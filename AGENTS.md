@@ -2,7 +2,8 @@
 
 ### Backlog
 
-Issues and PRDs live in this repository's GitHub Issues. See `docs/agents/backlog.md`.
+Implementation tickets live in this repository's GitHub Issues. Product requirements and
+specifications live in `docs/specs/`. See `docs/agents/backlog.md`.
 
 ### Triage labels
 

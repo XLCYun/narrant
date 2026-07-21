@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Narrant app icon</title>
+  <desc id="desc">An angular letter N formed from code brackets on a dark rounded square.</desc>
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111827"/>
+      <stop offset="1" stop-color="#030712"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="176" y1="128" x2="336" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6EE7B7"/>
+      <stop offset="1" stop-color="#22C55E"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#bg)"/>
+  <path d="M176 128 80 256l96 128"
+        fill="none" stroke="#F9FAFB" stroke-width="44"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m336 128 96 128-96 128"
+        fill="none" stroke="#F9FAFB" stroke-width="44"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m176 128 160 256"
+        fill="none" stroke="url(#signal)" stroke-width="44"
+        stroke-linecap="round"/>
+</svg>

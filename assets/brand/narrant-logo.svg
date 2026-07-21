@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Narrant logo</title>
+  <desc id="desc">An angular letter N formed from opening and closing code brackets.</desc>
+  <defs>
+    <linearGradient id="signal" x1="160" y1="112" x2="352" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#16A34A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Code brackets establish the two outer stems of the N. -->
+  <path d="M176 112 64 256l112 144"
+        fill="none" stroke="#111827" stroke-width="48"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m336 112 112 144-112 144"
+        fill="none" stroke="#111827" stroke-width="48"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- The signal-coloured diagonal completes the letterform. -->
+  <path d="m176 112 160 288"
+        fill="none" stroke="url(#signal)" stroke-width="48"
+        stroke-linecap="round"/>
+</svg>
