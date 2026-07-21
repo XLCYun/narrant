@@ -1,0 +1,79 @@
+name: quality-gate
+
+# 验收条件 #1:目标为 main 的 pull_request 在创建、重新打开或同步提交时触发。
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+# 验收条件 #6:同一 PR/分支的新提交取消旧运行。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 验收条件 #2:Rust 格式、静态检查、单元及 Git fixture 集成测试。
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Rust 格式检查
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Rust 静态检查
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Rust 单元及 Git fixture 集成测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  # 验收条件 #3:TypeScript 类型检查(pnpm build 内含 tsc --noEmit)、Lint、React 组件测试。
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: TypeScript Lint
+        run: pnpm lint
+      - name: TypeScript 类型检查与构建
+        run: pnpm build
+      - name: React 组件测试
+        run: pnpm test:components
+
+  # 验收条件 #5:macOS 与 Windows 使用 WebdriverIO @wdio/tauri-service 驱动真实 Tauri E2E。
+  # 验收条件 #4:GitHub 场景仅使用本地 mock,不访问真实账号或仓库(当前为本地分支比较 E2E,离线)。
+  e2e:
+    runs-on: ${{ matrix.os }}
+    env:
+      NARRANT_E2E_NO_REAL_GITHUB: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: 生成本地 Git fixture 仓库
+        run: node e2e/fixtures/setup-local-repo.mjs "${{ runner.temp }}/narrant-fixture"
+      - name: 运行真实 Tauri E2E
+        env:
+          NARRANT_E2E_REPOSITORY: ${{ runner.temp }}/narrant-fixture
+        run: pnpm test:e2e
