@@ -1,5 +1,5 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
-use narrant_lib::change_content::local::compare_refs;
+use narrant_lib::change_content::local::{compare_refs, list_refs};
 use tempfile::TempDir;
 
 fn commit_file(repository: &Repository, path: &str, contents: &str, message: &str) -> git2::Oid {
@@ -25,6 +25,9 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     repository.set_head("refs/heads/head").unwrap();
     repository.checkout_head(Some(CheckoutBuilder::new().force())).unwrap();
     let expected_head = commit_file(&repository, "welcome.txt", "你好，新内容\n", "head");
+
+    let refs = list_refs(fixture.path()).expect("list refs");
+    assert_eq!(refs, vec!["base", "head", "master"]);
 
     let snapshot = compare_refs(fixture.path(), "base", "head").expect("compare refs");
 

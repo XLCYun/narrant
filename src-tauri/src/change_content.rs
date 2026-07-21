@@ -25,16 +25,32 @@ pub struct FileChange {
 pub mod local {
     use super::*;
 
+    pub fn list_refs(repository_path: &Path) -> Result<Vec<String>, git2::Error> {
+        let repository = Repository::open(repository_path)?;
+        let mut refs = repository
+            .branches(Some(git2::BranchType::Local))?
+            .map(|branch| {
+                let (branch, _) = branch?;
+                branch
+                    .name()?
+                    .map(str::to_owned)
+                    .ok_or_else(|| git2::Error::from_str("branch name is not UTF-8"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        refs.sort();
+        Ok(refs)
+    }
+
     pub fn compare_refs(repository_path: &Path, base_ref: &str, head_ref: &str) -> Result<ReviewSnapshot, git2::Error> {
         let repository = Repository::open(repository_path)?;
         let base_commit = repository.revparse_single(base_ref)?.peel_to_commit()?;
         let head_commit = repository.revparse_single(head_ref)?.peel_to_commit()?;
         let comparison_base_id = repository.merge_base(base_commit.id(), head_commit.id())?;
         let comparison_base = repository.find_commit(comparison_base_id)?;
-        let base_tree = comparison_base.tree()?;
+        let comparison_base_tree = comparison_base.tree()?;
         let head_tree = head_commit.tree()?;
         let mut options = DiffOptions::new();
-        let mut diff = repository.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut options))?;
+        let mut diff = repository.diff_tree_to_tree(Some(&comparison_base_tree), Some(&head_tree), Some(&mut options))?;
         let mut find_options = DiffFindOptions::new();
         diff.find_similar(Some(&mut find_options))?;
         let mut file_changes = Vec::new();
@@ -45,7 +61,7 @@ pub mod local {
             file_changes.push(FileChange {
                 path: path.to_string_lossy().into_owned(),
                 status: status(delta.status()).to_owned(),
-                before: text_at(&repository, &base_tree, delta.old_file().path())?,
+                before: text_at(&repository, &comparison_base_tree, delta.old_file().path())?,
                 after: text_at(&repository, &head_tree, delta.new_file().path())?,
             });
         }

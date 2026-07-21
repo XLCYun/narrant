@@ -6,8 +6,14 @@ fn compare_local_refs(repository_path: String, base_ref: String, head_ref: Strin
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_local_refs(repository_path: String) -> Result<Vec<String>, String> {
+    change_content::local::list_refs(std::path::Path::new(&repository_path)).map_err(|error| error.to_string())
+}
+
 pub fn run() {
-    let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![compare_local_refs]);
+    let builder = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![compare_local_refs, list_local_refs]);
     #[cfg(feature = "wdio")]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
