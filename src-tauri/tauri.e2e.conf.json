@@ -1,0 +1,13 @@
+{
+  "app": {
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "wdio-e2e",
+          "windows": ["main"],
+          "permissions": ["core:default", "core:window:default", "wdio:default"]
+        }
+      ]
+    }
+  }
+}

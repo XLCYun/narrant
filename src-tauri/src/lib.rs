@@ -7,8 +7,11 @@ fn compare_local_refs(repository_path: String, base_ref: String, head_ref: Strin
 }
 
 pub fn run() {
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![compare_local_refs])
-        .run(tauri::generate_context!())
+    let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![compare_local_refs]);
+    #[cfg(feature = "wdio")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
+    builder.run(tauri::generate_context!())
         .expect("run Narrant");
 }
