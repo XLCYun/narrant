@@ -1,0 +1,7 @@
+packages: []
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  edgedriver: set this to true or false
+  esbuild: set this to true or false
+  geckodriver: set this to true or false
