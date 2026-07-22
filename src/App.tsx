@@ -4,6 +4,7 @@ import { DiffEditor } from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useSystemTheme } from "@/lib/use-system-theme";
 
 type FileChange = {
   path: string;
@@ -52,6 +53,7 @@ function buildDirectoryTree(fileChanges: FileChange[]): DirectoryNode {
 }
 
 export function App() {
+  const editorTheme = useSystemTheme();
   const [repositoryPath, setRepositoryPath] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
@@ -138,7 +140,7 @@ export function App() {
           : <>
             {fileChange.contentKind === "submodule" && <p>Submodule commit</p>}
             {fileChange.contentKind === "symlink" && <p>Symlink 目标</p>}
-            <DiffEditor height="500px" language="plaintext" original={fileChange.before ?? ""} modified={fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: true, ignoreTrimWhitespace: false }} />
+            <DiffEditor theme={editorTheme} height="500px" language="plaintext" original={fileChange.before ?? ""} modified={fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: true, ignoreTrimWhitespace: false }} />
           </>}
       </section>}
     </div>}

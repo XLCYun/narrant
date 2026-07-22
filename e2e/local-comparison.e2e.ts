@@ -1,4 +1,13 @@
 describe("本地分支比较", () => {
+  it("通过系统 WebView 应用当前系统主题", async () => {
+    const theme = await browser.execute(() => ({
+      systemDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+      rootDark: document.documentElement.classList.contains("dark"),
+    }));
+
+    expect(theme.rootDark).toBe(theme.systemDark);
+  });
+
   it("通过真实 Tauri IPC 显示只读 File Change", async () => {
     await $("[aria-label='本地仓库路径']").setValue(process.env.NARRANT_E2E_REPOSITORY!);
     await $("button=读取分支").click();
