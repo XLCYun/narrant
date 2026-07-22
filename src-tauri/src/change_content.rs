@@ -5,6 +5,8 @@ use std::path::Path;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewSnapshot {
+    #[serde(default)]
+    pub snapshot_id: String,
     pub base_ref: String,
     pub head_ref: String,
     pub base_revision: String,
@@ -48,7 +50,6 @@ pub trait ChangeContent {
     type Snapshot;
     type Error;
 
-    fn file_changes<'a>(&self, snapshot: &'a Self::Snapshot) -> &'a [FileChange];
     fn read_file_change(
         &self,
         snapshot: &Self::Snapshot,
@@ -58,6 +59,7 @@ pub trait ChangeContent {
 
 pub mod github {
     use super::{ChangeContent, ChangeStatus, ContentKind, FileChange};
+    use base64::Engine;
     use reqwest::blocking::Client;
     use serde::{Deserialize, Serialize};
 
@@ -95,6 +97,9 @@ pub mod github {
                 return Err(ParsePullRequestLocationError);
             }
             let number = number.parse().map_err(|_| ParsePullRequestLocationError)?;
+            if number == 0 {
+                return Err(ParsePullRequestLocationError);
+            }
             Ok(Self {
                 owner: (*owner).to_owned(),
                 repository: (*repository).to_owned(),
@@ -106,6 +111,8 @@ pub mod github {
     #[derive(Clone, Debug, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct GitHubReviewSnapshot {
+        #[serde(default)]
+        pub snapshot_id: String,
         pub owner: String,
         pub repository: String,
         pub title: String,
@@ -239,6 +246,7 @@ pub mod github {
             }
 
             Ok(GitHubReviewSnapshot {
+                snapshot_id: String::new(),
                 owner: location.owner,
                 repository: location.repository,
                 title: metadata.title,
@@ -280,34 +288,23 @@ pub mod github {
             let before = if listed.status == ChangeStatus::Added {
                 None
             } else {
-                self.read_content(snapshot, before_path, &snapshot.comparison_base)?
+                Some(self.read_content(snapshot, before_path, &snapshot.comparison_base)?)
             };
             let after = if listed.status == ChangeStatus::Deleted {
                 None
             } else {
-                self.read_content(snapshot, &listed.path, &snapshot.head_revision)?
+                Some(self.read_content(snapshot, &listed.path, &snapshot.head_revision)?)
             };
-            let binary = [before.as_deref(), after.as_deref()]
-                .into_iter()
-                .flatten()
-                .any(|content| content.contains(&0));
+            let content_kind = resolved_content_kind(before.as_ref(), after.as_ref());
             Ok(FileChange {
                 path: listed.path.clone(),
                 old_path: listed.old_path.clone(),
                 status: listed.status,
-                content_kind: if binary {
-                    ContentKind::Binary
-                } else {
-                    ContentKind::Text
-                },
-                before_size: before.as_ref().map(Vec::len),
-                after_size: after.as_ref().map(Vec::len),
-                before: before
-                    .filter(|_| !binary)
-                    .and_then(|content| String::from_utf8(content).ok()),
-                after: after
-                    .filter(|_| !binary)
-                    .and_then(|content| String::from_utf8(content).ok()),
+                content_kind,
+                before_size: before.as_ref().and_then(|content| content.size),
+                after_size: after.as_ref().and_then(|content| content.size),
+                before: before.and_then(|content| content.text),
+                after: after.and_then(|content| content.text),
             })
         }
 
@@ -316,44 +313,110 @@ pub mod github {
             snapshot: &GitHubReviewSnapshot,
             path: &str,
             revision: &str,
-        ) -> Result<Option<Vec<u8>>, GitHubError> {
-            let mut endpoint = reqwest::Url::parse(&format!(
-                "{}/repos/{}/{}/contents/",
-                self.api_base_url, snapshot.owner, snapshot.repository
-            ))
-            .map_err(|_| GitHubError("GitHub 内容地址无效。".to_owned()))?;
-            endpoint
-                .path_segments_mut()
-                .map_err(|_| GitHubError("GitHub 内容地址无效。".to_owned()))?
-                .pop_if_empty()
-                .extend(path.split('/'));
-            let response = self
-                .client
-                .get(endpoint)
-                .query(&[("ref", revision)])
-                .header("Accept", "application/vnd.github.raw+json")
-                .send()
-                .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
+        ) -> Result<EntryContent, GitHubError> {
+            let commit_endpoint = format!(
+                "{}/repos/{}/{}/git/commits/{}",
+                self.api_base_url, snapshot.owner, snapshot.repository, revision
+            );
+            let response =
+                self.client.get(commit_endpoint).send().map_err(|_| {
+                    GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
+                })?;
             if response.status().as_u16() == 404 {
-                return Ok(None);
+                return Err(GitHubError(
+                    "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。"
+                        .to_owned(),
+                ));
             }
             if !response.status().is_success() {
                 return Err(map_response_error(response.status().as_u16()));
             }
-            response
-                .bytes()
-                .map(|bytes| Some(bytes.to_vec()))
-                .map_err(|_| GitHubError("GitHub 文件内容读取失败，请重试。".to_owned()))
+            let commit: GitCommitResponse = response
+                .json()
+                .map_err(|_| GitHubError("GitHub 文件内容读取失败，请重试。".to_owned()))?;
+            let components = path.split('/').collect::<Vec<_>>();
+            let mut tree_sha = commit.tree.sha;
+            let mut resolved_entry = None;
+            for (index, component) in components.iter().enumerate() {
+                let tree_endpoint = format!(
+                    "{}/repos/{}/{}/git/trees/{}",
+                    self.api_base_url, snapshot.owner, snapshot.repository, tree_sha
+                );
+                let tree_response = self.client.get(tree_endpoint).send().map_err(|_| {
+                    GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
+                })?;
+                if !tree_response.status().is_success() {
+                    return Err(map_response_error(tree_response.status().as_u16()));
+                }
+                let tree: TreeResponse = tree_response
+                    .json()
+                    .map_err(|_| GitHubError("GitHub 文件内容读取失败，请重试。".to_owned()))?;
+                let entry = tree
+                    .tree
+                    .into_iter()
+                    .find(|entry| entry.path == *component)
+                    .ok_or_else(|| {
+                        GitHubError(
+                        "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。"
+                            .to_owned(),
+                    )
+                    })?;
+                if index + 1 == components.len() {
+                    resolved_entry = Some(entry);
+                    break;
+                }
+                if entry.kind != "tree" {
+                    return Err(GitHubError(
+                        "GitHub 文件路径无效，请重新打开 Pull Request。".to_owned(),
+                    ));
+                }
+                tree_sha = entry.sha;
+            }
+            let entry =
+                resolved_entry.ok_or_else(|| GitHubError("GitHub 文件路径无效。".to_owned()))?;
+            if entry.mode == "160000" || entry.kind == "commit" {
+                return Ok(EntryContent {
+                    kind: ContentKind::Submodule,
+                    size: entry.size,
+                    text: Some(entry.sha),
+                });
+            }
+            let blob_endpoint = format!(
+                "{}/repos/{}/{}/git/blobs/{}",
+                self.api_base_url, snapshot.owner, snapshot.repository, entry.sha
+            );
+            let blob_response =
+                self.client.get(blob_endpoint).send().map_err(|_| {
+                    GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
+                })?;
+            if !blob_response.status().is_success() {
+                return Err(map_response_error(blob_response.status().as_u16()));
+            }
+            let blob: BlobResponse = blob_response
+                .json()
+                .map_err(|_| GitHubError("GitHub 文件内容读取失败，请重试。".to_owned()))?;
+            let size = entry.size.or(Some(blob.size));
+            let bytes = blob.decode()?;
+            let kind = if entry.mode == "120000" {
+                ContentKind::Symlink
+            } else if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
+                ContentKind::Binary
+            } else {
+                ContentKind::Text
+            };
+            Ok(EntryContent {
+                kind,
+                size,
+                text: (kind != ContentKind::Binary)
+                    .then(|| String::from_utf8(bytes).ok())
+                    .flatten(),
+            })
         }
     }
 
     impl ChangeContent for GitHubChangeContent {
         type Snapshot = GitHubReviewSnapshot;
         type Error = GitHubError;
-
-        fn file_changes<'a>(&self, snapshot: &'a Self::Snapshot) -> &'a [FileChange] {
-            &snapshot.file_changes
-        }
 
         fn read_file_change(
             &self,
@@ -407,6 +470,72 @@ pub mod github {
         filename: String,
         previous_filename: Option<String>,
         status: String,
+    }
+
+    #[derive(Deserialize)]
+    struct TreeResponse {
+        tree: Vec<TreeEntryResponse>,
+    }
+
+    #[derive(Deserialize)]
+    struct GitCommitResponse {
+        tree: TreeReferenceResponse,
+    }
+
+    #[derive(Deserialize)]
+    struct TreeReferenceResponse {
+        sha: String,
+    }
+
+    #[derive(Deserialize)]
+    struct TreeEntryResponse {
+        path: String,
+        mode: String,
+        #[serde(rename = "type")]
+        kind: String,
+        sha: String,
+        size: Option<usize>,
+    }
+
+    #[derive(Deserialize)]
+    struct BlobResponse {
+        content: Option<String>,
+        encoding: Option<String>,
+        size: usize,
+    }
+
+    struct EntryContent {
+        kind: ContentKind,
+        size: Option<usize>,
+        text: Option<String>,
+    }
+
+    impl BlobResponse {
+        fn decode(self) -> Result<Vec<u8>, GitHubError> {
+            match (self.content, self.encoding.as_deref()) {
+                (Some(content), Some("base64")) => base64::engine::general_purpose::STANDARD
+                    .decode(content.replace(['\r', '\n'], ""))
+                    .map_err(|_| GitHubError("GitHub 文件内容读取失败，请重试。".to_owned())),
+                _ => return Err(GitHubError("GitHub 文件内容读取失败，请重试。".to_owned())),
+            }
+        }
+    }
+
+    fn resolved_content_kind(
+        before: Option<&EntryContent>,
+        after: Option<&EntryContent>,
+    ) -> ContentKind {
+        [before, after]
+            .into_iter()
+            .flatten()
+            .map(|content| content.kind)
+            .max_by_key(|kind| match *kind {
+                ContentKind::Submodule => 3,
+                ContentKind::Symlink => 2,
+                ContentKind::Binary => 1,
+                ContentKind::Text => 0,
+            })
+            .unwrap_or(ContentKind::Text)
     }
 
     fn file_change(response: FileResponse) -> FileChange {
@@ -467,10 +596,6 @@ pub mod local {
     impl ChangeContent for LocalGitChangeContent {
         type Snapshot = ReviewSnapshot;
         type Error = git2::Error;
-
-        fn file_changes<'a>(&self, snapshot: &'a Self::Snapshot) -> &'a [FileChange] {
-            &snapshot.file_changes
-        }
 
         fn read_file_change(
             &self,
@@ -552,6 +677,7 @@ pub mod local {
         }
 
         Ok(ReviewSnapshot {
+            snapshot_id: String::new(),
             base_ref: base_ref.to_owned(),
             head_ref: head_ref.to_owned(),
             base_revision: base_commit.id().to_string(),

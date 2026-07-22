@@ -2568,6 +2568,7 @@ dependencies = [
 name = "narrant"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "git2",
  "httpmock",
  "reqwest 0.12.28",

@@ -17,6 +17,7 @@ fn accepts_only_complete_standard_github_pull_request_urls() {
         "https://github.com/octo-org/octo-repo/pulls/42",
         "https://github.com/octo-org/octo-repo/pull/42/files",
         "https://github.com/octo-org/octo-repo/pull/not-a-number",
+        "https://github.com/octo-org/octo-repo/pull/0",
         "https://evil.example/octo-org/octo-repo/pull/42",
     ] {
         assert_eq!(
@@ -139,15 +140,43 @@ fn loads_one_file_change_on_demand_from_the_snapshots_pinned_revisions() {
     });
     let before = server.mock(|when, then| {
         when.method(GET)
-            .path("/repos/octo-org/octo-repo/contents/hello%20world.txt")
-            .query_param("ref", "immutable-comparison-base");
-        then.status(200).body("old greeting\n");
+            .path("/repos/octo-org/octo-repo/git/blobs/old-blob");
+        then.status(200).json_body(serde_json::json!({
+            "type": "file", "content": "b2xkIGdyZWV0aW5nCg==", "encoding": "base64",
+            "size": 13, "sha": "old-blob", "submodule_git_url": null
+        }));
     });
     let after = server.mock(|when, then| {
         when.method(GET)
-            .path("/repos/octo-org/octo-repo/contents/hello%20world.txt")
-            .query_param("ref", "immutable-head");
-        then.status(200).body("new greeting\n");
+            .path("/repos/octo-org/octo-repo/git/blobs/new-blob");
+        then.status(200).json_body(serde_json::json!({
+            "type": "file", "content": "bmV3IGdyZWV0aW5nCg==", "encoding": "base64",
+            "size": 13, "sha": "new-blob", "submodule_git_url": null
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/commits/immutable-comparison-base");
+        then.status(200)
+            .json_body(serde_json::json!({ "tree": { "sha": "immutable-comparison-base" } }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/repos/octo-org/octo-repo/git/trees/immutable-comparison-base");
+        then.status(200).json_body(serde_json::json!({ "truncated": false, "tree": [
+            { "path": "hello world.txt", "mode": "100644", "type": "blob", "sha": "old-blob", "size": 13 }
+        ]}));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/commits/immutable-head");
+        then.status(200)
+            .json_body(serde_json::json!({ "tree": { "sha": "immutable-head" } }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/repos/octo-org/octo-repo/git/trees/immutable-head");
+        then.status(200).json_body(serde_json::json!({ "truncated": false, "tree": [
+            { "path": "hello world.txt", "mode": "100644", "type": "blob", "sha": "new-blob", "size": 13 }
+        ]}));
     });
     let adapter = GitHubChangeContent::new(server.base_url());
     let snapshot = adapter
@@ -212,4 +241,149 @@ fn maps_anonymous_github_failures_to_chinese_recovery_messages() {
         .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
         .unwrap_err();
     assert_eq!(error.to_string(), "当前无法连接 GitHub，请检查网络后重试。");
+}
+
+#[test]
+fn preserves_binary_symlink_and_submodule_content_kinds() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/repos/octo-org/octo-repo/pulls/42");
+        then.status(200).json_body(serde_json::json!({
+            "title": "Special entries", "number": 42, "user": { "login": "octocat" },
+            "state": "open", "draft": false, "merged_at": null,
+            "base": { "ref": "main", "sha": "base" }, "head": { "ref": "head", "sha": "head" },
+            "body": "", "changed_files": 3, "additions": 1, "deletions": 1
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/compare/base...head");
+        then.status(200)
+            .json_body(serde_json::json!({ "merge_base_commit": { "sha": "merge-base" } }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/pulls/42/files");
+        then.status(200).json_body(serde_json::json!([
+            { "filename": "image.bin", "status": "modified" },
+            { "filename": "link", "status": "modified" },
+            { "filename": "vendor", "status": "modified" }
+        ]));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/commits/merge-base");
+        then.status(200)
+            .json_body(serde_json::json!({ "tree": { "sha": "merge-base" } }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/trees/merge-base");
+        then.status(200).json_body(serde_json::json!({
+            "truncated": false, "tree": [
+                { "path": "image.bin", "mode": "100644", "type": "blob", "sha": "binary", "size": 2 },
+                { "path": "link", "mode": "120000", "type": "blob", "sha": "link-blob", "size": 9 },
+                { "path": "vendor", "mode": "160000", "type": "commit", "sha": "submodule-commit", "size": null }
+            ]
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/commits/head");
+        then.status(200)
+            .json_body(serde_json::json!({ "tree": { "sha": "head" } }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/trees/head");
+        then.status(200).json_body(serde_json::json!({
+            "truncated": false, "tree": [
+                { "path": "image.bin", "mode": "100644", "type": "blob", "sha": "binary", "size": 2 },
+                { "path": "link", "mode": "120000", "type": "blob", "sha": "link-blob", "size": 9 },
+                { "path": "vendor", "mode": "160000", "type": "commit", "sha": "submodule-commit", "size": null }
+            ]
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/blobs/binary");
+        then.status(200).json_body(serde_json::json!({
+            "content": "/wE=", "encoding": "base64", "size": 2
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/blobs/link-blob");
+        then.status(200).json_body(serde_json::json!({
+            "content": "UkVBRE1FLm1k", "encoding": "base64", "size": 9
+        }));
+    });
+    let adapter = GitHubChangeContent::new(server.base_url());
+    let snapshot = adapter
+        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
+        .unwrap();
+
+    assert_eq!(
+        adapter
+            .read_file_change(&snapshot, "image.bin")
+            .unwrap()
+            .content_kind,
+        narrant_lib::change_content::ContentKind::Binary
+    );
+    assert_eq!(
+        adapter
+            .read_file_change(&snapshot, "link")
+            .unwrap()
+            .content_kind,
+        narrant_lib::change_content::ContentKind::Symlink
+    );
+    let submodule = adapter.read_file_change(&snapshot, "vendor").unwrap();
+    assert_eq!(
+        submodule.content_kind,
+        narrant_lib::change_content::ContentKind::Submodule
+    );
+    assert_eq!(submodule.after.as_deref(), Some("submodule-commit"));
+}
+
+#[test]
+fn reports_a_404_when_pinned_file_content_is_missing() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/repos/octo-org/octo-repo/pulls/42");
+        then.status(200).json_body(serde_json::json!({
+            "title": "Missing content", "number": 42, "user": { "login": "octocat" },
+            "state": "open", "draft": false, "merged_at": null,
+            "base": { "ref": "main", "sha": "base" }, "head": { "ref": "head", "sha": "head" },
+            "body": "", "changed_files": 1, "additions": 1, "deletions": 1
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/compare/base...head");
+        then.status(200)
+            .json_body(serde_json::json!({ "merge_base_commit": { "sha": "merge-base" } }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/pulls/42/files");
+        then.status(200)
+            .json_body(serde_json::json!([{ "filename": "missing.txt", "status": "modified" }]));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/commits/merge-base");
+        then.status(404);
+    });
+    let adapter = GitHubChangeContent::new(server.base_url());
+    let snapshot = adapter
+        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
+        .unwrap();
+
+    assert_eq!(
+        adapter
+            .read_file_change(&snapshot, "missing.txt")
+            .unwrap_err()
+            .to_string(),
+        "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。"
+    );
 }

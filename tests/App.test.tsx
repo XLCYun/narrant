@@ -71,6 +71,7 @@ describe("App", () => {
 
   it("匿名打开公开 Pull Request 并安全展示固定 Review Snapshot", async () => {
     invoke.mockResolvedValueOnce({
+      snapshotId: "snapshot-github-42",
       owner: "octo-org", repository: "octo-repo", title: "Improve greeting", number: 42,
       author: "octocat", state: "merged", draft: false, baseRef: "main",
       baseRevision: "base-sha", comparisonBase: "base-sha", headRef: "feature",
@@ -111,6 +112,7 @@ describe("App", () => {
   it("GitHub File Change 通过统一快照契约按需加载到 Monaco", async () => {
     mockSystemTheme(false);
     const snapshot = {
+      snapshotId: "snapshot-github-8",
       owner: "octo-org", repository: "octo-repo", title: "Update readme", number: 8,
       author: "octocat", state: "open", draft: false, baseRef: "main", baseRevision: "base",
       comparisonBase: "base", headRef: "docs", headRevision: "head", description: "",
@@ -126,13 +128,14 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
     fireEvent.click(await screen.findByRole("treeitem", { name: /README.md.*modified/ }));
 
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_github_file_change", { snapshot, path: "README.md" }));
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", { snapshotId: "snapshot-github-8", path: "README.md" }));
     expect(await screen.findByTestId("diff-editor")).toBeInTheDocument();
   });
 
   it("公开 Pull Request 没有 File Change 时显示简体中文空状态", async () => {
     mockSystemTheme(false);
     invoke.mockResolvedValueOnce({
+      snapshotId: "snapshot-github-9",
       owner: "octo-org", repository: "octo-repo", title: "Empty", number: 9, author: "octocat",
       state: "closed", draft: false, baseRef: "main", baseRevision: "same", comparisonBase: "same",
       headRef: "topic", headRevision: "same", description: "", changedFiles: 0, additions: 0,
@@ -150,6 +153,7 @@ describe("App", () => {
     invoke
       .mockResolvedValueOnce(["base", "origin/topic"])
       .mockResolvedValueOnce({
+        snapshotId: "snapshot-local-1",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [
@@ -170,11 +174,8 @@ describe("App", () => {
     expect(screen.getByRole("treeitem", { name: /main.rs.*modified/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("treeitem", { name: /logo.bin.*added/ }));
 
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_local_file_change", {
-      repositoryPath: "/repo",
-      comparisonBase: "base-sha",
-      headRevision: "head-sha",
-      path: "assets/logo.bin",
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", {
+      snapshotId: "snapshot-local-1", path: "assets/logo.bin",
     }));
     expect(await screen.findByText("二进制文件（变更前：无；变更后：128 字节）")).toBeInTheDocument();
   });
@@ -184,6 +185,7 @@ describe("App", () => {
     invoke
       .mockResolvedValueOnce(["base", "head"])
       .mockResolvedValueOnce({
+        snapshotId: "snapshot-local-2",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [{ path: "readme.txt", oldPath: null, status: "modified", contentKind: "text", beforeSize: 3, afterSize: 4, before: null, after: null }],

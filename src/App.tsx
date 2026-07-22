@@ -20,6 +20,7 @@ type FileChange = {
   after: string | null;
 };
 type ReviewSnapshot = {
+  snapshotId: string;
   owner?: string;
   repository?: string;
   title?: string;
@@ -83,7 +84,6 @@ export function App() {
   const editorTheme = useSystemTheme();
   const [repositoryPath, setRepositoryPath] = useState("");
   const [pullRequestUrl, setPullRequestUrl] = useState("");
-  const [snapshotSource, setSnapshotSource] = useState<"local" | "github">("local");
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
@@ -98,7 +98,6 @@ export function App() {
     try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_github_pull_request", { url: pullRequestUrl });
       setSnapshot(nextSnapshot);
-      setSnapshotSource("github");
       setFileChange(undefined);
     } catch (reason) {
       setSnapshot(undefined);
@@ -128,7 +127,6 @@ export function App() {
     setError("");
     try {
       setSnapshot(await invoke<ReviewSnapshot>("compare_local_refs", { repositoryPath, baseRef, headRef }));
-      setSnapshotSource("local");
       setFileChange(undefined);
     }
     catch (reason) { setSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
@@ -138,14 +136,7 @@ export function App() {
     if (!snapshot) return;
     setError("");
     try {
-      setFileChange(snapshotSource === "github"
-        ? await invoke<FileChange>("read_github_file_change", { snapshot, path })
-        : await invoke<FileChange>("read_local_file_change", {
-          repositoryPath,
-          comparisonBase: snapshot.comparisonBase,
-          headRevision: snapshot.headRevision,
-          path,
-        }));
+      setFileChange(await invoke<FileChange>("read_file_change", { snapshotId: snapshot.snapshotId, path }));
     } catch (reason) {
       setFileChange(undefined);
       setError(String(reason));
@@ -181,7 +172,7 @@ export function App() {
       <Button disabled={!baseRef || !headRef} onClick={openComparison}>打开 Review Snapshot</Button>
     </section>
     {error && <ErrorMessage message={error} />}
-    {snapshotSource === "github" && snapshot?.title && <article aria-label="Pull Request 概览">
+    {snapshot?.title && <article aria-label="Pull Request 概览">
       <h2>{snapshot.title}</h2>
       <p>#{snapshot.number} · {snapshot.author} · {snapshot.draft ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[snapshot.state ?? "open"]}</p>
       <p>{snapshot.baseRef} @ {snapshot.baseRevision} → {snapshot.headRef} @ {snapshot.headRevision}</p>

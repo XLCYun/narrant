@@ -5,7 +5,7 @@
         {
           "identifier": "wdio-e2e",
           "windows": ["main"],
-          "permissions": ["core:default", "core:window:default", "wdio:default"]
+          "permissions": ["core:default", "core:window:default", "opener:allow-open-url", "wdio:default"]
         }
       ]
     }
