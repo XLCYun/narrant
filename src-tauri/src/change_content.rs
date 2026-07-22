@@ -41,7 +41,11 @@ pub mod local {
         Ok(refs)
     }
 
-    pub fn compare_refs(repository_path: &Path, base_ref: &str, head_ref: &str) -> Result<ReviewSnapshot, git2::Error> {
+    pub fn compare_refs(
+        repository_path: &Path,
+        base_ref: &str,
+        head_ref: &str,
+    ) -> Result<ReviewSnapshot, git2::Error> {
         let repository = Repository::open(repository_path)?;
         let base_commit = repository.revparse_single(base_ref)?.peel_to_commit()?;
         let head_commit = repository.revparse_single(head_ref)?.peel_to_commit()?;
@@ -50,13 +54,20 @@ pub mod local {
         let comparison_base_tree = comparison_base.tree()?;
         let head_tree = head_commit.tree()?;
         let mut options = DiffOptions::new();
-        let mut diff = repository.diff_tree_to_tree(Some(&comparison_base_tree), Some(&head_tree), Some(&mut options))?;
+        let mut diff = repository.diff_tree_to_tree(
+            Some(&comparison_base_tree),
+            Some(&head_tree),
+            Some(&mut options),
+        )?;
         let mut find_options = DiffFindOptions::new();
         diff.find_similar(Some(&mut find_options))?;
         let mut file_changes = Vec::new();
 
         for delta in diff.deltas() {
-            let path = delta.new_file().path().or_else(|| delta.old_file().path())
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
                 .ok_or_else(|| git2::Error::from_str("file change has no path"))?;
             file_changes.push(FileChange {
                 path: path.to_string_lossy().into_owned(),
@@ -76,10 +87,19 @@ pub mod local {
         })
     }
 
-    fn text_at(repository: &Repository, tree: &git2::Tree<'_>, path: Option<&Path>) -> Result<Option<String>, git2::Error> {
+    fn text_at(
+        repository: &Repository,
+        tree: &git2::Tree<'_>,
+        path: Option<&Path>,
+    ) -> Result<Option<String>, git2::Error> {
         let Some(path) = path else { return Ok(None) };
-        let entry = match tree.get_path(path) { Ok(entry) => entry, Err(_) => return Ok(None) };
-        if entry.kind() != Some(git2::ObjectType::Blob) { return Ok(None) }
+        let entry = match tree.get_path(path) {
+            Ok(entry) => entry,
+            Err(_) => return Ok(None),
+        };
+        if entry.kind() != Some(git2::ObjectType::Blob) {
+            return Ok(None);
+        }
         let blob = repository.find_blob(entry.id())?;
         Ok(std::str::from_utf8(blob.content()).ok().map(str::to_owned))
     }
