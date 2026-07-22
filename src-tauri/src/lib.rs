@@ -20,10 +20,27 @@ fn list_local_refs(repository_path: String) -> Result<Vec<String>, String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn read_local_file_change(
+    repository_path: String,
+    comparison_base: String,
+    head_revision: String,
+    path: String,
+) -> Result<change_content::FileChange, String> {
+    change_content::local::read_file_change(
+        std::path::Path::new(&repository_path),
+        &comparison_base,
+        &head_revision,
+        &path,
+    )
+    .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![
         compare_local_refs,
-        list_local_refs
+        list_local_refs,
+        read_local_file_change
     ]);
     #[cfg(feature = "wdio")]
     let builder = builder

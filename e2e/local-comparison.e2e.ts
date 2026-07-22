@@ -4,7 +4,8 @@ describe("本地分支比较", () => {
     await $("button=读取分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("base-ref");
     await expect($("[aria-label='Head Ref']")).toHaveText("head-ref");
-    await $("button=打开 File Change").click();
+    await $("button=打开 Review Snapshot").click();
+    await $("[role='treeitem']").click();
     await expect($("[aria-label='File Change']")).toBeDisplayed();
     await expect($("h2")).toHaveText(expect.stringContaining("welcome.txt"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-before", expect.stringContaining("旧内容"));
