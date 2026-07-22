@@ -13,13 +13,15 @@
   </defs>
 
   <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#bg)"/>
-  <path d="M176 128 80 256l96 128"
-        fill="none" stroke="#F9FAFB" stroke-width="44"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="m336 128 96 128-96 128"
-        fill="none" stroke="#F9FAFB" stroke-width="44"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="m176 128 160 256"
-        fill="none" stroke="url(#signal)" stroke-width="44"
-        stroke-linecap="round"/>
+  <g transform="translate(256 256) scale(.88) translate(-256 -256)">
+    <path d="M176 128 80 256l96 128"
+          fill="none" stroke="#F9FAFB" stroke-width="44"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m336 128 96 128-96 128"
+          fill="none" stroke="#F9FAFB" stroke-width="44"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m176 128 160 256"
+          fill="none" stroke="url(#signal)" stroke-width="44"
+          stroke-linecap="round"/>
+  </g>
 </svg>
