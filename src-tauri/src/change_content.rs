@@ -516,7 +516,7 @@ pub mod github {
                 (Some(content), Some("base64")) => base64::engine::general_purpose::STANDARD
                     .decode(content.replace(['\r', '\n'], ""))
                     .map_err(|_| GitHubError("GitHub 文件内容读取失败，请重试。".to_owned())),
-                _ => return Err(GitHubError("GitHub 文件内容读取失败，请重试。".to_owned())),
+                _ => Err(GitHubError("GitHub 文件内容读取失败，请重试。".to_owned())),
             }
         }
     }
