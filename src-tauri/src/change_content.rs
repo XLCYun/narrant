@@ -29,6 +29,19 @@ pub enum ContentKind {
     Symlink,
 }
 
+fn resolved_content_kind(kinds: impl IntoIterator<Item = Option<ContentKind>>) -> ContentKind {
+    kinds
+        .into_iter()
+        .flatten()
+        .max_by_key(|kind| match kind {
+            ContentKind::Submodule => 3,
+            ContentKind::Symlink => 2,
+            ContentKind::Binary => 1,
+            ContentKind::Text => 0,
+        })
+        .unwrap_or(ContentKind::Text)
+}
+
 pub mod github {
     use super::{ChangeStatus, ContentKind, LoadedFileChange};
     use base64::Engine;
@@ -283,7 +296,10 @@ pub mod github {
             } else {
                 Some(self.read_content(snapshot, &listed.path, &snapshot.head_revision)?)
             };
-            let content_kind = resolved_content_kind(before.as_ref(), after.as_ref());
+            let content_kind = super::resolved_content_kind([
+                before.as_ref().map(|content| content.kind),
+                after.as_ref().map(|content| content.kind),
+            ]);
             Ok(LoadedFileChange {
                 path: listed.path.clone(),
                 old_path: listed.old_path.clone(),
@@ -496,23 +512,6 @@ pub mod github {
         }
     }
 
-    fn resolved_content_kind(
-        before: Option<&EntryContent>,
-        after: Option<&EntryContent>,
-    ) -> ContentKind {
-        [before, after]
-            .into_iter()
-            .flatten()
-            .map(|content| content.kind)
-            .max_by_key(|kind| match *kind {
-                ContentKind::Submodule => 3,
-                ContentKind::Symlink => 2,
-                ContentKind::Binary => 1,
-                ContentKind::Text => 0,
-            })
-            .unwrap_or(ContentKind::Text)
-    }
-
     fn file_change(response: FileResponse) -> GitHubFileChange {
         GitHubFileChange {
             path: response.filename,
@@ -580,7 +579,10 @@ pub mod local {
                 path: stored.path.clone(),
                 old_path: stored.old_path.clone(),
                 status: stored.status,
-                content_kind: content_kind(before.as_ref(), after.as_ref()),
+                content_kind: super::resolved_content_kind([
+                    before.as_ref().map(|content| content.kind),
+                    after.as_ref().map(|content| content.kind),
+                ]),
                 before_size: before.as_ref().and_then(|entry| entry.size),
                 after_size: after.as_ref().and_then(|entry| entry.size),
                 before: before.and_then(|entry| entry.text),
@@ -757,20 +759,6 @@ pub mod local {
         kind: ContentKind,
         size: Option<usize>,
         text: Option<String>,
-    }
-
-    fn content_kind(before: Option<&EntryContent>, after: Option<&EntryContent>) -> ContentKind {
-        [before, after]
-            .into_iter()
-            .flatten()
-            .map(|content| content.kind)
-            .max_by_key(|kind| match *kind {
-                ContentKind::Submodule => 3,
-                ContentKind::Symlink => 2,
-                ContentKind::Binary => 1,
-                ContentKind::Text => 0,
-            })
-            .unwrap_or(ContentKind::Text)
     }
 
     /// git2 的底层差异类型转换成自己的 ChangeStatus 枚举

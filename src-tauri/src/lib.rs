@@ -51,10 +51,17 @@ enum ContentKindResponse {
     Symlink,
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ReviewSourceResponse {
+    Local,
+    GitHub,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalReviewSnapshotResponse {
-    source: &'static str,
+    source: ReviewSourceResponse,
     session_id: String,
     base_ref: String,
     head_ref: String,
@@ -67,7 +74,7 @@ struct LocalReviewSnapshotResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GitHubReviewSnapshotResponse {
-    source: &'static str,
+    source: ReviewSourceResponse,
     session_id: String,
     owner: String,
     repository: String,
@@ -159,7 +166,7 @@ fn map_local_snapshot(
     snapshot: &change_content::local::LocalSnapshot,
 ) -> LocalReviewSnapshotResponse {
     LocalReviewSnapshotResponse {
-        source: "local",
+        source: ReviewSourceResponse::Local,
         session_id,
         base_ref: snapshot.base_ref.clone(),
         head_ref: snapshot.head_ref.clone(),
@@ -183,7 +190,7 @@ fn map_github_snapshot(
     snapshot: &change_content::github::GitHubSnapshot,
 ) -> GitHubReviewSnapshotResponse {
     GitHubReviewSnapshotResponse {
-        source: "github",
+        source: ReviewSourceResponse::GitHub,
         session_id,
         owner: snapshot.owner.clone(),
         repository: snapshot.repository.clone(),
@@ -318,7 +325,13 @@ mod tests {
     fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive() {
         let fixture = tempfile::TempDir::new().unwrap();
         let repository = git2::Repository::init(fixture.path()).unwrap();
-        let tree_id = repository.index().unwrap().write_tree().unwrap();
+        let old_blob = repository.blob(b"old\n").unwrap();
+        let mut tree_builder = repository.treebuilder(None).unwrap();
+        tree_builder
+            .insert("README.md", old_blob, 0o100644)
+            .unwrap();
+        let tree_id = tree_builder.write().unwrap();
+        drop(tree_builder);
         let tree = repository.find_tree(tree_id).unwrap();
         let signature = git2::Signature::now("Narrant test", "test@narrant.invalid").unwrap();
         let commit_id = repository
@@ -326,7 +339,21 @@ mod tests {
             .unwrap();
         let commit = repository.find_commit(commit_id).unwrap();
         repository.branch("base", &commit, true).unwrap();
-        repository.branch("head", &commit, true).unwrap();
+        let new_blob = repository.blob(b"new\n").unwrap();
+        let mut tree_builder = repository.treebuilder(Some(&tree)).unwrap();
+        tree_builder
+            .insert("README.md", new_blob, 0o100644)
+            .unwrap();
+        let head_tree_id = tree_builder.write().unwrap();
+        let head_tree = repository.find_tree(head_tree_id).unwrap();
+        let head_id = repository
+            .commit(None, &signature, &signature, "head", &head_tree, &[&commit])
+            .unwrap();
+        let head = repository.find_commit(head_id).unwrap();
+        repository.branch("head", &head, true).unwrap();
+        drop(head);
+        drop(head_tree);
+        drop(tree_builder);
         drop(commit);
         drop(tree);
         drop(repository);
@@ -336,7 +363,8 @@ mod tests {
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["source"], "local");
         assert_eq!(json["sessionId"], "session-42");
-        assert!(json["fileChanges"].as_array().unwrap().is_empty());
+        assert_eq!(json["fileChanges"][0]["path"], "README.md");
+        assert!(json["fileChanges"][0].get("contentKind").is_none());
         assert!(json.get("snapshotId").is_none());
 
         let store = ReviewSessionStore::default();
@@ -350,7 +378,13 @@ mod tests {
             store.get(&id).err().unwrap(),
             "Review Session 已关闭或失效，请重新打开。"
         );
-        assert!(in_flight.lock().is_ok());
+        let in_flight = in_flight.lock().unwrap();
+        let OpenedReview::Local(review) = &*in_flight else {
+            panic!("expected Local Review");
+        };
+        let change = review.read_file_change("README.md").unwrap();
+        assert_eq!(change.before.as_deref(), Some("old\n"));
+        assert_eq!(change.after.as_deref(), Some("new\n"));
     }
 
     #[test]

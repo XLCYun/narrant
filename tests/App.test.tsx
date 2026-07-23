@@ -193,6 +193,30 @@ describe("App", () => {
     expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-unmount" });
   });
 
+  it("读取新的本地仓库失败时关闭之前的 Review Session", async () => {
+    mockSystemTheme(false);
+    invoke.mockImplementation((command: string) => {
+      if (command === "open_github_pull_request") {
+        return Promise.resolve({
+          sessionId: "session-before-load", source: "github", title: "Existing",
+          comparisonBase: "base", headRevision: "head", fileChanges: [],
+        });
+      }
+      if (command === "list_local_refs") return Promise.reject("仓库不可用");
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/1" } });
+    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
+    expect(await screen.findByRole("heading", { name: "Existing" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/missing" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("仓库不可用");
+    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-before-load" });
+  });
+
   it("展示完整文件树并按需加载所选 File Change", async () => {
     mockSystemTheme(false);
     invoke

@@ -99,21 +99,23 @@ export function App() {
   const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const activeSnapshotId = useRef<string>();
+  const activeSessionId = useRef<string>();
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
-    const previousId = activeSnapshotId.current;
-    activeSnapshotId.current = nextSnapshot?.sessionId;
+    const previousSessionId = activeSessionId.current;
+    activeSessionId.current = nextSnapshot?.sessionId;
     setSnapshot(nextSnapshot);
-    if (previousId && previousId !== nextSnapshot?.sessionId) {
-      void invoke("close_review_session", { sessionId: previousId });
+    if (previousSessionId && previousSessionId !== nextSnapshot?.sessionId) {
+      void Promise.resolve(invoke("close_review_session", { sessionId: previousSessionId }))
+        .catch(() => undefined);
     }
   }
 
   useEffect(() => () => {
-    if (activeSnapshotId.current) {
-      void invoke("close_review_session", { sessionId: activeSnapshotId.current });
-      activeSnapshotId.current = undefined;
+    if (activeSessionId.current) {
+      void Promise.resolve(invoke("close_review_session", { sessionId: activeSessionId.current }))
+        .catch(() => undefined);
+      activeSessionId.current = undefined;
     }
   }, []);
 
@@ -144,6 +146,8 @@ export function App() {
       setHeadRef(loadedRefs[1] ?? loadedRefs[0] ?? "");
     } catch (reason) {
       setRefs([]);
+      replaceSnapshot(undefined);
+      setFileChange(undefined);
       setError(String(reason));
     }
   }
