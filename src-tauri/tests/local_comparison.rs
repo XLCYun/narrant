@@ -1,5 +1,5 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
-use narrant_lib::change_content::local::{compare_refs, list_refs, read_file_change};
+use narrant_lib::change_content::local::{list_refs, LocalOpenedReview};
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
 use tempfile::TempDir;
 
@@ -62,6 +62,10 @@ fn commit_tree_entry(
         .unwrap()
 }
 
+fn open_comparison(repository_path: &std::path::Path) -> LocalOpenedReview {
+    LocalOpenedReview::open(repository_path, "base", "head").unwrap()
+}
+
 #[test]
 fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     let fixture = TempDir::new().expect("fixture directory");
@@ -90,25 +94,26 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     let refs = list_refs(fixture.path()).expect("list refs");
     assert_eq!(refs, vec!["base", "head", "master"]);
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").expect("compare refs");
+    let content = open_comparison(fixture.path());
+    let snapshot = content.snapshot();
 
     assert_eq!(snapshot.base_ref, "base");
     assert_eq!(snapshot.head_ref, "head");
     assert_eq!(snapshot.comparison_base, snapshot.base_revision);
-    assert_eq!(snapshot.head_revision, expected_head.to_string());
+    assert_eq!(snapshot.head_revision, expected_head);
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "welcome.txt");
-    assert_eq!(snapshot.file_changes[0].before, None);
-    assert_eq!(snapshot.file_changes[0].after, None);
     assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Modified);
 
-    let content = read_file_change(
-        fixture.path(),
-        &snapshot.comparison_base,
-        &snapshot.head_revision,
+    commit_file(
+        &repository,
         "welcome.txt",
-    )
-    .expect("read pinned File Change");
+        "分支移动后的内容\n",
+        "move head after opening review",
+    );
+    let content = content
+        .read_file_change("welcome.txt")
+        .expect("read pinned File Change");
     assert_eq!(content.before.as_deref(), Some("你好，旧内容\n"));
     assert_eq!(content.after.as_deref(), Some("你好，新内容\n"));
 }
@@ -147,10 +152,11 @@ fn compares_from_merge_base_when_base_and_head_have_diverged() {
         .unwrap();
     commit_file(&repository, "head-only.txt", "head\n", "head advances");
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").expect("compare refs");
+    let content = open_comparison(fixture.path());
+    let snapshot = content.snapshot();
 
-    assert_eq!(snapshot.base_revision, base_tip.to_string());
-    assert_eq!(snapshot.comparison_base, common.to_string());
+    assert_eq!(snapshot.base_revision, base_tip);
+    assert_eq!(snapshot.comparison_base, common);
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "head-only.txt");
     assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Added);
@@ -218,7 +224,8 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
         )
         .unwrap();
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").expect("compare refs");
+    let content = open_comparison(fixture.path());
+    let snapshot = content.snapshot();
     let statuses = snapshot
         .file_changes
         .iter()
@@ -240,15 +247,58 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
         .find(|change| change.status == ChangeStatus::Renamed)
         .unwrap();
     assert_eq!(renamed.old_path.as_deref(), Some("old-name.txt"));
-    let renamed_content = read_file_change(
-        fixture.path(),
-        &snapshot.comparison_base,
-        &snapshot.head_revision,
-        "new-name.txt",
-    )
-    .unwrap();
+    let renamed_content = content.read_file_change("new-name.txt").unwrap();
     assert_eq!(renamed_content.before.as_deref(), Some("rename me\n"));
     assert_eq!(renamed_content.after.as_deref(), Some("rename me\n"));
+
+    let old_path_error = content.read_file_change("old-name.txt").unwrap_err();
+    assert_eq!(
+        old_path_error.message(),
+        "File Change is not part of the Review Snapshot"
+    );
+
+    let added = content.read_file_change("added.txt").unwrap();
+    assert_eq!(added.before, None);
+    assert_eq!(added.after.as_deref(), Some("added\n"));
+
+    let deleted = content.read_file_change("deleted.txt").unwrap();
+    assert_eq!(deleted.before.as_deref(), Some("deleted\n"));
+    assert_eq!(deleted.after, None);
+
+    let modified = content.read_file_change("modified.txt").unwrap();
+    assert_eq!(modified.before.as_deref(), Some("before\n"));
+    assert_eq!(modified.after.as_deref(), Some("after\n"));
+}
+
+#[test]
+fn opens_an_empty_comparison_and_rejects_unknown_paths() {
+    let fixture = TempDir::new().expect("fixture directory");
+    let repository = Repository::init(fixture.path()).unwrap();
+    commit_file(&repository, "README.md", "same\n", "initial");
+    let commit = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("base", &commit, true).unwrap();
+    repository.branch("head", &commit, true).unwrap();
+
+    let review = open_comparison(fixture.path());
+
+    assert!(review.snapshot().file_changes.is_empty());
+    assert_eq!(
+        review
+            .read_file_change("missing.txt")
+            .unwrap_err()
+            .message(),
+        "File Change is not part of the Review Snapshot"
+    );
+}
+
+#[test]
+fn rejects_missing_repositories_and_unknown_refs() {
+    let fixture = TempDir::new().unwrap();
+    assert!(LocalOpenedReview::open(fixture.path(), "base", "head").is_err());
+
+    let repository = Repository::init(fixture.path()).unwrap();
+    commit_file(&repository, "README.md", "same\n", "initial");
+    assert!(LocalOpenedReview::open(fixture.path(), "missing", "HEAD").is_err());
 }
 
 #[test]
@@ -272,8 +322,8 @@ fn represents_binary_changes_with_metadata_and_without_text() {
         )
         .unwrap();
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").expect("compare refs");
-    let change = &snapshot.file_changes[0];
+    let content = open_comparison(fixture.path());
+    let change = content.read_file_change("image.bin").unwrap();
 
     assert_eq!(change.content_kind, ContentKind::Binary);
     assert_eq!(change.before_size, Some(3));
@@ -305,14 +355,8 @@ fn reads_lfs_pointer_as_text_from_pinned_revisions() {
         )
         .unwrap();
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").unwrap();
-    let content = read_file_change(
-        fixture.path(),
-        &snapshot.comparison_base,
-        &snapshot.head_revision,
-        "asset.dat",
-    )
-    .unwrap();
+    let content = open_comparison(fixture.path());
+    let content = content.read_file_change("asset.dat").unwrap();
 
     assert_eq!(content.content_kind, ContentKind::Text);
     assert_eq!(content.before.as_deref(), Some(old_pointer));
@@ -343,14 +387,8 @@ fn reads_symlink_targets_without_following_them() {
         )
         .unwrap();
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").unwrap();
-    let content = read_file_change(
-        fixture.path(),
-        &snapshot.comparison_base,
-        &snapshot.head_revision,
-        "link",
-    )
-    .unwrap();
+    let content = open_comparison(fixture.path());
+    let content = content.read_file_change("link").unwrap();
 
     assert_eq!(content.content_kind, ContentKind::Symlink);
     assert_eq!(content.before.as_deref(), Some("missing-old-target"));
@@ -392,14 +430,8 @@ fn reads_submodule_commit_ids_from_pinned_trees() {
         )
         .unwrap();
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").unwrap();
-    let content = read_file_change(
-        fixture.path(),
-        &snapshot.comparison_base,
-        &snapshot.head_revision,
-        "vendor",
-    )
-    .unwrap();
+    let content = open_comparison(fixture.path());
+    let content = content.read_file_change("vendor").unwrap();
 
     assert_eq!(content.content_kind, ContentKind::Submodule);
     assert_eq!(
@@ -440,14 +472,9 @@ fn ignores_staged_unstaged_and_untracked_worktree_content() {
     index.add_path(std::path::Path::new("staged.txt")).unwrap();
     index.write().unwrap();
 
-    let snapshot = compare_refs(fixture.path(), "base", "head").unwrap();
-    let content = read_file_change(
-        fixture.path(),
-        &snapshot.comparison_base,
-        &snapshot.head_revision,
-        "tracked.txt",
-    )
-    .unwrap();
+    let content = open_comparison(fixture.path());
+    let snapshot = content.snapshot();
+    let content = content.read_file_change("tracked.txt").unwrap();
 
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(content.after.as_deref(), Some("committed head\n"));

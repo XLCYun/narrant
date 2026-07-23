@@ -34,6 +34,7 @@ _Avoid_: Diff file, patch item
 
 **Review Session**:
 A review activity that presents one **Review Snapshot** at a time and may explicitly advance to a newer snapshot.
+The activity may be explicitly closed, after which its snapshot is no longer available for review.
 _Avoid_: Workspace, project
 
 **Review Snapshot**:
@@ -47,7 +48,9 @@ _Avoid_: Latest PR, live diff
 - A **Change Comparison** uses the merge base of its **Base Ref** and **Head Ref** as its **Comparison Base**
 - A **Change Comparison** contains zero or more **File Changes**
 - A **Review Session** presents exactly one **Review Snapshot** at a time
+- A **Review Session** has its own identity, distinct from the immutable **Review Snapshot** it presents
 - Refreshing a **Review Session** replaces its current **Review Snapshot** only after explicit user action
+- Closing a **Review Session** ends access to its current **Review Snapshot**
 
 ## Example dialogue
 

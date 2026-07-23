@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -9,45 +9,53 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
 
-type FileChange = {
+type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
+type FileChangeSummary = {
   path: string;
   oldPath: string | null;
-  status: "added" | "modified" | "deleted" | "renamed";
+  status: ChangeStatus;
+};
+type FileChangeContent = FileChangeSummary & {
   contentKind: "text" | "binary" | "submodule" | "symlink";
   beforeSize: number | null;
   afterSize: number | null;
   before: string | null;
   after: string | null;
 };
-type ReviewSnapshot = {
-  snapshotId: string;
-  owner?: string;
-  repository?: string;
-  title?: string;
-  number?: number;
-  author?: string;
-  state?: "open" | "closed" | "merged";
-  draft?: boolean;
-  baseRef?: string;
-  baseRevision?: string;
+type ReviewSnapshotBase = {
+  sessionId: string;
+  baseRef: string;
+  baseRevision: string;
   comparisonBase: string;
-  headRef?: string;
+  headRef: string;
   headRevision: string;
-  description?: string;
-  changedFiles?: number;
-  additions?: number;
-  deletions?: number;
-  githubUrl?: string;
-  fileChanges: FileChange[];
+  fileChanges: FileChangeSummary[];
 };
+type LocalReviewSnapshot = ReviewSnapshotBase & { source: "local" };
+type GitHubReviewSnapshot = ReviewSnapshotBase & {
+  source: "github";
+  owner: string;
+  repository: string;
+  title: string;
+  number: number;
+  author: string;
+  state: "open" | "closed" | "merged";
+  draft: boolean;
+  description: string;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  githubUrl: string;
+};
+type ReviewSnapshot = LocalReviewSnapshot | GitHubReviewSnapshot;
 
 type DirectoryNode = {
   name: string;
   directories: DirectoryNode[];
-  files: FileChange[];
+  files: FileChangeSummary[];
 };
 
-function buildDirectoryTree(fileChanges: FileChange[]): DirectoryNode {
+function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
   const root: DirectoryNode = { name: "", directories: [], files: [] };
   for (const change of fileChanges) {
     const parts = change.path.split("/");
@@ -88,19 +96,36 @@ export function App() {
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
-  const [fileChange, setFileChange] = useState<FileChange>();
+  const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const activeSnapshotId = useRef<string>();
+
+  function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
+    const previousId = activeSnapshotId.current;
+    activeSnapshotId.current = nextSnapshot?.sessionId;
+    setSnapshot(nextSnapshot);
+    if (previousId && previousId !== nextSnapshot?.sessionId) {
+      void invoke("close_review_session", { sessionId: previousId });
+    }
+  }
+
+  useEffect(() => () => {
+    if (activeSnapshotId.current) {
+      void invoke("close_review_session", { sessionId: activeSnapshotId.current });
+      activeSnapshotId.current = undefined;
+    }
+  }, []);
 
   async function openPullRequest() {
     setError("");
     setLoading(true);
     try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_github_pull_request", { url: pullRequestUrl });
-      setSnapshot(nextSnapshot);
+      replaceSnapshot(nextSnapshot);
       setFileChange(undefined);
     } catch (reason) {
-      setSnapshot(undefined);
+      replaceSnapshot(undefined);
       setFileChange(undefined);
       setError(String(reason));
     } finally {
@@ -113,7 +138,7 @@ export function App() {
     try {
       const loadedRefs = await invoke<string[]>("list_local_refs", { repositoryPath });
       setRefs(loadedRefs);
-      setSnapshot(undefined);
+      replaceSnapshot(undefined);
       setFileChange(undefined);
       setBaseRef(loadedRefs[0] ?? "");
       setHeadRef(loadedRefs[1] ?? loadedRefs[0] ?? "");
@@ -126,17 +151,17 @@ export function App() {
   async function openComparison() {
     setError("");
     try {
-      setSnapshot(await invoke<ReviewSnapshot>("compare_local_refs", { repositoryPath, baseRef, headRef }));
+      replaceSnapshot(await invoke<ReviewSnapshot>("compare_local_refs", { repositoryPath, baseRef, headRef }));
       setFileChange(undefined);
     }
-    catch (reason) { setSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
+    catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
   }
 
   async function openFileChange(path: string) {
     if (!snapshot) return;
     setError("");
     try {
-      setFileChange(await invoke<FileChange>("read_file_change", { snapshotId: snapshot.snapshotId, path }));
+      setFileChange(await invoke<FileChangeContent>("read_file_change", { sessionId: snapshot.sessionId, path }));
     } catch (reason) {
       setFileChange(undefined);
       setError(String(reason));
@@ -172,7 +197,7 @@ export function App() {
       <Button disabled={!baseRef || !headRef} onClick={openComparison}>打开 Review Snapshot</Button>
     </section>
     {error && <ErrorMessage message={error} />}
-    {snapshot?.title && <article aria-label="Pull Request 概览">
+    {snapshot?.source === "github" && <article aria-label="Pull Request 概览">
       <h2>{snapshot.title}</h2>
       <p>#{snapshot.number} · {snapshot.author} · {snapshot.draft ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[snapshot.state ?? "open"]}</p>
       <p>{snapshot.baseRef} @ {snapshot.baseRevision} → {snapshot.headRef} @ {snapshot.headRevision}</p>

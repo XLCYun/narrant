@@ -1,5 +1,5 @@
 use httpmock::prelude::*;
-use narrant_lib::change_content::github::{GitHubChangeContent, PullRequestLocation};
+use narrant_lib::change_content::github::{GitHubOpenedReview, PullRequestLocation};
 use narrant_lib::change_content::ChangeStatus;
 
 #[test]
@@ -75,10 +75,12 @@ fn opens_a_pinned_public_pull_request_and_paginates_its_file_changes() {
         }]));
     });
 
-    let adapter = GitHubChangeContent::new(server.base_url());
-    let snapshot = adapter
-        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-        .expect("open public Pull Request");
+    let review = GitHubOpenedReview::open(
+        server.base_url(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+    )
+    .expect("open public Pull Request");
+    let snapshot = review.snapshot();
 
     metadata.assert();
     first_page.assert();
@@ -106,8 +108,6 @@ fn opens_a_pinned_public_pull_request_and_paginates_its_file_changes() {
         Some("guide.md")
     );
     assert_eq!(snapshot.file_changes[1].status, ChangeStatus::Renamed);
-    assert_eq!(snapshot.file_changes[0].before, None);
-    assert_eq!(snapshot.file_changes[0].after, None);
 }
 
 #[test]
@@ -178,16 +178,15 @@ fn loads_one_file_change_on_demand_from_the_snapshots_pinned_revisions() {
             { "path": "hello world.txt", "mode": "100644", "type": "blob", "sha": "new-blob", "size": 13 }
         ]}));
     });
-    let adapter = GitHubChangeContent::new(server.base_url());
-    let snapshot = adapter
-        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-        .unwrap();
+    let review = GitHubOpenedReview::open(
+        server.base_url(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+    )
+    .unwrap();
 
     assert_eq!(before.hits(), 0);
     assert_eq!(after.hits(), 0);
-    let change = adapter
-        .read_file_change(&snapshot, "hello world.txt")
-        .unwrap();
+    let change = review.read_file_change("hello world.txt").unwrap();
 
     before.assert();
     after.assert();
@@ -208,10 +207,12 @@ fn rejects_incomplete_reviews_above_githubs_3000_file_limit() {
         }));
     });
 
-    let error = GitHubChangeContent::new(server.base_url())
-        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-        .unwrap_err()
-        .to_string();
+    let error = GitHubOpenedReview::open(
+        server.base_url(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+    )
+    .unwrap_err()
+    .to_string();
 
     assert_eq!(error, "此 Pull Request 有 3001 个 File Change，超过 GitHub API 的 3000 个上限，无法保证审核完整。请在 GitHub 查看：https://github.com/octo-org/octo-repo/pull/42");
 }
@@ -231,15 +232,19 @@ fn maps_anonymous_github_failures_to_chinese_recovery_messages() {
             when.method(GET).path("/repos/octo-org/octo-repo/pulls/42");
             then.status(status);
         });
-        let error = GitHubChangeContent::new(server.base_url())
-            .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-            .unwrap_err();
+        let error = GitHubOpenedReview::open(
+            server.base_url(),
+            "https://github.com/octo-org/octo-repo/pull/42",
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), expected);
     }
 
-    let error = GitHubChangeContent::new("http://127.0.0.1:1".to_owned())
-        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-        .unwrap_err();
+    let error = GitHubOpenedReview::open(
+        "http://127.0.0.1:1".to_owned(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+    )
+    .unwrap_err();
     assert_eq!(error.to_string(), "当前无法连接 GitHub，请检查网络后重试。");
 }
 
@@ -318,26 +323,21 @@ fn preserves_binary_symlink_and_submodule_content_kinds() {
             "content": "UkVBRE1FLm1k", "encoding": "base64", "size": 9
         }));
     });
-    let adapter = GitHubChangeContent::new(server.base_url());
-    let snapshot = adapter
-        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-        .unwrap();
+    let review = GitHubOpenedReview::open(
+        server.base_url(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+    )
+    .unwrap();
 
     assert_eq!(
-        adapter
-            .read_file_change(&snapshot, "image.bin")
-            .unwrap()
-            .content_kind,
+        review.read_file_change("image.bin").unwrap().content_kind,
         narrant_lib::change_content::ContentKind::Binary
     );
     assert_eq!(
-        adapter
-            .read_file_change(&snapshot, "link")
-            .unwrap()
-            .content_kind,
+        review.read_file_change("link").unwrap().content_kind,
         narrant_lib::change_content::ContentKind::Symlink
     );
-    let submodule = adapter.read_file_change(&snapshot, "vendor").unwrap();
+    let submodule = review.read_file_change("vendor").unwrap();
     assert_eq!(
         submodule.content_kind,
         narrant_lib::change_content::ContentKind::Submodule
@@ -374,14 +374,15 @@ fn reports_a_404_when_pinned_file_content_is_missing() {
             .path("/repos/octo-org/octo-repo/git/commits/merge-base");
         then.status(404);
     });
-    let adapter = GitHubChangeContent::new(server.base_url());
-    let snapshot = adapter
-        .open_pull_request("https://github.com/octo-org/octo-repo/pull/42")
-        .unwrap();
+    let review = GitHubOpenedReview::open(
+        server.base_url(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+    )
+    .unwrap();
 
     assert_eq!(
-        adapter
-            .read_file_change(&snapshot, "missing.txt")
+        review
+            .read_file_change("missing.txt")
             .unwrap_err()
             .to_string(),
         "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。"

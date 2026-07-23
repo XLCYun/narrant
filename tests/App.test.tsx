@@ -71,7 +71,8 @@ describe("App", () => {
 
   it("匿名打开公开 Pull Request 并安全展示固定 Review Snapshot", async () => {
     invoke.mockResolvedValueOnce({
-      snapshotId: "snapshot-github-42",
+      sessionId: "session-github-42",
+      source: "github",
       owner: "octo-org", repository: "octo-repo", title: "Improve greeting", number: 42,
       author: "octocat", state: "merged", draft: false, baseRef: "main",
       baseRevision: "base-sha", comparisonBase: "base-sha", headRef: "feature",
@@ -112,7 +113,8 @@ describe("App", () => {
   it("GitHub File Change 通过统一快照契约按需加载到 Monaco", async () => {
     mockSystemTheme(false);
     const snapshot = {
-      snapshotId: "snapshot-github-8",
+      sessionId: "session-github-8",
+      source: "github",
       owner: "octo-org", repository: "octo-repo", title: "Update readme", number: 8,
       author: "octocat", state: "open", draft: false, baseRef: "main", baseRevision: "base",
       comparisonBase: "base", headRef: "docs", headRevision: "head", description: "",
@@ -128,14 +130,15 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
     fireEvent.click(await screen.findByRole("treeitem", { name: /README.md.*modified/ }));
 
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", { snapshotId: "snapshot-github-8", path: "README.md" }));
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", { sessionId: "session-github-8", path: "README.md" }));
     expect(await screen.findByTestId("diff-editor")).toBeInTheDocument();
   });
 
   it("公开 Pull Request 没有 File Change 时显示简体中文空状态", async () => {
     mockSystemTheme(false);
     invoke.mockResolvedValueOnce({
-      snapshotId: "snapshot-github-9",
+      sessionId: "session-github-9",
+      source: "github",
       owner: "octo-org", repository: "octo-repo", title: "Empty", number: 9, author: "octocat",
       state: "closed", draft: false, baseRef: "main", baseRevision: "same", comparisonBase: "same",
       headRef: "topic", headRevision: "same", description: "", changedFiles: 0, additions: 0,
@@ -148,12 +151,55 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
   });
 
+  it("打开新的 Review Snapshot 时关闭之前的 Review Session", async () => {
+    mockSystemTheme(false);
+    const snapshots = ["session-1", "session-2"].map((sessionId) => ({
+      sessionId, source: "github",
+      owner: "octo-org", repository: "octo-repo", title: sessionId, number: 1,
+      author: "octocat", state: "open", draft: false, baseRef: "main",
+      baseRevision: "base", comparisonBase: "base", headRef: "topic",
+      headRevision: "head", description: "", changedFiles: 0, additions: 0,
+      deletions: 0, githubUrl: "https://github.com/octo-org/octo-repo/pull/1",
+      fileChanges: [],
+    }));
+    invoke.mockImplementation((command: string) => {
+      if (command === "open_github_pull_request") return Promise.resolve(snapshots.shift());
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/1" } });
+    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
+    expect(await screen.findByRole("heading", { name: "session-1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
+
+    expect(await screen.findByRole("heading", { name: "session-2" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-1" });
+  });
+
+  it("卸载应用时关闭活动 Review Session", async () => {
+    mockSystemTheme(false);
+    invoke.mockResolvedValue({
+      sessionId: "session-unmount", source: "github", title: "Unmount", comparisonBase: "base",
+      headRevision: "head", fileChanges: [],
+    });
+    const view = render(<App />);
+
+    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/1" } });
+    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
+    expect(await screen.findByRole("heading", { name: "Unmount" })).toBeInTheDocument();
+    view.unmount();
+
+    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-unmount" });
+  });
+
   it("展示完整文件树并按需加载所选 File Change", async () => {
     mockSystemTheme(false);
     invoke
       .mockResolvedValueOnce(["base", "origin/topic"])
       .mockResolvedValueOnce({
-        snapshotId: "snapshot-local-1",
+        sessionId: "session-local-1",
+        source: "local",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [
@@ -175,7 +221,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("treeitem", { name: /logo.bin.*added/ }));
 
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", {
-      snapshotId: "snapshot-local-1", path: "assets/logo.bin",
+      sessionId: "session-local-1", path: "assets/logo.bin",
     }));
     expect(await screen.findByText("二进制文件（变更前：无；变更后：128 字节）")).toBeInTheDocument();
   });
@@ -185,7 +231,8 @@ describe("App", () => {
     invoke
       .mockResolvedValueOnce(["base", "head"])
       .mockResolvedValueOnce({
-        snapshotId: "snapshot-local-2",
+        sessionId: "session-local-2",
+        source: "local",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [{ path: "readme.txt", oldPath: null, status: "modified", contentKind: "text", beforeSize: 3, afterSize: 4, before: null, after: null }],

@@ -1,23 +1,8 @@
 use git2::{Delta, DiffFindOptions, DiffOptions, Repository};
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewSnapshot {
-    #[serde(default)]
-    pub snapshot_id: String,
-    pub base_ref: String,
-    pub head_ref: String,
-    pub base_revision: String,
-    pub comparison_base: String,
-    pub head_revision: String,
-    pub file_changes: Vec<FileChange>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileChange {
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedFileChange {
     pub path: String,
     pub old_path: Option<String>,
     pub status: ChangeStatus,
@@ -28,8 +13,7 @@ pub struct FileChange {
     pub after: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChangeStatus {
     Added,
     Modified,
@@ -37,8 +21,7 @@ pub enum ChangeStatus {
     Renamed,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ContentKind {
     Text,
     Binary,
@@ -46,22 +29,11 @@ pub enum ContentKind {
     Symlink,
 }
 
-pub trait ChangeContent {
-    type Snapshot;
-    type Error;
-
-    fn read_file_change(
-        &self,
-        snapshot: &Self::Snapshot,
-        path: &str,
-    ) -> Result<FileChange, Self::Error>;
-}
-
 pub mod github {
-    use super::{ChangeContent, ChangeStatus, ContentKind, FileChange};
+    use super::{ChangeStatus, ContentKind, LoadedFileChange};
     use base64::Engine;
     use reqwest::blocking::Client;
-    use serde::{Deserialize, Serialize};
+    use serde::Deserialize;
 
     const INVALID_PULL_REQUEST_URL: &str =
         "请输入完整的 GitHub Pull Request URL，例如 https://github.com/owner/repo/pull/123";
@@ -108,11 +80,8 @@ pub mod github {
         }
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct GitHubReviewSnapshot {
-        #[serde(default)]
-        pub snapshot_id: String,
+    #[derive(Clone, Debug)]
+    pub struct GitHubSnapshot {
         pub owner: String,
         pub repository: String,
         pub title: String,
@@ -129,8 +98,15 @@ pub mod github {
         pub changed_files: usize,
         pub additions: usize,
         pub deletions: usize,
-        pub file_changes: Vec<FileChange>,
+        pub file_changes: Vec<GitHubFileChange>,
         pub github_url: String,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct GitHubFileChange {
+        pub path: String,
+        pub old_path: Option<String>,
+        pub status: ChangeStatus,
     }
 
     #[derive(Debug)]
@@ -150,133 +126,145 @@ pub mod github {
         }
     }
 
-    pub struct GitHubChangeContent {
+    #[derive(Debug)]
+    pub struct GitHubOpenedReview {
         api_base_url: String,
         client: Client,
+        snapshot: GitHubSnapshot,
     }
 
-    impl GitHubChangeContent {
-        pub fn new(api_base_url: String) -> Self {
-            Self {
-                api_base_url: api_base_url.trim_end_matches('/').to_owned(),
-                client: Client::builder()
-                    .user_agent("Narrant/0.1")
-                    .build()
-                    .expect("build GitHub HTTP client"),
-            }
-        }
-
-        pub fn open_pull_request(&self, url: &str) -> Result<GitHubReviewSnapshot, GitHubError> {
-            let location = PullRequestLocation::parse(url)?;
-            let endpoint = format!(
-                "{}/repos/{}/{}/pulls/{}",
-                self.api_base_url, location.owner, location.repository, location.number
-            );
-            let response =
-                self.client.get(endpoint).send().map_err(|_| {
-                    GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
-                })?;
-            if !response.status().is_success() {
-                return Err(map_response_error(response.status().as_u16()));
-            }
-            let metadata: PullRequestResponse = response
-                .json()
-                .map_err(|_| GitHubError("GitHub 返回了无法识别的数据，请稍后重试。".to_owned()))?;
-            let github_url = format!(
-                "https://github.com/{}/{}/pull/{}",
-                location.owner, location.repository, location.number
-            );
-            if metadata.changed_files > 3000 {
-                return Err(GitHubError(format!(
-                    "此 Pull Request 有 {} 个 File Change，超过 GitHub API 的 3000 个上限，无法保证审核完整。请在 GitHub 查看：{}",
-                    metadata.changed_files, github_url
-                )));
-            }
-
-            let comparison_endpoint = format!(
-                "{}/repos/{}/{}/compare/{}...{}",
-                self.api_base_url,
-                location.owner,
-                location.repository,
-                metadata.base.sha,
-                metadata.head.sha
-            );
-            let comparison_response =
-                self.client.get(comparison_endpoint).send().map_err(|_| {
-                    GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
-                })?;
-            if !comparison_response.status().is_success() {
-                return Err(map_response_error(comparison_response.status().as_u16()));
-            }
-            let comparison: ComparisonResponse = comparison_response
-                .json()
-                .map_err(|_| GitHubError("GitHub 返回了无法识别的数据，请稍后重试。".to_owned()))?;
-
-            let mut file_changes = Vec::with_capacity(metadata.changed_files);
-            let mut page = 1;
-            while file_changes.len() < metadata.changed_files {
-                let endpoint = format!(
-                    "{}/repos/{}/{}/pulls/{}/files",
-                    self.api_base_url, location.owner, location.repository, location.number
-                );
-                let response = self
-                    .client
-                    .get(endpoint)
-                    .query(&[("per_page", 100), ("page", page)])
-                    .send()
-                    .map_err(|_| {
-                        GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
-                    })?;
-                if !response.status().is_success() {
-                    return Err(map_response_error(response.status().as_u16()));
-                }
-                let page_changes: Vec<FileResponse> = response.json().map_err(|_| {
-                    GitHubError("GitHub 返回了无法识别的数据，请稍后重试。".to_owned())
-                })?;
-                if page_changes.is_empty() {
-                    break;
-                }
-                file_changes.extend(page_changes.into_iter().map(file_change));
-                page += 1;
-            }
-            if file_changes.len() != metadata.changed_files {
-                return Err(GitHubError(
-                    "GitHub 返回的 File Change 列表不完整，请稍后重试或在 GitHub 查看。".to_owned(),
-                ));
-            }
-
-            Ok(GitHubReviewSnapshot {
-                snapshot_id: String::new(),
-                owner: location.owner,
-                repository: location.repository,
-                title: metadata.title,
-                number: metadata.number,
-                author: metadata.user.login,
-                state: if metadata.merged_at.is_some() {
-                    "merged".to_owned()
-                } else {
-                    metadata.state
-                },
-                draft: metadata.draft,
-                base_ref: metadata.base.reference,
-                base_revision: metadata.base.sha.clone(),
-                comparison_base: comparison.merge_base_commit.sha,
-                head_ref: metadata.head.reference,
-                head_revision: metadata.head.sha,
-                description: metadata.body.unwrap_or_default(),
-                changed_files: metadata.changed_files,
-                additions: metadata.additions,
-                deletions: metadata.deletions,
-                file_changes,
-                github_url,
+    impl GitHubOpenedReview {
+        pub fn open(api_base_url: String, url: &str) -> Result<Self, GitHubError> {
+            let api_base_url = api_base_url.trim_end_matches('/').to_owned();
+            let client = Client::builder()
+                .user_agent("Narrant/0.1")
+                .build()
+                .expect("build GitHub HTTP client");
+            let snapshot = load_pull_request(&api_base_url, &client, url)?;
+            Ok(Self {
+                api_base_url,
+                client,
+                snapshot,
             })
         }
 
-        pub fn read_file_change(
+        pub fn snapshot(&self) -> &GitHubSnapshot {
+            &self.snapshot
+        }
+
+        pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitHubError> {
+            self.read_file_change_from_snapshot(&self.snapshot, path)
+        }
+    }
+
+    fn load_pull_request(
+        api_base_url: &str,
+        client: &Client,
+        url: &str,
+    ) -> Result<GitHubSnapshot, GitHubError> {
+        let location = PullRequestLocation::parse(url)?;
+        let endpoint = format!(
+            "{}/repos/{}/{}/pulls/{}",
+            api_base_url, location.owner, location.repository, location.number
+        );
+        let response = client
+            .get(endpoint)
+            .send()
+            .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
+        if !response.status().is_success() {
+            return Err(map_response_error(response.status().as_u16()));
+        }
+        let metadata: PullRequestResponse = response
+            .json()
+            .map_err(|_| GitHubError("GitHub 返回了无法识别的数据，请稍后重试。".to_owned()))?;
+        let github_url = format!(
+            "https://github.com/{}/{}/pull/{}",
+            location.owner, location.repository, location.number
+        );
+        if metadata.changed_files > 3000 {
+            return Err(GitHubError(format!(
+                    "此 Pull Request 有 {} 个 File Change，超过 GitHub API 的 3000 个上限，无法保证审核完整。请在 GitHub 查看：{}",
+                    metadata.changed_files, github_url
+                )));
+        }
+
+        let comparison_endpoint = format!(
+            "{}/repos/{}/{}/compare/{}...{}",
+            api_base_url, location.owner, location.repository, metadata.base.sha, metadata.head.sha
+        );
+        let comparison_response = client
+            .get(comparison_endpoint)
+            .send()
+            .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
+        if !comparison_response.status().is_success() {
+            return Err(map_response_error(comparison_response.status().as_u16()));
+        }
+        let comparison: ComparisonResponse = comparison_response
+            .json()
+            .map_err(|_| GitHubError("GitHub 返回了无法识别的数据，请稍后重试。".to_owned()))?;
+
+        let mut file_changes = Vec::with_capacity(metadata.changed_files);
+        let mut page = 1;
+        while file_changes.len() < metadata.changed_files {
+            let endpoint = format!(
+                "{}/repos/{}/{}/pulls/{}/files",
+                api_base_url, location.owner, location.repository, location.number
+            );
+            let response = client
+                .get(endpoint)
+                .query(&[("per_page", 100), ("page", page)])
+                .send()
+                .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
+            if !response.status().is_success() {
+                return Err(map_response_error(response.status().as_u16()));
+            }
+            let page_changes: Vec<FileResponse> = response
+                .json()
+                .map_err(|_| GitHubError("GitHub 返回了无法识别的数据，请稍后重试。".to_owned()))?;
+            if page_changes.is_empty() {
+                break;
+            }
+            file_changes.extend(page_changes.into_iter().map(file_change));
+            page += 1;
+        }
+        if file_changes.len() != metadata.changed_files {
+            return Err(GitHubError(
+                "GitHub 返回的 File Change 列表不完整，请稍后重试或在 GitHub 查看。".to_owned(),
+            ));
+        }
+
+        Ok(GitHubSnapshot {
+            owner: location.owner,
+            repository: location.repository,
+            title: metadata.title,
+            number: metadata.number,
+            author: metadata.user.login,
+            state: if metadata.merged_at.is_some() {
+                "merged".to_owned()
+            } else {
+                metadata.state
+            },
+            draft: metadata.draft,
+            base_ref: metadata.base.reference,
+            base_revision: metadata.base.sha.clone(),
+            comparison_base: comparison.merge_base_commit.sha,
+            head_ref: metadata.head.reference,
+            head_revision: metadata.head.sha,
+            description: metadata.body.unwrap_or_default(),
+            changed_files: metadata.changed_files,
+            additions: metadata.additions,
+            deletions: metadata.deletions,
+            file_changes,
+            github_url,
+        })
+    }
+
+    impl GitHubOpenedReview {
+        fn read_file_change_from_snapshot(
             &self,
-            snapshot: &GitHubReviewSnapshot,
+            snapshot: &GitHubSnapshot,
             path: &str,
-        ) -> Result<FileChange, GitHubError> {
+        ) -> Result<LoadedFileChange, GitHubError> {
             let listed = snapshot
                 .file_changes
                 .iter()
@@ -296,7 +284,7 @@ pub mod github {
                 Some(self.read_content(snapshot, &listed.path, &snapshot.head_revision)?)
             };
             let content_kind = resolved_content_kind(before.as_ref(), after.as_ref());
-            Ok(FileChange {
+            Ok(LoadedFileChange {
                 path: listed.path.clone(),
                 old_path: listed.old_path.clone(),
                 status: listed.status,
@@ -310,7 +298,7 @@ pub mod github {
 
         fn read_content(
             &self,
-            snapshot: &GitHubReviewSnapshot,
+            snapshot: &GitHubSnapshot,
             path: &str,
             revision: &str,
         ) -> Result<EntryContent, GitHubError> {
@@ -411,19 +399,6 @@ pub mod github {
                     .then(|| String::from_utf8(bytes).ok())
                     .flatten(),
             })
-        }
-    }
-
-    impl ChangeContent for GitHubChangeContent {
-        type Snapshot = GitHubReviewSnapshot;
-        type Error = GitHubError;
-
-        fn read_file_change(
-            &self,
-            snapshot: &Self::Snapshot,
-            path: &str,
-        ) -> Result<FileChange, Self::Error> {
-            GitHubChangeContent::read_file_change(self, snapshot, path)
         }
     }
 
@@ -538,8 +513,8 @@ pub mod github {
             .unwrap_or(ContentKind::Text)
     }
 
-    fn file_change(response: FileResponse) -> FileChange {
-        FileChange {
+    fn file_change(response: FileResponse) -> GitHubFileChange {
+        GitHubFileChange {
             path: response.filename,
             old_path: response.previous_filename,
             status: match response.status.as_str() {
@@ -548,11 +523,6 @@ pub mod github {
                 "renamed" => ChangeStatus::Renamed,
                 _ => ChangeStatus::Modified,
             },
-            content_kind: ContentKind::Text,
-            before_size: None,
-            after_size: None,
-            before: None,
-            after: None,
         }
     }
 
@@ -571,44 +541,80 @@ pub mod github {
 
 pub mod local {
     use super::*;
-    use std::path::PathBuf;
 
-    pub struct LocalGitChangeContent {
-        repository_path: PathBuf,
+    pub struct LocalOpenedReview {
+        repository: Repository,
+        snapshot: LocalSnapshot,
     }
 
-    impl LocalGitChangeContent {
-        pub fn new(repository_path: impl Into<PathBuf>) -> Self {
-            Self {
-                repository_path: repository_path.into(),
-            }
-        }
-
-        pub fn compare_refs(
-            &self,
+    impl LocalOpenedReview {
+        pub fn open(
+            repository_path: &Path,
             base_ref: &str,
             head_ref: &str,
-        ) -> Result<ReviewSnapshot, git2::Error> {
-            compare_refs(&self.repository_path, base_ref, head_ref)
+        ) -> Result<Self, git2::Error> {
+            let repository = Repository::open(repository_path)?;
+            let snapshot = compare_refs(&repository, base_ref, head_ref)?;
+            Ok(Self {
+                repository,
+                snapshot,
+            })
+        }
+
+        pub fn snapshot(&self) -> &LocalSnapshot {
+            &self.snapshot
+        }
+
+        pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, git2::Error> {
+            let stored = self
+                .snapshot
+                .file_changes
+                .iter()
+                .find(|change| change.path == path)
+                .ok_or_else(|| {
+                    git2::Error::from_str("File Change is not part of the Review Snapshot")
+                })?;
+            let before = read_entry(&self.repository, stored.before_entry.as_ref())?;
+            let after = read_entry(&self.repository, stored.after_entry.as_ref())?;
+            Ok(LoadedFileChange {
+                path: stored.path.clone(),
+                old_path: stored.old_path.clone(),
+                status: stored.status,
+                content_kind: content_kind(before.as_ref(), after.as_ref()),
+                before_size: before.as_ref().and_then(|entry| entry.size),
+                after_size: after.as_ref().and_then(|entry| entry.size),
+                before: before.and_then(|entry| entry.text),
+                after: after.and_then(|entry| entry.text),
+            })
         }
     }
 
-    impl ChangeContent for LocalGitChangeContent {
-        type Snapshot = ReviewSnapshot;
-        type Error = git2::Error;
+    pub struct LocalSnapshot {
+        pub base_ref: String,
+        pub head_ref: String,
+        pub base_revision: git2::Oid,
+        pub comparison_base: git2::Oid,
+        pub head_revision: git2::Oid,
+        pub file_changes: Vec<LocalFileChange>,
+    }
 
-        fn read_file_change(
-            &self,
-            snapshot: &Self::Snapshot,
-            path: &str,
-        ) -> Result<FileChange, Self::Error> {
-            read_file_change(
-                &self.repository_path,
-                &snapshot.comparison_base,
-                &snapshot.head_revision,
-                path,
-            )
-        }
+    pub struct LocalFileChange {
+        pub path: String,
+        pub old_path: Option<String>,
+        pub status: ChangeStatus,
+        before_entry: Option<LocalEntry>,
+        after_entry: Option<LocalEntry>,
+    }
+
+    struct LocalEntry {
+        object_id: git2::Oid,
+        kind: LocalEntryKind,
+    }
+
+    enum LocalEntryKind {
+        RegularBlob,
+        Symlink,
+        Submodule,
     }
 
     pub fn list_refs(repository_path: &Path) -> Result<Vec<String>, git2::Error> {
@@ -627,12 +633,11 @@ pub mod local {
         Ok(refs)
     }
 
-    pub fn compare_refs(
-        repository_path: &Path,
+    fn compare_refs(
+        repository: &Repository,
         base_ref: &str,
         head_ref: &str,
-    ) -> Result<ReviewSnapshot, git2::Error> {
-        let repository = Repository::open(repository_path)?;
+    ) -> Result<LocalSnapshot, git2::Error> {
         let base_commit = repository.revparse_single(base_ref)?.peel_to_commit()?;
         let head_commit = repository.revparse_single(head_ref)?.peel_to_commit()?;
         let comparison_base_id = repository.merge_base(base_commit.id(), head_commit.id())?;
@@ -650,129 +655,94 @@ pub mod local {
         let mut file_changes = Vec::new();
 
         for delta in diff.deltas() {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .ok_or_else(|| git2::Error::from_str("file change has no path"))?;
-            let before = content_at(&repository, &comparison_base_tree, delta.old_file().path())?;
-            let after = content_at(&repository, &head_tree, delta.new_file().path())?;
-            file_changes.push(FileChange {
-                path: path.to_string_lossy().into_owned(),
-                old_path: (delta.status() == Delta::Renamed)
-                    .then(|| {
-                        delta
-                            .old_file()
-                            .path()
-                            .map(|path| path.to_string_lossy().into_owned())
-                    })
-                    .flatten(),
-                status: status(delta.status()),
-                content_kind: content_kind(before.as_ref(), after.as_ref()),
-                before_size: before.as_ref().and_then(|content| content.size),
-                after_size: after.as_ref().and_then(|content| content.size),
-                before: None,
-                after: None,
-            });
+            file_changes.push(local_file_change(&comparison_base_tree, &head_tree, delta)?);
         }
 
-        Ok(ReviewSnapshot {
-            snapshot_id: String::new(),
+        Ok(LocalSnapshot {
             base_ref: base_ref.to_owned(),
             head_ref: head_ref.to_owned(),
-            base_revision: base_commit.id().to_string(),
-            comparison_base: comparison_base_id.to_string(),
-            head_revision: head_commit.id().to_string(),
+            base_revision: base_commit.id(),
+            comparison_base: comparison_base_id,
+            head_revision: head_commit.id(),
             file_changes,
         })
     }
 
-    pub fn read_file_change(
-        repository_path: &Path,
-        comparison_base: &str,
-        head_revision: &str,
-        path: &str,
-    ) -> Result<FileChange, git2::Error> {
-        let repository = Repository::open(repository_path)?;
-        let comparison_base = repository.find_commit(git2::Oid::from_str(comparison_base)?)?;
-        let head = repository.find_commit(git2::Oid::from_str(head_revision)?)?;
-        let comparison_base_tree = comparison_base.tree()?;
-        let head_tree = head.tree()?;
-        let mut options = DiffOptions::new();
-        let mut diff = repository.diff_tree_to_tree(
-            Some(&comparison_base_tree),
-            Some(&head_tree),
-            Some(&mut options),
-        )?;
-        let mut find_options = DiffFindOptions::new();
-        diff.find_similar(Some(&mut find_options))?;
-
-        for delta in diff.deltas() {
-            let new_path = delta.new_file().path();
-            let old_path = delta.old_file().path();
-            let matches = new_path.is_some_and(|candidate| candidate == Path::new(path))
-                || old_path.is_some_and(|candidate| candidate == Path::new(path));
-            if !matches {
-                continue;
-            }
-            let before = content_at(&repository, &comparison_base_tree, old_path)?;
-            let after = content_at(&repository, &head_tree, new_path)?;
-            return Ok(FileChange {
-                path: new_path
-                    .or(old_path)
-                    .ok_or_else(|| git2::Error::from_str("file change has no path"))?
-                    .to_string_lossy()
-                    .into_owned(),
-                old_path: (delta.status() == Delta::Renamed)
-                    .then(|| old_path.map(|path| path.to_string_lossy().into_owned()))
-                    .flatten(),
-                status: status(delta.status()),
-                content_kind: content_kind(before.as_ref(), after.as_ref()),
-                before_size: before.as_ref().and_then(|content| content.size),
-                after_size: after.as_ref().and_then(|content| content.size),
-                before: before.and_then(|content| content.text),
-                after: after.and_then(|content| content.text),
-            });
-        }
-
-        Err(git2::Error::from_str(
-            "File Change is not part of the Review Snapshot",
-        ))
+    fn local_file_change(
+        comparison_base_tree: &git2::Tree<'_>,
+        head_tree: &git2::Tree<'_>,
+        delta: git2::DiffDelta<'_>,
+    ) -> Result<LocalFileChange, git2::Error> {
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .ok_or_else(|| git2::Error::from_str("file change has no path"))?;
+        let before_entry = entry_at(comparison_base_tree, delta.old_file().path())?;
+        let after_entry = entry_at(head_tree, delta.new_file().path())?;
+        Ok(LocalFileChange {
+            path: path.to_string_lossy().into_owned(),
+            old_path: (delta.status() == Delta::Renamed)
+                .then(|| {
+                    delta
+                        .old_file()
+                        .path()
+                        .map(|path| path.to_string_lossy().into_owned())
+                })
+                .flatten(),
+            status: status(delta.status()),
+            before_entry,
+            after_entry,
+        })
     }
 
-    struct EntryContent {
-        kind: ContentKind,
-        size: Option<usize>,
-        text: Option<String>,
-    }
-
-    fn content_at(
-        repository: &Repository,
+    fn entry_at(
         tree: &git2::Tree<'_>,
         path: Option<&Path>,
-    ) -> Result<Option<EntryContent>, git2::Error> {
+    ) -> Result<Option<LocalEntry>, git2::Error> {
         let Some(path) = path else { return Ok(None) };
         let entry = match tree.get_path(path) {
             Ok(entry) => entry,
             Err(_) => return Ok(None),
         };
         if entry.kind() == Some(git2::ObjectType::Commit) {
-            return Ok(Some(EntryContent {
-                kind: ContentKind::Submodule,
-                size: None,
-                text: Some(entry.id().to_string()),
+            return Ok(Some(LocalEntry {
+                object_id: entry.id(),
+                kind: LocalEntryKind::Submodule,
             }));
         }
         if entry.kind() != Some(git2::ObjectType::Blob) {
             return Ok(None);
         }
-        let blob = repository.find_blob(entry.id())?;
         let kind = if entry.filemode() == 0o120000 {
-            ContentKind::Symlink
-        } else if blob.is_binary() {
-            ContentKind::Binary
+            LocalEntryKind::Symlink
         } else {
-            ContentKind::Text
+            LocalEntryKind::RegularBlob
+        };
+        Ok(Some(LocalEntry {
+            object_id: entry.id(),
+            kind,
+        }))
+    }
+
+    fn read_entry(
+        repository: &Repository,
+        entry: Option<&LocalEntry>,
+    ) -> Result<Option<EntryContent>, git2::Error> {
+        let Some(entry) = entry else { return Ok(None) };
+        if matches!(entry.kind, LocalEntryKind::Submodule) {
+            return Ok(Some(EntryContent {
+                kind: ContentKind::Submodule,
+                size: None,
+                text: Some(entry.object_id.to_string()),
+            }));
+        }
+        let blob = repository.find_blob(entry.object_id)?;
+        let kind = match entry.kind {
+            LocalEntryKind::Symlink => ContentKind::Symlink,
+            LocalEntryKind::RegularBlob if blob.is_binary() => ContentKind::Binary,
+            LocalEntryKind::RegularBlob => ContentKind::Text,
+            LocalEntryKind::Submodule => unreachable!(),
         };
         Ok(Some(EntryContent {
             kind,
@@ -781,6 +751,12 @@ pub mod local {
                 .then(|| std::str::from_utf8(blob.content()).ok().map(str::to_owned))
                 .flatten(),
         }))
+    }
+
+    struct EntryContent {
+        kind: ContentKind,
+        size: Option<usize>,
+        text: Option<String>,
     }
 
     fn content_kind(before: Option<&EntryContent>, after: Option<&EntryContent>) -> ContentKind {
@@ -797,6 +773,7 @@ pub mod local {
             .unwrap_or(ContentKind::Text)
     }
 
+    /// git2 的底层差异类型转换成自己的 ChangeStatus 枚举
     fn status(delta: Delta) -> ChangeStatus {
         match delta {
             Delta::Added => ChangeStatus::Added,
