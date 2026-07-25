@@ -1,5 +1,6 @@
 use super::{
-    map_response_error, ChangeStatus, GitHubClient, GitHubError, GitHubSnapshot, LoadedFileChange,
+    map_content_response_error, ChangeStatus, GitHubClient, GitHubError, GitHubSnapshot,
+    LoadedFileChange,
 };
 use crate::change_content::ContentKind;
 use base64::Engine;
@@ -60,14 +61,8 @@ impl GitHubClient {
             .get(commit_endpoint)
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
-        if response.status().as_u16() == 404 {
-            return Err(GitHubError(
-                "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。"
-                    .to_owned(),
-            ));
-        }
         if !response.status().is_success() {
-            return Err(map_response_error(response.status().as_u16()));
+            return Err(map_content_response_error(response.status().as_u16()));
         }
         let commit: GitCommitResponse = response
             .json()
@@ -85,7 +80,7 @@ impl GitHubClient {
                     GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
                 })?;
             if !tree_response.status().is_success() {
-                return Err(map_response_error(tree_response.status().as_u16()));
+                return Err(map_content_response_error(tree_response.status().as_u16()));
             }
             let tree: TreeResponse = tree_response
                 .json()
@@ -130,7 +125,7 @@ impl GitHubClient {
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
         if !blob_response.status().is_success() {
-            return Err(map_response_error(blob_response.status().as_u16()));
+            return Err(map_content_response_error(blob_response.status().as_u16()));
         }
         let blob: BlobResponse = blob_response
             .json()

@@ -110,10 +110,20 @@ impl GitHubOpenedReview {
     }
 }
 
-fn map_response_error(status: u16) -> GitHubError {
+fn map_pull_request_response_error(status: u16) -> GitHubError {
     match status {
         404 => GitHubError(
             "找不到这个公开 Pull Request。请检查 URL，私有仓库需要登录后访问。".to_owned(),
+        ),
+        403 | 429 => GitHubError("GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。".to_owned()),
+        _ => GitHubError("GitHub 服务暂时不可用，请稍后重试。".to_owned()),
+    }
+}
+
+fn map_content_response_error(status: u16) -> GitHubError {
+    match status {
+        404 => GitHubError(
+            "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。".to_owned(),
         ),
         403 | 429 => GitHubError("GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。".to_owned()),
         _ => GitHubError("GitHub 服务暂时不可用，请稍后重试。".to_owned()),

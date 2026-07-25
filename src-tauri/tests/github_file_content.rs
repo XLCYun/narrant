@@ -273,7 +273,28 @@ fn preserves_binary_symlink_and_submodule_content_kinds() {
 }
 
 #[test]
-fn reports_a_404_when_pinned_file_content_is_missing() {
+fn reports_content_specific_404s_for_pinned_commit_tree_and_blob_requests() {
+    for missing_endpoint in ["commit", "tree", "blob"] {
+        assert_eq!(
+            added_file_content_failure(missing_endpoint, 404),
+            "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。",
+            "{missing_endpoint} 404 should use the pinned-content recovery message"
+        );
+    }
+}
+
+#[test]
+fn keeps_actionable_rate_limit_and_service_errors_for_pinned_content_requests() {
+    for (status, expected) in [
+        (403, "GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。"),
+        (429, "GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。"),
+        (503, "GitHub 服务暂时不可用，请稍后重试。"),
+    ] {
+        assert_eq!(added_file_content_failure("blob", status), expected);
+    }
+}
+
+fn added_file_content_failure(failing_endpoint: &str, status: u16) -> String {
     let server = MockServer::start();
     server.mock(|when, then| {
         when.method(GET).path("/repos/octo-org/octo-repo/pulls/42");
@@ -281,7 +302,7 @@ fn reports_a_404_when_pinned_file_content_is_missing() {
             "title": "Missing content", "number": 42, "user": { "login": "octocat" },
             "state": "open", "draft": false, "merged_at": null,
             "base": { "ref": "main", "sha": "base" }, "head": { "ref": "head", "sha": "head" },
-            "body": "", "changed_files": 1, "additions": 1, "deletions": 1
+            "body": "", "changed_files": 1, "additions": 1, "deletions": 0
         }));
     });
     server.mock(|when, then| {
@@ -294,24 +315,44 @@ fn reports_a_404_when_pinned_file_content_is_missing() {
         when.method(GET)
             .path("/repos/octo-org/octo-repo/pulls/42/files");
         then.status(200)
-            .json_body(serde_json::json!([{ "filename": "missing.txt", "status": "modified" }]));
+            .json_body(serde_json::json!([{ "filename": "missing.txt", "status": "added" }]));
     });
     server.mock(|when, then| {
         when.method(GET)
-            .path("/repos/octo-org/octo-repo/git/commits/merge-base");
-        then.status(404);
+            .path("/repos/octo-org/octo-repo/git/commits/head");
+        if failing_endpoint == "commit" {
+            then.status(status);
+        } else {
+            then.status(200)
+                .json_body(serde_json::json!({ "tree": { "sha": "head-tree" } }));
+        }
     });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/trees/head-tree");
+        if failing_endpoint == "tree" {
+            then.status(status);
+        } else {
+            then.status(200).json_body(serde_json::json!({ "tree": [{
+                "path": "missing.txt", "mode": "100644", "type": "blob",
+                "sha": "missing-blob", "size": 7
+            }] }));
+        }
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/blobs/missing-blob");
+        then.status(status);
+    });
+
     let review = GitHubOpenedReview::open(
         server.base_url(),
         "https://github.com/octo-org/octo-repo/pull/42",
     )
     .unwrap();
 
-    assert_eq!(
-        review
-            .read_file_change("missing.txt")
-            .unwrap_err()
-            .to_string(),
-        "无法读取固定版本中的 File Change（404），请重新打开 Pull Request 后重试。"
-    );
+    review
+        .read_file_change("missing.txt")
+        .unwrap_err()
+        .to_string()
 }

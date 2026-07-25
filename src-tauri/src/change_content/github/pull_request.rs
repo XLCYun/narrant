@@ -1,5 +1,6 @@
 use super::{
-    map_response_error, ChangeStatus, GitHubClient, GitHubError, GitHubFileChange, GitHubSnapshot,
+    map_pull_request_response_error, ChangeStatus, GitHubClient, GitHubError, GitHubFileChange,
+    GitHubSnapshot,
 };
 use serde::Deserialize;
 
@@ -63,7 +64,7 @@ impl GitHubClient {
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
         if !response.status().is_success() {
-            return Err(map_response_error(response.status().as_u16()));
+            return Err(map_pull_request_response_error(response.status().as_u16()));
         }
         let metadata: PullRequestResponse = response
             .json()
@@ -93,7 +94,9 @@ impl GitHubClient {
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
         if !comparison_response.status().is_success() {
-            return Err(map_response_error(comparison_response.status().as_u16()));
+            return Err(map_pull_request_response_error(
+                comparison_response.status().as_u16(),
+            ));
         }
         let comparison: ComparisonResponse = comparison_response
             .json()
@@ -113,7 +116,7 @@ impl GitHubClient {
                 .send()
                 .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
             if !response.status().is_success() {
-                return Err(map_response_error(response.status().as_u16()));
+                return Err(map_pull_request_response_error(response.status().as_u16()));
             }
             let page_changes: Vec<FileResponse> = response
                 .json()
