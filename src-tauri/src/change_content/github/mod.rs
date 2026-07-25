@@ -1,0 +1,121 @@
+mod content;
+mod pull_request;
+
+use super::{ChangeStatus, LoadedFileChange};
+use reqwest::blocking::Client;
+
+pub use pull_request::{ParsePullRequestLocationError, PullRequestLocation};
+
+/// 打开 Pull Request 时固定下来的 GitHub Review Snapshot。
+///
+/// Snapshot 只保存元数据和 File Change 列表，不缓存文件正文。后续读取必须使用这里
+/// 记录的精确 revision，避免 Pull Request 更新后混入新内容。
+#[derive(Clone, Debug)]
+pub struct GitHubSnapshot {
+    pub owner: String,
+    pub repository: String,
+    pub title: String,
+    pub number: u64,
+    pub author: String,
+    pub state: String,
+    pub draft: bool,
+    pub base_ref: String,
+    /// 打开 Review 时 Base Ref 指向的 commit；用于描述 Snapshot 身份。
+    pub base_revision: String,
+    /// Base 与 Head 的 merge base；File Change 的 before 内容从这里读取。
+    pub comparison_base: String,
+    pub head_ref: String,
+    /// 打开 Review 时 Head Ref 指向的 commit；File Change 的 after 内容从这里读取。
+    pub head_revision: String,
+    pub description: String,
+    pub changed_files: usize,
+    pub additions: usize,
+    pub deletions: usize,
+    pub file_changes: Vec<GitHubFileChange>,
+    pub github_url: String,
+}
+
+/// Snapshot 中一个 File Change 的轻量索引。
+///
+/// 文件正文按需加载；重命名文件以新路径作为公开查找键，旧路径仅用于读取 before。
+#[derive(Clone, Debug, PartialEq)]
+pub struct GitHubFileChange {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: ChangeStatus,
+}
+
+/// 可直接呈现给用户的 GitHub adapter 错误。
+#[derive(Debug)]
+pub struct GitHubError(String);
+
+impl std::fmt::Display for GitHubError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for GitHubError {}
+
+impl From<ParsePullRequestLocationError> for GitHubError {
+    fn from(error: ParsePullRequestLocationError) -> Self {
+        Self(error.to_string())
+    }
+}
+
+/// GitHub adapter 内部共享的请求边界。
+///
+/// API 地址和 HTTP client 集中在这里，确保 PR 加载与内容读取复用同一份请求配置。
+#[derive(Debug)]
+struct GitHubClient {
+    api_base_url: String,
+    http: Client,
+}
+
+impl GitHubClient {
+    fn new(api_base_url: String) -> Self {
+        Self {
+            api_base_url: api_base_url.trim_end_matches('/').to_owned(),
+            http: Client::builder()
+                .user_agent("Narrant/0.1")
+                .build()
+                .expect("build GitHub HTTP client"),
+        }
+    }
+}
+
+/// 已打开的 GitHub Review。
+///
+/// 同时持有不可变 Snapshot 与读取该 Snapshot 内容所需的 client，供 Review Session
+/// 在生命周期内重复按需读取 File Change。
+#[derive(Debug)]
+pub struct GitHubOpenedReview {
+    client: GitHubClient,
+    snapshot: GitHubSnapshot,
+}
+
+impl GitHubOpenedReview {
+    pub fn open(api_base_url: String, url: &str) -> Result<Self, GitHubError> {
+        let client = GitHubClient::new(api_base_url);
+        let snapshot = client.load_pull_request(url)?;
+        Ok(Self { client, snapshot })
+    }
+
+    pub fn snapshot(&self) -> &GitHubSnapshot {
+        &self.snapshot
+    }
+
+    pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitHubError> {
+        self.client.read_file_change(&self.snapshot, path)
+    }
+}
+
+fn map_response_error(status: u16) -> GitHubError {
+    match status {
+        404 => GitHubError(
+            "找不到这个公开 Pull Request。请检查 URL，私有仓库需要登录后访问。".to_owned(),
+        ),
+        403 | 429 => GitHubError("GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。".to_owned()),
+        _ => GitHubError("GitHub 服务暂时不可用，请稍后重试。".to_owned()),
+    }
+}
