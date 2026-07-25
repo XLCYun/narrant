@@ -1,7 +1,13 @@
 use keyring::Entry;
 
-const CREDENTIAL_SERVICE: &str = "com.narrant.github";
-const CREDENTIAL_ACCOUNT: &str = "current-user";
+/// 平台凭据管理器中的应用命名空间；与 Tauri bundle identifier 保持一致。
+const CREDENTIAL_SERVICE: &str = "com.narrant.app.github-auth";
+
+/// 单账户策略下 GitHub.com 的固定凭据槽位。
+///
+/// 系统凭据管理器本身会按操作系统用户隔离，因此这里不需要、也不应写入
+/// GitHub 登录名等用户身份信息。未来支持 GitHub Enterprise 时可改为对应 host。
+const CREDENTIAL_ACCOUNT: &str = "github.com";
 
 /// 为当前操作系统用户持久化加密凭据封套。
 pub trait CredentialStore: Send + Sync {
