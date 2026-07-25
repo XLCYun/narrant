@@ -22,7 +22,16 @@ servers and must not access a real GitHub account.
 
 ## Build configuration
 
-Set these public values when compiling the Tauri application:
+For local development, copy `.env.local.example` to `.env.local` and set these public
+values. `.env.local` is ignored by Git and is loaded at build time; explicitly supplied
+shell or CI environment variables take precedence.
+
+```sh
+cp .env.local.example .env.local
+```
+
+Then run `pnpm tauri dev` without repeating the variables. CI or release builds can
+continue to set them explicitly:
 
 ```sh
 NARRANT_GITHUB_CLIENT_ID=Iv1.example \

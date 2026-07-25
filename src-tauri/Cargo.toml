@@ -14,6 +14,7 @@ default = []
 wdio = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
+dotenvy = "0.15"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
