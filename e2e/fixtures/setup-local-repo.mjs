@@ -1,5 +1,5 @@
 // 构造本地 Git fixture 仓库,供真实 Tauri E2E(local-comparison)使用。
-// 仅用系统 Git CLI *搭建测试夹具*;应用本身从不调用系统 Git(见 ADR-0003)。
+// 用系统 Git CLI 搭建真实仓库夹具，应用通过同一 Core Git 语义读取它。
 // 用法: node setup-local-repo.mjs <目标目录>
 import { rm, mkdir, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";

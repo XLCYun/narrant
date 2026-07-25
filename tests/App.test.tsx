@@ -318,7 +318,9 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("treeitem", { name: /logo.bin.*added/ }));
 
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", {
-      sessionId: "session-local-1", path: "assets/logo.bin",
+      sessionId: "session-local-1",
+      path: "assets/logo.bin",
+      operationId: expect.any(String),
     }));
     expect(await screen.findByText("二进制文件（变更前：无；变更后：128 字节）")).toBeInTheDocument();
   });

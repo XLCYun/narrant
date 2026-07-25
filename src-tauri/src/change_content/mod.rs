@@ -1,6 +1,3 @@
-use git2::{Delta, DiffFindOptions, DiffOptions, Repository};
-use std::path::Path;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedFileChange {
     pub path: String,

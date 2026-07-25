@@ -1,4 +1,5 @@
 pub mod change_content;
+pub mod core_git;
 pub mod github_auth;
 
 use serde::Serialize;
@@ -9,7 +10,7 @@ use std::sync::{
 };
 
 enum OpenedReview {
-    Local(change_content::local::LocalOpenedReview),
+    Local(Box<change_content::local::LocalOpenedReview>),
     GitHub(Box<change_content::github::GitHubOpenedReview>),
 }
 
@@ -19,6 +20,14 @@ struct FileChangeSummaryResponse {
     path: String,
     old_path: Option<String>,
     status: ChangeStatusResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_mode: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_mode: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before_object_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after_object_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -101,6 +110,44 @@ struct GitHubReviewSnapshotResponse {
 struct ReviewSessionStore {
     next_id: AtomicU64,
     sessions: Mutex<HashMap<String, Arc<Mutex<OpenedReview>>>>,
+}
+
+/// 跟踪可由另一个 Tauri 调用取消的在途 Core Git 操作。
+#[derive(Default)]
+struct GitOperationStore {
+    operations: Mutex<HashMap<String, core_git::CancellationToken>>,
+}
+
+impl GitOperationStore {
+    /// 注册一次 Core Git 操作，并返回其共享取消标记。
+    fn start(&self, id: String) -> Result<core_git::CancellationToken, String> {
+        let token = core_git::CancellationToken::default();
+        self.operations
+            .lock()
+            .map_err(|_| "Core Git 操作状态不可用。".to_owned())?
+            .insert(id, token.clone());
+        Ok(token)
+    }
+
+    /// 移除已经完成的 Core Git 操作。
+    fn finish(&self, id: &str) {
+        if let Ok(mut operations) = self.operations.lock() {
+            operations.remove(id);
+        }
+    }
+
+    /// 请求取消指定的在途 Core Git 操作；操作已经完成时保持幂等。
+    fn cancel(&self, id: &str) -> Result<(), String> {
+        if let Some(token) = self
+            .operations
+            .lock()
+            .map_err(|_| "Core Git 操作状态不可用。".to_owned())?
+            .get(id)
+        {
+            token.cancel();
+        }
+        Ok(())
+    }
 }
 
 impl ReviewSessionStore {
@@ -191,9 +238,9 @@ fn map_local_snapshot(
         session_id,
         base_ref: snapshot.base_ref.clone(),
         head_ref: snapshot.head_ref.clone(),
-        base_revision: snapshot.base_revision.to_string(),
-        comparison_base: snapshot.comparison_base.to_string(),
-        head_revision: snapshot.head_revision.to_string(),
+        base_revision: snapshot.base_revision.clone(),
+        comparison_base: snapshot.comparison_base.clone(),
+        head_revision: snapshot.head_revision.clone(),
         file_changes: snapshot
             .file_changes
             .iter()
@@ -201,6 +248,10 @@ fn map_local_snapshot(
                 path: change.path.clone(),
                 old_path: change.old_path.clone(),
                 status: map_status(change.status),
+                before_mode: change.before_mode,
+                after_mode: change.after_mode,
+                before_object_id: change.before_object_id.clone(),
+                after_object_id: change.after_object_id.clone(),
             })
             .collect(),
     }
@@ -236,6 +287,10 @@ fn map_github_snapshot(
                 path: change.path.clone(),
                 old_path: change.old_path.clone(),
                 status: map_status(change.status),
+                before_mode: None,
+                after_mode: None,
+                before_object_id: None,
+                after_object_id: None,
             })
             .collect(),
         github_url: snapshot.github_url.clone(),
@@ -245,18 +300,24 @@ fn map_github_snapshot(
 #[tauri::command]
 fn compare_local_refs(
     state: tauri::State<'_, ReviewSessionStore>,
+    operations: tauri::State<'_, GitOperationStore>,
+    operation_id: String,
     repository_path: String,
     base_ref: String,
     head_ref: String,
 ) -> Result<LocalReviewSnapshotResponse, String> {
-    let review = change_content::local::LocalOpenedReview::open(
+    let cancellation = operations.start(operation_id.clone())?;
+    let review = change_content::local::LocalOpenedReview::open_with_cancellation(
         std::path::Path::new(&repository_path),
         &base_ref,
         &head_ref,
+        &cancellation,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string());
+    operations.finish(&operation_id);
+    let review = review?;
     let response = map_local_snapshot(String::new(), review.snapshot());
-    let session_id = state.insert(OpenedReview::Local(review))?;
+    let session_id = state.insert(OpenedReview::Local(Box::new(review)))?;
     Ok(LocalReviewSnapshotResponse {
         session_id,
         ..response
@@ -264,9 +325,27 @@ fn compare_local_refs(
 }
 
 #[tauri::command]
-fn list_local_refs(repository_path: String) -> Result<Vec<String>, String> {
-    change_content::local::list_refs(std::path::Path::new(&repository_path))
-        .map_err(|error| error.to_string())
+fn list_local_refs(
+    operations: tauri::State<'_, GitOperationStore>,
+    operation_id: String,
+    repository_path: String,
+) -> Result<Vec<String>, String> {
+    let cancellation = operations.start(operation_id.clone())?;
+    let result = change_content::local::list_refs_with_cancellation(
+        std::path::Path::new(&repository_path),
+        &cancellation,
+    )
+    .map_err(|error| error.to_string());
+    operations.finish(&operation_id);
+    result
+}
+
+#[tauri::command]
+fn cancel_git_operation(
+    operations: tauri::State<'_, GitOperationStore>,
+    operation_id: String,
+) -> Result<(), String> {
+    operations.cancel(&operation_id)
 }
 
 fn github_api_base_url() -> String {
@@ -336,6 +415,8 @@ async fn sign_out_github(
 #[tauri::command]
 async fn read_file_change(
     state: tauri::State<'_, ReviewSessionStore>,
+    operations: tauri::State<'_, GitOperationStore>,
+    operation_id: Option<String>,
     session_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
@@ -346,10 +427,15 @@ async fn read_file_change(
             .map_err(|_| "Review Session 状态不可用。".to_owned())?;
         match &*review {
             OpenedReview::Local(review) => {
-                return review
-                    .read_file_change(&path)
+                let operation_id =
+                    operation_id.ok_or_else(|| "本地 File Change 缺少操作 ID。".to_owned())?;
+                let cancellation = operations.start(operation_id.clone())?;
+                let result = review
+                    .read_file_change_with_cancellation(&path, &cancellation)
                     .map(map_file_content)
                     .map_err(|error| error.to_string());
+                operations.finish(&operation_id);
+                return result;
             }
             OpenedReview::GitHub(review) => review.clone(),
         }
@@ -391,10 +477,12 @@ pub fn run() {
     ));
     let builder = tauri::Builder::default()
         .manage(ReviewSessionStore::default())
+        .manage(GitOperationStore::default())
         .manage(auth)
         .invoke_handler(tauri::generate_handler![
             compare_local_refs,
             list_local_refs,
+            cancel_git_operation,
             open_github_pull_request,
             github_auth_status,
             start_github_authorization,
@@ -453,8 +541,12 @@ mod tests {
         drop(commit);
         drop(tree);
         drop(repository);
-        let review =
-            change_content::local::LocalOpenedReview::open(fixture.path(), "base", "head").unwrap();
+        let review = change_content::local::LocalOpenedReview::open(
+            fixture.path(),
+            "refs/heads/base",
+            "refs/heads/head",
+        )
+        .unwrap();
         let response = map_local_snapshot("session-42".to_owned(), review.snapshot());
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["source"], "local");
@@ -464,7 +556,7 @@ mod tests {
         assert!(json.get("snapshotId").is_none());
 
         let store = ReviewSessionStore::default();
-        let id = store.insert(OpenedReview::Local(review)).unwrap();
+        let id = store.insert(OpenedReview::Local(Box::new(review))).unwrap();
         let in_flight = store.get(&id).unwrap();
         let github_id = store
             .insert(OpenedReview::GitHub(Box::new(
