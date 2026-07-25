@@ -1,5 +1,10 @@
 # Stateful Review Sessions
 
+> **Superseded:** The runtime Review Session model and `sessionId` contract are replaced
+> by the durable Review and temporary Review Workspace model in
+> [0003 Local Repository Reviews](0003-local-repository-reviews.md). This document is
+> retained as implementation history.
+
 ## Problem Statement
 
 Opening a Review Snapshot currently stores only its serialized description and enough

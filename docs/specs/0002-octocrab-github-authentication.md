@@ -1,5 +1,11 @@
 # Octocrab-backed GitHub Authentication
 
+> **Partially superseded:** Device Flow, token refresh, secret handling, and the system
+> credential adapter remain in force. GitHub code-content access, Review Session
+> integration, sign-out cleanup, and GitHub App permission requirements are replaced by
+> [0003 Local Repository Reviews](0003-local-repository-reviews.md), ADR-0001,
+> ADR-0006, and ADR-0013.
+
 ## Problem Statement
 
 Narrant can authorize one GitHub account and open private Pull Requests, but its

@@ -10,7 +10,6 @@ environment variables and must never receive a client secret or private key.
 3. Enable **Device Flow**.
 4. Set repository permissions to:
    - **Metadata**: Read-only
-   - **Contents**: Read-only
    - **Pull requests**: Read-only
    - every other permission: No access
 5. Disable webhooks because Narrant does not receive events.
@@ -44,5 +43,5 @@ pnpm tauri build
   `https://github.com/apps/<slug>/installations/new`.
 
 Do not configure `CLIENT_SECRET` or a GitHub App private key. A build without both
-public values still allows opening a Review Session for a public Pull Request
-anonymously and reports that GitHub login is not configured.
+public values still allows anonymous Pull Request discovery for public GitHub remotes
+and reports that GitHub login is not configured.
