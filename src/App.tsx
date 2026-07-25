@@ -48,6 +48,18 @@ type GitHubReviewSnapshot = ReviewSnapshotBase & {
   githubUrl: string;
 };
 type ReviewSnapshot = LocalReviewSnapshot | GitHubReviewSnapshot;
+type GitHubAuthStatus = {
+  configured: boolean;
+  signedIn: boolean;
+  appInstallUrl: string | null;
+};
+type DeviceAuthorization = {
+  authorizationId: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
 
 type DirectoryNode = {
   name: string;
@@ -99,6 +111,9 @@ export function App() {
   const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
+  const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
+  const [authorizing, setAuthorizing] = useState(false);
   const activeSessionId = useRef<string>();
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
@@ -132,6 +147,61 @@ export function App() {
       setError(String(reason));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function showGitHubAuthorization() {
+    setError("");
+    try {
+      setAuthStatus(await invoke<GitHubAuthStatus>("github_auth_status"));
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function startGitHubAuthorization() {
+    setError("");
+    setAuthorizing(true);
+    try {
+      const authorization = await invoke<DeviceAuthorization>("start_github_authorization");
+      setDeviceAuthorization(authorization);
+      await openUrl(authorization.verificationUri);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setAuthorizing(false);
+    }
+  }
+
+  async function completeGitHubAuthorization() {
+    if (!deviceAuthorization) return;
+    setError("");
+    setAuthorizing(true);
+    try {
+      await invoke("complete_github_authorization", {
+        authorizationId: deviceAuthorization.authorizationId,
+      });
+      setAuthStatus((status) => status ? { ...status, signedIn: true } : status);
+      setDeviceAuthorization(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setAuthorizing(false);
+    }
+  }
+
+  async function signOutGitHub() {
+    setError("");
+    try {
+      await invoke("sign_out_github");
+      if (snapshot?.source === "github") {
+        replaceSnapshot(undefined);
+        setFileChange(undefined);
+      }
+      setAuthStatus((status) => status ? { ...status, signedIn: false } : status);
+      setDeviceAuthorization(undefined);
+    } catch (reason) {
+      setError(String(reason));
     }
   }
 
@@ -190,8 +260,24 @@ export function App() {
     <header><h1>Narrant</h1><p>只读变更审核</p></header>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
       <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
-      <Button disabled={!pullRequestUrl || loading} onClick={openPullRequest}>{loading ? "正在加载…" : "匿名打开"}</Button>
+      <Button disabled={!pullRequestUrl || loading} onClick={openPullRequest}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
+      {!authStatus && <Button variant="outline" onClick={showGitHubAuthorization}>GitHub 登录</Button>}
+      {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
     </section>
+    {authStatus && !authStatus.signedIn && <section aria-label="GitHub 授权">
+      {!authStatus.configured
+        ? <p>此构建未配置 GitHub App，仍可匿名打开公开 Pull Request。</p>
+        : <>
+          <p>先安装 Narrant GitHub App，并为目标仓库授予只读访问；组织仓库可能需要管理员审批。</p>
+          {authStatus.appInstallUrl && <Button variant="outline" onClick={() => openUrl(authStatus.appInstallUrl!)}>选择仓库或申请组织审批</Button>}
+          <Button disabled={authorizing} onClick={startGitHubAuthorization}>生成设备码</Button>
+          {deviceAuthorization && <div>
+            <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
+            <p>仅使用 Narrant 当前生成的设备码，并在 GitHub 页面核对应用名称。不要输入他人发送的验证码。</p>
+            <Button disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
+          </div>}
+        </>}
+    </section>}
     <p>本地分支比较</p>
     <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
       <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>

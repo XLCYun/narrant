@@ -163,3 +163,27 @@ fn maps_anonymous_github_failures_to_chinese_recovery_messages() {
     .unwrap_err();
     assert_eq!(error.to_string(), "当前无法连接 GitHub，请检查网络后重试。");
 }
+
+#[test]
+fn authenticated_pull_request_requests_use_bearer_token_and_explain_installation_access() {
+    let server = MockServer::start();
+    let request = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/private-org/private-repo/pulls/42")
+            .header("authorization", "Bearer private-token");
+        then.status(403);
+    });
+
+    let error = GitHubOpenedReview::open_with_token(
+        server.base_url(),
+        "https://github.com/private-org/private-repo/pull/42",
+        Some("private-token".to_owned()),
+    )
+    .unwrap_err();
+
+    request.assert();
+    assert_eq!(
+        error.to_string(),
+        "当前账号或 GitHub App 安装范围无权访问此 Pull Request，请检查仓库授权或组织审批。"
+    );
+}

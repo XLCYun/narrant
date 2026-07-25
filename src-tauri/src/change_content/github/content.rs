@@ -1,7 +1,4 @@
-use super::{
-    map_content_response_error, ChangeStatus, GitHubClient, GitHubError, GitHubSnapshot,
-    LoadedFileChange,
-};
+use super::{ChangeStatus, GitHubClient, GitHubError, GitHubSnapshot, LoadedFileChange};
 use crate::change_content::ContentKind;
 use base64::Engine;
 use serde::Deserialize;
@@ -57,12 +54,11 @@ impl GitHubClient {
             self.api_base_url, snapshot.owner, snapshot.repository, revision
         );
         let response = self
-            .http
             .get(commit_endpoint)
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
         if !response.status().is_success() {
-            return Err(map_content_response_error(response.status().as_u16()));
+            return Err(self.map_content_error(response.status().as_u16()));
         }
         let commit: GitCommitResponse = response
             .json()
@@ -75,12 +71,12 @@ impl GitHubClient {
                 "{}/repos/{}/{}/git/trees/{}",
                 self.api_base_url, snapshot.owner, snapshot.repository, tree_sha
             );
-            let tree_response =
-                self.http.get(tree_endpoint).send().map_err(|_| {
-                    GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned())
-                })?;
+            let tree_response = self
+                .get(tree_endpoint)
+                .send()
+                .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
             if !tree_response.status().is_success() {
-                return Err(map_content_response_error(tree_response.status().as_u16()));
+                return Err(self.map_content_error(tree_response.status().as_u16()));
             }
             let tree: TreeResponse = tree_response
                 .json()
@@ -120,12 +116,11 @@ impl GitHubClient {
             self.api_base_url, snapshot.owner, snapshot.repository, entry.sha
         );
         let blob_response = self
-            .http
             .get(blob_endpoint)
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
         if !blob_response.status().is_success() {
-            return Err(map_content_response_error(blob_response.status().as_u16()));
+            return Err(self.map_content_error(blob_response.status().as_u16()));
         }
         let blob: BlobResponse = blob_response
             .json()

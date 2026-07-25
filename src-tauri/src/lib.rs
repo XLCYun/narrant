@@ -1,4 +1,5 @@
 pub mod change_content;
+pub mod github_auth;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -128,6 +129,26 @@ impl ReviewSessionStore {
             .remove(id);
         Ok(())
     }
+
+    fn close_github_sessions(&self) -> Result<(), String> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "Review Session 状态不可用。".to_owned())?;
+        let mut github_ids = Vec::new();
+        for (id, review) in sessions.iter() {
+            let review = review
+                .lock()
+                .map_err(|_| "Review Session 状态不可用。".to_owned())?;
+            if matches!(&*review, OpenedReview::GitHub(_)) {
+                github_ids.push(id.clone());
+            }
+        }
+        for id in github_ids {
+            sessions.remove(&id);
+        }
+        Ok(())
+    }
 }
 
 fn map_status(status: change_content::ChangeStatus) -> ChangeStatusResponse {
@@ -249,16 +270,30 @@ fn list_local_refs(repository_path: String) -> Result<Vec<String>, String> {
 }
 
 fn github_api_base_url() -> String {
-    std::env::var("NARRANT_GITHUB_API_URL").unwrap_or_else(|_| "https://api.github.com".to_owned())
+    #[cfg(feature = "wdio")]
+    {
+        std::env::var("NARRANT_GITHUB_API_URL")
+            .unwrap_or_else(|_| "https://api.github.com".to_owned())
+    }
+    #[cfg(not(feature = "wdio"))]
+    {
+        "https://api.github.com".to_owned()
+    }
 }
 
 #[tauri::command]
 fn open_github_pull_request(
     state: tauri::State<'_, ReviewSessionStore>,
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
     url: String,
 ) -> Result<GitHubReviewSnapshotResponse, String> {
-    let review = change_content::github::GitHubOpenedReview::open(github_api_base_url(), &url)
-        .map_err(|error| error.to_string())?;
+    let access_token = auth.access_token()?;
+    let review = change_content::github::GitHubOpenedReview::open_with_token(
+        github_api_base_url(),
+        &url,
+        access_token,
+    )
+    .map_err(|error| error.to_string())?;
     let response = map_github_snapshot(String::new(), review.snapshot());
     let session_id = state.insert(OpenedReview::GitHub(Box::new(review)))?;
     Ok(GitHubReviewSnapshotResponse {
@@ -268,24 +303,64 @@ fn open_github_pull_request(
 }
 
 #[tauri::command]
+fn github_auth_status(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+) -> Result<github_auth::AuthorizationStatus, String> {
+    auth.status()
+}
+
+#[tauri::command]
+fn start_github_authorization(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+) -> Result<github_auth::DeviceAuthorization, String> {
+    auth.start_device_authorization()
+}
+
+#[tauri::command]
+async fn complete_github_authorization(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+    authorization_id: String,
+) -> Result<(), String> {
+    let auth = Arc::clone(auth.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        auth.complete_device_authorization(&authorization_id)
+    })
+    .await
+    .map_err(|_| "GitHub 授权任务意外终止，请重新尝试。".to_owned())?
+}
+
+#[tauri::command]
+fn sign_out_github(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+    sessions: tauri::State<'_, ReviewSessionStore>,
+) -> Result<(), String> {
+    auth.sign_out()?;
+    sessions.close_github_sessions()
+}
+
+#[tauri::command]
 fn read_file_change(
     state: tauri::State<'_, ReviewSessionStore>,
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
     session_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
     let review = state.get(&session_id)?;
-    let review = review
+    let mut review = review
         .lock()
         .map_err(|_| "Review Session 状态不可用。".to_owned())?;
-    match &*review {
+    match &mut *review {
         OpenedReview::Local(review) => review
             .read_file_change(&path)
             .map(map_file_content)
             .map_err(|error| error.to_string()),
-        OpenedReview::GitHub(review) => review
-            .read_file_change(&path)
-            .map(map_file_content)
-            .map_err(|error| error.to_string()),
+        OpenedReview::GitHub(review) => {
+            review.set_access_token(auth.access_token()?);
+            review
+                .read_file_change(&path)
+                .map(map_file_content)
+                .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -298,12 +373,29 @@ fn close_review_session(
 }
 
 pub fn run() {
+    #[cfg(feature = "wdio")]
+    let oauth_base_url = std::env::var("NARRANT_GITHUB_OAUTH_URL")
+        .unwrap_or_else(|_| "https://github.com".to_owned());
+    #[cfg(not(feature = "wdio"))]
+    let oauth_base_url = "https://github.com".to_owned();
+    let auth = Arc::new(github_auth::GitHubAuth::new(
+        option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
+        option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
+        oauth_base_url,
+        Arc::new(github_auth::SystemCredentialStore),
+        Arc::new(github_auth::NoGitHubRecentEntries),
+    ));
     let builder = tauri::Builder::default()
         .manage(ReviewSessionStore::default())
+        .manage(auth)
         .invoke_handler(tauri::generate_handler![
             compare_local_refs,
             list_local_refs,
             open_github_pull_request,
+            github_auth_status,
+            start_github_authorization,
+            complete_github_authorization,
+            sign_out_github,
             read_file_change,
             close_review_session
         ])
@@ -370,6 +462,18 @@ mod tests {
         let store = ReviewSessionStore::default();
         let id = store.insert(OpenedReview::Local(review)).unwrap();
         let in_flight = store.get(&id).unwrap();
+        let github_id = store
+            .insert(OpenedReview::GitHub(Box::new(
+                change_content::github::GitHubOpenedReview::empty_for_test(),
+            )))
+            .unwrap();
+
+        store.close_github_sessions().unwrap();
+        assert!(store.get(&id).is_ok());
+        assert_eq!(
+            store.get(&github_id).err().unwrap(),
+            "Review Session 已关闭或失效，请重新打开。"
+        );
 
         store.close(&id).unwrap();
         store.close(&id).unwrap();

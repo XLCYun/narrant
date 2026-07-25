@@ -70,16 +70,38 @@ impl From<ParsePullRequestLocationError> for GitHubError {
 struct GitHubClient {
     api_base_url: String,
     http: Client,
+    access_token: Option<String>,
 }
 
 impl GitHubClient {
-    fn new(api_base_url: String) -> Self {
+    fn new(api_base_url: String, access_token: Option<String>) -> Self {
         Self {
             api_base_url: api_base_url.trim_end_matches('/').to_owned(),
             http: Client::builder()
                 .user_agent("Narrant/0.1")
                 .build()
                 .expect("build GitHub HTTP client"),
+            access_token,
+        }
+    }
+
+    fn get(&self, endpoint: String) -> reqwest::blocking::RequestBuilder {
+        let request = self.http.get(endpoint);
+        match &self.access_token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    }
+
+    fn set_access_token(&mut self, access_token: Option<String>) {
+        self.access_token = access_token;
+    }
+
+    fn map_content_error(&self, status: u16) -> GitHubError {
+        if self.access_token.is_some() {
+            map_authenticated_pull_request_response_error(status)
+        } else {
+            map_content_response_error(status)
         }
     }
 }
@@ -96,7 +118,15 @@ pub struct GitHubOpenedReview {
 
 impl GitHubOpenedReview {
     pub fn open(api_base_url: String, url: &str) -> Result<Self, GitHubError> {
-        let client = GitHubClient::new(api_base_url);
+        Self::open_with_token(api_base_url, url, None)
+    }
+
+    pub fn open_with_token(
+        api_base_url: String,
+        url: &str,
+        access_token: Option<String>,
+    ) -> Result<Self, GitHubError> {
+        let client = GitHubClient::new(api_base_url, access_token);
         let snapshot = client.load_pull_request(url)?;
         Ok(Self { client, snapshot })
     }
@@ -108,6 +138,37 @@ impl GitHubOpenedReview {
     pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitHubError> {
         self.client.read_file_change(&self.snapshot, path)
     }
+
+    pub fn set_access_token(&mut self, access_token: Option<String>) {
+        self.client.set_access_token(access_token);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self {
+            client: GitHubClient::new("https://api.github.com".to_owned(), None),
+            snapshot: GitHubSnapshot {
+                owner: "test".to_owned(),
+                repository: "test".to_owned(),
+                title: "test".to_owned(),
+                number: 1,
+                author: "test".to_owned(),
+                state: "open".to_owned(),
+                draft: false,
+                base_ref: "main".to_owned(),
+                base_revision: "base".to_owned(),
+                comparison_base: "base".to_owned(),
+                head_ref: "head".to_owned(),
+                head_revision: "head".to_owned(),
+                description: String::new(),
+                changed_files: 0,
+                additions: 0,
+                deletions: 0,
+                file_changes: Vec::new(),
+                github_url: "https://github.com/test/test/pull/1".to_owned(),
+            },
+        }
+    }
 }
 
 fn map_pull_request_response_error(status: u16) -> GitHubError {
@@ -116,6 +177,18 @@ fn map_pull_request_response_error(status: u16) -> GitHubError {
             "找不到这个公开 Pull Request。请检查 URL，私有仓库需要登录后访问。".to_owned(),
         ),
         403 | 429 => GitHubError("GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。".to_owned()),
+        _ => GitHubError("GitHub 服务暂时不可用，请稍后重试。".to_owned()),
+    }
+}
+
+fn map_authenticated_pull_request_response_error(status: u16) -> GitHubError {
+    match status {
+        401 => GitHubError("GitHub 登录已失效，请重新授权。".to_owned()),
+        403 | 404 => GitHubError(
+            "当前账号或 GitHub App 安装范围无权访问此 Pull Request，请检查仓库授权或组织审批。"
+                .to_owned(),
+        ),
+        429 => GitHubError("GitHub 访问次数已用尽，请稍后重试。".to_owned()),
         _ => GitHubError("GitHub 服务暂时不可用，请稍后重试。".to_owned()),
     }
 }
