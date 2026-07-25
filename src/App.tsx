@@ -114,6 +114,7 @@ export function App() {
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
   const [authorizing, setAuthorizing] = useState(false);
+  const [copiedValue, setCopiedValue] = useState<"device-code" | "authorization-url">();
   const activeSessionId = useRef<string>();
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
@@ -150,10 +151,15 @@ export function App() {
     }
   }
 
-  async function showGitHubAuthorization() {
+  /** 启动连接向导，并在已配置时将用户带到 GitHub App 安装页。 */
+  async function connectGitHub() {
     setError("");
     try {
-      setAuthStatus(await invoke<GitHubAuthStatus>("github_auth_status"));
+      const status = await invoke<GitHubAuthStatus>("github_auth_status");
+      setAuthStatus(status);
+      if (status.configured && !status.signedIn && status.appInstallUrl) {
+        await openUrl(status.appInstallUrl);
+      }
     } catch (reason) {
       setError(String(reason));
     }
@@ -161,6 +167,7 @@ export function App() {
 
   async function startGitHubAuthorization() {
     setError("");
+    setCopiedValue(undefined);
     setAuthorizing(true);
     try {
       const authorization = await invoke<DeviceAuthorization>("start_github_authorization");
@@ -170,6 +177,17 @@ export function App() {
       setError(String(reason));
     } finally {
       setAuthorizing(false);
+    }
+  }
+
+  /** 将用户主动选择的授权信息复制到系统剪贴板，并反馈复制结果。 */
+  async function copyAuthorizationValue(value: string, copied: "device-code" | "authorization-url") {
+    setError("");
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedValue(copied);
+    } catch (reason) {
+      setError(`无法复制到剪贴板：${String(reason)}`);
     }
   }
 
@@ -261,18 +279,29 @@ export function App() {
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
       <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
       <Button disabled={!pullRequestUrl || loading} onClick={openPullRequest}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
-      {!authStatus && <Button variant="outline" onClick={showGitHubAuthorization}>GitHub 登录</Button>}
+      {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
       {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
     </section>
     {authStatus && !authStatus.signedIn && <section aria-label="GitHub 授权">
       {!authStatus.configured
         ? <p>此构建未配置 GitHub App，仍可匿名打开公开 Pull Request。</p>
         : <>
-          <p>先安装 Narrant GitHub App，并为目标仓库授予只读访问；组织仓库可能需要管理员审批。</p>
-          {authStatus.appInstallUrl && <Button variant="outline" onClick={() => openUrl(authStatus.appInstallUrl!)}>选择仓库或申请组织审批</Button>}
-          <Button disabled={authorizing} onClick={startGitHubAuthorization}>生成设备码</Button>
+          <p>第 1 步：在 GitHub 中安装 Narrant，并为目标仓库授予只读访问；组织仓库可能需要管理员审批。</p>
+          {authStatus.appInstallUrl && <Button variant="outline" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
+          <p>第 2 步：安装完成后返回此处，继续授权当前 GitHub 账号。</p>
+          <Button disabled={authorizing} onClick={startGitHubAuthorization}>我已安装，继续</Button>
           {deviceAuthorization && <div>
             <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
+            <Button variant="outline" type="button" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
+              {copiedValue === "device-code" ? "设备码已复制" : "复制设备码"}
+            </Button>
+            <p>授权 URL：<a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a></p>
+            <div className="flex flex-wrap gap-3">
+              <Button variant="outline" type="button" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
+                {copiedValue === "authorization-url" ? "链接已复制" : "复制链接"}
+              </Button>
+              <Button variant="outline" type="button" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>打开 GitHub</Button>
+            </div>
             <p>仅使用 Narrant 当前生成的设备码，并在 GitHub 页面核对应用名称。不要输入他人发送的验证码。</p>
             <Button disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
           </div>}
