@@ -282,17 +282,17 @@ fn github_api_base_url() -> String {
 }
 
 #[tauri::command]
-fn open_github_pull_request(
+async fn open_github_pull_request(
     state: tauri::State<'_, ReviewSessionStore>,
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
     url: String,
 ) -> Result<GitHubReviewSnapshotResponse, String> {
-    let access_token = auth.access_token()?;
-    let review = change_content::github::GitHubOpenedReview::open_with_token(
+    let review = change_content::github::GitHubOpenedReview::open_with_access_token_provider(
         github_api_base_url(),
-        &url,
-        access_token,
+        url,
+        auth.inner().clone(),
     )
+    .await
     .map_err(|error| error.to_string())?;
     let response = map_github_snapshot(String::new(), review.snapshot());
     let session_id = state.insert(OpenedReview::GitHub(Box::new(review)))?;
@@ -303,17 +303,17 @@ fn open_github_pull_request(
 }
 
 #[tauri::command]
-fn github_auth_status(
+async fn github_auth_status(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
 ) -> Result<github_auth::AuthorizationStatus, String> {
-    auth.status()
+    auth.status().await
 }
 
 #[tauri::command]
-fn start_github_authorization(
+async fn start_github_authorization(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
 ) -> Result<github_auth::DeviceAuthorization, String> {
-    auth.start_device_authorization()
+    auth.start_device_authorization().await
 }
 
 #[tauri::command]
@@ -321,47 +321,44 @@ async fn complete_github_authorization(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
     authorization_id: String,
 ) -> Result<(), String> {
-    let auth = Arc::clone(auth.inner());
-    tauri::async_runtime::spawn_blocking(move || {
-        auth.complete_device_authorization(&authorization_id)
-    })
-    .await
-    .map_err(|_| "GitHub 授权任务意外终止，请重新尝试。".to_owned())?
+    auth.complete_device_authorization(&authorization_id).await
 }
 
 #[tauri::command]
-fn sign_out_github(
+async fn sign_out_github(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
     sessions: tauri::State<'_, ReviewSessionStore>,
 ) -> Result<(), String> {
-    auth.sign_out()?;
+    auth.sign_out().await?;
     sessions.close_github_sessions()
 }
 
 #[tauri::command]
-fn read_file_change(
+async fn read_file_change(
     state: tauri::State<'_, ReviewSessionStore>,
-    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
     session_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
     let review = state.get(&session_id)?;
-    let mut review = review
-        .lock()
-        .map_err(|_| "Review Session 状态不可用。".to_owned())?;
-    match &mut *review {
-        OpenedReview::Local(review) => review
-            .read_file_change(&path)
-            .map(map_file_content)
-            .map_err(|error| error.to_string()),
-        OpenedReview::GitHub(review) => {
-            review.set_access_token(auth.access_token()?);
-            review
-                .read_file_change(&path)
-                .map(map_file_content)
-                .map_err(|error| error.to_string())
+    let github_review = {
+        let review = review
+            .lock()
+            .map_err(|_| "Review Session 状态不可用。".to_owned())?;
+        match &*review {
+            OpenedReview::Local(review) => {
+                return review
+                    .read_file_change(&path)
+                    .map(map_file_content)
+                    .map_err(|error| error.to_string());
+            }
+            OpenedReview::GitHub(review) => review.clone(),
         }
-    }
+    };
+    github_review
+        .read_file_change_with_access_token_provider(path)
+        .await
+        .map(map_file_content)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -378,10 +375,13 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
+    let oauth_client = Arc::new(
+        github_auth::OctocrabOAuthClient::new(&oauth_base_url).expect("build GitHub OAuth client"),
+    );
     let auth = Arc::new(github_auth::GitHubAuth::new(
         option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
         option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
-        oauth_base_url,
+        oauth_client,
         Arc::new(github_auth::SystemCredentialStore),
         Arc::new(github_auth::NoGitHubRecentEntries),
     ));

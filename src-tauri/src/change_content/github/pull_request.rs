@@ -92,7 +92,6 @@ impl GitHubClient {
             metadata.head.sha
         );
         let comparison_response = self
-            .http
             .get(comparison_endpoint)
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
@@ -113,7 +112,6 @@ impl GitHubClient {
                 self.api_base_url, location.owner, location.repository, location.number
             );
             let response = self
-                .http
                 .get(endpoint)
                 .query(&[("per_page", 100), ("page", page)])
                 .send()

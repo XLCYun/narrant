@@ -2,7 +2,10 @@ mod content;
 mod pull_request;
 
 use super::{ChangeStatus, LoadedFileChange};
+use crate::github_auth::GitHubAccessTokenProvider;
 use reqwest::blocking::Client;
+use secrecy::{ExposeSecret, SecretString};
+use std::sync::Arc;
 
 pub use pull_request::{ParsePullRequestLocationError, PullRequestLocation};
 
@@ -66,15 +69,16 @@ impl From<ParsePullRequestLocationError> for GitHubError {
 /// GitHub adapter 内部共享的请求边界。
 ///
 /// API 地址和 HTTP client 集中在这里，确保 PR 加载与内容读取复用同一份请求配置。
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct GitHubClient {
     api_base_url: String,
     http: Client,
-    access_token: Option<String>,
+    access_token: Option<SecretString>,
 }
 
 impl GitHubClient {
-    fn new(api_base_url: String, access_token: Option<String>) -> Self {
+    /// 构建一次 GitHub 操作使用的阻塞 HTTP 客户端和可选密钥令牌。
+    fn new(api_base_url: String, access_token: Option<SecretString>) -> Self {
         Self {
             api_base_url: api_base_url.trim_end_matches('/').to_owned(),
             http: Client::builder()
@@ -85,15 +89,17 @@ impl GitHubClient {
         }
     }
 
+    /// 构建 GET 请求，并仅在已认证时附加 Bearer 请求头。
     fn get(&self, endpoint: String) -> reqwest::blocking::RequestBuilder {
         let request = self.http.get(endpoint);
         match &self.access_token {
-            Some(token) => request.bearer_auth(token),
+            Some(token) => request.bearer_auth(token.expose_secret()),
             None => request,
         }
     }
 
-    fn set_access_token(&mut self, access_token: Option<String>) {
+    /// 在发出阻塞请求前替换本次操作使用的令牌。
+    fn set_access_token(&mut self, access_token: Option<SecretString>) {
         self.access_token = access_token;
     }
 
@@ -110,43 +116,111 @@ impl GitHubClient {
 ///
 /// 同时持有不可变 Snapshot 与读取该 Snapshot 内容所需的 client，供 Review Session
 /// 在生命周期内重复按需读取 File Change。
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct GitHubOpenedReview {
     client: GitHubClient,
     snapshot: GitHubSnapshot,
+    access_token_provider: Option<Arc<dyn GitHubAccessTokenProvider>>,
+}
+
+impl std::fmt::Debug for GitHubOpenedReview {
+    /// 省略令牌提供者，避免诊断输出暴露认证内部信息。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GitHubOpenedReview")
+            .field("snapshot", &self.snapshot)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GitHubOpenedReview {
+    /// 不使用用户凭据打开公开 Pull Request。
     pub fn open(api_base_url: String, url: &str) -> Result<Self, GitHubError> {
-        Self::open_with_token(api_base_url, url, None)
+        Self::open_with_token(api_base_url, url, None::<SecretString>)
     }
 
-    pub fn open_with_token(
+    /// 供旧同步调用方使用可选令牌打开 Pull Request。
+    pub fn open_with_token<T>(
         api_base_url: String,
         url: &str,
-        access_token: Option<String>,
-    ) -> Result<Self, GitHubError> {
-        let client = GitHubClient::new(api_base_url, access_token);
+        access_token: Option<T>,
+    ) -> Result<Self, GitHubError>
+    where
+        T: Into<SecretString>,
+    {
+        let client = GitHubClient::new(api_base_url, access_token.map(Into::into));
         let snapshot = client.load_pull_request(url)?;
-        Ok(Self { client, snapshot })
+        Ok(Self {
+            client,
+            snapshot,
+            access_token_provider: None,
+        })
     }
 
+    /// 使用共享 GitHub 认证边界提供的可选令牌打开 Review。
+    ///
+    /// 同步 HTTP adapter 在阻塞工作线程运行；令牌获取保持异步，避免 refresh token
+    /// 轮换阻塞 Tauri 的异步运行时。
+    pub async fn open_with_access_token_provider(
+        api_base_url: String,
+        url: String,
+        access_token_provider: Arc<dyn GitHubAccessTokenProvider>,
+    ) -> Result<Self, GitHubError> {
+        let access_token = access_token_provider
+            .access_token()
+            .await
+            .map_err(GitHubError)?;
+        let review = tokio::task::spawn_blocking(move || {
+            Self::open_with_token(api_base_url, &url, access_token)
+        })
+        .await
+        .map_err(|_| GitHubError("GitHub 请求任务意外中断，请重试。".to_owned()))??;
+        Ok(Self {
+            access_token_provider: Some(access_token_provider),
+            ..review
+        })
+    }
+
+    /// 返回打开 Review 时固定下来的不可变 Pull Request 快照。
     pub fn snapshot(&self) -> &GitHubSnapshot {
         &self.snapshot
     }
 
+    /// 供旧同步调用方从固定快照读取一个文件。
     pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitHubError> {
         self.client.read_file_change(&self.snapshot, path)
     }
 
-    pub fn set_access_token(&mut self, access_token: Option<String>) {
-        self.client.set_access_token(access_token);
+    /// 供旧同步调用方替换可选令牌。
+    pub fn set_access_token<T>(&mut self, access_token: Option<T>)
+    where
+        T: Into<SecretString>,
+    {
+        self.client.set_access_token(access_token.map(Into::into));
+    }
+
+    /// 使用新获取的可选令牌和阻塞 HTTP 工作线程读取一个文件。
+    pub async fn read_file_change_with_access_token_provider(
+        &self,
+        path: String,
+    ) -> Result<LoadedFileChange, GitHubError> {
+        let access_token = match &self.access_token_provider {
+            Some(provider) => provider.access_token().await.map_err(GitHubError)?,
+            None => self.client.access_token.clone(),
+        };
+        let mut client = self.client.clone();
+        client.set_access_token(access_token);
+        let snapshot = self.snapshot.clone();
+        tokio::task::spawn_blocking(move || client.read_file_change(&snapshot, &path))
+            .await
+            .map_err(|_| GitHubError("GitHub 请求任务意外中断，请重试。".to_owned()))?
     }
 
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
         Self {
             client: GitHubClient::new("https://api.github.com".to_owned(), None),
+            access_token_provider: None,
             snapshot: GitHubSnapshot {
                 owner: "test".to_owned(),
                 repository: "test".to_owned(),
@@ -200,5 +274,45 @@ fn map_content_response_error(status: u16) -> GitHubError {
         ),
         403 | 429 => GitHubError("GitHub 匿名访问次数已用尽，请稍后重试或登录后继续。".to_owned()),
         _ => GitHubError("GitHub 服务暂时不可用，请稍后重试。".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 统计经由 GitHub Source 令牌提供者边界的调用次数。
+    #[derive(Default)]
+    struct TokenProviderSpy(AtomicUsize);
+
+    #[async_trait]
+    impl GitHubAccessTokenProvider for TokenProviderSpy {
+        async fn access_token(&self) -> Result<Option<SecretString>, String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn each_file_change_read_requests_the_current_token_from_its_provider() {
+        let provider = Arc::new(TokenProviderSpy::default());
+        let mut review = tokio::task::spawn_blocking(GitHubOpenedReview::empty_for_test)
+            .await
+            .expect("test review worker completes");
+        review.access_token_provider = Some(provider.clone());
+
+        for _ in 0..2 {
+            let error = review
+                .read_file_change_with_access_token_provider("missing.rs".to_owned())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "这个 File Change 不属于当前 Review Snapshot。"
+            );
+        }
+        assert_eq!(provider.0.load(Ordering::SeqCst), 2);
     }
 }

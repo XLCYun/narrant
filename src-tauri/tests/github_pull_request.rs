@@ -187,3 +187,50 @@ fn authenticated_pull_request_requests_use_bearer_token_and_explain_installation
         "当前账号或 GitHub App 安装范围无权访问此 Pull Request，请检查仓库授权或组织审批。"
     );
 }
+
+#[test]
+fn authenticated_pull_request_uses_its_token_for_every_snapshot_request() {
+    let server = MockServer::start();
+    let metadata = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/private-org/private-repo/pulls/42")
+            .header("authorization", "Bearer private-token");
+        then.status(200).json_body(serde_json::json!({
+            "title": "Private", "number": 42, "user": { "login": "octocat" },
+            "state": "open", "draft": false, "merged_at": null,
+            "base": { "ref": "main", "sha": "base" },
+            "head": { "ref": "head", "sha": "head" },
+            "body": "", "changed_files": 1, "additions": 1, "deletions": 0
+        }));
+    });
+    let comparison = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/private-org/private-repo/compare/base...head")
+            .header("authorization", "Bearer private-token");
+        then.status(200).json_body(serde_json::json!({
+            "merge_base_commit": { "sha": "merge-base" }
+        }));
+    });
+    let files = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/private-org/private-repo/pulls/42/files")
+            .query_param("per_page", "100")
+            .query_param("page", "1")
+            .header("authorization", "Bearer private-token");
+        then.status(200).json_body(serde_json::json!([{
+            "filename": "private.rs", "status": "added", "additions": 1,
+            "deletions": 0, "changes": 1
+        }]));
+    });
+
+    GitHubOpenedReview::open_with_token(
+        server.base_url(),
+        "https://github.com/private-org/private-repo/pull/42",
+        Some("private-token".to_owned()),
+    )
+    .expect("open authenticated Pull Request");
+
+    metadata.assert();
+    comparison.assert();
+    files.assert();
+}

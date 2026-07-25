@@ -18,15 +18,20 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+async-trait = "0.1"
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+http = "1"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-wdio = { version = "1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 
 [dev-dependencies]
 httpmock = "0.7"
