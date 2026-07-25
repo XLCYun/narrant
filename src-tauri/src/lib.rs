@@ -9,7 +9,7 @@ use std::sync::{
 
 enum OpenedReview {
     Local(change_content::local::LocalOpenedReview),
-    GitHub(change_content::github::GitHubOpenedReview),
+    GitHub(Box<change_content::github::GitHubOpenedReview>),
 }
 
 #[derive(Serialize)]
@@ -260,7 +260,7 @@ fn open_github_pull_request(
     let review = change_content::github::GitHubOpenedReview::open(github_api_base_url(), &url)
         .map_err(|error| error.to_string())?;
     let response = map_github_snapshot(String::new(), review.snapshot());
-    let session_id = state.insert(OpenedReview::GitHub(review))?;
+    let session_id = state.insert(OpenedReview::GitHub(Box::new(review)))?;
     Ok(GitHubReviewSnapshotResponse {
         session_id,
         ..response
