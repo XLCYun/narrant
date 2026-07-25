@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+
+# 提交前检查 Rust 代码是否符合 rustfmt 的标准格式。
+set -eu
+
+# Git GUI 启动的进程可能不会加载 Shell 配置，导致 ~/.cargo/bin 不在 PATH 中。
+if command -v cargo >/dev/null 2>&1; then
+  cargo_command="$(command -v cargo)"
+elif [ -x "${HOME:-}/.cargo/bin/cargo" ]; then
+  cargo_command="${HOME}/.cargo/bin/cargo"
+else
+  echo "未找到 cargo；请安装 Rust，或将 cargo 加入 Git 客户端的 PATH。" >&2
+  exit 1
+fi
+
+"${cargo_command}" fmt --manifest-path src-tauri/Cargo.toml --all -- --check
