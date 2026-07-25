@@ -58,8 +58,8 @@ pub struct OctocrabOAuthClient {
 }
 
 impl OctocrabOAuthClient {
-    /// 为 GitHub OAuth 源站构建 Octocrab 客户端。
-    pub fn new(oauth_base_url: &str) -> Result<Self, String> {
+    /// 在 Tokio runtime 中为 GitHub OAuth 源站构建 Octocrab 客户端。
+    pub async fn new(oauth_base_url: &str) -> Result<Self, String> {
         let client = Octocrab::builder()
             .base_uri(oauth_base_url)
             .map_err(|_| "GitHub 授权配置不可用。".to_owned())?
@@ -217,7 +217,7 @@ fn map_device_flow_error(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::map_device_flow_error;
+    use super::{map_device_flow_error, OctocrabOAuthClient};
 
     #[test]
     fn maps_terminal_device_flow_errors_to_recovery_guidance() {
@@ -232,5 +232,12 @@ mod tests {
         ] {
             assert_eq!(map_device_flow_error(code), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn constructs_the_octocrab_client_inside_a_tokio_runtime() {
+        OctocrabOAuthClient::new("https://github.com")
+            .await
+            .expect("在 Tokio runtime 中构建 OAuth 客户端");
     }
 }

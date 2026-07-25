@@ -375,9 +375,13 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let oauth_client = Arc::new(
-        github_auth::OctocrabOAuthClient::new(&oauth_base_url).expect("build GitHub OAuth client"),
-    );
+    let oauth_client = tauri::async_runtime::block_on(async {
+        Arc::new(
+            github_auth::OctocrabOAuthClient::new(&oauth_base_url)
+                .await
+                .expect("build GitHub OAuth client"),
+        )
+    });
     let auth = Arc::new(github_auth::GitHubAuth::new(
         option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
         option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
