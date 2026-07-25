@@ -3,6 +3,58 @@ use narrant_lib::change_content::github::GitHubOpenedReview;
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
 
 #[test]
+fn authenticated_content_reads_use_the_latest_token_and_map_permission_failures() {
+    let server = MockServer::start();
+    let _metadata_mocks = [
+        "/repos/octo-org/octo-repo/pulls/42",
+        "/repos/octo-org/octo-repo/compare/base...head",
+        "/repos/octo-org/octo-repo/pulls/42/files",
+    ]
+    .into_iter()
+    .map(|path| {
+        server.mock(move |when, then| {
+            when.method(GET).path(path);
+            let body = if path.ends_with("/pulls/42") {
+                serde_json::json!({
+                    "title":"Private", "number":42, "user":{"login":"octocat"},
+                    "state":"open", "draft":false, "merged_at":null,
+                    "base":{"ref":"main","sha":"base"}, "head":{"ref":"topic","sha":"head"},
+                    "body":"", "changed_files":1, "additions":1, "deletions":0
+                })
+            } else if path.contains("/compare/") {
+                serde_json::json!({"merge_base_commit":{"sha":"base"}})
+            } else {
+                serde_json::json!([{"filename":"secret.txt","status":"added"}])
+            };
+            then.status(200).json_body(body);
+        })
+    })
+    .collect::<Vec<_>>();
+    let denied = server.mock(|when, then| {
+        when.method(GET)
+            .path("/repos/octo-org/octo-repo/git/commits/head")
+            .header("authorization", "Bearer refreshed-token");
+        then.status(403);
+    });
+    let mut review = GitHubOpenedReview::open_with_token(
+        server.base_url(),
+        "https://github.com/octo-org/octo-repo/pull/42",
+        Some("old-token".to_owned()),
+    )
+    .unwrap();
+
+    review.set_access_token(Some("refreshed-token".to_owned()));
+    assert_eq!(
+        review
+            .read_file_change("secret.txt")
+            .unwrap_err()
+            .to_string(),
+        "当前账号或 GitHub App 安装范围无权访问此 Pull Request，请检查仓库授权或组织审批。"
+    );
+    denied.assert();
+}
+
+#[test]
 fn loads_one_file_change_on_demand_from_the_snapshots_pinned_revisions() {
     let server = MockServer::start();
     server.mock(|when, then| {

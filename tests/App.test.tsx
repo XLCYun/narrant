@@ -8,6 +8,7 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const openUrl = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
+const writeText = vi.hoisted(() => vi.fn());
 
 import { App } from "@/App";
 
@@ -15,6 +16,7 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
   openUrl.mockReset();
+  writeText.mockReset();
   document.documentElement.classList.remove("dark");
 });
 
@@ -95,6 +97,77 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("link", { name: "查看详情" }));
     expect(openUrl).toHaveBeenCalledWith("https://example.com/details");
     expect(screen.getByRole("treeitem", { name: /main.rs.*modified/ })).toBeInTheDocument();
+  });
+
+  it("连接 GitHub 会先打开安装页，再引导设备码授权且不接收 token", async () => {
+    mockSystemTheme(false);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    invoke.mockImplementation((command: string) => {
+      if (command === "github_auth_status") return Promise.resolve({
+        configured: true,
+        signedIn: false,
+        appInstallUrl: "https://github.com/apps/narrant/installations/new",
+      });
+      if (command === "start_github_authorization") return Promise.resolve({
+        authorizationId: "authorization-1",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://github.com/login/device",
+        expiresIn: 900,
+        interval: 5,
+      });
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
+    expect(await screen.findByText(/组织仓库可能需要管理员审批/)).toBeInTheDocument();
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/apps/narrant/installations/new");
+    fireEvent.click(screen.getByRole("button", { name: "我已安装，继续" }));
+    expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
+    expect(screen.getByText(/不要输入他人发送的验证码/)).toBeInTheDocument();
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/login/device");
+    expect(screen.getByRole("link", { name: "https://github.com/login/device" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "复制设备码" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-EFGH"));
+    expect(screen.getByRole("button", { name: "设备码已复制" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "复制链接" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://github.com/login/device"));
+    expect(screen.getByRole("button", { name: "链接已复制" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开 GitHub" }));
+    expect(openUrl).toHaveBeenLastCalledWith("https://github.com/login/device");
+    fireEvent.click(screen.getByRole("button", { name: "我已在 GitHub 完成授权" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "complete_github_authorization",
+      { authorizationId: "authorization-1" },
+    ));
+    expect(await screen.findByRole("button", { name: "退出 GitHub" })).toBeInTheDocument();
+  });
+
+  it("退出 GitHub 会清除当前 GitHub Review Session 和界面内容", async () => {
+    mockSystemTheme(false);
+    invoke.mockImplementation((command: string) => {
+      if (command === "github_auth_status") return Promise.resolve({
+        configured: true, signedIn: true, appInstallUrl: "https://github.com/apps/narrant/installations/new",
+      });
+      if (command === "open_github_pull_request") return Promise.resolve({
+        sessionId: "private-session", source: "github", title: "Private", comparisonBase: "base",
+        headRevision: "head", fileChanges: [],
+      });
+      return Promise.resolve();
+    });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
+    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), {
+      target: { value: "https://github.com/acme/private/pull/1" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "打开" }));
+    expect(await screen.findByRole("heading", { name: "Private" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "退出 GitHub" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("sign_out_github"));
+    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "private-session" });
+    expect(screen.queryByRole("heading", { name: "Private" })).not.toBeInTheDocument();
   });
 
   it("超过 GitHub 文件上限时提供可在系统浏览器打开的恢复链接", async () => {

@@ -2,3 +2,5 @@ node_modules/
 .pnpm-store/
 dist/
 src-tauri/target/
+.env.local
+.DS_Store

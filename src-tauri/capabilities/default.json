@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Default capability for the Narrant desktop window.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:default", "opener:allow-open-url"]
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }]
+    }
+  ]
 }

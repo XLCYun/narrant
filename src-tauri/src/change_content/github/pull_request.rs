@@ -1,6 +1,6 @@
 use super::{
-    map_pull_request_response_error, ChangeStatus, GitHubClient, GitHubError, GitHubFileChange,
-    GitHubSnapshot,
+    map_authenticated_pull_request_response_error, map_pull_request_response_error, ChangeStatus,
+    GitHubClient, GitHubError, GitHubFileChange, GitHubSnapshot,
 };
 use serde::Deserialize;
 
@@ -59,12 +59,15 @@ impl GitHubClient {
             self.api_base_url, location.owner, location.repository, location.number
         );
         let response = self
-            .http
             .get(endpoint)
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
         if !response.status().is_success() {
-            return Err(map_pull_request_response_error(response.status().as_u16()));
+            return Err(if self.access_token.is_some() {
+                map_authenticated_pull_request_response_error(response.status().as_u16())
+            } else {
+                map_pull_request_response_error(response.status().as_u16())
+            });
         }
         let metadata: PullRequestResponse = response
             .json()
@@ -89,7 +92,6 @@ impl GitHubClient {
             metadata.head.sha
         );
         let comparison_response = self
-            .http
             .get(comparison_endpoint)
             .send()
             .map_err(|_| GitHubError("当前无法连接 GitHub，请检查网络后重试。".to_owned()))?;
@@ -110,7 +112,6 @@ impl GitHubClient {
                 self.api_base_url, location.owner, location.repository, location.number
             );
             let response = self
-                .http
                 .get(endpoint)
                 .query(&[("per_page", 100), ("page", page)])
                 .send()
