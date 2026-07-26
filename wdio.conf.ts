@@ -35,6 +35,9 @@ export const config = {
   },
   onComplete: async () => {
     githubMock?.kill();
-    if (localFixtureRoot) await rm(localFixtureRoot, { recursive: true, force: true });
+    // Windows 的 onComplete 早于 Tauri service 释放 SQLite handle，runner 退出后会回收临时目录。
+    if (localFixtureRoot && process.platform !== "win32") {
+      await rm(localFixtureRoot, { recursive: true, force: true });
+    }
   }
 };

@@ -3,7 +3,7 @@ describe("公开 GitHub Pull Request", () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     await $("[aria-label='Repository 路径']").setValue(repositoryPath);
     await $("button=添加 Repository").click();
-    await $(`button=${repositoryPath}`).click();
+    await $("[aria-label='Repository Entries'] button").click();
     await $("[aria-label='GitHub Pull Request URL']").setValue("https://github.com/octo-org/octo-repo/pull/42");
     await $("button=匿名打开").click();
 

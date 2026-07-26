@@ -15,7 +15,7 @@ describe("本地分支比较", () => {
     }
     await $("[aria-label='Repository 路径']").setValue(repositoryPath);
     await $("button=添加 Repository").click();
-    await $(`button=${repositoryPath}`).click();
+    await $("[aria-label='Repository Entries'] button").click();
     await $("button=读取分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
