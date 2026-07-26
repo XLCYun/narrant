@@ -1,6 +1,7 @@
 pub mod change_content;
 pub mod core_git;
 pub mod github_auth;
+pub mod repository_catalog;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -8,6 +9,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
+use tauri::Manager;
 
 enum OpenedReview {
     Local(Box<change_content::local::LocalOpenedReview>),
@@ -301,14 +303,16 @@ fn map_github_snapshot(
 fn compare_local_refs(
     state: tauri::State<'_, ReviewSessionStore>,
     operations: tauri::State<'_, GitOperationStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
-    repository_path: String,
+    repository_entry_id: i64,
     base_ref: String,
     head_ref: String,
 ) -> Result<LocalReviewSnapshotResponse, String> {
+    let repository_path = require_available_repository(&catalog, repository_entry_id)?;
     let cancellation = operations.start(operation_id.clone())?;
     let review = change_content::local::LocalOpenedReview::open_with_cancellation(
-        std::path::Path::new(&repository_path),
+        &repository_path,
         &base_ref,
         &head_ref,
         &cancellation,
@@ -327,15 +331,15 @@ fn compare_local_refs(
 #[tauri::command]
 fn list_local_refs(
     operations: tauri::State<'_, GitOperationStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
-    repository_path: String,
+    repository_entry_id: i64,
 ) -> Result<Vec<String>, String> {
+    let repository_path = require_available_repository(&catalog, repository_entry_id)?;
     let cancellation = operations.start(operation_id.clone())?;
-    let result = change_content::local::list_refs_with_cancellation(
-        std::path::Path::new(&repository_path),
-        &cancellation,
-    )
-    .map_err(|error| error.to_string());
+    let result =
+        change_content::local::list_refs_with_cancellation(&repository_path, &cancellation)
+            .map_err(|error| error.to_string());
     operations.finish(&operation_id);
     result
 }
@@ -364,8 +368,11 @@ fn github_api_base_url() -> String {
 async fn open_github_pull_request(
     state: tauri::State<'_, ReviewSessionStore>,
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    repository_entry_id: i64,
     url: String,
 ) -> Result<GitHubReviewSnapshotResponse, String> {
+    require_available_repository(&catalog, repository_entry_id)?;
     let review = change_content::github::GitHubOpenedReview::open_with_access_token_provider(
         github_api_base_url(),
         url,
@@ -455,6 +462,49 @@ fn close_review_session(
     state.close(&session_id)
 }
 
+/// 注册一个经 Core Git 验证的 Repository Entry。
+#[tauri::command]
+fn register_repository_entry(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    path: String,
+) -> Result<repository_catalog::RepositoryEntry, String> {
+    catalog
+        .register(std::path::Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
+/// 列出应用数据库中的全部 Repository Entries。
+#[tauri::command]
+fn list_repository_entries(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+) -> Result<Vec<repository_catalog::RepositoryEntry>, String> {
+    catalog.list().map_err(|error| error.to_string())
+}
+
+/// 打开 Repository Entry 并更新其最后打开时间。
+#[tauri::command]
+fn open_repository_entry(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    id: i64,
+) -> Result<repository_catalog::RepositoryEntry, String> {
+    catalog.open_entry(id).map_err(|error| error.to_string())
+}
+
+/// 将 durable Repository Entry identity 解析为当前仍可用的保存路径。
+fn require_available_repository(
+    catalog: &repository_catalog::RepositoryCatalog,
+    id: i64,
+) -> Result<std::path::PathBuf, String> {
+    let entry = catalog.open_entry(id).map_err(|error| error.to_string())?;
+    if entry.available {
+        Ok(entry.canonical_path)
+    } else {
+        Err(entry
+            .unavailable_reason
+            .unwrap_or_else(|| "Repository Entry 当前不可用。".to_owned()))
+    }
+}
+
 pub fn run() {
     #[cfg(feature = "wdio")]
     let oauth_base_url = std::env::var("NARRANT_GITHUB_OAUTH_URL")
@@ -479,7 +529,21 @@ pub fn run() {
         .manage(ReviewSessionStore::default())
         .manage(GitOperationStore::default())
         .manage(auth)
+        .setup(|app| {
+            #[cfg(feature = "wdio")]
+            let database_path = std::env::var_os("NARRANT_DATABASE_PATH")
+                .map(std::path::PathBuf::from)
+                .unwrap_or(app.path().app_data_dir()?.join("narrant.sqlite3"));
+            #[cfg(not(feature = "wdio"))]
+            let database_path = app.path().app_data_dir()?.join("narrant.sqlite3");
+            let catalog = repository_catalog::RepositoryCatalog::open(&database_path)?;
+            app.manage(catalog);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            register_repository_entry,
+            list_repository_entries,
+            open_repository_entry,
             compare_local_refs,
             list_local_refs,
             cancel_git_operation,

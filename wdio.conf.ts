@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -23,7 +23,8 @@ export const config = {
     localFixtureRoot = await mkdtemp(join(tmpdir(), "narrant-e2e-"));
     const repositoryPath = join(localFixtureRoot, "repository");
     await executeFile(process.execPath, ["e2e/fixtures/setup-local-repo.mjs", repositoryPath]);
-    process.env.NARRANT_E2E_REPOSITORY = repositoryPath;
+    process.env.NARRANT_E2E_REPOSITORY = await realpath(repositoryPath);
+    process.env.NARRANT_DATABASE_PATH = join(localFixtureRoot, "narrant.sqlite3");
     process.env.NARRANT_GITHUB_API_URL = "http://127.0.0.1:18472";
     githubMock = spawn(process.execPath, ["e2e/fixtures/github-mock-server.mjs"], { stdio: "inherit" });
     for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -34,6 +35,9 @@ export const config = {
   },
   onComplete: async () => {
     githubMock?.kill();
-    if (localFixtureRoot) await rm(localFixtureRoot, { recursive: true, force: true });
+    // Windows 的 onComplete 早于 Tauri service 释放 SQLite handle，runner 退出后会回收临时目录。
+    if (localFixtureRoot && process.platform !== "win32") {
+      await rm(localFixtureRoot, { recursive: true, force: true });
+    }
   }
 };
