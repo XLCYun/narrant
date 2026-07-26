@@ -231,6 +231,65 @@ impl GitProcessAdapter {
         .map(|_| ())
         .map_err(|error| GitCommandError::new(format!("无法移除 Review Workspace：{error}")))
     }
+
+    /// 在 common directory 与 registered worktree path 精确匹配后强制移除受管 workspace。
+    pub fn remove_owned_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
+        self.remove_worktree(workspace_path, cancellation)
+    }
+
+    /// 验证路径确属保存的 common directory，且仍是该仓库精确注册的 linked worktree。
+    pub fn validate_owned_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        let actual_common = self
+            .run(
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cancellation,
+            )
+            .and_then(|output| {
+                String::from_utf8(output.stdout)
+                    .map(|value| PathBuf::from(value.trim()))
+                    .map_err(|_| GitCommandError::new("Git common directory 编码无效"))
+            })?;
+        let actual_common = std::fs::canonicalize(&actual_common).map_err(|error| {
+            GitCommandError::new(format!("无法解析 Git common directory：{error}"))
+        })?;
+        let expected_common =
+            std::fs::canonicalize(expected_common_directory).map_err(|error| {
+                GitCommandError::new(format!("无法解析保存的 Git common directory：{error}"))
+            })?;
+        if actual_common != expected_common {
+            return Err(GitCommandError::new(
+                "Review Workspace 所有权验证失败：Git common directory 不匹配。",
+            ));
+        }
+        let expected_workspace = std::fs::canonicalize(workspace_path).map_err(|_| {
+            GitCommandError::new("Review Workspace 所有权验证失败：受管路径不存在。")
+        })?;
+        let registered = self.run(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+        let path_is_registered = registered.stdout.split(|byte| *byte == 0).any(|field| {
+            field
+                .strip_prefix(b"worktree ")
+                .and_then(|path| std::str::from_utf8(path).ok())
+                .and_then(|path| std::fs::canonicalize(path).ok())
+                .is_some_and(|path| path == expected_workspace)
+        });
+        if !path_is_registered {
+            return Err(GitCommandError::new(
+                "Review Workspace 所有权验证失败：路径不是该仓库注册的 linked worktree。",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// 读取 linked worktree 的精确 HEAD object ID，供创建前后统一校验。
