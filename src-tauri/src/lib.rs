@@ -189,6 +189,15 @@ impl ReviewSessionStore {
         Ok(())
     }
 
+    /// 仅保留即将打开的同一 Review 句柄，确保运行时最多存在一个 Review。
+    fn retain_only(&self, id: Option<&str>) -> Result<(), String> {
+        self.sessions
+            .lock()
+            .map_err(|_| "Review 状态不可用。".to_owned())?
+            .retain(|candidate, _| id.is_some_and(|id| candidate == id));
+        Ok(())
+    }
+
     fn close_github_sessions(&self) -> Result<(), String> {
         let mut sessions = self
             .sessions
@@ -366,9 +375,23 @@ fn open_saved_branch_review(
     repository_path: std::path::PathBuf,
     saved: repository_catalog::SavedBranchReview,
 ) -> Result<LocalReviewSnapshotResponse, String> {
+    cleanup_review_workspaces(catalog, Some(&saved.review_id))?;
+    state.retain_only(Some(&saved.review_id))?;
     let workspace = catalog
         .review_workspace_path(&saved.review_id)
         .map_err(|error| error.to_string())?;
+    if workspace.exists() {
+        let entry = catalog
+            .open_entry(saved.repository_entry_id)
+            .map_err(|error| error.to_string())?;
+        core_git::GitProcessAdapter::new(&repository_path)
+            .validate_owned_worktree(
+                &workspace,
+                &entry.common_directory,
+                &core_git::CancellationToken::default(),
+            )
+            .map_err(|error| error.to_string())?;
+    }
     if let Err(error) = core_git::GitProcessAdapter::new(&repository_path).create_detached_worktree(
         &workspace,
         &saved.head_revision,
@@ -388,6 +411,9 @@ fn open_saved_branch_review(
         saved.review_id.clone(),
         OpenedReview::Local(Box::new(review)),
     )?;
+    catalog
+        .mark_review_opened(&saved.review_id)
+        .map_err(|error| error.to_string())?;
     Ok(map_local_snapshot(saved.review_id, &snapshot))
 }
 
@@ -444,6 +470,8 @@ async fn open_github_pull_request(
     .await
     .map_err(|error| error.to_string())?;
     let response = map_github_snapshot(String::new(), review.snapshot());
+    cleanup_review_workspaces(&catalog, None)?;
+    state.retain_only(None)?;
     let session_id = state.insert(OpenedReview::GitHub(Box::new(review)))?;
     Ok(GitHubReviewSnapshotResponse {
         session_id,
@@ -570,12 +598,64 @@ fn close_review(
         .open_review(&review_id)
         .map_err(|error| error.to_string())?;
     let repository = require_available_repository(&catalog, saved.repository_entry_id)?;
+    let entry = catalog
+        .open_entry(saved.repository_entry_id)
+        .map_err(|error| error.to_string())?;
     let workspace = catalog
         .review_workspace_path(&review_id)
         .map_err(|error| error.to_string())?;
+    if !workspace.exists() {
+        return Ok(());
+    }
     core_git::GitProcessAdapter::new(&repository)
-        .remove_worktree(&workspace, &core_git::CancellationToken::default())
+        .remove_owned_worktree(
+            &workspace,
+            &entry.common_directory,
+            &core_git::CancellationToken::default(),
+        )
         .map_err(|error| error.to_string())
+}
+
+/// 严格清理除指定 Review 外的所有现存 workspace；任何所有权不匹配都会停止切换。
+fn cleanup_review_workspaces(
+    catalog: &repository_catalog::RepositoryCatalog,
+    except_review_id: Option<&str>,
+) -> Result<(), String> {
+    for target in catalog
+        .workspace_cleanup_targets()
+        .map_err(|error| error.to_string())?
+    {
+        if except_review_id.is_some_and(|id| id == target.review_id)
+            || !target.workspace_path.exists()
+        {
+            continue;
+        }
+        core_git::GitProcessAdapter::new(&target.repository_path)
+            .remove_owned_worktree(
+                &target.workspace_path,
+                &target.common_directory,
+                &core_git::CancellationToken::default(),
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// 启动恢复逐项尝试清理；所有权不匹配的路径会原样保留且不会阻挡其他安全目标。
+fn recover_interrupted_review_workspaces(catalog: &repository_catalog::RepositoryCatalog) {
+    let Ok(targets) = catalog.workspace_cleanup_targets() else {
+        return;
+    };
+    for target in targets {
+        if !target.workspace_path.exists() {
+            continue;
+        }
+        let _ = core_git::GitProcessAdapter::new(&target.repository_path).remove_owned_worktree(
+            &target.workspace_path,
+            &target.common_directory,
+            &core_git::CancellationToken::default(),
+        );
+    }
 }
 
 /// 查询一个 Repository Entry 的持久化 Workspace Trust。
@@ -617,6 +697,31 @@ fn list_repository_entries(
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
 ) -> Result<Vec<repository_catalog::RepositoryEntry>, String> {
     catalog.list().map_err(|error| error.to_string())
+}
+
+/// 列出一个 Repository Entry 的 Reviews；空 identity 表示全局最近 Reviews。
+#[tauri::command]
+fn list_reviews(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    repository_entry_id: Option<i64>,
+) -> Result<Vec<repository_catalog::ReviewSummary>, String> {
+    catalog
+        .list_reviews(repository_entry_id)
+        .map_err(|error| error.to_string())
+}
+
+/// 使用 current Snapshot 按 durable reviewId 重新物化 Review。
+#[tauri::command]
+fn reopen_review(
+    state: tauri::State<'_, ReviewSessionStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    review_id: String,
+) -> Result<LocalReviewSnapshotResponse, String> {
+    let saved = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    let repository_path = require_available_repository(&catalog, saved.repository_entry_id)?;
+    open_saved_branch_review(&state, &catalog, repository_path, saved)
 }
 
 /// 打开 Repository Entry 并更新其最后打开时间。
@@ -675,16 +780,19 @@ pub fn run() {
             #[cfg(not(feature = "wdio"))]
             let database_path = app.path().app_data_dir()?.join("narrant.sqlite3");
             let catalog = repository_catalog::RepositoryCatalog::open(&database_path)?;
+            recover_interrupted_review_workspaces(&catalog);
             app.manage(catalog);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             register_repository_entry,
             list_repository_entries,
+            list_reviews,
             open_repository_entry,
             repository_workspace_trust,
             grant_repository_workspace_trust,
             compare_local_refs,
+            reopen_review,
             list_local_refs,
             cancel_git_operation,
             discover_github_pull_requests,
@@ -703,9 +811,20 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
-    builder
-        .run(tauri::generate_context!())
-        .expect("run Narrant");
+    let application = builder
+        .build(tauri::generate_context!())
+        .expect("build Narrant");
+    application.run(|app, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
+            let catalog = app.state::<repository_catalog::RepositoryCatalog>();
+            let _ = cleanup_review_workspaces(&catalog, None);
+            let sessions = app.state::<ReviewSessionStore>();
+            let _ = sessions.retain_only(None);
+        }
+    });
 }
 
 #[cfg(test)]

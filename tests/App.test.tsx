@@ -87,6 +87,52 @@ describe("App", () => {
     ));
   });
 
+  it("从首页最近列表和 Repository Entry 重新打开持久化 Review", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 23, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const summary = {
+      reviewId: "review-23", repositoryEntryId: 23, repositoryPath: "/work/narrant",
+      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 20,
+    };
+    const newerSummary = {
+      ...summary, reviewId: "review-24", baseRef: "refs/heads/release",
+      headRef: "refs/heads/hotfix", lastOpenedAt: 30,
+    };
+    const snapshot = {
+      reviewId: "review-23", source: "local", baseRef: summary.baseRef,
+      baseRevision: "base", comparisonBase: "base", headRef: summary.headRef,
+      headRevision: "head", fileChanges: [],
+    };
+    invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "list_reviews") {
+        return Promise.resolve(arguments_?.repositoryEntryId === 23
+          ? [summary]
+          : [newerSummary, summary]);
+      }
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "reopen_review") return Promise.resolve(snapshot);
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /main → topic/ }));
+    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
+
+    expect(await screen.findByRole("region", { name: "Repository Reviews" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /main → topic/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "返回 Repository Entries" }));
+    const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
+      .querySelectorAll("button");
+    expect(recentButtons[0]).toHaveTextContent("main → topic");
+  });
+
   it("按 GitHub repository 分组展示 Pull Requests，且保留局部失败", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
