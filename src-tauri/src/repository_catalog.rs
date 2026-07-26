@@ -1,3 +1,6 @@
+use crate::change_content::{
+    local::LocalEntry, local::LocalFileChange, local::LocalSnapshot, ChangeStatus,
+};
 use crate::core_git::{CancellationToken, GitProcessAdapter};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -5,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 const ENTRY_COLUMNS: &str = "id, canonical_path, common_directory, created_at, last_opened_at";
 
 /// 已注册的具体本地 clone，以及当前是否仍可访问。
@@ -19,6 +22,35 @@ pub struct RepositoryEntry {
     pub last_opened_at: i64,
     pub available: bool,
     pub unavailable_reason: Option<String>,
+}
+
+/// 持久化 Review 及其 current immutable Snapshot 的完整本地读取模型。
+#[derive(Clone)]
+pub struct SavedBranchReview {
+    pub review_id: String,
+    pub repository_entry_id: i64,
+    pub base_ref: String,
+    pub head_ref: String,
+    pub base_revision: String,
+    pub comparison_base: String,
+    pub head_revision: String,
+    pub file_changes: Vec<LocalFileChange>,
+    pub created: bool,
+    snapshot_id: i64,
+}
+
+impl SavedBranchReview {
+    /// 将数据库模型还原成 Repository Operations 可读取的不可变 Snapshot。
+    pub fn snapshot(&self) -> LocalSnapshot {
+        LocalSnapshot {
+            base_ref: self.base_ref.clone(),
+            head_ref: self.head_ref.clone(),
+            base_revision: self.base_revision.clone(),
+            comparison_base: self.comparison_base.clone(),
+            head_revision: self.head_revision.clone(),
+            file_changes: self.file_changes.clone(),
+        }
+    }
 }
 
 /// 经 Core Git 验证后的 working-tree repository 身份。
@@ -55,6 +87,7 @@ impl std::error::Error for RepositoryCatalogError {}
 /// 应用级 SQLite Repository Catalog；所有写入通过事务原子完成。
 pub struct RepositoryCatalog {
     connection: Mutex<Connection>,
+    workspace_root: PathBuf,
 }
 
 impl std::fmt::Debug for RepositoryCatalog {
@@ -87,6 +120,10 @@ impl RepositoryCatalog {
         migrate(&mut connection).map_err(database_recovery_error)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            workspace_root: database_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("reviews"),
         })
     }
 
@@ -170,6 +207,278 @@ impl RepositoryCatalog {
         Ok(entry)
     }
 
+    /// 返回 Repository Entry 是否已经获得持久化 Workspace Trust。
+    pub fn is_workspace_trusted(&self, id: i64) -> Result<bool, RepositoryCatalogError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM workspace_trust WHERE repository_entry_id = ?1
+                 )",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(database_recovery_error)
+    }
+
+    /// 持久化用户对一个 Repository Entry 授予的 Workspace Trust。
+    pub fn grant_workspace_trust(&self, id: i64) -> Result<(), RepositoryCatalogError> {
+        let now = unix_timestamp_millis()?;
+        let connection = self.connection()?;
+        let changed = connection
+            .execute(
+                "INSERT INTO workspace_trust (repository_entry_id, granted_at)
+                 SELECT id, ?2 FROM repository_entries WHERE id = ?1
+                 ON CONFLICT(repository_entry_id) DO NOTHING",
+                params![id, now],
+            )
+            .map_err(database_recovery_error)?;
+        if changed == 0 {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM repository_entries WHERE id = ?1)",
+                    [id],
+                    |row| row.get(0),
+                )
+                .map_err(database_recovery_error)?;
+            if !exists {
+                return Err(RepositoryCatalogError::new("Repository Entry 不存在。"));
+            }
+        }
+        Ok(())
+    }
+
+    /// 原子保存 Branch Selection、首个 Snapshot、File Changes 与 current 指针。
+    ///
+    /// 同一 Repository Entry 的相同 canonical branch pair 会返回既有 Review。
+    pub fn save_branch_review(
+        &self,
+        repository_entry_id: i64,
+        snapshot: &LocalSnapshot,
+    ) -> Result<SavedBranchReview, RepositoryCatalogError> {
+        if !self.is_workspace_trusted(repository_entry_id)? {
+            return Err(RepositoryCatalogError::new(
+                "尚未授予 Workspace Trust；请先阅读风险说明并确认授权。",
+            ));
+        }
+        let now = unix_timestamp_millis()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        transaction
+            .execute(
+                "INSERT INTO reviews (
+                    repository_entry_id, selection_kind, base_ref, head_ref,
+                    current_snapshot_id, created_at, last_opened_at
+                 ) VALUES (?1, 'branch', ?2, ?3, NULL, ?4, ?4)
+                 ON CONFLICT(repository_entry_id, selection_kind, base_ref, head_ref)
+                 DO UPDATE SET last_opened_at = excluded.last_opened_at",
+                params![
+                    repository_entry_id,
+                    snapshot.base_ref,
+                    snapshot.head_ref,
+                    now
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let review_row_id: i64 = transaction
+            .query_row(
+                "SELECT id FROM reviews
+                 WHERE repository_entry_id = ?1 AND selection_kind = 'branch'
+                   AND base_ref = ?2 AND head_ref = ?3",
+                params![repository_entry_id, snapshot.base_ref, snapshot.head_ref],
+                |row| row.get(0),
+            )
+            .map_err(database_recovery_error)?;
+        let current_snapshot_id: Option<i64> = transaction
+            .query_row(
+                "SELECT current_snapshot_id FROM reviews WHERE id = ?1",
+                [review_row_id],
+                |row| row.get(0),
+            )
+            .map_err(database_recovery_error)?;
+        if current_snapshot_id.is_some() {
+            transaction.commit().map_err(database_recovery_error)?;
+            drop(connection);
+            return self.open_review(&format!("review-{review_row_id}"));
+        }
+        transaction
+            .execute(
+                "INSERT INTO review_snapshots (
+                    review_id, base_revision, comparison_base, head_revision, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    review_row_id,
+                    snapshot.base_revision,
+                    snapshot.comparison_base,
+                    snapshot.head_revision,
+                    now
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let snapshot_id = transaction.last_insert_rowid();
+        for change in &snapshot.file_changes {
+            transaction
+                .execute(
+                    "INSERT INTO file_changes (
+                        snapshot_id, path, old_path, status, before_mode, after_mode,
+                        before_object_id, after_object_id
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        snapshot_id,
+                        change.path,
+                        change.old_path,
+                        status_text(change.status),
+                        change.before_mode,
+                        change.after_mode,
+                        change.before_object_id,
+                        change.after_object_id
+                    ],
+                )
+                .map_err(database_recovery_error)?;
+        }
+        transaction.commit().map_err(database_recovery_error)?;
+        Ok(SavedBranchReview {
+            review_id: format!("review-{review_row_id}"),
+            repository_entry_id,
+            base_ref: snapshot.base_ref.clone(),
+            head_ref: snapshot.head_ref.clone(),
+            base_revision: snapshot.base_revision.clone(),
+            comparison_base: snapshot.comparison_base.clone(),
+            head_revision: snapshot.head_revision.clone(),
+            file_changes: snapshot.file_changes.clone(),
+            created: true,
+            snapshot_id,
+        })
+    }
+
+    /// 查找相同 Branch Selection 已存在且可打开的 current Snapshot。
+    pub fn find_branch_review(
+        &self,
+        repository_entry_id: i64,
+        base_ref: &str,
+        head_ref: &str,
+    ) -> Result<Option<SavedBranchReview>, RepositoryCatalogError> {
+        let connection = self.connection()?;
+        let row_id = connection
+            .query_row(
+                "SELECT id FROM reviews
+                 WHERE repository_entry_id = ?1 AND selection_kind = 'branch'
+                   AND base_ref = ?2 AND head_ref = ?3
+                   AND current_snapshot_id IS NOT NULL",
+                params![repository_entry_id, base_ref, head_ref],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(database_recovery_error)?;
+        drop(connection);
+        row_id
+            .map(|id| self.open_review(&format!("review-{id}")))
+            .transpose()
+    }
+
+    /// 在 workspace HEAD 已校验后原子推进 current Snapshot 指针。
+    pub fn activate_snapshot(
+        &self,
+        review: &SavedBranchReview,
+    ) -> Result<(), RepositoryCatalogError> {
+        let row_id = parse_review_id(&review.review_id)?;
+        let connection = self.connection()?;
+        let changed = connection
+            .execute(
+                "UPDATE reviews SET current_snapshot_id = ?1
+                 WHERE id = ?2 AND current_snapshot_id IS NULL",
+                params![review.snapshot_id, row_id],
+            )
+            .map_err(database_recovery_error)?;
+        if changed != 1 {
+            return Err(RepositoryCatalogError::new(
+                "Review current Snapshot 已改变；请重新打开后重试。",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 按 durable reviewId 读取 current Snapshot 及稳定 File Change metadata。
+    pub fn open_review(
+        &self,
+        review_id: &str,
+    ) -> Result<SavedBranchReview, RepositoryCatalogError> {
+        let row_id = parse_review_id(review_id)?;
+        let connection = self.connection()?;
+        let review = connection
+            .query_row(
+                "SELECT r.repository_entry_id, r.base_ref, r.head_ref,
+                        s.base_revision, s.comparison_base, s.head_revision, s.id
+                 FROM reviews r
+                 JOIN review_snapshots s ON s.id = r.current_snapshot_id
+                 WHERE r.id = ?1 AND r.selection_kind = 'branch'",
+                [row_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(database_recovery_error)?
+            .ok_or_else(|| RepositoryCatalogError::new("Review 不存在或尚无 current Snapshot。"))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT path, old_path, status, before_mode, after_mode,
+                        before_object_id, after_object_id
+                 FROM file_changes WHERE snapshot_id = ?1 ORDER BY id",
+            )
+            .map_err(database_recovery_error)?;
+        let file_changes = statement
+            .query_map([review.6], |row| {
+                let before_mode = row.get::<_, Option<u32>>(3)?;
+                let after_mode = row.get::<_, Option<u32>>(4)?;
+                let before_object_id = row.get::<_, Option<String>>(5)?;
+                let after_object_id = row.get::<_, Option<String>>(6)?;
+                Ok(LocalFileChange {
+                    path: row.get(0)?,
+                    old_path: row.get(1)?,
+                    status: parse_status(&row.get::<_, String>(2)?)?,
+                    before_mode,
+                    after_mode,
+                    before_entry: entry_from_metadata(&before_object_id, before_mode),
+                    after_entry: entry_from_metadata(&after_object_id, after_mode),
+                    before_object_id,
+                    after_object_id,
+                })
+            })
+            .map_err(database_recovery_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(database_recovery_error)?;
+        Ok(SavedBranchReview {
+            review_id: format!("review-{row_id}"),
+            repository_entry_id: review.0,
+            base_ref: review.1,
+            head_ref: review.2,
+            base_revision: review.3,
+            comparison_base: review.4,
+            head_revision: review.5,
+            file_changes,
+            created: false,
+            snapshot_id: review.6,
+        })
+    }
+
+    /// 返回 durable Review 对应的精确 Narrant-managed checkout 路径。
+    pub fn review_workspace_path(
+        &self,
+        review_id: &str,
+    ) -> Result<PathBuf, RepositoryCatalogError> {
+        parse_review_id(review_id)?;
+        Ok(self.workspace_root.join(review_id).join("repo"))
+    }
+
     /// 统一处理 Catalog mutex 状态，避免调用点重复泄露同步细节。
     fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, RepositoryCatalogError> {
         self.connection
@@ -198,7 +507,88 @@ fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
         )?;
         transaction.commit()?;
     }
+    if version < 2 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE workspace_trust (
+                repository_entry_id INTEGER PRIMARY KEY
+                    REFERENCES repository_entries(id) ON DELETE CASCADE,
+                granted_at INTEGER NOT NULL
+             );
+             CREATE TABLE reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_entry_id INTEGER NOT NULL
+                    REFERENCES repository_entries(id) ON DELETE CASCADE,
+                selection_kind TEXT NOT NULL CHECK(selection_kind IN ('branch', 'pull_request')),
+                base_ref TEXT NOT NULL,
+                head_ref TEXT NOT NULL,
+                current_snapshot_id INTEGER,
+                created_at INTEGER NOT NULL,
+                last_opened_at INTEGER NOT NULL,
+                UNIQUE(repository_entry_id, selection_kind, base_ref, head_ref)
+             );
+             CREATE TABLE review_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+                base_revision TEXT NOT NULL,
+                comparison_base TEXT NOT NULL,
+                head_revision TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+             );
+             CREATE TABLE file_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL
+                    REFERENCES review_snapshots(id) ON DELETE CASCADE,
+                path TEXT NOT NULL,
+                old_path TEXT,
+                status TEXT NOT NULL,
+                before_mode INTEGER,
+                after_mode INTEGER,
+                before_object_id TEXT,
+                after_object_id TEXT
+             );
+             PRAGMA user_version = 2;",
+        )?;
+        transaction.commit()?;
+    }
     Ok(())
+}
+
+/// 将 durable string identity 解析为数据库主键。
+fn parse_review_id(review_id: &str) -> Result<i64, RepositoryCatalogError> {
+    review_id
+        .strip_prefix("review-")
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| RepositoryCatalogError::new("reviewId 格式无效。"))
+}
+
+/// 将 domain status 保存成稳定的数据库标签。
+fn status_text(status: ChangeStatus) -> &'static str {
+    match status {
+        ChangeStatus::Added => "added",
+        ChangeStatus::Modified => "modified",
+        ChangeStatus::Deleted => "deleted",
+        ChangeStatus::Renamed => "renamed",
+    }
+}
+
+/// 从数据库状态标签恢复 domain status。
+fn parse_status(status: &str) -> rusqlite::Result<ChangeStatus> {
+    match status {
+        "added" => Ok(ChangeStatus::Added),
+        "modified" => Ok(ChangeStatus::Modified),
+        "deleted" => Ok(ChangeStatus::Deleted),
+        "renamed" => Ok(ChangeStatus::Renamed),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+/// 用持久化 object ID 与 mode 恢复按需读取条目。
+fn entry_from_metadata(object_id: &Option<String>, mode: Option<u32>) -> Option<LocalEntry> {
+    Some(LocalEntry {
+        object_id: object_id.clone()?,
+        mode: mode?,
+    })
 }
 
 /// 从稳定的列顺序重建尚未探测可用性的入口。
