@@ -1,6 +1,9 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
-use narrant_lib::change_content::local::{list_refs, LocalOpenedReview};
+use narrant_lib::change_content::local::{
+    fetch_selected_remote_refs, list_refs, LocalOpenedReview,
+};
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
+use narrant_lib::core_git::CancellationToken;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -612,4 +615,131 @@ fn compares_canonical_refs_in_a_real_shallow_clone() {
         review.snapshot().head_revision
     );
     assert!(review.snapshot().file_changes.is_empty());
+}
+
+#[test]
+fn selected_remote_fetch_observes_force_push_without_credentials_injection() {
+    let remote_fixture = TempDir::new().expect("remote directory");
+    let remote = Repository::init_bare(remote_fixture.path()).expect("initialize bare remote");
+    let source_fixture = TempDir::new().expect("source directory");
+    let source = Repository::init(source_fixture.path()).expect("initialize source");
+    commit_file(&source, "README.md", "first\n", "first");
+    source
+        .remote("origin", remote_fixture.path().to_str().unwrap())
+        .unwrap();
+    assert!(Command::new("git")
+        .args(["push", "origin", "HEAD:refs/heads/topic"])
+        .current_dir(source_fixture.path())
+        .status()
+        .unwrap()
+        .success());
+    let clone_fixture = TempDir::new().expect("clone parent");
+    let clone_path = clone_fixture.path().join("clone");
+    assert!(Command::new("git")
+        .args(["clone", "--quiet"])
+        .arg(remote_fixture.path())
+        .arg(&clone_path)
+        .status()
+        .unwrap()
+        .success());
+    let old_head = remote.refname_to_id("refs/heads/topic").unwrap();
+
+    std::fs::write(source_fixture.path().join("README.md"), "forced\n").unwrap();
+    assert!(Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(source_fixture.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["commit", "--amend", "--quiet", "-m", "forced"])
+        .current_dir(source_fixture.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["push", "--force", "origin", "HEAD:refs/heads/topic"])
+        .current_dir(source_fixture.path())
+        .status()
+        .unwrap()
+        .success());
+    let forced_head = source.head().unwrap().target().unwrap();
+
+    fetch_selected_remote_refs(
+        &clone_path,
+        "refs/remotes/origin/topic",
+        "refs/remotes/origin/topic",
+        &CancellationToken::default(),
+    )
+    .expect("fetch selected remote");
+
+    let clone = Repository::open(&clone_path).unwrap();
+    assert_eq!(
+        clone.refname_to_id("refs/remotes/origin/topic").unwrap(),
+        forced_head
+    );
+    assert_ne!(forced_head, old_head);
+}
+
+#[test]
+fn selected_remote_fetch_reports_transport_failure_without_moving_tracking_ref() {
+    let fixture = TempDir::new().expect("repository directory");
+    let repository = Repository::init(fixture.path()).expect("initialize repository");
+    let head = commit_file(&repository, "README.md", "stable\n", "stable");
+    repository
+        .reference("refs/remotes/origin/topic", head, true, "fixture")
+        .unwrap();
+    repository
+        .remote("origin", "/definitely/missing/narrant-remote")
+        .unwrap();
+
+    let error = fetch_selected_remote_refs(
+        fixture.path(),
+        "refs/remotes/origin/topic",
+        "refs/remotes/origin/topic",
+        &CancellationToken::default(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("Core Git 失败"));
+    assert_eq!(
+        repository
+            .refname_to_id("refs/remotes/origin/topic")
+            .unwrap(),
+        head
+    );
+}
+
+#[test]
+fn comparison_without_a_common_ancestor_fails_without_mutating_refs() {
+    let fixture = TempDir::new().expect("repository directory");
+    let repository = Repository::init(fixture.path()).expect("initialize repository");
+    let base = commit_file(&repository, "base.txt", "base\n", "base");
+    repository
+        .branch("base", &repository.find_commit(base).unwrap(), true)
+        .unwrap();
+    assert!(Command::new("git")
+        .args(["checkout", "--orphan", "head"])
+        .current_dir(fixture.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["rm", "-rf", "--quiet", "."])
+        .current_dir(fixture.path())
+        .status()
+        .unwrap()
+        .success());
+    commit_file(&repository, "head.txt", "head\n", "head");
+    let head = repository.head().unwrap().target().unwrap();
+
+    let error = match LocalOpenedReview::open(fixture.path(), "refs/heads/base", "refs/heads/head")
+    {
+        Ok(_) => panic!("unrelated histories must not produce a comparison"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("Core Git"));
+    assert_eq!(repository.refname_to_id("refs/heads/base").unwrap(), base);
+    assert_eq!(repository.refname_to_id("refs/heads/head").unwrap(), head);
 }

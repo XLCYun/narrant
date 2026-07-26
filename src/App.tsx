@@ -51,6 +51,13 @@ type GitHubReviewSnapshot = ReviewSnapshotBase & {
   githubUrl: string;
 };
 type ReviewSnapshot = LocalReviewSnapshot | GitHubReviewSnapshot;
+type BranchReviewUpdate = {
+  changed: boolean;
+  currentBaseRevision: string;
+  currentHeadRevision: string;
+  latestBaseRevision: string;
+  latestHeadRevision: string;
+};
 type ActiveReview = { source: "local"; reviewId: string } | { source: "github"; sessionId: string };
 type GitHubAuthStatus = {
   configured: boolean;
@@ -146,6 +153,7 @@ export function App() {
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
+  const [branchUpdate, setBranchUpdate] = useState<BranchReviewUpdate>();
   const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -180,6 +188,7 @@ export function App() {
       : nextSnapshot && { source: "github" as const, sessionId: nextSnapshot.sessionId };
     activeReview.current = nextReview;
     setSnapshot(nextSnapshot);
+    setBranchUpdate(undefined);
     if (previousReview && JSON.stringify(previousReview) !== JSON.stringify(nextReview)) {
       closeActiveReview(previousReview);
     }
@@ -434,6 +443,34 @@ export function App() {
     }
   }
 
+  /** 只检查 Branch Selection 的 moving refs，不改变正在展示的 Snapshot。 */
+  async function checkBranchReviewUpdates() {
+    if (snapshot?.source !== "local") return;
+    setError("");
+    try {
+      setBranchUpdate(await invokeLocalGit<BranchReviewUpdate>("check_branch_review_updates", {
+        reviewId: snapshot.reviewId,
+      }));
+    } catch (reason) {
+      setBranchUpdate(undefined);
+      setError(String(reason));
+    }
+  }
+
+  /** 在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
+  async function refreshBranchReview() {
+    if (snapshot?.source !== "local") return;
+    setError("");
+    try {
+      replaceSnapshot(await invokeLocalGit<LocalReviewSnapshot>("refresh_branch_review", {
+        reviewId: snapshot.reviewId,
+      }));
+      setFileChange(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
   function renderDirectory(directory: DirectoryNode) {
     return <>
       {directory.directories.map((child) => <li key={child.name} role="treeitem" aria-label={child.name} aria-expanded="true">
@@ -578,6 +615,14 @@ export function App() {
         >{snapshot.description}</ReactMarkdown>
       </div>
     </article>}
+    {snapshot?.source === "local" && <section aria-label="Branch Review 更新">
+      <Button variant="outline" onClick={checkBranchReviewUpdates}>检查更新</Button>
+      {branchUpdate && !branchUpdate.changed && <p role="status">当前已是最新版本</p>}
+      {branchUpdate?.changed && <div role="status">
+        <p>发现新版本：{branchUpdate.currentHeadRevision} → {branchUpdate.latestHeadRevision}</p>
+        <Button onClick={refreshBranchReview}>确认刷新到新版本</Button>
+      </div>}
+    </section>}
     {snapshot && <div className="grid grid-cols-[minmax(16rem,24rem)_1fr] gap-4">
       <nav aria-label="文件树">
         <ul role="tree" aria-label="文件树">

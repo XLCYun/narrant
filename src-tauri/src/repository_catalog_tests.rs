@@ -185,3 +185,75 @@ fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
     assert_eq!(loaded.head_revision, snapshot.snapshot().head_revision);
     assert!(loaded.file_changes.is_empty());
 }
+
+#[test]
+fn refresh_candidate_stays_non_current_until_explicit_activation() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let repository = create_repository();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let entry = catalog.register(repository.path()).unwrap();
+    catalog.grant_workspace_trust(entry.id).unwrap();
+    let branch = String::from_utf8(
+        Command::new("git")
+            .args(["symbolic-ref", "HEAD"])
+            .current_dir(repository.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let branch_ref = branch.trim();
+    let initial = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        branch_ref,
+        branch_ref,
+    )
+    .unwrap();
+    let saved = catalog
+        .save_branch_review(entry.id, initial.snapshot())
+        .unwrap();
+    catalog.activate_snapshot(&saved).unwrap();
+    let old_head = saved.head_revision.clone();
+
+    std::fs::write(repository.path().join("README.md"), "refreshed").unwrap();
+    assert!(Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["commit", "-q", "-m", "refresh"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap()
+        .success());
+    let latest = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        branch_ref,
+        branch_ref,
+    )
+    .unwrap();
+
+    let candidate = catalog
+        .save_refresh_snapshot(&saved.review_id, latest.snapshot())
+        .unwrap();
+    assert_eq!(
+        catalog.open_review(&saved.review_id).unwrap().head_revision,
+        old_head
+    );
+
+    catalog
+        .activate_refresh_snapshot(&candidate, &saved)
+        .unwrap();
+    let refreshed = catalog.open_review(&saved.review_id).unwrap();
+    assert_eq!(refreshed.head_revision, latest.snapshot().head_revision);
+    assert_ne!(refreshed.head_revision, old_head);
+    let internal_refs = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname)", "refs/narrant"])
+        .current_dir(repository.path())
+        .output()
+        .unwrap();
+    assert!(internal_refs.status.success());
+    assert!(internal_refs.stdout.is_empty());
+}

@@ -12,6 +12,41 @@ fn repository() -> tempfile::TempDir {
     fixture
 }
 
+/// 创建带用户配置和首个提交的真实仓库。
+fn committed_repository() -> tempfile::TempDir {
+    let fixture = repository();
+    run_git(
+        fixture.path(),
+        ["config", "user.email", "test@narrant.invalid"],
+    );
+    run_git(fixture.path(), ["config", "user.name", "Narrant Test"]);
+    std::fs::write(fixture.path().join("README.md"), "fixture").unwrap();
+    run_git(fixture.path(), ["add", "README.md"]);
+    run_git(fixture.path(), ["commit", "-q", "-m", "initial"]);
+    fixture
+}
+
+/// 执行预期成功且无需读取输出的测试 Git 命令。
+fn run_git<const N: usize>(path: &Path, arguments: [&str; N]) {
+    assert!(Command::new("git")
+        .args(arguments)
+        .current_dir(path)
+        .status()
+        .unwrap()
+        .success());
+}
+
+/// 读取预期成功的单行测试 Git 输出。
+fn read_git<const N: usize>(path: &Path, arguments: [&str; N]) -> String {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
 #[test]
 fn cancellation_stops_a_core_git_operation() {
     let fixture = repository();
@@ -130,4 +165,61 @@ fn review_workspace_is_a_detached_linked_worktree_at_the_snapshot_head() {
         .unwrap();
     assert_eq!(workspace_head.trim(), head);
     assert!(!symbolic.success());
+}
+
+#[test]
+fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head() {
+    let repository = committed_repository();
+    let adapter = GitProcessAdapter::new(repository.path());
+    let cancellation = CancellationToken::default();
+    let first_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
+    let workspace_root = tempfile::TempDir::new().unwrap();
+    let workspace = workspace_root.path().join("repo");
+    adapter
+        .create_detached_worktree(&workspace, &first_head, &cancellation)
+        .unwrap();
+    std::fs::write(workspace.join("dirty.txt"), "discard me").unwrap();
+
+    std::fs::write(repository.path().join("next.txt"), "next").unwrap();
+    run_git(repository.path(), ["add", "next.txt"]);
+    run_git(repository.path(), ["commit", "-q", "-m", "next"]);
+    let next_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
+
+    adapter
+        .force_restore_detached_worktree(&workspace, &next_head, &cancellation)
+        .unwrap();
+
+    assert_eq!(read_git(&workspace, ["rev-parse", "HEAD"]), next_head);
+    assert!(!workspace.join("dirty.txt").exists());
+    assert!(!Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .current_dir(&workspace)
+        .status()
+        .unwrap()
+        .success());
+}
+
+#[test]
+fn failed_workspace_transition_restores_the_previous_snapshot_head() {
+    let repository = committed_repository();
+    let adapter = GitProcessAdapter::new(repository.path());
+    let cancellation = CancellationToken::default();
+    let old_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
+    let workspace_root = tempfile::TempDir::new().unwrap();
+    let workspace = workspace_root.path().join("repo");
+    adapter
+        .create_detached_worktree(&workspace, &old_head, &cancellation)
+        .unwrap();
+
+    let error = adapter
+        .transition_detached_worktree(
+            &workspace,
+            &old_head,
+            "0000000000000000000000000000000000000000",
+            &cancellation,
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("无法创建 Review Workspace"));
+    assert_eq!(read_git(&workspace, ["rev-parse", "HEAD"]), old_head);
 }

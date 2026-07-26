@@ -84,6 +84,17 @@ struct LocalReviewSnapshotResponse {
     file_changes: Vec<FileChangeSummaryResponse>,
 }
 
+/// 检查 moving refs 后返回的版本差异，不携带或切换候选 File Changes。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchReviewUpdateResponse {
+    changed: bool,
+    current_base_revision: String,
+    current_head_revision: String,
+    latest_base_revision: String,
+    latest_head_revision: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GitHubReviewSnapshotResponse {
@@ -357,6 +368,121 @@ fn compare_local_refs(
         .save_branch_review(repository_entry_id, calculated_review.snapshot())
         .map_err(|error| error.to_string())?;
     open_saved_branch_review(&state, &catalog, repository_path, saved)
+}
+
+/// 重新获取所选 remote refs 并解析最新版本，但保持 current Snapshot 与 Workspace 不变。
+#[tauri::command]
+fn check_branch_review_updates(
+    operations: tauri::State<'_, GitOperationStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    operation_id: String,
+    review_id: String,
+) -> Result<BranchReviewUpdateResponse, String> {
+    let current = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    let repository = require_available_repository(&catalog, current.repository_entry_id)?;
+    let cancellation = operations.start(operation_id.clone())?;
+    let result = (|| {
+        change_content::local::fetch_selected_remote_refs(
+            &repository,
+            &current.base_ref,
+            &current.head_ref,
+            &cancellation,
+        )?;
+        let latest = change_content::local::LocalOpenedReview::open_with_cancellation(
+            &repository,
+            &current.base_ref,
+            &current.head_ref,
+            &cancellation,
+        )?;
+        Ok::<_, core_git::GitCommandError>(BranchReviewUpdateResponse {
+            changed: current.base_revision != latest.snapshot().base_revision
+                || current.head_revision != latest.snapshot().head_revision,
+            current_base_revision: current.base_revision,
+            current_head_revision: current.head_revision,
+            latest_base_revision: latest.snapshot().base_revision.clone(),
+            latest_head_revision: latest.snapshot().head_revision.clone(),
+        })
+    })()
+    .map_err(|error| error.to_string());
+    operations.finish(&operation_id);
+    result
+}
+
+/// 在用户明确确认后创建 Snapshot、重建 Workspace，并以 CAS 推进 current 指针。
+#[tauri::command]
+fn refresh_branch_review(
+    state: tauri::State<'_, ReviewSessionStore>,
+    operations: tauri::State<'_, GitOperationStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    operation_id: String,
+    review_id: String,
+) -> Result<LocalReviewSnapshotResponse, String> {
+    let current = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    let repository = require_available_repository(&catalog, current.repository_entry_id)?;
+    let cancellation = operations.start(operation_id.clone())?;
+    let result = (|| {
+        change_content::local::fetch_selected_remote_refs(
+            &repository,
+            &current.base_ref,
+            &current.head_ref,
+            &cancellation,
+        )?;
+        let latest = change_content::local::LocalOpenedReview::open_with_cancellation(
+            &repository,
+            &current.base_ref,
+            &current.head_ref,
+            &cancellation,
+        )?;
+        if current.base_revision == latest.snapshot().base_revision
+            && current.head_revision == latest.snapshot().head_revision
+        {
+            return Ok(map_local_snapshot(review_id.clone(), &current.snapshot()));
+        }
+        let candidate = catalog
+            .save_refresh_snapshot(&review_id, latest.snapshot())
+            .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
+        let workspace = catalog
+            .review_workspace_path(&review_id)
+            .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
+        let adapter = core_git::GitProcessAdapter::new(&repository);
+        adapter.transition_detached_worktree(
+            &workspace,
+            &current.head_revision,
+            &candidate.head_revision,
+            &cancellation,
+        )?;
+        if let Err(error) = catalog.activate_refresh_snapshot(&candidate, &current) {
+            let rollback = adapter.force_restore_detached_worktree(
+                &workspace,
+                &current.head_revision,
+                &core_git::CancellationToken::default(),
+            );
+            return Err(core_git::GitCommandError::new(match rollback {
+                Ok(()) => error.to_string(),
+                Err(rollback_error) => {
+                    format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
+                }
+            }));
+        }
+        let snapshot = candidate.snapshot();
+        state
+            .insert_with_id(
+                review_id.clone(),
+                OpenedReview::Local(Box::new(change_content::local::LocalOpenedReview::restore(
+                    &repository,
+                    snapshot.clone(),
+                ))),
+            )
+            .map_err(core_git::GitCommandError::new)?;
+        Ok(map_local_snapshot(review_id.clone(), &snapshot))
+    })()
+    .map_err(|error: core_git::GitCommandError| error.to_string());
+    operations.finish(&operation_id);
+    result
 }
 
 /// materialize saved Snapshot，校验 workspace 后再推进 current 指针并注册运行时句柄。
@@ -685,6 +811,8 @@ pub fn run() {
             repository_workspace_trust,
             grant_repository_workspace_trust,
             compare_local_refs,
+            check_branch_review_updates,
+            refresh_branch_review,
             list_local_refs,
             cancel_git_operation,
             discover_github_pull_requests,

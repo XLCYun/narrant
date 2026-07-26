@@ -433,6 +433,65 @@ describe("App", () => {
     expect(await screen.findByText("二进制文件（变更前：无；变更后：128 字节）")).toBeInTheDocument();
   });
 
+  it("检查到分支移动后保留当前 Snapshot，直到用户明确刷新", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 24, canonicalPath: "/repo", commonDirectory: "/repo/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const oldSnapshot = {
+      reviewId: "review-24", source: "local", baseRef: "refs/heads/main",
+      baseRevision: "base-old", comparisonBase: "base-old",
+      headRef: "refs/heads/topic", headRevision: "head-old",
+      fileChanges: [{ path: "old.txt", oldPath: null, status: "modified" }],
+    };
+    const newSnapshot = {
+      ...oldSnapshot, baseRevision: "base-new", comparisonBase: "base-new",
+      headRevision: "head-new",
+      fileChanges: [{ path: "new.txt", oldPath: null, status: "added" }],
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "discover_github_pull_requests") return Promise.resolve([]);
+      if (command === "list_local_refs") {
+        return Promise.resolve(["refs/heads/main", "refs/heads/topic"]);
+      }
+      if (command === "compare_local_refs") return Promise.resolve(oldSnapshot);
+      if (command === "check_branch_review_updates") return Promise.resolve({
+        changed: true,
+        currentBaseRevision: "base-old", currentHeadRevision: "head-old",
+        latestBaseRevision: "base-new", latestHeadRevision: "head-new",
+      });
+      if (command === "refresh_branch_review") return Promise.resolve(newSnapshot);
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "/repo" }));
+    await screen.findByRole("heading", { name: "repo" });
+    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+    await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("refs/heads/topic"));
+    fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));
+    expect(await screen.findByRole("treeitem", { name: /old.txt/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+
+    expect(await screen.findByText(/发现新版本.*head-new/)).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /old.txt/ })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /new.txt/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认刷新到新版本" }));
+
+    expect(await screen.findByRole("treeitem", { name: /new.txt/ })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /old.txt/ })).not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("refresh_branch_review", {
+      reviewId: "review-24",
+      operationId: expect.any(String),
+    });
+  });
+
   it("Monaco Diff Editor 跟随运行时系统主题", async () => {
     const changeSystemTheme = mockSystemTheme(false);
     invoke

@@ -209,6 +209,43 @@ impl GitProcessAdapter {
         Ok(())
     }
 
+    /// 强制重建受管 Review Workspace，并将其恢复为指定 detached HEAD。
+    pub fn force_restore_detached_worktree(
+        &self,
+        workspace_path: &Path,
+        head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        self.remove_worktree(workspace_path, cancellation)?;
+        self.create_detached_worktree(workspace_path, head_object_id, cancellation)
+    }
+
+    /// 将 Workspace 切换到新 Snapshot；核心阶段失败时恢复旧 Snapshot HEAD。
+    pub fn transition_detached_worktree(
+        &self,
+        workspace_path: &Path,
+        previous_head_object_id: &str,
+        next_head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        if let Err(error) =
+            self.force_restore_detached_worktree(workspace_path, next_head_object_id, cancellation)
+        {
+            let rollback = self.force_restore_detached_worktree(
+                workspace_path,
+                previous_head_object_id,
+                &CancellationToken::default(),
+            );
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => GitCommandError::new(format!(
+                    "{error}；恢复旧 Review Workspace 失败：{rollback_error}"
+                )),
+            });
+        }
+        Ok(())
+    }
+
     /// 精确移除调用方已验证归属的 disposable linked worktree。
     pub fn remove_worktree(
         &self,
