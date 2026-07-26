@@ -18,6 +18,7 @@ afterEach(() => {
   openUrl.mockReset();
   writeText.mockReset();
   document.documentElement.classList.remove("dark");
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
 function mockSystemTheme(initialDark: boolean) {
@@ -42,6 +43,63 @@ function mockSystemTheme(initialDark: boolean) {
 }
 
 describe("App", () => {
+  it("从仓库优先首页添加 Repository Entry 并进入仓库页面", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 21,
+      canonicalPath: "/work/narrant",
+      commonDirectory: "/work/narrant/.git",
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      unavailableReason: null,
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([]);
+      if (command === "register_repository_entry") return Promise.resolve(entry);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Repository Entries" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Repository 路径"), {
+      target: { value: "/work/narrant" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "添加 Repository" }));
+    fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
+
+    expect(await screen.findByRole("heading", { name: "narrant" })).toBeInTheDocument();
+    expect(screen.getByText("/work/narrant")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "返回 Repository Entries" })).toBeInTheDocument();
+    expect(screen.getByLabelText("本地仓库路径")).toHaveValue("/work/narrant");
+  });
+
+  it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([{
+        id: 22,
+        canonicalPath: "/missing/repository",
+        commonDirectory: "/missing/repository/.git",
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: false,
+        unavailableReason: "Repository Entry 路径不存在或不可访问",
+      }]);
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    expect(await screen.findByText("/missing/repository")).toBeInTheDocument();
+    expect(screen.getByText("不可用")).toBeInTheDocument();
+    expect(screen.getByText("Repository Entry 路径不存在或不可访问")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "/missing/repository" })).toBeDisabled();
+  });
+
   it("初始浅色系统主题不设置 dark class", () => {
     mockSystemTheme(false);
     render(<App />);

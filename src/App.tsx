@@ -60,6 +60,15 @@ type DeviceAuthorization = {
   expiresIn: number;
   interval: number;
 };
+type RepositoryEntry = {
+  id: number;
+  canonicalPath: string;
+  commonDirectory: string;
+  createdAt: number;
+  lastOpenedAt: number;
+  available: boolean;
+  unavailableReason: string | null;
+};
 
 type DirectoryNode = {
   name: string;
@@ -101,8 +110,12 @@ function ErrorMessage({ message }: { message: string }) {
 }
 
 export function App() {
+  const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const editorTheme = useSystemTheme();
   const [repositoryPath, setRepositoryPath] = useState("");
+  const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
+  const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestUrl, setPullRequestUrl] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
@@ -158,11 +171,63 @@ export function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    setCatalogLoading(true);
+    void invoke<RepositoryEntry[]>("list_repository_entries")
+      .then(setRepositoryEntries)
+      .catch((reason) => setError(String(reason)))
+      .finally(() => setCatalogLoading(false));
+  }, []);
+
+  /** 验证并持久化用户输入的具体本地 clone。 */
+  async function registerRepository() {
+    setError("");
+    setCatalogLoading(true);
+    try {
+      const entry = await invoke<RepositoryEntry>("register_repository_entry", {
+        path: repositoryPath,
+      });
+      setRepositoryEntries((entries) => [
+        entry,
+        ...entries.filter((candidate) => candidate.id !== entry.id),
+      ]);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
+  /** 进入一个可用 Repository Entry，并将后续 Core Git 操作限定到其保存路径。 */
+  async function openRepository(entry: RepositoryEntry) {
+    setError("");
+    try {
+      const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
+      setRepositoryEntries((entries) => entries.map((candidate) => (
+        candidate.id === opened.id ? opened : candidate
+      )));
+      if (!opened.available) return;
+      setSelectedRepository(opened);
+      setRepositoryPath(opened.canonicalPath);
+      setRefs([]);
+      setBaseRef("");
+      setHeadRef("");
+      replaceSnapshot(undefined);
+      setFileChange(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
   async function openPullRequest() {
     setError("");
     setLoading(true);
     try {
-      const nextSnapshot = await invoke<ReviewSnapshot>("open_github_pull_request", { url: pullRequestUrl });
+      const nextSnapshot = await invoke<ReviewSnapshot>("open_github_pull_request", {
+        repositoryEntryId: selectedRepository?.id,
+        url: pullRequestUrl,
+      });
       replaceSnapshot(nextSnapshot);
       setFileChange(undefined);
     } catch (reason) {
@@ -249,7 +314,9 @@ export function App() {
   async function loadRefs() {
     setError("");
     try {
-      const loadedRefs = await invokeLocalGit<string[]>("list_local_refs", { repositoryPath });
+      const loadedRefs = await invokeLocalGit<string[]>("list_local_refs", {
+        repositoryEntryId: selectedRepository?.id,
+      });
       setRefs(loadedRefs);
       replaceSnapshot(undefined);
       setFileChange(undefined);
@@ -266,7 +333,11 @@ export function App() {
   async function openComparison() {
     setError("");
     try {
-      replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("compare_local_refs", { repositoryPath, baseRef, headRef }));
+      replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("compare_local_refs", {
+        repositoryEntryId: selectedRepository?.id,
+        baseRef,
+        headRef,
+      }));
       setFileChange(undefined);
     }
     catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
@@ -302,6 +373,34 @@ export function App() {
 
   return <main>
     <header><h1>Narrant</h1><p>只读变更审核</p></header>
+    {catalogRuntimeEnabled && !selectedRepository && <article aria-label="Repository Catalog">
+      <h2>Repository Entries</h2>
+      <section aria-label="添加 Repository" className="flex flex-wrap items-end gap-3">
+        <label>Repository 路径<Input aria-label="Repository 路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
+        <Button disabled={!repositoryPath || catalogLoading} onClick={registerRepository}>
+          {catalogLoading ? "正在读取…" : "添加 Repository"}
+        </Button>
+      </section>
+      {repositoryEntries.length === 0
+        ? <p>{catalogLoading ? "正在加载 Repository Entries…" : "尚未添加 Repository Entry"}</p>
+        : <ul aria-label="Repository Entries">
+          {repositoryEntries.map((entry) => <li key={entry.id}>
+            <Button variant="outline" disabled={!entry.available} onClick={() => openRepository(entry)}>
+              {entry.canonicalPath}
+            </Button>
+            {!entry.available && <>
+              <strong>不可用</strong>
+              <p>{entry.unavailableReason}</p>
+            </>}
+          </li>)}
+        </ul>}
+    </article>}
+    {selectedRepository && <article aria-label="Repository Entry">
+      <Button variant="ghost" onClick={() => setSelectedRepository(undefined)}>返回 Repository Entries</Button>
+      <h2>{selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1)}</h2>
+      <p>{selectedRepository.canonicalPath}</p>
+    </article>}
+    {(!catalogRuntimeEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
       <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
       <Button disabled={!pullRequestUrl || loading} onClick={openPullRequest}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
@@ -335,7 +434,7 @@ export function App() {
     </section>}
     <p>本地分支比较</p>
     <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
-      <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
+      <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
       <Button variant="outline" onClick={loadRefs}>读取分支</Button>
       <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
       <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
@@ -379,5 +478,6 @@ export function App() {
           </>}
       </section>}
     </div>}
+    </>}
   </main>;
 }
