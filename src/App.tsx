@@ -107,16 +107,25 @@ type PullRequestGroup = {
   pullRequests: DiscoveredPullRequest[];
   error: string | null;
 };
+/// 当前由 discovery 选中的 Pull Request identity 与 metadata。
 type SelectedPullRequest = {
   repository: PullRequestGroup["repository"];
   pullRequest: DiscoveredPullRequest;
 };
+/// “检查更新”返回的 current 与 available revision 对照。
 type ReviewUpdate = {
   updateAvailable: boolean;
   currentBaseRevision: string;
   currentHeadRevision: string;
   availableBaseRevision: string;
   availableHeadRevision: string;
+};
+/// Repository Entry 下无需 GitHub 在线状态即可展示的 durable Review。
+type SavedReviewSummary = {
+  reviewId: string;
+  baseRevision: string;
+  headRevision: string;
+  pullRequest?: PullRequestMetadata;
 };
 
 type DirectoryNode = {
@@ -167,6 +176,7 @@ export function App() {
   const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
+  const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [pullRequestUrl, setPullRequestUrl] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
@@ -288,9 +298,12 @@ export function App() {
       )));
       if (!opened.available) return;
       setSelectedRepository(opened);
-      setWorkspaceTrusted(await invoke<boolean>("repository_workspace_trust", {
-        repositoryEntryId: opened.id,
-      }));
+      const [trusted, reviews] = await Promise.all([
+        invoke<boolean>("repository_workspace_trust", { repositoryEntryId: opened.id }),
+        invoke<SavedReviewSummary[]>("list_saved_reviews", { repositoryEntryId: opened.id }),
+      ]);
+      setWorkspaceTrusted(trusted);
+      setSavedReviews(reviews);
       setRepositoryPath(opened.canonicalPath);
       void loadPullRequestGroups(opened);
       setRefs([]);
@@ -300,6 +313,41 @@ export function App() {
       setFileChange(undefined);
     } catch (reason) {
       setError(String(reason));
+    }
+  }
+
+  /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
+  async function openSavedReview(review: SavedReviewSummary) {
+    setError("");
+    setLoading(true);
+    try {
+      const nextSnapshot = await invoke<LocalReviewSnapshot>("open_saved_review", {
+        reviewId: review.reviewId,
+      });
+      replaceSnapshot(nextSnapshot);
+      setSelectedPullRequest(nextSnapshot.pullRequest && {
+        repository: {
+          owner: nextSnapshot.pullRequest.owner,
+          name: nextSnapshot.pullRequest.repository,
+        },
+        pullRequest: {
+          number: nextSnapshot.pullRequest.number,
+          title: nextSnapshot.pullRequest.title,
+          description: nextSnapshot.pullRequest.description,
+          author: nextSnapshot.pullRequest.author,
+          state: nextSnapshot.pullRequest.state,
+          draft: nextSnapshot.pullRequest.draft,
+          url: nextSnapshot.pullRequest.url,
+          base: { ref: nextSnapshot.pullRequest.baseRef, sha: nextSnapshot.baseRevision },
+          head: { ref: nextSnapshot.pullRequest.headRef, sha: nextSnapshot.headRevision },
+        },
+      });
+      setReviewUpdate(undefined);
+      setFileChange(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -620,6 +668,18 @@ export function App() {
           </article>;
         })}
       </section>
+      <section aria-label="保存的 Reviews">
+        <h3>保存的 Reviews</h3>
+        {savedReviews.length === 0
+          ? <p>尚无保存的 Review</p>
+          : <ul>{savedReviews.map((review) => <li key={review.reviewId}>
+            <Button variant="outline" disabled={loading} onClick={() => void openSavedReview(review)}>
+              {review.pullRequest
+                ? `#${review.pullRequest.number} ${review.pullRequest.title}`
+                : `${review.baseRevision.slice(0, 8)} → ${review.headRevision.slice(0, 8)}`}
+            </Button>
+          </li>)}</ul>}
+      </section>
       {!workspaceTrusted && <section aria-label="Workspace Trust 风险说明">
         <h3>授予 Workspace Trust</h3>
         <p>创建 Review 会执行普通 Git checkout；仓库配置可能触发 hooks、filters、Git LFS，未来 review tools 也可能读取仓库控制的配置。</p>
@@ -628,8 +688,10 @@ export function App() {
     </article>}
     {(!catalogRuntimeEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
-      <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
-      <Button disabled={!pullRequestUrl || loading} onClick={() => void openPullRequest()}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
+      {!catalogRuntimeEnabled && <>
+        <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
+        <Button disabled={!pullRequestUrl || loading} onClick={() => void openPullRequest()}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
+      </>}
       {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
       {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
     </section>

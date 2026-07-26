@@ -336,26 +336,7 @@ impl RepositoryCatalog {
             )
             .map_err(database_recovery_error)?;
         let snapshot_id = transaction.last_insert_rowid();
-        for change in &snapshot.file_changes {
-            transaction
-                .execute(
-                    "INSERT INTO file_changes (
-                        snapshot_id, path, old_path, status, before_mode, after_mode,
-                        before_object_id, after_object_id
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![
-                        snapshot_id,
-                        change.path,
-                        change.old_path,
-                        status_text(change.status),
-                        change.before_mode,
-                        change.after_mode,
-                        change.before_object_id,
-                        change.after_object_id
-                    ],
-                )
-                .map_err(database_recovery_error)?;
-        }
+        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
         transaction.commit().map_err(database_recovery_error)?;
         Ok(SavedBranchReview {
             review_id: format!("review-{review_row_id}"),
@@ -503,6 +484,32 @@ impl RepositoryCatalog {
         row_id
             .map(|id| self.open_review(&format!("review-{id}")))
             .transpose()
+    }
+
+    /// 列出一个 Repository Entry 的全部 current Reviews，供历史列表与重开入口使用。
+    pub fn list_reviews(
+        &self,
+        repository_entry_id: i64,
+    ) -> Result<Vec<SavedBranchReview>, RepositoryCatalogError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id FROM reviews
+                 WHERE repository_entry_id = ?1 AND current_snapshot_id IS NOT NULL
+                 ORDER BY last_opened_at DESC, id DESC",
+            )
+            .map_err(database_recovery_error)?;
+        let review_ids = statement
+            .query_map([repository_entry_id], |row| row.get::<_, i64>(0))
+            .map_err(database_recovery_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(database_recovery_error)?;
+        drop(statement);
+        drop(connection);
+        review_ids
+            .into_iter()
+            .map(|id| self.open_review(&format!("review-{id}")))
+            .collect()
     }
 
     /// 暂存新的 immutable Snapshot；在 workspace 对齐前不改变 current 指针。

@@ -248,6 +248,13 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
         "Updated title"
     );
     assert_eq!(reopened.pull_request.as_ref().unwrap().base_ref, "release");
+    let listed = catalog.list_reviews(entry.id).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].review_id, first.review_id);
+    assert_eq!(
+        listed[0].pull_request.as_ref().unwrap().title,
+        "Updated title"
+    );
 }
 
 #[test]

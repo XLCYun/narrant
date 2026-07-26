@@ -235,6 +235,7 @@ struct PullRequestListItem {
     body: Option<String>,
     user: PullRequestUser,
     state: String,
+    merged_at: Option<String>,
     draft: bool,
     html_url: String,
     base: PullRequestRevision,
@@ -255,7 +256,11 @@ impl From<PullRequestListItem> for DiscoveredPullRequest {
             title: value.title,
             description: value.body.unwrap_or_default(),
             author: value.user.login,
-            state: value.state,
+            state: if value.merged_at.is_some() {
+                "merged".to_owned()
+            } else {
+                value.state
+            },
             draft: value.draft,
             url: value.html_url,
             base: value.base,
