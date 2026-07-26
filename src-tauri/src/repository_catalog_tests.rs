@@ -185,3 +185,126 @@ fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
     assert_eq!(loaded.head_revision, snapshot.snapshot().head_revision);
     assert!(loaded.file_changes.is_empty());
 }
+
+#[test]
+fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let repository = create_repository();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let entry = catalog.register(repository.path()).unwrap();
+    catalog.grant_workspace_trust(entry.id).unwrap();
+    let branch = String::from_utf8(
+        Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(repository.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let branch_ref = format!("refs/heads/{}", branch.trim());
+    let snapshot = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        &branch_ref,
+        &branch_ref,
+    )
+    .unwrap();
+    let first_metadata = PullRequestMetadata {
+        owner: "octo-org".to_owned(),
+        repository: "octo-repo".to_owned(),
+        number: 42,
+        title: "Initial title".to_owned(),
+        description: "Initial description".to_owned(),
+        author: "octocat".to_owned(),
+        state: "open".to_owned(),
+        draft: false,
+        url: "https://github.com/octo-org/octo-repo/pull/42".to_owned(),
+        base_ref: "main".to_owned(),
+        head_ref: "feature".to_owned(),
+        synchronized_at: 1,
+    };
+
+    let first = catalog
+        .save_pull_request_review(entry.id, &first_metadata, snapshot.snapshot())
+        .unwrap();
+    catalog.activate_snapshot(&first).unwrap();
+    let reopened = catalog
+        .save_pull_request_review(
+            entry.id,
+            &PullRequestMetadata {
+                title: "Updated title".to_owned(),
+                base_ref: "release".to_owned(),
+                synchronized_at: 2,
+                ..first_metadata
+            },
+            snapshot.snapshot(),
+        )
+        .unwrap();
+
+    assert_eq!(reopened.review_id, first.review_id);
+    assert!(!reopened.created);
+    assert_eq!(
+        reopened.pull_request.as_ref().unwrap().title,
+        "Updated title"
+    );
+    assert_eq!(reopened.pull_request.as_ref().unwrap().base_ref, "release");
+}
+
+#[test]
+fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let repository = create_repository();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let entry = catalog.register(repository.path()).unwrap();
+    catalog.grant_workspace_trust(entry.id).unwrap();
+    let branch = String::from_utf8(
+        Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(repository.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let branch_ref = format!("refs/heads/{}", branch.trim());
+    let opened = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        &branch_ref,
+        &branch_ref,
+    )
+    .unwrap();
+    let metadata = PullRequestMetadata {
+        owner: "octo-org".to_owned(),
+        repository: "octo-repo".to_owned(),
+        number: 7,
+        title: "Review".to_owned(),
+        description: String::new(),
+        author: "octocat".to_owned(),
+        state: "open".to_owned(),
+        draft: false,
+        url: "https://github.com/octo-org/octo-repo/pull/7".to_owned(),
+        base_ref: "main".to_owned(),
+        head_ref: "topic".to_owned(),
+        synchronized_at: 1,
+    };
+    let first = catalog
+        .save_pull_request_review(entry.id, &metadata, opened.snapshot())
+        .unwrap();
+    catalog.activate_snapshot(&first).unwrap();
+    let mut next_snapshot = opened.snapshot().clone();
+    next_snapshot.head_revision = "2222222222222222222222222222222222222222".to_owned();
+
+    let staged = catalog
+        .stage_pull_request_snapshot(&first, &metadata, &next_snapshot)
+        .unwrap();
+    assert_eq!(
+        catalog.open_review(&first.review_id).unwrap().head_revision,
+        first.head_revision
+    );
+
+    catalog.activate_snapshot(&staged).unwrap();
+    assert_eq!(
+        catalog.open_review(&first.review_id).unwrap().head_revision,
+        next_snapshot.head_revision
+    );
+}

@@ -127,6 +127,102 @@ describe("App", () => {
     expect(screen.getByText("GitHub 访问次数已用尽")).toBeInTheDocument();
   });
 
+  it("选择发现的 Pull Request 会通过 durable reviewId 打开本地 Review", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const repository = { owner: "octo-org", name: "octo-repo" };
+    const pullRequest = {
+      number: 42, title: "Local PR Review", description: "Details", author: "octocat",
+      state: "open", draft: true, url: "https://github.com/octo-org/octo-repo/pull/42",
+      base: { ref: "main", sha: "base-sha" }, head: { ref: "feature", sha: "head-sha" },
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "discover_github_pull_requests") return Promise.resolve([{
+        repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null,
+      }]);
+      if (command === "open_pull_request_review") return Promise.resolve({
+        source: "local", reviewId: "review-42", baseRef: "main", baseRevision: "base-sha",
+        comparisonBase: "base-sha", headRef: "feature", headRevision: "head-sha",
+        fileChanges: [{ path: "README.md", oldPath: null, status: "modified" }],
+        pullRequest: {
+          owner: repository.owner, repository: repository.name, number: 42,
+          title: pullRequest.title, description: pullRequest.description,
+          author: pullRequest.author, state: pullRequest.state, draft: pullRequest.draft,
+          url: pullRequest.url, baseRef: "main", headRef: "feature", synchronizedAt: 1,
+        },
+      });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
+    fireEvent.click(await screen.findByRole("button", { name: /#42 Local PR Review/ }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
+      repositoryEntryId: 25, repository, pullRequest,
+    }));
+    expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
+    expect(screen.getByText("#42 · octocat · 草稿 · 开放")).toBeInTheDocument();
+  });
+
+  it("检查更新不切换 Snapshot，只有显式刷新才替换 Review", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const repository = { owner: "octo-org", name: "octo-repo" };
+    const pullRequest = {
+      number: 42, title: "Refreshable", description: "", author: "octocat",
+      state: "open", draft: false, url: "https://github.com/octo-org/octo-repo/pull/42",
+      base: { ref: "main", sha: "base-1" }, head: { ref: "feature", sha: "head-1" },
+    };
+    const snapshot = (headRevision: string) => ({
+      source: "local", reviewId: "review-42", baseRef: "main", baseRevision: "base-1",
+      comparisonBase: "base-1", headRef: "feature", headRevision, fileChanges: [],
+      pullRequest: {
+        owner: repository.owner, repository: repository.name, number: 42,
+        title: pullRequest.title, description: "", author: "octocat", state: "open",
+        draft: false, url: pullRequest.url, baseRef: "main", headRef: "feature",
+        synchronizedAt: 1,
+      },
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "discover_github_pull_requests") return Promise.resolve([{
+        repository, remoteNames: ["origin"], pullRequests: [{
+          ...pullRequest, head: { ref: "feature", sha: "head-2" },
+        }], error: null,
+      }]);
+      if (command === "open_pull_request_review") return Promise.resolve(snapshot("head-1"));
+      if (command === "check_pull_request_review_update") return Promise.resolve({
+        updateAvailable: true, currentBaseRevision: "base-1", currentHeadRevision: "head-1",
+        availableBaseRevision: "base-1", availableHeadRevision: "head-2",
+      });
+      if (command === "refresh_pull_request_review") return Promise.resolve(snapshot("head-2"));
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
+    fireEvent.click(await screen.findByRole("button", { name: /#42 Refreshable/ }));
+    expect(await screen.findByText("main @ base-1 → feature @ head-1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "检查 Pull Request 更新" }));
+    expect(await screen.findByText("发现新的 Pull Request revisions；当前 Snapshot 保持不变。")).toBeInTheDocument();
+    expect(screen.getByText("main @ base-1 → feature @ head-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "刷新 Review" }));
+    expect(await screen.findByText("main @ base-1 → feature @ head-2")).toBeInTheDocument();
+  });
+
   it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};

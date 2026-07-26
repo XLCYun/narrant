@@ -1,5 +1,7 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
-use narrant_lib::change_content::local::{list_refs, LocalOpenedReview};
+use narrant_lib::change_content::local::{
+    fetch_pull_request_objects, list_refs, LocalOpenedReview,
+};
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
 use std::process::Command;
 use tempfile::TempDir;
@@ -179,6 +181,67 @@ fn compares_from_merge_base_when_base_and_head_have_diverged() {
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "head-only.txt");
     assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Added);
+}
+
+#[test]
+fn fetches_pull_request_objects_without_creating_narrant_refs() {
+    let source = TempDir::new().expect("source repository");
+    let source_repository = Repository::init(source.path()).expect("initialize source");
+    let base = commit_file(&source_repository, "README.md", "base\n", "base");
+    source_repository
+        .branch("main", &source_repository.find_commit(base).unwrap(), true)
+        .unwrap();
+    let head = commit_file(&source_repository, "README.md", "head\n", "head");
+    let bare = TempDir::new().expect("bare remote");
+    assert!(Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(bare.path())
+        .status()
+        .unwrap()
+        .success());
+    for (source_ref, destination_ref) in [
+        ("refs/heads/main", "refs/heads/main"),
+        ("HEAD", "refs/pull/42/head"),
+    ] {
+        assert!(Command::new("git")
+            .arg("push")
+            .arg(bare.path())
+            .arg(format!("{source_ref}:{destination_ref}"))
+            .current_dir(source.path())
+            .status()
+            .unwrap()
+            .success());
+    }
+    let clone = TempDir::new().expect("local clone parent");
+    let clone_path = clone.path().join("repo");
+    assert!(Command::new("git")
+        .args(["clone", "-q", "--single-branch", "--branch", "main"])
+        .arg(bare.path())
+        .arg(&clone_path)
+        .status()
+        .unwrap()
+        .success());
+
+    let review = fetch_pull_request_objects(
+        &clone_path,
+        "origin",
+        42,
+        "main",
+        &base.to_string(),
+        &head.to_string(),
+    )
+    .expect("fetch and compare Pull Request objects");
+
+    assert_eq!(review.snapshot().comparison_base, base.to_string());
+    assert_eq!(review.snapshot().head_revision, head.to_string());
+    assert_eq!(review.snapshot().file_changes[0].path, "README.md");
+    let refs = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname)", "refs/narrant"])
+        .current_dir(&clone_path)
+        .output()
+        .unwrap();
+    assert!(refs.status.success());
+    assert!(refs.stdout.is_empty());
 }
 
 #[test]

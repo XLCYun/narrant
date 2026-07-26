@@ -48,6 +48,27 @@ impl LocalOpenedReview {
         }
     }
 
+    /// 用已获取的精确 base/head commit 创建 Pull Request 的 current three-dot Snapshot。
+    pub fn open_revisions(
+        repository_path: &Path,
+        base_ref: &str,
+        head_ref: &str,
+        base_revision: &str,
+        head_revision: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, GitCommandError> {
+        let adapter = GitProcessAdapter::new(repository_path);
+        let snapshot = compare_revisions(
+            &adapter,
+            base_ref,
+            head_ref,
+            base_revision,
+            head_revision,
+            cancellation,
+        )?;
+        Ok(Self { adapter, snapshot })
+    }
+
     /// 从 Snapshot 记录的对象 ID 按需读取一个 File Change 的前后内容。
     pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitCommandError> {
         self.read_file_change_with_cancellation(path, &CancellationToken::default())
@@ -186,6 +207,44 @@ pub fn fetch_selected_remote_refs(
     Ok(())
 }
 
+/// 通过用户配置的 base repository remote 获取 PR base/head 对象且不创建持久 ref。
+pub fn fetch_pull_request_objects(
+    repository_path: &Path,
+    remote: &str,
+    pull_request_number: u64,
+    base_ref: &str,
+    base_revision: &str,
+    head_revision: &str,
+) -> Result<LocalOpenedReview, GitCommandError> {
+    if remote.is_empty() || base_ref.is_empty() || pull_request_number == 0 {
+        return Err(GitCommandError::new("Pull Request fetch 参数无效"));
+    }
+    let adapter = GitProcessAdapter::new(repository_path);
+    let cancellation = CancellationToken::default();
+    let base_source = format!("refs/heads/{base_ref}");
+    let head_source = format!("refs/pull/{pull_request_number}/head");
+    for source in [&base_source, &head_source] {
+        adapter.run(
+            [
+                "fetch",
+                "--no-write-fetch-head",
+                "--no-tags",
+                remote,
+                source,
+            ],
+            &cancellation,
+        )?;
+    }
+    LocalOpenedReview::open_revisions(
+        repository_path,
+        base_ref,
+        &format!("pull/{pull_request_number}/head"),
+        base_revision,
+        head_revision,
+        &cancellation,
+    )
+}
+
 /// 从 canonical remote-tracking ref 提取 remote 名称。
 fn remote_name(reference: &str) -> Option<&str> {
     reference
@@ -235,6 +294,47 @@ fn compare_refs(
     })
 }
 
+/// 校验精确 commit，计算 merge-base，并从 Comparison Base 到 head 生成 File Changes。
+fn compare_revisions(
+    adapter: &GitProcessAdapter,
+    base_ref: &str,
+    head_ref: &str,
+    base_revision: &str,
+    head_revision: &str,
+    cancellation: &CancellationToken,
+) -> Result<LocalSnapshot, GitCommandError> {
+    validate_object_id(base_revision)?;
+    validate_object_id(head_revision)?;
+    let base_revision = resolve_object_commit(adapter, base_revision, cancellation)?;
+    let head_revision = resolve_object_commit(adapter, head_revision, cancellation)?;
+    let comparison_base = text_output(
+        adapter.run(["merge-base", &base_revision, &head_revision], cancellation)?,
+        "merge-base",
+    )?;
+    validate_object_id(&comparison_base)?;
+    let raw = adapter.run(
+        [
+            "diff",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--find-renames",
+            &comparison_base,
+            &head_revision,
+            "--",
+        ],
+        cancellation,
+    )?;
+    Ok(LocalSnapshot {
+        base_ref: base_ref.to_owned(),
+        head_ref: head_ref.to_owned(),
+        base_revision,
+        comparison_base,
+        head_revision,
+        file_changes: parse_raw_diff(&raw.stdout)?,
+    })
+}
+
 /// 仅接受产品模型允许的 canonical local 或 remote-tracking branch ref。
 fn validate_branch_ref(reference: &str) -> Result<(), GitCommandError> {
     if reference.starts_with("refs/heads/") || reference.starts_with("refs/remotes/") {
@@ -265,6 +365,22 @@ fn resolve_commit(
     )?;
     validate_object_id(&object_id)?;
     Ok(object_id)
+}
+
+/// 将已校验的精确对象 ID peel 为 commit，不依赖任何持久 ref。
+fn resolve_object_commit(
+    adapter: &GitProcessAdapter,
+    object_id: &str,
+    cancellation: &CancellationToken,
+) -> Result<String, GitCommandError> {
+    validate_object_id(object_id)?;
+    let revision = format!("{object_id}^{{commit}}");
+    let commit = text_output(
+        adapter.run(["rev-parse", "--verify", &revision], cancellation)?,
+        "revision",
+    )?;
+    validate_object_id(&commit)?;
+    Ok(commit)
 }
 
 /// 从显式单行机器输出提取文本。

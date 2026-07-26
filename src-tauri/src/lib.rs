@@ -10,6 +10,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 enum OpenedReview {
@@ -82,6 +83,19 @@ struct LocalReviewSnapshotResponse {
     comparison_base: String,
     head_revision: String,
     file_changes: Vec<FileChangeSummaryResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pull_request: Option<repository_catalog::PullRequestMetadata>,
+}
+
+/// 检查 Selection 当前 revisions 后返回，不改变 current Snapshot 或 workspace。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewUpdateResponse {
+    update_available: bool,
+    current_base_revision: String,
+    current_head_revision: String,
+    available_base_revision: String,
+    available_head_revision: String,
 }
 
 #[derive(Serialize)]
@@ -266,6 +280,7 @@ fn map_local_snapshot(
                 after_object_id: change.after_object_id.clone(),
             })
             .collect(),
+        pull_request: None,
     }
 }
 
@@ -388,7 +403,159 @@ fn open_saved_branch_review(
         saved.review_id.clone(),
         OpenedReview::Local(Box::new(review)),
     )?;
-    Ok(map_local_snapshot(saved.review_id, &snapshot))
+    let mut response = map_local_snapshot(saved.review_id, &snapshot);
+    response.pull_request = saved.pull_request;
+    Ok(response)
+}
+
+/// 从 discovery metadata 创建或重开 durable Pull Request Review。
+#[tauri::command]
+fn open_pull_request_review(
+    state: tauri::State<'_, ReviewSessionStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    repository_entry_id: i64,
+    repository: github_discovery::GitHubRepository,
+    pull_request: github_discovery::DiscoveredPullRequest,
+) -> Result<LocalReviewSnapshotResponse, String> {
+    let repository_path = require_available_repository(&catalog, repository_entry_id)?;
+    if !catalog
+        .is_workspace_trusted(repository_entry_id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("尚未授予 Workspace Trust；请先阅读风险说明并确认授权。".to_owned());
+    }
+    if let Some(saved) = catalog
+        .find_pull_request_review(
+            repository_entry_id,
+            &repository.owner,
+            &repository.name,
+            pull_request.number,
+        )
+        .map_err(|error| error.to_string())?
+    {
+        return open_saved_branch_review(&state, &catalog, repository_path, saved);
+    }
+    let (calculated, metadata) =
+        calculate_pull_request_review(&repository_path, repository, pull_request)?;
+    let saved = catalog
+        .save_pull_request_review(repository_entry_id, &metadata, calculated.snapshot())
+        .map_err(|error| error.to_string())?;
+    open_saved_branch_review(&state, &catalog, repository_path, saved)
+}
+
+/// 检查 Pull Request 当前 revisions；只获取对象并计算候选 Snapshot。
+#[tauri::command]
+fn check_pull_request_review_update(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    review_id: String,
+    repository: github_discovery::GitHubRepository,
+    pull_request: github_discovery::DiscoveredPullRequest,
+) -> Result<ReviewUpdateResponse, String> {
+    let current = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
+    let (available, _) = calculate_pull_request_review(&repository_path, repository, pull_request)?;
+    Ok(ReviewUpdateResponse {
+        update_available: current.base_revision != available.snapshot().base_revision
+            || current.head_revision != available.snapshot().head_revision,
+        current_base_revision: current.base_revision,
+        current_head_revision: current.head_revision,
+        available_base_revision: available.snapshot().base_revision.clone(),
+        available_head_revision: available.snapshot().head_revision.clone(),
+    })
+}
+
+/// 显式刷新 Pull Request Review，并在 workspace 对齐后推进 current Snapshot。
+#[tauri::command]
+fn refresh_pull_request_review(
+    state: tauri::State<'_, ReviewSessionStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    review_id: String,
+    repository: github_discovery::GitHubRepository,
+    pull_request: github_discovery::DiscoveredPullRequest,
+) -> Result<LocalReviewSnapshotResponse, String> {
+    let current = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
+    let (calculated, metadata) =
+        calculate_pull_request_review(&repository_path, repository, pull_request)?;
+    if current.base_revision == calculated.snapshot().base_revision
+        && current.head_revision == calculated.snapshot().head_revision
+    {
+        return open_saved_branch_review(&state, &catalog, repository_path, current);
+    }
+    let staged = catalog
+        .stage_pull_request_snapshot(&current, &metadata, calculated.snapshot())
+        .map_err(|error| error.to_string())?;
+    let workspace = catalog
+        .review_workspace_path(&review_id)
+        .map_err(|error| error.to_string())?;
+    let adapter = core_git::GitProcessAdapter::new(&repository_path);
+    adapter
+        .remove_worktree(&workspace, &core_git::CancellationToken::default())
+        .and_then(|_| {
+            adapter.create_detached_worktree(
+                &workspace,
+                &staged.head_revision,
+                &core_git::CancellationToken::default(),
+            )
+        })
+        .map_err(|error| format!("Git transport：{error}"))?;
+    open_saved_branch_review(&state, &catalog, repository_path, staged)
+}
+
+/// 将 GitHub metadata 与用户 Core Git transport 收敛为一个本地候选 Snapshot。
+fn calculate_pull_request_review(
+    repository_path: &std::path::Path,
+    repository: github_discovery::GitHubRepository,
+    pull_request: github_discovery::DiscoveredPullRequest,
+) -> Result<
+    (
+        change_content::local::LocalOpenedReview,
+        repository_catalog::PullRequestMetadata,
+    ),
+    String,
+> {
+    let remote = github_discovery::remote_names_for_repository(repository_path, &repository)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            format!(
+                "Git transport：找不到代表 base repository {}/{} 的 Git remote。",
+                repository.owner, repository.name
+            )
+        })?;
+    let calculated = change_content::local::fetch_pull_request_objects(
+        repository_path,
+        &remote,
+        pull_request.number,
+        &pull_request.base.reference,
+        &pull_request.base.sha,
+        &pull_request.head.sha,
+    )
+    .map_err(|error| format!("Git transport：{error}"))?;
+    let metadata = repository_catalog::PullRequestMetadata {
+        owner: repository.owner,
+        repository: repository.name,
+        number: pull_request.number,
+        title: pull_request.title,
+        description: pull_request.description,
+        author: pull_request.author,
+        state: pull_request.state,
+        draft: pull_request.draft,
+        url: pull_request.url,
+        base_ref: pull_request.base.reference,
+        head_ref: pull_request.head.reference,
+        synchronized_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "系统时间早于 Unix epoch，无法保存 GitHub metadata。".to_owned())?
+            .as_millis()
+            .try_into()
+            .map_err(|_| "系统时间超出可保存范围。".to_owned())?,
+    };
+    Ok((calculated, metadata))
 }
 
 #[tauri::command]
@@ -688,6 +855,9 @@ pub fn run() {
             list_local_refs,
             cancel_git_operation,
             discover_github_pull_requests,
+            open_pull_request_review,
+            check_pull_request_review_update,
+            refresh_pull_request_review,
             open_github_pull_request,
             github_auth_status,
             start_github_authorization,

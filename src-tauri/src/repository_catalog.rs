@@ -3,12 +3,12 @@ use crate::change_content::{
 };
 use crate::core_git::{CancellationToken, GitProcessAdapter};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 const ENTRY_COLUMNS: &str = "id, canonical_path, common_directory, created_at, last_opened_at";
 
 /// 已注册的具体本地 clone，以及当前是否仍可访问。
@@ -36,7 +36,9 @@ pub struct SavedBranchReview {
     pub head_revision: String,
     pub file_changes: Vec<LocalFileChange>,
     pub created: bool,
+    pub pull_request: Option<PullRequestMetadata>,
     snapshot_id: i64,
+    expected_current_snapshot_id: Option<i64>,
 }
 
 impl SavedBranchReview {
@@ -51,6 +53,24 @@ impl SavedBranchReview {
             file_changes: self.file_changes.clone(),
         }
     }
+}
+
+/// Pull Request Selection 随 Review 保存的协作 metadata，不包含代码内容。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestMetadata {
+    pub owner: String,
+    pub repository: String,
+    pub number: u64,
+    pub title: String,
+    pub description: String,
+    pub author: String,
+    pub state: String,
+    pub draft: bool,
+    pub url: String,
+    pub base_ref: String,
+    pub head_ref: String,
+    pub synchronized_at: i64,
 }
 
 /// 经 Core Git 验证后的 working-tree repository 身份。
@@ -347,7 +367,195 @@ impl RepositoryCatalog {
             head_revision: snapshot.head_revision.clone(),
             file_changes: snapshot.file_changes.clone(),
             created: true,
+            pull_request: None,
             snapshot_id,
+            expected_current_snapshot_id: None,
+        })
+    }
+
+    /// 保存由 base GitHub repository identity 与 PR number 唯一标识的 Review。
+    pub fn save_pull_request_review(
+        &self,
+        repository_entry_id: i64,
+        metadata: &PullRequestMetadata,
+        snapshot: &LocalSnapshot,
+    ) -> Result<SavedBranchReview, RepositoryCatalogError> {
+        if !self.is_workspace_trusted(repository_entry_id)? {
+            return Err(RepositoryCatalogError::new(
+                "尚未授予 Workspace Trust；请先阅读风险说明并确认授权。",
+            ));
+        }
+        let now = unix_timestamp_millis()?;
+        let selection_repository = format!(
+            "{}/{}",
+            metadata.owner.to_ascii_lowercase(),
+            metadata.repository.to_ascii_lowercase()
+        );
+        let selection_number = metadata.number.to_string();
+        let metadata_json = serde_json::to_string(metadata).map_err(|error| {
+            RepositoryCatalogError::new(format!("无法保存 Pull Request metadata：{error}"))
+        })?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        transaction
+            .execute(
+                "INSERT INTO reviews (
+                    repository_entry_id, selection_kind, base_ref, head_ref,
+                    current_snapshot_id, created_at, last_opened_at, pull_request_metadata
+                 ) VALUES (?1, 'pull_request', ?2, ?3, NULL, ?4, ?4, ?5)
+                 ON CONFLICT(repository_entry_id, selection_kind, base_ref, head_ref)
+                 DO UPDATE SET
+                    last_opened_at = excluded.last_opened_at,
+                    pull_request_metadata = excluded.pull_request_metadata",
+                params![
+                    repository_entry_id,
+                    selection_repository,
+                    selection_number,
+                    now,
+                    metadata_json
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let review_row_id: i64 = transaction
+            .query_row(
+                "SELECT id FROM reviews
+                 WHERE repository_entry_id = ?1 AND selection_kind = 'pull_request'
+                   AND base_ref = ?2 AND head_ref = ?3",
+                params![repository_entry_id, selection_repository, selection_number],
+                |row| row.get(0),
+            )
+            .map_err(database_recovery_error)?;
+        let current_snapshot_id: Option<i64> = transaction
+            .query_row(
+                "SELECT current_snapshot_id FROM reviews WHERE id = ?1",
+                [review_row_id],
+                |row| row.get(0),
+            )
+            .map_err(database_recovery_error)?;
+        if current_snapshot_id.is_some() {
+            transaction.commit().map_err(database_recovery_error)?;
+            drop(connection);
+            return self.open_review(&format!("review-{review_row_id}"));
+        }
+        transaction
+            .execute(
+                "INSERT INTO review_snapshots (
+                    review_id, base_revision, comparison_base, head_revision, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    review_row_id,
+                    snapshot.base_revision,
+                    snapshot.comparison_base,
+                    snapshot.head_revision,
+                    now
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let snapshot_id = transaction.last_insert_rowid();
+        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        transaction.commit().map_err(database_recovery_error)?;
+        Ok(SavedBranchReview {
+            review_id: format!("review-{review_row_id}"),
+            repository_entry_id,
+            base_ref: snapshot.base_ref.clone(),
+            head_ref: snapshot.head_ref.clone(),
+            base_revision: snapshot.base_revision.clone(),
+            comparison_base: snapshot.comparison_base.clone(),
+            head_revision: snapshot.head_revision.clone(),
+            file_changes: snapshot.file_changes.clone(),
+            created: true,
+            pull_request: Some(metadata.clone()),
+            snapshot_id,
+            expected_current_snapshot_id: None,
+        })
+    }
+
+    /// 查找相同 Pull Request Selection 已存在且可打开的 current Snapshot。
+    pub fn find_pull_request_review(
+        &self,
+        repository_entry_id: i64,
+        owner: &str,
+        repository: &str,
+        number: u64,
+    ) -> Result<Option<SavedBranchReview>, RepositoryCatalogError> {
+        let selection_repository = format!(
+            "{}/{}",
+            owner.to_ascii_lowercase(),
+            repository.to_ascii_lowercase()
+        );
+        let connection = self.connection()?;
+        let row_id = connection
+            .query_row(
+                "SELECT id FROM reviews
+                 WHERE repository_entry_id = ?1 AND selection_kind = 'pull_request'
+                   AND base_ref = ?2 AND head_ref = ?3
+                   AND current_snapshot_id IS NOT NULL",
+                params![
+                    repository_entry_id,
+                    selection_repository,
+                    number.to_string()
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(database_recovery_error)?;
+        drop(connection);
+        row_id
+            .map(|id| self.open_review(&format!("review-{id}")))
+            .transpose()
+    }
+
+    /// 暂存新的 immutable Snapshot；在 workspace 对齐前不改变 current 指针。
+    pub fn stage_pull_request_snapshot(
+        &self,
+        current: &SavedBranchReview,
+        metadata: &PullRequestMetadata,
+        snapshot: &LocalSnapshot,
+    ) -> Result<SavedBranchReview, RepositoryCatalogError> {
+        let review_row_id = parse_review_id(&current.review_id)?;
+        let now = unix_timestamp_millis()?;
+        let metadata_json = serde_json::to_string(metadata).map_err(|error| {
+            RepositoryCatalogError::new(format!("无法保存 Pull Request metadata：{error}"))
+        })?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        transaction
+            .execute(
+                "INSERT INTO review_snapshots (
+                    review_id, base_revision, comparison_base, head_revision, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    review_row_id,
+                    snapshot.base_revision,
+                    snapshot.comparison_base,
+                    snapshot.head_revision,
+                    now
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let snapshot_id = transaction.last_insert_rowid();
+        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        transaction
+            .execute(
+                "UPDATE reviews SET pull_request_metadata = ?1, last_opened_at = ?2
+                 WHERE id = ?3 AND selection_kind = 'pull_request'",
+                params![metadata_json, now, review_row_id],
+            )
+            .map_err(database_recovery_error)?;
+        transaction.commit().map_err(database_recovery_error)?;
+        Ok(SavedBranchReview {
+            review_id: current.review_id.clone(),
+            repository_entry_id: current.repository_entry_id,
+            base_ref: snapshot.base_ref.clone(),
+            head_ref: snapshot.head_ref.clone(),
+            base_revision: snapshot.base_revision.clone(),
+            comparison_base: snapshot.comparison_base.clone(),
+            head_revision: snapshot.head_revision.clone(),
+            file_changes: snapshot.file_changes.clone(),
+            created: true,
+            pull_request: Some(metadata.clone()),
+            snapshot_id,
+            expected_current_snapshot_id: Some(current.snapshot_id),
         })
     }
 
@@ -386,8 +594,16 @@ impl RepositoryCatalog {
         let changed = connection
             .execute(
                 "UPDATE reviews SET current_snapshot_id = ?1
-                 WHERE id = ?2 AND current_snapshot_id IS NULL",
-                params![review.snapshot_id, row_id],
+                 WHERE id = ?2
+                   AND (
+                     current_snapshot_id = ?3
+                     OR (current_snapshot_id IS NULL AND ?3 IS NULL)
+                   )",
+                params![
+                    review.snapshot_id,
+                    row_id,
+                    review.expected_current_snapshot_id
+                ],
             )
             .map_err(database_recovery_error)?;
         if changed != 1 {
@@ -407,11 +623,12 @@ impl RepositoryCatalog {
         let connection = self.connection()?;
         let review = connection
             .query_row(
-                "SELECT r.repository_entry_id, r.base_ref, r.head_ref,
-                        s.base_revision, s.comparison_base, s.head_revision, s.id
+                "SELECT r.repository_entry_id, r.selection_kind, r.base_ref, r.head_ref,
+                        s.base_revision, s.comparison_base, s.head_revision, s.id,
+                        r.pull_request_metadata
                  FROM reviews r
                  JOIN review_snapshots s ON s.id = r.current_snapshot_id
-                 WHERE r.id = ?1 AND r.selection_kind = 'branch'",
+                 WHERE r.id = ?1",
                 [row_id],
                 |row| {
                     Ok((
@@ -421,7 +638,9 @@ impl RepositoryCatalog {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -436,7 +655,7 @@ impl RepositoryCatalog {
             )
             .map_err(database_recovery_error)?;
         let file_changes = statement
-            .query_map([review.6], |row| {
+            .query_map([review.7], |row| {
                 let before_mode = row.get::<_, Option<u32>>(3)?;
                 let after_mode = row.get::<_, Option<u32>>(4)?;
                 let before_object_id = row.get::<_, Option<String>>(5)?;
@@ -456,17 +675,28 @@ impl RepositoryCatalog {
             .map_err(database_recovery_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(database_recovery_error)?;
+        let pull_request: Option<PullRequestMetadata> = review
+            .8
+            .map(|metadata| serde_json::from_str(&metadata))
+            .transpose()
+            .map_err(|_| RepositoryCatalogError::new("Pull Request metadata 已损坏。"))?;
         Ok(SavedBranchReview {
             review_id: format!("review-{row_id}"),
             repository_entry_id: review.0,
-            base_ref: review.1,
-            head_ref: review.2,
-            base_revision: review.3,
-            comparison_base: review.4,
-            head_revision: review.5,
+            base_ref: pull_request
+                .as_ref()
+                .map_or_else(|| review.2.clone(), |metadata| metadata.base_ref.clone()),
+            head_ref: pull_request
+                .as_ref()
+                .map_or_else(|| review.3.clone(), |metadata| metadata.head_ref.clone()),
+            base_revision: review.4,
+            comparison_base: review.5,
+            head_revision: review.6,
             file_changes,
             created: false,
-            snapshot_id: review.6,
+            pull_request,
+            snapshot_id: review.7,
+            expected_current_snapshot_id: Some(review.7),
         })
     }
 
@@ -550,6 +780,43 @@ fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
              PRAGMA user_version = 2;",
         )?;
         transaction.commit()?;
+    }
+    if version < 3 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE reviews ADD COLUMN pull_request_metadata TEXT;
+             PRAGMA user_version = 3;",
+        )?;
+        transaction.commit()?;
+    }
+    Ok(())
+}
+
+/// 将一个 Snapshot 的稳定 File Change metadata 写入当前事务。
+fn insert_file_changes(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot_id: i64,
+    file_changes: &[LocalFileChange],
+) -> Result<(), RepositoryCatalogError> {
+    for change in file_changes {
+        transaction
+            .execute(
+                "INSERT INTO file_changes (
+                    snapshot_id, path, old_path, status, before_mode, after_mode,
+                    before_object_id, after_object_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    snapshot_id,
+                    change.path,
+                    change.old_path,
+                    status_text(change.status),
+                    change.before_mode,
+                    change.after_mode,
+                    change.before_object_id,
+                    change.after_object_id
+                ],
+            )
+            .map_err(database_recovery_error)?;
     }
     Ok(())
 }
