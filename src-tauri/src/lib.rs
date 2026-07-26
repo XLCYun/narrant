@@ -1,6 +1,7 @@
 pub mod change_content;
 pub mod core_git;
 pub mod github_auth;
+pub mod github_discovery;
 pub mod repository_catalog;
 
 use serde::Serialize;
@@ -388,6 +389,24 @@ async fn open_github_pull_request(
     })
 }
 
+/// 为 Repository Entry 的全部 GitHub remotes 独立发现 Pull Requests。
+#[tauri::command]
+async fn discover_github_pull_requests(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    repository_entry_id: i64,
+) -> Result<Vec<github_discovery::PullRequestGroup>, String> {
+    let repository_path = require_available_repository(&catalog, repository_entry_id)?;
+    let access_token =
+        github_auth::GitHubAccessTokenProvider::access_token(auth.inner().as_ref()).await?;
+    let api_base_url = github_api_base_url();
+    tokio::task::spawn_blocking(move || {
+        github_discovery::discover_pull_requests(&repository_path, &api_base_url, access_token)
+    })
+    .await
+    .map_err(|_| "GitHub discovery 任务意外中断，请重试。".to_owned())?
+}
+
 #[tauri::command]
 async fn github_auth_status(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
@@ -547,6 +566,7 @@ pub fn run() {
             compare_local_refs,
             list_local_refs,
             cancel_git_operation,
+            discover_github_pull_requests,
             open_github_pull_request,
             github_auth_status,
             start_github_authorization,

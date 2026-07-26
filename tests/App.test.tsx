@@ -77,6 +77,46 @@ describe("App", () => {
     expect(screen.getByLabelText("本地仓库路径")).toHaveValue("/work/narrant");
   });
 
+  it("按 GitHub repository 分组展示 Pull Requests，且保留局部失败", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "discover_github_pull_requests") return Promise.resolve([
+        {
+          repository: { owner: "fork-owner", name: "fork-repo" },
+          remoteNames: ["fork"], pullRequests: [], error: "GitHub 访问次数已用尽",
+        },
+        {
+          repository: { owner: "octo-org", name: "octo-repo" },
+          remoteNames: ["origin", "upstream"], error: null,
+          pullRequests: [{
+            number: 42, title: "Metadata only", description: "Details", author: "octocat",
+            state: "open", draft: false,
+            url: "https://github.com/octo-org/octo-repo/pull/42",
+            base: { ref: "main", sha: "base-sha" },
+            head: { ref: "feature", sha: "head-sha" },
+          }],
+        },
+      ]);
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
+
+    expect(await screen.findByRole("heading", { name: "octo-org/octo-repo" })).toBeInTheDocument();
+    expect(screen.getByText("remotes: origin, upstream")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /#42 Metadata only/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "fork-owner/fork-repo" })).toBeInTheDocument();
+    expect(screen.getByText("GitHub 访问次数已用尽")).toBeInTheDocument();
+  });
+
   it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};

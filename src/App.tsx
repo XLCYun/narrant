@@ -69,6 +69,24 @@ type RepositoryEntry = {
   available: boolean;
   unavailableReason: string | null;
 };
+type PullRequestRevision = { ref: string; sha: string };
+type DiscoveredPullRequest = {
+  number: number;
+  title: string;
+  description: string;
+  author: string;
+  state: string;
+  draft: boolean;
+  url: string;
+  base: PullRequestRevision;
+  head: PullRequestRevision;
+};
+type PullRequestGroup = {
+  repository: { owner: string; name: string };
+  remoteNames: string[];
+  pullRequests: DiscoveredPullRequest[];
+  error: string | null;
+};
 
 type DirectoryNode = {
   name: string;
@@ -116,6 +134,8 @@ export function App() {
   const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
   const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [pullRequestUrl, setPullRequestUrl] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
@@ -199,6 +219,21 @@ export function App() {
     }
   }
 
+  /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
+  async function loadPullRequestGroups(entry: RepositoryEntry) {
+    setPullRequestGroups([]);
+    setDiscoveryLoading(true);
+    try {
+      setPullRequestGroups(await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
+        repositoryEntryId: entry.id,
+      }));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
+
   /** 进入一个可用 Repository Entry，并将后续 Core Git 操作限定到其保存路径。 */
   async function openRepository(entry: RepositoryEntry) {
     setError("");
@@ -210,6 +245,7 @@ export function App() {
       if (!opened.available) return;
       setSelectedRepository(opened);
       setRepositoryPath(opened.canonicalPath);
+      void loadPullRequestGroups(opened);
       setRefs([]);
       setBaseRef("");
       setHeadRef("");
@@ -220,14 +256,16 @@ export function App() {
     }
   }
 
-  async function openPullRequest() {
+  async function openPullRequest(discoveredUrl?: string) {
+    const url = discoveredUrl ?? pullRequestUrl;
     setError("");
     setLoading(true);
     try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_github_pull_request", {
         repositoryEntryId: selectedRepository?.id,
-        url: pullRequestUrl,
+        url,
       });
+      setPullRequestUrl(url);
       replaceSnapshot(nextSnapshot);
       setFileChange(undefined);
     } catch (reason) {
@@ -289,6 +327,7 @@ export function App() {
       });
       setAuthStatus((status) => status ? { ...status, signedIn: true } : status);
       setDeviceAuthorization(undefined);
+      if (selectedRepository) await loadPullRequestGroups(selectedRepository);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -306,6 +345,7 @@ export function App() {
       }
       setAuthStatus((status) => status ? { ...status, signedIn: false } : status);
       setDeviceAuthorization(undefined);
+      if (selectedRepository) await loadPullRequestGroups(selectedRepository);
     } catch (reason) {
       setError(String(reason));
     }
@@ -399,11 +439,47 @@ export function App() {
       <Button variant="ghost" onClick={() => setSelectedRepository(undefined)}>返回 Repository Entries</Button>
       <h2>{selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1)}</h2>
       <p>{selectedRepository.canonicalPath}</p>
+      <section aria-label="GitHub Pull Requests">
+        <div className="flex flex-wrap items-center gap-3">
+          <h3>GitHub Pull Requests</h3>
+          <Button
+            variant="outline"
+            disabled={discoveryLoading}
+            onClick={() => void loadPullRequestGroups(selectedRepository)}
+          >
+            刷新 Pull Requests
+          </Button>
+        </div>
+        {discoveryLoading && <p>正在发现 Pull Requests…</p>}
+        {!discoveryLoading && pullRequestGroups.length === 0 && <p>没有发现 GitHub remote</p>}
+        {pullRequestGroups.map((group) => {
+          const identity = `${group.repository.owner}/${group.repository.name}`;
+          return <article key={identity} aria-label={identity}>
+            <h4>{identity}</h4>
+            <p>remotes: {group.remoteNames.join(", ")}</p>
+            {group.error && <p role="status">{group.error}</p>}
+            {!group.error && group.pullRequests.length === 0 && <p>没有可访问的 Pull Request</p>}
+            {group.pullRequests.length > 0 && <ul>
+              {group.pullRequests.map((pullRequest) => <li key={pullRequest.number}>
+                <Button
+                  variant="outline"
+                  disabled={loading}
+                  onClick={() => void openPullRequest(pullRequest.url)}
+                >
+                  #{pullRequest.number} {pullRequest.title}
+                  {pullRequest.draft ? "（草稿）" : ""}
+                </Button>
+                <p>{pullRequest.author} · {pullRequest.state} · {pullRequest.base.ref} → {pullRequest.head.ref}</p>
+              </li>)}
+            </ul>}
+          </article>;
+        })}
+      </section>
     </article>}
     {(!catalogRuntimeEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
       <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
-      <Button disabled={!pullRequestUrl || loading} onClick={openPullRequest}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
+      <Button disabled={!pullRequestUrl || loading} onClick={() => void openPullRequest()}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
       {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
       {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
     </section>
