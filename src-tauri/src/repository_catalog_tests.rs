@@ -266,6 +266,7 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     GitProcessAdapter::new(repository.path())
         .transition_detached_worktree(
             &workspace,
+            &entry.common_directory,
             &old_head,
             &candidate.head_revision,
             &CancellationToken::default(),
@@ -296,4 +297,65 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         .unwrap();
     assert!(internal_refs.status.success());
     assert!(internal_refs.stdout.is_empty());
+}
+
+#[test]
+fn lists_repository_reviews_and_recent_reviews_by_last_opened_time() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let first_repository = create_repository();
+    let second_repository = create_repository();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let first_entry = catalog.register(first_repository.path()).unwrap();
+    let second_entry = catalog.register(second_repository.path()).unwrap();
+    catalog.grant_workspace_trust(first_entry.id).unwrap();
+    catalog.grant_workspace_trust(second_entry.id).unwrap();
+
+    let first_snapshot = snapshot_for_head(&first_repository);
+    let first_review = catalog
+        .save_branch_review(first_entry.id, &first_snapshot)
+        .unwrap();
+    catalog.activate_snapshot(&first_review).unwrap();
+    let second_snapshot = snapshot_for_head(&second_repository);
+    let second_review = catalog
+        .save_branch_review(second_entry.id, &second_snapshot)
+        .unwrap();
+    catalog.activate_snapshot(&second_review).unwrap();
+
+    let repository_reviews = catalog.list_reviews(Some(first_entry.id)).unwrap();
+    let recent_reviews = catalog.list_reviews(None).unwrap();
+
+    assert_eq!(repository_reviews.len(), 1);
+    assert_eq!(repository_reviews[0].review_id, first_review.review_id);
+    assert_eq!(repository_reviews[0].repository_entry_id, first_entry.id);
+    assert_eq!(recent_reviews.len(), 2);
+    assert_eq!(recent_reviews[0].review_id, second_review.review_id);
+    assert_eq!(recent_reviews[1].review_id, first_review.review_id);
+    assert_eq!(
+        recent_reviews[0].repository_path,
+        second_entry.canonical_path
+    );
+}
+
+/// 从真实仓库当前分支构造可持久化的最小 Snapshot。
+fn snapshot_for_head(
+    repository: &tempfile::TempDir,
+) -> crate::change_content::local::LocalSnapshot {
+    let branch = String::from_utf8(
+        Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(repository.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let branch_ref = format!("refs/heads/{}", branch.trim());
+    crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        &branch_ref,
+        &branch_ref,
+    )
+    .unwrap()
+    .snapshot()
+    .clone()
 }

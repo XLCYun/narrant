@@ -80,6 +80,15 @@ type RepositoryEntry = {
   available: boolean;
   unavailableReason: string | null;
 };
+/** 首页与 Repository Entry 页面共享的持久化 Review 列表投影。 */
+type ReviewSummary = {
+  reviewId: string;
+  repositoryEntryId: number;
+  repositoryPath: string;
+  baseRef: string;
+  headRef: string;
+  lastOpenedAt: number;
+};
 type PullRequestRevision = { ref: string; sha: string };
 type DiscoveredPullRequest = {
   number: number;
@@ -143,6 +152,8 @@ export function App() {
   const editorTheme = useSystemTheme();
   const [repositoryPath, setRepositoryPath] = useState("");
   const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
+  const [recentReviews, setRecentReviews] = useState<ReviewSummary[]>([]);
+  const [repositoryReviews, setRepositoryReviews] = useState<ReviewSummary[]>([]);
   const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
   const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -203,6 +214,19 @@ export function App() {
     void Promise.resolve(invoke(command, arguments_)).catch(() => undefined);
   }
 
+  /** 关闭当前 Review 的运行时资源并保留持久化历史。 */
+  function closeReviewView() {
+    replaceSnapshot(undefined);
+    setFileChange(undefined);
+  }
+
+  /** 返回 Catalog 时同时关闭当前 Review，避免页面外仍保留 workspace。 */
+  function leaveRepository() {
+    closeReviewView();
+    setSelectedRepository(undefined);
+    setRepositoryReviews([]);
+  }
+
   useEffect(() => () => {
     if (activeGitOperationId.current) {
       void Promise.resolve(invoke("cancel_git_operation", { operationId: activeGitOperationId.current }))
@@ -218,8 +242,14 @@ export function App() {
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     setCatalogLoading(true);
-    void invoke<RepositoryEntry[]>("list_repository_entries")
-      .then(setRepositoryEntries)
+    void Promise.all([
+      invoke<RepositoryEntry[]>("list_repository_entries"),
+      invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: null }),
+    ])
+      .then(([entries, reviews]) => {
+        setRepositoryEntries(entries);
+        setRecentReviews(reviews ?? []);
+      })
       .catch((reason) => setError(String(reason)))
       .finally(() => setCatalogLoading(false));
   }, []);
@@ -271,6 +301,9 @@ export function App() {
       setWorkspaceTrusted(await invoke<boolean>("repository_workspace_trust", {
         repositoryEntryId: opened.id,
       }));
+      setRepositoryReviews(await invoke<ReviewSummary[]>("list_reviews", {
+        repositoryEntryId: opened.id,
+      }));
       setRepositoryPath(opened.canonicalPath);
       void loadPullRequestGroups(opened);
       setRefs([]);
@@ -280,6 +313,36 @@ export function App() {
       setFileChange(undefined);
     } catch (reason) {
       setError(String(reason));
+    }
+  }
+
+  /** 从持久化列表打开 current Snapshot，并在跨仓库进入时恢复 Repository Entry 上下文。 */
+  async function reopenReview(summary: ReviewSummary) {
+    setError("");
+    setLoading(true);
+    try {
+      if (selectedRepository?.id !== summary.repositoryEntryId) {
+        const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
+        if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
+        await openRepository(entry);
+      }
+      replaceSnapshot(await invoke<ReviewSnapshot>("reopen_review", {
+        reviewId: summary.reviewId,
+      }));
+      const reopened = { ...summary, lastOpenedAt: Date.now() };
+      setRecentReviews((reviews) => [
+        reopened,
+        ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
+      ]);
+      setRepositoryReviews((reviews) => [
+        reopened,
+        ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
+      ]);
+      setFileChange(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -414,11 +477,30 @@ export function App() {
   async function openComparison() {
     setError("");
     try {
-      replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("compare_local_refs", {
+      const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("compare_local_refs", {
         repositoryEntryId: selectedRepository?.id,
         baseRef,
         headRef,
-      }));
+      });
+      replaceSnapshot(nextSnapshot);
+      if (selectedRepository && nextSnapshot.source === "local") {
+        const summary: ReviewSummary = {
+          reviewId: nextSnapshot.reviewId,
+          repositoryEntryId: selectedRepository.id,
+          repositoryPath: selectedRepository.canonicalPath,
+          baseRef: nextSnapshot.baseRef,
+          headRef: nextSnapshot.headRef,
+          lastOpenedAt: Date.now(),
+        };
+        setRepositoryReviews((reviews) => [
+          summary,
+          ...reviews.filter((review) => review.reviewId !== summary.reviewId),
+        ]);
+        setRecentReviews((reviews) => [
+          summary,
+          ...reviews.filter((review) => review.reviewId !== summary.reviewId),
+        ]);
+      }
       setFileChange(undefined);
     }
     catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
@@ -509,11 +591,31 @@ export function App() {
             </>}
           </li>)}
         </ul>}
+      <section aria-label="Recent Reviews">
+        <h3>Recent Reviews</h3>
+        {recentReviews.length === 0
+          ? <p>尚无最近 Review</p>
+          : <ul>{recentReviews.map((review) => <li key={review.reviewId}>
+            <Button variant="outline" onClick={() => void reopenReview(review)}>
+              {review.repositoryPath} · {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
+            </Button>
+          </li>)}</ul>}
+      </section>
     </article>}
     {selectedRepository && <article aria-label="Repository Entry">
-      <Button variant="ghost" onClick={() => setSelectedRepository(undefined)}>返回 Repository Entries</Button>
+      <Button variant="ghost" onClick={leaveRepository}>返回 Repository Entries</Button>
       <h2>{selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1)}</h2>
       <p>{selectedRepository.canonicalPath}</p>
+      <section aria-label="Repository Reviews">
+        <h3>Reviews</h3>
+        {repositoryReviews.length === 0
+          ? <p>尚无 Review</p>
+          : <ul>{repositoryReviews.map((review) => <li key={review.reviewId}>
+            <Button variant="outline" onClick={() => void reopenReview(review)}>
+              {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
+            </Button>
+          </li>)}</ul>}
+      </section>
       <section aria-label="GitHub Pull Requests">
         <div className="flex flex-wrap items-center gap-3">
           <h3>GitHub Pull Requests</h3>
@@ -597,6 +699,7 @@ export function App() {
       <Button disabled={!baseRef || !headRef || (catalogRuntimeEnabled && !workspaceTrusted)} onClick={openComparison}>打开 Review Snapshot</Button>
     </section>
     {error && <ErrorMessage message={error} />}
+    {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}
     {snapshot?.source === "github" && <article aria-label="Pull Request 概览">
       <h2>{snapshot.title}</h2>
       <p>#{snapshot.number} · {snapshot.author} · {snapshot.draft ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[snapshot.state ?? "open"]}</p>
