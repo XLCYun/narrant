@@ -117,6 +117,7 @@ struct SavedReviewSummaryResponse {
     pull_request: Option<repository_catalog::PullRequestMetadata>,
 }
 
+/// 保存当前打开 Review 的运行时读取句柄，并串行化同一 Review 的刷新操作。
 #[derive(Default)]
 struct OpenReviewStore {
     reviews: Mutex<HashMap<String, Arc<Mutex<OpenedReview>>>>,
@@ -171,6 +172,7 @@ impl OpenReviewStore {
         Ok(())
     }
 
+    /// 按 durable reviewId 获取仍处于打开状态的运行时读取句柄。
     fn get(&self, id: &str) -> Result<Arc<Mutex<OpenedReview>>, String> {
         self.reviews
             .lock()
@@ -180,6 +182,7 @@ impl OpenReviewStore {
             .ok_or_else(|| "Review 已关闭或失效，请重新打开。".to_owned())
     }
 
+    /// 幂等移除 durable Review 的运行时读取句柄。
     fn close(&self, id: &str) -> Result<(), String> {
         self.reviews
             .lock()
@@ -247,6 +250,7 @@ fn map_file_content(change: change_content::LoadedFileChange) -> FileChangeConte
     }
 }
 
+/// 将内部固定 Snapshot 映射为不区分来源的前端 IPC 契约。
 fn map_snapshot(
     review_id: String,
     snapshot: &change_content::local::LocalSnapshot,
