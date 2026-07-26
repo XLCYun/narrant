@@ -209,6 +209,72 @@ impl GitProcessAdapter {
         Ok(())
     }
 
+    /// 强制重建受管 Review Workspace，并将其恢复为指定 detached HEAD。
+    fn force_restore_detached_worktree(
+        &self,
+        workspace_path: &Path,
+        head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        self.remove_worktree(workspace_path, cancellation)?;
+        self.create_detached_worktree(workspace_path, head_object_id, cancellation)
+    }
+
+    /// 将 Workspace 切换到新 Snapshot；核心阶段失败时恢复旧 Snapshot HEAD。
+    pub fn transition_detached_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        previous_head_object_id: &str,
+        next_head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
+        self.validate_registered_worktree(workspace_path, previous_head_object_id, cancellation)?;
+        if let Err(error) =
+            self.force_restore_detached_worktree(workspace_path, next_head_object_id, cancellation)
+        {
+            let rollback = self.force_restore_detached_worktree(
+                workspace_path,
+                previous_head_object_id,
+                &CancellationToken::default(),
+            );
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => GitCommandError::new(format!(
+                    "{error}；恢复旧 Review Workspace 失败：{rollback_error}"
+                )),
+            });
+        }
+        Ok(())
+    }
+
+    /// 验证目标是当前 Repository 注册且位于预期 HEAD 的精确 linked worktree。
+    fn validate_registered_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        let output = self.run(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+        let canonical_workspace = workspace_path.canonicalize().map_err(|error| {
+            GitCommandError::new(format!("无法验证 Review Workspace canonical path：{error}"))
+        })?;
+        let expected_path =
+            format!("worktree {}", canonical_workspace.to_string_lossy()).into_bytes();
+        let expected_head = format!("HEAD {expected_head_object_id}").into_bytes();
+        let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
+        let registered = fields
+            .windows(2)
+            .any(|fields| fields[0] == expected_path && fields[1] == expected_head);
+        if !registered {
+            return Err(GitCommandError::new(
+                "拒绝重建 Review Workspace：目标路径、Git worktree 注册或 current Snapshot HEAD 不一致。",
+            ));
+        }
+        Ok(())
+    }
+
     /// 精确移除调用方已验证归属的 disposable linked worktree。
     pub fn remove_worktree(
         &self,
@@ -230,6 +296,65 @@ impl GitProcessAdapter {
         )
         .map(|_| ())
         .map_err(|error| GitCommandError::new(format!("无法移除 Review Workspace：{error}")))
+    }
+
+    /// 在 common directory 与 registered worktree path 精确匹配后强制移除受管 workspace。
+    pub fn remove_owned_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
+        self.remove_worktree(workspace_path, cancellation)
+    }
+
+    /// 验证路径确属保存的 common directory，且仍是该仓库精确注册的 linked worktree。
+    pub fn validate_owned_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        let actual_common = self
+            .run(
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cancellation,
+            )
+            .and_then(|output| {
+                String::from_utf8(output.stdout)
+                    .map(|value| PathBuf::from(value.trim()))
+                    .map_err(|_| GitCommandError::new("Git common directory 编码无效"))
+            })?;
+        let actual_common = std::fs::canonicalize(&actual_common).map_err(|error| {
+            GitCommandError::new(format!("无法解析 Git common directory：{error}"))
+        })?;
+        let expected_common =
+            std::fs::canonicalize(expected_common_directory).map_err(|error| {
+                GitCommandError::new(format!("无法解析保存的 Git common directory：{error}"))
+            })?;
+        if actual_common != expected_common {
+            return Err(GitCommandError::new(
+                "Review Workspace 所有权验证失败：Git common directory 不匹配。",
+            ));
+        }
+        let expected_workspace = std::fs::canonicalize(workspace_path).map_err(|_| {
+            GitCommandError::new("Review Workspace 所有权验证失败：受管路径不存在。")
+        })?;
+        let registered = self.run(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+        let path_is_registered = registered.stdout.split(|byte| *byte == 0).any(|field| {
+            field
+                .strip_prefix(b"worktree ")
+                .and_then(|path| std::str::from_utf8(path).ok())
+                .and_then(|path| std::fs::canonicalize(path).ok())
+                .is_some_and(|path| path == expected_workspace)
+        });
+        if !path_is_registered {
+            return Err(GitCommandError::new(
+                "Review Workspace 所有权验证失败：路径不是该仓库注册的 linked worktree。",
+            ));
+        }
+        Ok(())
     }
 }
 

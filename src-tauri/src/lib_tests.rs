@@ -1,4 +1,18 @@
 use super::*;
+use std::process::Command;
+
+#[test]
+fn same_review_cannot_begin_two_refreshes_concurrently() {
+    let store = ReviewSessionStore::default();
+
+    store.begin_refresh("review-1").unwrap();
+    let error = store.begin_refresh("review-1").unwrap_err();
+    store.begin_refresh("review-2").unwrap();
+
+    assert!(error.contains("正在刷新"));
+    store.finish_refresh("review-1");
+    store.begin_refresh("review-1").unwrap();
+}
 
 #[test]
 fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive() {
@@ -101,4 +115,92 @@ fn loaded_file_change_mapper_serializes_every_status_and_content_kind() {
         assert_eq!(json["beforeSize"], 3);
         assert_eq!(json["afterSize"], 4);
     }
+}
+#[test]
+fn startup_recovery_removes_only_catalog_owned_registered_workspace() {
+    let application_data = tempfile::TempDir::new().unwrap();
+    let repository = test_repository_with_commit();
+    let catalog = repository_catalog::RepositoryCatalog::open(
+        &application_data.path().join("catalog.sqlite3"),
+    )
+    .unwrap();
+    let entry = catalog.register(repository.path()).unwrap();
+    catalog.grant_workspace_trust(entry.id).unwrap();
+    let branch = git_text(repository.path(), &["symbolic-ref", "--short", "HEAD"]);
+    let branch_ref = format!("refs/heads/{branch}");
+    let opened =
+        change_content::local::LocalOpenedReview::open(repository.path(), &branch_ref, &branch_ref)
+            .unwrap();
+    let saved = catalog
+        .save_branch_review(entry.id, opened.snapshot())
+        .unwrap();
+    catalog.activate_snapshot(&saved).unwrap();
+    let workspace = catalog.review_workspace_path(&saved.review_id).unwrap();
+    core_git::GitProcessAdapter::new(repository.path())
+        .create_detached_worktree(
+            &workspace,
+            &saved.head_revision,
+            &core_git::CancellationToken::default(),
+        )
+        .unwrap();
+    let user_worktree = application_data.path().join("user-worktree");
+    Command::new("git")
+        .args(["worktree", "add", "--detach", "--"])
+        .arg(&user_worktree)
+        .arg(&saved.head_revision)
+        .current_dir(repository.path())
+        .status()
+        .unwrap();
+
+    recover_interrupted_review_workspaces(&catalog);
+
+    assert!(!workspace.exists());
+    assert!(user_worktree.exists());
+}
+
+/// 创建供 runtime 生命周期测试使用的含提交 working-tree repository。
+fn test_repository_with_commit() -> tempfile::TempDir {
+    let repository = tempfile::TempDir::new().unwrap();
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@narrant.invalid"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Narrant Test"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap();
+    std::fs::write(repository.path().join("README.md"), "fixture").unwrap();
+    Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-q", "-m", "initial"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap();
+    repository
+}
+
+/// 返回生命周期测试所需的单行 Core Git 输出。
+fn git_text(repository: &std::path::Path, arguments: &[&str]) -> String {
+    String::from_utf8(
+        Command::new("git")
+            .args(arguments)
+            .current_dir(repository)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned()
 }

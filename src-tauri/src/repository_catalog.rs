@@ -24,6 +24,27 @@ pub struct RepositoryEntry {
     pub unavailable_reason: Option<String>,
 }
 
+/// 首页与 Repository Entry 页面共享的持久化 Review 列表投影。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewSummary {
+    pub review_id: String,
+    pub repository_entry_id: i64,
+    pub repository_path: PathBuf,
+    pub base_ref: String,
+    pub head_ref: String,
+    pub last_opened_at: i64,
+}
+
+/// 清理 Review Workspace 前必须同时匹配的四项持久化所有权证据。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceCleanupTarget {
+    pub review_id: String,
+    pub repository_path: PathBuf,
+    pub common_directory: PathBuf,
+    pub workspace_path: PathBuf,
+}
+
 /// 持久化 Review 及其 current immutable Snapshot 的完整本地读取模型。
 #[derive(Clone)]
 pub struct SavedBranchReview {
@@ -487,7 +508,7 @@ impl RepositoryCatalog {
     }
 
     /// 列出一个 Repository Entry 的全部 current Reviews，供历史列表与重开入口使用。
-    pub fn list_reviews(
+    pub fn list_saved_review_snapshots(
         &self,
         repository_entry_id: i64,
     ) -> Result<Vec<SavedBranchReview>, RepositoryCatalogError> {
@@ -621,6 +642,88 @@ impl RepositoryCatalog {
         Ok(())
     }
 
+    /// 保存明确刷新产生的新 immutable Snapshot，但暂不改变 current 指针。
+    pub fn save_refresh_snapshot(
+        &self,
+        review_id: &str,
+        snapshot: &LocalSnapshot,
+    ) -> Result<SavedBranchReview, RepositoryCatalogError> {
+        let row_id = parse_review_id(review_id)?;
+        let current = self.open_review(review_id)?;
+        if current.base_ref != snapshot.base_ref || current.head_ref != snapshot.head_ref {
+            return Err(RepositoryCatalogError::new(
+                "刷新结果与 Review Selection 不一致。",
+            ));
+        }
+        let now = unix_timestamp_millis()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        transaction
+            .execute(
+                "INSERT INTO review_snapshots (
+                    review_id, base_revision, comparison_base, head_revision, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    row_id,
+                    snapshot.base_revision,
+                    snapshot.comparison_base,
+                    snapshot.head_revision,
+                    now
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let snapshot_id = transaction.last_insert_rowid();
+        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        transaction.commit().map_err(database_recovery_error)?;
+        Ok(SavedBranchReview {
+            review_id: review_id.to_owned(),
+            repository_entry_id: current.repository_entry_id,
+            base_ref: snapshot.base_ref.clone(),
+            head_ref: snapshot.head_ref.clone(),
+            base_revision: snapshot.base_revision.clone(),
+            comparison_base: snapshot.comparison_base.clone(),
+            head_revision: snapshot.head_revision.clone(),
+            file_changes: snapshot.file_changes.clone(),
+            created: true,
+            pull_request: current.pull_request,
+            snapshot_id,
+            expected_current_snapshot_id: Some(current.snapshot_id),
+        })
+    }
+
+    /// 仅在 current 仍是用户确认的旧版本时原子推进刷新 Snapshot。
+    pub fn activate_refresh_snapshot(
+        &self,
+        review: &SavedBranchReview,
+        expected_current: &SavedBranchReview,
+    ) -> Result<(), RepositoryCatalogError> {
+        let row_id = parse_review_id(&review.review_id)?;
+        if expected_current.review_id != review.review_id {
+            return Err(RepositoryCatalogError::new(
+                "刷新前后的 Review identity 不一致。",
+            ));
+        }
+        let connection = self.connection()?;
+        let changed = connection
+            .execute(
+                "UPDATE reviews SET current_snapshot_id = ?1, last_opened_at = ?2
+                 WHERE id = ?3 AND current_snapshot_id = ?4",
+                params![
+                    review.snapshot_id,
+                    unix_timestamp_millis()?,
+                    row_id,
+                    expected_current.snapshot_id
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        if changed != 1 {
+            return Err(RepositoryCatalogError::new(
+                "Review current Snapshot 已改变；请重新检查更新。",
+            ));
+        }
+        Ok(())
+    }
+
     /// 按 durable reviewId 读取 current Snapshot 及稳定 File Change metadata。
     pub fn open_review(
         &self,
@@ -705,6 +808,96 @@ impl RepositoryCatalog {
             snapshot_id: review.7,
             expected_current_snapshot_id: Some(review.7),
         })
+    }
+
+    /// 按最后打开时间列出一个 Repository Entry 的 Reviews 或全局最近 Reviews。
+    pub fn list_reviews(
+        &self,
+        repository_entry_id: Option<i64>,
+    ) -> Result<Vec<ReviewSummary>, RepositoryCatalogError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT r.id, r.repository_entry_id, e.canonical_path,
+                        r.base_ref, r.head_ref, r.last_opened_at
+                 FROM reviews r
+                 JOIN repository_entries e ON e.id = r.repository_entry_id
+                 WHERE r.current_snapshot_id IS NOT NULL
+                   AND (?1 IS NULL OR r.repository_entry_id = ?1)
+                 ORDER BY r.last_opened_at DESC, r.id DESC",
+            )
+            .map_err(database_recovery_error)?;
+        let reviews = statement
+            .query_map([repository_entry_id], |row| {
+                Ok(ReviewSummary {
+                    review_id: format!("review-{}", row.get::<_, i64>(0)?),
+                    repository_entry_id: row.get(1)?,
+                    repository_path: PathBuf::from(row.get::<_, String>(2)?),
+                    base_ref: row.get(3)?,
+                    head_ref: row.get(4)?,
+                    last_opened_at: row.get(5)?,
+                })
+            })
+            .map_err(database_recovery_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(database_recovery_error)?;
+        Ok(reviews)
+    }
+
+    /// 更新 Review 的最近打开时间，供全局 recent projection 排序。
+    pub fn mark_review_opened(&self, review_id: &str) -> Result<(), RepositoryCatalogError> {
+        let row_id = parse_review_id(review_id)?;
+        let now = unix_timestamp_millis()?;
+        let connection = self.connection()?;
+        let changed = connection
+            .execute(
+                "UPDATE reviews SET last_opened_at = ?1 WHERE id = ?2",
+                params![now, row_id],
+            )
+            .map_err(database_recovery_error)?;
+        if changed != 1 {
+            return Err(RepositoryCatalogError::new("Review 不存在。"));
+        }
+        Ok(())
+    }
+
+    /// 返回所有持久化 Review 的精确 workspace 清理证据。
+    pub fn workspace_cleanup_targets(
+        &self,
+    ) -> Result<Vec<WorkspaceCleanupTarget>, RepositoryCatalogError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT r.id, e.canonical_path, e.common_directory
+                 FROM reviews r
+                 JOIN repository_entries e ON e.id = r.repository_entry_id
+                 WHERE r.current_snapshot_id IS NOT NULL
+                 ORDER BY r.id",
+            )
+            .map_err(database_recovery_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    PathBuf::from(row.get::<_, String>(1)?),
+                    PathBuf::from(row.get::<_, String>(2)?),
+                ))
+            })
+            .map_err(database_recovery_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(database_recovery_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, repository_path, common_directory)| {
+                let review_id = format!("review-{id}");
+                WorkspaceCleanupTarget {
+                    workspace_path: self.workspace_root.join(&review_id).join("repo"),
+                    review_id,
+                    repository_path,
+                    common_directory,
+                }
+            })
+            .collect())
     }
 
     /// 返回 durable Review 对应的精确 Narrant-managed checkout 路径。
