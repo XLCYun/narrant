@@ -149,6 +149,102 @@ impl GitProcessAdapter {
         }
         Ok(GitOutput { stdout })
     }
+
+    /// 在精确受管路径创建 detached linked worktree，并校验其 HEAD。
+    pub fn create_detached_worktree(
+        &self,
+        workspace_path: &Path,
+        head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        if workspace_path.exists() {
+            let actual_head = read_head_object_id(workspace_path, cancellation)?;
+            if actual_head == head_object_id {
+                return Ok(());
+            }
+            return Err(GitCommandError::new(
+                "Review Workspace 已存在但 HEAD 与 current Snapshot 不一致；请关闭 Review 后重试。",
+            ));
+        }
+        let parent = workspace_path
+            .parent()
+            .ok_or_else(|| GitCommandError::new("Review Workspace 路径无效"))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            GitCommandError::new(format!("无法创建 Review Workspace 目录：{error}"))
+        })?;
+        self.run(
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--detach"),
+                OsStr::new("--"),
+                workspace_path.as_os_str(),
+                OsStr::new(head_object_id),
+            ],
+            cancellation,
+        )
+        .map_err(|error| {
+            GitCommandError::new(format!(
+                "无法创建 Review Workspace：{error}。请确认磁盘空间和仓库 worktree 状态后重试。"
+            ))
+        })?;
+        let postcondition = read_head_object_id(workspace_path, cancellation).and_then(|actual| {
+            if actual == head_object_id {
+                Ok(())
+            } else {
+                Err(GitCommandError::new(
+                    "Review Workspace HEAD 与 Snapshot head object ID 不一致。",
+                ))
+            }
+        });
+        if let Err(error) = postcondition {
+            let cleanup = self.remove_worktree(workspace_path, &CancellationToken::default());
+            return Err(match cleanup {
+                Ok(()) => error,
+                Err(cleanup_error) => GitCommandError::new(format!(
+                    "{error}；自动清理失败：{cleanup_error}。请关闭 Narrant 并检查该仓库的 linked worktrees。"
+                )),
+            });
+        }
+        Ok(())
+    }
+
+    /// 精确移除调用方已验证归属的 disposable linked worktree。
+    pub fn remove_worktree(
+        &self,
+        workspace_path: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        if !workspace_path.exists() {
+            return Ok(());
+        }
+        self.run(
+            [
+                OsStr::new("worktree"),
+                OsStr::new("remove"),
+                OsStr::new("--force"),
+                OsStr::new("--"),
+                workspace_path.as_os_str(),
+            ],
+            cancellation,
+        )
+        .map(|_| ())
+        .map_err(|error| GitCommandError::new(format!("无法移除 Review Workspace：{error}")))
+    }
+}
+
+/// 读取 linked worktree 的精确 HEAD object ID，供创建前后统一校验。
+fn read_head_object_id(
+    workspace_path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<String, GitCommandError> {
+    GitProcessAdapter::new(workspace_path)
+        .run(["rev-parse", "HEAD"], cancellation)
+        .and_then(|output| {
+            String::from_utf8(output.stdout)
+                .map(|value| value.trim().to_owned())
+                .map_err(|_| GitCommandError::new("Review Workspace HEAD 编码无效"))
+        })
 }
 
 /// 终止异常子进程并回收两条输出管道，确保错误路径不遗留进程或线程。

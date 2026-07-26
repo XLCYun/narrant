@@ -42,10 +42,11 @@ fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive()
         "refs/heads/head",
     )
     .unwrap();
-    let response = map_local_snapshot("session-42".to_owned(), review.snapshot());
+    let response = map_local_snapshot("review-42".to_owned(), review.snapshot());
     let json = serde_json::to_value(&response).unwrap();
     assert_eq!(json["source"], "local");
-    assert_eq!(json["sessionId"], "session-42");
+    assert_eq!(json["reviewId"], "review-42");
+    assert!(json.get("sessionId").is_none());
     assert_eq!(json["fileChanges"][0]["path"], "README.md");
     assert!(json["fileChanges"][0].get("contentKind").is_none());
     assert!(json.get("snapshotId").is_none());

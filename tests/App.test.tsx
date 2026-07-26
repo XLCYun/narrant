@@ -59,6 +59,7 @@ describe("App", () => {
       if (command === "list_repository_entries") return Promise.resolve([]);
       if (command === "register_repository_entry") return Promise.resolve(entry);
       if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(false);
       return Promise.resolve([]);
     });
     render(<App />);
@@ -75,6 +76,15 @@ describe("App", () => {
     expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "返回 Repository Entries" })).toBeInTheDocument();
     expect(screen.getByLabelText("本地仓库路径")).toHaveValue("/work/narrant");
+    expect(screen.getByLabelText("Workspace Trust 风险说明")).toHaveTextContent("hooks、filters、Git LFS");
+    expect(screen.getByRole("button", { name: "打开 Review Snapshot" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "我了解风险并信任此 Repository Entry" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "grant_repository_workspace_trust",
+      { repositoryEntryId: 21 },
+    ));
   });
 
   it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
@@ -353,7 +363,7 @@ describe("App", () => {
     invoke
       .mockResolvedValueOnce(["base", "origin/topic"])
       .mockResolvedValueOnce({
-        sessionId: "session-local-1",
+        reviewId: "review-1",
         source: "local",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
@@ -375,8 +385,8 @@ describe("App", () => {
     expect(screen.getByRole("treeitem", { name: /main.rs.*modified/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("treeitem", { name: /logo.bin.*added/ }));
 
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", {
-      sessionId: "session-local-1",
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_review_file_change", {
+      reviewId: "review-1",
       path: "assets/logo.bin",
       operationId: expect.any(String),
     }));
@@ -388,7 +398,7 @@ describe("App", () => {
     invoke
       .mockResolvedValueOnce(["base", "head"])
       .mockResolvedValueOnce({
-        sessionId: "session-local-2",
+        reviewId: "review-2",
         source: "local",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
