@@ -210,7 +210,7 @@ impl GitProcessAdapter {
     }
 
     /// 强制重建受管 Review Workspace，并将其恢复为指定 detached HEAD。
-    pub fn force_restore_detached_worktree(
+    fn force_restore_detached_worktree(
         &self,
         workspace_path: &Path,
         head_object_id: &str,
@@ -228,6 +228,7 @@ impl GitProcessAdapter {
         next_head_object_id: &str,
         cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
+        self.validate_registered_worktree(workspace_path, previous_head_object_id, cancellation)?;
         if let Err(error) =
             self.force_restore_detached_worktree(workspace_path, next_head_object_id, cancellation)
         {
@@ -242,6 +243,32 @@ impl GitProcessAdapter {
                     "{error}；恢复旧 Review Workspace 失败：{rollback_error}"
                 )),
             });
+        }
+        Ok(())
+    }
+
+    /// 验证目标是当前 Repository 注册且位于预期 HEAD 的精确 linked worktree。
+    fn validate_registered_worktree(
+        &self,
+        workspace_path: &Path,
+        expected_head_object_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        let output = self.run(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+        let canonical_workspace = workspace_path.canonicalize().map_err(|error| {
+            GitCommandError::new(format!("无法验证 Review Workspace canonical path：{error}"))
+        })?;
+        let expected_path =
+            format!("worktree {}", canonical_workspace.to_string_lossy()).into_bytes();
+        let expected_head = format!("HEAD {expected_head_object_id}").into_bytes();
+        let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
+        let registered = fields
+            .windows(2)
+            .any(|fields| fields[0] == expected_path && fields[1] == expected_head);
+        if !registered {
+            return Err(GitCommandError::new(
+                "拒绝重建 Review Workspace：目标路径、Git worktree 注册或 current Snapshot HEAD 不一致。",
+            ));
         }
         Ok(())
     }

@@ -1,4 +1,5 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
+use httpmock::prelude::*;
 use narrant_lib::change_content::local::{
     fetch_selected_remote_refs, list_refs, LocalOpenedReview,
 };
@@ -708,6 +709,42 @@ fn selected_remote_fetch_reports_transport_failure_without_moving_tracking_ref()
             .unwrap(),
         head
     );
+}
+
+#[test]
+fn selected_remote_fetch_reports_http_authentication_failure_without_moving_ref() {
+    let server = MockServer::start();
+    let unauthorized = server.mock(|when, then| {
+        when.method(GET);
+        then.status(401)
+            .header("WWW-Authenticate", "Basic realm=\"Narrant test\"");
+    });
+    let fixture = TempDir::new().expect("repository directory");
+    let repository = Repository::init(fixture.path()).expect("initialize repository");
+    let head = commit_file(&repository, "README.md", "stable\n", "stable");
+    repository
+        .reference("refs/remotes/origin/topic", head, true, "fixture")
+        .unwrap();
+    repository
+        .remote("origin", &server.url("/private.git"))
+        .unwrap();
+
+    let error = fetch_selected_remote_refs(
+        fixture.path(),
+        "refs/remotes/origin/topic",
+        "refs/remotes/origin/topic",
+        &CancellationToken::default(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("Core Git 失败"));
+    assert_eq!(
+        repository
+            .refname_to_id("refs/remotes/origin/topic")
+            .unwrap(),
+        head
+    );
+    assert!(unauthorized.hits() > 0);
 }
 
 #[test]

@@ -489,6 +489,13 @@ describe("App", () => {
     expect(invoke).toHaveBeenCalledWith("refresh_branch_review", {
       reviewId: "review-24",
       operationId: expect.any(String),
+      confirmation: {
+        changed: true,
+        currentBaseRevision: "base-old",
+        currentHeadRevision: "head-old",
+        latestBaseRevision: "base-new",
+        latestHeadRevision: "head-new",
+      },
     });
   });
 

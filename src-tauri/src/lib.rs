@@ -4,8 +4,8 @@ pub mod github_auth;
 pub mod github_discovery;
 pub mod repository_catalog;
 
-use serde::Serialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
@@ -95,6 +95,16 @@ struct BranchReviewUpdateResponse {
     latest_head_revision: String,
 }
 
+/// 用户基于检查结果明确确认的一组 current/latest revisions。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmedBranchUpdate {
+    current_base_revision: String,
+    current_head_revision: String,
+    latest_base_revision: String,
+    latest_head_revision: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GitHubReviewSnapshotResponse {
@@ -124,6 +134,7 @@ struct GitHubReviewSnapshotResponse {
 struct ReviewSessionStore {
     next_id: AtomicU64,
     sessions: Mutex<HashMap<String, Arc<Mutex<OpenedReview>>>>,
+    active_refreshes: Mutex<HashSet<String>>,
 }
 
 /// 跟踪可由另一个 Tauri 调用取消的在途 Core Git 操作。
@@ -218,6 +229,25 @@ impl ReviewSessionStore {
             sessions.remove(&id);
         }
         Ok(())
+    }
+
+    /// 为一个 durable Review 获取独占刷新权，防止并发转换同一 Workspace。
+    fn begin_refresh(&self, review_id: &str) -> Result<(), String> {
+        let mut active = self
+            .active_refreshes
+            .lock()
+            .map_err(|_| "Review 刷新状态不可用。".to_owned())?;
+        if !active.insert(review_id.to_owned()) {
+            return Err("此 Review 正在刷新；请等待当前操作完成。".to_owned());
+        }
+        Ok(())
+    }
+
+    /// 释放 durable Review 的独占刷新权。
+    fn finish_refresh(&self, review_id: &str) {
+        if let Ok(mut active) = self.active_refreshes.lock() {
+            active.remove(review_id);
+        }
     }
 }
 
@@ -418,70 +448,109 @@ fn refresh_branch_review(
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     review_id: String,
+    confirmation: ConfirmedBranchUpdate,
 ) -> Result<LocalReviewSnapshotResponse, String> {
+    state.begin_refresh(&review_id)?;
     let current = catalog
         .open_review(&review_id)
-        .map_err(|error| error.to_string())?;
-    let repository = require_available_repository(&catalog, current.repository_entry_id)?;
-    let cancellation = operations.start(operation_id.clone())?;
-    let result = (|| {
-        change_content::local::fetch_selected_remote_refs(
-            &repository,
-            &current.base_ref,
-            &current.head_ref,
-            &cancellation,
-        )?;
-        let latest = change_content::local::LocalOpenedReview::open_with_cancellation(
-            &repository,
-            &current.base_ref,
-            &current.head_ref,
-            &cancellation,
-        )?;
-        if current.base_revision == latest.snapshot().base_revision
-            && current.head_revision == latest.snapshot().head_revision
+        .map_err(|error| error.to_string());
+    let result = current.and_then(|current| {
+        if current.base_revision != confirmation.current_base_revision
+            || current.head_revision != confirmation.current_head_revision
         {
-            return Ok(map_local_snapshot(review_id.clone(), &current.snapshot()));
+            return Err("current Snapshot 已改变；请重新检查更新。".to_owned());
         }
-        let candidate = catalog
-            .save_refresh_snapshot(&review_id, latest.snapshot())
-            .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
-        let workspace = catalog
-            .review_workspace_path(&review_id)
-            .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
-        let adapter = core_git::GitProcessAdapter::new(&repository);
-        adapter.transition_detached_worktree(
-            &workspace,
-            &current.head_revision,
-            &candidate.head_revision,
-            &cancellation,
-        )?;
-        if let Err(error) = catalog.activate_refresh_snapshot(&candidate, &current) {
-            let rollback = adapter.force_restore_detached_worktree(
+        let repository = require_available_repository(&catalog, current.repository_entry_id)?;
+        let cancellation = operations.start(operation_id.clone())?;
+        let refreshed = (|| {
+            change_content::local::fetch_selected_remote_refs(
+                &repository,
+                &current.base_ref,
+                &current.head_ref,
+                &cancellation,
+            )?;
+            let latest = change_content::local::LocalOpenedReview::open_with_cancellation(
+                &repository,
+                &current.base_ref,
+                &current.head_ref,
+                &cancellation,
+            )?;
+            if latest.snapshot().base_revision != confirmation.latest_base_revision
+                || latest.snapshot().head_revision != confirmation.latest_head_revision
+            {
+                return Err(core_git::GitCommandError::new(
+                    "Branch Selection 在确认后再次变化；请重新检查并确认新版本。",
+                ));
+            }
+            if current.base_revision == latest.snapshot().base_revision
+                && current.head_revision == latest.snapshot().head_revision
+            {
+                return Ok(map_local_snapshot(review_id.clone(), &current.snapshot()));
+            }
+            let candidate = catalog
+                .save_refresh_snapshot(&review_id, latest.snapshot())
+                .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
+            let workspace = catalog
+                .review_workspace_path(&review_id)
+                .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
+            let adapter = core_git::GitProcessAdapter::new(&repository);
+            adapter.transition_detached_worktree(
                 &workspace,
                 &current.head_revision,
-                &core_git::CancellationToken::default(),
-            );
-            return Err(core_git::GitCommandError::new(match rollback {
-                Ok(()) => error.to_string(),
-                Err(rollback_error) => {
-                    format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
-                }
-            }));
-        }
-        let snapshot = candidate.snapshot();
-        state
-            .insert_with_id(
+                &candidate.head_revision,
+                &cancellation,
+            )?;
+            let snapshot = candidate.snapshot();
+            if let Err(error) = state.insert_with_id(
                 review_id.clone(),
                 OpenedReview::Local(Box::new(change_content::local::LocalOpenedReview::restore(
                     &repository,
                     snapshot.clone(),
                 ))),
-            )
-            .map_err(core_git::GitCommandError::new)?;
-        Ok(map_local_snapshot(review_id.clone(), &snapshot))
-    })()
-    .map_err(|error: core_git::GitCommandError| error.to_string());
-    operations.finish(&operation_id);
+            ) {
+                let rollback = adapter.transition_detached_worktree(
+                    &workspace,
+                    &candidate.head_revision,
+                    &current.head_revision,
+                    &core_git::CancellationToken::default(),
+                );
+                return Err(core_git::GitCommandError::new(match rollback {
+                    Ok(()) => error,
+                    Err(rollback_error) => {
+                        format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
+                    }
+                }));
+            }
+            if let Err(error) = catalog.activate_refresh_snapshot(&candidate, &current) {
+                let rollback = adapter.transition_detached_worktree(
+                    &workspace,
+                    &candidate.head_revision,
+                    &current.head_revision,
+                    &core_git::CancellationToken::default(),
+                );
+                let _ = state.insert_with_id(
+                    review_id.clone(),
+                    OpenedReview::Local(Box::new(
+                        change_content::local::LocalOpenedReview::restore(
+                            &repository,
+                            current.snapshot(),
+                        ),
+                    )),
+                );
+                return Err(core_git::GitCommandError::new(match rollback {
+                    Ok(()) => error.to_string(),
+                    Err(rollback_error) => {
+                        format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
+                    }
+                }));
+            }
+            Ok(map_local_snapshot(review_id.clone(), &snapshot))
+        })()
+        .map_err(|error: core_git::GitCommandError| error.to_string());
+        operations.finish(&operation_id);
+        refreshed
+    });
+    state.finish_refresh(&review_id);
     result
 }
 

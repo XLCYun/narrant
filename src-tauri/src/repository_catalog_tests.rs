@@ -188,9 +188,10 @@ fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
 
 #[test]
 fn refresh_candidate_stays_non_current_until_explicit_activation() {
-    let database = tempfile::NamedTempFile::new().unwrap();
+    let application_data = tempfile::TempDir::new().unwrap();
+    let database_path = application_data.path().join("catalog.sqlite3");
     let repository = create_repository();
-    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let catalog = RepositoryCatalog::open(&database_path).unwrap();
     let entry = catalog.register(repository.path()).unwrap();
     catalog.grant_workspace_trust(entry.id).unwrap();
     let branch = String::from_utf8(
@@ -214,6 +215,10 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         .unwrap();
     catalog.activate_snapshot(&saved).unwrap();
     let old_head = saved.head_revision.clone();
+    let workspace = catalog.review_workspace_path(&saved.review_id).unwrap();
+    GitProcessAdapter::new(repository.path())
+        .create_detached_worktree(&workspace, &old_head, &CancellationToken::default())
+        .unwrap();
 
     std::fs::write(repository.path().join("README.md"), "refreshed").unwrap();
     assert!(Command::new("git")
@@ -242,13 +247,42 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         catalog.open_review(&saved.review_id).unwrap().head_revision,
         old_head
     );
+    let checked_workspace_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(checked_workspace_head.stdout)
+            .unwrap()
+            .trim(),
+        old_head
+    );
 
+    GitProcessAdapter::new(repository.path())
+        .transition_detached_worktree(
+            &workspace,
+            &old_head,
+            &candidate.head_revision,
+            &CancellationToken::default(),
+        )
+        .unwrap();
     catalog
         .activate_refresh_snapshot(&candidate, &saved)
         .unwrap();
     let refreshed = catalog.open_review(&saved.review_id).unwrap();
     assert_eq!(refreshed.head_revision, latest.snapshot().head_revision);
     assert_ne!(refreshed.head_revision, old_head);
+    let workspace_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+    assert!(workspace_head.status.success());
+    assert_eq!(
+        String::from_utf8(workspace_head.stdout).unwrap().trim(),
+        refreshed.head_revision
+    );
     let internal_refs = Command::new("git")
         .args(["for-each-ref", "--format=%(refname)", "refs/narrant"])
         .current_dir(repository.path())

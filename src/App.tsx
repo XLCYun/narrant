@@ -464,6 +464,7 @@ export function App() {
     try {
       replaceSnapshot(await invokeLocalGit<LocalReviewSnapshot>("refresh_branch_review", {
         reviewId: snapshot.reviewId,
+        confirmation: branchUpdate,
       }));
       setFileChange(undefined);
     } catch (reason) {

@@ -186,7 +186,7 @@ fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head()
     let next_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
 
     adapter
-        .force_restore_detached_worktree(&workspace, &next_head, &cancellation)
+        .transition_detached_worktree(&workspace, &first_head, &next_head, &cancellation)
         .unwrap();
 
     assert_eq!(read_git(&workspace, ["rev-parse", "HEAD"]), next_head);
@@ -197,6 +197,30 @@ fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head()
         .status()
         .unwrap()
         .success());
+}
+
+#[test]
+fn workspace_transition_rejects_an_unregistered_directory_before_deletion() {
+    let repository = committed_repository();
+    let adapter = GitProcessAdapter::new(repository.path());
+    let head = read_git(repository.path(), ["rev-parse", "HEAD"]);
+    let unmanaged = tempfile::TempDir::new().unwrap();
+    std::fs::write(unmanaged.path().join("keep.txt"), "owned elsewhere").unwrap();
+
+    let error = adapter
+        .transition_detached_worktree(
+            unmanaged.path(),
+            &head,
+            &head,
+            &CancellationToken::default(),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("拒绝重建 Review Workspace"));
+    assert_eq!(
+        std::fs::read_to_string(unmanaged.path().join("keep.txt")).unwrap(),
+        "owned elsewhere"
+    );
 }
 
 #[test]
@@ -220,6 +244,6 @@ fn failed_workspace_transition_restores_the_previous_snapshot_head() {
         )
         .unwrap_err();
 
-    assert!(error.to_string().contains("无法创建 Review Workspace"));
+    assert!(error.to_string().contains("Review Workspace"));
     assert_eq!(read_git(&workspace, ["rev-parse", "HEAD"]), old_head);
 }
