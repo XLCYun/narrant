@@ -127,3 +127,61 @@ fn corrupt_database_reports_a_recovery_error() {
     assert!(error.to_string().contains("Repository Catalog 无法打开"));
     assert!(error.to_string().contains("移走或删除"));
 }
+
+#[test]
+fn workspace_trust_survives_catalog_reopen_for_one_repository_entry() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let repository = create_repository();
+
+    let entry_id = {
+        let catalog = RepositoryCatalog::open(database.path()).unwrap();
+        let entry = catalog.register(repository.path()).unwrap();
+        assert!(!catalog.is_workspace_trusted(entry.id).unwrap());
+        catalog.grant_workspace_trust(entry.id).unwrap();
+        entry.id
+    };
+
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    assert!(catalog.is_workspace_trusted(entry_id).unwrap());
+}
+
+#[test]
+fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let repository = create_repository();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let entry = catalog.register(repository.path()).unwrap();
+    catalog.grant_workspace_trust(entry.id).unwrap();
+    let branch = String::from_utf8(
+        Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(repository.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let branch_ref = format!("refs/heads/{}", branch.trim());
+    let snapshot = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        &branch_ref,
+        &branch_ref,
+    )
+    .unwrap();
+
+    let first = catalog
+        .save_branch_review(entry.id, snapshot.snapshot())
+        .unwrap();
+    catalog.activate_snapshot(&first).unwrap();
+    let reopened = catalog
+        .save_branch_review(entry.id, snapshot.snapshot())
+        .unwrap();
+    let loaded = catalog.open_review(&first.review_id).unwrap();
+
+    assert_eq!(reopened.review_id, first.review_id);
+    assert_eq!(loaded.review_id, first.review_id);
+    assert_eq!(loaded.base_ref, branch_ref);
+    assert_eq!(loaded.head_ref, branch_ref);
+    assert_eq!(loaded.head_revision, snapshot.snapshot().head_revision);
+    assert!(loaded.file_changes.is_empty());
+}

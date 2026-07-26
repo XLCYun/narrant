@@ -75,7 +75,7 @@ enum ReviewSourceResponse {
 #[serde(rename_all = "camelCase")]
 struct LocalReviewSnapshotResponse {
     source: ReviewSourceResponse,
-    session_id: String,
+    review_id: String,
     base_ref: String,
     head_ref: String,
     base_revision: String,
@@ -163,6 +163,15 @@ impl ReviewSessionStore {
         Ok(id)
     }
 
+    /// 用 durable reviewId 注册运行时读取句柄。
+    fn insert_with_id(&self, id: String, review: OpenedReview) -> Result<(), String> {
+        self.sessions
+            .lock()
+            .map_err(|_| "Review 状态不可用。".to_owned())?
+            .insert(id, Arc::new(Mutex::new(review)));
+        Ok(())
+    }
+
     fn get(&self, id: &str) -> Result<Arc<Mutex<OpenedReview>>, String> {
         self.sessions
             .lock()
@@ -233,12 +242,12 @@ fn map_file_content(change: change_content::LoadedFileChange) -> FileChangeConte
 }
 
 fn map_local_snapshot(
-    session_id: String,
+    review_id: String,
     snapshot: &change_content::local::LocalSnapshot,
 ) -> LocalReviewSnapshotResponse {
     LocalReviewSnapshotResponse {
         source: ReviewSourceResponse::Local,
-        session_id,
+        review_id,
         base_ref: snapshot.base_ref.clone(),
         head_ref: snapshot.head_ref.clone(),
         base_revision: snapshot.base_revision.clone(),
@@ -311,7 +320,30 @@ fn compare_local_refs(
     head_ref: String,
 ) -> Result<LocalReviewSnapshotResponse, String> {
     let repository_path = require_available_repository(&catalog, repository_entry_id)?;
+    if !catalog
+        .is_workspace_trusted(repository_entry_id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("尚未授予 Workspace Trust；请先阅读风险说明并确认授权。".to_owned());
+    }
+    if let Some(saved) = catalog
+        .find_branch_review(repository_entry_id, &base_ref, &head_ref)
+        .map_err(|error| error.to_string())?
+    {
+        return open_saved_branch_review(&state, &catalog, repository_path, saved);
+    }
     let cancellation = operations.start(operation_id.clone())?;
+    let fetched = change_content::local::fetch_selected_remote_refs(
+        &repository_path,
+        &base_ref,
+        &head_ref,
+        &cancellation,
+    )
+    .map_err(|error| error.to_string());
+    if let Err(error) = fetched {
+        operations.finish(&operation_id);
+        return Err(error);
+    }
     let review = change_content::local::LocalOpenedReview::open_with_cancellation(
         &repository_path,
         &base_ref,
@@ -320,13 +352,43 @@ fn compare_local_refs(
     )
     .map_err(|error| error.to_string());
     operations.finish(&operation_id);
-    let review = review?;
-    let response = map_local_snapshot(String::new(), review.snapshot());
-    let session_id = state.insert(OpenedReview::Local(Box::new(review)))?;
-    Ok(LocalReviewSnapshotResponse {
-        session_id,
-        ..response
-    })
+    let calculated_review = review?;
+    let saved = catalog
+        .save_branch_review(repository_entry_id, calculated_review.snapshot())
+        .map_err(|error| error.to_string())?;
+    open_saved_branch_review(&state, &catalog, repository_path, saved)
+}
+
+/// materialize saved Snapshot，校验 workspace 后再推进 current 指针并注册运行时句柄。
+fn open_saved_branch_review(
+    state: &ReviewSessionStore,
+    catalog: &repository_catalog::RepositoryCatalog,
+    repository_path: std::path::PathBuf,
+    saved: repository_catalog::SavedBranchReview,
+) -> Result<LocalReviewSnapshotResponse, String> {
+    let workspace = catalog
+        .review_workspace_path(&saved.review_id)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = core_git::GitProcessAdapter::new(&repository_path).create_detached_worktree(
+        &workspace,
+        &saved.head_revision,
+        &core_git::CancellationToken::default(),
+    ) {
+        return Err(error.to_string());
+    }
+    if saved.created {
+        catalog
+            .activate_snapshot(&saved)
+            .map_err(|error| error.to_string())?;
+    }
+    let snapshot = saved.snapshot();
+    let review =
+        change_content::local::LocalOpenedReview::restore(&repository_path, snapshot.clone());
+    state.insert_with_id(
+        saved.review_id.clone(),
+        OpenedReview::Local(Box::new(review)),
+    )?;
+    Ok(map_local_snapshot(saved.review_id, &snapshot))
 }
 
 #[tauri::command]
@@ -441,8 +503,6 @@ async fn sign_out_github(
 #[tauri::command]
 async fn read_file_change(
     state: tauri::State<'_, ReviewSessionStore>,
-    operations: tauri::State<'_, GitOperationStore>,
-    operation_id: Option<String>,
     session_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
@@ -452,16 +512,8 @@ async fn read_file_change(
             .lock()
             .map_err(|_| "Review Session 状态不可用。".to_owned())?;
         match &*review {
-            OpenedReview::Local(review) => {
-                let operation_id =
-                    operation_id.ok_or_else(|| "本地 File Change 缺少操作 ID。".to_owned())?;
-                let cancellation = operations.start(operation_id.clone())?;
-                let result = review
-                    .read_file_change_with_cancellation(&path, &cancellation)
-                    .map(map_file_content)
-                    .map_err(|error| error.to_string());
-                operations.finish(&operation_id);
-                return result;
+            OpenedReview::Local(_) => {
+                return Err("本地 Review 必须使用 durable reviewId。".to_owned())
             }
             OpenedReview::GitHub(review) => review.clone(),
         }
@@ -473,12 +525,79 @@ async fn read_file_change(
         .map_err(|error| error.to_string())
 }
 
+/// 通过 durable reviewId 从 current Snapshot 读取本地 File Change。
+#[tauri::command]
+fn read_review_file_change(
+    state: tauri::State<'_, ReviewSessionStore>,
+    operations: tauri::State<'_, GitOperationStore>,
+    operation_id: String,
+    review_id: String,
+    path: String,
+) -> Result<FileChangeContentResponse, String> {
+    let review = state.get(&review_id)?;
+    let review = review
+        .lock()
+        .map_err(|_| "Review 状态不可用。".to_owned())?;
+    let OpenedReview::Local(review) = &*review else {
+        return Err("durable reviewId 未指向本地 Review。".to_owned());
+    };
+    let cancellation = operations.start(operation_id.clone())?;
+    let result = review
+        .read_file_change_with_cancellation(&path, &cancellation)
+        .map(map_file_content)
+        .map_err(|error| error.to_string());
+    operations.finish(&operation_id);
+    result
+}
+
 #[tauri::command]
 fn close_review_session(
     state: tauri::State<'_, ReviewSessionStore>,
     session_id: String,
 ) -> Result<(), String> {
     state.close(&session_id)
+}
+
+/// 关闭 durable Review 并精确移除它的 disposable linked worktree。
+#[tauri::command]
+fn close_review(
+    state: tauri::State<'_, ReviewSessionStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    review_id: String,
+) -> Result<(), String> {
+    state.close(&review_id)?;
+    let saved = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    let repository = require_available_repository(&catalog, saved.repository_entry_id)?;
+    let workspace = catalog
+        .review_workspace_path(&review_id)
+        .map_err(|error| error.to_string())?;
+    core_git::GitProcessAdapter::new(&repository)
+        .remove_worktree(&workspace, &core_git::CancellationToken::default())
+        .map_err(|error| error.to_string())
+}
+
+/// 查询一个 Repository Entry 的持久化 Workspace Trust。
+#[tauri::command]
+fn repository_workspace_trust(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    repository_entry_id: i64,
+) -> Result<bool, String> {
+    catalog
+        .is_workspace_trusted(repository_entry_id)
+        .map_err(|error| error.to_string())
+}
+
+/// 在用户确认风险说明后授予 Repository Entry 级 Workspace Trust。
+#[tauri::command]
+fn grant_repository_workspace_trust(
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    repository_entry_id: i64,
+) -> Result<(), String> {
+    catalog
+        .grant_workspace_trust(repository_entry_id)
+        .map_err(|error| error.to_string())
 }
 
 /// 注册一个经 Core Git 验证的 Repository Entry。
@@ -563,6 +682,8 @@ pub fn run() {
             register_repository_entry,
             list_repository_entries,
             open_repository_entry,
+            repository_workspace_trust,
+            grant_repository_workspace_trust,
             compare_local_refs,
             list_local_refs,
             cancel_git_operation,
@@ -573,7 +694,9 @@ pub fn run() {
             complete_github_authorization,
             sign_out_github,
             read_file_change,
-            close_review_session
+            read_review_file_change,
+            close_review_session,
+            close_review
         ])
         .plugin(tauri_plugin_opener::init());
     #[cfg(feature = "wdio")]

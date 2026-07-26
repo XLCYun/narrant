@@ -40,6 +40,14 @@ impl LocalOpenedReview {
         &self.snapshot
     }
 
+    /// 从持久化的不可变 Snapshot 恢复按对象读取能力，不重新解析可移动 branch refs。
+    pub fn restore(repository_path: &Path, snapshot: LocalSnapshot) -> Self {
+        Self {
+            adapter: GitProcessAdapter::new(repository_path),
+            snapshot,
+        }
+    }
+
     /// 从 Snapshot 记录的对象 ID 按需读取一个 File Change 的前后内容。
     pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitCommandError> {
         self.read_file_change_with_cancellation(path, &CancellationToken::default())
@@ -78,6 +86,7 @@ impl LocalOpenedReview {
 }
 
 /// 固定 base、Comparison Base、head 与 File Changes 的本地 Snapshot。
+#[derive(Clone)]
 pub struct LocalSnapshot {
     pub base_ref: String,
     pub head_ref: String,
@@ -88,6 +97,7 @@ pub struct LocalSnapshot {
 }
 
 /// 不含实际内容、可持久化的 File Change 元数据。
+#[derive(Clone)]
 pub struct LocalFileChange {
     pub path: String,
     pub old_path: Option<String>,
@@ -96,15 +106,15 @@ pub struct LocalFileChange {
     pub after_mode: Option<u32>,
     pub before_object_id: Option<String>,
     pub after_object_id: Option<String>,
-    before_entry: Option<LocalEntry>,
-    after_entry: Option<LocalEntry>,
+    pub(crate) before_entry: Option<LocalEntry>,
+    pub(crate) after_entry: Option<LocalEntry>,
 }
 
 /// 固定到 Git 对象和 tree mode 的单侧文件条目。
 #[derive(Clone)]
-struct LocalEntry {
-    object_id: String,
-    mode: u32,
+pub(crate) struct LocalEntry {
+    pub(crate) object_id: String,
+    pub(crate) mode: u32,
 }
 
 /// 枚举 canonical local 与 remote-tracking branch refs。
@@ -151,6 +161,38 @@ pub fn list_refs_with_cancellation(
     refs.sort();
     refs.dedup();
     Ok(refs)
+}
+
+/// 对 Selection 中的 remote-tracking refs 按 remote 去重执行受信任 fetch。
+pub fn fetch_selected_remote_refs(
+    repository_path: &Path,
+    base_ref: &str,
+    head_ref: &str,
+    cancellation: &CancellationToken,
+) -> Result<(), GitCommandError> {
+    let adapter = GitProcessAdapter::new(repository_path);
+    let mut remotes = [base_ref, head_ref]
+        .into_iter()
+        .filter_map(remote_name)
+        .collect::<Vec<_>>();
+    remotes.sort_unstable();
+    remotes.dedup();
+    for remote in remotes {
+        adapter.run(
+            ["fetch", "--no-write-fetch-head", "--", remote],
+            cancellation,
+        )?;
+    }
+    Ok(())
+}
+
+/// 从 canonical remote-tracking ref 提取 remote 名称。
+fn remote_name(reference: &str) -> Option<&str> {
+    reference
+        .strip_prefix("refs/remotes/")?
+        .split_once('/')
+        .map(|(remote, _)| remote)
+        .filter(|remote| !remote.is_empty())
 }
 
 /// 解析 refs、计算 merge-base，并用 raw NUL diff 构建 File Changes。

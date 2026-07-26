@@ -23,7 +23,6 @@ type FileChangeContent = FileChangeSummary & {
   after: string | null;
 };
 type ReviewSnapshotBase = {
-  sessionId: string;
   baseRef: string;
   baseRevision: string;
   comparisonBase: string;
@@ -31,9 +30,13 @@ type ReviewSnapshotBase = {
   headRevision: string;
   fileChanges: FileChangeSummary[];
 };
-type LocalReviewSnapshot = ReviewSnapshotBase & { source: "local" };
+type LocalReviewSnapshot = ReviewSnapshotBase & {
+  source: "local";
+  reviewId: string;
+};
 type GitHubReviewSnapshot = ReviewSnapshotBase & {
   source: "github";
+  sessionId: string;
   owner: string;
   repository: string;
   title: string;
@@ -48,6 +51,7 @@ type GitHubReviewSnapshot = ReviewSnapshotBase & {
   githubUrl: string;
 };
 type ReviewSnapshot = LocalReviewSnapshot | GitHubReviewSnapshot;
+type ActiveReview = { source: "local"; reviewId: string } | { source: "github"; sessionId: string };
 type GitHubAuthStatus = {
   configured: boolean;
   signedIn: boolean;
@@ -133,6 +137,7 @@ export function App() {
   const [repositoryPath, setRepositoryPath] = useState("");
   const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
   const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
+  const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
@@ -148,7 +153,7 @@ export function App() {
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
   const [authorizing, setAuthorizing] = useState(false);
   const [copiedValue, setCopiedValue] = useState<"device-code" | "authorization-url">();
-  const activeSessionId = useRef<string>();
+  const activeReview = useRef<ActiveReview>();
   const activeGitOperationId = useRef<string>();
   const nextGitOperationId = useRef(0);
 
@@ -169,13 +174,24 @@ export function App() {
   }
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
-    const previousSessionId = activeSessionId.current;
-    activeSessionId.current = nextSnapshot?.sessionId;
+    const previousReview = activeReview.current;
+    const nextReview = nextSnapshot?.source === "local"
+      ? { source: "local" as const, reviewId: nextSnapshot.reviewId }
+      : nextSnapshot && { source: "github" as const, sessionId: nextSnapshot.sessionId };
+    activeReview.current = nextReview;
     setSnapshot(nextSnapshot);
-    if (previousSessionId && previousSessionId !== nextSnapshot?.sessionId) {
-      void Promise.resolve(invoke("close_review_session", { sessionId: previousSessionId }))
-        .catch(() => undefined);
+    if (previousReview && JSON.stringify(previousReview) !== JSON.stringify(nextReview)) {
+      closeActiveReview(previousReview);
     }
+  }
+
+  /** 按来源使用唯一身份关闭当前运行时资源。 */
+  function closeActiveReview(review: ActiveReview) {
+    const command = review.source === "local" ? "close_review" : "close_review_session";
+    const arguments_ = review.source === "local"
+      ? { reviewId: review.reviewId }
+      : { sessionId: review.sessionId };
+    void Promise.resolve(invoke(command, arguments_)).catch(() => undefined);
   }
 
   useEffect(() => () => {
@@ -184,10 +200,9 @@ export function App() {
         .catch(() => undefined);
       activeGitOperationId.current = undefined;
     }
-    if (activeSessionId.current) {
-      void Promise.resolve(invoke("close_review_session", { sessionId: activeSessionId.current }))
-        .catch(() => undefined);
-      activeSessionId.current = undefined;
+    if (activeReview.current) {
+      closeActiveReview(activeReview.current);
+      activeReview.current = undefined;
     }
   }, []);
 
@@ -244,6 +259,9 @@ export function App() {
       )));
       if (!opened.available) return;
       setSelectedRepository(opened);
+      setWorkspaceTrusted(await invoke<boolean>("repository_workspace_trust", {
+        repositoryEntryId: opened.id,
+      }));
       setRepositoryPath(opened.canonicalPath);
       void loadPullRequestGroups(opened);
       setRefs([]);
@@ -251,6 +269,20 @@ export function App() {
       setHeadRef("");
       replaceSnapshot(undefined);
       setFileChange(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  /** 在明确展示 checkout、hooks、filters、LFS 与未来 review tools 风险后持久化授权。 */
+  async function grantWorkspaceTrust() {
+    if (!selectedRepository) return;
+    setError("");
+    try {
+      await invoke("grant_repository_workspace_trust", {
+        repositoryEntryId: selectedRepository.id,
+      });
+      setWorkspaceTrusted(true);
     } catch (reason) {
       setError(String(reason));
     }
@@ -387,10 +419,15 @@ export function App() {
     if (!snapshot) return;
     setError("");
     try {
-      const arguments_ = { sessionId: snapshot.sessionId, path };
       setFileChange(snapshot.source === "local"
-        ? await invokeLocalGit<FileChangeContent>("read_file_change", arguments_)
-        : await invoke<FileChangeContent>("read_file_change", arguments_));
+        ? await invokeLocalGit<FileChangeContent>("read_review_file_change", {
+          reviewId: snapshot.reviewId,
+          path,
+        })
+        : await invoke<FileChangeContent>("read_file_change", {
+          sessionId: snapshot.sessionId,
+          path,
+        }));
     } catch (reason) {
       setFileChange(undefined);
       setError(String(reason));
@@ -475,6 +512,11 @@ export function App() {
           </article>;
         })}
       </section>
+      {!workspaceTrusted && <section aria-label="Workspace Trust 风险说明">
+        <h3>授予 Workspace Trust</h3>
+        <p>创建 Review 会执行普通 Git checkout；仓库配置可能触发 hooks、filters、Git LFS，未来 review tools 也可能读取仓库控制的配置。</p>
+        <Button onClick={grantWorkspaceTrust}>我了解风险并信任此 Repository Entry</Button>
+      </section>}
     </article>}
     {(!catalogRuntimeEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
@@ -514,7 +556,7 @@ export function App() {
       <Button variant="outline" onClick={loadRefs}>读取分支</Button>
       <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
       <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-      <Button disabled={!baseRef || !headRef} onClick={openComparison}>打开 Review Snapshot</Button>
+      <Button disabled={!baseRef || !headRef || (catalogRuntimeEnabled && !workspaceTrusted)} onClick={openComparison}>打开 Review Snapshot</Button>
     </section>
     {error && <ErrorMessage message={error} />}
     {snapshot?.source === "github" && <article aria-label="Pull Request 概览">
