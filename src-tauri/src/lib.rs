@@ -65,6 +65,7 @@ enum ContentKindResponse {
 #[serde(rename_all = "camelCase")]
 struct ReviewSnapshotResponse {
     review_id: String,
+    snapshot_id: String,
     base_ref: String,
     head_ref: String,
     base_revision: String,
@@ -253,10 +254,12 @@ fn map_file_content(change: change_content::LoadedFileChange) -> FileChangeConte
 /// 将内部固定 Snapshot 映射为不区分来源的前端 IPC 契约。
 fn map_snapshot(
     review_id: String,
+    snapshot_id: String,
     snapshot: &change_content::local::LocalSnapshot,
 ) -> ReviewSnapshotResponse {
     ReviewSnapshotResponse {
         review_id,
+        snapshot_id,
         base_ref: snapshot.base_ref.clone(),
         head_ref: snapshot.head_ref.clone(),
         base_revision: snapshot.base_revision.clone(),
@@ -417,7 +420,11 @@ fn refresh_branch_review(
             if current.base_revision == latest.snapshot().base_revision
                 && current.head_revision == latest.snapshot().head_revision
             {
-                return Ok(map_snapshot(review_id.clone(), &current.snapshot()));
+                return Ok(map_snapshot(
+                    review_id.clone(),
+                    current.snapshot_identity(),
+                    &current.snapshot(),
+                ));
             }
             let candidate = catalog
                 .save_refresh_snapshot(&review_id, latest.snapshot())
@@ -462,7 +469,11 @@ fn refresh_branch_review(
                     ),
                 )))),
             );
-            Ok(map_snapshot(review_id.clone(), &snapshot))
+            Ok(map_snapshot(
+                review_id.clone(),
+                candidate.snapshot_identity(),
+                &snapshot,
+            ))
         })()
         .map_err(|error: core_git::GitCommandError| error.to_string());
         operations.finish(&operation_id);
@@ -518,7 +529,11 @@ fn open_saved_branch_review(
     catalog
         .mark_review_opened(&saved.review_id)
         .map_err(|error| error.to_string())?;
-    let mut response = map_snapshot(saved.review_id, &snapshot);
+    let mut response = map_snapshot(
+        saved.review_id.clone(),
+        saved.snapshot_identity(),
+        &snapshot,
+    );
     response.pull_request = saved.pull_request;
     Ok(response)
 }
@@ -814,10 +829,18 @@ async fn sign_out_github(
 fn read_review_file_change(
     state: tauri::State<'_, OpenReviewStore>,
     operations: tauri::State<'_, GitOperationStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     review_id: String,
+    snapshot_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
+    let current = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    if current.snapshot_identity() != snapshot_id {
+        return Err("Snapshot identity 与 Review 的 current Snapshot 不一致。".to_owned());
+    }
     let review = state.get(&review_id)?;
     let review = review
         .lock()

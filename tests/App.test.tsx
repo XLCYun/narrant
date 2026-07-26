@@ -372,6 +372,7 @@ describe("App", () => {
       .mockResolvedValueOnce(["base", "origin/topic"])
       .mockResolvedValueOnce({
         reviewId: "review-1",
+        snapshotId: "snapshot-1",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [
@@ -394,6 +395,7 @@ describe("App", () => {
 
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_review_file_change", {
       reviewId: "review-1",
+      snapshotId: "snapshot-1",
       path: "assets/logo.bin",
       operationId: expect.any(String),
     }));

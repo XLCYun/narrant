@@ -63,6 +63,11 @@ pub struct SavedBranchReview {
 }
 
 impl SavedBranchReview {
+    /// 返回可供 IPC 校验的 immutable Snapshot identity。
+    pub fn snapshot_identity(&self) -> String {
+        format!("snapshot-{}", self.snapshot_id)
+    }
+
     /// 将数据库模型还原成 Repository Operations 可读取的不可变 Snapshot。
     pub fn snapshot(&self) -> LocalSnapshot {
         LocalSnapshot {

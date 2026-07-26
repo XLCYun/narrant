@@ -56,12 +56,16 @@ fn closing_an_open_review_is_idempotent_and_keeps_in_flight_references_alive() {
         "refs/heads/head",
     )
     .unwrap();
-    let response = map_snapshot("review-42".to_owned(), review.snapshot());
+    let response = map_snapshot(
+        "review-42".to_owned(),
+        "snapshot-7".to_owned(),
+        review.snapshot(),
+    );
     let json = serde_json::to_value(&response).unwrap();
     assert_eq!(json["reviewId"], "review-42");
+    assert_eq!(json["snapshotId"], "snapshot-7");
     assert_eq!(json["fileChanges"][0]["path"], "README.md");
     assert!(json["fileChanges"][0].get("contentKind").is_none());
-    assert!(json.get("snapshotId").is_none());
     let store = OpenReviewStore::default();
     let id = "review-42".to_owned();
     store

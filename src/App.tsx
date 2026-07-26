@@ -46,6 +46,7 @@ type PullRequestMetadata = {
 };
 type ReviewSnapshot = ReviewSnapshotBase & {
   reviewId: string;
+  snapshotId: string;
   pullRequest?: PullRequestMetadata;
 };
 type BranchReviewUpdate = {
@@ -166,6 +167,7 @@ function ErrorMessage({ message }: { message: string }) {
 
 export function App() {
   const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
+  const testHarnessEnabled = import.meta.env.MODE === "test";
   const editorTheme = useSystemTheme();
   const [repositoryPath, setRepositoryPath] = useState("");
   const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
@@ -626,6 +628,7 @@ export function App() {
     try {
       setFileChange(await invokeLocalGit<FileChangeContent>("read_review_file_change", {
         reviewId: snapshot.reviewId,
+        snapshotId: snapshot.snapshotId,
         path,
       }));
     } catch (reason) {
@@ -779,7 +782,8 @@ export function App() {
         <Button onClick={grantWorkspaceTrust}>我了解风险并信任此 Repository Entry</Button>
       </section>}
     </article>}
-    {(!catalogRuntimeEnabled || selectedRepository) && <>
+    {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
+    {(testHarnessEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
       {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
       {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
