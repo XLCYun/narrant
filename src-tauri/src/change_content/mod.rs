@@ -39,5 +39,4 @@ fn resolved_content_kind(kinds: impl IntoIterator<Item = Option<ContentKind>>) -
         .unwrap_or(ContentKind::Text)
 }
 
-pub mod github;
 pub mod local;

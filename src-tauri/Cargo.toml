@@ -23,7 +23,7 @@ async-trait = "0.1"
 http = "1"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }

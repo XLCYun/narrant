@@ -14,7 +14,7 @@ function git(...args) {
   execFileSync("git", args, { cwd: target, stdio: "inherit" });
 }
 
-git("init", "-q");
+git("init", "-q", "--initial-branch=main");
 git("config", "user.email", "test@narrant.invalid");
 git("config", "user.name", "Narrant test");
 
@@ -23,10 +23,15 @@ await writeFile(resolve(target, "welcome.txt"), "你好,旧内容\n", "utf8");
 git("add", "welcome.txt");
 git("commit", "-q", "-m", "base");
 git("branch", "base-ref");
+const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim();
 
 // head 分支:welcome.txt 改为新内容。
 git("checkout", "-q", "-b", "head-ref");
 await writeFile(resolve(target, "welcome.txt"), "你好,新内容\n", "utf8");
 git("commit", "-q", "-am", "head");
+const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim();
+git("update-ref", "refs/pull/42/head", headSha);
+git("remote", "add", "origin", "https://github.com/octo-org/octo-repo.git");
+git("config", `url.file://${target}/.insteadOf`, "https://github.com/octo-org/octo-repo.git");
 
-console.log(target);
+console.log(JSON.stringify({ target, baseSha, headSha }));

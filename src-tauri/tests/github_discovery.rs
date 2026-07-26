@@ -29,8 +29,8 @@ fn repository_with_remotes(remotes: &[(&str, &str)]) -> TempDir {
     directory
 }
 
-#[test]
-fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_only() {
+#[tokio::test]
+async fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_only() {
     let server = MockServer::start();
     let first_page = server.mock(|when, then| {
         when.method(GET)
@@ -70,7 +70,9 @@ fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_only()
         then.status(403);
     });
 
-    let groups = discover_pull_requests(repository.path(), &server.base_url(), None).unwrap();
+    let groups = discover_pull_requests(repository.path(), &server.base_url(), None)
+        .await
+        .unwrap();
 
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0].repository.identity(), "fork-owner/fork-repo");
@@ -90,8 +92,8 @@ fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_only()
     second_page.assert();
 }
 
-#[test]
-fn rejects_code_content_endpoints_by_only_listing_pull_requests() {
+#[tokio::test]
+async fn rejects_code_content_endpoints_by_only_listing_pull_requests() {
     let server = MockServer::start();
     let list = server.mock(|when, then| {
         when.method(GET).path("/repos/octo-org/octo-repo/pulls");
@@ -106,14 +108,16 @@ fn rejects_code_content_endpoints_by_only_listing_pull_requests() {
     let repository =
         repository_with_remotes(&[("origin", "https://github.com/octo-org/octo-repo")]);
 
-    discover_pull_requests(repository.path(), &server.base_url(), None).unwrap();
+    discover_pull_requests(repository.path(), &server.base_url(), None)
+        .await
+        .unwrap();
 
     list.assert();
     assert_eq!(forbidden.hits(), 0);
 }
 
-#[test]
-fn uses_authenticated_metadata_access_and_keeps_permission_failures_local() {
+#[tokio::test]
+async fn uses_authenticated_metadata_access_and_keeps_permission_failures_local() {
     let server = MockServer::start();
     let private = server.mock(|when, then| {
         when.method(GET)
@@ -137,6 +141,7 @@ fn uses_authenticated_metadata_access_and_keeps_permission_failures_local() {
         &server.base_url(),
         Some(SecretString::from("private-token")),
     )
+    .await
     .unwrap();
 
     assert_eq!(groups.len(), 2);
@@ -146,14 +151,16 @@ fn uses_authenticated_metadata_access_and_keeps_permission_failures_local() {
     public.assert();
 }
 
-#[test]
-fn reports_offline_discovery_per_repository_without_losing_groups() {
+#[tokio::test]
+async fn reports_offline_discovery_per_repository_without_losing_groups() {
     let repository = repository_with_remotes(&[
         ("origin", "https://github.com/acme/one.git"),
         ("upstream", "https://github.com/acme/two.git"),
     ]);
 
-    let groups = discover_pull_requests(repository.path(), "http://127.0.0.1:9", None).unwrap();
+    let groups = discover_pull_requests(repository.path(), "http://127.0.0.1:9", None)
+        .await
+        .unwrap();
 
     assert_eq!(groups.len(), 2);
     assert!(groups

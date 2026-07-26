@@ -40,7 +40,9 @@ describe("本地分支比较", () => {
     await $("[aria-label='Repository 路径']").setValue(repositoryPath);
     await $("button=添加 Repository").click();
     await $("[aria-label='Repository Entries'] button").click();
-    await $("button=我了解风险并信任此 Repository Entry").click();
+    if (await $("button=我了解风险并信任此 Repository Entry").isExisting()) {
+      await $("button=我了解风险并信任此 Repository Entry").click();
+    }
     await $("button=读取分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");

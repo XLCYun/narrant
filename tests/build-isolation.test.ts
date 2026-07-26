@@ -42,4 +42,19 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(app).toMatch(/data-before=\{import\.meta\.env\.VITE_WDIO/);
     expect(app).toMatch(/data-after=\{import\.meta\.env\.VITE_WDIO/);
   });
+
+  it("生产依赖与模块不再包含旧 GitHub code-content 实现", () => {
+    const cargo = read("src-tauri/Cargo.toml");
+    const changeContent = read("src-tauri/src/change_content/mod.rs");
+    expect(cargo).not.toMatch(/reqwest\s*=.*blocking/);
+    expect(changeContent).not.toMatch(/pub\s+mod\s+github/);
+  });
+
+  it("前后端契约不再暴露 Review Session 或 source-tagged union", () => {
+    const backend = read("src-tauri/src/lib.rs");
+    const frontend = read("src/App.tsx");
+    expect(backend).not.toMatch(/ReviewSessionStore|sessionId|ReviewSourceResponse/);
+    expect(frontend).not.toMatch(/sessionId|close_review_session|open_github_pull_request/);
+    expect(frontend).not.toMatch(/source:\s*["'](?:local|github)["']/);
+  });
 });

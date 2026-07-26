@@ -44,29 +44,10 @@ type PullRequestMetadata = {
   headRef: string;
   synchronizedAt: number;
 };
-type LocalReviewSnapshot = ReviewSnapshotBase & {
-  source: "local";
+type ReviewSnapshot = ReviewSnapshotBase & {
   reviewId: string;
   pullRequest?: PullRequestMetadata;
 };
-type GitHubReviewSnapshot = ReviewSnapshotBase & {
-  source: "github";
-  pullRequest?: never;
-  sessionId: string;
-  owner: string;
-  repository: string;
-  title: string;
-  number: number;
-  author: string;
-  state: "open" | "closed" | "merged";
-  draft: boolean;
-  description: string;
-  changedFiles: number;
-  additions: number;
-  deletions: number;
-  githubUrl: string;
-};
-type ReviewSnapshot = LocalReviewSnapshot | GitHubReviewSnapshot;
 type BranchReviewUpdate = {
   changed: boolean;
   currentBaseRevision: string;
@@ -74,7 +55,7 @@ type BranchReviewUpdate = {
   latestBaseRevision: string;
   latestHeadRevision: string;
 };
-type ActiveReview = { source: "local"; reviewId: string } | { source: "github"; sessionId: string };
+type ActiveReview = { reviewId: string };
 type GitHubAuthStatus = {
   configured: boolean;
   signedIn: boolean;
@@ -196,7 +177,6 @@ export function App() {
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [pullRequestUrl, setPullRequestUrl] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
@@ -233,9 +213,7 @@ export function App() {
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
     const previousReview = activeReview.current;
-    const nextReview = nextSnapshot?.source === "local"
-      ? { source: "local" as const, reviewId: nextSnapshot.reviewId }
-      : nextSnapshot && { source: "github" as const, sessionId: nextSnapshot.sessionId };
+    const nextReview = nextSnapshot && { reviewId: nextSnapshot.reviewId };
     activeReview.current = nextReview;
     setSnapshot(nextSnapshot);
     setBranchUpdate(undefined);
@@ -244,13 +222,10 @@ export function App() {
     }
   }
 
-  /** 按来源使用唯一身份关闭当前运行时资源。 */
+  /** 使用 durable reviewId 关闭当前运行时资源。 */
   function closeActiveReview(review: ActiveReview) {
-    const command = review.source === "local" ? "close_review" : "close_review_session";
-    const arguments_ = review.source === "local"
-      ? { reviewId: review.reviewId }
-      : { sessionId: review.sessionId };
-    void Promise.resolve(invoke(command, arguments_)).catch(() => undefined);
+    void Promise.resolve(invoke("close_review", { reviewId: review.reviewId }))
+      .catch(() => undefined);
   }
 
   /** 关闭当前 Review 的运行时资源并保留持久化历史。 */
@@ -370,7 +345,7 @@ export function App() {
     setError("");
     setLoading(true);
     try {
-      const nextSnapshot = await invoke<LocalReviewSnapshot>("open_saved_review", {
+      const nextSnapshot = await invoke<ReviewSnapshot>("open_saved_review", {
         reviewId: review.reviewId,
       });
       replaceSnapshot(nextSnapshot);
@@ -444,27 +419,6 @@ export function App() {
     }
   }
 
-  async function openPullRequest(discoveredUrl?: string) {
-    const url = discoveredUrl ?? pullRequestUrl;
-    setError("");
-    setLoading(true);
-    try {
-      const nextSnapshot = await invoke<ReviewSnapshot>("open_github_pull_request", {
-        repositoryEntryId: selectedRepository?.id,
-        url,
-      });
-      setPullRequestUrl(url);
-      replaceSnapshot(nextSnapshot);
-      setFileChange(undefined);
-    } catch (reason) {
-      replaceSnapshot(undefined);
-      setFileChange(undefined);
-      setError(String(reason));
-    } finally {
-      setLoading(false);
-    }
-  }
-
   /** 将 discovery metadata 作为 Selection，并让代码内容完全走本地 Core Git。 */
   async function openDiscoveredPullRequest(
     repository: PullRequestGroup["repository"],
@@ -474,12 +428,11 @@ export function App() {
     setError("");
     setLoading(true);
     try {
-      const nextSnapshot = await invoke<LocalReviewSnapshot>("open_pull_request_review", {
+      const nextSnapshot = await invoke<ReviewSnapshot>("open_pull_request_review", {
         repositoryEntryId: selectedRepository.id,
         repository,
         pullRequest,
       });
-      setPullRequestUrl(pullRequest.url);
       setSelectedPullRequest({ repository, pullRequest });
       setReviewUpdate(undefined);
       replaceSnapshot(nextSnapshot);
@@ -495,7 +448,7 @@ export function App() {
 
   /** 重新查询 GitHub metadata 并检查候选 revisions，不改变当前 Snapshot。 */
   async function checkPullRequestUpdate() {
-    if (!selectedRepository || !selectedPullRequest || snapshot?.source !== "local") return;
+    if (!selectedRepository || !selectedPullRequest || !snapshot) return;
     setError("");
     setLoading(true);
     try {
@@ -527,11 +480,11 @@ export function App() {
 
   /** 仅在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
   async function refreshPullRequestReview() {
-    if (!selectedPullRequest || snapshot?.source !== "local") return;
+    if (!selectedPullRequest || !snapshot) return;
     setError("");
     setLoading(true);
     try {
-      replaceSnapshot(await invoke<LocalReviewSnapshot>("refresh_pull_request_review", {
+      replaceSnapshot(await invoke<ReviewSnapshot>("refresh_pull_request_review", {
         reviewId: snapshot.reviewId,
         repository: selectedPullRequest.repository,
         pullRequest: selectedPullRequest.pullRequest,
@@ -607,10 +560,6 @@ export function App() {
     setError("");
     try {
       await invoke("sign_out_github");
-      if (snapshot?.source === "github") {
-        replaceSnapshot(undefined);
-        setFileChange(undefined);
-      }
       setAuthStatus((status) => status ? { ...status, signedIn: false } : status);
       setDeviceAuthorization(undefined);
       if (selectedRepository) await loadPullRequestGroups(selectedRepository);
@@ -647,7 +596,7 @@ export function App() {
         headRef,
       });
       replaceSnapshot(nextSnapshot);
-      if (selectedRepository && nextSnapshot.source === "local") {
+      if (selectedRepository) {
         const summary: ReviewSummary = {
           reviewId: nextSnapshot.reviewId,
           repositoryEntryId: selectedRepository.id,
@@ -675,15 +624,10 @@ export function App() {
     if (!snapshot) return;
     setError("");
     try {
-      setFileChange(snapshot.source === "local"
-        ? await invokeLocalGit<FileChangeContent>("read_review_file_change", {
-          reviewId: snapshot.reviewId,
-          path,
-        })
-        : await invoke<FileChangeContent>("read_file_change", {
-          sessionId: snapshot.sessionId,
-          path,
-        }));
+      setFileChange(await invokeLocalGit<FileChangeContent>("read_review_file_change", {
+        reviewId: snapshot.reviewId,
+        path,
+      }));
     } catch (reason) {
       setFileChange(undefined);
       setError(String(reason));
@@ -692,7 +636,7 @@ export function App() {
 
   /** 只检查 Branch Selection 的 moving refs，不改变正在展示的 Snapshot。 */
   async function checkBranchReviewUpdates() {
-    if (snapshot?.source !== "local") return;
+    if (!snapshot) return;
     setError("");
     try {
       setBranchUpdate(await invokeLocalGit<BranchReviewUpdate>("check_branch_review_updates", {
@@ -706,10 +650,10 @@ export function App() {
 
   /** 在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
   async function refreshBranchReview() {
-    if (snapshot?.source !== "local") return;
+    if (!snapshot) return;
     setError("");
     try {
-      replaceSnapshot(await invokeLocalGit<LocalReviewSnapshot>("refresh_branch_review", {
+      replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
         reviewId: snapshot.reviewId,
         confirmation: branchUpdate,
       }));
@@ -837,16 +781,12 @@ export function App() {
     </article>}
     {(!catalogRuntimeEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
-      {!catalogRuntimeEnabled && <>
-        <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
-        <Button disabled={!pullRequestUrl || loading} onClick={() => void openPullRequest()}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
-      </>}
       {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
       {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
     </section>
     {authStatus && !authStatus.signedIn && <section aria-label="GitHub 授权">
       {!authStatus.configured
-        ? <p>此构建未配置 GitHub App，仍可匿名打开公开 Pull Request。</p>
+        ? <p>此构建未配置 GitHub App；公开 Repository 的 Pull Request 仍可匿名发现。</p>
         : <>
           <p>第 1 步：在 GitHub 中安装 Narrant，并为目标仓库授予只读访问；组织仓库可能需要管理员审批。</p>
           {authStatus.appInstallUrl && <Button variant="outline" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
@@ -879,11 +819,11 @@ export function App() {
     </section>
     {error && <ErrorMessage message={error} />}
     {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}
-    {(snapshot?.source === "github" || snapshot?.pullRequest) && <article aria-label="Pull Request 概览">
-      <h2>{snapshot.source === "github" ? snapshot.title : snapshot.pullRequest!.title}</h2>
-      <p>#{snapshot.source === "github" ? snapshot.number : snapshot.pullRequest!.number} · {snapshot.source === "github" ? snapshot.author : snapshot.pullRequest!.author} · {(snapshot.source === "github" ? snapshot.draft : snapshot.pullRequest!.draft) ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[(snapshot.source === "github" ? snapshot.state : snapshot.pullRequest!.state) ?? "open"]}</p>
+    {snapshot?.pullRequest && <article aria-label="Pull Request 概览">
+      <h2>{snapshot.pullRequest.title}</h2>
+      <p>#{snapshot.pullRequest.number} · {snapshot.pullRequest.author} · {snapshot.pullRequest.draft ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[snapshot.pullRequest.state ?? "open"]}</p>
       <p>{snapshot.baseRef} @ {snapshot.baseRevision} → {snapshot.headRef} @ {snapshot.headRevision}</p>
-      {snapshot.source === "local" && snapshot.pullRequest && <div>
+      <div>
         <Button variant="outline" disabled={loading} onClick={() => void checkPullRequestUpdate()}>
           检查 Pull Request 更新
         </Button>
@@ -893,8 +833,7 @@ export function App() {
             <Button disabled={loading} onClick={() => void refreshPullRequestReview()}>刷新 Review</Button>
           </div>
           : <p role="status">当前已是最新 Snapshot</p>)}
-      </div>}
-      {snapshot.source === "github" && <p>{snapshot.changedFiles} 个文件 · +{snapshot.additions} · −{snapshot.deletions}</p>}
+      </div>
       <div aria-label="Pull Request 描述">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -906,10 +845,10 @@ export function App() {
               if (href?.startsWith("https://") || href?.startsWith("http://")) void openUrl(href);
             }}>{children}</a>,
           }}
-        >{snapshot.source === "github" ? snapshot.description : snapshot.pullRequest!.description}</ReactMarkdown>
+        >{snapshot.pullRequest.description}</ReactMarkdown>
       </div>
     </article>}
-    {snapshot?.source === "local" && <section aria-label="Branch Review 更新">
+    {snapshot && !snapshot.pullRequest && <section aria-label="Branch Review 更新">
       <Button variant="outline" onClick={checkBranchReviewUpdates}>检查更新</Button>
       {branchUpdate && !branchUpdate.changed && <p role="status">当前已是最新版本</p>}
       {branchUpdate?.changed && <div role="status">
