@@ -187,6 +187,119 @@ fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
 }
 
 #[test]
+fn refresh_candidate_stays_non_current_until_explicit_activation() {
+    let application_data = tempfile::TempDir::new().unwrap();
+    let database_path = application_data.path().join("catalog.sqlite3");
+    let repository = create_repository();
+    let catalog = RepositoryCatalog::open(&database_path).unwrap();
+    let entry = catalog.register(repository.path()).unwrap();
+    catalog.grant_workspace_trust(entry.id).unwrap();
+    for arguments in [
+        ["branch", "base"],
+        ["branch", "topic"],
+        ["checkout", "topic"],
+    ] {
+        assert!(Command::new("git")
+            .args(arguments)
+            .current_dir(repository.path())
+            .status()
+            .unwrap()
+            .success());
+    }
+    let base_ref = "refs/heads/base";
+    let head_ref = "refs/heads/topic";
+    let initial = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        base_ref,
+        head_ref,
+    )
+    .unwrap();
+    let saved = catalog
+        .save_branch_review(entry.id, initial.snapshot())
+        .unwrap();
+    catalog.activate_snapshot(&saved).unwrap();
+    let old_head = saved.head_revision.clone();
+    let workspace = catalog.review_workspace_path(&saved.review_id).unwrap();
+    GitProcessAdapter::new(repository.path())
+        .create_detached_worktree(&workspace, &old_head, &CancellationToken::default())
+        .unwrap();
+
+    std::fs::write(repository.path().join("README.md"), "refreshed").unwrap();
+    assert!(Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args(["commit", "-q", "-m", "refresh"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap()
+        .success());
+    let latest = crate::change_content::local::LocalOpenedReview::open(
+        repository.path(),
+        base_ref,
+        head_ref,
+    )
+    .unwrap();
+
+    let candidate = catalog
+        .save_refresh_snapshot(&saved.review_id, latest.snapshot())
+        .unwrap();
+    assert_eq!(
+        catalog.open_review(&saved.review_id).unwrap().head_revision,
+        old_head
+    );
+    let checked_workspace_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(checked_workspace_head.stdout)
+            .unwrap()
+            .trim(),
+        old_head
+    );
+
+    GitProcessAdapter::new(repository.path())
+        .transition_detached_worktree(
+            &workspace,
+            &entry.common_directory,
+            &old_head,
+            &candidate.head_revision,
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    catalog
+        .activate_refresh_snapshot(&candidate, &saved)
+        .unwrap();
+    let refreshed = catalog.open_review(&saved.review_id).unwrap();
+    assert_eq!(refreshed.head_revision, latest.snapshot().head_revision);
+    assert_ne!(refreshed.head_revision, old_head);
+    assert_eq!(refreshed.file_changes.len(), 1);
+    assert_eq!(refreshed.file_changes[0].path, "README.md");
+    let workspace_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+    assert!(workspace_head.status.success());
+    assert_eq!(
+        String::from_utf8(workspace_head.stdout).unwrap().trim(),
+        refreshed.head_revision
+    );
+    let internal_refs = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname)", "refs/narrant"])
+        .current_dir(repository.path())
+        .output()
+        .unwrap();
+    assert!(internal_refs.status.success());
+    assert!(internal_refs.stdout.is_empty());
+}
+
+#[test]
 fn lists_repository_reviews_and_recent_reviews_by_last_opened_time() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let first_repository = create_repository();

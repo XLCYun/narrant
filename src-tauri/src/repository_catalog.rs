@@ -419,6 +419,86 @@ impl RepositoryCatalog {
         Ok(())
     }
 
+    /// 保存明确刷新产生的新 immutable Snapshot，但暂不改变 current 指针。
+    pub fn save_refresh_snapshot(
+        &self,
+        review_id: &str,
+        snapshot: &LocalSnapshot,
+    ) -> Result<SavedBranchReview, RepositoryCatalogError> {
+        let row_id = parse_review_id(review_id)?;
+        let current = self.open_review(review_id)?;
+        if current.base_ref != snapshot.base_ref || current.head_ref != snapshot.head_ref {
+            return Err(RepositoryCatalogError::new(
+                "刷新结果与 Review Selection 不一致。",
+            ));
+        }
+        let now = unix_timestamp_millis()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        transaction
+            .execute(
+                "INSERT INTO review_snapshots (
+                    review_id, base_revision, comparison_base, head_revision, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    row_id,
+                    snapshot.base_revision,
+                    snapshot.comparison_base,
+                    snapshot.head_revision,
+                    now
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        let snapshot_id = transaction.last_insert_rowid();
+        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        transaction.commit().map_err(database_recovery_error)?;
+        Ok(SavedBranchReview {
+            review_id: review_id.to_owned(),
+            repository_entry_id: current.repository_entry_id,
+            base_ref: snapshot.base_ref.clone(),
+            head_ref: snapshot.head_ref.clone(),
+            base_revision: snapshot.base_revision.clone(),
+            comparison_base: snapshot.comparison_base.clone(),
+            head_revision: snapshot.head_revision.clone(),
+            file_changes: snapshot.file_changes.clone(),
+            created: true,
+            snapshot_id,
+        })
+    }
+
+    /// 仅在 current 仍是用户确认的旧版本时原子推进刷新 Snapshot。
+    pub fn activate_refresh_snapshot(
+        &self,
+        review: &SavedBranchReview,
+        expected_current: &SavedBranchReview,
+    ) -> Result<(), RepositoryCatalogError> {
+        let row_id = parse_review_id(&review.review_id)?;
+        if expected_current.review_id != review.review_id {
+            return Err(RepositoryCatalogError::new(
+                "刷新前后的 Review identity 不一致。",
+            ));
+        }
+        let connection = self.connection()?;
+        let changed = connection
+            .execute(
+                "UPDATE reviews SET current_snapshot_id = ?1, last_opened_at = ?2
+                 WHERE id = ?3 AND current_snapshot_id = ?4",
+                params![
+                    review.snapshot_id,
+                    unix_timestamp_millis()?,
+                    row_id,
+                    expected_current.snapshot_id
+                ],
+            )
+            .map_err(database_recovery_error)?;
+        if changed != 1 {
+            return Err(RepositoryCatalogError::new(
+                "Review current Snapshot 已改变；请重新检查更新。",
+            ));
+        }
+        Ok(())
+    }
+
     /// 按 durable reviewId 读取 current Snapshot 及稳定 File Change metadata。
     pub fn open_review(
         &self,
@@ -661,6 +741,35 @@ fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
              PRAGMA user_version = 2;",
         )?;
         transaction.commit()?;
+    }
+    Ok(())
+}
+
+/// 将一个 Snapshot 的稳定 File Change metadata 写入指定事务。
+fn insert_file_changes(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot_id: i64,
+    file_changes: &[LocalFileChange],
+) -> Result<(), RepositoryCatalogError> {
+    for change in file_changes {
+        transaction
+            .execute(
+                "INSERT INTO file_changes (
+                    snapshot_id, path, old_path, status, before_mode, after_mode,
+                    before_object_id, after_object_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    snapshot_id,
+                    change.path,
+                    change.old_path,
+                    status_text(change.status),
+                    change.before_mode,
+                    change.after_mode,
+                    change.before_object_id,
+                    change.after_object_id
+                ],
+            )
+            .map_err(database_recovery_error)?;
     }
     Ok(())
 }

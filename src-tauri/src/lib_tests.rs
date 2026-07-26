@@ -2,6 +2,19 @@ use super::*;
 use std::process::Command;
 
 #[test]
+fn same_review_cannot_begin_two_refreshes_concurrently() {
+    let store = ReviewSessionStore::default();
+
+    store.begin_refresh("review-1").unwrap();
+    let error = store.begin_refresh("review-1").unwrap_err();
+    store.begin_refresh("review-2").unwrap();
+
+    assert!(error.contains("正在刷新"));
+    store.finish_refresh("review-1");
+    store.begin_refresh("review-1").unwrap();
+}
+
+#[test]
 fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive() {
     let fixture = tempfile::TempDir::new().unwrap();
     let repository = git2::Repository::init(fixture.path()).unwrap();
