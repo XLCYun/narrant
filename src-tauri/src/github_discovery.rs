@@ -133,15 +133,32 @@ fn github_repositories(
 
 /// 将 GitHub HTTPS、scp-like SSH 与 ssh:// remote 规范化为 repository identity。
 fn normalize_github_remote(url: &str) -> Option<GitHubRepository> {
-    let path = if let Some(path) = url
-        .strip_prefix("https://github.com/")
-        .or_else(|| url.strip_prefix("http://github.com/"))
-    {
+    let path = if let Some((scheme, remainder)) = url.split_once("://") {
+        if !matches!(
+            scheme.to_ascii_lowercase().as_str(),
+            "http" | "https" | "ssh"
+        ) {
+            return None;
+        }
+        let (authority, path) = remainder.split_once('/')?;
+        let host_with_port = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        let host = host_with_port.split(':').next()?;
+        if !host.eq_ignore_ascii_case("github.com") {
+            return None;
+        }
         path
-    } else if let Some(path) = url.strip_prefix("git@github.com:") {
+    } else if let Some((authority, path)) = url.split_once(':') {
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        if !host.eq_ignore_ascii_case("github.com") {
+            return None;
+        }
         path
     } else {
-        url.strip_prefix("ssh://git@github.com/")?
+        return None;
     };
     let path = path.trim_end_matches('/').trim_end_matches(".git");
     let mut parts = path.split('/');
