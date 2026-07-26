@@ -116,6 +116,24 @@ export function App() {
   const [authorizing, setAuthorizing] = useState(false);
   const [copiedValue, setCopiedValue] = useState<"device-code" | "authorization-url">();
   const activeSessionId = useRef<string>();
+  const activeGitOperationId = useRef<string>();
+  const nextGitOperationId = useRef(0);
+
+  /** 执行可取消的本地 Core Git 命令，并在新操作开始时取消旧操作。 */
+  async function invokeLocalGit<T>(command: string, arguments_: Record<string, unknown>) {
+    const previousOperationId = activeGitOperationId.current;
+    if (previousOperationId) {
+      void Promise.resolve(invoke("cancel_git_operation", { operationId: previousOperationId }))
+        .catch(() => undefined);
+    }
+    const operationId = `local-git-${nextGitOperationId.current++}`;
+    activeGitOperationId.current = operationId;
+    try {
+      return await invoke<T>(command, { ...arguments_, operationId });
+    } finally {
+      if (activeGitOperationId.current === operationId) activeGitOperationId.current = undefined;
+    }
+  }
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
     const previousSessionId = activeSessionId.current;
@@ -128,6 +146,11 @@ export function App() {
   }
 
   useEffect(() => () => {
+    if (activeGitOperationId.current) {
+      void Promise.resolve(invoke("cancel_git_operation", { operationId: activeGitOperationId.current }))
+        .catch(() => undefined);
+      activeGitOperationId.current = undefined;
+    }
     if (activeSessionId.current) {
       void Promise.resolve(invoke("close_review_session", { sessionId: activeSessionId.current }))
         .catch(() => undefined);
@@ -226,7 +249,7 @@ export function App() {
   async function loadRefs() {
     setError("");
     try {
-      const loadedRefs = await invoke<string[]>("list_local_refs", { repositoryPath });
+      const loadedRefs = await invokeLocalGit<string[]>("list_local_refs", { repositoryPath });
       setRefs(loadedRefs);
       replaceSnapshot(undefined);
       setFileChange(undefined);
@@ -243,7 +266,7 @@ export function App() {
   async function openComparison() {
     setError("");
     try {
-      replaceSnapshot(await invoke<ReviewSnapshot>("compare_local_refs", { repositoryPath, baseRef, headRef }));
+      replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("compare_local_refs", { repositoryPath, baseRef, headRef }));
       setFileChange(undefined);
     }
     catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
@@ -253,7 +276,10 @@ export function App() {
     if (!snapshot) return;
     setError("");
     try {
-      setFileChange(await invoke<FileChangeContent>("read_file_change", { sessionId: snapshot.sessionId, path }));
+      const arguments_ = { sessionId: snapshot.sessionId, path };
+      setFileChange(snapshot.source === "local"
+        ? await invokeLocalGit<FileChangeContent>("read_file_change", arguments_)
+        : await invoke<FileChangeContent>("read_file_change", arguments_));
     } catch (reason) {
       setFileChange(undefined);
       setError(String(reason));

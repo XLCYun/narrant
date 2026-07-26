@@ -20,7 +20,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 base64 = "0.22"
 async-trait = "0.1"
-git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 http = "1"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
@@ -35,5 +34,6 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 
 [dev-dependencies]
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 httpmock = "0.7"
 tempfile = "3"

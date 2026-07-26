@@ -1,6 +1,7 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
 use narrant_lib::change_content::local::{list_refs, LocalOpenedReview};
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
+use std::process::Command;
 use tempfile::TempDir;
 
 fn commit_file(repository: &Repository, path: &str, contents: &str, message: &str) -> git2::Oid {
@@ -63,7 +64,7 @@ fn commit_tree_entry(
 }
 
 fn open_comparison(repository_path: &std::path::Path) -> LocalOpenedReview {
-    LocalOpenedReview::open(repository_path, "base", "head").unwrap()
+    LocalOpenedReview::open(repository_path, "refs/heads/base", "refs/heads/head").unwrap()
 }
 
 #[test]
@@ -92,15 +93,18 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     let expected_head = commit_file(&repository, "welcome.txt", "你好，新内容\n", "head");
 
     let refs = list_refs(fixture.path()).expect("list refs");
-    assert_eq!(refs, vec!["base", "head", "master"]);
+    assert_eq!(
+        refs,
+        vec!["refs/heads/base", "refs/heads/head", "refs/heads/master"]
+    );
 
     let content = open_comparison(fixture.path());
     let snapshot = content.snapshot();
 
-    assert_eq!(snapshot.base_ref, "base");
-    assert_eq!(snapshot.head_ref, "head");
+    assert_eq!(snapshot.base_ref, "refs/heads/base");
+    assert_eq!(snapshot.head_ref, "refs/heads/head");
     assert_eq!(snapshot.comparison_base, snapshot.base_revision);
-    assert_eq!(snapshot.head_revision, expected_head);
+    assert_eq!(snapshot.head_revision, expected_head.to_string());
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "welcome.txt");
     assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Modified);
@@ -128,10 +132,25 @@ fn lists_local_and_existing_remote_tracking_refs() {
     repository
         .reference("refs/remotes/origin/main", commit.id(), true, "fixture")
         .unwrap();
+    repository
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
 
     let refs = list_refs(fixture.path()).expect("list refs");
 
-    assert_eq!(refs, vec!["master", "origin/main", "topic"]);
+    assert_eq!(
+        refs,
+        vec![
+            "refs/heads/master",
+            "refs/heads/topic",
+            "refs/remotes/origin/main"
+        ]
+    );
 }
 
 #[test]
@@ -155,8 +174,8 @@ fn compares_from_merge_base_when_base_and_head_have_diverged() {
     let content = open_comparison(fixture.path());
     let snapshot = content.snapshot();
 
-    assert_eq!(snapshot.base_revision, base_tip);
-    assert_eq!(snapshot.comparison_base, common);
+    assert_eq!(snapshot.base_revision, base_tip.to_string());
+    assert_eq!(snapshot.comparison_base, common.to_string());
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "head-only.txt");
     assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Added);
@@ -294,11 +313,17 @@ fn opens_an_empty_comparison_and_rejects_unknown_paths() {
 #[test]
 fn rejects_missing_repositories_and_unknown_refs() {
     let fixture = TempDir::new().unwrap();
-    assert!(LocalOpenedReview::open(fixture.path(), "base", "head").is_err());
+    assert!(LocalOpenedReview::open(fixture.path(), "refs/heads/base", "refs/heads/head").is_err());
 
     let repository = Repository::init(fixture.path()).unwrap();
     commit_file(&repository, "README.md", "same\n", "initial");
-    assert!(LocalOpenedReview::open(fixture.path(), "missing", "HEAD").is_err());
+    assert!(
+        LocalOpenedReview::open(fixture.path(), "refs/heads/missing", "refs/heads/master").is_err()
+    );
+    assert!(
+        LocalOpenedReview::open(fixture.path(), "refs/heads/master~1", "refs/heads/master")
+            .is_err()
+    );
 }
 
 #[test]
@@ -478,4 +503,113 @@ fn ignores_staged_unstaged_and_untracked_worktree_content() {
 
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(content.after.as_deref(), Some("committed head\n"));
+}
+
+#[test]
+fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
+    let fixture = TempDir::new().expect("fixture directory");
+    let repository = Repository::init(fixture.path()).expect("initialize fixture repo");
+    commit_file(&repository, "seed.txt", "seed\n", "base");
+    let base = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("base", &base, true).unwrap();
+
+    for path in ["space name.txt", "line\nbreak.txt", "你好.txt"] {
+        commit_file(&repository, path, "special\n", "special path");
+    }
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("head", &head, true).unwrap();
+
+    let review = open_comparison(fixture.path());
+    let mut paths = review
+        .snapshot()
+        .file_changes
+        .iter()
+        .map(|change| change.path.as_str())
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    assert_eq!(paths, vec!["line\nbreak.txt", "space name.txt", "你好.txt"]);
+    assert_eq!(
+        review
+            .read_file_change("line\nbreak.txt")
+            .unwrap()
+            .after
+            .as_deref(),
+        Some("special\n")
+    );
+}
+
+#[test]
+fn distinguishes_executable_mode_changes_in_snapshot_metadata() {
+    let fixture = TempDir::new().expect("fixture directory");
+    let repository = Repository::init(fixture.path()).expect("initialize fixture repo");
+    let blob = repository.blob(b"#!/bin/sh\n").unwrap();
+    commit_file(&repository, "seed.txt", "seed\n", "seed");
+    commit_tree_entry(&repository, "script.sh", blob, 0o100644, "non executable");
+    let base = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("base", &base, true).unwrap();
+    commit_tree_entry(&repository, "script.sh", blob, 0o100755, "executable");
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("head", &head, true).unwrap();
+
+    let review = open_comparison(fixture.path());
+    let change = &review.snapshot().file_changes[0];
+
+    assert_eq!(change.status, ChangeStatus::Modified);
+    assert_eq!(change.before_mode, Some(0o100644));
+    assert_eq!(change.after_mode, Some(0o100755));
+    assert_eq!(change.before_object_id, change.after_object_id);
+}
+
+#[test]
+fn recovers_after_a_failed_revision_resolution() {
+    let fixture = TempDir::new().expect("fixture directory");
+    let repository = Repository::init(fixture.path()).expect("initialize fixture repo");
+    commit_file(&repository, "README.md", "same\n", "initial");
+    let commit = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("base", &commit, true).unwrap();
+    repository.branch("head", &commit, true).unwrap();
+
+    assert!(
+        LocalOpenedReview::open(fixture.path(), "refs/heads/missing", "refs/heads/head").is_err()
+    );
+    let recovered = open_comparison(fixture.path());
+
+    assert!(recovered.snapshot().file_changes.is_empty());
+}
+
+#[test]
+fn compares_canonical_refs_in_a_real_shallow_clone() {
+    let source_fixture = TempDir::new().expect("source directory");
+    let source = Repository::init(source_fixture.path()).expect("initialize source");
+    commit_file(&source, "README.md", "base\n", "base");
+    let base = source.head().unwrap().peel_to_commit().unwrap();
+    source.branch("base", &base, true).unwrap();
+    commit_file(&source, "README.md", "head\n", "head");
+    let head = source.head().unwrap().peel_to_commit().unwrap();
+    source.branch("head", &head, true).unwrap();
+
+    let clone_fixture = TempDir::new().expect("clone parent");
+    let clone_path = clone_fixture.path().join("shallow");
+    let source_url = format!("file://{}", source_fixture.path().display());
+    let status = Command::new("git")
+        .args(["clone", "--quiet", "--depth=1", "--branch=head"])
+        .arg(source_url)
+        .arg(&clone_path)
+        .status()
+        .expect("run shallow clone");
+    assert!(status.success());
+
+    let refs = list_refs(&clone_path).expect("list shallow refs");
+    assert!(refs.contains(&"refs/heads/head".to_owned()));
+    assert!(refs.contains(&"refs/remotes/origin/head".to_owned()));
+    let review =
+        LocalOpenedReview::open(&clone_path, "refs/heads/head", "refs/remotes/origin/head")
+            .expect("compare shallow refs");
+
+    assert_eq!(
+        review.snapshot().base_revision,
+        review.snapshot().head_revision
+    );
+    assert!(review.snapshot().file_changes.is_empty());
 }
