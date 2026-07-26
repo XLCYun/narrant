@@ -30,12 +30,28 @@ type ReviewSnapshotBase = {
   headRevision: string;
   fileChanges: FileChangeSummary[];
 };
+type PullRequestMetadata = {
+  owner: string;
+  repository: string;
+  number: number;
+  title: string;
+  description: string;
+  author: string;
+  state: "open" | "closed" | "merged";
+  draft: boolean;
+  url: string;
+  baseRef: string;
+  headRef: string;
+  synchronizedAt: number;
+};
 type LocalReviewSnapshot = ReviewSnapshotBase & {
   source: "local";
   reviewId: string;
+  pullRequest?: PullRequestMetadata;
 };
 type GitHubReviewSnapshot = ReviewSnapshotBase & {
   source: "github";
+  pullRequest?: never;
   sessionId: string;
   owner: string;
   repository: string;
@@ -107,6 +123,26 @@ type PullRequestGroup = {
   pullRequests: DiscoveredPullRequest[];
   error: string | null;
 };
+/// 当前由 discovery 选中的 Pull Request identity 与 metadata。
+type SelectedPullRequest = {
+  repository: PullRequestGroup["repository"];
+  pullRequest: DiscoveredPullRequest;
+};
+/// “检查更新”返回的 current 与 available revision 对照。
+type ReviewUpdate = {
+  updateAvailable: boolean;
+  currentBaseRevision: string;
+  currentHeadRevision: string;
+  availableBaseRevision: string;
+  availableHeadRevision: string;
+};
+/// Repository Entry 下无需 GitHub 在线状态即可展示的 durable Review。
+type SavedReviewSummary = {
+  reviewId: string;
+  baseRevision: string;
+  headRevision: string;
+  pullRequest?: PullRequestMetadata;
+};
 
 type DirectoryNode = {
   name: string;
@@ -158,12 +194,15 @@ export function App() {
   const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
+  const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [pullRequestUrl, setPullRequestUrl] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
+  const [selectedPullRequest, setSelectedPullRequest] = useState<SelectedPullRequest>();
+  const [reviewUpdate, setReviewUpdate] = useState<ReviewUpdate>();
   const [branchUpdate, setBranchUpdate] = useState<BranchReviewUpdate>();
   const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [error, setError] = useState("");
@@ -288,6 +327,14 @@ export function App() {
     }
   }
 
+  /** 从持久化 Catalog 重新加载 Repository Entry 的 Review 历史。 */
+  async function loadSavedReviews(repositoryEntryId: number) {
+    const reviews = await invoke<SavedReviewSummary[]>("list_saved_reviews", {
+      repositoryEntryId,
+    });
+    setSavedReviews(reviews ?? []);
+  }
+
   /** 进入一个可用 Repository Entry，并将后续 Core Git 操作限定到其保存路径。 */
   async function openRepository(entry: RepositoryEntry) {
     setError("");
@@ -298,12 +345,14 @@ export function App() {
       )));
       if (!opened.available) return;
       setSelectedRepository(opened);
-      setWorkspaceTrusted(await invoke<boolean>("repository_workspace_trust", {
-        repositoryEntryId: opened.id,
-      }));
-      setRepositoryReviews(await invoke<ReviewSummary[]>("list_reviews", {
-        repositoryEntryId: opened.id,
-      }));
+      const [trusted, saved, reviews] = await Promise.all([
+        invoke<boolean>("repository_workspace_trust", { repositoryEntryId: opened.id }),
+        invoke<SavedReviewSummary[]>("list_saved_reviews", { repositoryEntryId: opened.id }),
+        invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
+      ]);
+      setWorkspaceTrusted(trusted);
+      setSavedReviews(saved ?? []);
+      setRepositoryReviews(reviews ?? []);
       setRepositoryPath(opened.canonicalPath);
       void loadPullRequestGroups(opened);
       setRefs([]);
@@ -313,6 +362,41 @@ export function App() {
       setFileChange(undefined);
     } catch (reason) {
       setError(String(reason));
+    }
+  }
+
+  /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
+  async function openSavedReview(review: SavedReviewSummary) {
+    setError("");
+    setLoading(true);
+    try {
+      const nextSnapshot = await invoke<LocalReviewSnapshot>("open_saved_review", {
+        reviewId: review.reviewId,
+      });
+      replaceSnapshot(nextSnapshot);
+      setSelectedPullRequest(nextSnapshot.pullRequest && {
+        repository: {
+          owner: nextSnapshot.pullRequest.owner,
+          name: nextSnapshot.pullRequest.repository,
+        },
+        pullRequest: {
+          number: nextSnapshot.pullRequest.number,
+          title: nextSnapshot.pullRequest.title,
+          description: nextSnapshot.pullRequest.description,
+          author: nextSnapshot.pullRequest.author,
+          state: nextSnapshot.pullRequest.state,
+          draft: nextSnapshot.pullRequest.draft,
+          url: nextSnapshot.pullRequest.url,
+          base: { ref: nextSnapshot.pullRequest.baseRef, sha: nextSnapshot.baseRevision },
+          head: { ref: nextSnapshot.pullRequest.headRef, sha: nextSnapshot.headRevision },
+        },
+      });
+      setReviewUpdate(undefined);
+      setFileChange(undefined);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -375,6 +459,86 @@ export function App() {
     } catch (reason) {
       replaceSnapshot(undefined);
       setFileChange(undefined);
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** 将 discovery metadata 作为 Selection，并让代码内容完全走本地 Core Git。 */
+  async function openDiscoveredPullRequest(
+    repository: PullRequestGroup["repository"],
+    pullRequest: DiscoveredPullRequest,
+  ) {
+    if (!selectedRepository) return;
+    setError("");
+    setLoading(true);
+    try {
+      const nextSnapshot = await invoke<LocalReviewSnapshot>("open_pull_request_review", {
+        repositoryEntryId: selectedRepository.id,
+        repository,
+        pullRequest,
+      });
+      setPullRequestUrl(pullRequest.url);
+      setSelectedPullRequest({ repository, pullRequest });
+      setReviewUpdate(undefined);
+      replaceSnapshot(nextSnapshot);
+      setFileChange(undefined);
+      await loadSavedReviews(selectedRepository.id);
+    } catch (reason) {
+      setFileChange(undefined);
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** 重新查询 GitHub metadata 并检查候选 revisions，不改变当前 Snapshot。 */
+  async function checkPullRequestUpdate() {
+    if (!selectedRepository || !selectedPullRequest || snapshot?.source !== "local") return;
+    setError("");
+    setLoading(true);
+    try {
+      const groups = await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
+        repositoryEntryId: selectedRepository.id,
+      });
+      setPullRequestGroups(groups);
+      const identity = `${selectedPullRequest.repository.owner}/${selectedPullRequest.repository.name}`;
+      const group = groups.find((candidate) => (
+        `${candidate.repository.owner}/${candidate.repository.name}` === identity
+      ));
+      if (group?.error) throw new Error(`GitHub metadata：${group.error}`);
+      const current = group?.pullRequests.find(
+        (candidate) => candidate.number === selectedPullRequest.pullRequest.number,
+      );
+      if (!current) throw new Error("GitHub metadata：当前无法找到这个 Pull Request。");
+      setSelectedPullRequest({ repository: group!.repository, pullRequest: current });
+      setReviewUpdate(await invoke<ReviewUpdate>("check_pull_request_review_update", {
+        reviewId: snapshot.reviewId,
+        repository: group!.repository,
+        pullRequest: current,
+      }));
+    } catch (reason) {
+      setError(String(reason).replace(/^Error: /, ""));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** 仅在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
+  async function refreshPullRequestReview() {
+    if (!selectedPullRequest || snapshot?.source !== "local") return;
+    setError("");
+    setLoading(true);
+    try {
+      replaceSnapshot(await invoke<LocalReviewSnapshot>("refresh_pull_request_review", {
+        reviewId: snapshot.reviewId,
+        repository: selectedPullRequest.repository,
+        pullRequest: selectedPullRequest.pullRequest,
+      }));
+      setReviewUpdate(undefined);
+      setFileChange(undefined);
+    } catch (reason) {
       setError(String(reason));
     } finally {
       setLoading(false);
@@ -502,6 +666,7 @@ export function App() {
         ]);
       }
       setFileChange(undefined);
+      if (selectedRepository) await loadSavedReviews(selectedRepository.id);
     }
     catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
   }
@@ -641,7 +806,7 @@ export function App() {
                 <Button
                   variant="outline"
                   disabled={loading}
-                  onClick={() => void openPullRequest(pullRequest.url)}
+                  onClick={() => void openDiscoveredPullRequest(group.repository, pullRequest)}
                 >
                   #{pullRequest.number} {pullRequest.title}
                   {pullRequest.draft ? "（草稿）" : ""}
@@ -652,6 +817,18 @@ export function App() {
           </article>;
         })}
       </section>
+      <section aria-label="保存的 Reviews">
+        <h3>保存的 Reviews</h3>
+        {savedReviews.length === 0
+          ? <p>尚无保存的 Review</p>
+          : <ul>{savedReviews.map((review) => <li key={review.reviewId}>
+            <Button variant="outline" disabled={loading} onClick={() => void openSavedReview(review)}>
+              {review.pullRequest
+                ? `#${review.pullRequest.number} ${review.pullRequest.title}`
+                : `${review.baseRevision.slice(0, 8)} → ${review.headRevision.slice(0, 8)}`}
+            </Button>
+          </li>)}</ul>}
+      </section>
       {!workspaceTrusted && <section aria-label="Workspace Trust 风险说明">
         <h3>授予 Workspace Trust</h3>
         <p>创建 Review 会执行普通 Git checkout；仓库配置可能触发 hooks、filters、Git LFS，未来 review tools 也可能读取仓库控制的配置。</p>
@@ -660,8 +837,10 @@ export function App() {
     </article>}
     {(!catalogRuntimeEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
-      <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
-      <Button disabled={!pullRequestUrl || loading} onClick={() => void openPullRequest()}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
+      {!catalogRuntimeEnabled && <>
+        <label>GitHub Pull Request URL<Input aria-label="GitHub Pull Request URL" type="url" placeholder="https://github.com/owner/repo/pull/123" value={pullRequestUrl} onChange={(event) => setPullRequestUrl(event.target.value)} /></label>
+        <Button disabled={!pullRequestUrl || loading} onClick={() => void openPullRequest()}>{loading ? "正在加载…" : authStatus?.signedIn ? "打开" : "匿名打开"}</Button>
+      </>}
       {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
       {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
     </section>
@@ -700,11 +879,22 @@ export function App() {
     </section>
     {error && <ErrorMessage message={error} />}
     {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}
-    {snapshot?.source === "github" && <article aria-label="Pull Request 概览">
-      <h2>{snapshot.title}</h2>
-      <p>#{snapshot.number} · {snapshot.author} · {snapshot.draft ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[snapshot.state ?? "open"]}</p>
+    {(snapshot?.source === "github" || snapshot?.pullRequest) && <article aria-label="Pull Request 概览">
+      <h2>{snapshot.source === "github" ? snapshot.title : snapshot.pullRequest!.title}</h2>
+      <p>#{snapshot.source === "github" ? snapshot.number : snapshot.pullRequest!.number} · {snapshot.source === "github" ? snapshot.author : snapshot.pullRequest!.author} · {(snapshot.source === "github" ? snapshot.draft : snapshot.pullRequest!.draft) ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[(snapshot.source === "github" ? snapshot.state : snapshot.pullRequest!.state) ?? "open"]}</p>
       <p>{snapshot.baseRef} @ {snapshot.baseRevision} → {snapshot.headRef} @ {snapshot.headRevision}</p>
-      <p>{snapshot.changedFiles} 个文件 · +{snapshot.additions} · −{snapshot.deletions}</p>
+      {snapshot.source === "local" && snapshot.pullRequest && <div>
+        <Button variant="outline" disabled={loading} onClick={() => void checkPullRequestUpdate()}>
+          检查 Pull Request 更新
+        </Button>
+        {reviewUpdate && (reviewUpdate.updateAvailable
+          ? <div role="status">
+            <p>发现新的 Pull Request revisions；当前 Snapshot 保持不变。</p>
+            <Button disabled={loading} onClick={() => void refreshPullRequestReview()}>刷新 Review</Button>
+          </div>
+          : <p role="status">当前已是最新 Snapshot</p>)}
+      </div>}
+      {snapshot.source === "github" && <p>{snapshot.changedFiles} 个文件 · +{snapshot.additions} · −{snapshot.deletions}</p>}
       <div aria-label="Pull Request 描述">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -716,7 +906,7 @@ export function App() {
               if (href?.startsWith("https://") || href?.startsWith("http://")) void openUrl(href);
             }}>{children}</a>,
           }}
-        >{snapshot.description}</ReactMarkdown>
+        >{snapshot.source === "github" ? snapshot.description : snapshot.pullRequest!.description}</ReactMarkdown>
       </div>
     </article>}
     {snapshot?.source === "local" && <section aria-label="Branch Review 更新">

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// 一个经规范化的 GitHub repository identity。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubRepository {
     pub owner: String,
@@ -30,7 +30,7 @@ pub struct PullRequestRevision {
 }
 
 /// 创建 Review 所需的只读 Pull Request 协作 metadata。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredPullRequest {
     pub number: u64,
@@ -131,6 +131,17 @@ fn github_repositories(
     Ok(repositories)
 }
 
+/// 查找代表指定 GitHub base repository identity 的本地 remote 名称。
+pub fn remote_names_for_repository(
+    repository_path: &Path,
+    repository: &GitHubRepository,
+) -> Result<Vec<String>, String> {
+    Ok(github_repositories(repository_path)?
+        .remove(&repository.identity())
+        .map(|(_, remote_names)| remote_names)
+        .unwrap_or_default())
+}
+
 /// 将 GitHub HTTPS、scp-like SSH 与 ssh:// remote 规范化为 repository identity。
 fn normalize_github_remote(url: &str) -> Option<GitHubRepository> {
     let path = if let Some((scheme, remainder)) = url.split_once("://") {
@@ -224,6 +235,7 @@ struct PullRequestListItem {
     body: Option<String>,
     user: PullRequestUser,
     state: String,
+    merged_at: Option<String>,
     draft: bool,
     html_url: String,
     base: PullRequestRevision,
@@ -244,7 +256,11 @@ impl From<PullRequestListItem> for DiscoveredPullRequest {
             title: value.title,
             description: value.body.unwrap_or_default(),
             author: value.user.login,
-            state: value.state,
+            state: if value.merged_at.is_some() {
+                "merged".to_owned()
+            } else {
+                value.state
+            },
             draft: value.draft,
             url: value.html_url,
             base: value.base,

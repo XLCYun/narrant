@@ -65,19 +65,11 @@ fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive()
     assert!(json["fileChanges"][0].get("contentKind").is_none());
     assert!(json.get("snapshotId").is_none());
     let store = ReviewSessionStore::default();
-    let id = store.insert(OpenedReview::Local(Box::new(review))).unwrap();
-    let in_flight = store.get(&id).unwrap();
-    let github_id = store
-        .insert(OpenedReview::GitHub(Box::new(
-            change_content::github::GitHubOpenedReview::empty_for_test(),
-        )))
+    let id = "review-42".to_owned();
+    store
+        .insert_with_id(id.clone(), OpenedReview::Local(Box::new(review)))
         .unwrap();
-    store.close_github_sessions().unwrap();
-    assert!(store.get(&id).is_ok());
-    assert_eq!(
-        store.get(&github_id).err().unwrap(),
-        "Review Session 已关闭或失效，请重新打开。"
-    );
+    let in_flight = store.get(&id).unwrap();
     store.close(&id).unwrap();
     store.close(&id).unwrap();
     assert_eq!(
@@ -85,32 +77,10 @@ fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive()
         "Review Session 已关闭或失效，请重新打开。"
     );
     let in_flight = in_flight.lock().unwrap();
-    let OpenedReview::Local(review) = &*in_flight else {
-        panic!("expected Local Review");
-    };
+    let OpenedReview::Local(review) = &*in_flight;
     let change = review.read_file_change("README.md").unwrap();
     assert_eq!(change.before.as_deref(), Some("old\n"));
     assert_eq!(change.after.as_deref(), Some("new\n"));
-}
-
-#[test]
-fn runtime_store_keeps_only_the_review_selected_for_reopen() {
-    let store = ReviewSessionStore::default();
-    let first = store
-        .insert(OpenedReview::GitHub(Box::new(
-            change_content::github::GitHubOpenedReview::empty_for_test(),
-        )))
-        .unwrap();
-    let second = store
-        .insert(OpenedReview::GitHub(Box::new(
-            change_content::github::GitHubOpenedReview::empty_for_test(),
-        )))
-        .unwrap();
-
-    store.retain_only(Some(&second)).unwrap();
-
-    assert!(store.get(&first).is_err());
-    assert!(store.get(&second).is_ok());
 }
 
 #[test]
@@ -146,42 +116,6 @@ fn loaded_file_change_mapper_serializes_every_status_and_content_kind() {
         assert_eq!(json["afterSize"], 4);
     }
 }
-
-#[test]
-fn github_snapshot_mapper_produces_a_tagged_summary_without_content_placeholders() {
-    let snapshot = change_content::github::GitHubSnapshot {
-        owner: "octo-org".to_owned(),
-        repository: "octo-repo".to_owned(),
-        title: "Review".to_owned(),
-        number: 42,
-        author: "octocat".to_owned(),
-        state: "open".to_owned(),
-        draft: false,
-        base_ref: "main".to_owned(),
-        base_revision: "base".to_owned(),
-        comparison_base: "merge-base".to_owned(),
-        head_ref: "topic".to_owned(),
-        head_revision: "head".to_owned(),
-        description: String::new(),
-        changed_files: 1,
-        additions: 2,
-        deletions: 1,
-        file_changes: vec![change_content::github::GitHubFileChange {
-            path: "README.md".to_owned(),
-            old_path: None,
-            status: change_content::ChangeStatus::Modified,
-        }],
-        github_url: "https://github.com/octo-org/octo-repo/pull/42".to_owned(),
-    };
-    let response = map_github_snapshot("session-7".to_owned(), &snapshot);
-    let json = serde_json::to_value(response).unwrap();
-    assert_eq!(json["source"], "github");
-    assert_eq!(json["sessionId"], "session-7");
-    assert_eq!(json["fileChanges"][0]["path"], "README.md");
-    assert!(json["fileChanges"][0].get("contentKind").is_none());
-    assert!(json["fileChanges"][0].get("before").is_none());
-}
-
 #[test]
 fn startup_recovery_removes_only_catalog_owned_registered_workspace() {
     let application_data = tempfile::TempDir::new().unwrap();
