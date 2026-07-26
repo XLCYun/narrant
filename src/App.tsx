@@ -288,6 +288,13 @@ export function App() {
     }
   }
 
+  /** 从持久化 Catalog 重新加载 Repository Entry 的 Review 历史。 */
+  async function loadSavedReviews(repositoryEntryId: number) {
+    setSavedReviews(await invoke<SavedReviewSummary[]>("list_saved_reviews", {
+      repositoryEntryId,
+    }));
+  }
+
   /** 进入一个可用 Repository Entry，并将后续 Core Git 操作限定到其保存路径。 */
   async function openRepository(entry: RepositoryEntry) {
     setError("");
@@ -405,6 +412,7 @@ export function App() {
       setReviewUpdate(undefined);
       replaceSnapshot(nextSnapshot);
       setFileChange(undefined);
+      await loadSavedReviews(selectedRepository.id);
     } catch (reason) {
       setFileChange(undefined);
       setError(String(reason));
@@ -567,6 +575,7 @@ export function App() {
         headRef,
       }));
       setFileChange(undefined);
+      if (selectedRepository) await loadSavedReviews(selectedRepository.id);
     }
     catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
   }
