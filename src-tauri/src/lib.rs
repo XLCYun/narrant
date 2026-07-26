@@ -494,6 +494,10 @@ fn refresh_branch_review(
                 .review_workspace_path(&review_id)
                 .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
             let adapter = core_git::GitProcessAdapter::new(&repository);
+            let mut sessions = state
+                .sessions
+                .lock()
+                .map_err(|_| core_git::GitCommandError::new("Review 状态不可用。"))?;
             adapter.transition_detached_worktree(
                 &workspace,
                 &current.head_revision,
@@ -501,41 +505,12 @@ fn refresh_branch_review(
                 &cancellation,
             )?;
             let snapshot = candidate.snapshot();
-            if let Err(error) = state.insert_with_id(
-                review_id.clone(),
-                OpenedReview::Local(Box::new(change_content::local::LocalOpenedReview::restore(
-                    &repository,
-                    snapshot.clone(),
-                ))),
-            ) {
-                let rollback = adapter.transition_detached_worktree(
-                    &workspace,
-                    &candidate.head_revision,
-                    &current.head_revision,
-                    &core_git::CancellationToken::default(),
-                );
-                return Err(core_git::GitCommandError::new(match rollback {
-                    Ok(()) => error,
-                    Err(rollback_error) => {
-                        format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
-                    }
-                }));
-            }
             if let Err(error) = catalog.activate_refresh_snapshot(&candidate, &current) {
                 let rollback = adapter.transition_detached_worktree(
                     &workspace,
                     &candidate.head_revision,
                     &current.head_revision,
                     &core_git::CancellationToken::default(),
-                );
-                let _ = state.insert_with_id(
-                    review_id.clone(),
-                    OpenedReview::Local(Box::new(
-                        change_content::local::LocalOpenedReview::restore(
-                            &repository,
-                            current.snapshot(),
-                        ),
-                    )),
                 );
                 return Err(core_git::GitCommandError::new(match rollback {
                     Ok(()) => error.to_string(),
@@ -544,6 +519,15 @@ fn refresh_branch_review(
                     }
                 }));
             }
+            sessions.insert(
+                review_id.clone(),
+                Arc::new(Mutex::new(OpenedReview::Local(Box::new(
+                    change_content::local::LocalOpenedReview::restore(
+                        &repository,
+                        snapshot.clone(),
+                    ),
+                )))),
+            );
             Ok(map_local_snapshot(review_id.clone(), &snapshot))
         })()
         .map_err(|error: core_git::GitCommandError| error.to_string());

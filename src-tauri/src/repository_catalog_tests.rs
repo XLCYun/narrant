@@ -194,20 +194,24 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     let catalog = RepositoryCatalog::open(&database_path).unwrap();
     let entry = catalog.register(repository.path()).unwrap();
     catalog.grant_workspace_trust(entry.id).unwrap();
-    let branch = String::from_utf8(
-        Command::new("git")
-            .args(["symbolic-ref", "HEAD"])
+    for arguments in [
+        ["branch", "base"],
+        ["branch", "topic"],
+        ["checkout", "topic"],
+    ] {
+        assert!(Command::new("git")
+            .args(arguments)
             .current_dir(repository.path())
-            .output()
+            .status()
             .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let branch_ref = branch.trim();
+            .success());
+    }
+    let base_ref = "refs/heads/base";
+    let head_ref = "refs/heads/topic";
     let initial = crate::change_content::local::LocalOpenedReview::open(
         repository.path(),
-        branch_ref,
-        branch_ref,
+        base_ref,
+        head_ref,
     )
     .unwrap();
     let saved = catalog
@@ -235,8 +239,8 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         .success());
     let latest = crate::change_content::local::LocalOpenedReview::open(
         repository.path(),
-        branch_ref,
-        branch_ref,
+        base_ref,
+        head_ref,
     )
     .unwrap();
 
@@ -273,6 +277,8 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     let refreshed = catalog.open_review(&saved.review_id).unwrap();
     assert_eq!(refreshed.head_revision, latest.snapshot().head_revision);
     assert_ne!(refreshed.head_revision, old_head);
+    assert_eq!(refreshed.file_changes.len(), 1);
+    assert_eq!(refreshed.file_changes[0].path, "README.md");
     let workspace_head = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(&workspace)
