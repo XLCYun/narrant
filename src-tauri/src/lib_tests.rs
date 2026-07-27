@@ -3,7 +3,7 @@ use std::process::Command;
 
 #[test]
 fn same_review_cannot_begin_two_refreshes_concurrently() {
-    let store = ReviewSessionStore::default();
+    let store = OpenReviewStore::default();
 
     store.begin_refresh("review-1").unwrap();
     let error = store.begin_refresh("review-1").unwrap_err();
@@ -15,7 +15,7 @@ fn same_review_cannot_begin_two_refreshes_concurrently() {
 }
 
 #[test]
-fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive() {
+fn closing_an_open_review_is_idempotent_and_keeps_in_flight_references_alive() {
     let fixture = tempfile::TempDir::new().unwrap();
     let repository = git2::Repository::init(fixture.path()).unwrap();
     let old_blob = repository.blob(b"old\n").unwrap();
@@ -56,15 +56,17 @@ fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive()
         "refs/heads/head",
     )
     .unwrap();
-    let response = map_local_snapshot("review-42".to_owned(), review.snapshot());
+    let response = map_snapshot(
+        "review-42".to_owned(),
+        "snapshot-7".to_owned(),
+        review.snapshot(),
+    );
     let json = serde_json::to_value(&response).unwrap();
-    assert_eq!(json["source"], "local");
     assert_eq!(json["reviewId"], "review-42");
-    assert!(json.get("sessionId").is_none());
+    assert_eq!(json["snapshotId"], "snapshot-7");
     assert_eq!(json["fileChanges"][0]["path"], "README.md");
     assert!(json["fileChanges"][0].get("contentKind").is_none());
-    assert!(json.get("snapshotId").is_none());
-    let store = ReviewSessionStore::default();
+    let store = OpenReviewStore::default();
     let id = "review-42".to_owned();
     store
         .insert_with_id(id.clone(), OpenedReview::Local(Box::new(review)))
@@ -74,7 +76,7 @@ fn closing_a_review_session_is_idempotent_and_keeps_in_flight_references_alive()
     store.close(&id).unwrap();
     assert_eq!(
         store.get(&id).err().unwrap(),
-        "Review Session 已关闭或失效，请重新打开。"
+        "Review 已关闭或失效，请重新打开。"
     );
     let in_flight = in_flight.lock().unwrap();
     let OpenedReview::Local(review) = &*in_flight;

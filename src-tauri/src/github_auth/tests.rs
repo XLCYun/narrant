@@ -1,4 +1,5 @@
 use super::*;
+use async_trait::async_trait;
 use secrecy::ExposeSecret;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex as StdMutex;
@@ -29,17 +30,6 @@ impl CredentialStore for MemoryStore {
             .0
             .lock()
             .map_err(|_| "store lock poisoned".to_owned())? = None;
-        Ok(())
-    }
-}
-
-/// 统计仅 GitHub 最近条目的清理请求。
-#[derive(Default)]
-struct RecentSpy(AtomicUsize);
-
-impl GitHubRecentEntries for RecentSpy {
-    fn clear_github_entries(&self) -> Result<(), String> {
-        self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -83,12 +73,8 @@ fn expired_credentials() -> StoredCredentialsWire {
 }
 
 /// 使用可控 OAuth adapter 构建已配置的认证服务。
-fn auth_with(
-    store: Arc<MemoryStore>,
-    recent: Arc<RecentSpy>,
-    oauth: Arc<FakeOAuthClient>,
-) -> GitHubAuth {
-    GitHubAuth::new("client-id", "narrant", oauth, store, recent)
+fn auth_with(store: Arc<MemoryStore>, oauth: Arc<FakeOAuthClient>) -> GitHubAuth {
+    GitHubAuth::new("client-id", "narrant", oauth, store)
 }
 
 #[tokio::test]
@@ -107,11 +93,7 @@ async fn concurrent_expired_token_reads_share_one_refresh_and_rotate_credentials
         }),
         device_result: Err("not used".to_owned()),
     });
-    let auth = Arc::new(auth_with(
-        store.clone(),
-        Arc::new(RecentSpy::default()),
-        oauth.clone(),
-    ));
+    let auth = Arc::new(auth_with(store.clone(), oauth.clone()));
 
     let (first, second, third) = tokio::join!(
         auth.access_token(),
@@ -133,7 +115,6 @@ async fn failed_refresh_deletes_credentials_and_requires_reauthorization() {
         .unwrap();
     let auth = auth_with(
         store.clone(),
-        Arc::new(RecentSpy::default()),
         Arc::new(FakeOAuthClient {
             refreshes: AtomicUsize::new(0),
             refresh_result: Err("invalid refresh token".to_owned()),
@@ -151,7 +132,6 @@ async fn malformed_credentials_are_deleted_and_not_reported_as_signed_in() {
     store.save("not-json").unwrap();
     let auth = auth_with(
         store.clone(),
-        Arc::new(RecentSpy::default()),
         Arc::new(FakeOAuthClient {
             refreshes: AtomicUsize::new(0),
             refresh_result: Err("not used".to_owned()),
@@ -164,13 +144,11 @@ async fn malformed_credentials_are_deleted_and_not_reported_as_signed_in() {
 }
 
 #[tokio::test]
-async fn sign_out_removes_credentials_and_requests_only_github_recent_cleanup() {
+async fn sign_out_removes_credentials_without_touching_review_history_seams() {
     let store = Arc::new(MemoryStore::default());
     store.save("credentials").unwrap();
-    let recent = Arc::new(RecentSpy::default());
     let auth = auth_with(
         store.clone(),
-        recent.clone(),
         Arc::new(FakeOAuthClient {
             refreshes: AtomicUsize::new(0),
             refresh_result: Err("not used".to_owned()),
@@ -180,7 +158,6 @@ async fn sign_out_removes_credentials_and_requests_only_github_recent_cleanup() 
 
     auth.sign_out().await.unwrap();
     assert_eq!(store.load().unwrap(), None);
-    assert_eq!(recent.0.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -188,7 +165,6 @@ async fn sign_out_invalidates_pending_device_authorizations_before_they_can_pers
     let store = Arc::new(MemoryStore::default());
     let auth = auth_with(
         store.clone(),
-        Arc::new(RecentSpy::default()),
         Arc::new(FakeOAuthClient {
             refreshes: AtomicUsize::new(0),
             refresh_result: Err("not used".to_owned()),
@@ -218,7 +194,6 @@ async fn device_flow_exposes_no_device_secret_and_persists_authorized_tokens() {
     let store = Arc::new(MemoryStore::default());
     let auth = auth_with(
         store.clone(),
-        Arc::new(RecentSpy::default()),
         Arc::new(FakeOAuthClient {
             refreshes: AtomicUsize::new(0),
             refresh_result: Err("not used".to_owned()),

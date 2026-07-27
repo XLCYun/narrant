@@ -61,17 +61,11 @@ enum ContentKindResponse {
     Symlink,
 }
 
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ReviewSourceResponse {
-    Local,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalReviewSnapshotResponse {
-    source: ReviewSourceResponse,
+struct ReviewSnapshotResponse {
     review_id: String,
+    snapshot_id: String,
     base_ref: String,
     head_ref: String,
     base_revision: String,
@@ -124,9 +118,10 @@ struct SavedReviewSummaryResponse {
     pull_request: Option<repository_catalog::PullRequestMetadata>,
 }
 
+/// 保存当前打开 Review 的运行时读取句柄，并串行化同一 Review 的刷新操作。
 #[derive(Default)]
-struct ReviewSessionStore {
-    sessions: Mutex<HashMap<String, Arc<Mutex<OpenedReview>>>>,
+struct OpenReviewStore {
+    reviews: Mutex<HashMap<String, Arc<Mutex<OpenedReview>>>>,
     active_refreshes: Mutex<HashSet<String>>,
 }
 
@@ -168,35 +163,37 @@ impl GitOperationStore {
     }
 }
 
-impl ReviewSessionStore {
+impl OpenReviewStore {
     /// 用 durable reviewId 注册运行时读取句柄。
     fn insert_with_id(&self, id: String, review: OpenedReview) -> Result<(), String> {
-        self.sessions
+        self.reviews
             .lock()
             .map_err(|_| "Review 状态不可用。".to_owned())?
             .insert(id, Arc::new(Mutex::new(review)));
         Ok(())
     }
 
+    /// 按 durable reviewId 获取仍处于打开状态的运行时读取句柄。
     fn get(&self, id: &str) -> Result<Arc<Mutex<OpenedReview>>, String> {
-        self.sessions
+        self.reviews
             .lock()
-            .map_err(|_| "Review Session 状态不可用。".to_owned())?
+            .map_err(|_| "Review 状态不可用。".to_owned())?
             .get(id)
             .cloned()
-            .ok_or_else(|| "Review Session 已关闭或失效，请重新打开。".to_owned())
+            .ok_or_else(|| "Review 已关闭或失效，请重新打开。".to_owned())
     }
 
+    /// 幂等移除 durable Review 的运行时读取句柄。
     fn close(&self, id: &str) -> Result<(), String> {
-        self.sessions
+        self.reviews
             .lock()
-            .map_err(|_| "Review Session 状态不可用。".to_owned())?
+            .map_err(|_| "Review 状态不可用。".to_owned())?
             .remove(id);
         Ok(())
     }
     /// 仅保留即将打开的同一 Review 句柄，确保运行时最多存在一个 Review。
     fn retain_only(&self, id: Option<&str>) -> Result<(), String> {
-        self.sessions
+        self.reviews
             .lock()
             .map_err(|_| "Review 状态不可用。".to_owned())?
             .retain(|candidate, _| id.is_some_and(|id| candidate == id));
@@ -254,13 +251,15 @@ fn map_file_content(change: change_content::LoadedFileChange) -> FileChangeConte
     }
 }
 
-fn map_local_snapshot(
+/// 将内部固定 Snapshot 映射为不区分来源的前端 IPC 契约。
+fn map_snapshot(
     review_id: String,
+    snapshot_id: String,
     snapshot: &change_content::local::LocalSnapshot,
-) -> LocalReviewSnapshotResponse {
-    LocalReviewSnapshotResponse {
-        source: ReviewSourceResponse::Local,
+) -> ReviewSnapshotResponse {
+    ReviewSnapshotResponse {
         review_id,
+        snapshot_id,
         base_ref: snapshot.base_ref.clone(),
         head_ref: snapshot.head_ref.clone(),
         base_revision: snapshot.base_revision.clone(),
@@ -285,14 +284,14 @@ fn map_local_snapshot(
 
 #[tauri::command]
 fn compare_local_refs(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     operations: tauri::State<'_, GitOperationStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     repository_entry_id: i64,
     base_ref: String,
     head_ref: String,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     let repository_path = require_available_repository(&catalog, repository_entry_id)?;
     if !catalog
         .is_workspace_trusted(repository_entry_id)
@@ -376,13 +375,13 @@ fn check_branch_review_updates(
 /// 在用户明确确认后创建 Snapshot、重建 Workspace，并以 CAS 推进 current 指针。
 #[tauri::command]
 fn refresh_branch_review(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     operations: tauri::State<'_, GitOperationStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     review_id: String,
     confirmation: ConfirmedBranchUpdate,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     state.begin_refresh(&review_id)?;
     let current = catalog
         .open_review(&review_id)
@@ -421,7 +420,11 @@ fn refresh_branch_review(
             if current.base_revision == latest.snapshot().base_revision
                 && current.head_revision == latest.snapshot().head_revision
             {
-                return Ok(map_local_snapshot(review_id.clone(), &current.snapshot()));
+                return Ok(map_snapshot(
+                    review_id.clone(),
+                    current.snapshot_identity(),
+                    &current.snapshot(),
+                ));
             }
             let candidate = catalog
                 .save_refresh_snapshot(&review_id, latest.snapshot())
@@ -430,8 +433,8 @@ fn refresh_branch_review(
                 .review_workspace_path(&review_id)
                 .map_err(|error| core_git::GitCommandError::new(error.to_string()))?;
             let adapter = core_git::GitProcessAdapter::new(&repository);
-            let mut sessions = state
-                .sessions
+            let mut reviews = state
+                .reviews
                 .lock()
                 .map_err(|_| core_git::GitCommandError::new("Review 状态不可用。"))?;
             adapter.transition_detached_worktree(
@@ -457,7 +460,7 @@ fn refresh_branch_review(
                     }
                 }));
             }
-            sessions.insert(
+            reviews.insert(
                 review_id.clone(),
                 Arc::new(Mutex::new(OpenedReview::Local(Box::new(
                     change_content::local::LocalOpenedReview::restore(
@@ -466,7 +469,11 @@ fn refresh_branch_review(
                     ),
                 )))),
             );
-            Ok(map_local_snapshot(review_id.clone(), &snapshot))
+            Ok(map_snapshot(
+                review_id.clone(),
+                candidate.snapshot_identity(),
+                &snapshot,
+            ))
         })()
         .map_err(|error: core_git::GitCommandError| error.to_string());
         operations.finish(&operation_id);
@@ -478,11 +485,11 @@ fn refresh_branch_review(
 
 /// materialize saved Snapshot，校验 workspace 后再推进 current 指针并注册运行时句柄。
 fn open_saved_branch_review(
-    state: &ReviewSessionStore,
+    state: &OpenReviewStore,
     catalog: &repository_catalog::RepositoryCatalog,
     repository_path: std::path::PathBuf,
     saved: repository_catalog::SavedBranchReview,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     cleanup_review_workspaces(catalog, Some(&saved.review_id))?;
     state.retain_only(Some(&saved.review_id))?;
     let workspace = catalog
@@ -522,7 +529,11 @@ fn open_saved_branch_review(
     catalog
         .mark_review_opened(&saved.review_id)
         .map_err(|error| error.to_string())?;
-    let mut response = map_local_snapshot(saved.review_id, &snapshot);
+    let mut response = map_snapshot(
+        saved.review_id.clone(),
+        saved.snapshot_identity(),
+        &snapshot,
+    );
     response.pull_request = saved.pull_request;
     Ok(response)
 }
@@ -530,12 +541,12 @@ fn open_saved_branch_review(
 /// 从 discovery metadata 创建或重开 durable Pull Request Review。
 #[tauri::command]
 fn open_pull_request_review(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     repository_entry_id: i64,
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     let repository_path = require_available_repository(&catalog, repository_entry_id)?;
     if !catalog
         .is_workspace_trusted(repository_entry_id)
@@ -589,12 +600,12 @@ fn check_pull_request_review_update(
 /// 显式刷新 Pull Request Review，并在 workspace 对齐后推进 current Snapshot。
 #[tauri::command]
 fn refresh_pull_request_review(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     review_id: String,
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     let current = catalog
         .open_review(&review_id)
         .map_err(|error| error.to_string())?;
@@ -672,10 +683,10 @@ fn list_saved_reviews(
 /// 仅用 cached current Snapshot 重开 durable Review，不依赖 GitHub 登录或 discovery。
 #[tauri::command]
 fn open_saved_review(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     review_id: String,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     let saved = catalog
         .open_review(&review_id)
         .map_err(|error| error.to_string())?;
@@ -779,14 +790,9 @@ async fn discover_github_pull_requests(
     repository_entry_id: i64,
 ) -> Result<Vec<github_discovery::PullRequestGroup>, String> {
     let repository_path = require_available_repository(&catalog, repository_entry_id)?;
-    let access_token =
-        github_auth::GitHubAccessTokenProvider::access_token(auth.inner().as_ref()).await?;
+    let access_token = auth.access_token().await?;
     let api_base_url = github_api_base_url();
-    tokio::task::spawn_blocking(move || {
-        github_discovery::discover_pull_requests(&repository_path, &api_base_url, access_token)
-    })
-    .await
-    .map_err(|_| "GitHub discovery 任务意外中断，请重试。".to_owned())?
+    github_discovery::discover_pull_requests(&repository_path, &api_base_url, access_token).await
 }
 
 #[tauri::command]
@@ -821,12 +827,20 @@ async fn sign_out_github(
 /// 通过 durable reviewId 从 current Snapshot 读取本地 File Change。
 #[tauri::command]
 fn read_review_file_change(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     operations: tauri::State<'_, GitOperationStore>,
+    catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     review_id: String,
+    snapshot_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
+    let current = catalog
+        .open_review(&review_id)
+        .map_err(|error| error.to_string())?;
+    if current.snapshot_identity() != snapshot_id {
+        return Err("Snapshot identity 与 Review 的 current Snapshot 不一致。".to_owned());
+    }
     let review = state.get(&review_id)?;
     let review = review
         .lock()
@@ -844,7 +858,7 @@ fn read_review_file_change(
 /// 关闭 durable Review 并精确移除它的 disposable linked worktree。
 #[tauri::command]
 fn close_review(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     review_id: String,
 ) -> Result<(), String> {
@@ -968,10 +982,10 @@ fn list_reviews(
 /// 使用 current Snapshot 按 durable reviewId 重新物化 Review。
 #[tauri::command]
 fn reopen_review(
-    state: tauri::State<'_, ReviewSessionStore>,
+    state: tauri::State<'_, OpenReviewStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     review_id: String,
-) -> Result<LocalReviewSnapshotResponse, String> {
+) -> Result<ReviewSnapshotResponse, String> {
     let saved = catalog
         .open_review(&review_id)
         .map_err(|error| error.to_string())?;
@@ -1021,10 +1035,9 @@ pub fn run() {
         option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
         oauth_client,
         Arc::new(github_auth::SystemCredentialStore),
-        Arc::new(github_auth::NoGitHubRecentEntries),
     ));
     let builder = tauri::Builder::default()
-        .manage(ReviewSessionStore::default())
+        .manage(OpenReviewStore::default())
         .manage(GitOperationStore::default())
         .manage(auth)
         .setup(|app| {
@@ -1080,8 +1093,8 @@ pub fn run() {
         ) {
             let catalog = app.state::<repository_catalog::RepositoryCatalog>();
             let _ = cleanup_review_workspaces(&catalog, None);
-            let sessions = app.state::<ReviewSessionStore>();
-            let _ = sessions.retain_only(None);
+            let reviews = app.state::<OpenReviewStore>();
+            let _ = reviews.retain_only(None);
         }
     });
 }

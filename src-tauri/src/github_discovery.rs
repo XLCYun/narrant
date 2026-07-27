@@ -1,5 +1,5 @@
 use crate::core_git::{CancellationToken, GitProcessAdapter};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -55,7 +55,7 @@ pub struct PullRequestGroup {
 }
 
 /// 扫描 Repository Entry 的全部 remotes，按 GitHub repository 去重并列出 Pull Requests。
-pub fn discover_pull_requests(
+pub async fn discover_pull_requests(
     repository_path: &Path,
     api_base_url: &str,
     access_token: Option<SecretString>,
@@ -65,25 +65,26 @@ pub fn discover_pull_requests(
         .user_agent("Narrant/0.1")
         .build()
         .map_err(|_| "GitHub discovery client 不可用。".to_owned())?;
-    Ok(repositories
-        .into_values()
-        .map(|(repository, remote_names)| {
-            match list_pull_requests(&client, api_base_url, &repository, access_token.as_ref()) {
-                Ok(pull_requests) => PullRequestGroup {
-                    repository,
-                    remote_names,
-                    pull_requests,
-                    error: None,
-                },
-                Err(error) => PullRequestGroup {
-                    repository,
-                    remote_names,
-                    pull_requests: Vec::new(),
-                    error: Some(error),
-                },
-            }
-        })
-        .collect())
+    let mut groups = Vec::with_capacity(repositories.len());
+    for (repository, remote_names) in repositories.into_values() {
+        let result =
+            list_pull_requests(&client, api_base_url, &repository, access_token.as_ref()).await;
+        groups.push(match result {
+            Ok(pull_requests) => PullRequestGroup {
+                repository,
+                remote_names,
+                pull_requests,
+                error: None,
+            },
+            Err(error) => PullRequestGroup {
+                repository,
+                remote_names,
+                pull_requests: Vec::new(),
+                error: Some(error),
+            },
+        });
+    }
+    Ok(groups)
 }
 
 /// 读取全部 remote URL，并按大小写不敏感的 GitHub identity 合并同仓库 remote。
@@ -185,7 +186,7 @@ fn normalize_github_remote(url: &str) -> Option<GitHubRepository> {
 }
 
 /// 分页调用 Pull Requests list endpoint；这里不访问任何代码内容 endpoint。
-fn list_pull_requests(
+async fn list_pull_requests(
     client: &Client,
     api_base_url: &str,
     repository: &GitHubRepository,
@@ -209,6 +210,7 @@ fn list_pull_requests(
         }
         let response = request
             .send()
+            .await
             .map_err(|_| "当前无法连接 GitHub，请检查网络后重试。".to_owned())?;
         if !response.status().is_success() {
             return Err(map_discovery_error(
@@ -218,6 +220,7 @@ fn list_pull_requests(
         }
         let page_items: Vec<PullRequestListItem> = response
             .json()
+            .await
             .map_err(|_| "GitHub 返回了无法识别的 Pull Request metadata。".to_owned())?;
         if page_items.is_empty() {
             return Ok(result);

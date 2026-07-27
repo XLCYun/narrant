@@ -1,7 +1,6 @@
 mod credential_store;
 mod oauth_client;
 
-use async_trait::async_trait;
 use oauth_client::{OAuthDeviceCodes, OAuthPollResult, OAuthTokens};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -16,29 +15,6 @@ use tokio::time::{sleep, Duration, Instant};
 
 pub use credential_store::{CredentialStore, SystemCredentialStore};
 pub use oauth_client::{OAuthClient, OctocrabOAuthClient};
-
-/// 在登出时清理仅属于 GitHub 的最近条目。
-pub trait GitHubRecentEntries: Send + Sync {
-    /// 仅删除 GitHub 最近条目。
-    fn clear_github_entries(&self) -> Result<(), String>;
-}
-
-/// 向 GitHub Source 提供当前可选的 GitHub 用户访问令牌。
-#[async_trait]
-pub trait GitHubAccessTokenProvider: Send + Sync {
-    /// 返回匿名状态，或返回刷新后的密钥访问令牌。
-    async fn access_token(&self) -> Result<Option<SecretString>, String>;
-}
-
-/// 在本地状态待办完成前提供无操作的最近条目行为。
-pub struct NoGitHubRecentEntries;
-
-impl GitHubRecentEntries for NoGitHubRecentEntries {
-    /// 尚无持久化最近条目存储时直接成功返回。
-    fn clear_github_entries(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
 
 /// 供 WebView 展示的公开认证状态。
 #[derive(Clone, Debug, Serialize)]
@@ -66,7 +42,6 @@ pub struct GitHubAuth {
     app_slug: String,
     oauth_client: Arc<dyn OAuthClient>,
     store: Arc<dyn CredentialStore>,
-    recent_entries: Arc<dyn GitHubRecentEntries>,
     credentials: Mutex<Option<StoredCredentials>>,
     authorization_epoch: AtomicU64,
     next_authorization_id: AtomicU64,
@@ -138,14 +113,12 @@ impl GitHubAuth {
         app_slug: impl Into<String>,
         oauth_client: Arc<dyn OAuthClient>,
         store: Arc<dyn CredentialStore>,
-        recent_entries: Arc<dyn GitHubRecentEntries>,
     ) -> Self {
         Self {
             client_id: SecretString::from(client_id.into()),
             app_slug: app_slug.into(),
             oauth_client,
             store,
-            recent_entries,
             credentials: Mutex::new(None),
             authorization_epoch: AtomicU64::new(0),
             next_authorization_id: AtomicU64::new(0),
@@ -225,14 +198,14 @@ impl GitHubAuth {
         }
     }
 
-    /// 清除凭据及 GitHub 专属持久化状态。
+    /// 清除凭据与待完成授权，不修改 Repository Entry 或 Review 历史。
     pub async fn sign_out(&self) -> Result<(), String> {
         self.authorization_epoch.fetch_add(1, Ordering::AcqRel);
         self.pending_authorizations.lock().await.clear();
         let mut credentials = self.credentials.lock().await;
         self.store.delete()?;
         *credentials = None;
-        self.recent_entries.clear_github_entries()
+        Ok(())
     }
 
     /// 在授权前确保构建时 GitHub App 配置存在。
@@ -285,12 +258,8 @@ impl GitHubAuth {
         *stored_credentials = Some(credentials);
         Ok(())
     }
-}
-
-#[async_trait]
-impl GitHubAccessTokenProvider for GitHubAuth {
     /// 返回匿名状态，或刷新一组共享的密钥令牌对。
-    async fn access_token(&self) -> Result<Option<SecretString>, String> {
+    pub async fn access_token(&self) -> Result<Option<SecretString>, String> {
         let mut credentials = self.credentials.lock().await;
         if credentials.is_none() {
             *credentials = self.read_store()?;

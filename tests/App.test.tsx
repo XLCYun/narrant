@@ -103,7 +103,7 @@ describe("App", () => {
       headRef: "refs/heads/hotfix", lastOpenedAt: 30,
     };
     const snapshot = {
-      reviewId: "review-23", source: "local", baseRef: summary.baseRef,
+      reviewId: "review-23", baseRef: summary.baseRef,
       baseRevision: "base", comparisonBase: "base", headRef: summary.headRef,
       headRevision: "head", fileChanges: [],
     };
@@ -195,7 +195,7 @@ describe("App", () => {
         repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null,
       }]);
       if (command === "open_pull_request_review") return Promise.resolve({
-        source: "local", reviewId: "review-42", baseRef: "main", baseRevision: "base-sha",
+        reviewId: "review-42", baseRef: "main", baseRevision: "base-sha",
         comparisonBase: "base-sha", headRef: "feature", headRevision: "head-sha",
         fileChanges: [{ path: "README.md", oldPath: null, status: "modified" }],
         pullRequest: {
@@ -232,7 +232,7 @@ describe("App", () => {
       base: { ref: "main", sha: "base-1" }, head: { ref: "feature", sha: "head-1" },
     };
     const snapshot = (headRevision: string) => ({
-      source: "local", reviewId: "review-42", baseRef: "main", baseRevision: "base-1",
+      reviewId: "review-42", baseRef: "main", baseRevision: "base-1",
       comparisonBase: "base-1", headRef: "feature", headRevision, fileChanges: [],
       pullRequest: {
         owner: repository.owner, repository: repository.name, number: 42,
@@ -322,34 +322,6 @@ describe("App", () => {
     expect(screen.getByText("本地分支比较")).toBeInTheDocument();
   });
 
-  it("匿名打开公开 Pull Request 并安全展示固定 Review Snapshot", async () => {
-    invoke.mockResolvedValueOnce({
-      sessionId: "session-github-42",
-      source: "github",
-      owner: "octo-org", repository: "octo-repo", title: "Improve greeting", number: 42,
-      author: "octocat", state: "merged", draft: false, baseRef: "main",
-      baseRevision: "base-sha", comparisonBase: "base-sha", headRef: "feature",
-      headRevision: "head-sha", description: "## Summary\n**Safe** <script>alert(1)</script>\n\n![tracker](https://tracker.invalid/pixel.png)\n\n[查看详情](https://example.com/details)",
-      changedFiles: 1, additions: 5, deletions: 1, githubUrl: "https://github.com/octo-org/octo-repo/pull/42",
-      fileChanges: [{ path: "src/main.rs", oldPath: null, status: "modified", contentKind: "text", beforeSize: null, afterSize: null, before: null, after: null }],
-    });
-    render(<App />);
-
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/42" } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-
-    expect(await screen.findByRole("heading", { name: "Improve greeting" })).toBeInTheDocument();
-    expect(screen.getByText("#42 · octocat · 已合并")).toBeInTheDocument();
-    expect(screen.getByText("main @ base-sha → feature @ head-sha")).toBeInTheDocument();
-    expect(screen.getByText("1 个文件 · +5 · −1")).toBeInTheDocument();
-    expect(screen.getByText("Safe").tagName).toBe("STRONG");
-    expect(document.querySelector("script")).not.toBeInTheDocument();
-    expect(document.querySelector("img")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("link", { name: "查看详情" }));
-    expect(openUrl).toHaveBeenCalledWith("https://example.com/details");
-    expect(screen.getByRole("treeitem", { name: /main.rs.*modified/ })).toBeInTheDocument();
-  });
-
   it("连接 GitHub 会先打开安装页，再引导设备码授权且不接收 token", async () => {
     mockSystemTheme(false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -394,160 +366,13 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "退出 GitHub" })).toBeInTheDocument();
   });
 
-  it("退出 GitHub 会清除当前 GitHub Review Session 和界面内容", async () => {
-    mockSystemTheme(false);
-    invoke.mockImplementation((command: string) => {
-      if (command === "github_auth_status") return Promise.resolve({
-        configured: true, signedIn: true, appInstallUrl: "https://github.com/apps/narrant/installations/new",
-      });
-      if (command === "open_github_pull_request") return Promise.resolve({
-        sessionId: "private-session", source: "github", title: "Private", comparisonBase: "base",
-        headRevision: "head", fileChanges: [],
-      });
-      return Promise.resolve();
-    });
-    render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), {
-      target: { value: "https://github.com/acme/private/pull/1" },
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "打开" }));
-    expect(await screen.findByRole("heading", { name: "Private" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "退出 GitHub" }));
-
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("sign_out_github"));
-    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "private-session" });
-    expect(screen.queryByRole("heading", { name: "Private" })).not.toBeInTheDocument();
-  });
-
-  it("超过 GitHub 文件上限时提供可在系统浏览器打开的恢复链接", async () => {
-    mockSystemTheme(false);
-    invoke.mockRejectedValueOnce("此 Pull Request 有 3001 个 File Change，超过 GitHub API 的 3000 个上限，无法保证审核完整。请在 GitHub 查看：https://github.com/octo-org/octo-repo/pull/42");
-    render(<App />);
-
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/42" } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-
-    const recoveryLink = await screen.findByRole("link", { name: "在 GitHub 查看" });
-    fireEvent.click(recoveryLink);
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/octo-org/octo-repo/pull/42");
-  });
-
-  it("GitHub File Change 通过统一快照契约按需加载到 Monaco", async () => {
-    mockSystemTheme(false);
-    const snapshot = {
-      sessionId: "session-github-8",
-      source: "github",
-      owner: "octo-org", repository: "octo-repo", title: "Update readme", number: 8,
-      author: "octocat", state: "open", draft: false, baseRef: "main", baseRevision: "base",
-      comparisonBase: "base", headRef: "docs", headRevision: "head", description: "",
-      changedFiles: 1, additions: 1, deletions: 1, githubUrl: "https://github.com/octo-org/octo-repo/pull/8",
-      fileChanges: [{ path: "README.md", oldPath: null, status: "modified", contentKind: "text", beforeSize: null, afterSize: null, before: null, after: null }],
-    };
-    invoke
-      .mockResolvedValueOnce(snapshot)
-      .mockResolvedValueOnce({ ...snapshot.fileChanges[0], beforeSize: 4, afterSize: 4, before: "old\n", after: "new\n" });
-    render(<App />);
-
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: snapshot.githubUrl } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-    fireEvent.click(await screen.findByRole("treeitem", { name: /README.md.*modified/ }));
-
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_file_change", { sessionId: "session-github-8", path: "README.md" }));
-    expect(await screen.findByTestId("diff-editor")).toBeInTheDocument();
-  });
-
-  it("公开 Pull Request 没有 File Change 时显示简体中文空状态", async () => {
-    mockSystemTheme(false);
-    invoke.mockResolvedValueOnce({
-      sessionId: "session-github-9",
-      source: "github",
-      owner: "octo-org", repository: "octo-repo", title: "Empty", number: 9, author: "octocat",
-      state: "closed", draft: false, baseRef: "main", baseRevision: "same", comparisonBase: "same",
-      headRef: "topic", headRevision: "same", description: "", changedFiles: 0, additions: 0,
-      deletions: 0, githubUrl: "https://github.com/octo-org/octo-repo/pull/9", fileChanges: [],
-    });
-    render(<App />);
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/9" } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-
-    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
-  });
-
-  it("打开新的 Review Snapshot 时关闭之前的 Review Session", async () => {
-    mockSystemTheme(false);
-    const snapshots = ["session-1", "session-2"].map((sessionId) => ({
-      sessionId, source: "github",
-      owner: "octo-org", repository: "octo-repo", title: sessionId, number: 1,
-      author: "octocat", state: "open", draft: false, baseRef: "main",
-      baseRevision: "base", comparisonBase: "base", headRef: "topic",
-      headRevision: "head", description: "", changedFiles: 0, additions: 0,
-      deletions: 0, githubUrl: "https://github.com/octo-org/octo-repo/pull/1",
-      fileChanges: [],
-    }));
-    invoke.mockImplementation((command: string) => {
-      if (command === "open_github_pull_request") return Promise.resolve(snapshots.shift());
-      return Promise.resolve();
-    });
-    render(<App />);
-
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/1" } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-    expect(await screen.findByRole("heading", { name: "session-1" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-
-    expect(await screen.findByRole("heading", { name: "session-2" })).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-1" });
-  });
-
-  it("卸载应用时关闭活动 Review Session", async () => {
-    mockSystemTheme(false);
-    invoke.mockResolvedValue({
-      sessionId: "session-unmount", source: "github", title: "Unmount", comparisonBase: "base",
-      headRevision: "head", fileChanges: [],
-    });
-    const view = render(<App />);
-
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/1" } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-    expect(await screen.findByRole("heading", { name: "Unmount" })).toBeInTheDocument();
-    view.unmount();
-
-    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-unmount" });
-  });
-
-  it("读取新的本地仓库失败时关闭之前的 Review Session", async () => {
-    mockSystemTheme(false);
-    invoke.mockImplementation((command: string) => {
-      if (command === "open_github_pull_request") {
-        return Promise.resolve({
-          sessionId: "session-before-load", source: "github", title: "Existing",
-          comparisonBase: "base", headRevision: "head", fileChanges: [],
-        });
-      }
-      if (command === "list_local_refs") return Promise.reject("仓库不可用");
-      return Promise.resolve();
-    });
-    render(<App />);
-
-    fireEvent.change(screen.getByLabelText("GitHub Pull Request URL"), { target: { value: "https://github.com/octo-org/octo-repo/pull/1" } });
-    fireEvent.click(screen.getByRole("button", { name: "匿名打开" }));
-    expect(await screen.findByRole("heading", { name: "Existing" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/missing" } });
-    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("仓库不可用");
-    expect(invoke).toHaveBeenCalledWith("close_review_session", { sessionId: "session-before-load" });
-  });
-
   it("展示完整文件树并按需加载所选 File Change", async () => {
     mockSystemTheme(false);
     invoke
       .mockResolvedValueOnce(["base", "origin/topic"])
       .mockResolvedValueOnce({
         reviewId: "review-1",
-        source: "local",
+        snapshotId: "snapshot-1",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [
@@ -570,6 +395,7 @@ describe("App", () => {
 
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_review_file_change", {
       reviewId: "review-1",
+      snapshotId: "snapshot-1",
       path: "assets/logo.bin",
       operationId: expect.any(String),
     }));
@@ -584,7 +410,7 @@ describe("App", () => {
       createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
     };
     const oldSnapshot = {
-      reviewId: "review-24", source: "local", baseRef: "refs/heads/main",
+      reviewId: "review-24", baseRef: "refs/heads/main",
       baseRevision: "base-old", comparisonBase: "base-old",
       headRef: "refs/heads/topic", headRevision: "head-old",
       fileChanges: [{ path: "old.txt", oldPath: null, status: "modified" }],
@@ -649,7 +475,6 @@ describe("App", () => {
       .mockResolvedValueOnce(["base", "head"])
       .mockResolvedValueOnce({
         reviewId: "review-2",
-        source: "local",
         comparisonBase: "base-sha",
         headRevision: "head-sha",
         fileChanges: [{ path: "readme.txt", oldPath: null, status: "modified", contentKind: "text", beforeSize: 3, afterSize: 4, before: null, after: null }],
