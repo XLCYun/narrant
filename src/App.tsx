@@ -6,9 +6,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
 import "@/lib/i18n";
@@ -136,6 +138,17 @@ type DirectoryNode = {
   files: FileChangeSummary[];
 };
 
+/** Monaco Diff 阅读器支持的持久化展示布局。 */
+type DiffMode = "side-by-side" | "inline";
+
+const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
+const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
+
+/** 以不依赖系统 locale 的代码点顺序稳定排列 File Change 路径。 */
+function comparePaths(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
   const root: DirectoryNode = { name: "", directories: [], files: [] };
   for (const change of fileChanges) {
@@ -152,8 +165,8 @@ function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
     directory.files.push(change);
   }
   const sort = (directory: DirectoryNode) => {
-    directory.directories.sort((left, right) => left.name.localeCompare(right.name));
-    directory.files.sort((left, right) => left.path.localeCompare(right.path));
+    directory.directories.sort((left, right) => comparePaths(left.name, right.name));
+    directory.files.sort((left, right) => comparePaths(left.path, right.path));
     directory.directories.forEach(sort);
   };
   sort(root);
@@ -170,7 +183,7 @@ function ErrorMessage({ message }: { message: string }) {
 }
 
 export function App() {
-  const { t } = useTranslation();
+  const { t } = useTranslation(["common", "review"]);
   const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const editorTheme = useSystemTheme();
@@ -200,9 +213,18 @@ export function App() {
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
   const [authorizing, setAuthorizing] = useState(false);
   const [copiedValue, setCopiedValue] = useState<"device-code" | "authorization-url">();
+  const [diffMode, setDiffMode] = useState<DiffMode>(() => (
+    localStorage.getItem(REVIEW_DIFF_MODE_KEY) === "inline" ? "inline" : "side-by-side"
+  ));
+  const [narrowReview, setNarrowReview] = useState(() => window.innerWidth < 1200);
+  const savedTreeWidth = Number(localStorage.getItem(REVIEW_TREE_WIDTH_KEY));
+  const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
+    ? savedTreeWidth
+    : 24;
   const activeReview = useRef<ActiveReview>();
   const activeGitOperationId = useRef<string>();
   const nextGitOperationId = useRef(0);
+  const openFileChangeRef = useRef<(path: string) => Promise<void>>();
 
   /** 把后端技术错误归类为稳定、可翻译的仓库打开摘要，并保留原始详情。 */
   function repositoryOpenError(reason: unknown) {
@@ -272,6 +294,19 @@ export function App() {
       activeReview.current = undefined;
     }
   }, []);
+
+  useEffect(() => {
+    /** 窗口变窄时只临时切换显示模式，不覆盖用户保存的 Diff 偏好。 */
+    const updateReviewWidth = () => setNarrowReview(window.innerWidth < 1200);
+    window.addEventListener("resize", updateReviewWidth);
+    return () => window.removeEventListener("resize", updateReviewWidth);
+  }, []);
+
+  /** 保存用户明确选择的宽窗口 Diff 模式。 */
+  function selectDiffMode(mode: DiffMode) {
+    setDiffMode(mode);
+    localStorage.setItem(REVIEW_DIFF_MODE_KEY, mode);
+  }
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -695,6 +730,20 @@ export function App() {
       setError(String(reason));
     }
   }
+  openFileChangeRef.current = openFileChange;
+
+  /** 打开或刷新 Review 后按稳定路径顺序选择第一个 File Change。 */
+  const firstFileChangePath = snapshot
+    ? [...snapshot.fileChanges].sort((left, right) => comparePaths(left.path, right.path))[0]?.path
+    : undefined;
+  useEffect(() => {
+    if (!snapshot?.reviewId) return;
+    if (!firstFileChangePath) {
+      setFileChange(undefined);
+      return;
+    }
+    void openFileChangeRef.current?.(firstFileChangePath);
+  }, [snapshot?.reviewId, snapshot?.snapshotId, firstFileChangePath]);
 
   /** 只检查 Branch Selection 的 moving refs，不改变正在展示的 Snapshot。 */
   async function checkBranchReviewUpdates() {
@@ -725,6 +774,17 @@ export function App() {
     }
   }
 
+  /** 使用颜色与本地化文字共同表达 File Change 状态。 */
+  function renderChangeStatus(status: ChangeStatus) {
+    const colors: Record<ChangeStatus, string> = {
+      added: "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400",
+      deleted: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400",
+      modified: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      renamed: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400",
+    };
+    return <Badge variant="outline" className={colors[status]}>{t(`review:${status}`)}</Badge>;
+  }
+
   function renderDirectory(directory: DirectoryNode) {
     return <>
       {directory.directories.map((child) => <li key={child.name} role="treeitem" aria-label={child.name} aria-expanded="true">
@@ -732,8 +792,15 @@ export function App() {
         <ul role="group">{renderDirectory(child)}</ul>
       </li>)}
       {directory.files.map((change) => <li key={change.path} role="none">
-        <Button variant="ghost" type="button" role="treeitem" onClick={() => openFileChange(change.path)}>
-          <span>{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span> <small>{change.status}</small>
+        <Button
+          variant="ghost"
+          type="button"
+          role="treeitem"
+          aria-current={fileChange?.path === change.path ? "true" : undefined}
+          onClick={() => openFileChange(change.path)}
+        >
+          <span>{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span>
+          {renderChangeStatus(change.status)}
         </Button>
       </li>)}
     </>;
@@ -933,24 +1000,61 @@ export function App() {
         <Button onClick={refreshBranchReview}>确认刷新到新版本</Button>
       </div>}
     </section>}
-    {snapshot && <div className="grid grid-cols-[minmax(16rem,24rem)_1fr] gap-4">
-      <nav aria-label="文件树">
-        <ul role="tree" aria-label="文件树">
-          {renderDirectory(buildDirectoryTree(snapshot.fileChanges))}
-        </ul>
-      </nav>
-      {snapshot.fileChanges.length === 0 && <p>没有 File Change</p>}
-      {fileChange && <section aria-label="File Change" data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
-        <h2>{fileChange.path} <small>{fileChange.status}</small></h2>
-        {fileChange.contentKind === "binary"
-          ? <p>二进制文件（变更前：{fileChange.beforeSize === null ? "无" : `${fileChange.beforeSize} 字节`}；变更后：{fileChange.afterSize === null ? "无" : `${fileChange.afterSize} 字节`}）</p>
-          : <>
-            {fileChange.contentKind === "submodule" && <p>Submodule commit</p>}
-            {fileChange.contentKind === "symlink" && <p>Symlink 目标</p>}
-            <DiffEditor theme={editorTheme} height="500px" language="plaintext" original={fileChange.before ?? ""} modified={fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: true, ignoreTrimWhitespace: false }} />
-          </>}
-      </section>}
-    </div>}
+    {snapshot && <section aria-label={t("review:reader")} className="mt-3 overflow-hidden rounded-lg border">
+      <header className="flex min-h-11 items-center justify-between gap-3 border-b px-3 py-2">
+        <div className="min-w-0">
+          <h2 className="truncate text-sm font-semibold">
+            {snapshot.pullRequest ? `#${snapshot.pullRequest.number} ${snapshot.pullRequest.title}` : `${snapshot.baseRef} → ${snapshot.headRef}`}
+          </h2>
+          <p className="truncate font-mono text-xs text-muted-foreground">
+            {(snapshot.baseRevision ?? snapshot.comparisonBase).slice(0, 8)} → {snapshot.headRevision.slice(0, 8)}
+          </p>
+        </div>
+        <div aria-label={t("review:diffLayout")} className="flex gap-1">
+          <Button size="xs" variant={diffMode === "inline" ? "secondary" : "ghost"} aria-pressed={diffMode === "inline"} onClick={() => selectDiffMode("inline")}>{t("review:inline")}</Button>
+          <Button size="xs" variant={diffMode === "side-by-side" ? "secondary" : "ghost"} aria-pressed={diffMode === "side-by-side"} onClick={() => selectDiffMode("side-by-side")}>{t("review:sideBySide")}</Button>
+        </div>
+      </header>
+      {snapshot.fileChanges.length === 0
+        ? <div className="grid min-h-72 place-content-center px-6 text-center">
+          <h3 className="font-medium">{t("review:emptyTitle")}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p>
+        </div>
+        : <ResizablePanelGroup
+          orientation="horizontal"
+          className="min-h-[32rem]"
+          defaultLayout={{ "review-file-tree": initialTreeWidth, "review-diff": 100 - initialTreeWidth }}
+          onLayoutChanged={(layout, meta) => {
+            if (meta.isUserInteraction) {
+              localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(layout["review-file-tree"]));
+            }
+          }}
+        >
+          <ResizablePanel id="review-file-tree" minSize="15%" maxSize="45%" defaultSize={`${initialTreeWidth}%`}>
+            <nav aria-label={t("review:fileTree")} className="h-full overflow-auto border-r bg-muted/20">
+              <div className="sticky top-0 border-b bg-background/95 px-3 py-2 backdrop-blur">
+                <h3 className="text-xs font-semibold">{t("review:fileChanges")}</h3>
+                <p className="text-xs text-muted-foreground">{t("review:changeCount", { count: snapshot.fileChanges.length })}</p>
+              </div>
+              <ul role="tree" aria-label={t("review:fileTree")} className="p-1">
+                {renderDirectory(buildDirectoryTree(snapshot.fileChanges))}
+              </ul>
+            </nav>
+          </ResizablePanel>
+          <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
+          <ResizablePanel id="review-diff" minSize="45%">
+            {fileChange && <section className="h-full min-w-0" aria-label="File Change" data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
+              <header className="border-b px-3 py-2">
+                <h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium">{fileChange.path} {renderChangeStatus(fileChange.status)}</h3>
+              </header>
+              {fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: fileChange.beforeSize }), after: fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: fileChange.afterSize }) })}</p></div>}
+              {fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{fileChange.before ?? t("review:none")} → {fileChange.after ?? t("review:none")}</p></div>}
+              {fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{fileChange.before ?? t("review:none")} → {fileChange.after ?? t("review:none")}</p></div>}
+              {fileChange.contentKind === "text" && <DiffEditor theme={editorTheme} height="calc(100% - 2.5rem)" language="plaintext" original={fileChange.before ?? ""} modified={fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: !narrowReview && diffMode === "side-by-side", ignoreTrimWhitespace: false }} />}
+            </section>}
+          </ResizablePanel>
+        </ResizablePanelGroup>}
+    </section>}
     </>}
   </main>;
 }
