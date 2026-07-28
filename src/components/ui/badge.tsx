@@ -27,6 +27,7 @@ const badgeVariants = cva(
   }
 )
 
+/** shadcn 提供的通用紧凑状态标签。 */
 function Badge({
   className,
   variant = "default",

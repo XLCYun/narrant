@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
+import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import "@/lib/i18n";
 
 type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
@@ -34,20 +35,6 @@ type ReviewSnapshotBase = {
   headRef: string;
   headRevision: string;
   fileChanges: FileChangeSummary[];
-};
-type PullRequestMetadata = {
-  owner: string;
-  repository: string;
-  number: number;
-  title: string;
-  description: string;
-  author: string;
-  state: "open" | "closed" | "merged";
-  draft: boolean;
-  url: string;
-  baseRef: string;
-  headRef: string;
-  synchronizedAt: number;
 };
 type ReviewSnapshot = ReviewSnapshotBase & {
   reviewId: string;
@@ -83,33 +70,6 @@ type RepositoryEntry = {
   available: boolean;
   unavailableReason: string | null;
 };
-/** 首页与 Repository Entry 页面共享的持久化 Review 列表投影。 */
-type ReviewSummary = {
-  reviewId: string;
-  repositoryEntryId: number;
-  repositoryPath: string;
-  baseRef: string;
-  headRef: string;
-  lastOpenedAt: number;
-};
-type PullRequestRevision = { ref: string; sha: string };
-type DiscoveredPullRequest = {
-  number: number;
-  title: string;
-  description: string;
-  author: string;
-  state: string;
-  draft: boolean;
-  url: string;
-  base: PullRequestRevision;
-  head: PullRequestRevision;
-};
-type PullRequestGroup = {
-  repository: { owner: string; name: string };
-  remoteNames: string[];
-  pullRequests: DiscoveredPullRequest[];
-  error: string | null;
-};
 /// 当前由 discovery 选中的 Pull Request identity 与 metadata。
 type SelectedPullRequest = {
   repository: PullRequestGroup["repository"];
@@ -122,13 +82,6 @@ type ReviewUpdate = {
   currentHeadRevision: string;
   availableBaseRevision: string;
   availableHeadRevision: string;
-};
-/// Repository Entry 下无需 GitHub 在线状态即可展示的 durable Review。
-type SavedReviewSummary = {
-  reviewId: string;
-  baseRevision: string;
-  headRevision: string;
-  pullRequest?: PullRequestMetadata;
 };
 
 type DirectoryNode = {
@@ -354,6 +307,8 @@ export function App() {
     setSavedReviews(saved ?? []);
     setRepositoryReviews(reviews ?? []);
     setRepositoryPath(opened.canonicalPath);
+    setPullRequestGroups([]);
+    setDiscoveryError(undefined);
     void loadPullRequestGroups(opened);
     void Promise.resolve(invoke<GitHubAuthStatus>("github_auth_status"))
       .then(setAuthStatus)
@@ -634,6 +589,34 @@ export function App() {
     }
   }
 
+  /** 渲染由用户主动打开的 GitHub 安装、Device Flow、复制与退出入口。 */
+  function renderGitHubControls() {
+    return <div className="space-y-3 text-sm">
+      {!authStatus && <Button variant="ghost" className="w-full justify-start" onClick={connectGitHub}>连接 GitHub</Button>}
+      {authStatus?.signedIn && <Button variant="ghost" className="w-full justify-start" onClick={signOutGitHub}>退出 GitHub</Button>}
+      {authStatus && !authStatus.signedIn && (!authStatus.configured
+        ? <p className="px-2 text-xs text-muted-foreground">此构建未配置 GitHub App；公开 Pull Request 仍可匿名发现。</p>
+        : <>
+          <p className="px-2 text-xs">先安装 Narrant GitHub App 并为目标仓库授予只读访问；组织仓库可能需要管理员审批，再授权当前账号。</p>
+          {authStatus.appInstallUrl && <Button variant="outline" className="w-full" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
+          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>我已安装，继续</Button>
+          {deviceAuthorization && <div className="space-y-2 rounded-md border p-2">
+            <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
+            <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
+              {copiedValue === "device-code" ? "设备码已复制" : "复制设备码"}
+            </Button>
+            <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
+              {copiedValue === "authorization-url" ? "链接已复制" : "复制链接"}
+            </Button>
+            <a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a>
+            <Button variant="outline" className="w-full" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>打开 GitHub</Button>
+            <p className="text-xs text-muted-foreground">请核对应用名称，不要输入他人发送的验证码。</p>
+            <Button className="w-full" disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
+          </div>}
+        </>)}
+    </div>;
+  }
+
   async function loadRefs() {
     setError("");
     try {
@@ -790,6 +773,7 @@ export function App() {
         discoveryLoading={discoveryLoading}
         discoveryError={discoveryError}
         githubConnected={authStatus?.signedIn ?? false}
+        githubControls={renderGitHubControls()}
         onRetryDiscovery={() => void loadPullRequestGroups(selectedRepository)}
         onConnectGitHub={() => void connectGitHub()}
         onOpenSavedReview={(review) => void openSavedReview(review)}
@@ -823,35 +807,7 @@ export function App() {
     </Dialog>
     {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
-    <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
-      {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
-      {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
-    </section>
-    {authStatus && !authStatus.signedIn && <section aria-label="GitHub 授权">
-      {!authStatus.configured
-        ? <p>此构建未配置 GitHub App；公开 Repository 的 Pull Request 仍可匿名发现。</p>
-        : <>
-          <p>第 1 步：在 GitHub 中安装 Narrant，并为目标仓库授予只读访问；组织仓库可能需要管理员审批。</p>
-          {authStatus.appInstallUrl && <Button variant="outline" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
-          <p>第 2 步：安装完成后返回此处，继续授权当前 GitHub 账号。</p>
-          <Button disabled={authorizing} onClick={startGitHubAuthorization}>我已安装，继续</Button>
-          {deviceAuthorization && <div>
-            <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
-            <Button variant="outline" type="button" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
-              {copiedValue === "device-code" ? "设备码已复制" : "复制设备码"}
-            </Button>
-            <p>授权 URL：<a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a></p>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="outline" type="button" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
-                {copiedValue === "authorization-url" ? "链接已复制" : "复制链接"}
-              </Button>
-              <Button variant="outline" type="button" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>打开 GitHub</Button>
-            </div>
-            <p>仅使用 Narrant 当前生成的设备码，并在 GitHub 页面核对应用名称。不要输入他人发送的验证码。</p>
-            <Button disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
-          </div>}
-        </>}
-    </section>}
+    {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
     {!selectedRepository && <><p>本地分支比较</p>
       <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
         <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>

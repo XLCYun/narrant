@@ -3,33 +3,10 @@ import { RiGithubFill, RiGitPullRequestLine, RiHistoryLine, RiGitBranchLine } fr
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
+export type { DiscoveredPullRequest, PullRequestGroup, SavedReviewSummary } from "@/lib/review-types";
 
-export type PullRequestMetadata = {
-  owner: string; repository: string; number: number; title: string; description: string;
-  author: string; state: "open" | "closed" | "merged"; draft: boolean; url: string;
-  baseRef: string; headRef: string; synchronizedAt: number;
-};
-export type SavedReviewSummary = {
-  reviewId: string;
-  baseRevision: string;
-  headRevision: string;
-  pullRequest?: PullRequestMetadata;
-};
-export type DiscoveredPullRequest = {
-  number: number; title: string; description: string; author: string; state: string;
-  draft: boolean; url: string;
-  base: { ref: string; sha: string };
-  head: { ref: string; sha: string };
-};
-export type PullRequestGroup = {
-  repository: { owner: string; name: string };
-  remoteNames: string[];
-  pullRequests: DiscoveredPullRequest[];
-  error: string | null;
-};
-type ReviewSummary = {
-  reviewId: string; baseRef: string; headRef: string; lastOpenedAt: number;
-};
+/** Repository Entry 概览所需的外部状态与用户动作。 */
 type Props = {
   repositoryName: string;
   repositoryPath: string;
@@ -39,6 +16,7 @@ type Props = {
   discoveryLoading: boolean;
   discoveryError?: string;
   githubConnected: boolean;
+  githubControls?: ReactNode;
   localBranches: ReactNode;
   onRetryDiscovery: () => void;
   onConnectGitHub: () => void;
@@ -49,6 +27,7 @@ type Props = {
   ) => void;
 };
 
+/** 合并后用于渲染一个 Pull Request Selection 的行模型。 */
 type PullRequestRow = {
   key: string;
   repository: PullRequestGroup["repository"];
@@ -89,9 +68,9 @@ export function RepositoryOverview(props: Props) {
         <p className="font-heading text-base">{props.repositoryName}</p>
       </div>
       <div className="mt-auto border-t pt-3">
-        <Button variant="ghost" className="w-full justify-start" onClick={props.onConnectGitHub}>
+        {props.githubControls ?? <Button variant="ghost" className="w-full justify-start" onClick={props.onConnectGitHub}>
           <RiGithubFill />{props.githubConnected ? "GitHub 已连接" : "连接 GitHub"}
-        </Button>
+        </Button>}
       </div>
     </aside>
     <section className="min-w-0 p-6">
