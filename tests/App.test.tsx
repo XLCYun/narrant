@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 const writeText = vi.hoisted(() => vi.fn());
 
 import { App } from "@/App";
+import { i18n } from "@/lib/i18n";
 
 afterEach(() => {
   cleanup();
@@ -43,7 +44,8 @@ function mockSystemTheme(initialDark: boolean) {
 }
 
 describe("App", () => {
-  it("从仓库优先首页添加 Repository Entry 并进入仓库页面", async () => {
+  it("未信任仓库取消时留在首页，确认后才进入仓库页面", async () => {
+    await i18n.changeLanguage("zh-CN");
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
@@ -71,20 +73,61 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加 Repository" }));
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
 
-    expect(await screen.findByRole("heading", { name: "narrant" })).toBeInTheDocument();
-    expect(screen.getByText("/work/narrant")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "返回 Repository Entries" })).toBeInTheDocument();
-    expect(screen.getByLabelText("本地仓库路径")).toHaveValue("/work/narrant");
-    expect(screen.getByLabelText("Workspace Trust 风险说明")).toHaveTextContent("hooks、filters、Git LFS");
-    expect(screen.getByRole("button", { name: "打开 Review Snapshot" })).toBeDisabled();
+    expect(await screen.findByRole("dialog", { name: "信任这个仓库？" })).toHaveTextContent(
+      /checkout.*hooks.*filters.*Git LFS/i,
+    );
+    expect(screen.getByLabelText("Repository Catalog")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "我了解风险并信任此 Repository Entry" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog", { name: "信任这个仓库？" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Repository Catalog")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "/work/narrant" }));
+    fireEvent.click(await screen.findByRole("button", { name: "信任并打开" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith(
       "grant_repository_workspace_trust",
       { repositoryEntryId: 21 },
     ));
+    expect(await screen.findByRole("heading", { name: "narrant" })).toBeInTheDocument();
+    expect(screen.getByText("/work/narrant")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
+    expect(screen.queryByText("已信任")).not.toBeInTheDocument();
+  });
+
+  it("从最近审核触发信任后继续打开原 Review", async () => {
+    await i18n.changeLanguage("zh-CN");
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 31, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const review = {
+      reviewId: "review-31", repositoryEntryId: 31, repositoryPath: "/work/narrant",
+      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "list_reviews") return Promise.resolve([review]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(false);
+      if (command === "reopen_review") return Promise.resolve({
+        reviewId: review.reviewId, snapshotId: "snapshot-31", baseRef: review.baseRef,
+        baseRevision: "base", comparisonBase: "base", headRef: review.headRef,
+        headRevision: "head", fileChanges: [],
+      });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /narrant · main → topic/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "信任并打开" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", {
+      reviewId: "review-31",
+    }));
+    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
   });
 
   it("从首页最近列表和 Repository Entry 重新打开持久化 Review", async () => {

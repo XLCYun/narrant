@@ -22,11 +22,14 @@ export const config = {
     // 为真实 Tauri IPC 创建隔离的 Core Git 仓库，并把路径传给测试 worker。
     localFixtureRoot = await mkdtemp(join(tmpdir(), "narrant-e2e-"));
     const repositoryPath = join(localFixtureRoot, "repository");
+    const trustRepositoryPath = join(localFixtureRoot, "trust-repository");
     const fixture = JSON.parse((await executeFile(
       process.execPath,
       ["e2e/fixtures/setup-local-repo.mjs", repositoryPath],
     )).stdout.trim());
+    await executeFile(process.execPath, ["e2e/fixtures/setup-local-repo.mjs", trustRepositoryPath]);
     process.env.NARRANT_E2E_REPOSITORY = await realpath(repositoryPath);
+    process.env.NARRANT_E2E_TRUST_REPOSITORY = await realpath(trustRepositoryPath);
     process.env.NARRANT_DATABASE_PATH = join(localFixtureRoot, "narrant.sqlite3");
     process.env.NARRANT_GITHUB_API_URL = "http://127.0.0.1:18472";
     githubMock = spawn(process.execPath, ["e2e/fixtures/github-mock-server.mjs"], {
