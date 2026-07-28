@@ -14,7 +14,7 @@ const pullRequestReview = {
     repository: "narrant",
     number: 43,
     title: "Safe review overview",
-    description: "Hello <script>alert('no')</script>\n\n![tracker](https://example.com/pixel.png)\n\n[Read more](https://example.com/details)",
+    description: "Hello <script>alert('no')</script>\n\n![tracker](https://example.com/pixel.png)\n\n[Read more](https://example.com/details)\n\n[Uppercase scheme](HTTPS://example.com/uppercase)",
     author: "octocat",
     state: "open" as const,
     draft: false,
@@ -95,6 +95,8 @@ describe("ReviewOverview", () => {
 
     fireEvent.click(screen.getByRole("link", { name: "Read more" }));
     expect(onOpenExternal).toHaveBeenCalledWith("https://example.com/details");
+    fireEvent.click(screen.getByRole("link", { name: "Uppercase scheme" }));
+    expect(onOpenExternal).toHaveBeenLastCalledWith("HTTPS://example.com/uppercase");
     fireEvent.click(screen.getByRole("link", { name: "在 GitHub 查看" }));
     expect(onOpenExternal).toHaveBeenLastCalledWith(pullRequestReview.pullRequest.url);
   });

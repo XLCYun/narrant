@@ -32,7 +32,13 @@ type ReviewOverviewProps = {
 
 /** 判断 Markdown 链接是否可交给系统默认浏览器。 */
 function isExternalWebUrl(url?: string): url is string {
-  return Boolean(url && (url.startsWith("https://") || url.startsWith("http://")));
+  if (!url) return false;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 /** 将 Review 背景放进默认关闭的右侧 Sheet，避免长期占用 Diff 空间。 */
