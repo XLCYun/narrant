@@ -4,7 +4,9 @@ import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Button } from "@/components/ui/button";
+import { useTranslation } from "react-i18next";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
@@ -168,6 +170,7 @@ function ErrorMessage({ message }: { message: string }) {
 }
 
 export function App() {
+  const { t } = useTranslation();
   const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const editorTheme = useSystemTheme();
@@ -176,6 +179,7 @@ export function App() {
   const [recentReviews, setRecentReviews] = useState<ReviewSummary[]>([]);
   const [repositoryReviews, setRepositoryReviews] = useState<ReviewSummary[]>([]);
   const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
+  const [pendingRepository, setPendingRepository] = useState<RepositoryEntry>();
   const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
@@ -198,6 +202,17 @@ export function App() {
   const activeReview = useRef<ActiveReview>();
   const activeGitOperationId = useRef<string>();
   const nextGitOperationId = useRef(0);
+
+  /** 把后端技术错误归类为稳定、可翻译的仓库打开摘要，并保留原始详情。 */
+  function repositoryOpenError(reason: unknown) {
+    const detail = String(reason);
+    const key = detail.includes("不是兼容的 working-tree Git 仓库")
+      ? "repositoryNotGit"
+      : detail.includes("路径不存在或不可访问")
+        ? "repositoryUnavailable"
+        : "repositoryRegistrationFailed";
+    return `${t(key)} ${detail}`;
+  }
 
   /** 执行可取消的本地 Core Git 命令，并在新操作开始时取消旧操作。 */
   async function invokeLocalGit<T>(command: string, arguments_: Record<string, unknown>) {
@@ -299,7 +314,7 @@ export function App() {
       const entry = await invoke<RepositoryEntry>("register_repository_entry", { path });
       setRepositoryEntries((entries) => [entry, ...entries.filter((candidate) => candidate.id !== entry.id)]);
       await openRepository(entry);
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) { setError(repositoryOpenError(reason)); }
   }
 
   /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
@@ -325,33 +340,49 @@ export function App() {
     setSavedReviews(reviews ?? []);
   }
 
-  /** 进入一个可用 Repository Entry，并将后续 Core Git 操作限定到其保存路径。 */
-  async function openRepository(entry: RepositoryEntry) {
+  /** 在 Workspace Trust 已确认后进入 Repository Entry 上下文。 */
+  async function enterRepository(opened: RepositoryEntry) {
+    const [saved, reviews] = await Promise.all([
+      invoke<SavedReviewSummary[]>("list_saved_reviews", { repositoryEntryId: opened.id }),
+      invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
+    ]);
+    setSelectedRepository(opened);
+    setWorkspaceTrusted(true);
+    setSavedReviews(saved ?? []);
+    setRepositoryReviews(reviews ?? []);
+    setRepositoryPath(opened.canonicalPath);
+    void loadPullRequestGroups(opened);
+    setRefs([]);
+    setBaseRef("");
+    setHeadRef("");
+    replaceSnapshot(undefined);
+    setFileChange(undefined);
+  }
+
+  /** 打开 Repository Entry；首次使用时先停留当前页面并请求 Workspace Trust。 */
+  async function openRepository(entry: RepositoryEntry): Promise<boolean> {
     setError("");
     try {
       const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
       setRepositoryEntries((entries) => entries.map((candidate) => (
         candidate.id === opened.id ? opened : candidate
       )));
-      if (!opened.available) return;
-      setSelectedRepository(opened);
-      const [trusted, saved, reviews] = await Promise.all([
-        invoke<boolean>("repository_workspace_trust", { repositoryEntryId: opened.id }),
-        invoke<SavedReviewSummary[]>("list_saved_reviews", { repositoryEntryId: opened.id }),
-        invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
-      ]);
-      setWorkspaceTrusted(trusted);
-      setSavedReviews(saved ?? []);
-      setRepositoryReviews(reviews ?? []);
-      setRepositoryPath(opened.canonicalPath);
-      void loadPullRequestGroups(opened);
-      setRefs([]);
-      setBaseRef("");
-      setHeadRef("");
-      replaceSnapshot(undefined);
-      setFileChange(undefined);
+      if (!opened.available) {
+        setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
+        return false;
+      }
+      const trusted = await invoke<boolean>("repository_workspace_trust", {
+        repositoryEntryId: opened.id,
+      });
+      if (!trusted) {
+        setPendingRepository(opened);
+        return false;
+      }
+      await enterRepository(opened);
+      return true;
     } catch (reason) {
       setError(String(reason));
+      return false;
     }
   }
 
@@ -398,7 +429,7 @@ export function App() {
       if (selectedRepository?.id !== summary.repositoryEntryId) {
         const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
         if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
-        await openRepository(entry);
+        if (!await openRepository(entry)) return;
       }
       replaceSnapshot(await invoke<ReviewSnapshot>("reopen_review", {
         reviewId: summary.reviewId,
@@ -420,15 +451,17 @@ export function App() {
     }
   }
 
-  /** 在明确展示 checkout、hooks、filters、LFS 与未来 review tools 风险后持久化授权。 */
+  /** 在风险 Dialog 明确确认后持久化 Workspace Trust，并进入待打开仓库。 */
   async function grantWorkspaceTrust() {
-    if (!selectedRepository) return;
+    if (!pendingRepository) return;
     setError("");
     try {
       await invoke("grant_repository_workspace_trust", {
-        repositoryEntryId: selectedRepository.id,
+        repositoryEntryId: pendingRepository.id,
       });
-      setWorkspaceTrusted(true);
+      const trustedRepository = pendingRepository;
+      setPendingRepository(undefined);
+      await enterRepository(trustedRepository);
     } catch (reason) {
       setError(String(reason));
     }
@@ -695,7 +728,7 @@ export function App() {
 
   return <main>
     <header><h1>Narrant</h1><p>只读变更审核</p></header>
-    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage reviews={recentReviews} onOpenReview={(review) => void reopenReview(review)} onOpenFolder={(path) => void registerRepositoryFolder(path)} />}
+    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage reviews={recentReviews} error={error} onOpenReview={(review) => void reopenReview(review)} onOpenFolder={(path) => void registerRepositoryFolder(path)} />}
     {catalogRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Repository Catalog">
       <h2>Repository Entries</h2>
       <section aria-label="添加 Repository" className="flex flex-wrap items-end gap-3">
@@ -790,12 +823,22 @@ export function App() {
             </Button>
           </li>)}</ul>}
       </section>
-      {!workspaceTrusted && <section aria-label="Workspace Trust 风险说明">
-        <h3>授予 Workspace Trust</h3>
-        <p>创建 Review 会执行普通 Git checkout；仓库配置可能触发 hooks、filters、Git LFS，未来 review tools 也可能读取仓库控制的配置。</p>
-        <Button onClick={grantWorkspaceTrust}>我了解风险并信任此 Repository Entry</Button>
-      </section>}
     </article>}
+    <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
+      if (!open) setPendingRepository(undefined);
+    }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("trustTitle")}</DialogTitle>
+          <DialogDescription>{t("trustDescription")}</DialogDescription>
+        </DialogHeader>
+        <p className="break-all text-sm text-muted-foreground">{pendingRepository?.canonicalPath}</p>
+        <DialogFooter>
+          <DialogClose className={buttonVariants({ variant: "outline" })}>{t("cancel")}</DialogClose>
+          <Button onClick={() => void grantWorkspaceTrust()}>{t("trustAndOpen")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
     <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">

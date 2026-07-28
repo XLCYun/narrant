@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { openFixtureRepository } from "./helpers/open-repository";
 
 /** 返回 fixture 仓库当前注册的 worktree 数量，不依赖本地化输出。 */
 function worktreeCount(repositoryPath: string) {
@@ -34,15 +35,7 @@ describe("本地分支比较", () => {
 
   it("通过真实 Tauri IPC 显示只读 File Change", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
-    if (await $("button=返回 Repository Entries").isExisting()) {
-      await $("button=返回 Repository Entries").click();
-    }
-    await $("[aria-label='Repository 路径']").setValue(repositoryPath);
-    await $("button=添加 Repository").click();
-    await $("[aria-label='Repository Entries'] button").click();
-    if (await $("button=我了解风险并信任此 Repository Entry").isExisting()) {
-      await $("button=我了解风险并信任此 Repository Entry").click();
-    }
+    await openFixtureRepository(repositoryPath);
     await $("button=读取分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
@@ -62,7 +55,7 @@ describe("本地分支比较", () => {
     await $("button=关闭 Review").click();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
     await $("button=返回 Repository Entries").click();
-    const recent = await $("[aria-label='Recent Reviews'] button");
+    const recent = await $("main [aria-label='最近审核'] button");
     await expect(recent).toBeDisplayed();
     await recent.click();
 
