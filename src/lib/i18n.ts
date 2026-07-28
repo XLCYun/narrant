@@ -20,4 +20,10 @@ void i18n.use(initReactI18next).init({
   interpolation: { escapeValue: false },
 });
 
+if (import.meta.env.VITE_WDIO === "true") {
+  /** 让真实 Tauri E2E 显式固定界面 locale，避免依赖 CI 主机语言。 */
+  (window as Window & { __NARRANT_E2E_SET_LOCALE__?: (locale: string) => Promise<unknown> })
+    .__NARRANT_E2E_SET_LOCALE__ = (locale) => i18n.changeLanguage(normalizeLocale(locale));
+}
+
 export { i18n };

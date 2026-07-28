@@ -52,6 +52,9 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(app).toMatch(/data-after=\{import\.meta\.env\.VITE_WDIO/);
     expect(home).toMatch(/import\.meta\.env\.VITE_WDIO\s*===\s*"true"/);
     expect(home).toMatch(/__NARRANT_E2E_DIRECTORY__/);
+    const i18n = read("src/lib/i18n.ts");
+    expect(i18n).toMatch(/import\.meta\.env\.VITE_WDIO\s*===\s*"true"/);
+    expect(i18n).toMatch(/__NARRANT_E2E_SET_LOCALE__/);
   });
 
   it("生产依赖与模块不再包含旧 GitHub code-content 实现", () => {

@@ -180,6 +180,7 @@ export function App() {
   const [repositoryReviews, setRepositoryReviews] = useState<ReviewSummary[]>([]);
   const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
   const [pendingRepository, setPendingRepository] = useState<RepositoryEntry>();
+  const [pendingReview, setPendingReview] = useState<ReviewSummary>();
   const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
@@ -360,7 +361,7 @@ export function App() {
   }
 
   /** 打开 Repository Entry；首次使用时先停留当前页面并请求 Workspace Trust。 */
-  async function openRepository(entry: RepositoryEntry): Promise<boolean> {
+  async function openRepository(entry: RepositoryEntry): Promise<"entered" | "trust-required" | "failed"> {
     setError("");
     try {
       const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
@@ -369,20 +370,20 @@ export function App() {
       )));
       if (!opened.available) {
         setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
-        return false;
+        return "failed";
       }
       const trusted = await invoke<boolean>("repository_workspace_trust", {
         repositoryEntryId: opened.id,
       });
       if (!trusted) {
         setPendingRepository(opened);
-        return false;
+        return "trust-required";
       }
       await enterRepository(opened);
-      return true;
+      return "entered";
     } catch (reason) {
       setError(String(reason));
-      return false;
+      return "failed";
     }
   }
 
@@ -421,6 +422,23 @@ export function App() {
     }
   }
 
+  /** 在 Repository Entry 已进入后打开 current Snapshot，并更新最近审核排序。 */
+  async function reopenResolvedReview(summary: ReviewSummary) {
+    replaceSnapshot(await invoke<ReviewSnapshot>("reopen_review", {
+      reviewId: summary.reviewId,
+    }));
+    const reopened = { ...summary, lastOpenedAt: Date.now() };
+    setRecentReviews((reviews) => [
+      reopened,
+      ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
+    ]);
+    setRepositoryReviews((reviews) => [
+      reopened,
+      ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
+    ]);
+    setFileChange(undefined);
+  }
+
   /** 从持久化列表打开 current Snapshot，并在跨仓库进入时恢复 Repository Entry 上下文。 */
   async function reopenReview(summary: ReviewSummary) {
     setError("");
@@ -429,21 +447,13 @@ export function App() {
       if (selectedRepository?.id !== summary.repositoryEntryId) {
         const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
         if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
-        if (!await openRepository(entry)) return;
+        const result = await openRepository(entry);
+        if (result !== "entered") {
+          if (result === "trust-required") setPendingReview(summary);
+          return;
+        }
       }
-      replaceSnapshot(await invoke<ReviewSnapshot>("reopen_review", {
-        reviewId: summary.reviewId,
-      }));
-      const reopened = { ...summary, lastOpenedAt: Date.now() };
-      setRecentReviews((reviews) => [
-        reopened,
-        ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
-      ]);
-      setRepositoryReviews((reviews) => [
-        reopened,
-        ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
-      ]);
-      setFileChange(undefined);
+      await reopenResolvedReview(summary);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -460,8 +470,11 @@ export function App() {
         repositoryEntryId: pendingRepository.id,
       });
       const trustedRepository = pendingRepository;
+      const reviewToResume = pendingReview;
       setPendingRepository(undefined);
+      setPendingReview(undefined);
       await enterRepository(trustedRepository);
+      if (reviewToResume) await reopenResolvedReview(reviewToResume);
     } catch (reason) {
       setError(String(reason));
     }
@@ -825,7 +838,10 @@ export function App() {
       </section>
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
-      if (!open) setPendingRepository(undefined);
+      if (!open) {
+        setPendingRepository(undefined);
+        setPendingReview(undefined);
+      }
     }}>
       <DialogContent>
         <DialogHeader>

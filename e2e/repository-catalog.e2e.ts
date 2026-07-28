@@ -1,4 +1,4 @@
-import { chooseRepositoryFolder } from "./helpers/open-repository";
+import { chooseRepositoryFolder, setE2ELocale } from "./helpers/open-repository";
 
 describe("Repository Catalog 持久化", () => {
   it("通过原生目录选择、首次信任并在再次选择时复用仓库", async () => {
@@ -27,5 +27,10 @@ describe("Repository Catalog 持久化", () => {
       ({ core }) => core.invoke<Array<{ canonicalPath: string }>>("list_repository_entries"),
     );
     expect(entries.filter((entry) => entry.canonicalPath === repositoryPath)).toHaveLength(1);
+
+    await $("button=返回 Repository Entries").click();
+    await setE2ELocale("en");
+    await chooseRepositoryFolder(repositoryPath, "Open repository folder");
+    await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
   });
 });

@@ -5,22 +5,27 @@ import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
 import { RiCloseLine } from "@remixicon/react"
 
+/** 提供 Dialog 的受控打开状态与上下文。 */
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
 
+/** 渲染打开 Dialog 的可访问触发控件。 */
 function DialogTrigger({ ...props }: DialogPrimitive.Trigger.Props) {
   return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
 }
 
+/** 将 Dialog 浮层挂载到页面顶层。 */
 function DialogPortal({ ...props }: DialogPrimitive.Portal.Props) {
   return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
 }
 
+/** 渲染关闭当前 Dialog 的控件。 */
 function DialogClose({ ...props }: DialogPrimitive.Close.Props) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
 }
 
+/** 渲染阻止背景交互的 Dialog 遮罩。 */
 function DialogOverlay({
   className,
   ...props
@@ -37,6 +42,7 @@ function DialogOverlay({
   )
 }
 
+/** 渲染带焦点约束和默认关闭按钮的 Dialog 内容。 */
 function DialogContent({
   className,
   children,
@@ -72,6 +78,7 @@ function DialogContent({
   )
 }
 
+/** 组织 Dialog 标题与说明区域。 */
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -82,6 +89,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** 组织 Dialog 底部操作区域。 */
 function DialogFooter({
   className,
   showCloseButton = false,
@@ -109,6 +117,7 @@ function DialogFooter({
   )
 }
 
+/** 渲染参与可访问名称计算的 Dialog 标题。 */
 function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
@@ -122,6 +131,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   )
 }
 
+/** 渲染参与可访问描述计算的 Dialog 说明。 */
 function DialogDescription({
   className,
   ...props

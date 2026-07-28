@@ -95,6 +95,41 @@ describe("App", () => {
     expect(screen.queryByText("已信任")).not.toBeInTheDocument();
   });
 
+  it("从最近审核触发信任后继续打开原 Review", async () => {
+    await i18n.changeLanguage("zh-CN");
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 31, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const review = {
+      reviewId: "review-31", repositoryEntryId: 31, repositoryPath: "/work/narrant",
+      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "list_reviews") return Promise.resolve([review]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(false);
+      if (command === "reopen_review") return Promise.resolve({
+        reviewId: review.reviewId, snapshotId: "snapshot-31", baseRef: review.baseRef,
+        baseRevision: "base", comparisonBase: "base", headRef: review.headRef,
+        headRevision: "head", fileChanges: [],
+      });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /narrant · main → topic/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "信任并打开" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", {
+      reviewId: "review-31",
+    }));
+    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
+  });
+
   it("从首页最近列表和 Repository Entry 重新打开持久化 Review", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
