@@ -35,6 +35,10 @@ export async function openFixtureRepository(repositoryPath: string) {
     await $("button=返回 Repository Entries").click();
   }
   await chooseRepositoryFolder(repositoryPath);
+  await browser.waitUntil(async () => (
+    await $("button=信任并打开").isExisting()
+    || await $("[aria-label='Repository Entry']").isExisting()
+  ));
   if (await $("button=信任并打开").isExisting()) {
     await $("button=信任并打开").click();
   }
