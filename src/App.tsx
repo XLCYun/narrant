@@ -60,6 +60,12 @@ type BranchReviewUpdate = {
   latestBaseRevision: string;
   latestHeadRevision: string;
 };
+/** 应用边界显式返回的分支选项与 Repository Entry 默认选择。 */
+type BranchRefs = {
+  refs: string[];
+  defaultRef: string;
+  currentRef: string;
+};
 type ActiveReview = { reviewId: string };
 type GitHubAuthStatus = {
   configured: boolean;
@@ -353,9 +359,7 @@ export function App() {
     setRepositoryReviews(reviews ?? []);
     setRepositoryPath(opened.canonicalPath);
     void loadPullRequestGroups(opened);
-    setRefs([]);
-    setBaseRef("");
-    setHeadRef("");
+    if (!testHarnessEnabled) void loadRefs(opened.id);
     replaceSnapshot(undefined);
     setFileChange(undefined);
   }
@@ -629,17 +633,21 @@ export function App() {
     }
   }
 
-  async function loadRefs() {
+  /** 加载 canonical refs，并使用后端识别的默认分支和当前检出分支初始化选择。 */
+  async function loadRefs(repositoryEntryId = selectedRepository?.id) {
     setError("");
     try {
-      const loadedRefs = await invokeLocalGit<string[]>("list_local_refs", {
-        repositoryEntryId: selectedRepository?.id,
+      const branches = await invokeLocalGit<BranchRefs>("list_local_refs", {
+        repositoryEntryId,
       });
-      setRefs(loadedRefs);
+      if (!branches || !Array.isArray(branches.refs)) {
+        throw new Error("分支应用边界返回了无效数据。");
+      }
+      setRefs(branches.refs);
       replaceSnapshot(undefined);
       setFileChange(undefined);
-      setBaseRef(loadedRefs[0] ?? "");
-      setHeadRef(loadedRefs[1] ?? loadedRefs[0] ?? "");
+      setBaseRef(branches.defaultRef);
+      setHeadRef(branches.currentRef);
     } catch (reason) {
       setRefs([]);
       replaceSnapshot(undefined);
@@ -647,6 +655,11 @@ export function App() {
       setError(String(reason));
     }
   }
+
+  const hasMatchingBranchReview = repositoryReviews.some(
+    (review) => review.baseRef === baseRef && review.headRef === headRef,
+  );
+  const branchSelectionInvalid = Boolean(baseRef && headRef && baseRef === headRef);
 
   async function openComparison() {
     setError("");
@@ -889,10 +902,13 @@ export function App() {
     <p>本地分支比较</p>
     <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
       <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
-      <Button variant="outline" onClick={loadRefs}>读取分支</Button>
+      <Button variant="outline" onClick={() => void loadRefs()}>重新读取分支</Button>
       <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
       <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-      <Button disabled={!baseRef || !headRef || (catalogRuntimeEnabled && !workspaceTrusted)} onClick={openComparison}>打开 Review Snapshot</Button>
+      <Button disabled={!baseRef || !headRef || branchSelectionInvalid || (catalogRuntimeEnabled && !workspaceTrusted)} onClick={openComparison}>
+        {hasMatchingBranchReview ? t("continueReview") : t("startReview")}
+      </Button>
+      {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
     </section>
     {error && <ErrorMessage message={error} />}
     {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}

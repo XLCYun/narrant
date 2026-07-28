@@ -36,10 +36,9 @@ describe("本地分支比较", () => {
   it("通过真实 Tauri IPC 显示只读 File Change", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     await openFixtureRepository(repositoryPath);
-    await $("button=读取分支").click();
-    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
+    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
-    await $("button=打开 Review Snapshot").click();
+    await $("button=开始审核").click();
     await $("[role='treeitem']").click();
     await expect($("[aria-label='File Change']")).toBeDisplayed();
     await expect($("[aria-label='File Change'] h2")).toHaveText(expect.stringContaining("welcome.txt"));
@@ -63,11 +62,10 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
-    await $("button=读取分支").click();
-    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
+    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await selectRef("Base Ref", "refs/heads/head-ref");
     await selectRef("Head Ref", "refs/heads/base-ref");
-    await $("button=打开 Review Snapshot").click();
+    await $("button=开始审核").click();
 
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
