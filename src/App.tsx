@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
+import { RepositoryOverview } from "@/components/repository-overview";
+import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import "@/lib/i18n";
 
 type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
@@ -33,20 +35,6 @@ type ReviewSnapshotBase = {
   headRef: string;
   headRevision: string;
   fileChanges: FileChangeSummary[];
-};
-type PullRequestMetadata = {
-  owner: string;
-  repository: string;
-  number: number;
-  title: string;
-  description: string;
-  author: string;
-  state: "open" | "closed" | "merged";
-  draft: boolean;
-  url: string;
-  baseRef: string;
-  headRef: string;
-  synchronizedAt: number;
 };
 type ReviewSnapshot = ReviewSnapshotBase & {
   reviewId: string;
@@ -82,33 +70,6 @@ type RepositoryEntry = {
   available: boolean;
   unavailableReason: string | null;
 };
-/** 首页与 Repository Entry 页面共享的持久化 Review 列表投影。 */
-type ReviewSummary = {
-  reviewId: string;
-  repositoryEntryId: number;
-  repositoryPath: string;
-  baseRef: string;
-  headRef: string;
-  lastOpenedAt: number;
-};
-type PullRequestRevision = { ref: string; sha: string };
-type DiscoveredPullRequest = {
-  number: number;
-  title: string;
-  description: string;
-  author: string;
-  state: string;
-  draft: boolean;
-  url: string;
-  base: PullRequestRevision;
-  head: PullRequestRevision;
-};
-type PullRequestGroup = {
-  repository: { owner: string; name: string };
-  remoteNames: string[];
-  pullRequests: DiscoveredPullRequest[];
-  error: string | null;
-};
 /// 当前由 discovery 选中的 Pull Request identity 与 metadata。
 type SelectedPullRequest = {
   repository: PullRequestGroup["repository"];
@@ -121,13 +82,6 @@ type ReviewUpdate = {
   currentHeadRevision: string;
   availableBaseRevision: string;
   availableHeadRevision: string;
-};
-/// Repository Entry 下无需 GitHub 在线状态即可展示的 durable Review。
-type SavedReviewSummary = {
-  reviewId: string;
-  baseRevision: string;
-  headRevision: string;
-  pullRequest?: PullRequestMetadata;
 };
 
 type DirectoryNode = {
@@ -186,6 +140,7 @@ export function App() {
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string>();
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
@@ -320,14 +275,14 @@ export function App() {
 
   /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
   async function loadPullRequestGroups(entry: RepositoryEntry) {
-    setPullRequestGroups([]);
+    setDiscoveryError(undefined);
     setDiscoveryLoading(true);
     try {
       setPullRequestGroups(await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
         repositoryEntryId: entry.id,
       }));
     } catch (reason) {
-      setError(String(reason));
+      setDiscoveryError(String(reason));
     } finally {
       setDiscoveryLoading(false);
     }
@@ -352,7 +307,12 @@ export function App() {
     setSavedReviews(saved ?? []);
     setRepositoryReviews(reviews ?? []);
     setRepositoryPath(opened.canonicalPath);
+    setPullRequestGroups([]);
+    setDiscoveryError(undefined);
     void loadPullRequestGroups(opened);
+    void Promise.resolve(invoke<GitHubAuthStatus>("github_auth_status"))
+      .then(setAuthStatus)
+      .catch(() => setAuthStatus(undefined));
     setRefs([]);
     setBaseRef("");
     setHeadRef("");
@@ -629,6 +589,34 @@ export function App() {
     }
   }
 
+  /** 渲染由用户主动打开的 GitHub 安装、Device Flow、复制与退出入口。 */
+  function renderGitHubControls() {
+    return <div className="space-y-3 text-sm">
+      {!authStatus && <Button variant="ghost" className="w-full justify-start" onClick={connectGitHub}>连接 GitHub</Button>}
+      {authStatus?.signedIn && <Button variant="ghost" className="w-full justify-start" onClick={signOutGitHub}>退出 GitHub</Button>}
+      {authStatus && !authStatus.signedIn && (!authStatus.configured
+        ? <p className="px-2 text-xs text-muted-foreground">此构建未配置 GitHub App；公开 Pull Request 仍可匿名发现。</p>
+        : <>
+          <p className="px-2 text-xs">先安装 Narrant GitHub App 并为目标仓库授予只读访问；组织仓库可能需要管理员审批，再授权当前账号。</p>
+          {authStatus.appInstallUrl && <Button variant="outline" className="w-full" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
+          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>我已安装，继续</Button>
+          {deviceAuthorization && <div className="space-y-2 rounded-md border p-2">
+            <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
+            <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
+              {copiedValue === "device-code" ? "设备码已复制" : "复制设备码"}
+            </Button>
+            <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
+              {copiedValue === "authorization-url" ? "链接已复制" : "复制链接"}
+            </Button>
+            <a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a>
+            <Button variant="outline" className="w-full" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>打开 GitHub</Button>
+            <p className="text-xs text-muted-foreground">请核对应用名称，不要输入他人发送的验证码。</p>
+            <Button className="w-full" disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
+          </div>}
+        </>)}
+    </div>;
+  }
+
   async function loadRefs() {
     setError("");
     try {
@@ -774,68 +762,30 @@ export function App() {
           </li>)}</ul>}
       </section>
     </article>}
-    {selectedRepository && <article aria-label="Repository Entry">
-      <Button variant="ghost" onClick={leaveRepository}>返回 Repository Entries</Button>
-      <h2>{selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1)}</h2>
-      <p>{selectedRepository.canonicalPath}</p>
-      <section aria-label="Repository Reviews">
-        <h3>Reviews</h3>
-        {repositoryReviews.length === 0
-          ? <p>尚无 Review</p>
-          : <ul>{repositoryReviews.map((review) => <li key={review.reviewId}>
-            <Button variant="outline" onClick={() => void reopenReview(review)}>
-              {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
-            </Button>
-          </li>)}</ul>}
-      </section>
-      <section aria-label="GitHub Pull Requests">
-        <div className="flex flex-wrap items-center gap-3">
-          <h3>GitHub Pull Requests</h3>
-          <Button
-            variant="outline"
-            disabled={discoveryLoading}
-            onClick={() => void loadPullRequestGroups(selectedRepository)}
-          >
-            刷新 Pull Requests
-          </Button>
-        </div>
-        {discoveryLoading && <p>正在发现 Pull Requests…</p>}
-        {!discoveryLoading && pullRequestGroups.length === 0 && <p>没有发现 GitHub remote</p>}
-        {pullRequestGroups.map((group) => {
-          const identity = `${group.repository.owner}/${group.repository.name}`;
-          return <article key={identity} aria-label={identity}>
-            <h4>{identity}</h4>
-            <p>remotes: {group.remoteNames.join(", ")}</p>
-            {group.error && <p role="status">{group.error}</p>}
-            {!group.error && group.pullRequests.length === 0 && <p>没有可访问的 Pull Request</p>}
-            {group.pullRequests.length > 0 && <ul>
-              {group.pullRequests.map((pullRequest) => <li key={pullRequest.number}>
-                <Button
-                  variant="outline"
-                  disabled={loading}
-                  onClick={() => void openDiscoveredPullRequest(group.repository, pullRequest)}
-                >
-                  #{pullRequest.number} {pullRequest.title}
-                  {pullRequest.draft ? "（草稿）" : ""}
-                </Button>
-                <p>{pullRequest.author} · {pullRequest.state} · {pullRequest.base.ref} → {pullRequest.head.ref}</p>
-              </li>)}
-            </ul>}
-          </article>;
-        })}
-      </section>
-      <section aria-label="保存的 Reviews">
-        <h3>保存的 Reviews</h3>
-        {savedReviews.length === 0
-          ? <p>尚无保存的 Review</p>
-          : <ul>{savedReviews.map((review) => <li key={review.reviewId}>
-            <Button variant="outline" disabled={loading} onClick={() => void openSavedReview(review)}>
-              {review.pullRequest
-                ? `#${review.pullRequest.number} ${review.pullRequest.title}`
-                : `${review.baseRevision.slice(0, 8)} → ${review.headRevision.slice(0, 8)}`}
-            </Button>
-          </li>)}</ul>}
-      </section>
+    {selectedRepository && !snapshot && <article aria-label="Repository Entry">
+      <Button variant="ghost" className="mb-3" onClick={leaveRepository}>返回 Repository Entries</Button>
+      <RepositoryOverview
+        repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
+        repositoryPath={selectedRepository.canonicalPath}
+        savedReviews={savedReviews}
+        pullRequestGroups={pullRequestGroups}
+        repositoryReviews={repositoryReviews}
+        discoveryLoading={discoveryLoading}
+        discoveryError={discoveryError}
+        githubConnected={authStatus?.signedIn ?? false}
+        githubControls={renderGitHubControls()}
+        onRetryDiscovery={() => void loadPullRequestGroups(selectedRepository)}
+        onConnectGitHub={() => void connectGitHub()}
+        onOpenSavedReview={(review) => void openSavedReview(review)}
+        onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
+        localBranches={<section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
+          <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
+          <Button variant="outline" onClick={loadRefs}>读取分支</Button>
+          <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+          <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+          <Button disabled={!baseRef || !headRef || baseRef === headRef || !workspaceTrusted} onClick={openComparison}>打开 Review Snapshot</Button>
+        </section>}
+      />
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
       if (!open) {
@@ -857,43 +807,16 @@ export function App() {
     </Dialog>
     {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
-    <section aria-label="打开 GitHub Pull Request" className="flex flex-wrap items-end gap-3">
-      {!authStatus && <Button variant="outline" onClick={connectGitHub}>连接 GitHub</Button>}
-      {authStatus?.signedIn && <Button variant="outline" onClick={signOutGitHub}>退出 GitHub</Button>}
-    </section>
-    {authStatus && !authStatus.signedIn && <section aria-label="GitHub 授权">
-      {!authStatus.configured
-        ? <p>此构建未配置 GitHub App；公开 Repository 的 Pull Request 仍可匿名发现。</p>
-        : <>
-          <p>第 1 步：在 GitHub 中安装 Narrant，并为目标仓库授予只读访问；组织仓库可能需要管理员审批。</p>
-          {authStatus.appInstallUrl && <Button variant="outline" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
-          <p>第 2 步：安装完成后返回此处，继续授权当前 GitHub 账号。</p>
-          <Button disabled={authorizing} onClick={startGitHubAuthorization}>我已安装，继续</Button>
-          {deviceAuthorization && <div>
-            <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
-            <Button variant="outline" type="button" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
-              {copiedValue === "device-code" ? "设备码已复制" : "复制设备码"}
-            </Button>
-            <p>授权 URL：<a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a></p>
-            <div className="flex flex-wrap gap-3">
-              <Button variant="outline" type="button" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
-                {copiedValue === "authorization-url" ? "链接已复制" : "复制链接"}
-              </Button>
-              <Button variant="outline" type="button" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>打开 GitHub</Button>
-            </div>
-            <p>仅使用 Narrant 当前生成的设备码，并在 GitHub 页面核对应用名称。不要输入他人发送的验证码。</p>
-            <Button disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
-          </div>}
-        </>}
-    </section>}
-    <p>本地分支比较</p>
-    <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
-      <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
-      <Button variant="outline" onClick={loadRefs}>读取分支</Button>
-      <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-      <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-      <Button disabled={!baseRef || !headRef || (catalogRuntimeEnabled && !workspaceTrusted)} onClick={openComparison}>打开 Review Snapshot</Button>
-    </section>
+    {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
+    {!selectedRepository && <><p>本地分支比较</p>
+      <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
+        <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
+        <Button variant="outline" onClick={loadRefs}>读取分支</Button>
+        <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+        <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+        <Button disabled={!baseRef || !headRef} onClick={openComparison}>打开 Review Snapshot</Button>
+      </section>
+    </>}
     {error && <ErrorMessage message={error} />}
     {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}
     {snapshot?.pullRequest && <article aria-label="Pull Request 概览">
