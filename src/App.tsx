@@ -942,6 +942,7 @@ export function App() {
       </div>
     </article>}
     {snapshot && !snapshot.pullRequest && <section aria-label="Branch Review 更新">
+      <p>{snapshot.baseRef} → {snapshot.headRef}</p>
       <Button variant="outline" onClick={checkBranchReviewUpdates}>检查更新</Button>
       {branchUpdate && !branchUpdate.changed && <p role="status">当前已是最新版本</p>}
       {branchUpdate?.changed && <div role="status">

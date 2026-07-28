@@ -11,12 +11,14 @@ function worktreeCount(repositoryPath: string) {
 
 /** 通过真实 shadcn/Base UI Select 选择一个 canonical ref。 */
 async function selectRef(label: "Base Ref" | "Head Ref", value: string) {
-  await $(`[aria-label='${label}']`).click();
+  const trigger = await $(`[aria-label='${label}']`);
+  await trigger.click();
   await browser.waitUntil(async () => (await $$("[role='option']")).length > 0);
   const options = await $$("[role='option']");
   for (const option of options) {
-    if ((await option.getText()).includes(value)) {
+    if (await option.isDisplayed() && (await option.getText()) === value) {
       await option.click();
+      await expect(trigger).toHaveText(value);
       return;
     }
   }
@@ -67,6 +69,10 @@ describe("本地分支比较", () => {
     await selectRef("Head Ref", "refs/heads/base-ref");
     await $("button=开始审核").click();
 
+    await expect($("[aria-label='Branch Review 更新']")).toHaveText(
+      expect.stringContaining("refs/heads/head-ref → refs/heads/base-ref"),
+    );
+    await expect($("p=没有 File Change")).toBeDisplayed();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
