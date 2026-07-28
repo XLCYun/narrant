@@ -1,8 +1,14 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@monaco-editor/react", () => ({
-  DiffEditor: ({ theme }: { theme?: string }) => <div data-testid="diff-editor" data-theme={theme} />,
+  DiffEditor: ({ theme, options }: { theme?: string; options?: { renderSideBySide?: boolean } }) => (
+    <div
+      data-testid="diff-editor"
+      data-theme={theme}
+      data-layout={options?.renderSideBySide ? "side-by-side" : "inline"}
+    />
+  ),
 }));
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -13,11 +19,17 @@ const writeText = vi.hoisted(() => vi.fn());
 import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
 
+beforeEach(async () => {
+  await i18n.changeLanguage("zh-CN");
+});
+
 afterEach(() => {
   cleanup();
   invoke.mockReset();
   openUrl.mockReset();
   writeText.mockReset();
+  localStorage.clear();
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
   document.documentElement.classList.remove("dark");
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
@@ -495,8 +507,7 @@ describe("App", () => {
 
     expect(await screen.findByRole("tree", { name: "文件树" })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("treeitem", { name: /main.rs.*modified/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("treeitem", { name: /logo.bin.*added/ }));
+    expect(screen.getByRole("treeitem", { name: /main.rs.*修改/ })).toBeInTheDocument();
 
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_review_file_change", {
       reviewId: "review-1",
@@ -505,6 +516,121 @@ describe("App", () => {
       operationId: expect.any(String),
     }));
     expect(await screen.findByText("二进制文件（变更前：无；变更后：128 字节）")).toBeInTheDocument();
+  });
+
+  it("打开 Review 后按稳定路径顺序自动选择首个 File Change 并高亮当前位置", async () => {
+    mockSystemTheme(false);
+    invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
+      if (command === "list_local_refs") {
+        return Promise.resolve({ refs: ["base", "head"], defaultRef: "base", currentRef: "head" });
+      }
+      if (command === "compare_local_refs") {
+        return Promise.resolve({
+          reviewId: "review-auto",
+          snapshotId: "snapshot-auto",
+          baseRef: "base",
+          baseRevision: "base-sha",
+          comparisonBase: "base-sha",
+          headRef: "head",
+          headRevision: "head-sha",
+          fileChanges: [
+            { path: "z-last.txt", oldPath: null, status: "modified" },
+            { path: "a-first.txt", oldPath: null, status: "added" },
+          ],
+        });
+      }
+      if (command === "read_review_file_change") {
+        return Promise.resolve({
+          path: arguments_?.path,
+          oldPath: null,
+          status: "added",
+          contentKind: "text",
+          beforeSize: null,
+          afterSize: 3,
+          before: null,
+          after: "new",
+        });
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
+    await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("read_review_file_change", {
+      reviewId: "review-auto",
+      snapshotId: "snapshot-auto",
+      path: "a-first.txt",
+      operationId: expect.any(String),
+    }));
+    expect(await screen.findByRole("treeitem", { name: /a-first.txt.*新增/ }))
+      .toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("heading", { name: /a-first.txt/ })).toBeInTheDocument();
+
+    await i18n.changeLanguage("en");
+    expect(screen.getByRole("region", { name: "Review reader" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Side by side" })).toBeInTheDocument();
+    expect(screen.getByRole("tree", { name: "File tree" })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /a-first.txt.*Added/ })).toBeInTheDocument();
+  });
+
+  it("为 Binary、Symlink 和 Submodule 显示专用信息视图而不实例化 Monaco", async () => {
+    mockSystemTheme(false);
+    invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
+      if (command === "list_local_refs") {
+        return Promise.resolve({ refs: ["base", "head"], defaultRef: "base", currentRef: "head" });
+      }
+      if (command === "compare_local_refs") {
+        return Promise.resolve({
+          reviewId: "review-special",
+          snapshotId: "snapshot-special",
+          baseRef: "base",
+          baseRevision: "base-sha",
+          comparisonBase: "base-sha",
+          headRef: "head",
+          headRevision: "head-sha",
+          fileChanges: [
+            { path: "assets/image.bin", oldPath: null, status: "added" },
+            { path: "deps/library", oldPath: null, status: "modified" },
+            { path: "latest", oldPath: null, status: "modified" },
+          ],
+        });
+      }
+      if (command === "read_review_file_change") {
+        const path = String(arguments_?.path);
+        const contentKind = path.endsWith(".bin") ? "binary" : path.startsWith("deps/") ? "submodule" : "symlink";
+        return Promise.resolve({
+          path,
+          oldPath: null,
+          status: "modified",
+          contentKind,
+          beforeSize: contentKind === "binary" ? null : 7,
+          afterSize: contentKind === "binary" ? 128 : 8,
+          before: contentKind === "submodule" ? "abc1234" : contentKind === "symlink" ? "v1" : null,
+          after: contentKind === "submodule" ? "def5678" : contentKind === "symlink" ? "v2" : null,
+        });
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
+    await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
+
+    expect(await screen.findByText(/二进制文件/)).toBeInTheDocument();
+    expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("treeitem", { name: /library.*修改/ }));
+    expect(await screen.findByText("Submodule commit 变更")).toBeInTheDocument();
+    expect(screen.getByText("abc1234 → def5678")).toBeInTheDocument();
+    expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("treeitem", { name: /latest.*修改/ }));
+    expect(await screen.findByText("Symlink 目标变更")).toBeInTheDocument();
+    expect(screen.getByText("v1 → v2")).toBeInTheDocument();
+    expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
   });
 
   it("检查到分支移动后保留当前 Snapshot，直到用户明确刷新", async () => {
@@ -580,6 +706,8 @@ describe("App", () => {
   });
 
   it("Monaco Diff Editor 跟随运行时系统主题", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    localStorage.setItem("narrant.review.fileTreeWidth", "31");
     const changeSystemTheme = mockSystemTheme(false);
     invoke
       .mockResolvedValueOnce({
@@ -600,9 +728,21 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
-    fireEvent.click(await screen.findByRole("treeitem", { name: /readme.txt.*modified/ }));
 
     expect(await screen.findByTestId("diff-editor")).toHaveAttribute("data-theme", "light");
+    expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "side-by-side");
+    expect(screen.getByRole("separator", { name: "调整文件树宽度" })).toHaveAttribute("aria-valuenow", "31");
+    fireEvent.click(screen.getByRole("button", { name: "单栏" }));
+    expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "inline");
+    expect(localStorage.getItem("narrant.review.diffMode")).toBe("inline");
+    fireEvent.click(screen.getByRole("button", { name: "双栏" }));
+    expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "inline"));
+    expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
+
     changeSystemTheme(true);
     await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-theme", "vs-dark"));
   });
