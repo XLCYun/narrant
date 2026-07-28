@@ -118,6 +118,15 @@ struct SavedReviewSummaryResponse {
     pull_request: Option<repository_catalog::PullRequestMetadata>,
 }
 
+/// Repository Entry 本地分支标签所需的 canonical refs 与显式默认选择。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchRefsResponse {
+    refs: Vec<String>,
+    default_ref: String,
+    current_ref: String,
+}
+
 /// 保存当前打开 Review 的运行时读取句柄，并串行化同一 Review 的刷新操作。
 #[derive(Default)]
 struct OpenReviewStore {
@@ -752,11 +761,16 @@ fn list_local_refs(
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     repository_entry_id: i64,
-) -> Result<Vec<String>, String> {
+) -> Result<BranchRefsResponse, String> {
     let repository_path = require_available_repository(&catalog, repository_entry_id)?;
     let cancellation = operations.start(operation_id.clone())?;
     let result =
-        change_content::local::list_refs_with_cancellation(&repository_path, &cancellation)
+        change_content::local::list_branch_refs_with_cancellation(&repository_path, &cancellation)
+            .map(|branches| BranchRefsResponse {
+                refs: branches.refs,
+                default_ref: branches.default_ref,
+                current_ref: branches.current_ref,
+            })
             .map_err(|error| error.to_string());
     operations.finish(&operation_id);
     result

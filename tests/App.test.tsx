@@ -180,8 +180,9 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
-    expect(await screen.findByRole("region", { name: "Repository Reviews" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /main → topic/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Review" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "审核历史" }));
+    expect(screen.getByText(/refs\/heads\/main → refs\/heads\/topic/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "返回 Repository Entries" }));
     const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
       .querySelectorAll("button");
@@ -377,6 +378,63 @@ describe("App", () => {
     expect(screen.getByText("本地分支比较")).toBeInTheDocument();
   });
 
+  it("仓库页面默认选择默认与当前分支，并识别可继续的 Branch Selection", async () => {
+    await i18n.changeLanguage("zh-CN");
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 41, canonicalPath: "/repo", commonDirectory: "/repo/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const existingReview = {
+      reviewId: "review-41", repositoryEntryId: 41, repositoryPath: "/repo",
+      baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
+    };
+    invoke.mockImplementation((command: string, arguments_?: { repositoryEntryId?: number | null }) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "list_reviews") {
+        return Promise.resolve(arguments_?.repositoryEntryId === 41 ? [existingReview] : []);
+      }
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "list_saved_reviews" || command === "discover_github_pull_requests") {
+        return Promise.resolve([]);
+      }
+      if (command === "list_local_refs") return Promise.resolve({
+        refs: ["refs/heads/topic", "refs/remotes/origin/main"],
+        defaultRef: "refs/remotes/origin/main",
+        currentRef: "refs/heads/topic",
+      });
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "/repo" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "本地分支" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新读取分支" }));
+
+    expect(await screen.findByLabelText("Base Ref")).toHaveTextContent("refs/remotes/origin/main");
+    expect(screen.getByLabelText("Head Ref")).toHaveTextContent("refs/heads/topic");
+    expect(screen.getByRole("button", { name: "继续审核" })).toBeEnabled();
+  });
+
+  it("Base 与 Head 相同时禁用开始审核并显示可翻译说明", async () => {
+    await i18n.changeLanguage("en");
+    mockSystemTheme(false);
+    invoke.mockResolvedValue({
+      refs: ["refs/heads/main"],
+      defaultRef: "refs/heads/main",
+      currentRef: "refs/heads/main",
+    });
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
+
+    expect(await screen.findByRole("button", { name: "Start review" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Base and Head must be different branches.");
+    await i18n.changeLanguage("zh-CN");
+  });
+
   it("连接 GitHub 会先打开安装页，再引导设备码授权且不接收 token", async () => {
     mockSystemTheme(false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -424,7 +482,11 @@ describe("App", () => {
   it("展示完整文件树并按需加载所选 File Change", async () => {
     mockSystemTheme(false);
     invoke
-      .mockResolvedValueOnce(["base", "origin/topic"])
+      .mockResolvedValueOnce({
+        refs: ["base", "origin/topic"],
+        defaultRef: "base",
+        currentRef: "origin/topic",
+      })
       .mockResolvedValueOnce({
         reviewId: "review-1",
         snapshotId: "snapshot-1",
@@ -439,9 +501,9 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("origin/topic"));
-    fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
     expect(await screen.findByRole("tree", { name: "文件树" })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "true");
@@ -459,7 +521,9 @@ describe("App", () => {
   it("打开 Review 后按稳定路径顺序自动选择首个 File Change 并高亮当前位置", async () => {
     mockSystemTheme(false);
     invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
-      if (command === "list_local_refs") return Promise.resolve(["base", "head"]);
+      if (command === "list_local_refs") {
+        return Promise.resolve({ refs: ["base", "head"], defaultRef: "base", currentRef: "head" });
+      }
       if (command === "compare_local_refs") {
         return Promise.resolve({
           reviewId: "review-auto",
@@ -492,9 +556,9 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
-    fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("read_review_file_change", {
       reviewId: "review-auto",
@@ -516,7 +580,9 @@ describe("App", () => {
   it("为 Binary、Symlink 和 Submodule 显示专用信息视图而不实例化 Monaco", async () => {
     mockSystemTheme(false);
     invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
-      if (command === "list_local_refs") return Promise.resolve(["base", "head"]);
+      if (command === "list_local_refs") {
+        return Promise.resolve({ refs: ["base", "head"], defaultRef: "base", currentRef: "head" });
+      }
       if (command === "compare_local_refs") {
         return Promise.resolve({
           reviewId: "review-special",
@@ -551,9 +617,9 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
-    fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
     expect(await screen.findByText(/二进制文件/)).toBeInTheDocument();
     expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
@@ -592,7 +658,11 @@ describe("App", () => {
       if (command === "repository_workspace_trust") return Promise.resolve(true);
       if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") {
-        return Promise.resolve(["refs/heads/main", "refs/heads/topic"]);
+        return Promise.resolve({
+          refs: ["refs/heads/main", "refs/heads/topic"],
+          defaultRef: "refs/heads/main",
+          currentRef: "refs/heads/topic",
+        });
       }
       if (command === "compare_local_refs") return Promise.resolve(oldSnapshot);
       if (command === "check_branch_review_updates") return Promise.resolve({
@@ -607,9 +677,10 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "/repo" }));
     await screen.findByRole("heading", { name: "repo" });
-    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+    fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("refs/heads/topic"));
-    fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
     expect(await screen.findByRole("treeitem", { name: /old.txt/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
@@ -639,7 +710,11 @@ describe("App", () => {
     localStorage.setItem("narrant.review.fileTreeWidth", "31");
     const changeSystemTheme = mockSystemTheme(false);
     invoke
-      .mockResolvedValueOnce(["base", "head"])
+      .mockResolvedValueOnce({
+        refs: ["base", "head"],
+        defaultRef: "base",
+        currentRef: "head",
+      })
       .mockResolvedValueOnce({
         reviewId: "review-2",
         comparisonBase: "base-sha",
@@ -650,9 +725,9 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
-    fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
     expect(await screen.findByTestId("diff-editor")).toHaveAttribute("data-theme", "light");
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "side-by-side");
