@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
+import { HomePage } from "@/components/home-page";
+import "@/lib/i18n";
 
 type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 type FileChangeSummary = {
@@ -287,6 +289,17 @@ export function App() {
     } finally {
       setCatalogLoading(false);
     }
+  }
+
+  /** 原生目录选择后的 Repository Entry 注册入口。 */
+  async function registerRepositoryFolder(path: string) {
+    setRepositoryPath(path);
+    setError("");
+    try {
+      const entry = await invoke<RepositoryEntry>("register_repository_entry", { path });
+      setRepositoryEntries((entries) => [entry, ...entries.filter((candidate) => candidate.id !== entry.id)]);
+      await openRepository(entry);
+    } catch (reason) { setError(String(reason)); }
   }
 
   /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
@@ -682,7 +695,8 @@ export function App() {
 
   return <main>
     <header><h1>Narrant</h1><p>只读变更审核</p></header>
-    {catalogRuntimeEnabled && !selectedRepository && <article aria-label="Repository Catalog">
+    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage reviews={recentReviews} onOpenReview={(review) => void reopenReview(review)} onOpenFolder={(path) => void registerRepositoryFolder(path)} />}
+    {catalogRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Repository Catalog">
       <h2>Repository Entries</h2>
       <section aria-label="添加 Repository" className="flex flex-wrap items-end gap-3">
         <label>Repository 路径<Input aria-label="Repository 路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>

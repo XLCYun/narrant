@@ -1078,7 +1078,8 @@ pub fn run() {
             read_review_file_change,
             close_review
         ])
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init());
     #[cfg(feature = "wdio")]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
