@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
+import { RepositoryOverview } from "@/components/repository-overview";
 import "@/lib/i18n";
 
 type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
@@ -186,6 +187,7 @@ export function App() {
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string>();
   const [refs, setRefs] = useState<string[]>([]);
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
@@ -320,14 +322,14 @@ export function App() {
 
   /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
   async function loadPullRequestGroups(entry: RepositoryEntry) {
-    setPullRequestGroups([]);
+    setDiscoveryError(undefined);
     setDiscoveryLoading(true);
     try {
       setPullRequestGroups(await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
         repositoryEntryId: entry.id,
       }));
     } catch (reason) {
-      setError(String(reason));
+      setDiscoveryError(String(reason));
     } finally {
       setDiscoveryLoading(false);
     }
@@ -353,6 +355,9 @@ export function App() {
     setRepositoryReviews(reviews ?? []);
     setRepositoryPath(opened.canonicalPath);
     void loadPullRequestGroups(opened);
+    void Promise.resolve(invoke<GitHubAuthStatus>("github_auth_status"))
+      .then(setAuthStatus)
+      .catch(() => setAuthStatus(undefined));
     setRefs([]);
     setBaseRef("");
     setHeadRef("");
@@ -774,68 +779,29 @@ export function App() {
           </li>)}</ul>}
       </section>
     </article>}
-    {selectedRepository && <article aria-label="Repository Entry">
-      <Button variant="ghost" onClick={leaveRepository}>返回 Repository Entries</Button>
-      <h2>{selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1)}</h2>
-      <p>{selectedRepository.canonicalPath}</p>
-      <section aria-label="Repository Reviews">
-        <h3>Reviews</h3>
-        {repositoryReviews.length === 0
-          ? <p>尚无 Review</p>
-          : <ul>{repositoryReviews.map((review) => <li key={review.reviewId}>
-            <Button variant="outline" onClick={() => void reopenReview(review)}>
-              {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
-            </Button>
-          </li>)}</ul>}
-      </section>
-      <section aria-label="GitHub Pull Requests">
-        <div className="flex flex-wrap items-center gap-3">
-          <h3>GitHub Pull Requests</h3>
-          <Button
-            variant="outline"
-            disabled={discoveryLoading}
-            onClick={() => void loadPullRequestGroups(selectedRepository)}
-          >
-            刷新 Pull Requests
-          </Button>
-        </div>
-        {discoveryLoading && <p>正在发现 Pull Requests…</p>}
-        {!discoveryLoading && pullRequestGroups.length === 0 && <p>没有发现 GitHub remote</p>}
-        {pullRequestGroups.map((group) => {
-          const identity = `${group.repository.owner}/${group.repository.name}`;
-          return <article key={identity} aria-label={identity}>
-            <h4>{identity}</h4>
-            <p>remotes: {group.remoteNames.join(", ")}</p>
-            {group.error && <p role="status">{group.error}</p>}
-            {!group.error && group.pullRequests.length === 0 && <p>没有可访问的 Pull Request</p>}
-            {group.pullRequests.length > 0 && <ul>
-              {group.pullRequests.map((pullRequest) => <li key={pullRequest.number}>
-                <Button
-                  variant="outline"
-                  disabled={loading}
-                  onClick={() => void openDiscoveredPullRequest(group.repository, pullRequest)}
-                >
-                  #{pullRequest.number} {pullRequest.title}
-                  {pullRequest.draft ? "（草稿）" : ""}
-                </Button>
-                <p>{pullRequest.author} · {pullRequest.state} · {pullRequest.base.ref} → {pullRequest.head.ref}</p>
-              </li>)}
-            </ul>}
-          </article>;
-        })}
-      </section>
-      <section aria-label="保存的 Reviews">
-        <h3>保存的 Reviews</h3>
-        {savedReviews.length === 0
-          ? <p>尚无保存的 Review</p>
-          : <ul>{savedReviews.map((review) => <li key={review.reviewId}>
-            <Button variant="outline" disabled={loading} onClick={() => void openSavedReview(review)}>
-              {review.pullRequest
-                ? `#${review.pullRequest.number} ${review.pullRequest.title}`
-                : `${review.baseRevision.slice(0, 8)} → ${review.headRevision.slice(0, 8)}`}
-            </Button>
-          </li>)}</ul>}
-      </section>
+    {selectedRepository && !snapshot && <article aria-label="Repository Entry">
+      <Button variant="ghost" className="mb-3" onClick={leaveRepository}>返回 Repository Entries</Button>
+      <RepositoryOverview
+        repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
+        repositoryPath={selectedRepository.canonicalPath}
+        savedReviews={savedReviews}
+        pullRequestGroups={pullRequestGroups}
+        repositoryReviews={repositoryReviews}
+        discoveryLoading={discoveryLoading}
+        discoveryError={discoveryError}
+        githubConnected={authStatus?.signedIn ?? false}
+        onRetryDiscovery={() => void loadPullRequestGroups(selectedRepository)}
+        onConnectGitHub={() => void connectGitHub()}
+        onOpenSavedReview={(review) => void openSavedReview(review)}
+        onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
+        localBranches={<section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
+          <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
+          <Button variant="outline" onClick={loadRefs}>读取分支</Button>
+          <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+          <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+          <Button disabled={!baseRef || !headRef || baseRef === headRef || !workspaceTrusted} onClick={openComparison}>打开 Review Snapshot</Button>
+        </section>}
+      />
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
       if (!open) {
@@ -886,14 +852,15 @@ export function App() {
           </div>}
         </>}
     </section>}
-    <p>本地分支比较</p>
-    <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
-      <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
-      <Button variant="outline" onClick={loadRefs}>读取分支</Button>
-      <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-      <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-      <Button disabled={!baseRef || !headRef || (catalogRuntimeEnabled && !workspaceTrusted)} onClick={openComparison}>打开 Review Snapshot</Button>
-    </section>
+    {!selectedRepository && <><p>本地分支比较</p>
+      <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
+        <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
+        <Button variant="outline" onClick={loadRefs}>读取分支</Button>
+        <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+        <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+        <Button disabled={!baseRef || !headRef} onClick={openComparison}>打开 Review Snapshot</Button>
+      </section>
+    </>}
     {error && <ErrorMessage message={error} />}
     {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}
     {snapshot?.pullRequest && <article aria-label="Pull Request 概览">

@@ -36,6 +36,7 @@ describe("本地分支比较", () => {
   it("通过真实 Tauri IPC 显示只读 File Change", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     await openFixtureRepository(repositoryPath);
+    await $("[role='tab']=本地分支").click();
     await $("button=读取分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
@@ -63,6 +64,8 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
+    await $("button=关闭 Review").click();
+    await $("[role='tab']=本地分支").click();
     await $("button=读取分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
     await selectRef("Base Ref", "refs/heads/head-ref");

@@ -168,8 +168,9 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
-    expect(await screen.findByRole("region", { name: "Repository Reviews" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /main → topic/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Review" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "审核历史" }));
+    expect(screen.getByText(/refs\/heads\/main → refs\/heads\/topic/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "返回 Repository Entries" }));
     const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
       .querySelectorAll("button");
@@ -485,6 +486,7 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "/repo" }));
     await screen.findByRole("heading", { name: "repo" });
+    fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
     fireEvent.click(screen.getByRole("button", { name: "读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("refs/heads/topic"));
     fireEvent.click(screen.getByRole("button", { name: "打开 Review Snapshot" }));

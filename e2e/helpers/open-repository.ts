@@ -28,6 +28,9 @@ export async function setE2ELocale(locale: "zh-CN" | "en") {
 /** 从首页选择 fixture 仓库，并在首次打开时确认 Workspace Trust。 */
 export async function openFixtureRepository(repositoryPath: string) {
   await setE2ELocale("zh-CN");
+  if (await $("button=关闭 Review").isExisting()) {
+    await $("button=关闭 Review").click();
+  }
   if (await $("button=返回 Repository Entries").isExisting()) {
     await $("button=返回 Repository Entries").click();
   }
