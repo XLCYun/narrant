@@ -143,6 +143,95 @@ pub fn list_refs(repository_path: &Path) -> Result<Vec<String>, GitCommandError>
     list_refs_with_cancellation(repository_path, &CancellationToken::default())
 }
 
+/// Repository Entry 的 canonical 分支选项及 Git 明确报告的默认、当前分支。
+#[derive(Debug, PartialEq, Eq)]
+pub struct BranchRefs {
+    pub refs: Vec<String>,
+    pub default_ref: String,
+    pub current_ref: String,
+}
+
+/// 返回分支选项及默认选择，不以排序后列表的位置推断语义。
+pub fn list_branch_refs(repository_path: &Path) -> Result<BranchRefs, GitCommandError> {
+    list_branch_refs_with_cancellation(repository_path, &CancellationToken::default())
+}
+
+/// 使用调用方取消标记返回分支选项及默认选择。
+pub fn list_branch_refs_with_cancellation(
+    repository_path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<BranchRefs, GitCommandError> {
+    let refs = list_refs_with_cancellation(repository_path, cancellation)?;
+    let adapter = GitProcessAdapter::new(repository_path);
+    let current_ref = text_output(
+        adapter
+            .run(["symbolic-ref", "--quiet", "HEAD"], cancellation)
+            .map_err(|_| GitCommandError::new("Repository Entry 当前未检出本地分支"))?,
+        "当前分支",
+    )?;
+    if !refs.contains(&current_ref) {
+        return Err(GitCommandError::new(
+            "Repository Entry 当前分支不是 canonical 本地分支",
+        ));
+    }
+
+    let symbolic_output = adapter.run(
+        [
+            "for-each-ref",
+            "--format=%(refname)%00%(symref)%00",
+            "refs/remotes",
+        ],
+        cancellation,
+    )?;
+    let mut fields = symbolic_output.stdout.split(|byte| *byte == 0);
+    let mut remote_defaults = Vec::new();
+    while let Some(reference) = fields.next() {
+        let reference = reference
+            .iter()
+            .copied()
+            .skip_while(|byte| *byte == b'\n' || *byte == b'\r')
+            .collect::<Vec<_>>();
+        if reference.is_empty() {
+            break;
+        }
+        let Some(symref) = fields.next() else {
+            return Err(GitCommandError::new("remote default branch 输出字段不完整"));
+        };
+        if !symref.is_empty() {
+            let source = String::from_utf8(reference)
+                .map_err(|_| GitCommandError::new("remote HEAD ref 不是有效的 UTF-8"))?;
+            let target = String::from_utf8(symref.to_vec())
+                .map_err(|_| GitCommandError::new("remote default branch 不是有效的 UTF-8"))?;
+            if refs.contains(&target) {
+                remote_defaults.push((source, target));
+            }
+        }
+    }
+    remote_defaults
+        .sort_by_key(|(source, _)| (!source.starts_with("refs/remotes/origin/"), source.clone()));
+    let default_ref = remote_defaults
+        .into_iter()
+        .map(|(_, target)| target)
+        .next()
+        .or_else(|| {
+            refs.iter()
+                .find(|reference| reference.as_str() == "refs/heads/main")
+                .cloned()
+        })
+        .or_else(|| {
+            refs.iter()
+                .find(|reference| reference.as_str() == "refs/heads/master")
+                .cloned()
+        })
+        .unwrap_or_else(|| current_ref.clone());
+
+    Ok(BranchRefs {
+        refs,
+        default_ref,
+        current_ref,
+    })
+}
+
 /// 使用调用方持有的取消标记枚举 canonical branch refs。
 pub fn list_refs_with_cancellation(
     repository_path: &Path,

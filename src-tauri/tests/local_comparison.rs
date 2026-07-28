@@ -1,7 +1,8 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
 use httpmock::prelude::*;
 use narrant_lib::change_content::local::{
-    fetch_pull_request_objects, fetch_selected_remote_refs, list_refs, LocalOpenedReview,
+    fetch_pull_request_objects, fetch_selected_remote_refs, list_branch_refs, list_refs,
+    LocalOpenedReview,
 };
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
 use narrant_lib::core_git::CancellationToken;
@@ -155,6 +156,52 @@ fn lists_local_and_existing_remote_tracking_refs() {
             "refs/remotes/origin/main"
         ]
     );
+}
+
+#[test]
+fn branch_refs_report_remote_default_and_current_branch_independently_of_ref_order() {
+    let fixture = TempDir::new().expect("fixture directory");
+    let repository = Repository::init(fixture.path()).expect("initialize fixture repo");
+    commit_file(&repository, "welcome.txt", "hello\n", "base");
+    let commit = repository.head().unwrap().peel_to_commit().unwrap();
+    repository.branch("aaa-topic", &commit, true).unwrap();
+    repository.set_head("refs/heads/aaa-topic").unwrap();
+    repository
+        .reference("refs/remotes/origin/main", commit.id(), true, "fixture")
+        .unwrap();
+    repository
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "fixture",
+        )
+        .unwrap();
+
+    let branches = list_branch_refs(fixture.path()).expect("list branch refs");
+
+    assert_eq!(branches.default_ref, "refs/remotes/origin/main");
+    assert_eq!(branches.current_ref, "refs/heads/aaa-topic");
+    assert_eq!(
+        branches.refs,
+        vec![
+            "refs/heads/aaa-topic",
+            "refs/heads/master",
+            "refs/remotes/origin/main",
+        ]
+    );
+}
+
+#[test]
+fn branch_refs_report_detached_head_as_an_actionable_repository_error() {
+    let fixture = TempDir::new().expect("fixture directory");
+    let repository = Repository::init(fixture.path()).expect("initialize fixture repo");
+    let commit = commit_file(&repository, "welcome.txt", "hello\n", "base");
+    repository.set_head_detached(commit).unwrap();
+
+    let error = list_branch_refs(fixture.path()).unwrap_err();
+
+    assert!(error.to_string().contains("当前未检出本地分支"));
 }
 
 #[test]

@@ -11,12 +11,14 @@ function worktreeCount(repositoryPath: string) {
 
 /** 通过真实 shadcn/Base UI Select 选择一个 canonical ref。 */
 async function selectRef(label: "Base Ref" | "Head Ref", value: string) {
-  await $(`[aria-label='${label}']`).click();
+  const trigger = await $(`[aria-label='${label}']`);
+  await trigger.click();
   await browser.waitUntil(async () => (await $$("[role='option']")).length > 0);
   const options = await $$("[role='option']");
   for (const option of options) {
-    if ((await option.getText()).includes(value)) {
+    if (await option.isDisplayed() && (await option.getText()) === value) {
       await option.click();
+      await expect(trigger).toHaveText(value);
       return;
     }
   }
@@ -37,10 +39,9 @@ describe("本地分支比较", () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     await openFixtureRepository(repositoryPath);
     await $("[role='tab']=本地分支").click();
-    await $("button=读取分支").click();
-    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
+    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
-    await $("button=打开 Review Snapshot").click();
+    await $("button=开始审核").click();
     await $("[role='treeitem']").click();
     await expect($("[aria-label='File Change']")).toBeDisplayed();
     await expect($("[aria-label='File Change'] h2")).toHaveText(expect.stringContaining("welcome.txt"));
@@ -66,12 +67,15 @@ describe("本地分支比较", () => {
 
     await $("button=关闭 Review").click();
     await $("[role='tab']=本地分支").click();
-    await $("button=读取分支").click();
-    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
+    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await selectRef("Base Ref", "refs/heads/head-ref");
     await selectRef("Head Ref", "refs/heads/base-ref");
-    await $("button=打开 Review Snapshot").click();
+    await $("button=开始审核").click();
 
+    await expect($("[aria-label='Branch Review 更新']")).toHaveText(
+      expect.stringContaining("refs/heads/head-ref → refs/heads/base-ref"),
+    );
+    await expect($("p=没有 File Change")).toBeDisplayed();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
