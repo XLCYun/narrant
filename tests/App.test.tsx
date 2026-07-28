@@ -180,8 +180,8 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭 Review" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "审核历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭审核" }));
+    expect(await screen.findByRole("tab", { name: "审核历史", selected: true })).toBeInTheDocument();
     expect(screen.getByText(/refs\/heads\/main → refs\/heads\/topic/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "返回 Repository Entries" }));
     const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
@@ -319,11 +319,54 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /#42 Refreshable/ }));
     expect(await screen.findByText("main @ base-1 → feature @ head-1")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "检查 Pull Request 更新" }));
-    expect(await screen.findByText("发现新的 Pull Request revisions；当前 Snapshot 保持不变。")).toBeInTheDocument();
+    expect(await screen.findByText("当前 head-1 · 可用 head-2")).toBeInTheDocument();
     expect(screen.getByText("main @ base-1 → feature @ head-1")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "刷新 Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
     expect(await screen.findByText("main @ base-1 → feature @ head-2")).toBeInTheDocument();
+  });
+
+  it("切换 Review 失败时保留当前 Snapshot 与 File Change", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const current = {
+      reviewId: "review-current", repositoryEntryId: 25, repositoryPath: "/work/narrant",
+      baseRef: "refs/heads/main", headRef: "refs/heads/current", lastOpenedAt: 2,
+    };
+    const target = {
+      ...current, reviewId: "review-target", headRef: "refs/heads/target", lastOpenedAt: 1,
+    };
+    invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "list_reviews") return Promise.resolve([current, target]);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "reopen_review" && arguments_?.reviewId === current.reviewId) {
+        return Promise.resolve({
+          reviewId: current.reviewId, snapshotId: "snapshot-current", baseRef: current.baseRef,
+          baseRevision: "base", comparisonBase: "base", headRef: current.headRef,
+          headRevision: "head", fileChanges: [{ path: "kept.txt", oldPath: null, status: "modified" }],
+        });
+      }
+      if (command === "read_review_file_change") {
+        return Promise.resolve({ path: "kept.txt", oldPath: null, status: "modified", contentKind: "text", beforeSize: 3, afterSize: 3, before: "old", after: "new" });
+      }
+      if (command === "reopen_review" && arguments_?.reviewId === target.reviewId) {
+        return Promise.reject(new Error("目标审核打开失败"));
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /main → current/ }));
+    expect(await screen.findByRole("treeitem", { name: /kept.txt/ })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "main → target" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("目标审核打开失败");
+    expect(screen.getByRole("treeitem", { name: /kept.txt/ })).toBeInTheDocument();
   });
 
   it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
@@ -509,7 +552,7 @@ describe("App", () => {
     expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("treeitem", { name: /main.rs.*修改/ })).toBeInTheDocument();
 
-    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("read_review_file_change", {
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("read_review_file_change", {
       reviewId: "review-1",
       snapshotId: "snapshot-1",
       path: "assets/logo.bin",
@@ -683,12 +726,10 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
     expect(await screen.findByRole("treeitem", { name: /old.txt/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
-
-    expect(await screen.findByText(/发现新版本.*head-new/)).toBeInTheDocument();
+    expect(await screen.findByText("当前 head-old · 可用 head-new")).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /old.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: /new.txt/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认刷新到新版本" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
 
     expect(await screen.findByRole("treeitem", { name: /new.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: /old.txt/ })).not.toBeInTheDocument();

@@ -615,36 +615,80 @@ fn refresh_pull_request_review(
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
 ) -> Result<ReviewSnapshotResponse, String> {
-    let current = catalog
-        .open_review(&review_id)
-        .map_err(|error| error.to_string())?;
-    require_pull_request_identity(&current, &repository, &pull_request)?;
-    let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
-    let (calculated, metadata) =
-        calculate_pull_request_review(&repository_path, repository, pull_request)?;
-    if current.base_revision == calculated.snapshot().base_revision
-        && current.head_revision == calculated.snapshot().head_revision
-    {
-        return open_saved_branch_review(&state, &catalog, repository_path, current);
-    }
-    let staged = catalog
-        .stage_pull_request_snapshot(&current, &metadata, calculated.snapshot())
-        .map_err(|error| error.to_string())?;
-    let workspace = catalog
-        .review_workspace_path(&review_id)
-        .map_err(|error| error.to_string())?;
-    let adapter = core_git::GitProcessAdapter::new(&repository_path);
-    adapter
-        .remove_worktree(&workspace, &core_git::CancellationToken::default())
-        .and_then(|_| {
-            adapter.create_detached_worktree(
+    state.begin_refresh(&review_id)?;
+    let result = (|| {
+        let current = catalog
+            .open_review(&review_id)
+            .map_err(|error| error.to_string())?;
+        require_pull_request_identity(&current, &repository, &pull_request)?;
+        let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
+        let entry = catalog
+            .open_entry(current.repository_entry_id)
+            .map_err(|error| error.to_string())?;
+        let (calculated, metadata) =
+            calculate_pull_request_review(&repository_path, repository, pull_request)?;
+        if current.base_revision == calculated.snapshot().base_revision
+            && current.head_revision == calculated.snapshot().head_revision
+        {
+            return Ok(map_snapshot(
+                review_id.clone(),
+                current.snapshot_identity(),
+                &current.snapshot(),
+            ));
+        }
+        let candidate = catalog
+            .stage_pull_request_snapshot(&current, &metadata, calculated.snapshot())
+            .map_err(|error| error.to_string())?;
+        let workspace = catalog
+            .review_workspace_path(&review_id)
+            .map_err(|error| error.to_string())?;
+        let adapter = core_git::GitProcessAdapter::new(&repository_path);
+        let mut reviews = state
+            .reviews
+            .lock()
+            .map_err(|_| "Review 状态不可用。".to_owned())?;
+        adapter
+            .transition_detached_worktree(
                 &workspace,
-                &staged.head_revision,
+                &entry.common_directory,
+                &current.head_revision,
+                &candidate.head_revision,
                 &core_git::CancellationToken::default(),
             )
-        })
-        .map_err(|error| format!("Git transport：{error}"))?;
-    open_saved_branch_review(&state, &catalog, repository_path, staged)
+            .map_err(|error| format!("Git transport：{error}"))?;
+        if let Err(error) = catalog.activate_refresh_snapshot(&candidate, &current) {
+            let rollback = adapter.transition_detached_worktree(
+                &workspace,
+                &entry.common_directory,
+                &candidate.head_revision,
+                &current.head_revision,
+                &core_git::CancellationToken::default(),
+            );
+            return Err(match rollback {
+                Ok(()) => error.to_string(),
+                Err(rollback_error) => {
+                    format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
+                }
+            });
+        }
+        let snapshot = candidate.snapshot();
+        reviews.insert(
+            review_id.clone(),
+            Arc::new(Mutex::new(OpenedReview::Local(Box::new(
+                change_content::local::LocalOpenedReview::restore(
+                    &repository_path,
+                    snapshot.clone(),
+                ),
+            )))),
+        );
+        Ok(map_snapshot(
+            review_id.clone(),
+            candidate.snapshot_identity(),
+            &snapshot,
+        ))
+    })();
+    state.finish_refresh(&review_id);
+    result
 }
 
 /// 确保更新请求不会改变 durable Review 的 immutable Selection identity。

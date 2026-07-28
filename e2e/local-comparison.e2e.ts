@@ -42,6 +42,9 @@ describe("本地分支比较", () => {
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
     await $("button=开始审核").click();
+    await expect($("[aria-label='Branch Review 更新'] [role='status']")).toHaveText(
+      "当前已是最新版本",
+    );
     await expect($("[aria-label='File Change']")).toBeDisplayed();
     await expect($("[aria-label='File Change'] h3")).toHaveText(expect.stringContaining("welcome.txt"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-before", expect.stringContaining("旧内容"));
@@ -50,10 +53,10 @@ describe("本地分支比较", () => {
 
   it("关闭后从最近列表重开 current Snapshot 且只保留一个 Review Workspace", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
-    await expect($("button=关闭 Review")).toBeDisplayed();
+    await expect($("button=关闭审核")).toBeDisplayed();
     expect(worktreeCount(repositoryPath)).toBe(2);
 
-    await $("button=关闭 Review").click();
+    await $("button=关闭审核").click();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
     await $("button=返回 Repository Entries").click();
     const recent = await $("main [aria-label='最近审核'] button");
@@ -64,7 +67,7 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
-    await $("button=关闭 Review").click();
+    await $("button=关闭审核").click();
     await $("[role='tab']=本地分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await selectRef("Base Ref", "refs/heads/head-ref");
@@ -78,7 +81,7 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
-    await $("button=关闭 Review").click();
+    await $("button=关闭审核").click();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
     await $("button=返回 Repository Entries").click();
     await expect($("main [aria-label='最近审核'] button")).toBeDisplayed();
