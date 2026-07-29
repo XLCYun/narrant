@@ -166,9 +166,11 @@ export function App() {
   const [selectedPullRequest, setSelectedPullRequest] = useState<SelectedPullRequest>();
   const [reviewUpdate, setReviewUpdate] = useState<ReviewUpdate>();
   const [branchUpdate, setBranchUpdate] = useState<BranchReviewUpdate>();
+  const [reviewUpdateError, setReviewUpdateError] = useState("");
+  const [refreshingReview, setRefreshingReview] = useState(false);
+  const [repositoryInitialTab, setRepositoryInitialTab] = useState<"pull-requests" | "branches" | "history">("pull-requests");
   const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
   const [authorizing, setAuthorizing] = useState(false);
@@ -182,6 +184,7 @@ export function App() {
     ? savedTreeWidth
     : 24;
   const activeReview = useRef<ActiveReview>();
+  const activeSnapshotId = useRef<string>();
   const activeGitOperationId = useRef<string>();
   const nextGitOperationId = useRef(0);
   const openFileChangeRef = useRef<(path: string) => Promise<void>>();
@@ -213,10 +216,17 @@ export function App() {
     }
   }
 
+  /** 后台检查使用独立 operation identity，不取消用户正在读取的 File Change。 */
+  async function invokeBackgroundGit<T>(command: string, arguments_: Record<string, unknown>) {
+    const operationId = `background-git-${nextGitOperationId.current++}`;
+    return invoke<T>(command, { ...arguments_, operationId });
+  }
+
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
     const previousReview = activeReview.current;
     const nextReview = nextSnapshot && { reviewId: nextSnapshot.reviewId };
     activeReview.current = nextReview;
+    activeSnapshotId.current = nextSnapshot?.snapshotId;
     setSnapshot(nextSnapshot);
     setBranchUpdate(undefined);
     if (previousReview && JSON.stringify(previousReview) !== JSON.stringify(nextReview)) {
@@ -234,6 +244,9 @@ export function App() {
   function closeReviewView() {
     replaceSnapshot(undefined);
     setFileChange(undefined);
+    setReviewUpdate(undefined);
+    setReviewUpdateError("");
+    setRepositoryInitialTab("history");
   }
 
   /** 返回 Catalog 时同时关闭当前 Review，避免页面外仍保留 workspace。 */
@@ -354,8 +367,7 @@ export function App() {
     void Promise.resolve(invoke<GitHubAuthStatus>("github_auth_status"))
       .then(setAuthStatus)
       .catch(() => setAuthStatus(undefined));
-    replaceSnapshot(undefined);
-    setFileChange(undefined);
+    if (!snapshot) setFileChange(undefined);
   }
 
   /** 打开 Repository Entry；首次使用时先停留当前页面并请求 Workspace Trust。 */
@@ -388,7 +400,6 @@ export function App() {
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
   async function openSavedReview(review: SavedReviewSummary) {
     setError("");
-    setLoading(true);
     try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_saved_review", {
         reviewId: review.reviewId,
@@ -415,8 +426,6 @@ export function App() {
       setFileChange(undefined);
     } catch (reason) {
       setError(String(reason));
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -440,22 +449,46 @@ export function App() {
   /** 从持久化列表打开 current Snapshot，并在跨仓库进入时恢复 Repository Entry 上下文。 */
   async function reopenReview(summary: ReviewSummary) {
     setError("");
-    setLoading(true);
     try {
       if (selectedRepository?.id !== summary.repositoryEntryId) {
         const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
         if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
-        const result = await openRepository(entry);
-        if (result !== "entered") {
-          if (result === "trust-required") setPendingReview(summary);
+        const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
+        const trusted = await invoke<boolean>("repository_workspace_trust", {
+          repositoryEntryId: opened.id,
+        });
+        if (!trusted) {
+          setPendingRepository(opened);
+          setPendingReview(summary);
           return;
         }
+        const nextSnapshot = await invoke<ReviewSnapshot>("reopen_review", {
+          reviewId: summary.reviewId,
+        });
+        const [saved, reviews] = await Promise.all([
+          invoke<SavedReviewSummary[]>("list_saved_reviews", { repositoryEntryId: opened.id }),
+          invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
+        ]);
+        setSelectedRepository(opened);
+        setWorkspaceTrusted(true);
+        setSavedReviews(saved ?? []);
+        setRepositoryReviews(reviews ?? []);
+        setRepositoryPath(opened.canonicalPath);
+        setPullRequestGroups([]);
+        setDiscoveryError(undefined);
+        replaceSnapshot(nextSnapshot);
+        const reopened = { ...summary, lastOpenedAt: Date.now() };
+        setRecentReviews((candidates) => [
+          reopened,
+          ...candidates.filter((candidate) => candidate.reviewId !== reopened.reviewId),
+        ]);
+        setFileChange(undefined);
+        void loadPullRequestGroups(opened);
+        return;
       }
       await reopenResolvedReview(summary);
     } catch (reason) {
       setError(String(reason));
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -485,7 +518,6 @@ export function App() {
   ) {
     if (!selectedRepository) return;
     setError("");
-    setLoading(true);
     try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_pull_request_review", {
         repositoryEntryId: selectedRepository.id,
@@ -498,22 +530,22 @@ export function App() {
       setFileChange(undefined);
       await loadSavedReviews(selectedRepository.id);
     } catch (reason) {
-      setFileChange(undefined);
       setError(String(reason));
-    } finally {
-      setLoading(false);
     }
   }
 
   /** 重新查询 GitHub metadata 并检查候选 revisions，不改变当前 Snapshot。 */
   async function checkPullRequestUpdate() {
     if (!selectedRepository || !selectedPullRequest || !snapshot) return;
-    setError("");
-    setLoading(true);
+    const checkedReviewId = snapshot.reviewId;
+    const checkedSnapshotId = snapshot.snapshotId;
+    setReviewUpdateError("");
     try {
       const groups = await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
         repositoryEntryId: selectedRepository.id,
       });
+      if (activeReview.current?.reviewId !== checkedReviewId
+        || activeSnapshotId.current !== checkedSnapshotId) return;
       setPullRequestGroups(groups);
       const identity = `${selectedPullRequest.repository.owner}/${selectedPullRequest.repository.name}`;
       const group = groups.find((candidate) => (
@@ -525,23 +557,27 @@ export function App() {
       );
       if (!current) throw new Error("GitHub metadata：当前无法找到这个 Pull Request。");
       setSelectedPullRequest({ repository: group!.repository, pullRequest: current });
-      setReviewUpdate(await invoke<ReviewUpdate>("check_pull_request_review_update", {
+      const update = await invoke<ReviewUpdate>("check_pull_request_review_update", {
         reviewId: snapshot.reviewId,
         repository: group!.repository,
         pullRequest: current,
-      }));
+      });
+      if (activeReview.current?.reviewId === checkedReviewId
+        && activeSnapshotId.current === checkedSnapshotId
+        && typeof update?.currentHeadRevision === "string") setReviewUpdate(update);
     } catch (reason) {
-      setError(String(reason).replace(/^Error: /, ""));
-    } finally {
-      setLoading(false);
+      if (activeReview.current?.reviewId === checkedReviewId
+        && activeSnapshotId.current === checkedSnapshotId) {
+        setReviewUpdateError(String(reason).replace(/^Error: /, ""));
+      }
     }
   }
 
   /** 仅在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
   async function refreshPullRequestReview() {
-    if (!selectedPullRequest || !snapshot) return;
-    setError("");
-    setLoading(true);
+    if (!selectedPullRequest || !snapshot || refreshingReview) return;
+    setReviewUpdateError("");
+    setRefreshingReview(true);
     try {
       replaceSnapshot(await invoke<ReviewSnapshot>("refresh_pull_request_review", {
         reviewId: snapshot.reviewId,
@@ -551,9 +587,9 @@ export function App() {
       setReviewUpdate(undefined);
       setFileChange(undefined);
     } catch (reason) {
-      setError(String(reason));
+      setReviewUpdateError(String(reason));
     } finally {
-      setLoading(false);
+      setRefreshingReview(false);
     }
   }
 
@@ -748,21 +784,30 @@ export function App() {
   /** 只检查 Branch Selection 的 moving refs，不改变正在展示的 Snapshot。 */
   async function checkBranchReviewUpdates() {
     if (!snapshot) return;
-    setError("");
+    const checkedReviewId = snapshot.reviewId;
+    const checkedSnapshotId = snapshot.snapshotId;
+    setReviewUpdateError("");
     try {
-      setBranchUpdate(await invokeLocalGit<BranchReviewUpdate>("check_branch_review_updates", {
+      const update = await invokeBackgroundGit<BranchReviewUpdate>("check_branch_review_updates", {
         reviewId: snapshot.reviewId,
-      }));
+      });
+      if (activeReview.current?.reviewId === checkedReviewId
+        && activeSnapshotId.current === checkedSnapshotId
+        && typeof update?.currentHeadRevision === "string") setBranchUpdate(update);
     } catch (reason) {
-      setBranchUpdate(undefined);
-      setError(String(reason));
+      if (activeReview.current?.reviewId === checkedReviewId
+        && activeSnapshotId.current === checkedSnapshotId) {
+        setBranchUpdate(undefined);
+        setReviewUpdateError(String(reason));
+      }
     }
   }
 
   /** 在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
   async function refreshBranchReview() {
-    if (!snapshot) return;
-    setError("");
+    if (!snapshot || refreshingReview) return;
+    setReviewUpdateError("");
+    setRefreshingReview(true);
     try {
       replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
         reviewId: snapshot.reviewId,
@@ -770,8 +815,27 @@ export function App() {
       }));
       setFileChange(undefined);
     } catch (reason) {
-      setError(String(reason));
+      setReviewUpdateError(String(reason));
+    } finally {
+      setRefreshingReview(false);
     }
+  }
+
+  /** 打开已有 Review 后非阻塞检查 moving Selection；检查期间继续展示 current Snapshot。 */
+  useEffect(() => {
+    if (!snapshot) return;
+    if (snapshot.pullRequest && selectedPullRequest) {
+      void checkPullRequestUpdate();
+    } else if (!snapshot.pullRequest) {
+      void checkBranchReviewUpdates();
+    }
+    // 检查只由 immutable Snapshot identity 驱动，避免 discovery state 更新造成重复请求。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot ? `${snapshot.reviewId}:${snapshot.snapshotId ?? `${snapshot.baseRevision}:${snapshot.headRevision}`}` : undefined]);
+
+  /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
+  function shortRevision(revision: string) {
+    return revision.slice(0, 8);
   }
 
   /** 使用颜色与本地化文字共同表达 File Change 状态。 */
@@ -867,6 +931,7 @@ export function App() {
           </Button>
           {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
         </section>}
+        initialTab={repositoryInitialTab}
       />
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
@@ -890,6 +955,17 @@ export function App() {
     {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
     {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
+    {snapshot && repositoryReviews.length > 1 && <nav aria-label="切换审核">
+      {repositoryReviews
+        .filter((review) => review.reviewId !== snapshot.reviewId)
+        .map((review) => <Button
+          key={review.reviewId}
+          variant="ghost"
+          onClick={() => void reopenReview(review)}
+        >
+          {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
+        </Button>)}
+    </nav>}
     {!selectedRepository && <><p>本地分支比较</p>
       <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
         <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
@@ -903,29 +979,33 @@ export function App() {
       </section>
     </>}
     {error && <ErrorMessage message={error} />}
-    {snapshot && <Button variant="outline" onClick={closeReviewView}>关闭 Review</Button>}
+    {snapshot && <details className="w-fit">
+      <summary className={buttonVariants({ variant: "outline" })}>更多操作</summary>
+      <Button variant="ghost" onClick={closeReviewView}>关闭审核</Button>
+    </details>}
     {snapshot?.pullRequest && <section aria-label="Pull Request 更新">
       <div>
-        <Button variant="outline" disabled={loading} onClick={() => void checkPullRequestUpdate()}>
-          检查 Pull Request 更新
-        </Button>
         {reviewUpdate && (reviewUpdate.updateAvailable
           ? <div role="status">
-            <p>发现新的 Pull Request revisions；当前 Snapshot 保持不变。</p>
-            <Button disabled={loading} onClick={() => void refreshPullRequestReview()}>刷新 Review</Button>
+            <p>当前 {shortRevision(reviewUpdate.currentHeadRevision)} · 可用 {shortRevision(reviewUpdate.availableHeadRevision)}</p>
+            <Button disabled={refreshingReview} onClick={() => void refreshPullRequestReview()}>
+              {refreshingReview ? "正在刷新审核…" : "刷新审核"}
+            </Button>
           </div>
-          : <p role="status">当前已是最新 Snapshot</p>)}
+          : <p role="status">当前 {shortRevision(reviewUpdate.currentHeadRevision)} · 已是最新版本</p>)}
       </div>
     </section>}
     {snapshot && !snapshot.pullRequest && <section aria-label="Branch Review 更新">
       <p>{snapshot.baseRef} → {snapshot.headRef}</p>
-      <Button variant="outline" onClick={checkBranchReviewUpdates}>检查更新</Button>
       {branchUpdate && !branchUpdate.changed && <p role="status">当前已是最新版本</p>}
       {branchUpdate?.changed && <div role="status">
-        <p>发现新版本：{branchUpdate.currentHeadRevision} → {branchUpdate.latestHeadRevision}</p>
-        <Button onClick={refreshBranchReview}>确认刷新到新版本</Button>
+        <p>当前 {shortRevision(branchUpdate.currentHeadRevision)} · 可用 {shortRevision(branchUpdate.latestHeadRevision)}</p>
+        <Button disabled={refreshingReview} onClick={refreshBranchReview}>
+          {refreshingReview ? "正在刷新审核…" : "刷新审核"}
+        </Button>
       </div>}
     </section>}
+    {snapshot && reviewUpdateError && <p role="alert" className="text-sm text-destructive">{reviewUpdateError}</p>}
     {snapshot && <section aria-label={t("review:reader")} className="mt-3 overflow-hidden rounded-lg border">
       <header className="flex min-h-11 items-center justify-between gap-3 border-b px-3 py-2">
         <div className="min-w-0">

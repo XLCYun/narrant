@@ -18,6 +18,7 @@ type Props = {
   githubConnected: boolean;
   githubControls?: ReactNode;
   localBranches: ReactNode;
+  initialTab?: "pull-requests" | "branches" | "history";
   onRetryDiscovery: () => void;
   onConnectGitHub: () => void;
   onOpenSavedReview: (review: SavedReviewSummary) => void;
@@ -78,7 +79,7 @@ export function RepositoryOverview(props: Props) {
         <h2 className="font-heading text-2xl">{props.repositoryName}</h2>
         <p className="mt-1 break-all text-sm text-muted-foreground">{props.repositoryPath}</p>
       </header>
-      <Tabs defaultValue="pull-requests">
+      <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>
         <TabsList aria-label="仓库任务">
           <TabsTrigger value="pull-requests"><RiGitPullRequestLine />Pull Requests</TabsTrigger>
           <TabsTrigger value="branches"><RiGitBranchLine />本地分支</TabsTrigger>
