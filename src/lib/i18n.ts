@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+/** 当前随应用离线打包的界面语言白名单。 */
 export type SupportedLocale = "zh-CN" | "en";
 export const localePreferenceKey = "narrant.locale";
 
@@ -78,6 +79,7 @@ export const resources = {
       blockedRemoteImage: "远程图片已阻止加载", blockedRemoteImageWithAlt: "远程图片“{{alt}}”已阻止加载", viewOnGitHub: "在 GitHub 查看",
       moreActions: "更多操作", close: "关闭审核", refresh: "刷新审核", refreshing: "正在刷新审核…", latest: "当前已是最新版本",
       currentAvailable: "当前 {{current}} · 可用 {{available}}", pullRequestUpdate: "Pull Request 更新", branchUpdate: "Branch Review 更新",
+      fileChangeError: "无法读取 File Change", closeDialog: "关闭",
     },
     github: {
       connect: "连接 GitHub", connected: "GitHub 已连接", signOut: "退出 GitHub",
@@ -120,6 +122,7 @@ export const resources = {
       blockedRemoteImage: "Remote image was blocked", blockedRemoteImageWithAlt: "Remote image \"{{alt}}\" was blocked", viewOnGitHub: "View on GitHub",
       moreActions: "More actions", close: "Close review", refresh: "Refresh review", refreshing: "Refreshing review…", latest: "Already up to date",
       currentAvailable: "Current {{current}} · available {{available}}", pullRequestUpdate: "Pull Request update", branchUpdate: "Branch review update",
+      fileChangeError: "Could not load File Change", closeDialog: "Close",
     },
     github: {
       connect: "Connect GitHub", connected: "GitHub connected", signOut: "Sign out of GitHub",

@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -175,6 +175,7 @@ export function App() {
   const [repositoryInitialTab, setRepositoryInitialTab] = useState<"pull-requests" | "branches" | "history">("pull-requests");
   const [fileChange, setFileChange] = useState<FileChangeContent>();
   const [fileChangeLoading, setFileChangeLoading] = useState(false);
+  const [fileChangeError, setFileChangeError] = useState("");
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
@@ -758,6 +759,7 @@ export function App() {
 
   async function openFileChange(path: string) {
     if (!snapshot) return;
+    setFileChangeError("");
     setFileChangeLoading(true);
     try {
       setFileChange(await invokeLocalGit<FileChangeContent>("read_review_file_change", {
@@ -767,7 +769,7 @@ export function App() {
       }));
     } catch (reason) {
       setFileChange(undefined);
-      setError(String(reason));
+      setFileChangeError(String(reason));
     } finally {
       setFileChangeLoading(false);
     }
@@ -954,7 +956,15 @@ export function App() {
         </DialogHeader>
         <p className="break-all text-sm text-muted-foreground">{pendingRepository?.canonicalPath}</p>
         <DialogFooter>
-          <DialogClose className={buttonVariants({ variant: "outline" })}>{t("cancel")}</DialogClose>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setPendingRepository(undefined);
+              setPendingReview(undefined);
+            }}
+          >
+            {t("cancel")}
+          </Button>
           <Button onClick={() => void grantWorkspaceTrust()}>{t("trustAndOpen")}</Button>
         </DialogFooter>
       </DialogContent>
@@ -990,7 +1000,7 @@ export function App() {
       <summary className={buttonVariants({ variant: "outline" })}>{t("review:moreActions")}</summary>
       <Button variant="ghost" onClick={closeReviewView}>{t("review:close")}</Button>
     </details>}
-    {snapshot?.pullRequest && <section aria-label="Pull Request 更新">
+    {snapshot?.pullRequest && <section aria-label={t("review:pullRequestUpdate")}>
       <div>
         {reviewUpdate && (reviewUpdate.updateAvailable
           ? <div role="status">
@@ -1002,7 +1012,7 @@ export function App() {
           : <p role="status">{t("review:latest")}</p>)}
       </div>
     </section>}
-    {snapshot && !snapshot.pullRequest && <section aria-label="Branch Review 更新">
+    {snapshot && !snapshot.pullRequest && <section aria-label={t("review:branchUpdate")}>
       <p>{snapshot.baseRef} → {snapshot.headRef}</p>
       {branchUpdate && !branchUpdate.changed && <p role="status">{t("review:latest")}</p>}
       {branchUpdate?.changed && <div role="status">
@@ -1060,7 +1070,8 @@ export function App() {
           <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
           <ResizablePanel id="review-diff" minSize="45%">
             {fileChangeLoading && <div role="status" aria-label={t("review:loadingFileChange")} className="space-y-3 p-4"><Skeleton className="h-6 w-2/3" /><Skeleton className="h-[28rem] w-full" /></div>}
-            {fileChange && <section className="h-full min-w-0" aria-label="File Change" data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
+            {fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{fileChangeError}</p>{firstFileChangePath && <Button variant="outline" onClick={() => void openFileChange(firstFileChangePath)}>{t("retry")}</Button>}</div>}
+            {fileChange && !fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
               <header className="border-b px-3 py-2">
                 <h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium">{fileChange.path} {renderChangeStatus(fileChange.status)}</h3>
               </header>

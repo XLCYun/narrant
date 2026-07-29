@@ -65,8 +65,8 @@ export function RepositoryOverview(props: Props) {
   const rows = mergePullRequests(props.savedReviews, props.pullRequestGroups);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
   const remoteError = props.discoveryError ?? groupErrors[0];
-  return <div className="grid min-h-[calc(100vh-4rem)] grid-cols-[minmax(13rem,15rem)_1fr] overflow-hidden rounded-xl border bg-background">
-    <aside className="flex min-h-full flex-col border-r bg-muted/20 p-3" aria-label={t("catalog:sidebar")}>
+  return <div className="grid min-h-[calc(100vh-4rem)] grid-cols-1 overflow-hidden rounded-xl border bg-background min-[1200px]:grid-cols-[minmax(13rem,15rem)_1fr]">
+    <aside className="hidden min-h-full flex-col border-r bg-muted/20 p-3 min-[1200px]:flex" aria-label={t("catalog:sidebar")}>
       <div className="px-2 py-3">
         <p className="font-heading text-base">{props.repositoryName}</p>
       </div>

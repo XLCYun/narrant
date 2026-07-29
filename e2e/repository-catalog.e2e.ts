@@ -15,7 +15,7 @@ describe("Repository Catalog 持久化", () => {
     await chooseRepositoryFolder(repositoryPath);
     await expect($("[role='dialog']")).toHaveText(expect.stringContaining("hooks、filters 和 Git LFS"));
     await $("button=取消").click();
-    await expect($("[role='dialog']")).not.toExist();
+    await expect($("[role='dialog']")).not.toBeDisplayed();
     await expect($("[aria-label='Repository Entry']")).not.toExist();
 
     await chooseRepositoryFolder(repositoryPath);
@@ -24,7 +24,7 @@ describe("Repository Catalog 持久化", () => {
     await $("button=返回仓库列表").click();
 
     await chooseRepositoryFolder(repositoryPath);
-    await expect($("[role='dialog']")).not.toExist();
+    await expect($("[role='dialog']")).not.toBeDisplayed();
     await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
     await expect($("body")).not.toHaveText(expect.stringContaining("已信任"));
 

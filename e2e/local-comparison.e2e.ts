@@ -18,7 +18,7 @@ async function selectRef(label: "Base Ref" | "Head Ref", value: string) {
   for (const option of options) {
     if (await option.isDisplayed() && (await option.getText()) === value) {
       await option.click();
-      await expect(trigger).toHaveText(value);
+      await browser.waitUntil(async () => (await trigger.getText()) === value);
       return;
     }
   }
@@ -92,12 +92,16 @@ describe("本地分支比较", () => {
 
   it("英文 900×600 核心旅程可进入仓库、继续审核、读取 Diff 并重开", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
+    execFileSync("git", ["commit", "--allow-empty", "-m", "e2e update"], { cwd: repositoryPath });
     await browser.setWindowSize(900, 600);
     await openFixtureRepository(repositoryPath, "en");
     await $("[role='tab']=Local branches").click();
     await expect($("[aria-label='Base Ref']")).toBeDisplayed();
     await expect($("[aria-label='Head Ref']")).toBeDisplayed();
     await $("button=Continue review").click();
+    await expect($("[aria-label='Branch review update'] [role='status']")).toHaveText(expect.stringContaining("available"));
+    await $("button=Refresh review").click();
+    await expect($("[aria-label='Branch review update'] [role='status']")).toHaveText("Already up to date");
     await expect($("[aria-label='File Change']")).toBeDisplayed();
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-after", expect.stringContaining("新内容"));
 

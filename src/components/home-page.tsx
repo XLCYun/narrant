@@ -13,7 +13,7 @@ const preferenceKey = "narrant.sidebar-preferences";
 /** 最近审核首页以及仅保存于浏览器的主侧边栏偏好。 */
 export function HomePage({ reviews, error, loading = false, onOpenReview, onOpenFolder }: Props) {
   const { t } = useTranslation();
-  const [preferences, setPreferences] = useState(() => JSON.parse(window.localStorage?.getItem(preferenceKey) ?? "{\"open\":true,\"width\":280}"));
+  const [preferences, setPreferences] = useState(() => JSON.parse(window.localStorage?.getItem(preferenceKey) ?? `{"open":${window.innerWidth >= 1200},"width":280}`));
   const openSidebar = preferences.open !== false;
   const sidebarWidth = typeof preferences.width === "number" ? preferences.width : 280;
   useEffect(() => { window.localStorage?.setItem(preferenceKey, JSON.stringify({ open: openSidebar, width: sidebarWidth })); }, [openSidebar, sidebarWidth]);
