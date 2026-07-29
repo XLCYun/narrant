@@ -3,9 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -13,6 +14,8 @@ import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewOverview } from "@/components/review-overview";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Toaster } from "@/components/ui/sonner";
 import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import "@/lib/i18n";
 
@@ -133,11 +136,12 @@ function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
 }
 
 function ErrorMessage({ message }: { message: string }) {
+  const { t } = useTranslation("review");
   const match = message.match(/(https:\/\/github\.com\/[^\s]+)/);
   const text = match ? message.replace(match[1], "") : message;
   return <p role="alert">
     {text}
-    {match && <> <a href={match[1]} onClick={(event) => { event.preventDefault(); void openUrl(match[1]); }}>在 GitHub 查看</a></>}
+    {match && <> <a href={match[1]} onClick={(event) => { event.preventDefault(); void openUrl(match[1]); }}>{t("viewOnGitHub")}</a></>}
   </p>;
 }
 
@@ -170,6 +174,8 @@ export function App() {
   const [refreshingReview, setRefreshingReview] = useState(false);
   const [repositoryInitialTab, setRepositoryInitialTab] = useState<"pull-requests" | "branches" | "history">("pull-requests");
   const [fileChange, setFileChange] = useState<FileChangeContent>();
+  const [fileChangeLoading, setFileChangeLoading] = useState(false);
+  const [fileChangeError, setFileChangeError] = useState("");
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
@@ -624,12 +630,11 @@ export function App() {
 
   /** 将用户主动选择的授权信息复制到系统剪贴板，并反馈复制结果。 */
   async function copyAuthorizationValue(value: string, copied: "device-code" | "authorization-url") {
-    setError("");
     try {
       await navigator.clipboard.writeText(value);
       setCopiedValue(copied);
     } catch (reason) {
-      setError(`无法复制到剪贴板：${String(reason)}`);
+      toast.error(t("transientError"), { description: String(reason) });
     }
   }
 
@@ -666,26 +671,26 @@ export function App() {
   /** 渲染由用户主动打开的 GitHub 安装、Device Flow、复制与退出入口。 */
   function renderGitHubControls() {
     return <div className="space-y-3 text-sm">
-      {!authStatus && <Button variant="ghost" className="w-full justify-start" onClick={connectGitHub}>连接 GitHub</Button>}
-      {authStatus?.signedIn && <Button variant="ghost" className="w-full justify-start" onClick={signOutGitHub}>退出 GitHub</Button>}
+      {!authStatus && <Button variant="ghost" className="w-full justify-start" onClick={connectGitHub}>{t("github:connect")}</Button>}
+      {authStatus?.signedIn && <Button variant="ghost" className="w-full justify-start" onClick={signOutGitHub}>{t("github:signOut")}</Button>}
       {authStatus && !authStatus.signedIn && (!authStatus.configured
-        ? <p className="px-2 text-xs text-muted-foreground">此构建未配置 GitHub App；公开 Pull Request 仍可匿名发现。</p>
+        ? <p className="px-2 text-xs text-muted-foreground">{t("github:unconfigured")}</p>
         : <>
-          <p className="px-2 text-xs">先安装 Narrant GitHub App 并为目标仓库授予只读访问；组织仓库可能需要管理员审批，再授权当前账号。</p>
-          {authStatus.appInstallUrl && <Button variant="outline" className="w-full" onClick={() => openUrl(authStatus.appInstallUrl!)}>重新选择仓库或申请组织审批</Button>}
-          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>我已安装，继续</Button>
+          <p className="px-2 text-xs">{t("github:installHelp")}</p>
+          {authStatus.appInstallUrl && <Button variant="outline" className="w-full" onClick={() => openUrl(authStatus.appInstallUrl!)}>{t("github:chooseRepositories")}</Button>}
+          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>{t("github:installedContinue")}</Button>
           {deviceAuthorization && <div className="space-y-2 rounded-md border p-2">
-            <p>设备码：<strong>{deviceAuthorization.userCode}</strong></p>
+            <p>{t("github:deviceCode")}：<strong>{deviceAuthorization.userCode}</strong></p>
             <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
-              {copiedValue === "device-code" ? "设备码已复制" : "复制设备码"}
+              {copiedValue === "device-code" ? t("github:deviceCodeCopied") : t("github:copyDeviceCode")}
             </Button>
             <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
-              {copiedValue === "authorization-url" ? "链接已复制" : "复制链接"}
+              {copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
             </Button>
             <a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a>
-            <Button variant="outline" className="w-full" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>打开 GitHub</Button>
-            <p className="text-xs text-muted-foreground">请核对应用名称，不要输入他人发送的验证码。</p>
-            <Button className="w-full" disabled={authorizing} onClick={completeGitHubAuthorization}>我已在 GitHub 完成授权</Button>
+            <Button variant="outline" className="w-full" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>{t("github:open")}</Button>
+            <p className="text-xs text-muted-foreground">{t("github:safety")}</p>
+            <Button className="w-full" disabled={authorizing} onClick={completeGitHubAuthorization}>{t("github:authorizationComplete")}</Button>
           </div>}
         </>)}
     </div>;
@@ -754,7 +759,8 @@ export function App() {
 
   async function openFileChange(path: string) {
     if (!snapshot) return;
-    setError("");
+    setFileChangeError("");
+    setFileChangeLoading(true);
     try {
       setFileChange(await invokeLocalGit<FileChangeContent>("read_review_file_change", {
         reviewId: snapshot.reviewId,
@@ -763,7 +769,9 @@ export function App() {
       }));
     } catch (reason) {
       setFileChange(undefined);
-      setError(String(reason));
+      setFileChangeError(String(reason));
+    } finally {
+      setFileChangeLoading(false);
     }
   }
   openFileChangeRef.current = openFileChange;
@@ -870,9 +878,10 @@ export function App() {
     </>;
   }
 
-  return <main>
-    <header><h1>Narrant</h1><p>只读变更审核</p></header>
-    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage reviews={recentReviews} error={error} onOpenReview={(review) => void reopenReview(review)} onOpenFolder={(path) => void registerRepositoryFolder(path)} />}
+  return <main className="narrant-app">
+    <Toaster position="top-right" />
+    <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>
+    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage reviews={recentReviews} error={error} loading={catalogLoading} onOpenReview={(review) => void reopenReview(review)} onOpenFolder={(path) => void registerRepositoryFolder(path)} />}
     {catalogRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Repository Catalog">
       <h2>Repository Entries</h2>
       <section aria-label="添加 Repository" className="flex flex-wrap items-end gap-3">
@@ -906,7 +915,7 @@ export function App() {
       </section>
     </article>}
     {selectedRepository && !snapshot && <article aria-label="Repository Entry">
-      <Button variant="ghost" className="mb-3" onClick={leaveRepository}>返回 Repository Entries</Button>
+      <Button variant="ghost" className="mb-3" onClick={leaveRepository}>{t("catalog:back")}</Button>
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
@@ -921,11 +930,11 @@ export function App() {
         onConnectGitHub={() => void connectGitHub()}
         onOpenSavedReview={(review) => void openSavedReview(review)}
         onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
-        localBranches={<section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
-          <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} readOnly /></label>
-          <Button variant="outline" onClick={() => void loadRefs()}>重新读取分支</Button>
-          <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-          <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+        localBranches={<section aria-label={t("catalog:localRepository")} className="flex flex-wrap items-end gap-3">
+          <label>{t("catalog:repositoryPath")}<Input aria-label={t("catalog:repositoryPath")} value={repositoryPath} readOnly /></label>
+          <Button variant="outline" onClick={() => void loadRefs()}>{t("catalog:reloadBranches")}</Button>
+          <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder={t("catalog:selectBase")} /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
+          <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder={t("catalog:selectHead")} /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
           <Button disabled={!baseRef || !headRef || branchSelectionInvalid || !workspaceTrusted} onClick={openComparison}>
             {hasMatchingBranchReview ? t("continueReview") : t("startReview")}
           </Button>
@@ -947,7 +956,15 @@ export function App() {
         </DialogHeader>
         <p className="break-all text-sm text-muted-foreground">{pendingRepository?.canonicalPath}</p>
         <DialogFooter>
-          <DialogClose className={buttonVariants({ variant: "outline" })}>{t("cancel")}</DialogClose>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setPendingRepository(undefined);
+              setPendingReview(undefined);
+            }}
+          >
+            {t("cancel")}
+          </Button>
           <Button onClick={() => void grantWorkspaceTrust()}>{t("trustAndOpen")}</Button>
         </DialogFooter>
       </DialogContent>
@@ -980,28 +997,28 @@ export function App() {
     </>}
     {error && <ErrorMessage message={error} />}
     {snapshot && <details className="w-fit">
-      <summary className={buttonVariants({ variant: "outline" })}>更多操作</summary>
-      <Button variant="ghost" onClick={closeReviewView}>关闭审核</Button>
+      <summary className={buttonVariants({ variant: "outline" })}>{t("review:moreActions")}</summary>
+      <Button variant="ghost" onClick={closeReviewView}>{t("review:close")}</Button>
     </details>}
-    {snapshot?.pullRequest && <section aria-label="Pull Request 更新">
+    {snapshot?.pullRequest && <section aria-label={t("review:pullRequestUpdate")}>
       <div>
         {reviewUpdate && (reviewUpdate.updateAvailable
           ? <div role="status">
-            <p>当前 {shortRevision(reviewUpdate.currentHeadRevision)} · 可用 {shortRevision(reviewUpdate.availableHeadRevision)}</p>
+            <p>{t("review:currentAvailable", { current: shortRevision(reviewUpdate.currentHeadRevision), available: shortRevision(reviewUpdate.availableHeadRevision) })}</p>
             <Button disabled={refreshingReview} onClick={() => void refreshPullRequestReview()}>
-              {refreshingReview ? "正在刷新审核…" : "刷新审核"}
+              {refreshingReview ? t("review:refreshing") : t("review:refresh")}
             </Button>
           </div>
-          : <p role="status">当前 {shortRevision(reviewUpdate.currentHeadRevision)} · 已是最新版本</p>)}
+          : <p role="status">{t("review:latest")}</p>)}
       </div>
     </section>}
-    {snapshot && !snapshot.pullRequest && <section aria-label="Branch Review 更新">
+    {snapshot && !snapshot.pullRequest && <section aria-label={t("review:branchUpdate")}>
       <p>{snapshot.baseRef} → {snapshot.headRef}</p>
-      {branchUpdate && !branchUpdate.changed && <p role="status">当前已是最新版本</p>}
+      {branchUpdate && !branchUpdate.changed && <p role="status">{t("review:latest")}</p>}
       {branchUpdate?.changed && <div role="status">
-        <p>当前 {shortRevision(branchUpdate.currentHeadRevision)} · 可用 {shortRevision(branchUpdate.latestHeadRevision)}</p>
+        <p>{t("review:currentAvailable", { current: shortRevision(branchUpdate.currentHeadRevision), available: shortRevision(branchUpdate.latestHeadRevision) })}</p>
         <Button disabled={refreshingReview} onClick={refreshBranchReview}>
-          {refreshingReview ? "正在刷新审核…" : "刷新审核"}
+          {refreshingReview ? t("review:refreshing") : t("review:refresh")}
         </Button>
       </div>}
     </section>}
@@ -1052,7 +1069,9 @@ export function App() {
           </ResizablePanel>
           <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
           <ResizablePanel id="review-diff" minSize="45%">
-            {fileChange && <section className="h-full min-w-0" aria-label="File Change" data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
+            {fileChangeLoading && <div role="status" aria-label={t("review:loadingFileChange")} className="space-y-3 p-4"><Skeleton className="h-6 w-2/3" /><Skeleton className="h-[28rem] w-full" /></div>}
+            {fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{fileChangeError}</p>{firstFileChangePath && <Button variant="outline" onClick={() => void openFileChange(firstFileChangePath)}>{t("retry")}</Button>}</div>}
+            {fileChange && !fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
               <header className="border-b px-3 py-2">
                 <h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium">{fileChange.path} {renderChangeStatus(fileChange.status)}</h3>
               </header>

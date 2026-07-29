@@ -18,7 +18,7 @@ async function selectRef(label: "Base Ref" | "Head Ref", value: string) {
   for (const option of options) {
     if (await option.isDisplayed() && (await option.getText()) === value) {
       await option.click();
-      await expect(trigger).toHaveText(value);
+      await browser.waitUntil(async () => (await trigger.getText()) === value);
       return;
     }
   }
@@ -53,12 +53,13 @@ describe("本地分支比较", () => {
 
   it("关闭后从最近列表重开 current Snapshot 且只保留一个 Review Workspace", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
+    await $("summary=更多操作").click();
     await expect($("button=关闭审核")).toBeDisplayed();
     expect(worktreeCount(repositoryPath)).toBe(2);
 
     await $("button=关闭审核").click();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
-    await $("button=返回 Repository Entries").click();
+    await $("button=返回仓库列表").click();
     const recent = await $("main [aria-label='最近审核'] button");
     await expect(recent).toBeDisplayed();
     await recent.click();
@@ -67,6 +68,7 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
+    await $("summary=更多操作").click();
     await $("button=关闭审核").click();
     await $("[role='tab']=本地分支").click();
     await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
@@ -81,9 +83,35 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
+    await $("summary=更多操作").click();
     await $("button=关闭审核").click();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
-    await $("button=返回 Repository Entries").click();
+    await $("button=返回仓库列表").click();
     await expect($("main [aria-label='最近审核'] button")).toBeDisplayed();
+  });
+
+  it("英文 900×600 核心旅程可进入仓库、继续审核、读取 Diff 并重开", async () => {
+    const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
+    execFileSync("git", ["commit", "--allow-empty", "-m", "e2e update"], { cwd: repositoryPath });
+    await browser.setWindowSize(900, 600);
+    await openFixtureRepository(repositoryPath, "en");
+    await $("[role='tab']=Local branches").click();
+    await expect($("[aria-label='Base Ref']")).toBeDisplayed();
+    await expect($("[aria-label='Head Ref']")).toBeDisplayed();
+    await $("button=Continue review").click();
+    await expect($("[aria-label='Branch review update'] [role='status']")).toHaveText(expect.stringContaining("available"));
+    await $("button=Refresh review").click();
+    await expect($("[aria-label='Branch review update'] [role='status']")).toHaveText("Already up to date");
+    await expect($("[aria-label='File Change']")).toBeDisplayed();
+    await expect($("[aria-label='File Change']")).toHaveAttribute("data-after", expect.stringContaining("新内容"));
+
+    await $("summary=More actions").click();
+    await $("button=Close review").click();
+    await $("button=Back to repositories").click();
+    const recent = await $("main [aria-label='Recent reviews'] button");
+    await recent.click();
+    await expect($("[aria-label='Review reader']")).toBeDisplayed();
+    await expect($("[aria-label='File Change']")).toBeDisplayed();
+    await browser.setWindowSize(1200, 800);
   });
 });

@@ -8,14 +8,15 @@ describe("公开 GitHub Pull Request", () => {
     await $("button*=#42").click();
 
     await browser.waitUntil(async () => (
-      await $("h2=真实 Tauri 审核").isExisting() || await $("[role='alert']").isExisting()
+      await $("[aria-label='审核阅读器']").isExisting() || await $("[role='alert']").isExisting()
     ));
     if (await $("[role='alert']").isExisting()) {
       throw new Error(await $("[role='alert']").getText());
     }
-    await expect($("h2=真实 Tauri 审核")).toBeDisplayed();
-    await expect($("[aria-label='Pull Request 描述'] strong")).toHaveText("安全描述");
-    await expect($("[aria-label='Pull Request 描述'] img")).not.toExist();
+    await expect($("h2*=真实 Tauri 审核")).toBeDisplayed();
+    await $("button=打开审核概览").click();
+    await expect($("[aria-label='审核概览']")).toHaveText(expect.stringContaining("安全描述"));
+    await expect($("[aria-label='审核概览'] img")).not.toExist();
     await $("[role='treeitem']").click();
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-before", expect.stringContaining("旧内容"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-after", expect.stringContaining("新内容"));

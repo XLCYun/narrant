@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RepositoryOverview, type PullRequestGroup, type SavedReviewSummary } from "@/components/repository-overview";
+import { i18n } from "@/lib/i18n";
 
 const repository = { owner: "octo", name: "narrant" };
 const pullRequest = {
@@ -34,6 +35,7 @@ const saved: SavedReviewSummary = {
   },
 };
 
+beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(cleanup);
 
 function renderOverview(options: {
@@ -108,5 +110,15 @@ describe("RepositoryOverview", () => {
   ])("区分 Pull Request 空状态 %#", (options, expected) => {
     renderOverview(options);
     expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it("英文 locale 同时翻译标签、状态、恢复动作和 ARIA label", async () => {
+    await i18n.changeLanguage("en");
+    renderOverview({ discoveryError: "network unavailable", connected: true });
+
+    expect(screen.getByRole("tab", { name: "Local branches" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Review history" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(screen.getByLabelText("Repository tasks")).toBeVisible();
   });
 });

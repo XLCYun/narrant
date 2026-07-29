@@ -26,21 +26,27 @@ export async function setE2ELocale(locale: "zh-CN" | "en") {
 }
 
 /** 从首页选择 fixture 仓库，并在首次打开时确认 Workspace Trust。 */
-export async function openFixtureRepository(repositoryPath: string) {
-  await setE2ELocale("zh-CN");
-  if (await $("button=关闭审核").isExisting()) {
-    await $("button=关闭审核").click();
+export async function openFixtureRepository(repositoryPath: string, locale: "zh-CN" | "en" = "zh-CN") {
+  await setE2ELocale(locale);
+  const closeReview = locale === "en" ? "Close review" : "关闭审核";
+  const openFolder = locale === "en" ? "Open repository folder" : "打开仓库文件夹";
+  const trustAndOpen = locale === "en" ? "Trust and open" : "信任并打开";
+  if (await $(`button=${closeReview}`).isExisting()) {
+    const moreActions = locale === "en" ? "More actions" : "更多操作";
+    if (await $(`summary=${moreActions}`).isExisting()) await $(`summary=${moreActions}`).click();
+    await $(`button=${closeReview}`).click();
   }
-  if (await $("button=返回 Repository Entries").isExisting()) {
-    await $("button=返回 Repository Entries").click();
+  const back = locale === "en" ? "Back to repositories" : "返回仓库列表";
+  if (await $(`button=${back}`).isExisting()) {
+    await $(`button=${back}`).click();
   }
-  await chooseRepositoryFolder(repositoryPath);
+  await chooseRepositoryFolder(repositoryPath, openFolder);
   await browser.waitUntil(async () => (
-    await $("button=信任并打开").isExisting()
+    await $(`button=${trustAndOpen}`).isExisting()
     || await $("[aria-label='Repository Entry']").isExisting()
   ));
-  if (await $("button=信任并打开").isExisting()) {
-    await $("button=信任并打开").click();
+  if (await $(`button=${trustAndOpen}`).isExisting()) {
+    await $(`button=${trustAndOpen}`).click();
   }
   await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
 }

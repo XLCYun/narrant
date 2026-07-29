@@ -4,6 +4,7 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
 import { RiCloseLine } from "@remixicon/react"
+import { useTranslation } from "react-i18next"
 
 /** 提供 Dialog 的受控打开状态与上下文。 */
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
@@ -51,6 +52,7 @@ function DialogContent({
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
 }) {
+  const { t } = useTranslation("review")
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -70,7 +72,7 @@ function DialogContent({
           >
             <RiCloseLine
             />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{t("closeDialog")}</span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Popup>
