@@ -3,6 +3,7 @@ import { RiGithubFill, RiGitPullRequestLine, RiHistoryLine, RiGitBranchLine } fr
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useTranslation } from "react-i18next";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 export type { DiscoveredPullRequest, PullRequestGroup, SavedReviewSummary } from "@/lib/review-types";
 
@@ -60,17 +61,18 @@ function mergePullRequests(savedReviews: SavedReviewSummary[], groups: PullReque
 
 /** Repository Entry 的任务概览：缓存优先呈现 Pull Request，并隔离远端失败。 */
 export function RepositoryOverview(props: Props) {
+  const { t } = useTranslation(["catalog", "common", "github"]);
   const rows = mergePullRequests(props.savedReviews, props.pullRequestGroups);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
   const remoteError = props.discoveryError ?? groupErrors[0];
   return <div className="grid min-h-[calc(100vh-4rem)] grid-cols-[minmax(13rem,15rem)_1fr] overflow-hidden rounded-xl border bg-background">
-    <aside className="flex min-h-full flex-col border-r bg-muted/20 p-3" aria-label="仓库侧边栏">
+    <aside className="flex min-h-full flex-col border-r bg-muted/20 p-3" aria-label={t("catalog:sidebar")}>
       <div className="px-2 py-3">
         <p className="font-heading text-base">{props.repositoryName}</p>
       </div>
       <div className="mt-auto border-t pt-3">
         {props.githubControls ?? <Button variant="ghost" className="w-full justify-start" onClick={props.onConnectGitHub}>
-          <RiGithubFill />{props.githubConnected ? "GitHub 已连接" : "连接 GitHub"}
+          <RiGithubFill />{props.githubConnected ? t("github:connected") : t("github:connect")}
         </Button>}
       </div>
     </aside>
@@ -80,10 +82,10 @@ export function RepositoryOverview(props: Props) {
         <p className="mt-1 break-all text-sm text-muted-foreground">{props.repositoryPath}</p>
       </header>
       <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>
-        <TabsList aria-label="仓库任务">
-          <TabsTrigger value="pull-requests"><RiGitPullRequestLine />Pull Requests</TabsTrigger>
-          <TabsTrigger value="branches"><RiGitBranchLine />本地分支</TabsTrigger>
-          <TabsTrigger value="history"><RiHistoryLine />审核历史</TabsTrigger>
+        <TabsList aria-label={t("catalog:tasks")}>
+          <TabsTrigger value="pull-requests"><RiGitPullRequestLine />{t("catalog:tabs.pullRequests")}</TabsTrigger>
+          <TabsTrigger value="branches"><RiGitBranchLine />{t("catalog:tabs.branches")}</TabsTrigger>
+          <TabsTrigger value="history"><RiHistoryLine />{t("catalog:tabs.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="pull-requests" className="mt-5">
           {props.pullRequestGroups.length > 0 && <div className="mb-4 flex flex-wrap gap-2">
@@ -97,8 +99,8 @@ export function RepositoryOverview(props: Props) {
             })}
           </div>}
           {(props.discoveryLoading || remoteError) && rows.length > 0 && <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-            {props.discoveryLoading ? "正在后台刷新 Pull Requests。 " : ""}
-            {remoteError ? `${remoteError}；` : ""}在线元数据可能不是最新。
+            {props.discoveryLoading ? `${t("catalog:refreshing")} ` : ""}
+            {remoteError ? `${remoteError}；` : ""}{t("catalog:stale")}
           </div>}
           {rows.length > 0 && <ul className="divide-y rounded-lg border">
             {rows.map((row) => {
@@ -114,32 +116,32 @@ export function RepositoryOverview(props: Props) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="truncate font-medium">#{metadata.number} {metadata.title}</p>
-                    {metadata.draft && <Badge variant="secondary">草稿</Badge>}
-                    {updated && <Badge>有更新</Badge>}
+                    {metadata.draft && <Badge variant="secondary">{t("catalog:draft")}</Badge>}
+                    {updated && <Badge>{t("catalog:updateAvailable")}</Badge>}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {metadata.author} · {metadata.state} · {baseRef} → {headRef}
                   </p>
                 </div>
-                <Button aria-label={`${row.saved ? "继续审核" : "开始审核"} #${metadata.number} ${metadata.title}`} variant={row.saved ? "outline" : "default"} onClick={() => {
+                <Button aria-label={`${row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} variant={row.saved ? "outline" : "default"} onClick={() => {
                   if (row.saved) props.onOpenSavedReview(row.saved);
                   else if (row.discovered) props.onOpenPullRequest(row.repository, row.discovered);
-                }}>{row.saved ? "继续审核" : "开始审核"} #{metadata.number}</Button>
+                }}>{row.saved ? t("common:continueReview") : t("common:startReview")} #{metadata.number}</Button>
               </li>;
             })}
           </ul>}
           {rows.length === 0 && <div className="rounded-lg border border-dashed px-6 py-16 text-center">
             {remoteError
-              ? <><p className="text-sm text-destructive">{remoteError}</p><Button className="mt-4" variant="outline" onClick={props.onRetryDiscovery}>重新尝试</Button></>
+              ? <><p className="text-sm text-destructive">{remoteError}</p><Button className="mt-4" variant="outline" onClick={props.onRetryDiscovery}>{t("catalog:retry")}</Button></>
               : !props.githubConnected
-                ? <><p>连接 GitHub 以访问授权范围内的 Pull Request</p><Button className="mt-4" onClick={props.onConnectGitHub}>连接 GitHub</Button></>
-                : <p>没有可审核的 Pull Request</p>}
+                ? <><p>{t("catalog:connectForPrivate")}</p><Button className="mt-4" onClick={props.onConnectGitHub}>{t("github:connect")}</Button></>
+                : <p>{t("catalog:noPullRequests")}</p>}
           </div>}
         </TabsContent>
         <TabsContent value="branches" className="mt-5">{props.localBranches}</TabsContent>
         <TabsContent value="history" className="mt-5">
           {props.repositoryReviews.length === 0
-            ? <p className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">尚无审核历史</p>
+            ? <p className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("catalog:noHistory")}</p>
             : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => <li className="p-4" key={review.reviewId}>{review.baseRef} → {review.headRef}</li>)}</ul>}
         </TabsContent>
       </Tabs>

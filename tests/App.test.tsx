@@ -183,7 +183,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "关闭审核" }));
     expect(await screen.findByRole("tab", { name: "审核历史", selected: true })).toBeInTheDocument();
     expect(screen.getByText(/refs\/heads\/main → refs\/heads\/topic/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "返回 Repository Entries" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回仓库列表" }));
     const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
       .querySelectorAll("button");
     expect(recentButtons[0]).toHaveTextContent("main → topic");
@@ -421,7 +421,7 @@ describe("App", () => {
   it("渲染 Narrant 标题与本地分支比较入口", () => {
     invoke.mockResolvedValue([]);
     render(<App />);
-    expect(screen.getByRole("heading", { name: "Narrant" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "纳言" })).toBeInTheDocument();
     expect(screen.getByText("本地分支比较")).toBeInTheDocument();
   });
 

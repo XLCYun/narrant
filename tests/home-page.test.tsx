@@ -44,6 +44,13 @@ describe("最近审核首页", () => {
     expect(screen.getByRole("button", { name: "Open repository folder" })).toBeVisible();
   });
 
+  it("首次加载使用可访问的局部 Skeleton", async () => {
+    render(<HomePage reviews={[]} loading onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
+
+    expect(screen.getByRole("status", { name: "正在加载最近审核" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "纳言：审好代码，睡安稳觉" })).not.toBeInTheDocument();
+  });
+
   it("最近审核首页仍提供文件夹入口并显示本地化仓库错误", async () => {
     await i18n.changeLanguage("en");
     const reviews = [{ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 }];

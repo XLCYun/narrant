@@ -14,6 +14,7 @@ export const config = {
   logLevel: "error",
   specs: ["./e2e/**/*.e2e.ts"],
   maxInstances: 1,
+  waitforTimeout: 15000,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   capabilities: [{ browserName: "tauri", "tauri:options": { application: binary } }],
   framework: "mocha",

@@ -1,5 +1,6 @@
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
+import { forwardRef } from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -38,19 +39,21 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
+/** shadcn 按钮向浮层触发器透传 DOM ref，以保证焦点恢复。 */
+const Button = forwardRef<HTMLButtonElement, ButtonPrimitive.Props & VariantProps<typeof buttonVariants>>(function Button({
   className,
   variant = "default",
   size = "default",
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}, ref) {
   return (
     <ButtonPrimitive
+      ref={ref}
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
   )
-}
+})
 
 export { Button, buttonVariants }
