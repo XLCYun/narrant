@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +12,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
+import { ReviewOverview } from "@/components/review-overview";
 import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import "@/lib/i18n";
 
@@ -984,10 +983,7 @@ export function App() {
       <summary className={buttonVariants({ variant: "outline" })}>更多操作</summary>
       <Button variant="ghost" onClick={closeReviewView}>关闭审核</Button>
     </details>}
-    {snapshot?.pullRequest && <article aria-label="Pull Request 概览">
-      <h2>{snapshot.pullRequest.title}</h2>
-      <p>#{snapshot.pullRequest.number} · {snapshot.pullRequest.author} · {snapshot.pullRequest.draft ? "草稿 · " : ""}{{ open: "开放", closed: "已关闭", merged: "已合并" }[snapshot.pullRequest.state ?? "open"]}</p>
-      <p>{snapshot.baseRef} @ {snapshot.baseRevision} → {snapshot.headRef} @ {snapshot.headRevision}</p>
+    {snapshot?.pullRequest && <section aria-label="Pull Request 更新">
       <div>
         {reviewUpdate && (reviewUpdate.updateAvailable
           ? <div role="status">
@@ -998,20 +994,7 @@ export function App() {
           </div>
           : <p role="status">当前 {shortRevision(reviewUpdate.currentHeadRevision)} · 已是最新版本</p>)}
       </div>
-      <div aria-label="Pull Request 描述">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          skipHtml
-          components={{
-            img: ({ alt }) => <span>{alt ? `[图片：${alt}，已阻止远程加载]` : "[已阻止远程图片]"}</span>,
-            a: ({ href, children }) => <a href={href} onClick={(event) => {
-              event.preventDefault();
-              if (href?.startsWith("https://") || href?.startsWith("http://")) void openUrl(href);
-            }}>{children}</a>,
-          }}
-        >{snapshot.pullRequest.description}</ReactMarkdown>
-      </div>
-    </article>}
+    </section>}
     {snapshot && !snapshot.pullRequest && <section aria-label="Branch Review 更新">
       <p>{snapshot.baseRef} → {snapshot.headRef}</p>
       {branchUpdate && !branchUpdate.changed && <p role="status">当前已是最新版本</p>}
@@ -1033,9 +1016,12 @@ export function App() {
             {(snapshot.baseRevision ?? snapshot.comparisonBase).slice(0, 8)} → {snapshot.headRevision.slice(0, 8)}
           </p>
         </div>
-        <div aria-label={t("review:diffLayout")} className="flex gap-1">
-          <Button size="xs" variant={diffMode === "inline" ? "secondary" : "ghost"} aria-pressed={diffMode === "inline"} onClick={() => selectDiffMode("inline")}>{t("review:inline")}</Button>
-          <Button size="xs" variant={diffMode === "side-by-side" ? "secondary" : "ghost"} aria-pressed={diffMode === "side-by-side"} onClick={() => selectDiffMode("side-by-side")}>{t("review:sideBySide")}</Button>
+        <div className="flex items-center gap-2">
+          <ReviewOverview review={snapshot} onOpenExternal={(url) => void openUrl(url)} />
+          <div aria-label={t("review:diffLayout")} className="flex gap-1">
+            <Button size="xs" variant={diffMode === "inline" ? "secondary" : "ghost"} aria-pressed={diffMode === "inline"} onClick={() => selectDiffMode("inline")}>{t("review:inline")}</Button>
+            <Button size="xs" variant={diffMode === "side-by-side" ? "secondary" : "ghost"} aria-pressed={diffMode === "side-by-side"} onClick={() => selectDiffMode("side-by-side")}>{t("review:sideBySide")}</Button>
+          </div>
         </div>
       </header>
       {snapshot.fileChanges.length === 0

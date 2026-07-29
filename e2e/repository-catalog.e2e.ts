@@ -3,8 +3,8 @@ import { chooseRepositoryFolder, setE2ELocale } from "./helpers/open-repository"
 describe("Repository Catalog 持久化", () => {
   it("通过原生目录选择、首次信任并在再次选择时复用仓库", async () => {
     const repositoryPath = process.env.NARRANT_E2E_TRUST_REPOSITORY!;
-    if (await $("button=关闭 Review").isExisting()) {
-      await $("button=关闭 Review").click();
+    if (await $("button=关闭审核").isExisting()) {
+      await $("button=关闭审核").click();
     }
     if (await $("button=返回 Repository Entries").isExisting()) {
       await $("button=返回 Repository Entries").click();

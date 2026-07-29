@@ -270,8 +270,12 @@ describe("App", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
       repositoryEntryId: 25, repository, pullRequest,
     }));
-    expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
-    expect(screen.getByText("#42 · octocat · 草稿 · 开放")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "#42 Local PR Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "审核概览" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开审核概览" }));
+    expect(await screen.findByRole("dialog", { name: "审核概览" })).toHaveTextContent(
+      /#42.*octocat.*草稿 · 开放/s,
+    );
   });
 
   it("检查更新不切换 Snapshot，只有显式刷新才替换 Review", async () => {
@@ -317,12 +321,12 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
     fireEvent.click(await screen.findByRole("button", { name: /#42 Refreshable/ }));
-    expect(await screen.findByText("main @ base-1 → feature @ head-1")).toBeInTheDocument();
+    expect(await screen.findByText("base-1 → head-1")).toBeInTheDocument();
 
     expect(await screen.findByText("当前 head-1 · 可用 head-2")).toBeInTheDocument();
-    expect(screen.getByText("main @ base-1 → feature @ head-1")).toBeInTheDocument();
+    expect(screen.getByText("base-1 → head-1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
-    expect(await screen.findByText("main @ base-1 → feature @ head-2")).toBeInTheDocument();
+    expect(await screen.findByText("base-1 → head-2")).toBeInTheDocument();
   });
 
   it("切换 Review 失败时保留当前 Snapshot 与 File Change", async () => {
