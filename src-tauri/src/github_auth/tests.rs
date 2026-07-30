@@ -48,10 +48,12 @@ struct FakeIdentityProvider {
 
 #[async_trait]
 impl GitHubIdentityProvider for FakeIdentityProvider {
+    /// 返回测试预置的公开身份。
     async fn cached(&self) -> Result<Option<GitHubIdentity>, String> {
         Ok(self.cached.lock().unwrap().clone())
     }
 
+    /// 将测试预置身份作为刷新结果。
     async fn refresh(&self, _: &SecretString) -> Result<GitHubIdentity, String> {
         self.cached
             .lock()
@@ -60,6 +62,7 @@ impl GitHubIdentityProvider for FakeIdentityProvider {
             .ok_or_else(|| "profile unavailable".to_owned())
     }
 
+    /// 清空测试身份，以便从公开状态观察退出行为。
     fn clear(&self) -> Result<(), String> {
         *self.cached.lock().unwrap() = None;
         Ok(())

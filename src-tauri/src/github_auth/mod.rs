@@ -32,8 +32,11 @@ pub struct GitHubIdentity {
 /// 隔离 GitHub 公开身份的网络读取和本地缓存。
 #[async_trait]
 pub trait GitHubIdentityProvider: Send + Sync {
+    /// 读取上次成功持久化的公开 GitHub Identity。
     async fn cached(&self) -> Result<Option<GitHubIdentity>, String>;
+    /// 使用当前 user access token 刷新公开资料和头像缓存。
     async fn refresh(&self, access_token: &SecretString) -> Result<GitHubIdentity, String>;
+    /// 在退出 GitHub 时删除全部公开身份缓存。
     fn clear(&self) -> Result<(), String>;
 }
 
@@ -42,14 +45,17 @@ struct DisabledGitHubIdentityProvider;
 
 #[async_trait]
 impl GitHubIdentityProvider for DisabledGitHubIdentityProvider {
+    /// 未配置 provider 时不存在已缓存身份。
     async fn cached(&self) -> Result<Option<GitHubIdentity>, String> {
         Ok(None)
     }
 
+    /// 未配置 provider 时明确拒绝资料刷新。
     async fn refresh(&self, _: &SecretString) -> Result<GitHubIdentity, String> {
         Err("GitHub 身份资料未配置。".to_owned())
     }
 
+    /// 未配置 provider 时无需清理本地资料。
     fn clear(&self) -> Result<(), String> {
         Ok(())
     }

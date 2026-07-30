@@ -1,4 +1,5 @@
 use super::*;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use httpmock::prelude::*;
 use secrecy::SecretString;
 
@@ -6,6 +7,9 @@ use secrecy::SecretString;
 async fn refresh_fetches_authenticated_profile_and_caches_a_valid_avatar() {
     let server = MockServer::start();
     let cache = tempfile::tempdir().unwrap();
+    let avatar_bytes = STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        .unwrap();
     let profile = server.mock(|when, then| {
         when.method(GET)
             .path("/user")
@@ -21,7 +25,7 @@ async fn refresh_fetches_authenticated_profile_and_caches_a_valid_avatar() {
         when.method(GET).path("/avatar");
         then.status(200)
             .header("content-type", "image/png")
-            .body(b"\x89PNG\r\n\x1a\navatar".as_slice());
+            .body(avatar_bytes.clone());
     });
     let provider = FileGitHubIdentityProvider::new(server.base_url(), cache.path().to_owned());
 
@@ -34,7 +38,7 @@ async fn refresh_fetches_authenticated_profile_and_caches_a_valid_avatar() {
     assert_eq!(identity.name.as_deref(), Some("Monalisa"));
     assert_eq!(
         std::fs::read(identity.avatar_path.unwrap()).unwrap(),
-        b"\x89PNG\r\n\x1a\navatar"
+        avatar_bytes
     );
     assert_eq!(provider.cached().await.unwrap().unwrap().id, 42);
     profile.assert();

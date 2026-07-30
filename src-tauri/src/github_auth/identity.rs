@@ -106,6 +106,7 @@ impl FileGitHubIdentityProvider {
         }
         let extension = supported_image_extension(&content_type, &bytes)
             .ok_or_else(|| "GitHub avatar 格式不受支持。".to_owned())?;
+        image::load_from_memory(&bytes).map_err(|_| "GitHub avatar 无法解码。".to_owned())?;
         std::fs::create_dir_all(&self.cache_directory)
             .map_err(|error| format!("无法创建 GitHub 身份缓存：{error}"))?;
         let file_name = format!("avatar.{extension}");

@@ -131,4 +131,3 @@ credential-store details remain outside the WebView contract.
 - Editing GitHub profile data.
 - Adding application settings before a settings feature exists.
 - Changing GitHub App repository permissions or the existing Device Flow.
-

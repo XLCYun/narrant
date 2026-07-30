@@ -685,6 +685,9 @@ export function App() {
       setDeviceAuthorization(undefined);
       if (selectedRepository) await loadPullRequestGroups(selectedRepository);
     } catch (reason) {
+      void invoke<GitHubAuthStatus>("github_auth_status")
+        .then(setAuthStatus)
+        .catch(() => undefined);
       setError(String(reason));
     }
   }

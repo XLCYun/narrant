@@ -48,4 +48,17 @@ describe("全局 GitHub Identity 入口", () => {
 
     expect(screen.getByRole("button", { name: "GitHub 已连接" })).toBeVisible();
   });
+
+  it("显示名称为空时使用 login，并在头像解码失败后显示首字母", () => {
+    render(<GitHubIdentityEntry
+      signedIn
+      identity={{ id: 42, login: "octocat", name: null, avatarPath: "/broken-avatar.png" }}
+      onConnect={() => undefined}
+      onSignOut={() => undefined}
+    />);
+
+    const trigger = screen.getByRole("button", { name: "octocat" });
+
+    expect(trigger).toHaveTextContent("OC");
+  });
 });
