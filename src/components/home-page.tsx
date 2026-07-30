@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent, type
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
-import { RiArrowDownSLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
+import { RiArrowDownSLine, RiArrowRightLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
 import { BranchRelation } from "@/components/branch-relation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,7 +12,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -37,6 +36,8 @@ export type HomeRepository = {
 type SidebarPreferences = {
   open: boolean;
   width: number;
+  recentGroupOpen: boolean;
+  repositoriesGroupOpen: boolean;
   recentExpanded: boolean;
   expandedRepositories: number[];
   allRepositoryReviews: number[];
@@ -65,6 +66,8 @@ function readPreferences(): SidebarPreferences {
   const defaults: SidebarPreferences = {
     open: window.innerWidth >= 1200,
     width: 280,
+    recentGroupOpen: true,
+    repositoriesGroupOpen: true,
     recentExpanded: false,
     expandedRepositories: [],
     allRepositoryReviews: [],
@@ -233,59 +236,83 @@ export function HomePage({
           <p className="truncate text-xs text-muted-foreground">{t("subtitle")}</p>
         </div>
       </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("recent")}</SidebarGroupLabel>
-          <SidebarGroupContent>
+      <SidebarContent className="gap-0">
+        <SidebarGroup className="py-1">
+          <button
+            type="button"
+            className="group/section-label flex h-9 w-full items-center rounded-md px-3 text-left text-sm font-medium text-sidebar-foreground/80 outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            aria-expanded={preferences.recentGroupOpen}
+            onClick={() => setPreferences((value) => ({ ...value, recentGroupOpen: !value.recentGroupOpen }))}
+          >
+            <span>{t("recent")}</span>
+            <RiArrowDownSLine className={cn(
+              "ml-1 size-4 opacity-0 transition-[transform,opacity] group-hover/section-label:opacity-100 group-focus-visible/section-label:opacity-100",
+              !preferences.recentGroupOpen && "-rotate-90",
+            )} />
+          </button>
+          {preferences.recentGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
               {reviews.slice(0, preferences.recentExpanded ? 10 : 5).map((review) =>
                 <ReviewMenuItem key={review.reviewId} review={review} showRepository onOpen={() => openRecentReview(review)} />)}
               {!reviews.length && <p className="px-2 text-sm text-muted-foreground">{t("noRecent")}</p>}
               {reviews.length > 5 && <SidebarMenuItem>
                 <SidebarMenuButton
-                  className="text-xs text-muted-foreground"
+                  className="text-xs text-muted-foreground hover:bg-transparent active:bg-transparent"
                   onClick={() => setPreferences((value) => ({ ...value, recentExpanded: !value.recentExpanded }))}
                 >
                   {preferences.recentExpanded ? t("showLess") : t("viewAll")}
                 </SidebarMenuButton>
               </SidebarMenuItem>}
             </SidebarMenu>
-          </SidebarGroupContent>
+          </SidebarGroupContent>}
         </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("repositories")}</SidebarGroupLabel>
-          <SidebarGroupContent>
+        <SidebarGroup className="py-1">
+          <button
+            type="button"
+            className="group/section-label flex h-9 w-full items-center rounded-md px-3 text-left text-sm font-medium text-sidebar-foreground/80 outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            aria-expanded={preferences.repositoriesGroupOpen}
+            onClick={() => setPreferences((value) => ({ ...value, repositoriesGroupOpen: !value.repositoriesGroupOpen }))}
+          >
+            <span>{t("repositories")}</span>
+            <RiArrowDownSLine className={cn(
+              "ml-1 size-4 opacity-0 transition-[transform,opacity] group-hover/section-label:opacity-100 group-focus-visible/section-label:opacity-100",
+              !preferences.repositoriesGroupOpen && "-rotate-90",
+            )} />
+          </button>
+          {preferences.repositoriesGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
               {sortedRepositories.map((repository) => {
                 const expanded = preferences.expandedRepositories.includes(repository.id);
                 const all = preferences.allRepositoryReviews.includes(repository.id);
                 const repositoryReviews = reviews.filter((review) => review.repositoryEntryId === repository.id);
                 return <SidebarMenuItem key={repository.id}>
-                  <div className="flex items-center gap-0.5">
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`${expanded ? t("showLess") : t("viewAll")} ${repositoryName(repository.canonicalPath)}`}
+                  <div className="relative flex items-center">
+                    <SidebarMenuButton
+                      className={cn("min-w-0 flex-1 pr-9", !repository.available && "text-muted-foreground")}
+                      tooltip={repository.canonicalPath}
                       aria-expanded={expanded}
                       onClick={() => toggleRepository(repository.id)}
-                    >
-                      <RiArrowDownSLine className={cn("transition-transform", !expanded && "-rotate-90")} />
-                    </Button>
-                    <SidebarMenuButton
-                      className={cn("min-w-0 flex-1", !repository.available && "text-muted-foreground")}
-                      tooltip={repository.canonicalPath}
-                      onClick={() => onOpenRepository(repository)}
                     >
                       {expanded ? <RiFolderOpenLine /> : <RiFolderLine />}
                       <span className="truncate">{repositoryName(repository.canonicalPath)}</span>
                     </SidebarMenuButton>
+                    <Button
+                      variant="outline"
+                      size="icon-xs"
+                      className="absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar shadow-xs hover:bg-sidebar-accent active:translate-y-0!"
+                      aria-label={t("openRepository", { name: repositoryName(repository.canonicalPath) })}
+                      onClick={() => onOpenRepository(repository)}
+                    >
+                      <RiArrowRightLine />
+                    </Button>
                   </div>
-                  {expanded && <SidebarMenu className="ml-5 mt-1 border-l pl-2">
+                  {expanded && <SidebarMenu className="ml-5 mt-1 pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
                       <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} onOpen={() => onOpenReview(review)} />)}
+                    {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}
                     {repositoryReviews.length > 10 && <SidebarMenuItem>
                       <SidebarMenuButton
-                        className="text-xs text-muted-foreground"
+                        className="text-xs text-muted-foreground hover:bg-transparent active:bg-transparent"
                         onClick={() => setPreferences((value) => ({
                           ...value,
                           allRepositoryReviews: all
@@ -300,7 +327,7 @@ export function HomePage({
                 </SidebarMenuItem>;
               })}
             </SidebarMenu>
-          </SidebarGroupContent>
+          </SidebarGroupContent>}
         </SidebarGroup>
       </SidebarContent>
       {githubIdentityEntry && <SidebarFooter className="border-t p-3">{githubIdentityEntry}</SidebarFooter>}

@@ -57,6 +57,28 @@ describe("最近审核首页", () => {
     expect(JSON.parse(window.localStorage.getItem("narrant.sidebar-preferences") ?? "{}")).toMatchObject({ open: true, width: 280 });
   });
 
+  it("分组标题整行可折叠内容，并持久化展开状态", () => {
+    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
+    const reviews = [{ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 }];
+    render(<HomePage reviews={reviews} repositories={[repository]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
+
+    const recentGroup = screen.getByRole("button", { name: "最近审核" });
+    const repositoryGroup = screen.getByRole("button", { name: "代码仓库" });
+    expect(recentGroup).toHaveAttribute("aria-expanded", "true");
+    expect(repositoryGroup).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(recentGroup);
+    fireEvent.click(repositoryGroup);
+
+    expect(recentGroup).toHaveAttribute("aria-expanded", "false");
+    expect(repositoryGroup).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "repo" })).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem("narrant.sidebar-preferences") ?? "{}")).toMatchObject({
+      recentGroupOpen: false,
+      repositoriesGroupOpen: false,
+    });
+  });
+
   it("已有审核时不重复展示主体品牌，并把打开仓库入口放在最近审核标题行", () => {
     const reviews = [{ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 }];
     render(<HomePage reviews={reviews} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
@@ -103,7 +125,7 @@ describe("最近审核首页", () => {
     expect(startDragging).toHaveBeenCalledOnce();
   });
 
-  it("仓库按最近活动排序并支持多个仓库独立展开", () => {
+  it("仓库主体独立展开 Review 列表，右侧按钮打开仓库", () => {
     const repositories = [
       { id: 1, canonicalPath: "/work/older", lastOpenedAt: 1, available: true },
       { id: 2, canonicalPath: "/work/newer", lastOpenedAt: 2, available: true },
@@ -121,13 +143,29 @@ describe("最近审核首页", () => {
 
     const repositoryButtons = screen.getAllByRole("button", { name: /^(newer|older)$/ });
     expect(repositoryButtons.map((button) => button.textContent)).toEqual(["newer", "older"]);
-    fireEvent.click(screen.getByRole("button", { name: "查看全部 newer" }));
-    fireEvent.click(screen.getByRole("button", { name: "查看全部 older" }));
+    fireEvent.click(screen.getByRole("button", { name: "newer" }));
+    fireEvent.click(screen.getByRole("button", { name: "older" }));
     expect(screen.getAllByLabelText("将 Head 分支 topic-1 合入 Base 分支 main")).toHaveLength(3);
     expect(screen.getAllByLabelText("将 Head 分支 topic-2 合入 Base 分支 main")).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: "newer" }));
+    expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
+    const reviewList = repositoryButtons[0].closest("li")?.querySelector("ul");
+    expect(reviewList).toHaveClass("ml-5", "pl-2");
+    expect(reviewList).not.toHaveClass("border-l");
+    fireEvent.click(screen.getByRole("button", { name: "打开仓库 newer" }));
     expect(onOpenRepository).toHaveBeenCalledWith(repositories[1]);
+    expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("代码仓库")).toBeVisible();
+  });
+
+  it("没有 Review 的仓库展开后显示空状态", () => {
+    const repository = { id: 1, canonicalPath: "/work/empty", lastOpenedAt: 1, available: false };
+    const onOpenRepository = vi.fn();
+    render(<HomePage reviews={[]} repositories={[repository]} onOpenReview={() => undefined} onOpenRepository={onOpenRepository} onOpenFolder={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "empty" }));
+    expect(screen.getAllByText("还没有审核记录")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "打开仓库 empty" }));
+    expect(onOpenRepository).toHaveBeenCalledWith(repository);
   });
 
   it("英文系统语言显示英文首页", async () => {
