@@ -28,9 +28,12 @@ describe("全局 GitHub Identity 入口", () => {
       identity={{ id: 42, login: "octocat", name: "Monalisa", avatarPath: null }}
       onConnect={() => undefined}
       onSignOut={onSignOut}
+      className="h-auto min-h-12 w-full justify-start py-2"
     />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Monalisa" }));
+    const trigger = screen.getByRole("button", { name: "Monalisa" });
+    expect(trigger).toHaveClass("min-h-12", "py-2");
+    fireEvent.click(trigger);
 
     const menu = await waitFor(() => {
       const element = screen.getByRole("menu");

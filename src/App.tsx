@@ -4,6 +4,7 @@ import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { RiFileCopyLine } from "@remixicon/react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -620,6 +621,7 @@ export function App() {
   /** 启动连接向导，并在已配置时将用户带到 GitHub App 安装页。 */
   async function connectGitHub() {
     setError("");
+    setCopiedValue(undefined);
     if (!testHarnessEnabled) setGitHubDialogOpen(true);
     try {
       const status = await invoke<GitHubAuthStatus>("github_auth_status");
@@ -692,36 +694,93 @@ export function App() {
     }
   }
 
-  /** 渲染由用户主动打开的 GitHub 安装、Device Flow、复制与退出入口。 */
+  /** 按安装与账号授权两个独立步骤渲染 GitHub 连接向导。 */
   function renderGitHubControls() {
-    return <div className="space-y-3 text-sm">
+    return <div className="min-w-0 space-y-3 font-mono text-sm">
       {!authStatus && <Button variant="ghost" className="w-full justify-start" onClick={connectGitHub}>{t("github:connect")}</Button>}
       {authStatus?.signedIn && <Button variant="ghost" className="w-full justify-start" onClick={signOutGitHub}>{t("github:signOut")}</Button>}
       {authStatus && !authStatus.signedIn && (!authStatus.configured
         ? <p className="px-2 text-xs text-muted-foreground">{t("github:unconfigured")}</p>
-        : <>
-          <p className="px-2 text-xs">{t("github:installHelp")}</p>
-          {authStatus.appInstallUrl && <Button variant="outline" className="w-full" onClick={() => openUrl(authStatus.appInstallUrl!)}>{t("github:chooseRepositories")}</Button>}
-          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>{t("github:installedContinue")}</Button>
-          {deviceAuthorization && <div className="space-y-2 rounded-md border p-2">
-            <p>{t("github:deviceCode")}：<strong>{deviceAuthorization.userCode}</strong></p>
+        : deviceAuthorization
+          ? <div className="min-w-0 space-y-5 py-2">
+            <p className="text-center leading-6">
+              {t("github:authorizationPromptBefore")}{" "}
+              <span>
+                <a
+                  className="break-all underline underline-offset-4 hover:text-foreground"
+                  href={deviceAuthorization.verificationUri}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openUrl(deviceAuthorization.verificationUri);
+                  }}
+                >
+                  {deviceAuthorization.verificationUri}
+                </a>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="ml-1 inline-flex cursor-pointer align-middle"
+                  aria-label={copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
+                  onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}
+                >
+                  <RiFileCopyLine />
+                </Button>
+              </span>{" "}
+              {t("github:authorizationPromptAfter")}
+            </p>
+            <div
+              aria-label={`${t("github:deviceCode")} ${deviceAuthorization.userCode}`}
+              className="grid w-full grid-cols-[repeat(4,minmax(0,1fr))_auto_repeat(4,minmax(0,1fr))] items-center gap-1.5 sm:gap-2"
+            >
+              {Array.from(deviceAuthorization.userCode).map((character, index) => (
+                character === "-"
+                  ? <span key={`${character}-${index}`} aria-hidden className="px-0.5 text-center text-2xl font-bold">-</span>
+                  : <span
+                    key={`${character}-${index}`}
+                    aria-hidden
+                    className="flex aspect-square min-w-0 items-center justify-center rounded-md border bg-input/20 text-xl font-bold"
+                  >
+                    {character}
+                  </span>
+              ))}
+            </div>
             <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
               {copiedValue === "device-code" ? t("github:deviceCodeCopied") : t("github:copyDeviceCode")}
             </Button>
-            <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}>
-              {copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
-            </Button>
-            <a href={deviceAuthorization.verificationUri} onClick={(event) => { event.preventDefault(); void openUrl(deviceAuthorization.verificationUri); }}>{deviceAuthorization.verificationUri}</a>
-            <Button variant="outline" className="w-full" onClick={() => void openUrl(deviceAuthorization.verificationUri)}>{t("github:open")}</Button>
-            <p className="text-xs text-muted-foreground">{t("github:safety")}</p>
             <Button className="w-full" disabled={authorizing} onClick={completeGitHubAuthorization}>{t("github:authorizationComplete")}</Button>
+          </div>
+          : <div className="space-y-6">
+          {authStatus.appInstallUrl && <div className="space-y-3 text-center">
+            <p className="leading-6">
+              <a
+                className="break-all text-foreground underline underline-offset-4"
+                href={authStatus.appInstallUrl}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openUrl(authStatus.appInstallUrl!);
+                }}
+              >
+                {authStatus.appInstallUrl}
+              </a>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="ml-1 inline-flex cursor-pointer align-middle"
+                aria-label={copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
+                onClick={() => void copyAuthorizationValue(authStatus.appInstallUrl!, "authorization-url")}
+              >
+                <RiFileCopyLine />
+              </Button>
+            </p>
+            <p className="leading-6 text-muted-foreground">{t("github:installHelp")}</p>
           </div>}
-        </>)}
+          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>{t("github:installedContinue")}</Button>
+        </div>)}
     </div>;
   }
 
   /** 在主侧栏和旧布局中复用同一个 GitHub Identity 全局入口。 */
-  function renderGitHubIdentityEntry(className = "w-full justify-start") {
+  function renderGitHubIdentityEntry(className = "h-auto min-h-12 w-full justify-start py-2") {
     return <GitHubIdentityEntry
       className={className}
       signedIn={authStatus?.signedIn ?? false}
@@ -1021,8 +1080,8 @@ export function App() {
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t("github:connect")}</DialogTitle>
-          <DialogDescription>{t("github:installHelp")}</DialogDescription>
+          <DialogTitle className="font-mono">{t("github:connect")}</DialogTitle>
+          {!authStatus && <DialogDescription>{t("github:installHelp")}</DialogDescription>}
         </DialogHeader>
         {renderGitHubControls()}
       </DialogContent>
