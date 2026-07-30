@@ -133,7 +133,7 @@ describe("App", () => {
     });
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /narrant · main → topic/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 topic 合入 Base 分支 main/ }));
     fireEvent.click(await screen.findByRole("button", { name: "信任并打开" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", {
@@ -176,17 +176,17 @@ describe("App", () => {
     });
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /main → topic/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 topic 合入 Base 分支 main/ }));
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
     fireEvent.click(screen.getByRole("button", { name: "关闭审核" }));
     expect(await screen.findByRole("tab", { name: "审核历史", selected: true })).toBeInTheDocument();
-    expect(screen.getByText(/refs\/heads\/main → refs\/heads\/topic/)).toBeInTheDocument();
+    expect(screen.getByLabelText("将 Head 分支 topic 合入 Base 分支 main")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "返回仓库列表" }));
     const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
       .querySelectorAll("button");
-    expect(recentButtons[0]).toHaveTextContent("main → topic");
+    expect(recentButtons[0]).toHaveAccessibleName(/将 Head 分支 topic 合入 Base 分支 main/);
   });
 
   it("按 GitHub repository 分组展示 Pull Requests，且保留局部失败", async () => {
@@ -364,10 +364,10 @@ describe("App", () => {
       return Promise.resolve([]);
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /main → current/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 current 合入 Base 分支 main/ }));
     expect(await screen.findByRole("treeitem", { name: /kept.txt/ })).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: "main → target" }));
+    fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 target 合入 Base 分支 main/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("目标审核打开失败");
     expect(screen.getByRole("treeitem", { name: /kept.txt/ })).toBeInTheDocument();

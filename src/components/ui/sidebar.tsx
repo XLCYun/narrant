@@ -23,7 +23,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { RiSideBarLine } from "@remixicon/react"
+import { RiSidebarFoldLine, RiSidebarUnfoldLine } from "@remixicon/react"
 import { useTranslation } from "react-i18next"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
@@ -258,7 +258,7 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  const { state, toggleSidebar } = useSidebar()
   const { t } = useTranslation()
 
   return (
@@ -274,7 +274,7 @@ function SidebarTrigger({
       }}
       {...props}
     >
-      <RiSideBarLine />
+      {state === "expanded" ? <RiSidebarFoldLine /> : <RiSidebarUnfoldLine />}
       <span className="sr-only">{t("sidebar")}</span>
     </Button>
   )

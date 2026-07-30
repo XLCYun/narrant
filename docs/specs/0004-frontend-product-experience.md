@@ -38,7 +38,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 
 1. 作为首次使用 Narrant 的审核者，我希望看到清晰的品牌说明和“打开仓库文件夹”主操作，以便立即理解产品用途。
 2. 作为首次使用 Narrant 的审核者，我希望知道代码内容来自本地仓库且产品执行只读审核，以便理解产品的安全边界。
-3. 作为回访用户，我希望启动后看到最近 10 条 Review，以便快速继续上次工作。
+3. 作为回访用户，我希望启动后看到最近 5 条 Review，并可展开到最近 10 条，以便快速继续上次工作且避免侧边栏过长。
 4. 作为回访用户，我希望最近 Review 同时显示仓库、Review 身份和最后打开时间，以便辨认目标。
 5. 作为回访用户，我希望点击最近 Review 的整行即可继续，以便减少导航步骤。
 6. 作为维护多个仓库的审核者，我希望在常驻侧边栏中看到所有 Repository Entry，以便随时切换上下文。
@@ -119,12 +119,20 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 
 - 应用采用三个主视图：最近 Review 首页、Repository Entry 概览和 Review 阅读器。
 - 不设置横跨全窗口的全局顶栏。品牌区位于主侧边栏顶部，GitHub 连接入口位于底部，每个主视图拥有自己的页面级标题栏。
-- 主侧边栏默认宽度约 280px，可拖动调整、折叠并保存前端偏好。小窗口下使用临时侧栏。
-- 主侧边栏的“最近审核”固定显示跨 Repository Entry 最近 10 条 Review。
+- 主侧边栏默认宽度约 280px，可拖动调整、折叠并保存前端偏好。拖动期间宽度必须逐帧跟随指针，临时关闭宽度过渡并禁止页面文本选择；折叠或展开仍可保留过渡。折叠后侧边栏宽度为零，不保留仅含展开按钮的图标窄栏。小窗口下使用临时侧栏。
+- 主侧边栏使用唯一的展开/收起按钮：macOS 将按钮放在红黄绿窗口控件右侧的标题栏区域，Windows 和 Linux 将按钮放在主内容顶部工具区；按钮不随侧边栏一起隐藏。
+- 主侧边栏的“最近审核”默认显示跨 Repository Entry 最近 5 条 Review；记录超过 5 条时提供“查看全部”，展开后显示最近 10 条。
+- “最近审核”展开到 10 条后提供收起操作，恢复为最近 5 条。
+- 首页主内容不复用侧边栏的折叠状态，始终直接显示最近 10 条 Review。
 - 每个 Repository Entry 首次展开显示最近 10 条 Review；超过 10 条时提供“查看全部”，展开后提供“收起到最近 10 条”。
 - 点击 Repository Entry 的展开控件只控制历史列表；点击名称打开 Repository Entry 概览。
+- 多个 Repository Entry 可以同时展开，各自的展开状态作为前端本地偏好保存并在应用重启后恢复；打开 Repository Entry 概览不隐式改变其展开状态。
+- 首次显示仓库列表时，当前 Repository Entry 自动展开，其他 Repository Entry 默认收起。此后以各仓库的持久化展开状态为准；从“最近审核”打开 Review 时自动展开其所属 Repository Entry，并保存该状态。
+- Repository Entry 按最近活动时间降序排列；打开 Repository Entry 或其任一 Review 都会更新最近活动时间并重新排序。当前 Repository Entry 仅显示选中态，不在列表中创建固定副本。尚无 Review 的新 Repository Entry 使用最后打开时间参与排序。
+- 侧边栏所有 Review 条目统一使用两行布局。Pull Request Review 第一行显示 `#编号 标题`，Branch Selection Review 第一行显示“本地分支”；相对时间作为独立列位于第一行右侧，并与侧边栏分隔线保留安全间距。第二行统一显示 Base/Head 分支关系。分支名溢出时截断，并通过 Tooltip 提供完整 ref；整行作为继续 Review 的点击目标，不显示额外操作按钮。
+- 跨 Repository Entry 的“最近审核”条目在第一行先显示仓库名，再以布局间距分隔 Pull Request 的 `#编号 标题` 或“本地分支”；不使用点号或其他文本分隔符。第二行继续显示 Base/Head 分支关系。
 - 没有 Review 的首次使用首页展示品牌、slogan“纳言：审好代码，睡安稳觉”、产品说明和“打开仓库文件夹”主按钮。
-- 已有 Review 的正常首页使用“最近审核”作为标题，不重复展示完整 slogan。
+- 已有 Review 的正常首页使用“最近审核”作为标题，不重复展示完整品牌和 slogan；“打开仓库文件夹”位于同一标题行右侧。
 - “打开仓库文件夹”使用系统原生目录选择器，不把手工路径输入作为主要交互。
 - 选择目录后依次验证 Git 仓库、复用或注册 Repository Entry、检查 Workspace Trust，并仅在必要时显示风险 Dialog。
 - 已经获得 Workspace Trust 的 Repository Entry 直接打开，不持续显示“已信任”状态。
@@ -144,6 +152,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 二进制、Symlink 与 Submodule File Change 使用专用内容状态，不实例化无意义的文本 Diff。
 - Pull Request 与本地分支 Review 共用 Review 概览 Sheet。Sheet 默认关闭，通过 Review 顶栏打开。
 - Pull Request 概览展示描述、作者、状态、Base/Head、完整 revisions 和 GitHub 链接；本地分支概览展示分支与 revisions。
+- 侧边栏 Review 条目、首页最近审核、Repository Entry 概览、审核历史、Review 顶栏和概览 Sheet 中的 Base/Head 分支关系，统一显示为“Base 分支名 Badge、向左箭头图标、Head 分支名 Badge”。不额外显示 `Base`、`Head` 角色文字，不使用文本箭头或点号分隔；辅助技术文案明确读作“将 Head 分支合入 Base 分支”。
+- Base 与 Head 使用相同、具有清晰边框和背景对比的中性 Badge 样式，不用颜色区分角色或暗示状态；悬停不得降低其对比度，当前 Review 由条目整体的选中背景表达。
+- revision 之间的变化继续使用从旧 revision 指向新 revision 的向右箭头，避免把版本演进误表达为分支合入关系。
 - Pull Request 描述使用安全 Markdown：跳过原始 HTML、阻止远程图片自动加载，HTTP/HTTPS 链接交给系统浏览器。
 - 打开已有 Review 后后台自动检查 Selection 更新，但不自动刷新 Review Snapshot。
 - “刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间保留当前 Snapshot；成功后原子切换，失败后保留旧 Snapshot。
@@ -178,7 +189,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 真实 Tauri E2E 覆盖首次启动、原生目录选择、Workspace Trust、Repository Entry 概览、开始或继续 Review、自动选择 File Change、Diff 展示、显式刷新、Review 切换、Workspace 释放和应用重启恢复。
 - E2E 至少覆盖一条中文核心路径和一条英文核心路径；测试环境显式固定 locale，不依赖 CI 主机语言。
 - React 外部行为测试作为辅助 seam，通过 Testing Library 和 mock Tauri IPC 覆盖大量状态组合，继续使用 accessible role、name 和可见文案查询。
-- React 测试覆盖侧边栏最近 10 条、Repository Entry 最近 10 条、查看全部、收起、主视图导航、Tabs、Sheet、Dialog、Toast、Skeleton 和空状态。
+- React 测试覆盖侧边栏最近 5 条、展开到最近 10 条、Repository Entry 最近 10 条、查看全部、收起、主视图导航、Tabs、Sheet、Dialog、Toast、Skeleton 和空状态。
 - React 测试覆盖 Pull Request 离线缓存、局部 GitHub 失败、不可用 Repository Entry、Review 切换失败保留当前内容，以及不同错误作用域。
 - React 测试覆盖文件树自动选择、零变更、特殊 File Change、单栏与双栏切换、响应式降级和前端偏好恢复。
 - i18n 单元测试覆盖 locale 规范化、显式偏好优先级、未知语言回退、namespace loader 白名单、绝对时间和相对时间格式。

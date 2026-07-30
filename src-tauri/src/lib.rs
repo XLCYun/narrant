@@ -860,6 +860,14 @@ async fn github_auth_status(
     auth.status().await
 }
 
+/// 在不改变登录状态的情况下刷新 GitHub 公开身份。
+#[tauri::command]
+async fn refresh_github_identity(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+) -> Result<github_auth::GitHubIdentity, String> {
+    auth.refresh_identity().await
+}
+
 #[tauri::command]
 async fn start_github_authorization(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
@@ -1081,33 +1089,38 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let oauth_client = tauri::async_runtime::block_on(async {
-        Arc::new(
-            github_auth::OctocrabOAuthClient::new(&oauth_base_url)
-                .await
-                .expect("build GitHub OAuth client"),
-        )
-    });
-    let auth = Arc::new(github_auth::GitHubAuth::new(
-        option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
-        option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
-        oauth_client,
-        Arc::new(github_auth::SystemCredentialStore),
-    ));
     let builder = tauri::Builder::default()
         .manage(OpenReviewStore::default())
         .manage(GitOperationStore::default())
-        .manage(auth)
-        .setup(|app| {
+        .setup(move |app| {
+            let application_data = app.path().app_data_dir()?;
             #[cfg(feature = "wdio")]
             let database_path = std::env::var_os("NARRANT_DATABASE_PATH")
                 .map(std::path::PathBuf::from)
-                .unwrap_or(app.path().app_data_dir()?.join("narrant.sqlite3"));
+                .unwrap_or(application_data.join("narrant.sqlite3"));
             #[cfg(not(feature = "wdio"))]
-            let database_path = app.path().app_data_dir()?.join("narrant.sqlite3");
+            let database_path = application_data.join("narrant.sqlite3");
             let catalog = repository_catalog::RepositoryCatalog::open(&database_path)?;
             recover_interrupted_review_workspaces(&catalog);
             app.manage(catalog);
+            let oauth_client = tauri::async_runtime::block_on(async {
+                Arc::new(
+                    github_auth::OctocrabOAuthClient::new(&oauth_base_url)
+                        .await
+                        .expect("build GitHub OAuth client"),
+                )
+            });
+            let identity_provider = Arc::new(github_auth::FileGitHubIdentityProvider::new(
+                github_api_base_url(),
+                application_data.join("github-identity"),
+            ));
+            app.manage(Arc::new(github_auth::GitHubAuth::with_identity_provider(
+                option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
+                option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
+                oauth_client,
+                Arc::new(github_auth::SystemCredentialStore),
+                identity_provider,
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1130,6 +1143,7 @@ pub fn run() {
             list_saved_reviews,
             open_saved_review,
             github_auth_status,
+            refresh_github_identity,
             start_github_authorization,
             complete_github_authorization,
             sign_out_github,

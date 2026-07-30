@@ -34,6 +34,7 @@ pub struct ReviewSummary {
     pub base_ref: String,
     pub head_ref: String,
     pub last_opened_at: i64,
+    pub pull_request: Option<PullRequestMetadata>,
 }
 
 /// 清理 Review Workspace 前必须同时匹配的四项持久化所有权证据。
@@ -824,7 +825,8 @@ impl RepositoryCatalog {
         let mut statement = connection
             .prepare(
                 "SELECT r.id, r.repository_entry_id, e.canonical_path,
-                        r.base_ref, r.head_ref, r.last_opened_at
+                        r.base_ref, r.head_ref, r.last_opened_at,
+                        r.pull_request_metadata
                  FROM reviews r
                  JOIN repository_entries e ON e.id = r.repository_entry_id
                  WHERE r.current_snapshot_id IS NOT NULL
@@ -834,6 +836,17 @@ impl RepositoryCatalog {
             .map_err(database_recovery_error)?;
         let reviews = statement
             .query_map([repository_entry_id], |row| {
+                let metadata = row.get::<_, Option<String>>(6)?;
+                let pull_request = metadata
+                    .map(|json| serde_json::from_str::<PullRequestMetadata>(&json))
+                    .transpose()
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
                 Ok(ReviewSummary {
                     review_id: format!("review-{}", row.get::<_, i64>(0)?),
                     repository_entry_id: row.get(1)?,
@@ -841,6 +854,7 @@ impl RepositoryCatalog {
                     base_ref: row.get(3)?,
                     head_ref: row.get(4)?,
                     last_opened_at: row.get(5)?,
+                    pull_request,
                 })
             })
             .map_err(database_recovery_error)?

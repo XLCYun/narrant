@@ -37,4 +37,5 @@ export type ReviewSummary = {
   baseRef: string;
   headRef: string;
   lastOpenedAt: number;
+  pullRequest?: PullRequestMetadata;
 };

@@ -49,9 +49,10 @@ export function formatRelativeTime(
 export const resources = {
   "zh-CN": {
     common: {
-      brand: "纳言", subtitle: "只读代码审核", recent: "最近审核", emptyTitle: "纳言：审好代码，睡安稳觉",
+      brand: "纳言", subtitle: "审好代码，睡安稳觉", recent: "最近审核", emptyTitle: "纳言：审好代码，睡安稳觉",
       emptyDescription: "从本地仓库开始，只读地审好每一次代码变更。", openFolder: "打开仓库文件夹",
       sidebar: "主侧边栏", collapse: "收起侧边栏", expand: "展开侧边栏", noRecent: "还没有审核记录",
+      repositories: "代码仓库", viewAll: "查看全部", showLess: "收起", localBranch: "本地分支",
       loadingRecent: "正在加载最近审核", resizeSidebar: "调整侧边栏宽度", sidebarDescription: "显示移动端主侧边栏。", cancel: "取消", retry: "重试",
       trustTitle: "信任这个仓库？", trustDescription: "Narrant 需要执行 Git checkout。仓库配置可能运行 hooks、filters 和 Git LFS，这些能力可能执行仓库控制的程序或读取外部内容。",
       trustAndOpen: "信任并打开", repositoryNotGit: "所选文件夹不是 Git 仓库。", repositoryUnavailable: "所选文件夹不存在或无法访问。",
@@ -95,6 +96,7 @@ export const resources = {
       brand: "Narrant", subtitle: "Read-only code review", recent: "Recent reviews", emptyTitle: "Narrant: review code, sleep soundly",
       emptyDescription: "Start from a local repository and review every change read-only.", openFolder: "Open repository folder",
       sidebar: "Primary sidebar", collapse: "Collapse sidebar", expand: "Expand sidebar", noRecent: "No reviews yet",
+      repositories: "Repositories", viewAll: "View all", showLess: "Show less", localBranch: "Local branch",
       loadingRecent: "Loading recent reviews", resizeSidebar: "Resize sidebar", sidebarDescription: "Displays the primary sidebar on small windows.", cancel: "Cancel", retry: "Retry",
       trustTitle: "Trust this repository?", trustDescription: "Narrant needs to perform Git checkout. Repository configuration may run hooks, filters, and Git LFS, which can execute repository-controlled programs or read external content.",
       trustAndOpen: "Trust and open", repositoryNotGit: "The selected folder is not a Git repository.", repositoryUnavailable: "The selected folder does not exist or cannot be accessed.",

@@ -27,6 +27,15 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(JSON.stringify(prod)).not.toMatch(/wdio/i);
   });
 
+  it("macOS 标题栏样式使用当前 Tauri schema 接受的枚举值", () => {
+    const prod = JSON.parse(read("src-tauri/tauri.conf.json"));
+    const schema = JSON.parse(read("node_modules/@tauri-apps/cli/config.schema.json"));
+    const allowed = schema.definitions.TitleBarStyle.oneOf.flatMap(
+      (option: { enum?: string[] }) => option.enum ?? [],
+    );
+    expect(allowed).toContain(prod.app.windows[0].titleBarStyle);
+  });
+
   it("默认 capability 不含 wdio 权限", () => {
     const def = JSON.parse(read("src-tauri/capabilities/default.json"));
     expect(JSON.stringify(def.permissions)).not.toMatch(/wdio/i);

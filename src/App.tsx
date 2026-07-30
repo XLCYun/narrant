@@ -14,6 +14,8 @@ import { useSystemTheme } from "@/lib/use-system-theme";
 import { HomePage } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewOverview } from "@/components/review-overview";
+import { BranchRelation } from "@/components/branch-relation";
+import { GitHubIdentityEntry, type GitHubIdentity } from "@/components/github-identity-entry";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
@@ -63,6 +65,7 @@ type GitHubAuthStatus = {
   configured: boolean;
   signedIn: boolean;
   appInstallUrl: string | null;
+  identity: GitHubIdentity | null;
 };
 type DeviceAuthorization = {
   authorizationId: string;
@@ -178,6 +181,7 @@ export function App() {
   const [fileChangeError, setFileChangeError] = useState("");
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
+  const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
   const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
   const [authorizing, setAuthorizing] = useState(false);
   const [copiedValue, setCopiedValue] = useState<"device-code" | "authorization-url">();
@@ -302,6 +306,19 @@ export function App() {
       .finally(() => setCatalogLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void invoke<GitHubAuthStatus>("github_auth_status")
+      .then((status) => {
+        setAuthStatus(status);
+        if (!status.signedIn) return;
+        void invoke<GitHubIdentity>("refresh_github_identity")
+          .then((identity) => setAuthStatus((current) => current ? { ...current, identity } : current))
+          .catch(() => undefined);
+      })
+      .catch(() => setAuthStatus(undefined));
+  }, []);
+
   /** 验证并持久化用户输入的具体本地 clone。 */
   async function registerRepository() {
     setError("");
@@ -381,9 +398,10 @@ export function App() {
     setError("");
     try {
       const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
-      setRepositoryEntries((entries) => entries.map((candidate) => (
-        candidate.id === opened.id ? opened : candidate
-      )));
+      setRepositoryEntries((entries) => [
+        opened,
+        ...entries.filter((candidate) => candidate.id !== opened.id),
+      ]);
       if (!opened.available) {
         setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
         return "failed";
@@ -602,6 +620,7 @@ export function App() {
   /** 启动连接向导，并在已配置时将用户带到 GitHub App 安装页。 */
   async function connectGitHub() {
     setError("");
+    if (!testHarnessEnabled) setGitHubDialogOpen(true);
     try {
       const status = await invoke<GitHubAuthStatus>("github_auth_status");
       setAuthStatus(status);
@@ -646,8 +665,10 @@ export function App() {
       await invoke("complete_github_authorization", {
         authorizationId: deviceAuthorization.authorizationId,
       });
-      setAuthStatus((status) => status ? { ...status, signedIn: true } : status);
+      const status = await invoke<GitHubAuthStatus>("github_auth_status");
+      setAuthStatus({ ...status, signedIn: true });
       setDeviceAuthorization(undefined);
+      setGitHubDialogOpen(false);
       if (selectedRepository) await loadPullRequestGroups(selectedRepository);
     } catch (reason) {
       setError(String(reason));
@@ -660,7 +681,7 @@ export function App() {
     setError("");
     try {
       await invoke("sign_out_github");
-      setAuthStatus((status) => status ? { ...status, signedIn: false } : status);
+      setAuthStatus((status) => status ? { ...status, signedIn: false, identity: null } : status);
       setDeviceAuthorization(undefined);
       if (selectedRepository) await loadPullRequestGroups(selectedRepository);
     } catch (reason) {
@@ -694,6 +715,17 @@ export function App() {
           </div>}
         </>)}
     </div>;
+  }
+
+  /** 在主侧栏和旧布局中复用同一个 GitHub Identity 全局入口。 */
+  function renderGitHubIdentityEntry(className = "w-full justify-start") {
+    return <GitHubIdentityEntry
+      className={className}
+      signedIn={authStatus?.signedIn ?? false}
+      identity={authStatus?.identity}
+      onConnect={() => void connectGitHub()}
+      onSignOut={() => void signOutGitHub()}
+    />;
   }
 
   /** 加载 canonical refs，并使用后端识别的默认分支和当前检出分支初始化选择。 */
@@ -878,10 +910,25 @@ export function App() {
     </>;
   }
 
-  return <main className="narrant-app">
+  return <main className={catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled ? "min-h-screen" : "narrant-app"}>
     <Toaster position="top-right" />
-    <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>
-    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage reviews={recentReviews} error={error} loading={catalogLoading} onOpenReview={(review) => void reopenReview(review)} onOpenFolder={(path) => void registerRepositoryFolder(path)} />}
+    {(!catalogRuntimeEnabled || selectedRepository || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
+    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage
+      reviews={recentReviews}
+      repositories={repositoryEntries}
+      error={error}
+      loading={catalogLoading}
+      onOpenReview={(review) => void reopenReview(review)}
+      onOpenRepository={(repository) => {
+        const entry = repositoryEntries.find((candidate) => candidate.id === repository.id);
+        if (entry) void openRepository(entry);
+      }}
+      onOpenFolder={(path) => void registerRepositoryFolder(path)}
+      githubIdentityEntry={renderGitHubIdentityEntry()}
+    />}
+    {!testHarnessEnabled && (!catalogRuntimeEnabled || selectedRepository) && <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur">
+      {renderGitHubIdentityEntry()}
+    </div>}
     {catalogRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Repository Catalog">
       <h2>Repository Entries</h2>
       <section aria-label="添加 Repository" className="flex flex-wrap items-end gap-3">
@@ -909,7 +956,7 @@ export function App() {
           ? <p>尚无最近 Review</p>
           : <ul>{recentReviews.map((review) => <li key={review.reviewId}>
             <Button variant="outline" onClick={() => void reopenReview(review)}>
-              {review.repositoryPath} · {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
+              <span className="mr-3">{review.repositoryPath}</span><BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
             </Button>
           </li>)}</ul>}
       </section>
@@ -925,7 +972,6 @@ export function App() {
         discoveryLoading={discoveryLoading}
         discoveryError={discoveryError}
         githubConnected={authStatus?.signedIn ?? false}
-        githubControls={renderGitHubControls()}
         onRetryDiscovery={() => void loadPullRequestGroups(selectedRepository)}
         onConnectGitHub={() => void connectGitHub()}
         onOpenSavedReview={(review) => void openSavedReview(review)}
@@ -969,6 +1015,15 @@ export function App() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("github:connect")}</DialogTitle>
+          <DialogDescription>{t("github:installHelp")}</DialogDescription>
+        </DialogHeader>
+        {renderGitHubControls()}
+      </DialogContent>
+    </Dialog>
     {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
     {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
@@ -980,7 +1035,7 @@ export function App() {
           variant="ghost"
           onClick={() => void reopenReview(review)}
         >
-          {review.baseRef.split("/").at(-1)} → {review.headRef.split("/").at(-1)}
+          <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
         </Button>)}
     </nav>}
     {!selectedRepository && <><p>本地分支比较</p>
@@ -1013,7 +1068,7 @@ export function App() {
       </div>
     </section>}
     {snapshot && !snapshot.pullRequest && <section aria-label={t("review:branchUpdate")}>
-      <p>{snapshot.baseRef} → {snapshot.headRef}</p>
+      <BranchRelation baseRef={snapshot.baseRef} headRef={snapshot.headRef} />
       {branchUpdate && !branchUpdate.changed && <p role="status">{t("review:latest")}</p>}
       {branchUpdate?.changed && <div role="status">
         <p>{t("review:currentAvailable", { current: shortRevision(branchUpdate.currentHeadRevision), available: shortRevision(branchUpdate.latestHeadRevision) })}</p>
@@ -1027,7 +1082,7 @@ export function App() {
       <header className="flex min-h-11 items-center justify-between gap-3 border-b px-3 py-2">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold">
-            {snapshot.pullRequest ? `#${snapshot.pullRequest.number} ${snapshot.pullRequest.title}` : `${snapshot.baseRef} → ${snapshot.headRef}`}
+            {snapshot.pullRequest ? `#${snapshot.pullRequest.number} ${snapshot.pullRequest.title}` : <BranchRelation baseRef={snapshot.baseRef} headRef={snapshot.headRef} />}
           </h2>
           <p className="truncate font-mono text-xs text-muted-foreground">
             {(snapshot.baseRevision ?? snapshot.comparisonBase).slice(0, 8)} → {snapshot.headRevision.slice(0, 8)}

@@ -75,6 +75,11 @@ A reviewer's durable authorization for Narrant to perform normal Git checkout an
 run review tooling for one **Repository Entry**.
 _Avoid_: Safe repository, Review permission
 
+**GitHub Identity**:
+The single GitHub user currently authorized to act through Narrant's GitHub App.
+It is an external authorization identity, not a Narrant-owned user account.
+_Avoid_: Narrant Account, User Profile
+
 **Review Workspace**:
 The Narrant-owned, disposable checkout of the head revision presented by one
 open **Review**. It contains no user-owned state, may be forcibly rebuilt when the
@@ -96,6 +101,9 @@ _Avoid_: Repository Entry, user worktree
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
 - A **Repository Entry** owns zero or more **Reviews**
+- Narrant has at most one current **GitHub Identity**
+- A **GitHub Identity** may be represented by cached public profile information while
+  GitHub is temporarily unavailable, but signing out removes that representation
 - Moving a local clone does not create a new **Repository Entry** when the user
   explicitly relocates its saved path
 - A **Repository Entry** may discover pull requests from multiple GitHub repositories

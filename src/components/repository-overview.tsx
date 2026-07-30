@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { RiGithubFill, RiGitPullRequestLine, RiHistoryLine, RiGitBranchLine } from "@remixicon/react";
+import { RiGitPullRequestLine, RiHistoryLine, RiGitBranchLine } from "@remixicon/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslation } from "react-i18next";
+import { BranchRelation } from "@/components/branch-relation";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 export type { DiscoveredPullRequest, PullRequestGroup, SavedReviewSummary } from "@/lib/review-types";
 
@@ -17,7 +18,6 @@ type Props = {
   discoveryLoading: boolean;
   discoveryError?: string;
   githubConnected: boolean;
-  githubControls?: ReactNode;
   localBranches: ReactNode;
   initialTab?: "pull-requests" | "branches" | "history";
   onRetryDiscovery: () => void;
@@ -70,11 +70,6 @@ export function RepositoryOverview(props: Props) {
       <div className="px-2 py-3">
         <p className="font-heading text-base">{props.repositoryName}</p>
       </div>
-      <div className="mt-auto border-t pt-3">
-        {props.githubControls ?? <Button variant="ghost" className="w-full justify-start" onClick={props.onConnectGitHub}>
-          <RiGithubFill />{props.githubConnected ? t("github:connected") : t("github:connect")}
-        </Button>}
-      </div>
     </aside>
     <section className="min-w-0 p-6">
       <header className="mb-6">
@@ -119,9 +114,10 @@ export function RepositoryOverview(props: Props) {
                     {metadata.draft && <Badge variant="secondary">{t("catalog:draft")}</Badge>}
                     {updated && <Badge>{t("catalog:updateAvailable")}</Badge>}
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {metadata.author} · {metadata.state} · {baseRef} → {headRef}
-                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{metadata.author}</span><span>{metadata.state}</span>
+                    {baseRef && headRef && <BranchRelation baseRef={baseRef} headRef={headRef} />}
+                  </div>
                 </div>
                 <Button aria-label={`${row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} variant={row.saved ? "outline" : "default"} onClick={() => {
                   if (row.saved) props.onOpenSavedReview(row.saved);
@@ -142,7 +138,7 @@ export function RepositoryOverview(props: Props) {
         <TabsContent value="history" className="mt-5">
           {props.repositoryReviews.length === 0
             ? <p className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("catalog:noHistory")}</p>
-            : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => <li className="p-4" key={review.reviewId}>{review.baseRef} → {review.headRef}</li>)}</ul>}
+            : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => <li className="p-4" key={review.reviewId}><BranchRelation baseRef={review.baseRef} headRef={review.headRef} /></li>)}</ul>}
         </TabsContent>
       </Tabs>
     </section>
