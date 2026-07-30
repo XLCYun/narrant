@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent, type
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
-import { RiArrowDownSLine, RiArrowRightLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
-import { BranchRelation } from "@/components/branch-relation";
+import { RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
+import { BranchRelation, branchName } from "@/components/branch-relation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -19,7 +19,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { formatRelativeTime, normalizeLocale } from "@/lib/i18n";
+import { formatAbsoluteTime, formatRelativeTime, normalizeLocale } from "@/lib/i18n";
 import type { ReviewSummary } from "@/lib/review-types";
 import { cn } from "@/lib/utils";
 import narrantLogo from "../../assets/brand/narrant-logo.svg";
@@ -79,7 +79,54 @@ function readPreferences(): SidebarPreferences {
   }
 }
 
-/** 两行 Review 导航条目，统一呈现身份、时间和 Base/Head 合入方向。 */
+/** 在紧凑列表中以单行文本呈现 Branch Selection 的合入方向。 */
+function CompactBranchRelation({ baseRef, headRef }: { baseRef: string; headRef: string }) {
+  const base = branchName(baseRef);
+  const head = branchName(headRef);
+  return <span
+    className="flex min-w-0 flex-1 items-center gap-1 font-mono text-xs"
+    aria-label={`将 Head 分支 ${head} 合入 Base 分支 ${base}`}
+  >
+    <span className="truncate">{base}</span>
+    <RiArrowLeftLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+    <span className="truncate">{head}</span>
+  </span>;
+}
+
+/** 展示 Pull Request 导航行中被压缩掉的稳定辨认信息。 */
+function PullRequestReviewDetails({
+  pullRequest,
+  repositoryPath,
+  identity,
+  openedAt,
+}: {
+  pullRequest: NonNullable<ReviewSummary["pullRequest"]>;
+  repositoryPath: string;
+  identity: string;
+  openedAt: string;
+}) {
+  const { t } = useTranslation();
+  const details = [
+    [t("review:author"), pullRequest.author],
+    [
+      t("mergeDirection"),
+      `${branchName(pullRequest.headRef)} → ${branchName(pullRequest.baseRef)}`,
+    ],
+    [t("catalog:repositoryPath"), repositoryPath],
+    [t("lastOpened"), openedAt],
+  ];
+  return <div className="w-72 text-left">
+    <p className="break-words font-medium">{identity}</p>
+    <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
+      {details.map(([label, value]) => <div className="contents" key={label}>
+        <dt className="text-background/65">{label}</dt>
+        <dd className="min-w-0 break-words">{value}</dd>
+      </div>)}
+    </dl>
+  </div>;
+}
+
+/** Review 导航条目按 Selection 类型呈现紧凑身份与最近打开时间。 */
 function ReviewMenuItem({
   review,
   showRepository,
@@ -89,24 +136,35 @@ function ReviewMenuItem({
   showRepository: boolean;
   onOpen: () => void;
 }) {
-  const { t, i18n } = useTranslation();
-  const identity = review.pullRequest
-    ? `#${review.pullRequest.number} ${review.pullRequest.title}`
-    : t("localBranch");
-  const time = formatRelativeTime(review.lastOpenedAt, Date.now(), normalizeLocale(i18n.resolvedLanguage));
+  const { i18n } = useTranslation();
+  const locale = normalizeLocale(i18n.resolvedLanguage);
+  const time = formatRelativeTime(review.lastOpenedAt, Date.now(), locale);
+  const pullRequest = review.pullRequest;
+  const identity = pullRequest ? `#${pullRequest.number} ${pullRequest.title}` : undefined;
+  const tooltip = pullRequest && identity ? {
+    hidden: false,
+    side: "right" as const,
+    align: "start" as const,
+    className: "block max-w-xs px-3 py-2.5",
+    children: <PullRequestReviewDetails
+      pullRequest={pullRequest}
+      repositoryPath={review.repositoryPath}
+      identity={identity}
+      openedAt={formatAbsoluteTime(review.lastOpenedAt, locale)}
+    />,
+  } : undefined;
   return <SidebarMenuItem>
     <SidebarMenuButton
-      className="h-auto min-w-0 items-start rounded-lg px-2 py-2"
-      tooltip={`${showRepository ? `${repositoryName(review.repositoryPath)} ` : ""}${identity}`}
+      className="h-auto min-w-0 rounded-lg px-2 py-2"
+      tooltip={tooltip}
       onClick={onOpen}
     >
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="flex min-w-0 items-center gap-2 text-xs">
-          {showRepository && <span className="shrink-0 font-medium">{repositoryName(review.repositoryPath)}</span>}
-          <span className="min-w-0 flex-1 truncate">{identity}</span>
-          <span className="mr-3 shrink-0 text-[11px] text-muted-foreground">{time}</span>
-        </span>
-        <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
+      <span className="flex min-w-0 flex-1 items-center gap-2 text-xs">
+        {showRepository && <span className="max-w-24 shrink truncate font-medium">{repositoryName(review.repositoryPath)}</span>}
+        {identity
+          ? <span className="min-w-0 flex-1 truncate">{identity}</span>
+          : <CompactBranchRelation baseRef={review.baseRef} headRef={review.headRef} />}
+        <span className="mr-3 shrink-0 text-[11px] text-muted-foreground">{time}</span>
       </span>
     </SidebarMenuButton>
   </SidebarMenuItem>;

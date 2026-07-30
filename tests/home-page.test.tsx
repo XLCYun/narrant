@@ -157,6 +157,74 @@ describe("最近审核首页", () => {
     expect(screen.getByText("代码仓库")).toBeVisible();
   });
 
+  it("侧边栏把本地分支 Review 压缩为不含类型复述的单行", () => {
+    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
+    const reviews = [{
+      reviewId: "1",
+      repositoryEntryId: 1,
+      repositoryPath: repository.canonicalPath,
+      baseRef: "refs/heads/main",
+      headRef: "refs/heads/topic",
+      lastOpenedAt: 1,
+    }];
+    const { container } = render(
+      <HomePage
+        reviews={reviews}
+        repositories={[repository]}
+        onOpenReview={() => undefined}
+        onOpenFolder={() => undefined}
+      />,
+    );
+
+    const sidebar = container.querySelector("[data-sidebar=sidebar]");
+    const reviewButton = sidebar
+      ?.querySelector("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")
+      ?.closest("button");
+    expect(reviewButton).toBeVisible();
+    expect(reviewButton).not.toHaveAttribute("data-base-ui-tooltip-trigger");
+    expect(reviewButton).not.toHaveTextContent("本地分支");
+    expect(reviewButton?.firstElementChild).not.toHaveClass("flex-col");
+    expect(reviewButton).toHaveTextContent(/repo.*main.*topic/);
+  });
+
+  it("侧边栏把 Pull Request Review 压缩为单行并提供整行信息卡触发器", () => {
+    const openedAt = new Date("2026-07-30T08:15:00Z").getTime();
+    const review = {
+      reviewId: "1",
+      repositoryEntryId: 1,
+      repositoryPath: "/work/narrant",
+      baseRef: "refs/remotes/origin/main",
+      headRef: "refs/remotes/origin/feature/compact-reviews",
+      lastOpenedAt: openedAt,
+      pullRequest: {
+        owner: "octo-org",
+        repository: "narrant",
+        number: 42,
+        title: "Compact review navigation",
+        description: "不应进入 tooltip",
+        author: "octocat",
+        state: "open" as const,
+        draft: true,
+        url: "https://github.com/octo-org/narrant/pull/42",
+        baseRef: "main",
+        headRef: "feature/compact-reviews",
+        synchronizedAt: 1,
+      },
+    };
+    const { container } = render(
+      <HomePage reviews={[review]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />,
+    );
+
+    const sidebar = container.querySelector("[data-sidebar=sidebar]");
+    const reviewButton = [...sidebar!.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("#42 Compact review navigation"));
+    expect(reviewButton).toBeVisible();
+    expect(reviewButton).toHaveAttribute("data-base-ui-tooltip-trigger");
+    expect(reviewButton?.firstElementChild).not.toHaveClass("flex-col");
+    expect(reviewButton).not.toHaveTextContent("main");
+    expect(reviewButton).not.toHaveTextContent("feature/compact-reviews");
+  });
+
   it("没有 Review 的仓库展开后显示空状态", () => {
     const repository = { id: 1, canonicalPath: "/work/empty", lastOpenedAt: 1, available: false };
     const onOpenRepository = vi.fn();
