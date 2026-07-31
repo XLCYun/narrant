@@ -439,11 +439,9 @@ export function AppShell({
                       className={cn("min-w-0 flex-1 pr-9", !repository.available && "text-muted-foreground")}
                       tooltip={repository.canonicalPath}
                       isActive={activeRepositoryId === repository.id && !activeReviewId}
-                      disabled={pendingRepositoryId === repository.id}
-                      aria-busy={pendingRepositoryId === repository.id || undefined}
                       aria-expanded={expanded}
                       aria-current={activeRepositoryId === repository.id && !activeReviewId ? "page" : undefined}
-                      onClick={() => onOpenRepository(repository)}
+                      onClick={() => toggleRepository(repository.id)}
                     >
                       {expanded ? <Icon icon={FolderOpenIcon} /> : <Icon icon={Folder01Icon} />}
                       <span className="truncate">{repositoryName(repository.canonicalPath)}</span>
@@ -452,9 +450,10 @@ export function AppShell({
                       variant="outline"
                       size="icon-xs"
                       className="absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar shadow-xs hover:bg-sidebar-accent active:translate-y-0!"
-                      aria-label={t(expanded ? "collapseRepository" : "expandRepository", { name: repositoryName(repository.canonicalPath) })}
-                      aria-expanded={expanded}
-                      onClick={() => toggleRepository(repository.id)}
+                      aria-label={t("openRepository", { name: repositoryName(repository.canonicalPath) })}
+                      disabled={pendingRepositoryId === repository.id}
+                      aria-busy={pendingRepositoryId === repository.id || undefined}
+                      onClick={() => onOpenRepository(repository)}
                     >
                       <Icon icon={ArrowRight02Icon} />
                     </Button>

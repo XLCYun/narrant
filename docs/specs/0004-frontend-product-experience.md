@@ -48,7 +48,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 10. 作为代码阅读者，我希望调整并折叠主侧边栏，以便把更多窗口空间留给 Diff。
 11. 作为回访用户，我希望应用记住主侧边栏的宽度和折叠状态，以便下次保持我的工作布局。
 12. 作为小窗口用户，我希望主侧边栏自动转为临时侧栏，以便主内容仍然可用。
-13. 作为仓库用户，我希望点击仓库的展开箭头只展开 Review，而点击仓库名称打开仓库概览，以便导航行为可预测。
+13. 作为仓库用户，我希望点击仓库主体只展开或收起 Review，而点击右侧独立小按钮打开仓库概览，以便导航行为可预测。
 14. 作为仓库用户，我希望仓库概览显示仓库名称和完整路径，以便确认正在使用具体哪个本地 clone。
 15. 作为仓库用户，我希望通过 Pull Requests、本地分支和 Review 历史三个标签进入不同任务，以便页面不会堆叠多个长列表。
 16. 作为 Pull Request 审核者，我希望仓库概览默认打开 Pull Requests 标签，以便优先进入常见工作流。
@@ -119,7 +119,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 
 - 应用采用三个主视图：最近 Review 首页、Repository Entry 概览和 Review 阅读器。
 - 不设置横跨全窗口的全局顶栏。品牌区位于主侧边栏顶部，GitHub 连接入口位于底部，每个主视图拥有自己的页面级标题栏。
-- 三个主视图共享同一个应用外壳，不引入 URL Router；主侧边栏承担主视图切换。点击品牌区进入首页，点击 Repository Entry 名称进入仓库概览，点击 Review 条目进入 Review 阅读器。
+- 三个主视图共享同一个应用外壳，不引入 URL Router；主侧边栏承担主视图切换。点击品牌区进入首页，点击 Repository Entry 右侧独立小按钮进入仓库概览，点击 Review 条目进入 Review 阅读器。
 - 当前主视图在侧边栏中只对应一个选中项：首页选中品牌区，仓库概览选中 Repository Entry 名称，Review 阅读器选中所属 Repository Entry 下的 Review 条目并自动滚动到、展开所属 Repository Entry，但不同时选中 Repository Entry 名称。“最近审核”仅作为跨仓库快捷入口，其中的 Review 条目永不显示选中态；从这里打开 Review 后，选中态落到所属 Repository Entry 下的对应条目。不额外设置导航条或面包屑。
 - 主侧边栏默认宽度约 280px，可拖动调整、折叠并保存前端偏好。拖动期间宽度必须逐帧跟随指针，临时关闭宽度过渡并禁止页面文本选择；折叠或展开仍可保留过渡。折叠后侧边栏宽度为零，不保留仅含展开按钮的图标窄栏。小窗口下使用临时侧栏。
 - 主视图切换不重新挂载或重置主侧边栏；其宽度、开合状态和各 Repository Entry 的历史展开状态在视图间保持，并从前端本地偏好恢复。小窗口的临时侧栏在点击品牌区、Repository Entry 名称或 Review 条目后都保持打开，只由用户显式关闭。
@@ -128,7 +128,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - “最近审核”展开到 10 条后提供收起操作，恢复为最近 5 条。
 - 首页主内容不复用侧边栏的折叠状态，始终直接显示最近 10 条 Review。
 - 每个 Repository Entry 首次展开显示最近 10 条 Review；超过 10 条时提供“查看全部”，展开后提供“收起到最近 10 条”。
-- 点击 Repository Entry 的展开控件只控制历史列表；点击名称打开 Repository Entry 概览。
+- 点击 Repository Entry 主体（包括名称）只展开或收起 Review 历史；只有点击右侧独立小按钮才打开 Repository Entry 概览。
 - 多个 Repository Entry 可以同时展开，各自的展开状态作为前端本地偏好保存并在应用重启后恢复；打开 Repository Entry 概览不隐式改变其展开状态。
 - 首次显示仓库列表时，当前 Repository Entry 自动展开，其他 Repository Entry 默认收起。此后以各仓库的持久化展开状态为准；从“最近审核”打开 Review 时自动展开其所属 Repository Entry，并保存该状态。
 - Repository Entry 保持稳定的添加顺序，新添加的仓库位于前端；打开 Repository Entry 或其任一 Review 都不改变仓库之间的排列位置。当前 Repository Entry 仅显示选中态，不在列表中创建固定副本。
