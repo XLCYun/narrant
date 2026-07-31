@@ -88,9 +88,9 @@ function CompactBranchRelation({ baseRef, headRef }: { baseRef: string; headRef:
     className="flex min-w-0 flex-1 items-center gap-1 font-mono text-xs"
     aria-label={`将 Head 分支 ${head} 合入 Base 分支 ${base}`}
   >
-    <span className="shrink-0">{head}</span>
+    <span className="min-w-0 shrink truncate">{head}</span>
     <RiArrowRightLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-    <span className="min-w-0 flex-1 truncate">{base}</span>
+    <span className="min-w-0 shrink-[10] truncate">{base}</span>
   </span>;
 }
 

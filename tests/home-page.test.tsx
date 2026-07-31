@@ -205,6 +205,10 @@ describe("最近审核首页", () => {
     expect(recentReviewButton?.firstElementChild).not.toHaveClass("flex-col");
     expect(recentReviewButton).toHaveTextContent(/repo.*topic.*main/);
     expect(recentReviewButton?.querySelector("[data-slot='badge']")).toHaveTextContent("repo");
+    const compactRelation = recentReviewButton?.querySelector("[aria-label='将 Head 分支 topic 合入 Base 分支 main']");
+    expect(compactRelation?.firstElementChild).toHaveClass("min-w-0", "truncate");
+    expect(compactRelation?.firstElementChild).not.toHaveClass("shrink-0");
+    expect(recentReviewButton?.lastElementChild?.lastElementChild).toHaveClass("shrink-0");
 
     fireEvent.click(screen.getByRole("button", { name: "repo" }));
     const localReviewButtons = [...sidebar!.querySelectorAll("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")]
