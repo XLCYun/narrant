@@ -79,6 +79,21 @@ describe("最近审核首页", () => {
     });
   });
 
+  it("最近审核列表与分组标题左对齐", () => {
+    const reviews = [{
+      reviewId: "1",
+      repositoryEntryId: 1,
+      repositoryPath: "/work/repo",
+      baseRef: "refs/heads/main",
+      headRef: "refs/heads/topic",
+      lastOpenedAt: 1,
+    }];
+    render(<HomePage reviews={reviews} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
+
+    const recentGroup = screen.getByRole("button", { name: "最近审核" }).closest("[data-sidebar=group]");
+    expect(recentGroup?.querySelector("[data-sidebar=menu]")).not.toHaveClass("ml-5", "pl-2");
+  });
+
   it("已有审核时不重复展示主体品牌，并把打开仓库入口放在最近审核标题行", () => {
     const reviews = [{ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 }];
     render(<HomePage reviews={reviews} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
@@ -177,14 +192,20 @@ describe("最近审核首页", () => {
     );
 
     const sidebar = container.querySelector("[data-sidebar=sidebar]");
-    const reviewButton = sidebar
+    const recentReviewButton = sidebar
       ?.querySelector("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")
       ?.closest("button");
-    expect(reviewButton).toBeVisible();
-    expect(reviewButton).not.toHaveAttribute("data-base-ui-tooltip-trigger");
-    expect(reviewButton).not.toHaveTextContent("本地分支");
-    expect(reviewButton?.firstElementChild).not.toHaveClass("flex-col");
-    expect(reviewButton).toHaveTextContent(/repo.*main.*topic/);
+    expect(recentReviewButton).toBeVisible();
+    expect(recentReviewButton).toHaveAttribute("data-base-ui-tooltip-trigger");
+    expect(recentReviewButton).not.toHaveTextContent("本地分支");
+    expect(recentReviewButton?.firstElementChild).not.toHaveClass("flex-col");
+    expect(recentReviewButton).toHaveTextContent(/repo.*main.*topic/);
+
+    fireEvent.click(screen.getByRole("button", { name: "repo" }));
+    const localReviewButtons = [...sidebar!.querySelectorAll("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")]
+      .map((relation) => relation.closest("button"));
+    expect(localReviewButtons).toHaveLength(2);
+    expect(localReviewButtons.every((button) => button?.hasAttribute("data-base-ui-tooltip-trigger"))).toBe(true);
   });
 
   it("侧边栏把 Pull Request Review 压缩为单行并提供整行信息卡触发器", () => {

@@ -126,6 +126,28 @@ function PullRequestReviewDetails({
   </div>;
 }
 
+/** 展示本地 Branch Selection 的合入方向、仓库位置与最近打开时间。 */
+function BranchReviewDetails({
+  review,
+  openedAt,
+}: {
+  review: ReviewSummary;
+  openedAt: string;
+}) {
+  const { t } = useTranslation();
+  const details = [
+    [t("mergeDirection"), `${branchName(review.headRef)} → ${branchName(review.baseRef)}`],
+    [t("catalog:repositoryPath"), review.repositoryPath],
+    [t("lastOpened"), openedAt],
+  ];
+  return <dl className="grid w-72 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-left">
+    {details.map(([label, value]) => <div className="contents" key={label}>
+      <dt className="text-background/65">{label}</dt>
+      <dd className="min-w-0 break-words">{value}</dd>
+    </div>)}
+  </dl>;
+}
+
 /** Review 导航条目按 Selection 类型呈现紧凑身份与最近打开时间。 */
 function ReviewMenuItem({
   review,
@@ -141,18 +163,22 @@ function ReviewMenuItem({
   const time = formatRelativeTime(review.lastOpenedAt, Date.now(), locale);
   const pullRequest = review.pullRequest;
   const identity = pullRequest ? `#${pullRequest.number} ${pullRequest.title}` : undefined;
-  const tooltip = pullRequest && identity ? {
+  const openedAt = formatAbsoluteTime(review.lastOpenedAt, locale);
+  const tooltip = {
     hidden: false,
     side: "right" as const,
     align: "start" as const,
-    className: "block max-w-xs px-3 py-2.5",
-    children: <PullRequestReviewDetails
-      pullRequest={pullRequest}
-      repositoryPath={review.repositoryPath}
-      identity={identity}
-      openedAt={formatAbsoluteTime(review.lastOpenedAt, locale)}
-    />,
-  } : undefined;
+    sideOffset: 8,
+    className: "block max-w-xs px-3 py-2.5 [&>[data-side]]:hidden",
+    children: pullRequest && identity
+      ? <PullRequestReviewDetails
+          pullRequest={pullRequest}
+          repositoryPath={review.repositoryPath}
+          identity={identity}
+          openedAt={openedAt}
+        />
+      : <BranchReviewDetails review={review} openedAt={openedAt} />,
+  };
   return <SidebarMenuItem>
     <SidebarMenuButton
       className="h-auto min-w-0 rounded-lg px-2 py-2"
