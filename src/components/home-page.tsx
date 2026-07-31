@@ -120,7 +120,7 @@ function PullRequestReviewDetails({
     <p className="break-words font-medium">{identity}</p>
     <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
       {details.map(([label, value]) => <div className="contents" key={label}>
-        <dt className="text-background/65">{label}</dt>
+        <dt className="text-muted-foreground">{label}</dt>
         <dd className="min-w-0 break-words">{value}</dd>
       </div>)}
     </dl>
@@ -143,7 +143,7 @@ function BranchReviewDetails({
   ];
   return <dl className="grid w-72 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-left">
     {details.map(([label, value]) => <div className="contents" key={label}>
-      <dt className="text-background/65">{label}</dt>
+      <dt className="text-muted-foreground">{label}</dt>
       <dd className="min-w-0 break-words">{value}</dd>
     </div>)}
   </dl>;
@@ -170,7 +170,7 @@ function ReviewMenuItem({
     side: "right" as const,
     align: "start" as const,
     sideOffset: 16,
-    className: "block max-w-xs px-3 py-2.5 [&>[data-side]]:hidden",
+    className: "block max-w-xs border border-border bg-popover px-3 py-2.5 text-popover-foreground shadow-lg [&>[data-side]]:hidden",
     children: pullRequest && identity
       ? <PullRequestReviewDetails
           pullRequest={pullRequest}
@@ -444,7 +444,7 @@ export function HomePage({
                       <span className="font-medium">{repositoryName(review.repositoryPath)}</span>
                       <span className="truncate">{review.pullRequest ? `#${review.pullRequest.number} ${review.pullRequest.title}` : t("localBranch")}</span>
                     </span>
-                    <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
+                    <BranchRelation baseRef={review.baseRef} headRef={review.headRef} direction="head-to-base" />
                   </span>
                 </Button>
               </li>)}
