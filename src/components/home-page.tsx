@@ -168,7 +168,7 @@ function ReviewMenuItem({
     hidden: false,
     side: "right" as const,
     align: "start" as const,
-    sideOffset: 8,
+    sideOffset: 16,
     className: "block max-w-xs px-3 py-2.5 [&>[data-side]]:hidden",
     children: pullRequest && identity
       ? <PullRequestReviewDetails
@@ -181,7 +181,7 @@ function ReviewMenuItem({
   };
   return <SidebarMenuItem>
     <SidebarMenuButton
-      className="h-auto min-w-0 rounded-lg px-2 py-2"
+      className="h-auto min-w-0 rounded-lg px-3 py-2"
       tooltip={tooltip}
       onClick={onOpen}
     >
@@ -390,7 +390,7 @@ export function HomePage({
                       <RiArrowRightLine />
                     </Button>
                   </div>
-                  {expanded && <SidebarMenu className="ml-5 mt-1 pl-2">
+                  {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
                       <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} onOpen={() => onOpenReview(review)} />)}
                     {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}

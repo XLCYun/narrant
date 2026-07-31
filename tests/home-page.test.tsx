@@ -79,7 +79,7 @@ describe("最近审核首页", () => {
     });
   });
 
-  it("最近审核列表与分组标题左对齐", () => {
+  it("最近审核列表文字与分组标题左对齐", () => {
     const reviews = [{
       reviewId: "1",
       repositoryEntryId: 1,
@@ -92,6 +92,10 @@ describe("最近审核首页", () => {
 
     const recentGroup = screen.getByRole("button", { name: "最近审核" }).closest("[data-sidebar=group]");
     expect(recentGroup?.querySelector("[data-sidebar=menu]")).not.toHaveClass("ml-5", "pl-2");
+    const reviewButton = recentGroup
+      ?.querySelector("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")
+      ?.closest("button");
+    expect(reviewButton).toHaveClass("px-3");
   });
 
   it("已有审核时不重复展示主体品牌，并把打开仓库入口放在最近审核标题行", () => {
@@ -164,7 +168,7 @@ describe("最近审核首页", () => {
     expect(screen.getAllByLabelText("将 Head 分支 topic-2 合入 Base 分支 main")).toHaveLength(3);
     expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
     const reviewList = repositoryButtons[0].closest("li")?.querySelector("ul");
-    expect(reviewList).toHaveClass("ml-5", "pl-2");
+    expect(reviewList).toHaveClass("ml-5", "w-auto", "pl-2");
     expect(reviewList).not.toHaveClass("border-l");
     fireEvent.click(screen.getByRole("button", { name: "打开仓库 newer" }));
     expect(onOpenRepository).toHaveBeenCalledWith(repositories[1]);
