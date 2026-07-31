@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent, type
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
-import { RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
+import { RiArrowDownSLine, RiArrowRightLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
 import { BranchRelation, branchName } from "@/components/branch-relation";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -87,9 +88,9 @@ function CompactBranchRelation({ baseRef, headRef }: { baseRef: string; headRef:
     className="flex min-w-0 flex-1 items-center gap-1 font-mono text-xs"
     aria-label={`将 Head 分支 ${head} 合入 Base 分支 ${base}`}
   >
-    <span className="truncate">{base}</span>
-    <RiArrowLeftLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-    <span className="truncate">{head}</span>
+    <span className="shrink-0">{head}</span>
+    <RiArrowRightLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+    <span className="min-w-0 flex-1 truncate">{base}</span>
   </span>;
 }
 
@@ -186,7 +187,12 @@ function ReviewMenuItem({
       onClick={onOpen}
     >
       <span className="flex min-w-0 flex-1 items-center gap-2 text-xs">
-        {showRepository && <span className="max-w-24 shrink truncate font-medium">{repositoryName(review.repositoryPath)}</span>}
+        {showRepository && <Badge
+          variant="secondary"
+          className="h-5 shrink-0 rounded-sm border-0 bg-muted px-1.5 text-foreground hover:bg-muted"
+        >
+          {repositoryName(review.repositoryPath)}
+        </Badge>}
         {identity
           ? <span className="min-w-0 flex-1 truncate">{identity}</span>
           : <CompactBranchRelation baseRef={review.baseRef} headRef={review.headRef} />}

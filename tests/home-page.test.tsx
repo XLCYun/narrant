@@ -203,7 +203,8 @@ describe("最近审核首页", () => {
     expect(recentReviewButton).toHaveAttribute("data-base-ui-tooltip-trigger");
     expect(recentReviewButton).not.toHaveTextContent("本地分支");
     expect(recentReviewButton?.firstElementChild).not.toHaveClass("flex-col");
-    expect(recentReviewButton).toHaveTextContent(/repo.*main.*topic/);
+    expect(recentReviewButton).toHaveTextContent(/repo.*topic.*main/);
+    expect(recentReviewButton?.querySelector("[data-slot='badge']")).toHaveTextContent("repo");
 
     fireEvent.click(screen.getByRole("button", { name: "repo" }));
     const localReviewButtons = [...sidebar!.querySelectorAll("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")]
