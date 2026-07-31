@@ -120,7 +120,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 应用采用三个主视图：最近 Review 首页、Repository Entry 概览和 Review 阅读器。
 - 不设置横跨全窗口的全局顶栏。品牌区位于主侧边栏顶部，GitHub 连接入口位于底部，每个主视图拥有自己的页面级标题栏。
 - 三个主视图共享同一个应用外壳，不引入 URL Router；主侧边栏承担主视图切换。点击品牌区进入首页，点击 Repository Entry 右侧独立小按钮进入仓库概览，点击 Review 条目进入 Review 阅读器。
-- 当前主视图在侧边栏中只对应一个选中项：首页选中品牌区，仓库概览选中 Repository Entry 名称，Review 阅读器选中所属 Repository Entry 下的 Review 条目并自动滚动到、展开所属 Repository Entry，但不同时选中 Repository Entry 名称。“最近审核”仅作为跨仓库快捷入口，其中的 Review 条目永不显示选中态；从这里打开 Review 后，选中态落到所属 Repository Entry 下的对应条目。不额外设置导航条或面包屑。
+- 当前主视图在侧边栏中只对应一个选中项：品牌区在首页保留 `aria-current="page"` 语义但不显示常驻选中背景；仓库概览选中 Repository Entry 名称，Review 阅读器选中所属 Repository Entry 下的 Review 条目并自动滚动到、展开所属 Repository Entry，但不同时选中 Repository Entry 名称。品牌区始终可点击返回首页，使用 pointer 光标、悬停灰色背景与键盘焦点环。“最近审核”仅作为跨仓库快捷入口，其中的 Review 条目永不显示选中态；从这里打开 Review 后，选中态落到所属 Repository Entry 下的对应条目。不额外设置导航条或面包屑。
 - 主侧边栏默认宽度约 280px，可拖动调整、折叠并保存前端偏好。拖动期间宽度必须逐帧跟随指针，临时关闭宽度过渡并禁止页面文本选择；折叠或展开仍可保留过渡。折叠后侧边栏宽度为零，不保留仅含展开按钮的图标窄栏。小窗口下使用临时侧栏。
 - 主视图切换不重新挂载或重置主侧边栏；其宽度、开合状态和各 Repository Entry 的历史展开状态在视图间保持，并从前端本地偏好恢复。小窗口的临时侧栏在点击品牌区、Repository Entry 名称或 Review 条目后都保持打开，只由用户显式关闭。
 - 主侧边栏使用唯一的展开/收起按钮：macOS 将按钮放在红黄绿窗口控件右侧的标题栏区域，Windows 和 Linux 将按钮放在主内容顶部工具区；按钮不随侧边栏一起隐藏。

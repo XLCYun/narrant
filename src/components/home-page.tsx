@@ -371,7 +371,7 @@ export function AppShell({
           type="button"
           aria-label={t("brand")}
           aria-current={showHome ? "page" : undefined}
-          className={cn("flex w-full items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring", showHome && "bg-sidebar-accent text-sidebar-accent-foreground")}
+          className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           onClick={onOpenHome}
         >
           <picture className="size-12 shrink-0">

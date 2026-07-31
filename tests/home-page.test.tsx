@@ -20,6 +20,15 @@ afterEach(() => {
 });
 
 describe("最近审核首页", () => {
+  it("首页中的品牌入口保留语义与悬停反馈，但不显示常驻选中背景", () => {
+    render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
+
+    const brandButton = screen.getByRole("button", { name: /^(纳言|Narrant)$/ });
+    expect(brandButton).toHaveAttribute("aria-current", "page");
+    expect(brandButton).toHaveClass("cursor-pointer", "hover:bg-sidebar-accent", "focus-visible:ring-2");
+    expect(brandButton).not.toHaveClass("bg-sidebar-accent");
+  });
+
   it("Review 阅读器只选中所属仓库树中的 Review", async () => {
     const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
     const review = {
