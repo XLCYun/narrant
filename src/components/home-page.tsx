@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
@@ -248,10 +248,6 @@ export function AppShell({
   const seenActiveRepositories = useRef(new Set<number>());
   const openSidebar = preferences.open !== false;
   const sidebarWidth = typeof preferences.width === "number" ? preferences.width : 280;
-  const sortedRepositories = useMemo(
-    () => [...repositories].sort((left, right) => right.lastOpenedAt - left.lastOpenedAt),
-    [repositories],
-  );
 
   useEffect(() => {
     window.localStorage?.setItem(preferenceKey, JSON.stringify(preferences));
@@ -433,7 +429,7 @@ export function AppShell({
           </button>
           {preferences.repositoriesGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
-              {sortedRepositories.map((repository) => {
+              {repositories.map((repository) => {
                 const expanded = preferences.expandedRepositories.includes(repository.id);
                 const all = preferences.allRepositoryReviews.includes(repository.id);
                 const repositoryReviews = reviews.filter((review) => review.repositoryEntryId === repository.id);

@@ -211,12 +211,12 @@ impl RepositoryCatalog {
         Ok(entry)
     }
 
-    /// 按最近打开顺序列出全部入口，缺失路径仍保留在结果中。
+    /// 按添加顺序倒序列出全部入口，打开活动不改变仓库位置。
     pub fn list(&self) -> Result<Vec<RepositoryEntry>, RepositoryCatalogError> {
         let connection = self.connection()?;
         let list_query = format!(
             "SELECT {ENTRY_COLUMNS} FROM repository_entries
-             ORDER BY last_opened_at DESC, id DESC"
+             ORDER BY id DESC"
         );
         let mut statement = connection
             .prepare(&list_query)

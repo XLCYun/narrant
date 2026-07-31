@@ -131,7 +131,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 点击 Repository Entry 的展开控件只控制历史列表；点击名称打开 Repository Entry 概览。
 - 多个 Repository Entry 可以同时展开，各自的展开状态作为前端本地偏好保存并在应用重启后恢复；打开 Repository Entry 概览不隐式改变其展开状态。
 - 首次显示仓库列表时，当前 Repository Entry 自动展开，其他 Repository Entry 默认收起。此后以各仓库的持久化展开状态为准；从“最近审核”打开 Review 时自动展开其所属 Repository Entry，并保存该状态。
-- Repository Entry 按最近活动时间降序排列；打开 Repository Entry 或其任一 Review 都会更新最近活动时间并重新排序。当前 Repository Entry 仅显示选中态，不在列表中创建固定副本。尚无 Review 的新 Repository Entry 使用最后打开时间参与排序。
+- Repository Entry 保持稳定的添加顺序，新添加的仓库位于前端；打开 Repository Entry 或其任一 Review 都不改变仓库之间的排列位置。当前 Repository Entry 仅显示选中态，不在列表中创建固定副本。
 - Review 按最近打开时间降序排列；打开已有 Review 或创建并打开新 Review 都会更新其最近打开时间，使当前 Review 自然进入所属 Repository Entry 的列表顶部并成为选中项，不为旧 Review 创建固定副本或强制切换“查看全部”状态。
 - 再次点击当前已选中的 Repository Entry 或 Review 不重新加载内容、重建 Review Workspace 或更新最近打开时间；内容刷新只由对应主视图中的明确操作触发。
 - 从侧边栏打开另一个 Repository Entry 或 Review 时，原主视图和原选中项保持到新目标成功打开；目标条目局部显示加载状态并禁止重复触发。成功后原子切换主内容和选中态，失败则保留原视图与选中态。

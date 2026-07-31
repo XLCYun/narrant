@@ -113,6 +113,13 @@ type DiffMode = "side-by-side" | "inline";
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
 const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
 
+/** 更新已有 Repository Entry 时保持位置，只把新添加的仓库放到列表前端。 */
+function upsertRepositoryEntry(entries: RepositoryEntry[], entry: RepositoryEntry) {
+  return entries.some((candidate) => candidate.id === entry.id)
+    ? entries.map((candidate) => candidate.id === entry.id ? entry : candidate)
+    : [entry, ...entries];
+}
+
 /** 以不依赖系统 locale 的代码点顺序稳定排列 File Change 路径。 */
 function comparePaths(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -332,10 +339,7 @@ export function App() {
       const entry = await invoke<RepositoryEntry>("register_repository_entry", {
         path: repositoryPath,
       });
-      setRepositoryEntries((entries) => [
-        entry,
-        ...entries.filter((candidate) => candidate.id !== entry.id),
-      ]);
+      setRepositoryEntries((entries) => upsertRepositoryEntry(entries, entry));
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -349,7 +353,7 @@ export function App() {
     setError("");
     try {
       const entry = await invoke<RepositoryEntry>("register_repository_entry", { path });
-      setRepositoryEntries((entries) => [entry, ...entries.filter((candidate) => candidate.id !== entry.id)]);
+      setRepositoryEntries((entries) => upsertRepositoryEntry(entries, entry));
       await openRepository(entry);
     } catch (reason) { setError(repositoryOpenError(reason)); }
   }
@@ -405,10 +409,7 @@ export function App() {
     const leavingReview = Boolean(snapshot);
     try {
       const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
-      setRepositoryEntries((entries) => [
-        opened,
-        ...entries.filter((candidate) => candidate.id !== opened.id),
-      ]);
+      setRepositoryEntries((entries) => upsertRepositoryEntry(entries, opened));
       if (!opened.available) {
         setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
         return "failed";

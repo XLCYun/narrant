@@ -77,6 +77,36 @@ fn separate_clones_of_the_same_remote_remain_separate_entries() {
 }
 
 #[test]
+fn opening_repository_does_not_change_repository_list_order() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let older = create_repository();
+    let newer = create_repository();
+    let older_entry = catalog.register(older.path()).unwrap();
+    let newer_entry = catalog.register(newer.path()).unwrap();
+
+    assert_eq!(
+        catalog
+            .list()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![newer_entry.id, older_entry.id],
+    );
+    catalog.open_entry(older_entry.id).unwrap();
+    assert_eq!(
+        catalog
+            .list()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![newer_entry.id, older_entry.id],
+    );
+}
+
+#[test]
 fn registering_the_same_clone_reopens_the_existing_entry() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();

@@ -173,7 +173,8 @@ describe("最近审核首页", () => {
     expect(startDragging).toHaveBeenCalledOnce();
   });
 
-  it("仓库名称打开仓库，右侧按钮独立展开 Review 列表", () => {
+  it("仓库名称打开仓库，右侧按钮独立展开 Review 列表", async () => {
+    await i18n.changeLanguage("zh-CN");
     const repositories = [
       { id: 1, canonicalPath: "/work/older", lastOpenedAt: 1, available: true },
       { id: 2, canonicalPath: "/work/newer", lastOpenedAt: 2, available: true },
@@ -190,7 +191,7 @@ describe("最近审核首页", () => {
     render(<HomePage reviews={reviews} repositories={repositories} onOpenReview={() => undefined} onOpenRepository={onOpenRepository} onOpenFolder={() => undefined} />);
 
     const repositoryButtons = screen.getAllByRole("button", { name: /^(newer|older)$/ });
-    expect(repositoryButtons.map((button) => button.textContent)).toEqual(["newer", "older"]);
+    expect(repositoryButtons.map((button) => button.textContent)).toEqual(["older", "newer"]);
     fireEvent.click(screen.getByRole("button", { name: "展开仓库 newer" }));
     fireEvent.click(screen.getByRole("button", { name: "展开仓库 older" }));
     expect(screen.getAllByLabelText("将 Head 分支 topic-1 合入 Base 分支 main")).toHaveLength(3);
