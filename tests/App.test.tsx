@@ -105,6 +105,7 @@ describe("App", () => {
     expect(screen.getByText("/work/narrant")).toBeInTheDocument();
     expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
     expect(screen.queryByText("已信任")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("主侧边栏")).toBeInTheDocument();
   });
 
   it("从最近审核触发信任后继续打开原 Review", async () => {
@@ -182,8 +183,8 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "关闭审核" }));
     expect(await screen.findByRole("tab", { name: "审核历史", selected: true })).toBeInTheDocument();
-    expect(screen.getByLabelText("将 Head 分支 topic 合入 Base 分支 main")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "返回仓库列表" }));
+    expect(screen.getAllByLabelText("将 Head 分支 topic 合入 Base 分支 main").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "纳言" }));
     const recentButtons = screen.getByRole("region", { name: "Recent Reviews" })
       .querySelectorAll("button");
     expect(recentButtons[0]).toHaveAccessibleName(/将 Head 分支 topic 合入 Base 分支 main/);
@@ -367,7 +368,12 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 current 合入 Base 分支 main/ }));
     expect(await screen.findByRole("treeitem", { name: /kept.txt/ })).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 target 合入 Base 分支 main/ }));
+    const targetReview = await waitFor(() => {
+      const item = document.querySelector<HTMLButtonElement>('[data-review-id="review-target"]');
+      expect(item).toBeInTheDocument();
+      return item!;
+    });
+    fireEvent.click(targetReview);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("目标审核打开失败");
     expect(screen.getByRole("treeitem", { name: /kept.txt/ })).toBeInTheDocument();

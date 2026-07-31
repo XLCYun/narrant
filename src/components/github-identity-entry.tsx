@@ -1,4 +1,4 @@
-import { RiGithubFill, RiLogoutBoxRLine } from "@remixicon/react";
+import { LogoutSquare01Icon } from "@hugeicons/core-free-icons";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -12,6 +12,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { GitHubMark } from "@/components/brand/github-mark";
+import { Icon } from "@/components/ui/icon";
 
 /** WebView 可以安全呈现的 GitHub 公开身份。 */
 export type GitHubIdentity = {
@@ -44,7 +46,7 @@ export function GitHubIdentityEntry({ signedIn, identity, onConnect, onSignOut, 
 
   if (!signedIn) {
     return <Button variant="ghost" className={className} onClick={onConnect}>
-      <RiGithubFill />
+      <GitHubMark />
       <span className="truncate">{t("connect")}</span>
     </Button>;
   }
@@ -64,7 +66,7 @@ export function GitHubIdentityEntry({ signedIn, identity, onConnect, onSignOut, 
           {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
           <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
         </Avatar>
-        : <RiGithubFill />}
+        : <GitHubMark />}
       <span className="truncate">{compactName}</span>
     </DropdownMenuTrigger>
     <DropdownMenuContent side="top" align="start" className="w-64">
@@ -84,7 +86,7 @@ export function GitHubIdentityEntry({ signedIn, identity, onConnect, onSignOut, 
         <DropdownMenuSeparator />
       </>}
       <DropdownMenuItem variant="destructive" onClick={onSignOut}>
-        <RiLogoutBoxRLine />
+        <Icon icon={LogoutSquare01Icon} />
         {t("signOut")}
       </DropdownMenuItem>
     </DropdownMenuContent>

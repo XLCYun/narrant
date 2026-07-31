@@ -1,7 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
-import { RiExternalLinkLine, RiInformationLine } from "@remixicon/react";
+import { ExternalLinkIcon, InformationCircleIcon } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +14,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import type { PullRequestMetadata } from "@/lib/review-types";
+import { Icon } from "@/components/ui/icon";
 
 /** Review 概览所需的来源无关 Snapshot 投影。 */
 export type ReviewOverviewModel = {
@@ -55,7 +56,7 @@ export function ReviewOverview({ review, onOpenExternal }: ReviewOverviewProps) 
   return (
     <Sheet>
       <SheetTrigger render={<Button size="xs" variant="outline" />}>
-        <RiInformationLine />
+        <Icon icon={InformationCircleIcon} />
         {t("openOverview")}
       </SheetTrigger>
       <SheetContent
@@ -140,7 +141,7 @@ export function ReviewOverview({ review, onOpenExternal }: ReviewOverviewProps) 
                 onClick={(event) => openExternal(event, pullRequest.url)}
               >
                 {t("viewOnGitHub")}
-                <RiExternalLinkLine />
+                <Icon icon={ExternalLinkIcon} />
               </a>
             </>
           )}

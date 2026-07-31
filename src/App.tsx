@@ -4,7 +4,7 @@ import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { RiFileCopyLine } from "@remixicon/react";
+import { Copy01Icon } from "@hugeicons/core-free-icons";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,13 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useSystemTheme } from "@/lib/use-system-theme";
-import { HomePage } from "@/components/home-page";
+import { AppShell, type HomeRepository } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewOverview } from "@/components/review-overview";
 import { BranchRelation } from "@/components/branch-relation";
 import { GitHubIdentityEntry, type GitHubIdentity } from "@/components/github-identity-entry";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
+import { Icon } from "@/components/ui/icon";
 import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import "@/lib/i18n";
 
@@ -62,6 +63,8 @@ type BranchRefs = {
   currentRef: string;
 };
 type ActiveReview = { reviewId: string };
+/** 侧边栏中正在打开的单一导航目标。 */
+type PendingNavigation = { type: "repository"; id: number } | { type: "review"; id: string };
 type GitHubAuthStatus = {
   configured: boolean;
   signedIn: boolean;
@@ -159,6 +162,7 @@ export function App() {
   const [recentReviews, setRecentReviews] = useState<ReviewSummary[]>([]);
   const [repositoryReviews, setRepositoryReviews] = useState<ReviewSummary[]>([]);
   const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
+  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation>();
   const [pendingRepository, setPendingRepository] = useState<RepositoryEntry>();
   const [pendingReview, setPendingReview] = useState<ReviewSummary>();
   const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
@@ -252,12 +256,12 @@ export function App() {
   }
 
   /** 关闭当前 Review 的运行时资源并保留持久化历史。 */
-  function closeReviewView() {
+  function closeReviewView(initialTab: "pull-requests" | "branches" | "history" = "history") {
     replaceSnapshot(undefined);
     setFileChange(undefined);
     setReviewUpdate(undefined);
     setReviewUpdateError("");
-    setRepositoryInitialTab("history");
+    setRepositoryInitialTab(initialTab);
   }
 
   /** 返回 Catalog 时同时关闭当前 Review，避免页面外仍保留 workspace。 */
@@ -397,6 +401,8 @@ export function App() {
   /** 打开 Repository Entry；首次使用时先停留当前页面并请求 Workspace Trust。 */
   async function openRepository(entry: RepositoryEntry): Promise<"entered" | "trust-required" | "failed"> {
     setError("");
+    const previousRepositoryId = selectedRepository?.id;
+    const leavingReview = Boolean(snapshot);
     try {
       const opened = await invoke<RepositoryEntry>("open_repository_entry", { id: entry.id });
       setRepositoryEntries((entries) => [
@@ -415,6 +421,11 @@ export function App() {
         return "trust-required";
       }
       await enterRepository(opened);
+      if (leavingReview) {
+        closeReviewView(previousRepositoryId === opened.id ? "history" : "pull-requests");
+      } else {
+        setRepositoryInitialTab("pull-requests");
+      }
       return "entered";
     } catch (reason) {
       setError(String(reason));
@@ -468,7 +479,39 @@ export function App() {
       reopened,
       ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
     ]);
+    setRepositoryEntries((entries) => entries.map((entry) => entry.id === summary.repositoryEntryId
+      ? { ...entry, lastOpenedAt: reopened.lastOpenedAt }
+      : entry));
+    setSelectedRepository((entry) => entry?.id === summary.repositoryEntryId
+      ? { ...entry, lastOpenedAt: reopened.lastOpenedAt }
+      : entry);
+    void Promise.resolve(invoke<RepositoryEntry>("open_repository_entry", { id: summary.repositoryEntryId }))
+      .catch(() => undefined);
     setFileChange(undefined);
+  }
+
+  /** 仅允许一个侧边栏仓库导航进行，成功后由 openRepository 提交主视图。 */
+  async function navigateToRepository(repository: HomeRepository) {
+    if (pendingNavigation || (selectedRepository?.id === repository.id && !snapshot)) return;
+    const entry = repositoryEntries.find((candidate) => candidate.id === repository.id);
+    if (!entry) return;
+    setPendingNavigation({ type: "repository", id: repository.id });
+    try {
+      await openRepository(entry);
+    } finally {
+      setPendingNavigation(undefined);
+    }
+  }
+
+  /** 仅允许一个侧边栏 Review 导航进行，失败时保留当前主视图。 */
+  async function navigateToReview(review: ReviewSummary) {
+    if (pendingNavigation || snapshot?.reviewId === review.reviewId) return;
+    setPendingNavigation({ type: "review", id: review.reviewId });
+    try {
+      await reopenReview(review);
+    } finally {
+      setPendingNavigation(undefined);
+    }
   }
 
   /** 从持久化列表打开 current Snapshot，并在跨仓库进入时恢复 Repository Entry 上下文。 */
@@ -723,7 +766,7 @@ export function App() {
                   aria-label={copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
                   onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}
                 >
-                  <RiFileCopyLine />
+                  <Icon icon={Copy01Icon} />
                 </Button>
               </span>{" "}
               {t("github:authorizationPromptAfter")}
@@ -769,7 +812,7 @@ export function App() {
                 aria-label={copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
                 onClick={() => void copyAuthorizationValue(authStatus.appInstallUrl!, "authorization-url")}
               >
-                <RiFileCopyLine />
+                <Icon icon={Copy01Icon} />
               </Button>
             </p>
             <p className="leading-6 text-muted-foreground">{t("github:installHelp")}</p>
@@ -972,23 +1015,27 @@ export function App() {
     </>;
   }
 
-  return <main className={catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled ? "min-h-screen" : "narrant-app"}>
+  return <AppShell
+    enabled={catalogRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
+    fallbackClassName="narrant-app"
+    showHome={!selectedRepository && !testHarnessEnabled}
+    activeRepositoryId={selectedRepository?.id}
+    activeReviewId={snapshot?.reviewId}
+    pendingRepositoryId={pendingNavigation?.type === "repository" ? pendingNavigation.id : undefined}
+    pendingReviewId={pendingNavigation?.type === "review" ? pendingNavigation.id : undefined}
+    reviews={recentReviews}
+    repositories={repositoryEntries}
+    error={!selectedRepository ? error : undefined}
+    loading={catalogLoading}
+    onOpenHome={leaveRepository}
+    onOpenReview={(review) => void navigateToReview(review)}
+    onOpenRepository={(repository) => void navigateToRepository(repository)}
+    onOpenFolder={(path) => void registerRepositoryFolder(path)}
+    githubIdentityEntry={renderGitHubIdentityEntry()}
+  >
     <Toaster position="top-right" />
-    {(!catalogRuntimeEnabled || selectedRepository || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
-    {catalogRuntimeEnabled && !selectedRepository && !testHarnessEnabled && <HomePage
-      reviews={recentReviews}
-      repositories={repositoryEntries}
-      error={error}
-      loading={catalogLoading}
-      onOpenReview={(review) => void reopenReview(review)}
-      onOpenRepository={(repository) => {
-        const entry = repositoryEntries.find((candidate) => candidate.id === repository.id);
-        if (entry) void openRepository(entry);
-      }}
-      onOpenFolder={(path) => void registerRepositoryFolder(path)}
-      githubIdentityEntry={renderGitHubIdentityEntry()}
-    />}
-    {!testHarnessEnabled && (!catalogRuntimeEnabled || selectedRepository) && <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur">
+    {(!catalogRuntimeEnabled || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
+    {!testHarnessEnabled && !catalogRuntimeEnabled && <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur">
       {renderGitHubIdentityEntry()}
     </div>}
     {catalogRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Repository Catalog">
@@ -1024,7 +1071,6 @@ export function App() {
       </section>
     </article>}
     {selectedRepository && !snapshot && <article aria-label="Repository Entry">
-      <Button variant="ghost" className="mb-3" onClick={leaveRepository}>{t("catalog:back")}</Button>
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
@@ -1115,7 +1161,7 @@ export function App() {
     {error && <ErrorMessage message={error} />}
     {snapshot && <details className="w-fit">
       <summary className={buttonVariants({ variant: "outline" })}>{t("review:moreActions")}</summary>
-      <Button variant="ghost" onClick={closeReviewView}>{t("review:close")}</Button>
+      <Button variant="ghost" onClick={() => closeReviewView()}>{t("review:close")}</Button>
     </details>}
     {snapshot?.pullRequest && <section aria-label={t("review:pullRequestUpdate")}>
       <div>
@@ -1201,5 +1247,5 @@ export function App() {
         </ResizablePanelGroup>}
     </section>}
     </>}
-  </main>;
+  </AppShell>;
 }

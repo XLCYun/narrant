@@ -23,7 +23,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { RiSidebarFoldLine, RiSidebarUnfoldLine } from "@remixicon/react"
+import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "@hugeicons/core-free-icons"
+import { Icon } from "@/components/ui/icon"
 import { useTranslation } from "react-i18next"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
@@ -274,7 +275,7 @@ function SidebarTrigger({
       }}
       {...props}
     >
-      {state === "expanded" ? <RiSidebarFoldLine /> : <RiSidebarUnfoldLine />}
+      {state === "expanded" ? <Icon icon={PanelLeftCloseIcon} /> : <Icon icon={PanelLeftOpenIcon} />}
       <span className="sr-only">{t("sidebar")}</span>
     </Button>
   )

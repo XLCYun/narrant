@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
-import { RiGitPullRequestLine, RiHistoryLine, RiGitBranchLine } from "@remixicon/react";
+import { GitBranchIcon, GitPullRequestIcon, HistoryIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslation } from "react-i18next";
 import { BranchRelation } from "@/components/branch-relation";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
+import { Icon } from "@/components/ui/icon";
 export type { DiscoveredPullRequest, PullRequestGroup, SavedReviewSummary } from "@/lib/review-types";
 
 /** Repository Entry 概览所需的外部状态与用户动作。 */
@@ -65,22 +66,16 @@ export function RepositoryOverview(props: Props) {
   const rows = mergePullRequests(props.savedReviews, props.pullRequestGroups);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
   const remoteError = props.discoveryError ?? groupErrors[0];
-  return <div className="grid min-h-[calc(100vh-4rem)] grid-cols-1 overflow-hidden rounded-xl border bg-background min-[1200px]:grid-cols-[minmax(13rem,15rem)_1fr]">
-    <aside className="hidden min-h-full flex-col border-r bg-muted/20 p-3 min-[1200px]:flex" aria-label={t("catalog:sidebar")}>
-      <div className="px-2 py-3">
-        <p className="font-heading text-base">{props.repositoryName}</p>
-      </div>
-    </aside>
-    <section className="min-w-0 p-6">
+  return <section className="min-w-0">
       <header className="mb-6">
         <h2 className="font-heading text-2xl">{props.repositoryName}</h2>
         <p className="mt-1 break-all text-sm text-muted-foreground">{props.repositoryPath}</p>
       </header>
       <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>
         <TabsList aria-label={t("catalog:tasks")}>
-          <TabsTrigger value="pull-requests"><RiGitPullRequestLine />{t("catalog:tabs.pullRequests")}</TabsTrigger>
-          <TabsTrigger value="branches"><RiGitBranchLine />{t("catalog:tabs.branches")}</TabsTrigger>
-          <TabsTrigger value="history"><RiHistoryLine />{t("catalog:tabs.history")}</TabsTrigger>
+          <TabsTrigger value="pull-requests"><Icon icon={GitPullRequestIcon} />{t("catalog:tabs.pullRequests")}</TabsTrigger>
+          <TabsTrigger value="branches"><Icon icon={GitBranchIcon} />{t("catalog:tabs.branches")}</TabsTrigger>
+          <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("catalog:tabs.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="pull-requests" className="mt-5">
           {props.pullRequestGroups.length > 0 && <div className="mb-4 flex flex-wrap gap-2">
@@ -107,7 +102,7 @@ export function RepositoryOverview(props: Props) {
                 || row.saved.headRevision !== row.discovered.head.sha
               ));
               return <li key={row.key} className="flex items-center gap-4 p-4">
-                <RiGitPullRequestLine className="shrink-0 text-muted-foreground" aria-hidden />
+                <Icon icon={GitPullRequestIcon} className="shrink-0 text-muted-foreground" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="truncate font-medium">#{metadata.number} {metadata.title}</p>
@@ -141,6 +136,5 @@ export function RepositoryOverview(props: Props) {
             : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => <li className="p-4" key={review.reviewId}><BranchRelation baseRef={review.baseRef} headRef={review.headRef} /></li>)}</ul>}
         </TabsContent>
       </Tabs>
-    </section>
-  </div>;
+  </section>;
 }

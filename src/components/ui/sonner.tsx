@@ -1,5 +1,12 @@
 import { Toaster as Sonner, type ToasterProps } from "sonner"
-import { RiCheckboxCircleLine, RiInformationLine, RiErrorWarningLine, RiCloseCircleLine, RiLoaderLine } from "@remixicon/react"
+import {
+  AlertCircleIcon,
+  CancelCircleIcon,
+  CheckmarkCircle02Icon,
+  InformationCircleIcon,
+  Loading03Icon,
+} from "@hugeicons/core-free-icons"
+import { Icon } from "@/components/ui/icon"
 
 /** 使用系统主题 token 渲染全局、非阻断的短暂反馈。 */
 const Toaster = ({ ...props }: ToasterProps) => {
@@ -9,19 +16,19 @@ const Toaster = ({ ...props }: ToasterProps) => {
       className="toaster group"
       icons={{
         success: (
-          <RiCheckboxCircleLine className="size-4" />
+          <Icon icon={CheckmarkCircle02Icon} className="size-4" />
         ),
         info: (
-          <RiInformationLine className="size-4" />
+          <Icon icon={InformationCircleIcon} className="size-4" />
         ),
         warning: (
-          <RiErrorWarningLine className="size-4" />
+          <Icon icon={AlertCircleIcon} className="size-4" />
         ),
         error: (
-          <RiCloseCircleLine className="size-4" />
+          <Icon icon={CancelCircleIcon} className="size-4" />
         ),
         loading: (
-          <RiLoaderLine className="size-4 animate-spin" />
+          <Icon icon={Loading03Icon} className="size-4 animate-spin" />
         ),
       }}
       style={

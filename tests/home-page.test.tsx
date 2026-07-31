@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { HomePage } from "@/components/home-page";
+import { AppShell, HomePage } from "@/components/home-page";
 import { i18n } from "@/lib/i18n";
 
 const open = vi.hoisted(() => vi.fn());
@@ -20,6 +20,32 @@ afterEach(() => {
 });
 
 describe("最近审核首页", () => {
+  it("Review 阅读器只选中所属仓库树中的 Review", async () => {
+    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
+    const review = {
+      reviewId: "review-1",
+      repositoryEntryId: 1,
+      repositoryPath: "/work/repo",
+      baseRef: "refs/heads/main",
+      headRef: "refs/heads/topic",
+      lastOpenedAt: 1,
+    };
+    render(<AppShell
+      reviews={[review]}
+      repositories={[repository]}
+      activeRepositoryId={1}
+      activeReviewId="review-1"
+      showHome={false}
+      onOpenReview={() => undefined}
+      onOpenFolder={() => undefined}
+    ><p>Review reader</p></AppShell>);
+
+    await waitFor(() => expect(document.querySelectorAll('[data-review-id="review-1"]')).toHaveLength(2));
+    const entries = [...document.querySelectorAll<HTMLElement>('[data-review-id="review-1"]')];
+    expect(entries.filter((entry) => entry.getAttribute("aria-current") === "page")).toHaveLength(1);
+    expect(entries[0]).not.toHaveAttribute("aria-current");
+  });
+
   it("首次用户看到中文空状态和仓库文件夹入口", async () => {
     await i18n.changeLanguage("zh-CN");
     const { container } = render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
@@ -123,6 +149,9 @@ describe("最近审核首页", () => {
     fireEvent.mouseMove(document, { clientX: 240 });
     expect(wrapper).toHaveStyle({ "--sidebar-width": "240px" });
 
+    fireEvent.mouseMove(document, { clientX: 700 });
+    expect(wrapper).toHaveStyle({ "--sidebar-width": "700px" });
+
     fireEvent.mouseUp(document);
     expect(wrapper).not.toHaveAttribute("data-resizing");
   });
@@ -144,7 +173,7 @@ describe("最近审核首页", () => {
     expect(startDragging).toHaveBeenCalledOnce();
   });
 
-  it("仓库主体独立展开 Review 列表，右侧按钮打开仓库", () => {
+  it("仓库名称打开仓库，右侧按钮独立展开 Review 列表", () => {
     const repositories = [
       { id: 1, canonicalPath: "/work/older", lastOpenedAt: 1, available: true },
       { id: 2, canonicalPath: "/work/newer", lastOpenedAt: 2, available: true },
@@ -162,15 +191,15 @@ describe("最近审核首页", () => {
 
     const repositoryButtons = screen.getAllByRole("button", { name: /^(newer|older)$/ });
     expect(repositoryButtons.map((button) => button.textContent)).toEqual(["newer", "older"]);
-    fireEvent.click(screen.getByRole("button", { name: "newer" }));
-    fireEvent.click(screen.getByRole("button", { name: "older" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开仓库 newer" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开仓库 older" }));
     expect(screen.getAllByLabelText("将 Head 分支 topic-1 合入 Base 分支 main")).toHaveLength(3);
     expect(screen.getAllByLabelText("将 Head 分支 topic-2 合入 Base 分支 main")).toHaveLength(3);
     expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
     const reviewList = repositoryButtons[0].closest("li")?.querySelector("ul");
     expect(reviewList).toHaveClass("ml-5", "w-auto", "pl-2");
     expect(reviewList).not.toHaveClass("border-l");
-    fireEvent.click(screen.getByRole("button", { name: "打开仓库 newer" }));
+    fireEvent.click(screen.getByRole("button", { name: "newer" }));
     expect(onOpenRepository).toHaveBeenCalledWith(repositories[1]);
     expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("代码仓库")).toBeVisible();
@@ -210,7 +239,7 @@ describe("最近审核首页", () => {
     expect(compactRelation?.firstElementChild).not.toHaveClass("shrink-0");
     expect(recentReviewButton?.lastElementChild?.lastElementChild).toHaveClass("shrink-0");
 
-    fireEvent.click(screen.getByRole("button", { name: "repo" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开仓库 repo" }));
     const localReviewButtons = [...sidebar!.querySelectorAll("[aria-label='将 Head 分支 topic 合入 Base 分支 main']")]
       .map((relation) => relation.closest("button"));
     expect(localReviewButtons).toHaveLength(2);
@@ -260,9 +289,9 @@ describe("最近审核首页", () => {
     const onOpenRepository = vi.fn();
     render(<HomePage reviews={[]} repositories={[repository]} onOpenReview={() => undefined} onOpenRepository={onOpenRepository} onOpenFolder={() => undefined} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "empty" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开仓库 empty" }));
     expect(screen.getAllByText("还没有审核记录")).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "打开仓库 empty" }));
+    fireEvent.click(screen.getByRole("button", { name: "empty" }));
     expect(onOpenRepository).toHaveBeenCalledWith(repository);
   });
 

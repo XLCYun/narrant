@@ -3,7 +3,8 @@ import { Dialog as SheetPrimitive } from "@base-ui/react/dialog"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { RiCloseLine } from "@remixicon/react"
+import { Cancel01Icon } from "@hugeicons/core-free-icons"
+import { Icon } from "@/components/ui/icon"
 import { useTranslation } from "react-i18next"
 
 function Sheet({ ...props }: SheetPrimitive.Root.Props) {
@@ -70,7 +71,7 @@ function SheetContent({
               />
             }
           >
-            <RiCloseLine
+            <Icon icon={Cancel01Icon}
             />
             <span className="sr-only">{t("closeDialog")}</span>
           </SheetPrimitive.Close>

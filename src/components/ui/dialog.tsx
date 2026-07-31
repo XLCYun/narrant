@@ -3,7 +3,8 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
-import { RiCloseLine } from "@remixicon/react"
+import { Cancel01Icon } from "@hugeicons/core-free-icons"
+import { Icon } from "@/components/ui/icon"
 import { useTranslation } from "react-i18next"
 
 /** 提供 Dialog 的受控打开状态与上下文。 */
@@ -70,7 +71,7 @@ function DialogContent({
             data-slot="dialog-close"
             className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "absolute top-4 right-4")}
           >
-            <RiCloseLine
+            <Icon icon={Cancel01Icon}
             />
             <span className="sr-only">{t("closeDialog")}</span>
           </DialogPrimitive.Close>

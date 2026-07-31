@@ -119,7 +119,10 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 
 - 应用采用三个主视图：最近 Review 首页、Repository Entry 概览和 Review 阅读器。
 - 不设置横跨全窗口的全局顶栏。品牌区位于主侧边栏顶部，GitHub 连接入口位于底部，每个主视图拥有自己的页面级标题栏。
+- 三个主视图共享同一个应用外壳，不引入 URL Router；主侧边栏承担主视图切换。点击品牌区进入首页，点击 Repository Entry 名称进入仓库概览，点击 Review 条目进入 Review 阅读器。
+- 当前主视图在侧边栏中只对应一个选中项：首页选中品牌区，仓库概览选中 Repository Entry 名称，Review 阅读器选中所属 Repository Entry 下的 Review 条目并自动滚动到、展开所属 Repository Entry，但不同时选中 Repository Entry 名称。“最近审核”仅作为跨仓库快捷入口，其中的 Review 条目永不显示选中态；从这里打开 Review 后，选中态落到所属 Repository Entry 下的对应条目。不额外设置导航条或面包屑。
 - 主侧边栏默认宽度约 280px，可拖动调整、折叠并保存前端偏好。拖动期间宽度必须逐帧跟随指针，临时关闭宽度过渡并禁止页面文本选择；折叠或展开仍可保留过渡。折叠后侧边栏宽度为零，不保留仅含展开按钮的图标窄栏。小窗口下使用临时侧栏。
+- 主视图切换不重新挂载或重置主侧边栏；其宽度、开合状态和各 Repository Entry 的历史展开状态在视图间保持，并从前端本地偏好恢复。小窗口的临时侧栏在点击品牌区、Repository Entry 名称或 Review 条目后都保持打开，只由用户显式关闭。
 - 主侧边栏使用唯一的展开/收起按钮：macOS 将按钮放在红黄绿窗口控件右侧的标题栏区域，Windows 和 Linux 将按钮放在主内容顶部工具区；按钮不随侧边栏一起隐藏。
 - 主侧边栏的“最近审核”默认显示跨 Repository Entry 最近 5 条 Review；记录超过 5 条时提供“查看全部”，展开后显示最近 10 条。
 - “最近审核”展开到 10 条后提供收起操作，恢复为最近 5 条。
@@ -129,6 +132,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 多个 Repository Entry 可以同时展开，各自的展开状态作为前端本地偏好保存并在应用重启后恢复；打开 Repository Entry 概览不隐式改变其展开状态。
 - 首次显示仓库列表时，当前 Repository Entry 自动展开，其他 Repository Entry 默认收起。此后以各仓库的持久化展开状态为准；从“最近审核”打开 Review 时自动展开其所属 Repository Entry，并保存该状态。
 - Repository Entry 按最近活动时间降序排列；打开 Repository Entry 或其任一 Review 都会更新最近活动时间并重新排序。当前 Repository Entry 仅显示选中态，不在列表中创建固定副本。尚无 Review 的新 Repository Entry 使用最后打开时间参与排序。
+- Review 按最近打开时间降序排列；打开已有 Review 或创建并打开新 Review 都会更新其最近打开时间，使当前 Review 自然进入所属 Repository Entry 的列表顶部并成为选中项，不为旧 Review 创建固定副本或强制切换“查看全部”状态。
+- 再次点击当前已选中的 Repository Entry 或 Review 不重新加载内容、重建 Review Workspace 或更新最近打开时间；内容刷新只由对应主视图中的明确操作触发。
+- 从侧边栏打开另一个 Repository Entry 或 Review 时，原主视图和原选中项保持到新目标成功打开；目标条目局部显示加载状态并禁止重复触发。成功后原子切换主内容和选中态，失败则保留原视图与选中态。
 - 侧边栏所有 Review 条目统一使用两行布局。Pull Request Review 第一行显示 `#编号 标题`，Branch Selection Review 第一行显示“本地分支”；相对时间作为独立列位于第一行右侧，并与侧边栏分隔线保留安全间距。第二行统一显示 Base/Head 分支关系。分支名溢出时截断，并通过 Tooltip 提供完整 ref；整行作为继续 Review 的点击目标，不显示额外操作按钮。
 - 跨 Repository Entry 的“最近审核”条目在第一行先显示仓库名，再以布局间距分隔 Pull Request 的 `#编号 标题` 或“本地分支”；不使用点号或其他文本分隔符。第二行继续显示 Base/Head 分支关系。
 - 没有 Review 的首次使用首页展示品牌、slogan“纳言：审好代码，睡安稳觉”、产品说明和“打开仓库文件夹”主按钮。
@@ -159,9 +165,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 打开已有 Review 后后台自动检查 Selection 更新，但不自动刷新 Review Snapshot。
 - “刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间保留当前 Snapshot；成功后原子切换，失败后保留旧 Snapshot。
 - 点击另一条 Review 直接切换；切换失败保留当前 Review。离开或切换成功后释放旧 Review Workspace。
-- 页面导航自动关闭当前 Review 的运行时资源；更多菜单保留“关闭审核”，执行后返回所属 Repository Entry 的审核历史，不删除 Review 或 Snapshot。
+- 页面导航自动关闭当前 Review 的运行时资源；更多菜单保留“关闭审核”，执行后返回所属 Repository Entry 的审核历史，不删除 Review 或 Snapshot。从 Review 阅读器点击所属 Repository Entry 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository Entry 直接打开仓库概览时仍默认进入 `Pull Requests`。
 - 不可用 Repository Entry 继续显示在主侧边栏中，允许展开历史名称；主区域显示原路径和不可用原因。重新定位和删除不在本规格范围。
-- 错误按范围反馈：短暂且无需立即处理的错误使用 shadcn Sonner；输入错误就地展示；阻断内容区域的错误在区域内展示；风险确认和用户选择使用 Dialog。
+- 错误按范围反馈：短暂且无需立即处理的错误使用 shadcn Sonner；输入错误就地展示；阻断内容区域的错误在区域内展示；风险确认和用户选择使用 Dialog。导航失败若没有合适的就地承载区域，使用 Sonner 错误通知，且不改变当前主视图或选中态。
 - 加载按范围反馈：首页和首次列表使用 Skeleton；后台列表刷新保留内容并显示局部进度；File Change 读取只占用 Diff 区域；Snapshot 刷新保留旧 Diff。
 - 快速操作避免闪烁；只有持续约一秒的操作才增加文字说明。正常成功操作不普遍使用 Toast。
 - UI 以中文为主，保留 Pull Request、Diff、Base、Head 和 GitHub 等约定术语。代码和领域文档继续使用 `CONTEXT.md` 的规范英文术语。
@@ -180,6 +186,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - File Change 状态使用一致语义颜色：新增绿色、删除红色、修改橙色或黄色、重命名蓝色，并同时提供文字或图标，不能仅依赖颜色。
 - 最小可用窗口目标为 900×600。1200px 以上同时展示主侧边栏、文件树和双栏 Diff；900–1199px 默认收起主侧边栏并允许 Diff 临时单栏。
 - 第一版不增加产品级键盘快捷键，但所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。
+- 主视图切换不额外编排键盘焦点，沿用按钮和侧边栏组件的标准焦点行为；为显示当前 Review 而自动滚动侧边栏时不主动抢占焦点。
 - 本规格不改变 Review、Review Selection、Review Snapshot、Repository Entry 或 Workspace Trust 的领域关系，也不改变只有一个 Review 同时打开的约束。
 
 ## Testing Decisions
@@ -190,6 +197,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - E2E 至少覆盖一条中文核心路径和一条英文核心路径；测试环境显式固定 locale，不依赖 CI 主机语言。
 - React 外部行为测试作为辅助 seam，通过 Testing Library 和 mock Tauri IPC 覆盖大量状态组合，继续使用 accessible role、name 和可见文案查询。
 - React 测试覆盖侧边栏最近 5 条、展开到最近 10 条、Repository Entry 最近 10 条、查看全部、收起、主视图导航、Tabs、Sheet、Dialog、Toast、Skeleton 和空状态。
+- 主视图导航测试验证三个主视图共用常驻侧边栏，品牌区、Repository Entry 和 Review 可切换对应内容，仓库树中只有当前项高亮且“最近审核”永不高亮，打开 Review 后所属 Repository Entry 展开、选中项可见且 Review 按更新后的最近打开时间排序。同时覆盖异步加载、打开失败保留原视图、重复点击不重载，以及小窗口切换后临时侧栏保持打开。测试不断言 `AppShell`、`MainSidebar` 或主视图状态的内部组件结构。
 - React 测试覆盖 Pull Request 离线缓存、局部 GitHub 失败、不可用 Repository Entry、Review 切换失败保留当前内容，以及不同错误作用域。
 - React 测试覆盖文件树自动选择、零变更、特殊 File Change、单栏与双栏切换、响应式降级和前端偏好恢复。
 - i18n 单元测试覆盖 locale 规范化、显式偏好优先级、未知语言回退、namespace loader 白名单、绝对时间和相对时间格式。

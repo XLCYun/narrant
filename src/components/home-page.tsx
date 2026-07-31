@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
-import { RiArrowDownSLine, RiArrowRightLine, RiFolderLine, RiFolderOpenLine } from "@remixicon/react";
+import { ArrowDown01Icon, ArrowRight02Icon, Folder01Icon, FolderOpenIcon } from "@hugeicons/core-free-icons";
 import { BranchRelation, branchName } from "@/components/branch-relation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import {
 import { formatAbsoluteTime, formatRelativeTime, normalizeLocale } from "@/lib/i18n";
 import type { ReviewSummary } from "@/lib/review-types";
 import { cn } from "@/lib/utils";
+import { Icon } from "@/components/ui/icon";
 import narrantLogo from "../../assets/brand/narrant-logo.svg";
 import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg";
 
@@ -44,6 +45,7 @@ type SidebarPreferences = {
   allRepositoryReviews: number[];
 };
 
+/** 应用外壳、主侧边栏与最近审核首页共享的外部状态和用户动作。 */
 type Props = {
   reviews: ReviewSummary[];
   repositories?: HomeRepository[];
@@ -53,6 +55,15 @@ type Props = {
   onOpenRepository?: (repository: HomeRepository) => void;
   onOpenFolder: (path: string) => void;
   githubIdentityEntry?: ReactNode;
+  children?: ReactNode;
+  showHome?: boolean;
+  onOpenHome?: () => void;
+  enabled?: boolean;
+  fallbackClassName?: string;
+  activeRepositoryId?: number;
+  activeReviewId?: string;
+  pendingRepositoryId?: number;
+  pendingReviewId?: string;
 };
 
 const preferenceKey = "narrant.sidebar-preferences";
@@ -89,7 +100,7 @@ function CompactBranchRelation({ baseRef, headRef }: { baseRef: string; headRef:
     aria-label={`将 Head 分支 ${head} 合入 Base 分支 ${base}`}
   >
     <span className="min-w-0 shrink truncate">{head}</span>
-    <RiArrowRightLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+    <Icon icon={ArrowRight02Icon} className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
     <span className="min-w-0 shrink-[10] truncate">{base}</span>
   </span>;
 }
@@ -154,10 +165,14 @@ function ReviewMenuItem({
   review,
   showRepository,
   onOpen,
+  active = false,
+  pending = false,
 }: {
   review: ReviewSummary;
   showRepository: boolean;
   onOpen: () => void;
+  active?: boolean;
+  pending?: boolean;
 }) {
   const { i18n } = useTranslation();
   const locale = normalizeLocale(i18n.resolvedLanguage);
@@ -184,12 +199,17 @@ function ReviewMenuItem({
     <SidebarMenuButton
       className="h-auto min-w-0 rounded-lg px-3 py-2"
       tooltip={tooltip}
+      isActive={active}
       onClick={onOpen}
+      aria-current={active ? "page" : undefined}
+      data-review-id={review.reviewId}
+      disabled={pending}
+      aria-busy={pending || undefined}
     >
       <span className="flex min-w-0 flex-1 items-center gap-2 text-xs">
         {showRepository && <Badge
           variant="secondary"
-          className="h-5 shrink-0 rounded-sm border-0 bg-muted px-1.5 text-foreground hover:bg-muted"
+          className="h-5 shrink-0 rounded-sm border-0 bg-muted px-1.5 text-foreground"
         >
           {repositoryName(review.repositoryPath)}
         </Badge>}
@@ -203,7 +223,7 @@ function ReviewMenuItem({
 }
 
 /** 最近审核首页，以及仓库和 Review 历史的常驻导航。 */
-export function HomePage({
+export function AppShell({
   reviews,
   repositories = [],
   error,
@@ -212,10 +232,20 @@ export function HomePage({
   onOpenRepository = () => undefined,
   onOpenFolder,
   githubIdentityEntry,
+  children,
+  showHome = true,
+  onOpenHome = () => undefined,
+  enabled = true,
+  fallbackClassName,
+  activeRepositoryId,
+  activeReviewId,
+  pendingRepositoryId,
+  pendingReviewId,
 }: Props) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState<SidebarPreferences>(readPreferences);
   const [resizingSidebar, setResizingSidebar] = useState(false);
+  const seenActiveRepositories = useRef(new Set<number>());
   const openSidebar = preferences.open !== false;
   const sidebarWidth = typeof preferences.width === "number" ? preferences.width : 280;
   const sortedRepositories = useMemo(
@@ -227,7 +257,29 @@ export function HomePage({
     window.localStorage?.setItem(preferenceKey, JSON.stringify(preferences));
   }, [preferences]);
 
-  /** 拖动侧边栏边界并将宽度限制在可用范围内。 */
+  useEffect(() => {
+    if (!activeReviewId || activeRepositoryId === undefined) return;
+    setPreferences((value) => value.expandedRepositories.includes(activeRepositoryId)
+      ? value
+      : { ...value, expandedRepositories: [...value.expandedRepositories, activeRepositoryId] });
+  }, [activeRepositoryId, activeReviewId]);
+
+  useEffect(() => {
+    if (activeRepositoryId === undefined || seenActiveRepositories.current.has(activeRepositoryId)) return;
+    seenActiveRepositories.current.add(activeRepositoryId);
+    setPreferences((value) => value.expandedRepositories.includes(activeRepositoryId)
+      ? value
+      : { ...value, expandedRepositories: [...value.expandedRepositories, activeRepositoryId] });
+  }, [activeRepositoryId]);
+
+  useEffect(() => {
+    if (!activeReviewId) return;
+    const selected = [...document.querySelectorAll<HTMLElement>("[data-review-id]")]
+      .find((item) => item.dataset.reviewId === activeReviewId && item.getAttribute("aria-current") === "page");
+    selected?.scrollIntoView?.({ block: "nearest" });
+  }, [activeReviewId, preferences.expandedRepositories]);
+
+  /** 拖动侧边栏边界；仅保留最小宽度，允许按需扩展到任意宽度。 */
   function resizeSidebar(event: MouseEvent<HTMLDivElement>) {
     event.preventDefault();
     const startX = event.clientX;
@@ -235,7 +287,7 @@ export function HomePage({
     setResizingSidebar(true);
     const resize = (move: globalThis.MouseEvent) => setPreferences((value) => ({
       ...value,
-      width: Math.min(480, Math.max(220, startWidth + move.clientX - startX)),
+      width: Math.max(220, startWidth + move.clientX - startX),
     }));
     const stop = () => {
       setResizingSidebar(false);
@@ -287,6 +339,8 @@ export function HomePage({
     void getCurrentWindow().startDragging();
   }
 
+  if (!enabled) return <main className={fallbackClassName}>{children}</main>;
+
   return <SidebarProvider
     open={openSidebar}
     onOpenChange={(nextOpen) => setPreferences((value) => ({ ...value, open: nextOpen }))}
@@ -316,15 +370,23 @@ export function HomePage({
       />
     </div>
     <Sidebar aria-label={t("sidebar")} collapsible="offcanvas" className="pt-12">
-      <SidebarHeader className="flex-row items-center gap-3 px-4 py-3">
-        <picture className="size-12 shrink-0">
-          <source media="(prefers-color-scheme: dark)" srcSet={narrantLogoDark} />
-          <img className="size-12" src={narrantLogo} alt={t("brand")} />
-        </picture>
-        <div className="min-w-0">
-          <p className="font-heading text-lg">{t("brand")}</p>
-          <p className="truncate text-xs text-muted-foreground">{t("subtitle")}</p>
-        </div>
+      <SidebarHeader className="px-3 py-3">
+        <button
+          type="button"
+          aria-label={t("brand")}
+          aria-current={showHome ? "page" : undefined}
+          className={cn("flex w-full items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring", showHome && "bg-sidebar-accent text-sidebar-accent-foreground")}
+          onClick={onOpenHome}
+        >
+          <picture className="size-12 shrink-0">
+            <source media="(prefers-color-scheme: dark)" srcSet={narrantLogoDark} />
+            <img className="size-12" src={narrantLogo} alt={t("brand")} />
+          </picture>
+          <span className="min-w-0">
+            <span className="block font-heading text-lg">{t("brand")}</span>
+            <span className="block truncate text-xs text-muted-foreground">{t("subtitle")}</span>
+          </span>
+        </button>
       </SidebarHeader>
       <SidebarContent className="gap-0">
         <SidebarGroup className="py-1">
@@ -335,7 +397,7 @@ export function HomePage({
             onClick={() => setPreferences((value) => ({ ...value, recentGroupOpen: !value.recentGroupOpen }))}
           >
             <span>{t("recent")}</span>
-            <RiArrowDownSLine className={cn(
+            <Icon icon={ArrowDown01Icon} className={cn(
               "ml-1 size-4 opacity-0 transition-[transform,opacity] group-hover/section-label:opacity-100 group-focus-visible/section-label:opacity-100",
               !preferences.recentGroupOpen && "-rotate-90",
             )} />
@@ -343,7 +405,7 @@ export function HomePage({
           {preferences.recentGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
               {reviews.slice(0, preferences.recentExpanded ? 10 : 5).map((review) =>
-                <ReviewMenuItem key={review.reviewId} review={review} showRepository onOpen={() => openRecentReview(review)} />)}
+                <ReviewMenuItem key={review.reviewId} review={review} showRepository pending={pendingReviewId === review.reviewId} onOpen={() => openRecentReview(review)} />)}
               {!reviews.length && <p className="px-2 text-sm text-muted-foreground">{t("noRecent")}</p>}
               {reviews.length > 5 && <SidebarMenuItem>
                 <SidebarMenuButton
@@ -364,7 +426,7 @@ export function HomePage({
             onClick={() => setPreferences((value) => ({ ...value, repositoriesGroupOpen: !value.repositoriesGroupOpen }))}
           >
             <span>{t("repositories")}</span>
-            <RiArrowDownSLine className={cn(
+            <Icon icon={ArrowDown01Icon} className={cn(
               "ml-1 size-4 opacity-0 transition-[transform,opacity] group-hover/section-label:opacity-100 group-focus-visible/section-label:opacity-100",
               !preferences.repositoriesGroupOpen && "-rotate-90",
             )} />
@@ -380,25 +442,30 @@ export function HomePage({
                     <SidebarMenuButton
                       className={cn("min-w-0 flex-1 pr-9", !repository.available && "text-muted-foreground")}
                       tooltip={repository.canonicalPath}
+                      isActive={activeRepositoryId === repository.id && !activeReviewId}
+                      disabled={pendingRepositoryId === repository.id}
+                      aria-busy={pendingRepositoryId === repository.id || undefined}
                       aria-expanded={expanded}
-                      onClick={() => toggleRepository(repository.id)}
+                      aria-current={activeRepositoryId === repository.id && !activeReviewId ? "page" : undefined}
+                      onClick={() => onOpenRepository(repository)}
                     >
-                      {expanded ? <RiFolderOpenLine /> : <RiFolderLine />}
+                      {expanded ? <Icon icon={FolderOpenIcon} /> : <Icon icon={Folder01Icon} />}
                       <span className="truncate">{repositoryName(repository.canonicalPath)}</span>
                     </SidebarMenuButton>
                     <Button
                       variant="outline"
                       size="icon-xs"
                       className="absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar shadow-xs hover:bg-sidebar-accent active:translate-y-0!"
-                      aria-label={t("openRepository", { name: repositoryName(repository.canonicalPath) })}
-                      onClick={() => onOpenRepository(repository)}
+                      aria-label={t(expanded ? "collapseRepository" : "expandRepository", { name: repositoryName(repository.canonicalPath) })}
+                      aria-expanded={expanded}
+                      onClick={() => toggleRepository(repository.id)}
                     >
-                      <RiArrowRightLine />
+                      <Icon icon={ArrowRight02Icon} />
                     </Button>
                   </div>
                   {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
-                      <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} onOpen={() => onOpenReview(review)} />)}
+                      <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} active={activeReviewId === review.reviewId} pending={pendingReviewId === review.reviewId} onOpen={() => onOpenReview(review)} />)}
                     {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}
                     {repositoryReviews.length > 10 && <SidebarMenuItem>
                       <SidebarMenuButton
@@ -424,6 +491,7 @@ export function HomePage({
       <div aria-label={t("resizeSidebar")} className="absolute right-0 top-12 h-[calc(100%-3rem)] w-1 cursor-col-resize" onMouseDown={resizeSidebar} />
     </Sidebar>
     <main className="min-h-screen w-full bg-background px-8 pb-8 pt-14">
+      {!showHome ? children : <>
       {!reviews.length && <header className="flex items-center gap-3 border-b pb-5">
         <div><h1 className="font-heading text-xl">{t("brand")}</h1><p className="text-sm text-muted-foreground">{t("subtitle")}</p></div>
       </header>}
@@ -434,7 +502,7 @@ export function HomePage({
           ? <section className="mx-auto max-w-3xl py-10" aria-label={t("recent")}>
             <div className="flex items-center justify-between gap-4">
               <h2 className="font-heading text-2xl">{t("recent")}</h2>
-              <Button onClick={() => void chooseFolder()}><RiFolderOpenLine />{t("openFolder")}</Button>
+              <Button onClick={() => void chooseFolder()}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button>
             </div>
             <ul className="mt-5 divide-y rounded-lg border">
               {reviews.slice(0, 10).map((review) => <li key={review.reviewId}>
@@ -450,7 +518,13 @@ export function HomePage({
               </li>)}
             </ul>
           </section>
-          : <section className="mx-auto flex max-w-xl flex-col items-start gap-5 py-24"><h2 className="font-heading text-3xl">{t("emptyTitle")}</h2><p className="text-muted-foreground">{t("emptyDescription")}</p><Button size="lg" onClick={() => void chooseFolder()}><RiFolderOpenLine />{t("openFolder")}</Button></section>}
+          : <section className="mx-auto flex max-w-xl flex-col items-start gap-5 py-24"><h2 className="font-heading text-3xl">{t("emptyTitle")}</h2><p className="text-muted-foreground">{t("emptyDescription")}</p><Button size="lg" onClick={() => void chooseFolder()}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button></section>}
+      </>}
     </main>
   </SidebarProvider>;
+}
+
+/** 为首页组件测试与独立展示保留的最近审核首页入口。 */
+export function HomePage(props: Props) {
+  return <AppShell {...props} showHome />;
 }

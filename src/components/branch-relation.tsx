@@ -1,5 +1,6 @@
-import { RiArrowLeftLine, RiArrowRightLine } from "@remixicon/react";
+import { ArrowLeft02Icon, ArrowRight02Icon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
+import { Icon } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -34,8 +35,8 @@ export function BranchRelation({
   return <span className={cn("inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5", className)} aria-label={label}>
     {direction === "head-to-base" ? headBadge : baseBadge}
     {direction === "head-to-base"
-      ? <RiArrowRightLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      : <RiArrowLeftLine className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+      ? <Icon icon={ArrowRight02Icon} className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      : <Icon icon={ArrowLeft02Icon} className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
     {direction === "head-to-base" ? baseBadge : headBadge}
   </span>;
 }

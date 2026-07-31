@@ -80,6 +80,12 @@ The single GitHub user currently authorized to act through Narrant's GitHub App.
 It is an external authorization identity, not a Narrant-owned user account.
 _Avoid_: Narrant Account, User Profile
 
+**UI Icon**:
+A compact visual symbol that communicates an interface action, object, or status.
+It excludes product and third-party logos, application icons, avatars, and
+content-provided graphics.
+_Avoid_: Logo, brand icon
+
 **Review Workspace**:
 The Narrant-owned, disposable checkout of the head revision presented by one
 open **Review**. It contains no user-owned state, may be forcibly rebuilt when the
