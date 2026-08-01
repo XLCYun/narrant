@@ -97,6 +97,8 @@ pub struct PullRequestMetadata {
     pub url: String,
     pub base_ref: String,
     pub head_ref: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
     pub synchronized_at: i64,
 }
 

@@ -455,6 +455,8 @@ export function App() {
           state: nextSnapshot.pullRequest.state,
           draft: nextSnapshot.pullRequest.draft,
           url: nextSnapshot.pullRequest.url,
+          updatedAt: nextSnapshot.pullRequest.updatedAt
+            ?? new Date(nextSnapshot.pullRequest.synchronizedAt).toISOString(),
           base: { ref: nextSnapshot.pullRequest.baseRef, sha: nextSnapshot.baseRevision },
           head: { ref: nextSnapshot.pullRequest.headRef, sha: nextSnapshot.headRevision },
         },

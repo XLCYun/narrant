@@ -2,13 +2,13 @@
 export type PullRequestMetadata = {
   owner: string; repository: string; number: number; title: string; description: string;
   author: string; state: "open" | "closed" | "merged"; draft: boolean; url: string;
-  baseRef: string; headRef: string; synchronizedAt: number;
+  baseRef: string; headRef: string; updatedAt?: string; synchronizedAt: number;
 };
 
 /** GitHub discovery 返回的一个 Pull Request。 */
 export type DiscoveredPullRequest = {
   number: number; title: string; description: string; author: string; state: string;
-  draft: boolean; url: string;
+  draft: boolean; url: string; updatedAt: string;
   base: { ref: string; sha: string };
   head: { ref: string; sha: string };
 };

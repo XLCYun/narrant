@@ -789,6 +789,7 @@ fn calculate_pull_request_review(
         url: pull_request.url,
         base_ref: pull_request.base.reference,
         head_ref: pull_request.head.reference,
+        updated_at: Some(pull_request.updated_at),
         synchronized_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "系统时间早于 Unix epoch，无法保存 GitHub metadata。".to_owned())?

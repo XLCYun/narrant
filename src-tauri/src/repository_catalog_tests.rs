@@ -251,6 +251,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
         url: "https://github.com/octo-org/octo-repo/pull/42".to_owned(),
         base_ref: "main".to_owned(),
         head_ref: "feature".to_owned(),
+        updated_at: Some("2026-07-31T08:00:00Z".to_owned()),
         synchronized_at: 1,
     };
 
@@ -322,6 +323,7 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
         url: "https://github.com/octo-org/octo-repo/pull/7".to_owned(),
         base_ref: "main".to_owned(),
         head_ref: "topic".to_owned(),
+        updated_at: Some("2026-07-31T08:00:00Z".to_owned()),
         synchronized_at: 1,
     };
     let first = catalog

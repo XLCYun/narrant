@@ -102,7 +102,7 @@ describe("App", () => {
       { repositoryEntryId: 21 },
     ));
     expect(await screen.findByRole("heading", { name: "narrant" })).toBeInTheDocument();
-    expect(screen.getByText("/work/narrant")).toBeInTheDocument();
+    expect(screen.queryByText("/work/narrant")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
     expect(screen.queryByText("已信任")).not.toBeInTheDocument();
     expect(screen.getByLabelText("主侧边栏")).toBeInTheDocument();
@@ -190,7 +190,7 @@ describe("App", () => {
     expect(recentButtons[0]).toHaveAccessibleName(/将 Head 分支 topic 合入 Base 分支 main/);
   });
 
-  it("按 GitHub repository 分组展示 Pull Requests，且保留局部失败", async () => {
+  it("扁平展示多个 GitHub repository 的 Pull Requests，且保留局部失败", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
@@ -213,6 +213,7 @@ describe("App", () => {
             number: 42, title: "Metadata only", description: "Details", author: "octocat",
             state: "open", draft: false,
             url: "https://github.com/octo-org/octo-repo/pull/42",
+            updatedAt: "2026-07-31T08:00:00Z",
             base: { ref: "main", sha: "base-sha" },
             head: { ref: "feature", sha: "head-sha" },
           }],
@@ -224,11 +225,10 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
 
-    expect(await screen.findByRole("heading", { name: "octo-org/octo-repo" })).toBeInTheDocument();
-    expect(screen.getByText("remotes: origin, upstream")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /#42 Metadata only/ })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "fork-owner/fork-repo" })).toBeInTheDocument();
-    expect(screen.getByText("GitHub 访问次数已用尽")).toBeInTheDocument();
+    expect(await screen.findByText("#42 Metadata only")).toBeInTheDocument();
+    expect(screen.getByText("octo-org/octo-repo")).toBeInTheDocument();
+    expect(screen.queryByText(/remotes:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/fork-owner\/fork-repo/)).toHaveTextContent(/GitHub 访问次数已用尽/);
   });
 
   it("选择发现的 Pull Request 会通过 durable reviewId 打开本地 Review", async () => {
@@ -242,6 +242,7 @@ describe("App", () => {
     const pullRequest = {
       number: 42, title: "Local PR Review", description: "Details", author: "octocat",
       state: "open", draft: true, url: "https://github.com/octo-org/octo-repo/pull/42",
+      updatedAt: "2026-07-31T08:00:00Z",
       base: { ref: "main", sha: "base-sha" }, head: { ref: "feature", sha: "head-sha" },
     };
     invoke.mockImplementation((command: string) => {
@@ -266,7 +267,7 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
-    fireEvent.click(await screen.findByRole("button", { name: /#42 Local PR Review/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Local PR Review/ }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
       repositoryEntryId: 25, repository, pullRequest,
@@ -290,6 +291,7 @@ describe("App", () => {
     const pullRequest = {
       number: 42, title: "Refreshable", description: "", author: "octocat",
       state: "open", draft: false, url: "https://github.com/octo-org/octo-repo/pull/42",
+      updatedAt: "2026-07-31T08:00:00Z",
       base: { ref: "main", sha: "base-1" }, head: { ref: "feature", sha: "head-1" },
     };
     const snapshot = (headRevision: string) => ({
@@ -321,7 +323,7 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
-    fireEvent.click(await screen.findByRole("button", { name: /#42 Refreshable/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Refreshable/ }));
     expect(await screen.findByText("base-1 → head-1")).toBeInTheDocument();
 
     expect(await screen.findByText("当前 head-1 · 可用 head-2")).toBeInTheDocument();

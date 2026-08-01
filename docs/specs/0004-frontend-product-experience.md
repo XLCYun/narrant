@@ -143,10 +143,16 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 选择目录后依次验证 Git 仓库、复用或注册 Repository Entry、检查 Workspace Trust，并仅在必要时显示风险 Dialog。
 - 已经获得 Workspace Trust 的 Repository Entry 直接打开，不持续显示“已信任”状态。
 - Repository Entry 概览使用 `Pull Requests`、`本地分支`、`审核历史` 三个标签，默认选择 Pull Requests。
+- Repository Entry 概览默认只显示仓库名称；完整本地路径通过仓库名称的 hover 与键盘 focus Tooltip 提供，路径不截断并允许换行。
+- Repository Entry 概览主内容左对齐，宽窗口中的最大宽度为约 1100–1200px；三个任务标签保留紧凑胶囊式选中态。
 - Pull Request 列表把未创建 Review 与已有 Review 分别标记为“开始审核”和“继续审核”。相同 Pull Request Selection 继续复用已有 Review。
+- 多个 GitHub repository 的 Pull Requests 使用一个按 GitHub 最近更新时间降序排列的扁平列表，不按 Git remote 或 GitHub repository 分组。只有发现多个不同 GitHub repository identity 时，每行才以弱化标签显示 `owner/repository`；`origin`、`upstream` 等 remote 名称仅用于诊断，不进入正常界面。
+- Pull Request 行在标题中显示一次 `#编号`，右侧操作只显示“开始审核”或“继续审核”；整行不作为点击目标。列表显示 Pull Request 相对更新时间。
 - Pull Request 标签先展示本地持久化的 Pull Request Review 元数据，再后台发现 GitHub Pull Request。尚未创建 Review 的 Pull Request 不做离线列表缓存。
 - GitHub 不可用时，已保存的 Pull Request Review 仍留在 Pull Requests 标签中，并以低干扰提示说明元数据可能不是最新。
 - Pull Request 空状态区分未连接 GitHub、确实没有 Pull Request 和 GitHub 请求失败；连接 GitHub 必须由用户主动触发。
+- 未连接 GitHub、没有 Pull Request 与 GitHub 请求失败共用宽度约 480–560px 的紧凑状态面板，只展示一次状态信息；可恢复状态使用中性层级，destructive 颜色仅用于具体阻断错误。未连接时提供“连接 GitHub”，请求失败时提供“重新尝试”，正常空状态不显示错误样式。
+- 多个 GitHub repository 中只有部分 discovery 失败时继续显示成功结果，并在列表上方按 repository identity 给出低干扰的局部失败提示与“重新尝试”，不把整个 Pull Request 标签切换为错误状态。
 - GitHub App 安装、Device Flow、复制授权信息和退出登录进入侧边栏底部的 GitHub 连接界面，不长期占用 Repository Entry 概览。
 - 本地分支标签默认使用仓库默认分支作为 Base Ref、当前检出分支作为 Head Ref。需要在应用边界提供这两项信息，而不是继续依赖分支列表顺序。
 - Base Ref 与 Head Ref 相同时禁止开始 Review。相同 Branch Selection 显示“继续审核”。

@@ -12,6 +12,7 @@ const pullRequest = {
   state: "open",
   draft: false,
   url: "https://github.com/octo/narrant/pull/40",
+  updatedAt: "2026-07-31T08:00:00Z",
   base: { ref: "main", sha: "base-new" },
   head: { ref: "feature", sha: "head-new" },
 };
@@ -47,6 +48,8 @@ function renderOverview(options: {
 } = {}) {
   const onOpenSavedReview = vi.fn();
   const onOpenPullRequest = vi.fn();
+  const onRetryDiscovery = vi.fn();
+  const onConnectGitHub = vi.fn();
   render(<RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
@@ -56,13 +59,13 @@ function renderOverview(options: {
     discoveryLoading={options.loading ?? false}
     discoveryError={options.discoveryError}
     githubConnected={options.connected ?? true}
-    onRetryDiscovery={vi.fn()}
-    onConnectGitHub={vi.fn()}
+    onRetryDiscovery={onRetryDiscovery}
+    onConnectGitHub={onConnectGitHub}
     onOpenSavedReview={onOpenSavedReview}
     onOpenPullRequest={onOpenPullRequest}
     localBranches={<p>Local branch content</p>}
   />);
-  return { onOpenSavedReview, onOpenPullRequest };
+  return { onOpenSavedReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub };
 }
 
 describe("RepositoryOverview", () => {
@@ -71,6 +74,32 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "本地分支" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "审核历史" })).toBeInTheDocument();
+  });
+
+  it("默认隐藏完整路径，并允许通过仓库名称的键盘焦点查看", async () => {
+    renderOverview();
+    expect(screen.queryByText("/work/narrant")).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByRole("button", { name: "narrant" }));
+    expect(await screen.findByText("/work/narrant")).toBeVisible();
+  });
+
+  it("把多个 GitHub repository 合并为按更新时间排序的列表，并只在多仓库时显示来源", () => {
+    const older = { ...pullRequest, number: 99, title: "Older", updatedAt: "2026-07-30T08:00:00Z" };
+    const newer = { ...pullRequest, number: 2, title: "Newer", updatedAt: "2026-08-01T08:00:00Z" };
+    renderOverview({ groups: [
+      { repository, remoteNames: ["origin"], pullRequests: [older], error: null },
+      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [newer], error: null },
+    ] });
+
+    const rows = screen.getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("#2 Newer");
+    expect(rows[0]).toHaveTextContent("other/fork");
+    expect(rows[1]).toHaveTextContent("octo/narrant");
+    expect(screen.queryByText(/remotes:/)).not.toBeInTheDocument();
+
+    cleanup();
+    renderOverview({ groups: [{ repository, remoteNames: ["origin"], pullRequests: [older], error: null }] });
+    expect(screen.queryByText("octo/narrant")).not.toBeInTheDocument();
   });
 
   it("后台 discovery 时先保留缓存 Review，失败也能继续并访问本地分支", () => {
@@ -94,13 +123,38 @@ describe("RepositoryOverview", () => {
       groups: [group],
     });
     expect(screen.getByText("有更新")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /继续审核/ }));
+    const continueButton = screen.getByRole("button", { name: /继续审核/ });
+    expect(continueButton).toHaveTextContent(/^继续审核$/);
+    fireEvent.click(continueButton);
     expect(onOpenSavedReview).toHaveBeenCalledWith(saved);
 
     cleanup();
     const fresh = renderOverview({ groups: [group] });
-    fireEvent.click(screen.getByRole("button", { name: /开始审核/ }));
+    const startButton = screen.getByRole("button", { name: /开始审核/ });
+    expect(startButton).toHaveTextContent(/^开始审核$/);
+    fireEvent.click(startButton);
     expect(fresh.onOpenPullRequest).toHaveBeenCalledWith(repository, pullRequest);
+  });
+
+  it("多个 repository 局部失败时保留成功结果并提供一次恢复操作", () => {
+    const { onRetryDiscovery } = renderOverview({ groups: [
+      { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null },
+      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" },
+    ] });
+    expect(screen.getByText("#40 Repository overview")).toBeVisible();
+    expect(screen.getByText(/other\/fork/)).toHaveTextContent(/request failed/);
+    fireEvent.click(screen.getByRole("button", { name: "重新尝试" }));
+    expect(onRetryDiscovery).toHaveBeenCalledOnce();
+  });
+
+  it("部分 repository 成功但没有 PR 时仍把失败作为局部提示", () => {
+    renderOverview({ groups: [
+      { repository, remoteNames: ["origin"], pullRequests: [], error: null },
+      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" },
+    ] });
+    expect(screen.getByText(/other\/fork/)).toHaveTextContent(/request failed/);
+    expect(screen.getByText("没有可审核的 Pull Request")).toBeVisible();
+    expect(screen.queryByText("无法加载 Pull Requests")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -110,6 +164,18 @@ describe("RepositoryOverview", () => {
   ])("区分 Pull Request 空状态 %#", (options, expected) => {
     renderOverview(options);
     expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it("未连接 GitHub 时把连接作为空状态主操作", () => {
+    const { onConnectGitHub } = renderOverview({ connected: false });
+    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
+    expect(onConnectGitHub).toHaveBeenCalledOnce();
+  });
+
+  it("未连接且匿名 discovery 失败时仍优先提供连接 GitHub", () => {
+    renderOverview({ connected: false, discoveryError: "private repository" });
+    expect(screen.getByRole("button", { name: "连接 GitHub" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "重新尝试" })).not.toBeInTheDocument();
   });
 
   it("英文 locale 同时翻译标签、状态、恢复动作和 ARIA label", async () => {
