@@ -7,6 +7,7 @@ import { BranchRelation, branchName } from "@/components/branch-relation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Sidebar,
   SidebarContent,
@@ -365,6 +366,16 @@ export function AppShell({
         className="absolute left-3 top-2 z-10 bg-transparent hover:bg-sidebar-accent supports-[padding:max(0px)]:left-[max(0.75rem,env(titlebar-area-x,0px)+5.5rem)]"
       />
     </div>
+    <div
+      aria-hidden
+      data-slot="main-elevation-shadow"
+      className={cn(
+        "pointer-events-none fixed inset-y-0 z-40 w-5 -translate-x-full bg-linear-to-r from-transparent to-black/[0.03] opacity-100 transition-[left,opacity] duration-200 ease-linear dark:to-black/[0.06]",
+        !openSidebar && "opacity-0",
+        resizingSidebar && "transition-none",
+      )}
+      style={{ left: openSidebar ? `${sidebarWidth}px` : 0 }}
+    />
     <Sidebar aria-label={t("sidebar")} collapsible="offcanvas" className="pt-12">
       <SidebarHeader className="px-3 py-3">
         <button
@@ -433,6 +444,7 @@ export function AppShell({
                 const expanded = preferences.expandedRepositories.includes(repository.id);
                 const all = preferences.allRepositoryReviews.includes(repository.id);
                 const repositoryReviews = reviews.filter((review) => review.repositoryEntryId === repository.id);
+                const pending = pendingRepositoryId === repository.id;
                 return <SidebarMenuItem key={repository.id}>
                   <div className="relative flex items-center">
                     <SidebarMenuButton
@@ -450,12 +462,12 @@ export function AppShell({
                       variant="outline"
                       size="icon-xs"
                       className="absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar shadow-xs hover:bg-sidebar-accent active:translate-y-0!"
-                      aria-label={t("openRepository", { name: repositoryName(repository.canonicalPath) })}
-                      disabled={pendingRepositoryId === repository.id}
-                      aria-busy={pendingRepositoryId === repository.id || undefined}
+                      aria-label={t(pending ? "openingRepository" : "openRepository", { name: repositoryName(repository.canonicalPath) })}
+                      disabled={pending}
+                      aria-busy={pending || undefined}
                       onClick={() => onOpenRepository(repository)}
                     >
-                      <Icon icon={ArrowRight02Icon} />
+                      {pending ? <Spinner aria-hidden /> : <Icon icon={ArrowRight02Icon} />}
                     </Button>
                   </div>
                   {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
@@ -485,7 +497,7 @@ export function AppShell({
       {githubIdentityEntry && <SidebarFooter className="border-t p-3">{githubIdentityEntry}</SidebarFooter>}
       <div aria-label={t("resizeSidebar")} className="absolute right-0 top-12 h-[calc(100%-3rem)] w-1 cursor-col-resize" onMouseDown={resizeSidebar} />
     </Sidebar>
-    <main className="min-h-screen w-full bg-background px-8 pb-8 pt-14">
+    <main className="relative z-20 min-h-screen w-full bg-background px-8 pb-8 pt-14">
       {!showHome ? children : <>
       {!reviews.length && <header className="flex items-center gap-3 border-b pb-5">
         <div><h1 className="font-heading text-xl">{t("brand")}</h1><p className="text-sm text-muted-foreground">{t("subtitle")}</p></div>

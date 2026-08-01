@@ -4,9 +4,9 @@ import {
   CancelCircleIcon,
   CheckmarkCircle02Icon,
   InformationCircleIcon,
-  Loading03Icon,
 } from "@hugeicons/core-free-icons"
 import { Icon } from "@/components/ui/icon"
+import { Spinner } from "@/components/ui/spinner"
 
 /** 使用系统主题 token 渲染全局、非阻断的短暂反馈。 */
 const Toaster = ({ ...props }: ToasterProps) => {
@@ -28,7 +28,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           <Icon icon={CancelCircleIcon} className="size-4" />
         ),
         loading: (
-          <Icon icon={Loading03Icon} className="size-4 animate-spin" />
+          <Spinner aria-hidden />
         ),
       }}
       style={

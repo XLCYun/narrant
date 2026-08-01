@@ -68,7 +68,7 @@ export function RepositoryOverview(props: Props) {
   const remoteError = props.discoveryError ?? groupErrors[0];
   return <section className="min-w-0">
       <header className="mb-6">
-        <h2 className="font-heading text-2xl">{props.repositoryName}</h2>
+        <h2 className="font-mono text-2xl">{props.repositoryName}</h2>
         <p className="mt-1 break-all text-sm text-muted-foreground">{props.repositoryPath}</p>
       </header>
       <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>

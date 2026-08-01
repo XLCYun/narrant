@@ -143,6 +143,15 @@ describe("最近审核首页", () => {
     expect(screen.queryByRole("heading", { name: "纳言" })).not.toBeInTheDocument();
   });
 
+  it("主界面向侧边栏投射左向阴影以体现更高层级", () => {
+    const { container } = render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
+
+    const main = container.querySelector("main");
+    const shadow = container.querySelector("[data-slot=main-elevation-shadow]");
+    expect(main).toHaveClass("relative", "z-20");
+    expect(shadow).toHaveClass("fixed", "inset-y-0", "w-5", "bg-linear-to-r", "from-transparent", "to-black/[0.03]", "dark:to-black/[0.06]");
+  });
+
   it("拖动侧边栏时禁用宽度动画和文本选择，并让宽度立即跟随指针", () => {
     window.localStorage.setItem("narrant.sidebar-preferences", JSON.stringify({ open: true, width: 280 }));
     render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
@@ -150,13 +159,16 @@ describe("最近审核首页", () => {
     const resizeHandle = screen.getByLabelText("调整侧边栏宽度");
     const wrapper = document.querySelector("[data-slot=sidebar-wrapper]");
     const titlebar = document.querySelector("[data-slot=window-titlebar]");
+    const shadow = document.querySelector("[data-slot=main-elevation-shadow]");
     expect(titlebar?.firstElementChild).toHaveClass("border-r", "border-sidebar-border");
+    expect(shadow).toHaveStyle({ left: "280px" });
     fireEvent.mouseDown(resizeHandle, { clientX: 280 });
     expect(wrapper).toHaveAttribute("data-resizing", "true");
     expect(wrapper).toHaveClass("select-none");
 
     fireEvent.mouseMove(document, { clientX: 240 });
     expect(wrapper).toHaveStyle({ "--sidebar-width": "240px" });
+    expect(shadow).toHaveStyle({ left: "240px" });
 
     fireEvent.mouseMove(document, { clientX: 700 });
     expect(wrapper).toHaveStyle({ "--sidebar-width": "700px" });
@@ -213,6 +225,33 @@ describe("最近审核首页", () => {
     expect(onOpenRepository).toHaveBeenCalledWith(repositories[1]);
     expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("代码仓库")).toBeVisible();
+  });
+
+  it("打开仓库期间仅把目标仓库的箭头替换为可访问的加载状态", () => {
+    const repositories = [
+      { id: 1, canonicalPath: "/work/first", lastOpenedAt: 1, available: true },
+      { id: 2, canonicalPath: "/work/second", lastOpenedAt: 2, available: true },
+    ];
+
+    render(
+      <HomePage
+        reviews={[]}
+        repositories={repositories}
+        pendingRepositoryId={2}
+        onOpenReview={() => undefined}
+        onOpenRepository={() => undefined}
+        onOpenFolder={() => undefined}
+      />,
+    );
+
+    const pendingButton = screen.getByRole("button", { name: "正在打开仓库 second" });
+    const idleButton = screen.getByRole("button", { name: "打开仓库 first" });
+    expect(pendingButton).toBeDisabled();
+    expect(pendingButton).toHaveAttribute("aria-busy", "true");
+    expect(pendingButton.querySelector(".animate-spin")).toBeInTheDocument();
+    expect(pendingButton.querySelector("[role='status']")).not.toBeInTheDocument();
+    expect(idleButton).not.toBeDisabled();
+    expect(idleButton.querySelector(".animate-spin")).not.toBeInTheDocument();
   });
 
   it("侧边栏把本地分支 Review 压缩为不含类型复述的单行", () => {

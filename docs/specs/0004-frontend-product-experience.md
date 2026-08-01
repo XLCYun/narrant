@@ -182,7 +182,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 需要的通用能力优先安装和使用 shadcn 的 Sidebar、Resizable、Tabs、Sheet、Dialog、Dropdown Menu、Tooltip、Skeleton、Badge 和 Sonner；只有默认组件无法满足领域交互时才组合或新增组件。
 - 视觉采用克制的桌面开发工具风格。品牌绿色仅用于主操作、选中和焦点；内容区域使用中性色、细边框和有限卡片。
 - 首页和首次空状态使用舒展密度，Repository Entry 概览使用中等密度，主侧边栏、文件树和 Review 顶栏使用紧凑密度。
-- 标题可使用现有 Oxanium 品牌字体，正文使用系统字体，代码与 revision 使用 JetBrains Mono。
+- 标题、正文、代码与 revision 统一使用 Oxanium 字体。
 - File Change 状态使用一致语义颜色：新增绿色、删除红色、修改橙色或黄色、重命名蓝色，并同时提供文字或图标，不能仅依赖颜色。
 - 最小可用窗口目标为 900×600。1200px 以上同时展示主侧边栏、文件树和双栏 Diff；900–1199px 默认收起主侧边栏并允许 Diff 临时单栏。
 - 第一版不增加产品级键盘快捷键，但所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。
