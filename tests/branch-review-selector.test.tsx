@@ -48,8 +48,106 @@ describe("本地 Branch Selection", () => {
     />);
 
     const headTrigger = screen.getByLabelText("Head 分支");
-    expect(headTrigger).toHaveClass("min-w-0", "overflow-hidden");
-    expect(screen.getByText("当前分支")).toHaveClass("shrink-0");
+    expect(headTrigger).toHaveClass("max-w-full", "overflow-hidden");
+    expect(screen.getByText("当前分支")).toHaveClass("h-5", "shrink-0", "leading-none");
+  });
+
+  it("打开 Head 选择器后可以搜索并选择已有分支", async () => {
+    await i18n.changeLanguage("zh-CN");
+    const onHeadChange = vi.fn();
+    render(<BranchReviewSelector
+      refs={[
+        "refs/heads/main",
+        "refs/heads/codex/issue-21-repository-entries",
+        "refs/heads/codex/issue-11-system-theme",
+        "refs/remotes/origin/main",
+      ]}
+      currentRef="refs/heads/main"
+      defaultRef="refs/remotes/origin/main"
+      headRef="refs/heads/main"
+      baseRef="refs/remotes/origin/main"
+      action="start"
+      onHeadChange={onHeadChange}
+      onBaseChange={vi.fn()}
+      onReload={vi.fn()}
+      onSubmit={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByLabelText("Head 分支"));
+    const search = await screen.findByPlaceholderText("搜索分支…");
+    fireEvent.change(search, { target: { value: "issue-21" } });
+
+    expect(screen.getByText("codex/issue-21-repository-entries")).toBeInTheDocument();
+    expect(screen.queryByText("codex/issue-11-system-theme")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("codex/issue-21-repository-entries"));
+    expect(onHeadChange).toHaveBeenCalledWith("refs/heads/codex/issue-21-repository-entries");
+  });
+
+  it("搜索无结果时解释原因，关闭后重新打开会恢复完整列表", async () => {
+    await i18n.changeLanguage("zh-CN");
+    render(<BranchReviewSelector
+      refs={["refs/heads/main", "refs/heads/release", "refs/remotes/origin/main"]}
+      currentRef="refs/heads/release"
+      defaultRef="refs/remotes/origin/main"
+      headRef="refs/heads/release"
+      baseRef="refs/remotes/origin/main"
+      action="start"
+      onHeadChange={vi.fn()}
+      onBaseChange={vi.fn()}
+      onReload={vi.fn()}
+      onSubmit={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByLabelText("Head 分支"));
+    const search = await screen.findByPlaceholderText("搜索分支…");
+    fireEvent.change(search, { target: { value: "missing" } });
+    expect(screen.getByText("没有匹配的分支")).toBeInTheDocument();
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    fireEvent.click(screen.getByLabelText("Head 分支"));
+    expect(await screen.findByText("main")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("搜索分支…")).toHaveValue("");
+  });
+
+  it("选择器聚焦时直接输入字符会打开弹层并开始搜索", async () => {
+    await i18n.changeLanguage("zh-CN");
+    render(<BranchReviewSelector
+      refs={["refs/heads/main", "refs/heads/issue-21", "refs/remotes/origin/main"]}
+      currentRef="refs/heads/main"
+      defaultRef="refs/remotes/origin/main"
+      headRef="refs/heads/main"
+      baseRef="refs/remotes/origin/main"
+      action="start"
+      onHeadChange={vi.fn()}
+      onBaseChange={vi.fn()}
+      onReload={vi.fn()}
+      onSubmit={vi.fn()}
+    />);
+
+    fireEvent.keyDown(screen.getByLabelText("Head 分支"), { key: "z" });
+    expect(await screen.findByPlaceholderText("搜索分支…")).toHaveValue("z");
+  });
+
+  it("按 Space 打开选择器时不会把空格作为搜索词", async () => {
+    await i18n.changeLanguage("zh-CN");
+    render(<BranchReviewSelector
+      refs={["refs/heads/main", "refs/heads/release", "refs/remotes/origin/main"]}
+      currentRef="refs/heads/main"
+      defaultRef="refs/remotes/origin/main"
+      headRef="refs/heads/main"
+      baseRef="refs/remotes/origin/main"
+      action="start"
+      onHeadChange={vi.fn()}
+      onBaseChange={vi.fn()}
+      onReload={vi.fn()}
+      onSubmit={vi.fn()}
+    />);
+
+    const trigger = screen.getByLabelText("Head 分支");
+    fireEvent.keyDown(trigger, { key: " " });
+    fireEvent.keyUp(trigger, { key: " " });
+    expect(await screen.findByPlaceholderText("搜索分支…")).toHaveValue("");
+    expect(screen.getByText("release")).toBeInTheDocument();
   });
 
   it("Head 与 Base 相同时就地解释并禁用主操作", async () => {
