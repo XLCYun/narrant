@@ -5,6 +5,13 @@ import { BranchRelation } from "@/components/branch-relation";
 afterEach(cleanup);
 
 describe("Base Ref 与 Head Ref 关系", () => {
+  it("默认从 Head 向 Base 展示合入方向", () => {
+    render(<BranchRelation baseRef="refs/heads/main" headRef="refs/heads/release" />);
+
+    const relation = screen.getByLabelText("将 Head 分支 release 合入 Base 分支 main");
+    expect(relation.textContent).toBe("releasemain");
+  });
+
   it("完整显示任意长度的分支名，并允许标签在可用宽度内换行", () => {
     const base = "team/a-very-long-base-branch-name-without-a-fixed-limit";
     const head = "feature/a-very-long-head-branch-name-without-a-fixed-limit";

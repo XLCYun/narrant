@@ -16,6 +16,7 @@ import { AppShell, type HomeRepository } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewOverview } from "@/components/review-overview";
 import { BranchRelation } from "@/components/branch-relation";
+import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry, type GitHubIdentity } from "@/components/github-identity-entry";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
@@ -56,6 +57,11 @@ type BranchReviewUpdate = {
   latestBaseRevision: string;
   latestHeadRevision: string;
 };
+/** Repository Entry 中已有 Branch Selection 的更新检查状态。 */
+type BranchSelectionCheck =
+  | { status: "idle" | "checking" | "current" }
+  | { status: "update"; update: BranchReviewUpdate }
+  | { status: "failed" };
 /** 应用边界显式返回的分支选项与 Repository Entry 默认选择。 */
 type BranchRefs = {
   refs: string[];
@@ -172,15 +178,21 @@ export function App() {
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation>();
   const [pendingRepository, setPendingRepository] = useState<RepositoryEntry>();
   const [pendingReview, setPendingReview] = useState<ReviewSummary>();
-  const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string>();
   const [refs, setRefs] = useState<string[]>([]);
+  const [defaultRef, setDefaultRef] = useState("");
+  const [currentRef, setCurrentRef] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
+  const [branchSelectionCheck, setBranchSelectionCheck] = useState<BranchSelectionCheck>({ status: "idle" });
+  const [showBranchCheckingMessage, setShowBranchCheckingMessage] = useState(false);
+  const [branchesReloading, setBranchesReloading] = useState(false);
+  const [branchReloadError, setBranchReloadError] = useState("");
+  const branchSelectionCheckId = useRef(0);
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
   const [selectedPullRequest, setSelectedPullRequest] = useState<SelectedPullRequest>();
   const [reviewUpdate, setReviewUpdate] = useState<ReviewUpdate>();
@@ -388,7 +400,6 @@ export function App() {
       invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
     ]);
     setSelectedRepository(opened);
-    setWorkspaceTrusted(true);
     setSavedReviews(saved ?? []);
     setRepositoryReviews(reviews ?? []);
     setRepositoryPath(opened.canonicalPath);
@@ -541,7 +552,6 @@ export function App() {
           invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
         ]);
         setSelectedRepository(opened);
-        setWorkspaceTrusted(true);
         setSavedReviews(saved ?? []);
         setRepositoryReviews(reviews ?? []);
         setRepositoryPath(opened.canonicalPath);
@@ -838,7 +848,8 @@ export function App() {
 
   /** 加载 canonical refs，并使用后端识别的默认分支和当前检出分支初始化选择。 */
   async function loadRefs(repositoryEntryId = selectedRepository?.id) {
-    setError("");
+    setBranchReloadError("");
+    setBranchesReloading(true);
     try {
       const branches = await invokeLocalGit<BranchRefs>("list_local_refs", {
         repositoryEntryId,
@@ -847,22 +858,72 @@ export function App() {
         throw new Error("分支应用边界返回了无效数据。");
       }
       setRefs(branches.refs);
+      setDefaultRef(branches.defaultRef);
+      setCurrentRef(branches.currentRef);
       replaceSnapshot(undefined);
       setFileChange(undefined);
       setBaseRef(branches.defaultRef);
       setHeadRef(branches.currentRef);
     } catch (reason) {
-      setRefs([]);
-      replaceSnapshot(undefined);
-      setFileChange(undefined);
-      setError(String(reason));
+      setBranchReloadError(String(reason));
+    } finally {
+      setBranchesReloading(false);
     }
   }
 
-  const hasMatchingBranchReview = repositoryReviews.some(
+  const matchingBranchReview = repositoryReviews.find(
     (review) => review.baseRef === baseRef && review.headRef === headRef,
   );
   const branchSelectionInvalid = Boolean(baseRef && headRef && baseRef === headRef);
+
+  useEffect(() => {
+    const checkId = ++branchSelectionCheckId.current;
+    setShowBranchCheckingMessage(false);
+    if (!matchingBranchReview || branchSelectionInvalid) {
+      setBranchSelectionCheck({ status: "idle" });
+      return;
+    }
+    setBranchSelectionCheck({ status: "checking" });
+    const messageTimer = window.setTimeout(() => {
+      if (branchSelectionCheckId.current === checkId) setShowBranchCheckingMessage(true);
+    }, 1000);
+    void invokeBackgroundGit<BranchReviewUpdate>("check_branch_review_updates", {
+      reviewId: matchingBranchReview.reviewId,
+    }).then((update) => {
+      if (branchSelectionCheckId.current !== checkId) return;
+      setBranchSelectionCheck(update.changed ? { status: "update", update } : { status: "current" });
+    }).catch(() => {
+      if (branchSelectionCheckId.current === checkId) setBranchSelectionCheck({ status: "failed" });
+    }).finally(() => window.clearTimeout(messageTimer));
+    return () => window.clearTimeout(messageTimer);
+    // invokeBackgroundGit 的 identity 由每次调用生成；这里只由用户可见的 Selection 驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchingBranchReview?.reviewId, baseRef, headRef, branchSelectionInvalid]);
+
+  const branchSelectorAction: BranchSelectorAction = branchSelectionInvalid
+    ? "invalid"
+    : !matchingBranchReview
+      ? "start"
+      : branchSelectionCheck.status === "checking"
+        ? "checking"
+        : branchSelectionCheck.status === "update"
+          ? "update"
+          : branchSelectionCheck.status === "failed" ? "fallback" : "continue";
+
+  /** 统一呈现新 Snapshot，并在提供摘要时同步仓库与最近审核列表。 */
+  function presentReviewSnapshot(nextSnapshot: ReviewSnapshot, summary?: ReviewSummary) {
+    replaceSnapshot(nextSnapshot);
+    setFileChange(undefined);
+    if (!summary) return;
+    setRepositoryReviews((reviews) => [
+      summary,
+      ...reviews.filter((review) => review.reviewId !== summary.reviewId),
+    ]);
+    setRecentReviews((reviews) => [
+      summary,
+      ...reviews.filter((review) => review.reviewId !== summary.reviewId),
+    ]);
+  }
 
   async function openComparison() {
     setError("");
@@ -872,7 +933,6 @@ export function App() {
         baseRef,
         headRef,
       });
-      replaceSnapshot(nextSnapshot);
       if (selectedRepository) {
         const summary: ReviewSummary = {
           reviewId: nextSnapshot.reviewId,
@@ -882,19 +942,43 @@ export function App() {
           headRef: nextSnapshot.headRef,
           lastOpenedAt: Date.now(),
         };
-        setRepositoryReviews((reviews) => [
-          summary,
-          ...reviews.filter((review) => review.reviewId !== summary.reviewId),
-        ]);
-        setRecentReviews((reviews) => [
-          summary,
-          ...reviews.filter((review) => review.reviewId !== summary.reviewId),
-        ]);
+        presentReviewSnapshot(nextSnapshot, summary);
+      } else {
+        presentReviewSnapshot(nextSnapshot);
       }
-      setFileChange(undefined);
       if (selectedRepository) await loadSavedReviews(selectedRepository.id);
     }
     catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
+  }
+
+  /** 根据已确认的 moving refs 创建新 Snapshot，再进入同一个 durable Review。 */
+  async function updateAndOpenBranchReview() {
+    if (!matchingBranchReview || branchSelectionCheck.status !== "update") return;
+    setError("");
+    try {
+      await invoke<ReviewSnapshot>("reopen_review", { reviewId: matchingBranchReview.reviewId });
+      const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
+        reviewId: matchingBranchReview.reviewId,
+        confirmation: branchSelectionCheck.update,
+      });
+      if (selectedRepository) {
+        const summary: ReviewSummary = {
+          ...matchingBranchReview,
+          lastOpenedAt: Date.now(),
+          baseRef: nextSnapshot.baseRef,
+          headRef: nextSnapshot.headRef,
+        };
+        presentReviewSnapshot(nextSnapshot, summary);
+        await loadSavedReviews(selectedRepository.id);
+      } else {
+        presentReviewSnapshot(nextSnapshot);
+      }
+    } catch (reason) {
+      void Promise.resolve(invoke("close_review", { reviewId: matchingBranchReview.reviewId })).catch(() => undefined);
+      replaceSnapshot(undefined);
+      setFileChange(undefined);
+      setError(String(reason));
+    }
   }
 
   async function openFileChange(path: string) {
@@ -957,11 +1041,11 @@ export function App() {
     setReviewUpdateError("");
     setRefreshingReview(true);
     try {
-      replaceSnapshot(await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
+      const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
         reviewId: snapshot.reviewId,
         confirmation: branchUpdate,
-      }));
-      setFileChange(undefined);
+      });
+      presentReviewSnapshot(nextSnapshot);
     } catch (reason) {
       setReviewUpdateError(String(reason));
     } finally {
@@ -1087,16 +1171,21 @@ export function App() {
         onConnectGitHub={() => void connectGitHub()}
         onOpenSavedReview={(review) => void openSavedReview(review)}
         onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
-        localBranches={<section aria-label={t("catalog:localRepository")} className="flex flex-wrap items-end gap-3">
-          <label>{t("catalog:repositoryPath")}<Input aria-label={t("catalog:repositoryPath")} value={repositoryPath} readOnly /></label>
-          <Button variant="outline" onClick={() => void loadRefs()}>{t("catalog:reloadBranches")}</Button>
-          <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder={t("catalog:selectBase")} /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-          <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder={t("catalog:selectHead")} /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-          <Button disabled={!baseRef || !headRef || branchSelectionInvalid || !workspaceTrusted} onClick={openComparison}>
-            {hasMatchingBranchReview ? t("continueReview") : t("startReview")}
-          </Button>
-          {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
-        </section>}
+        localBranches={<BranchReviewSelector
+          refs={refs}
+          currentRef={currentRef}
+          defaultRef={defaultRef}
+          headRef={headRef}
+          baseRef={baseRef}
+          action={branchSelectorAction}
+          showCheckingMessage={showBranchCheckingMessage}
+          reloading={branchesReloading}
+          reloadError={branchReloadError}
+          onHeadChange={setHeadRef}
+          onBaseChange={setBaseRef}
+          onReload={() => void loadRefs()}
+          onSubmit={() => void (branchSelectorAction === "update" ? updateAndOpenBranchReview() : openComparison())}
+        />}
         initialTab={repositoryInitialTab}
       />
     </article>}
@@ -1156,7 +1245,7 @@ export function App() {
         <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
         <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
         <Button disabled={!baseRef || !headRef || branchSelectionInvalid} onClick={openComparison}>
-          {hasMatchingBranchReview ? t("continueReview") : t("startReview")}
+          {matchingBranchReview ? t("continueReview") : t("startReview")}
         </Button>
         {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
       </section>

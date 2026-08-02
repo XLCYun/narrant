@@ -155,7 +155,17 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 多个 GitHub repository 中只有部分 discovery 失败时继续显示成功结果，并在列表上方按 repository identity 给出低干扰的局部失败提示与“重新尝试”，不把整个 Pull Request 标签切换为错误状态。
 - GitHub App 安装、Device Flow、复制授权信息和退出登录进入侧边栏底部的 GitHub 连接界面，不长期占用 Repository Entry 概览。
 - 本地分支标签默认使用仓库默认分支作为 Base Ref、当前检出分支作为 Head Ref。需要在应用边界提供这两项信息，而不是继续依赖分支列表顺序。
-- Base Ref 与 Head Ref 相同时禁止开始 Review。相同 Branch Selection 显示“继续审核”。
+- Head 与 Base 选择器通过弱化标记解释自动默认值：当前检出分支标记为“当前分支”，仓库默认分支标记为“默认分支”；展开后的对应选项保留相同标记。一个分支同时具备两种身份时展示两个标记，但仍按 Base 与 Head 相同的规则禁止开始 Review。
+- Head 与 Base 选择器显示去掉 `refs/heads/` 或 `refs/remotes/` 前缀后的短分支名，展开列表按“本地分支”和“远程跟踪分支”分组；远程跟踪分支保留 remote 名称，例如 `origin/main`。界面不展示 canonical ref，也不专门为它提供 Tooltip；只有短分支名因空间不足被截断时，Tooltip 才回显该完整短分支名。
+- Head 与 Base 选择器下方随选择即时显示“将 `{head}` 合入 `{base}`”确认文案，帮助用户在开始审核前核对方向；分支名保持原文。
+- 分支选择器使用左对齐、最大宽度约 720–800px 的轻量面板，以细边框、轻微背景层次和中等内边距聚合任务，不使用强阴影或品牌绿色描边。面板标题为“选择要审核的分支”，刷新操作位于标题右侧；仓库名称保留在页面标题中，完整本地路径只通过仓库名称的 Tooltip 提供，不进入面板。
+- 选择器区域底部使用提交区：宽窗口中左侧显示合入确认文案、右侧显示主按钮；窄窗口中上下排列，主按钮占满可用宽度。未创建 Review 时按钮显示“开始审核”；已有相同 Branch Selection 且 refs 未移动时显示“继续审核”；已有相同 Branch Selection 且检测到新 commit 时显示“更新并继续审核”。点击“更新并继续审核”复用同一个 Review，基于最新 Base 与 Head 创建并切换到新的 immutable Review Snapshot，同时保留旧 Snapshot，不覆盖已有审核版本。
+- 已有相同 Branch Selection 且 refs 未移动时，提交区只保留合入确认文案与“继续审核”按钮，不重复显示“已有审核”或最近打开时间；时间信息留在审核历史中。
+- 检测到已有 Branch Selection 的 refs 移动时，提交区显示“检测到所选分支有新提交”和“将使用最新的分支内容继续审核。”，不展示旧、新 commit SHA，也不提示用户当前无法浏览或恢复的旧 Snapshot；主按钮显示“更新并继续审核”。
+- 检查已有 Branch Selection 是否更新时，本地分支只解析当前 `refs/heads/*`，不访问网络；只有选择中包含 `refs/remotes/<remote>/*` 远程跟踪分支时才 fetch 对应 remote，两个 refs 属于不同 remote 时分别 fetch。fetch 失败不阻断已有 Review，提交区提示“无法检查 `{branch}` 的远程更新，当前审核版本可能不是最新”，按钮降级为“继续现有审核”，不得暗示当前 Snapshot 已是最新。
+- 已有 Branch Selection 的更新检查期间暂时禁用主按钮，并立即在按钮内显示 Loading 图标，保持按钮宽度稳定；辅助技术文案说明“正在检查审核更新”。只有操作持续约一秒后，提交区才增加“正在检查审核内容是否有更新…”状态文字，快速完成不闪烁额外文案。
+- 本地分支列表在进入标签时自动读取。“重新读取分支”仅用于同步用户在 Narrant 外部造成的 Git 分支变化，不是开始审核的必经步骤；它作为选择器区域右上角的低层级刷新图标展示，通过 Tooltip 提供完整名称。刷新期间禁用操作并显示图标进度，失败时在选择器区域内反馈且保留已有选项。
+- Base Ref 与 Head Ref 相同时禁止开始 Review。此时提交区以普通警示层级就地显示“Head 与 Base 不能是同一分支”，主按钮保持禁用；不把单个合法选择器标记为错误，也不弹出 Toast。用户修改任一选择后立即恢复合入确认文案。相同 Branch Selection 显示“继续审核”。
 - Review 阅读器由紧凑顶栏、可调整宽度的文件树和 Diff 主区域组成。
 - 第一版文件树不提供搜索、状态筛选、已读或未读状态；显示目录、File Change 状态、总数和当前选择。
 - 打开或刷新 Review 后，按稳定路径顺序自动选择第一个 File Change；零变更显示明确空状态。
@@ -164,7 +174,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 二进制、Symlink 与 Submodule File Change 使用专用内容状态，不实例化无意义的文本 Diff。
 - Pull Request 与本地分支 Review 共用 Review 概览 Sheet。Sheet 默认关闭，通过 Review 顶栏打开。
 - Pull Request 概览展示描述、作者、状态、Base/Head、完整 revisions 和 GitHub 链接；本地分支概览展示分支与 revisions。
-- 侧边栏 Review 条目、首页最近审核、Repository Entry 概览、审核历史、Review 顶栏和概览 Sheet 中的 Base/Head 分支关系，统一显示为“Base 分支名 Badge、向左箭头图标、Head 分支名 Badge”。不额外显示 `Base`、`Head` 角色文字，不使用文本箭头或点号分隔；辅助技术文案明确读作“将 Head 分支合入 Base 分支”。
+- 侧边栏 Review 条目、首页最近审核、Repository Entry 概览、审核历史、Review 顶栏、概览 Sheet 和本地分支选择器中的 Base/Head 分支关系，统一显示为“Head 分支名 Badge、向右箭头图标、Base 分支名 Badge”，表达“将 Head 分支合入 Base 分支”。紧凑展示不额外显示 `Head`、`Base` 角色文字，不使用文本箭头或点号分隔；本地分支选择器保留可见的 `Head 分支`、`Base 分支`字段标签，辅助技术文案明确读作“将 Head 分支合入 Base 分支”。
 - Base 与 Head 使用相同、具有清晰边框和背景对比的中性 Badge 样式，不用颜色区分角色或暗示状态；悬停不得降低其对比度，当前 Review 由条目整体的选中背景表达。
 - revision 之间的变化继续使用从旧 revision 指向新 revision 的向右箭头，避免把版本演进误表达为分支合入关系。
 - Pull Request 描述使用安全 Markdown：跳过原始 HTML、阻止远程图片自动加载，HTTP/HTTPS 链接交给系统浏览器。

@@ -460,17 +460,87 @@ describe("App", () => {
         defaultRef: "refs/remotes/origin/main",
         currentRef: "refs/heads/topic",
       });
+      if (command === "check_branch_review_updates") return Promise.resolve({
+        changed: false,
+        currentBaseRevision: "base-1",
+        currentHeadRevision: "head-1",
+        latestBaseRevision: "base-1",
+        latestHeadRevision: "head-1",
+      });
       return Promise.resolve();
     });
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "/repo" }));
     fireEvent.click(await screen.findByRole("tab", { name: "本地分支" }));
-    fireEvent.click(await screen.findByRole("button", { name: "重新读取分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
 
-    expect(await screen.findByLabelText("Base Ref")).toHaveTextContent("refs/remotes/origin/main");
-    expect(screen.getByLabelText("Head Ref")).toHaveTextContent("refs/heads/topic");
-    expect(screen.getByRole("button", { name: "继续审核" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByLabelText("Head 分支")).toHaveTextContent("topic"));
+    expect(screen.getByLabelText("Base 分支")).toHaveTextContent("origin/main");
+    expect(screen.getByText("将 topic 合入 origin/main")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "继续审核" })).toBeEnabled();
+    expect(invoke).toHaveBeenCalledWith("check_branch_review_updates", {
+      operationId: expect.stringMatching(/^background-git-/),
+      reviewId: "review-41",
+    });
+  });
+
+  it("已有 Branch Selection 更新后创建最新 Snapshot 再继续审核", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 42, canonicalPath: "/repo", commonDirectory: "/repo/.git",
+      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+    };
+    const review = {
+      reviewId: "review-42", repositoryEntryId: 42, repositoryPath: "/repo",
+      baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
+    };
+    const update = {
+      changed: true,
+      currentBaseRevision: "base-1",
+      currentHeadRevision: "head-1",
+      latestBaseRevision: "base-2",
+      latestHeadRevision: "head-2",
+    };
+    const snapshot = (snapshotId: string, baseRevision: string, headRevision: string) => ({
+      reviewId: review.reviewId,
+      snapshotId,
+      baseRef: review.baseRef,
+      baseRevision,
+      comparisonBase: baseRevision,
+      headRef: review.headRef,
+      headRevision,
+      fileChanges: [],
+    });
+    invoke.mockImplementation((command: string, arguments_?: { repositoryEntryId?: number | null }) => {
+      if (command === "list_repository_entries") return Promise.resolve([entry]);
+      if (command === "list_reviews") return Promise.resolve(arguments_?.repositoryEntryId === 42 ? [review] : []);
+      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "list_saved_reviews" || command === "discover_github_pull_requests") return Promise.resolve([]);
+      if (command === "list_local_refs") return Promise.resolve({
+        refs: [review.headRef, review.baseRef], defaultRef: review.baseRef, currentRef: review.headRef,
+      });
+      if (command === "check_branch_review_updates") return Promise.resolve(update);
+      if (command === "reopen_review") return Promise.resolve(snapshot("snapshot-1", "base-1", "head-1"));
+      if (command === "refresh_branch_review") return Promise.resolve(snapshot("snapshot-2", "base-2", "head-2"));
+      return Promise.resolve();
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "/repo" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "本地分支" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
+    fireEvent.click(await screen.findByRole("button", { name: "更新并继续审核" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-42" }));
+    expect(invoke).toHaveBeenCalledWith("refresh_branch_review", {
+      operationId: expect.stringMatching(/^local-git-/),
+      reviewId: "review-42",
+      confirmation: update,
+    });
+    expect(await screen.findByText("base-2 → head-2")).toBeInTheDocument();
   });
 
   it("Base 与 Head 相同时禁用开始审核并显示可翻译说明", async () => {
@@ -486,7 +556,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
 
     expect(await screen.findByRole("button", { name: "Start review" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Base and Head must be different branches.");
+    expect(screen.getByRole("status")).toHaveTextContent("Head and Base must be different branches.");
     await i18n.changeLanguage("zh-CN");
   });
 
@@ -750,7 +820,7 @@ describe("App", () => {
     await screen.findByRole("heading", { name: "repo" });
     fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
-    await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("refs/heads/topic"));
+    await waitFor(() => expect(screen.getByLabelText("Head 分支")).toHaveTextContent("topic"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
     expect(await screen.findByRole("treeitem", { name: /old.txt/ })).toBeInTheDocument();
 

@@ -14,7 +14,7 @@ export function BranchRelation({
   baseRef,
   headRef,
   className,
-  direction = "base-to-head",
+  direction = "head-to-base",
 }: {
   baseRef: string;
   headRef: string;
