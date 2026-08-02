@@ -81,10 +81,10 @@ function BranchOption({ refName, currentRef, defaultRef }: {
   defaultRef: string;
 }) {
   const { t } = useTranslation();
-  return <span className="flex min-w-0 flex-1 items-center gap-2">
+  return <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
     <TruncatedBranchName name={branchName(refName)} />
-    {refName === currentRef && <Badge variant="secondary">{t("catalog:currentBranch")}</Badge>}
-    {refName === defaultRef && <Badge variant="secondary">{t("catalog:defaultBranch")}</Badge>}
+    {refName === currentRef && <Badge className="shrink-0" variant="secondary">{t("catalog:currentBranch")}</Badge>}
+    {refName === defaultRef && <Badge className="shrink-0" variant="secondary">{t("catalog:defaultBranch")}</Badge>}
   </span>;
 }
 
@@ -106,7 +106,7 @@ export function BranchReviewSelector(props: Props) {
     return <label className="grid min-w-0 gap-2 text-sm font-medium">
       {label}
       <Select value={value} onValueChange={(nextValue) => onValueChange(nextValue ?? "")}>
-        <SelectTrigger className="w-full" aria-label={label}>
+        <SelectTrigger className="w-full min-w-0 overflow-hidden" aria-label={label}>
           {value
             ? <BranchOption refName={value} currentRef={props.currentRef} defaultRef={props.defaultRef} />
             : <span className="text-muted-foreground">{role === "head" ? t("catalog:selectHead") : t("catalog:selectBase")}</span>}
@@ -171,7 +171,7 @@ export function BranchReviewSelector(props: Props) {
           ? <p role="status" className="text-sm text-muted-foreground">{t("catalog:checkingReviewUpdateMessage")}</p>
         : selectionMissing
           ? <p className="text-sm text-muted-foreground">{t("catalog:chooseBothBranches")}</p>
-          : <p className="text-sm text-muted-foreground">{t("catalog:mergeConfirmation", {
+          : <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{t("catalog:mergeConfirmation", {
             head: branchName(props.headRef),
             base: branchName(props.baseRef),
           })}</p>}

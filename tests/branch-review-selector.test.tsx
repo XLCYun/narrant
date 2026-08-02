@@ -31,6 +31,27 @@ describe("本地 Branch Selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
   });
 
+  it("长分支名在各自选择器内收缩，不会覆盖相邻的 Base 分支", async () => {
+    await i18n.changeLanguage("zh-CN");
+    const longBranch = "codex/frontend-product-experience-spec-with-an-extra-long-suffix";
+    render(<BranchReviewSelector
+      refs={[`refs/heads/${longBranch}`, "refs/remotes/origin/main"]}
+      currentRef={`refs/heads/${longBranch}`}
+      defaultRef="refs/remotes/origin/main"
+      headRef={`refs/heads/${longBranch}`}
+      baseRef="refs/remotes/origin/main"
+      action="start"
+      onHeadChange={vi.fn()}
+      onBaseChange={vi.fn()}
+      onReload={vi.fn()}
+      onSubmit={vi.fn()}
+    />);
+
+    const headTrigger = screen.getByLabelText("Head 分支");
+    expect(headTrigger).toHaveClass("min-w-0", "overflow-hidden");
+    expect(screen.getByText("当前分支")).toHaveClass("shrink-0");
+  });
+
   it("Head 与 Base 相同时就地解释并禁用主操作", async () => {
     await i18n.changeLanguage("zh-CN");
     render(<BranchReviewSelector
