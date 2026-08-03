@@ -55,10 +55,10 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
   });
 
   it("前端测试用 data-* endpoint 仅在 VITE_WDIO 下暴露", () => {
-    const app = read("src/App.tsx");
+    const reader = read("src/components/review-reader.tsx");
     const home = read("src/components/home-page.tsx");
-    expect(app).toMatch(/data-before=\{import\.meta\.env\.VITE_WDIO/);
-    expect(app).toMatch(/data-after=\{import\.meta\.env\.VITE_WDIO/);
+    expect(reader).toMatch(/data-before=\{import\.meta\.env\.VITE_WDIO/);
+    expect(reader).toMatch(/data-after=\{import\.meta\.env\.VITE_WDIO/);
     expect(home).toMatch(/import\.meta\.env\.VITE_WDIO\s*===\s*"true"/);
     expect(home).toMatch(/__NARRANT_E2E_DIRECTORY__/);
     const i18n = read("src/lib/i18n.ts");

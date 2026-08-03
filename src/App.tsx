@@ -1,56 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DiffEditor } from "@monaco-editor/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Copy01Icon } from "@hugeicons/core-free-icons";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useSystemTheme } from "@/lib/use-system-theme";
 import { AppShell, type HomeRepository } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
-import { ReviewOverview } from "@/components/review-overview";
 import { BranchRelation } from "@/components/branch-relation";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry, type GitHubIdentity } from "@/components/github-identity-entry";
 import { Spinner } from "@/components/ui/spinner";
-import { FileChangeLoading } from "@/components/file-change-loading";
 import { Toaster } from "@/components/ui/sonner";
 import { Icon } from "@/components/ui/icon";
-import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
+import {
+  ReviewReader,
+  type DiffMode,
+  type FileChangeContent,
+  type ReviewReaderSnapshot,
+} from "@/components/review-reader";
+import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import "@/lib/i18n";
 
-type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
-type FileChangeSummary = {
-  path: string;
-  oldPath: string | null;
-  status: ChangeStatus;
-};
-type FileChangeContent = FileChangeSummary & {
-  contentKind: "text" | "binary" | "submodule" | "symlink";
-  beforeSize: number | null;
-  afterSize: number | null;
-  before: string | null;
-  after: string | null;
-};
-type ReviewSnapshotBase = {
-  baseRef: string;
-  baseRevision: string;
-  comparisonBase: string;
-  headRef: string;
-  headRevision: string;
-  fileChanges: FileChangeSummary[];
-};
-type ReviewSnapshot = ReviewSnapshotBase & {
-  reviewId: string;
-  snapshotId: string;
-  pullRequest?: PullRequestMetadata;
-};
+type ReviewSnapshot = ReviewReaderSnapshot;
 type BranchReviewUpdate = {
   changed: boolean;
   currentBaseRevision: string;
@@ -108,52 +84,20 @@ type ReviewUpdate = {
   availableHeadRevision: string;
 };
 
-type DirectoryNode = {
-  name: string;
-  directories: DirectoryNode[];
-  files: FileChangeSummary[];
-};
-
-/** Monaco Diff 阅读器支持的持久化展示布局。 */
-type DiffMode = "side-by-side" | "inline";
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
 const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
+
+/** 以不依赖系统 locale 的代码点顺序稳定排列路径。 */
+function comparePaths(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 /** 更新已有 Repository Entry 时保持位置，只把新添加的仓库放到列表前端。 */
 function upsertRepositoryEntry(entries: RepositoryEntry[], entry: RepositoryEntry) {
   return entries.some((candidate) => candidate.id === entry.id)
     ? entries.map((candidate) => candidate.id === entry.id ? entry : candidate)
     : [entry, ...entries];
-}
-
-/** 以不依赖系统 locale 的代码点顺序稳定排列 File Change 路径。 */
-function comparePaths(left: string, right: string) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
-  const root: DirectoryNode = { name: "", directories: [], files: [] };
-  for (const change of fileChanges) {
-    const parts = change.path.split("/");
-    let directory = root;
-    for (const name of parts.slice(0, -1)) {
-      let child = directory.directories.find((candidate) => candidate.name === name);
-      if (!child) {
-        child = { name, directories: [], files: [] };
-        directory.directories.push(child);
-      }
-      directory = child;
-    }
-    directory.files.push(change);
-  }
-  const sort = (directory: DirectoryNode) => {
-    directory.directories.sort((left, right) => comparePaths(left.name, right.name));
-    directory.files.sort((left, right) => comparePaths(left.path, right.path));
-    directory.directories.forEach(sort);
-  };
-  sort(root);
-  return root;
 }
 
 function ErrorMessage({ message }: { message: string }) {
@@ -1130,41 +1074,6 @@ export function App() {
     return revision.slice(0, 8);
   }
 
-  /** 使用颜色与本地化文字共同表达 File Change 状态。 */
-  function renderChangeStatus(status: ChangeStatus) {
-    const colors: Record<ChangeStatus, string> = {
-      added: "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400",
-      deleted: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400",
-      modified: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-      renamed: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400",
-    };
-    return <Badge variant="outline" className={colors[status]}>{t(`review:${status}`)}</Badge>;
-  }
-
-  function renderDirectory(directory: DirectoryNode) {
-    const reviewNavigationBusy = Boolean(reviewOpeningKey) || refreshingReview || grantingTrust;
-    return <>
-      {directory.directories.map((child) => <li key={child.name} role="treeitem" aria-label={child.name} aria-expanded="true">
-        <span>{child.name}</span>
-        <ul role="group">{renderDirectory(child)}</ul>
-      </li>)}
-      {directory.files.map((change) => <li key={change.path} role="none">
-        <Button
-          variant="ghost"
-          type="button"
-          role="treeitem"
-          aria-current={(pendingFilePath ?? fileChange?.path) === change.path ? "true" : undefined}
-          aria-busy={pendingFilePath === change.path || undefined}
-          disabled={reviewNavigationBusy}
-          onClick={() => openFileChange(change.path)}
-        >
-          <span>{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span>
-          {renderChangeStatus(change.status)}
-        </Button>
-      </li>)}
-    </>;
-  }
-
   return <AppShell
     enabled={catalogRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
     fallbackClassName="narrant-app"
@@ -1174,6 +1083,7 @@ export function App() {
     pendingRepositoryId={pendingNavigation?.type === "repository" ? pendingNavigation.id : undefined}
     pendingReviewId={reviewOpeningKey?.startsWith("review:") ? reviewOpeningKey.slice("review:".length) : undefined}
     reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
+    workspace={Boolean(snapshot)}
     reviews={recentReviews}
     repositories={repositoryEntries}
     error={!selectedRepository ? error : undefined}
@@ -1300,20 +1210,6 @@ export function App() {
     {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
     {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
-    {snapshot && repositoryReviews.length > 1 && <nav aria-label="切换审核">
-      {repositoryReviews
-        .filter((review) => review.reviewId !== snapshot.reviewId)
-        .map((review) => <Button
-          key={review.reviewId}
-          variant="ghost"
-          disabled={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
-          aria-busy={reviewOpeningKey === `review:${review.reviewId}` || undefined}
-          onClick={() => void navigateToReview(review)}
-        >
-          {reviewOpeningKey === `review:${review.reviewId}` && <Spinner aria-hidden />}
-          <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
-        </Button>)}
-    </nav>}
     {!selectedRepository && <><p>本地分支比较</p>
       <section aria-label="选择本地仓库" className="flex flex-wrap items-end gap-3">
         <label>本地仓库路径<Input aria-label="本地仓库路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
@@ -1328,93 +1224,39 @@ export function App() {
       </section>
     </>}
     {error && <ErrorMessage message={error} />}
-    {snapshot && <details className="w-fit">
-      <summary className={buttonVariants({ variant: "outline" })}>{t("review:moreActions")}</summary>
-      <Button variant="ghost" onClick={() => closeReviewView()}>{t("review:close")}</Button>
-    </details>}
-    {snapshot?.pullRequest && <section aria-label={t("review:pullRequestUpdate")}>
-      <div>
-        {reviewUpdate && (reviewUpdate.updateAvailable
-          ? <div role="status">
-            <p>{t("review:currentAvailable", { current: shortRevision(reviewUpdate.currentHeadRevision), available: shortRevision(reviewUpdate.availableHeadRevision) })}</p>
-            <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>
-              {refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}
-            </Button>
-          </div>
-          : <p role="status">{t("review:latest")}</p>)}
-      </div>
-    </section>}
-    {snapshot && !snapshot.pullRequest && <section aria-label={t("review:branchUpdate")}>
-      <BranchRelation baseRef={snapshot.baseRef} headRef={snapshot.headRef} />
-      {branchUpdate && !branchUpdate.changed && <p role="status">{t("review:latest")}</p>}
-      {branchUpdate?.changed && <div role="status">
-        <p>{t("review:currentAvailable", { current: shortRevision(branchUpdate.currentHeadRevision), available: shortRevision(branchUpdate.latestHeadRevision) })}</p>
-        <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>
-          {refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}
-        </Button>
-      </div>}
-    </section>}
-    {snapshot && reviewUpdateError && <p role="alert" className="text-sm text-destructive">{reviewUpdateError}</p>}
-    {snapshot && <section aria-label={t("review:reader")} className="mt-3 overflow-hidden rounded-lg border">
-      <header className="flex min-h-11 items-center justify-between gap-3 border-b px-3 py-2">
-        <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold">
-            {snapshot.pullRequest ? `#${snapshot.pullRequest.number} ${snapshot.pullRequest.title}` : <BranchRelation baseRef={snapshot.baseRef} headRef={snapshot.headRef} />}
-          </h2>
-          <p className="truncate font-mono text-xs text-muted-foreground">
-            {(snapshot.baseRevision ?? snapshot.comparisonBase).slice(0, 8)} → {snapshot.headRevision.slice(0, 8)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <ReviewOverview review={snapshot} onOpenExternal={(url) => void openUrl(url)} />
-          <div aria-label={t("review:diffLayout")} className="flex gap-1">
-            <Button size="xs" variant={diffMode === "inline" ? "secondary" : "ghost"} aria-pressed={diffMode === "inline"} onClick={() => selectDiffMode("inline")}>{t("review:inline")}</Button>
-            <Button size="xs" variant={diffMode === "side-by-side" ? "secondary" : "ghost"} aria-pressed={diffMode === "side-by-side"} onClick={() => selectDiffMode("side-by-side")}>{t("review:sideBySide")}</Button>
-          </div>
-        </div>
-      </header>
-      {snapshot.fileChanges.length === 0
-        ? <div className="grid min-h-72 place-content-center px-6 text-center">
-          <h3 className="font-medium">{t("review:emptyTitle")}</h3>
-          <p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p>
-        </div>
-        : <ResizablePanelGroup
-          orientation="horizontal"
-          className="min-h-[32rem]"
-          defaultLayout={{ "review-file-tree": initialTreeWidth, "review-diff": 100 - initialTreeWidth }}
-          onLayoutChanged={(layout, meta) => {
-            if (meta.isUserInteraction) {
-              localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(layout["review-file-tree"]));
-            }
-          }}
-        >
-          <ResizablePanel id="review-file-tree" minSize="15%" maxSize="45%" defaultSize={`${initialTreeWidth}%`}>
-            <nav aria-label={t("review:fileTree")} className="h-full overflow-auto border-r bg-muted/20">
-              <div className="sticky top-0 border-b bg-background/95 px-3 py-2 backdrop-blur">
-                <h3 className="text-xs font-semibold">{t("review:fileChanges")}</h3>
-                <p className="text-xs text-muted-foreground">{t("review:changeCount", { count: snapshot.fileChanges.length })}</p>
-              </div>
-              <ul role="tree" aria-label={t("review:fileTree")} className="p-1">
-                {renderDirectory(buildDirectoryTree(snapshot.fileChanges))}
-              </ul>
-            </nav>
-          </ResizablePanel>
-          <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
-          <ResizablePanel id="review-diff" minSize="45%">
-            {fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
-            {fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{fileChangeError}</p>{firstFileChangePath && <Button variant="outline" onClick={() => void openFileChange(firstFileChangePath)}>{t("retry")}</Button>}</div>}
-            {fileChange && !fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
-              <header className="border-b px-3 py-2">
-                <h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium">{fileChange.path} {renderChangeStatus(fileChange.status)}</h3>
-              </header>
-              {fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: fileChange.beforeSize }), after: fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: fileChange.afterSize }) })}</p></div>}
-              {fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{fileChange.before ?? t("review:none")} → {fileChange.after ?? t("review:none")}</p></div>}
-              {fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{fileChange.before ?? t("review:none")} → {fileChange.after ?? t("review:none")}</p></div>}
-              {fileChange.contentKind === "text" && <DiffEditor theme={editorTheme} height="calc(100% - 2.5rem)" language="plaintext" original={fileChange.before ?? ""} modified={fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: !narrowReview && diffMode === "side-by-side", ignoreTrimWhitespace: false }} />}
-            </section>}
-          </ResizablePanel>
-        </ResizablePanelGroup>}
-    </section>}
+    {snapshot && <div className="h-[calc(100vh-4.5rem)]">
+      <ReviewReader
+        key={`${snapshot.reviewId}:${snapshot.snapshotId}`}
+        snapshot={snapshot}
+        fileChange={fileChange}
+        pendingFilePath={pendingFilePath}
+        fileChangeLoading={fileChangeLoading}
+        fileChangeError={fileChangeError}
+        firstFileChangePath={firstFileChangePath}
+        navigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
+        diffMode={diffMode}
+        narrow={narrowReview}
+        editorTheme={editorTheme}
+        initialTreeWidth={initialTreeWidth}
+        updateAction={<>
+          {snapshot.pullRequest && reviewUpdate?.updateAvailable && <div role="status" className="flex items-center gap-2 text-xs">
+            <span className="text-amber-700 dark:text-amber-400">{t("review:currentAvailable", { current: shortRevision(reviewUpdate.currentHeadRevision), available: shortRevision(reviewUpdate.availableHeadRevision) })}</span>
+            <Button size="xs" disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
+          </div>}
+          {!snapshot.pullRequest && branchUpdate?.changed && <div role="status" className="flex items-center gap-2 text-xs">
+            <span className="text-amber-700 dark:text-amber-400">{t("review:currentAvailable", { current: shortRevision(branchUpdate.currentHeadRevision), available: shortRevision(branchUpdate.latestHeadRevision) })}</span>
+            <Button size="xs" disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
+          </div>}
+        </>}
+        notice={reviewUpdateError ? <p role="alert" className="text-destructive">{reviewUpdateError}</p> : undefined}
+        onSelectFile={(path) => void openFileChange(path)}
+        onRetryFile={(path) => void openFileChange(path)}
+        onDiffModeChange={selectDiffMode}
+        onTreeWidthChange={(width) => localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(width))}
+        onOpenExternal={(url) => void openUrl(url)}
+        onClose={() => closeReviewView()}
+      />
+    </div>}
     </>}
   </AppShell>;
 }

@@ -5,7 +5,9 @@ import "@/index.css";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { RepositoryOverview } from "@/components/repository-overview";
+import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { i18n } from "@/lib/i18n";
 import type { ReviewSummary } from "@/lib/review-types";
 
@@ -111,6 +113,62 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
   />;
 }
 
+const readerSnapshot: ReviewReaderSnapshot = {
+  reviewId: "review-reader-preview",
+  snapshotId: "snapshot-reader-preview",
+  baseRef: "refs/heads/main",
+  baseRevision: "c530a07d6a0bd935a5aa7a62e34f19e2f3ea2bdd",
+  comparisonBase: "c530a07d6a0bd935a5aa7a62e34f19e2f3ea2bdd",
+  headRef: "refs/heads/feature/review-reader",
+  headRevision: "274aaa2f9b3b0d3e7363d09fa21dfe76782d25cf",
+  fileChanges: [
+    { path: "docs/review-reader.md", oldPath: null, status: "added" },
+    { path: "src/components/review-reader.tsx", oldPath: null, status: "modified" },
+    { path: "src/components/legacy-reader.tsx", oldPath: null, status: "deleted" },
+    { path: "src/lib/review-navigation.ts", oldPath: "src/lib/diff-navigation.ts", status: "renamed" },
+    { path: "tests/review-reader.test.tsx", oldPath: null, status: "modified" },
+  ],
+  pullRequest: {
+    owner: "narrant", repository: "desktop", number: 14, title: "Improve the Review Reader",
+    description: "Make file changes easier to scan and keep the Diff workspace focused.",
+    author: "reviewer", state: "open", draft: false,
+    url: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
+    headRef: "feature/review-reader", synchronizedAt: Date.now(),
+  },
+};
+
+/** 用代表性长短路径和变更内容预览完整 Review Reader。 */
+function ReviewReaderPreview({ empty = false, update = false }: { empty?: boolean; update?: boolean }) {
+  const snapshot = empty ? { ...readerSnapshot, fileChanges: [] } : readerSnapshot;
+  const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => [
+    change.path,
+    {
+      ...change, contentKind: "text", beforeSize: 48, afterSize: 78,
+      before: "export function review() {\n  return 'old reader';\n}\n",
+      after: "export function review() {\n  return 'focused review reader';\n}\n",
+    },
+  ]));
+  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
+  const [mode, setMode] = useState<DiffMode>("side-by-side");
+  return <div className="h-[calc(100vh-8.5rem)]">
+    <ReviewReader
+      snapshot={snapshot}
+      fileChange={selectedPath ? contents[selectedPath] : undefined}
+      diffMode={mode}
+      narrow={window.innerWidth < 1200}
+      editorTheme={document.documentElement.classList.contains("dark") ? "vs-dark" : "light"}
+      initialTreeWidth={26}
+      updateAction={update ? <div role="status" className="flex items-center gap-2 text-xs"><span className="text-amber-700 dark:text-amber-400">当前 274aaa2f · 可用 81bc230a</span><Button size="xs">刷新审核</Button></div> : undefined}
+      onSelectFile={setSelectedPath}
+      onRetryFile={setSelectedPath}
+      onDiffModeChange={setMode}
+      onTreeWidthChange={() => undefined}
+      onOpenExternal={() => undefined}
+      onClose={() => undefined}
+    />
+  </div>;
+}
+
 const previews: Record<string, PreviewDefinition> = {
   "branch-selector": {
     label: "分支选择器",
@@ -167,6 +225,14 @@ const previews: Record<string, PreviewDefinition> = {
         label: "正在打开 Review",
         render: () => <ReviewHistoryPreview initiallyOpening />,
       },
+    },
+  },
+  "review-reader": {
+    label: "Review 阅读器",
+    scenarios: {
+      default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
+      update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
+      empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
     },
   },
 };

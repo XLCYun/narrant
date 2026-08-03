@@ -52,7 +52,8 @@ _Avoid_: Diff file, patch item
 
 **Review Reader**:
 The application view that presents one open **Review Snapshot**, including its
-collection of **File Changes** and the selected **File Change** content.
+collection of **File Changes** and the freely selected **File Change** content. It
+does not assign reading progress or an approval state to File Changes.
 _Avoid_: File Changes page, Diff page
 
 **Review Snapshot**:
@@ -112,6 +113,8 @@ _Avoid_: Repository Entry, user worktree
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
 - A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
+- Selecting a **File Change** in the **Review Reader** is navigation only; it does not
+  mark that change as viewed, reviewed, or approved
 - A **Repository Entry** owns zero or more **Reviews**
 - Narrant has at most one current **GitHub Identity**
 - A **GitHub Identity** may be represented by cached public profile information while

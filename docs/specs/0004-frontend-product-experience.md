@@ -174,7 +174,10 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 本地分支列表在进入标签时自动读取。“重新读取分支”仅用于同步用户在 Narrant 外部造成的 Git 分支变化，不是开始审核的必经步骤；它作为选择器区域右上角的低层级刷新图标展示，通过 Tooltip 提供完整名称。刷新期间禁用操作并显示图标进度，失败时在选择器区域内反馈且保留已有选项。
 - Base Ref 与 Head Ref 相同时禁止开始 Review。此时提交区以普通警示层级就地显示“Head 与 Base 不能是同一分支”，主按钮保持禁用；不把单个合法选择器标记为错误，也不弹出 Toast。用户修改任一选择后立即恢复合入确认文案。相同 Branch Selection 显示“继续审核”。
 - Review 阅读器由紧凑顶栏、可调整宽度的文件树和 Diff 主区域组成。
-- 第一版文件树不提供搜索、状态筛选、已读或未读状态；显示目录、File Change 状态、总数和当前选择。
+- Review 阅读器占满主内容区剩余高度，页面本身不纵向滚动；顶栏固定，文件树与 Diff 独立滚动。Review 切换只由常驻主侧边栏承担，阅读器内容区不再重复展示 Review 切换入口。
+- 顶栏只保留当前 Review 身份、Base/Head 关系、可用更新、概览、Diff 布局和更多操作。正常状态不常驻显示 revision；完整 revision 位于概览 Sheet，检测到更新时才在顶栏显示当前与可用短 revision。
+- 第一版文件树不提供搜索、状态筛选、已读或未读状态；显示目录、File Change 状态、总数和当前选择。选择 File Change 只是自由导航，不产生 viewed、reviewed 或 approved 状态。
+- 文件树使用紧凑列表与 disclosure button：目录默认展开并可逐级折叠，切换 Review Snapshot 后恢复默认展开；不伪装成缺少方向键行为的 ARIA Tree。当前文件整行高亮，新增、删除、修改和重命名使用带语义色的 Hugeicons 图标，并通过可访问名称和 Tooltip 同时表达文字状态。
 - 打开或刷新 Review 后，按稳定路径顺序自动选择第一个 File Change；零变更显示明确空状态。
 - 所有进入或切换 Review 阅读器的入口在读取 Review Snapshot 期间立即显示 Loading 图标，并保留来源页面或旧 Review 内容；同一期间禁用其他 Review 导航入口，成功后再一次性切换。入口位于列表行时保留 Review 身份并在行尾显示 Loading 图标，位于按钮时用 Loading 图标替换动作图标且保持按钮尺寸稳定。
 - 跨仓库打开 Review 需要 Workspace Trust 时，原入口的 Loading 在信任 Dialog 出现后结束；“信任并打开”从确认开始到 Review Snapshot 就绪期间显示 Loading 图标、禁用取消和关闭，失败时恢复 Dialog 操作并保留原页面。
@@ -208,7 +211,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 需要的通用能力优先安装和使用 shadcn 的 Sidebar、Resizable、Tabs、Sheet、Dialog、Dropdown Menu、Tooltip、Skeleton、Badge 和 Sonner；只有默认组件无法满足领域交互时才组合或新增组件。
 - 视觉采用克制的桌面开发工具风格。品牌绿色仅用于主操作、选中和焦点；内容区域使用中性色、细边框和有限卡片。
 - 首页和首次空状态使用舒展密度，Repository Entry 概览使用中等密度，主侧边栏、文件树和 Review 顶栏使用紧凑密度。
-- 标题、正文、代码与 revision 统一使用 Oxanium 字体。
+- 标题、正文、分支、路径与 revision 统一使用 Oxanium；只有 Monaco Diff 中的代码内容使用 JetBrains Mono。
 - File Change 状态使用一致语义颜色：新增绿色、删除红色、修改橙色或黄色、重命名蓝色，并同时提供文字或图标，不能仅依赖颜色。
 - 最小可用窗口目标为 900×600。1200px 以上同时展示主侧边栏、文件树和双栏 Diff；900–1199px 默认收起主侧边栏并允许 Diff 临时单栏。
 - 第一版不增加产品级键盘快捷键，但所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。

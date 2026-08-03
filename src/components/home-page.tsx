@@ -66,6 +66,7 @@ type Props = {
   pendingRepositoryId?: number;
   pendingReviewId?: string;
   reviewNavigationBusy?: boolean;
+  workspace?: boolean;
 };
 
 const preferenceKey = "narrant.sidebar-preferences";
@@ -246,6 +247,7 @@ export function AppShell({
   pendingRepositoryId,
   pendingReviewId,
   reviewNavigationBusy = false,
+  workspace = false,
 }: Props) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState<SidebarPreferences>(readPreferences);
@@ -394,7 +396,7 @@ export function AppShell({
             <img className="size-12" src={narrantLogo} alt={t("brand")} />
           </picture>
           <span className="min-w-0">
-            <span className="block font-heading text-lg">{t("brand")}</span>
+            <span className="block font-brand text-lg">{t("brand")}</span>
             <span className="block truncate text-xs text-muted-foreground">{t("subtitle")}</span>
           </span>
         </button>
@@ -501,10 +503,13 @@ export function AppShell({
       {githubIdentityEntry && <SidebarFooter className="border-t p-3">{githubIdentityEntry}</SidebarFooter>}
       <div aria-label={t("resizeSidebar")} className="absolute right-0 top-12 h-[calc(100%-3rem)] w-1 cursor-col-resize" onMouseDown={resizeSidebar} />
     </Sidebar>
-    <main className="relative z-20 min-h-screen w-full bg-background px-8 pb-8 pt-14">
+    <main className={cn(
+      "relative z-20 w-full bg-background px-8 pt-14",
+      workspace ? "h-screen overflow-hidden pb-4" : "min-h-screen pb-8",
+    )}>
       {!showHome ? children : <>
       {!reviews.length && <header className="flex items-center gap-3 border-b pb-5">
-        <div><h1 className="font-heading text-xl">{t("brand")}</h1><p className="text-sm text-muted-foreground">{t("subtitle")}</p></div>
+        <div><h1 className="font-brand text-xl">{t("brand")}</h1><p className="text-sm text-muted-foreground">{t("subtitle")}</p></div>
       </header>}
       {error && <p role="alert" className="mx-auto mt-6 max-w-3xl rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
       {loading
@@ -530,7 +535,7 @@ export function AppShell({
               </li>)}
             </ul>
           </section>
-          : <section className="mx-auto flex max-w-xl flex-col items-start gap-5 py-24"><h2 className="font-heading text-3xl">{t("emptyTitle")}</h2><p className="text-muted-foreground">{t("emptyDescription")}</p><Button size="lg" onClick={() => void chooseFolder()}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button></section>}
+          : <section className="mx-auto flex max-w-xl flex-col items-start gap-5 py-24"><h2 className="font-brand text-3xl">{t("emptyTitle")}</h2><p className="text-muted-foreground">{t("emptyDescription")}</p><Button size="lg" onClick={() => void chooseFolder()}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button></section>}
       </>}
     </main>
   </SidebarProvider>;
