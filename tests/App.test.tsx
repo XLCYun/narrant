@@ -56,9 +56,9 @@ function mockSystemTheme(initialDark: boolean) {
   };
 }
 
-/** 从默认审核概览显式切换到 File Changes。 */
+/** 从默认审核概览显式切换到文件改动。 */
 async function openFileChanges() {
-  fireEvent.click(await screen.findByRole("tab", { name: "File Changes" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "文件改动" }));
 }
 
 describe("App", () => {
