@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { i18n } from "@/lib/i18n";
 import { ReviewReader } from "@/components/review-reader";
@@ -12,6 +12,7 @@ const snapshot = {
 };
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
+afterEach(() => cleanup());
 
 describe("ReviewReader", () => {
   it("默认展示概览，并通过标签切换到文件改动", () => {
@@ -22,5 +23,19 @@ describe("ReviewReader", () => {
     fireEvent.click(screen.getByRole("tab", { name: "File Changes" }));
     expect(screen.getByRole("tab", { name: "File Changes" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("navigation", { name: "文件树" })).toBeVisible();
+  });
+
+  it("只用一条审核工具栏承载视图标签和右侧操作", () => {
+    render(<ReviewReader snapshot={snapshot} diffMode="inline" narrow={false} editorTheme="vs" initialTreeWidth={25} updateAction={<button type="button">刷新审核</button>} onSelectFile={vi.fn()} onRetryFile={vi.fn()} onDiffModeChange={vi.fn()} onTreeWidthChange={vi.fn()} onOpenExternal={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.queryByRole("heading", { name: "#42 Review tabs" })).not.toBeInTheDocument();
+    const toolbar = screen.getByRole("toolbar", { name: "审核工具栏" });
+    expect(within(toolbar).getByRole("tab", { name: "审核概览" })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: "刷新审核" })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: "退出审核" })).toBeVisible();
+    expect(within(toolbar).queryByRole("button", { name: "切换为双栏" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(toolbar).getByRole("tab", { name: "File Changes" }));
+    expect(within(toolbar).getByRole("button", { name: "切换为双栏" })).toBeVisible();
   });
 });

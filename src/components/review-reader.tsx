@@ -6,20 +6,14 @@ import {
   FileEditIcon,
   FileRemoveIcon,
   FileSyncIcon,
-  GitMergeIcon,
-  GitPullRequestClosedIcon,
-  GitPullRequestDraftIcon,
-  GitPullRequestIcon,
   LayoutTwoColumnIcon,
   Logout02Icon,
   ViewAgendaIcon,
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
-import { BranchRelation } from "@/components/branch-relation";
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { ReviewOverview } from "@/components/review-overview";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -165,29 +159,6 @@ export function ReviewReader(props: ReviewReaderProps) {
     </Tooltip>;
   }
 
-  /** 使用统一 Badge 呈现 Pull Request 的协作状态。 */
-  function renderPullRequestStatus() {
-    const pullRequest = props.snapshot.pullRequest;
-    if (!pullRequest) return null;
-    const state: "draft" | PullRequestMetadata["state"] = pullRequest.draft ? "draft" : pullRequest.state;
-    const icons = {
-      draft: GitPullRequestDraftIcon,
-      open: GitPullRequestIcon,
-      closed: GitPullRequestClosedIcon,
-      merged: GitMergeIcon,
-    };
-    const colors = {
-      draft: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-      open: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-      closed: "bg-muted text-muted-foreground",
-      merged: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
-    };
-    return <Badge variant="secondary" className={cn("border-0", colors[state])}>
-      <Icon icon={icons[state]} data-icon="inline-start" aria-hidden />
-      {pullRequest.draft ? t("review:draft") : t(`review:state.${pullRequest.state}`)}
-    </Badge>;
-  }
-
   /** 递归渲染可独立折叠的紧凑目录。 */
   function renderDirectory(directory: DirectoryNode, parentPath = "") {
     return <>
@@ -222,18 +193,13 @@ export function ReviewReader(props: ReviewReaderProps) {
     </>;
   }
 
-  return <Tabs defaultValue="overview" onValueChange={(value) => setActiveView(value as "overview" | "file-changes")} aria-label={t("review:reader")} className="h-full min-h-0 overflow-hidden rounded-lg border bg-background">
-    <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b px-3 py-2">
-      <div className="min-w-0 flex-1">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 className="truncate text-sm font-semibold">{props.snapshot.pullRequest ? `#${props.snapshot.pullRequest.number} ${props.snapshot.pullRequest.title}` : t("review:localBranchReview")}</h2>
-            {renderPullRequestStatus()}
-          </div>
-          <BranchRelation baseRef={props.snapshot.baseRef} headRef={props.snapshot.headRef} className="mt-1.5 flex-nowrap [&_[data-slot=badge]]:truncate [&_[data-slot=badge]]:whitespace-nowrap" />
-        </div>
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+  return <Tabs defaultValue="overview" onValueChange={(value) => setActiveView(value as "overview" | "file-changes")} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
+    <div role="toolbar" aria-label={t("review:toolbar")} className="flex min-h-12 shrink-0 items-center gap-2 border-b px-3">
+      <TabsList variant="line" aria-label={t("review:reviewViews")} className="h-full shrink-0 p-0">
+        <TabsTrigger value="overview" className="px-3">{t("review:overview")}</TabsTrigger>
+        <TabsTrigger value="file-changes" className="px-3">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
+      </TabsList>
+      <div className="ml-auto flex min-w-0 shrink-0 items-center justify-end gap-2">
         {props.updateAction}
         {activeView === "file-changes" && <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
@@ -241,21 +207,17 @@ export function ReviewReader(props: ReviewReaderProps) {
               aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow}
               onClick={() => props.onDiffModeChange(effectiveDiffMode === "side-by-side" ? "inline" : "side-by-side")}>
               <Icon icon={effectiveDiffMode === "side-by-side" ? LayoutTwoColumnIcon : ViewAgendaIcon} data-icon="inline-start" aria-hidden />
-              {effectiveDiffMode === "side-by-side" ? t("review:sideBySide") : t("review:inline")}
+              <span className="hidden sm:inline">{effectiveDiffMode === "side-by-side" ? t("review:sideBySide") : t("review:inline")}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>{props.narrow ? t("review:narrowInlineOnly") : effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}</TooltipContent>
         </Tooltip>}
-        <Button variant="outline" onClick={props.onClose}>
+        <Button variant="outline" aria-label={t("review:exit")} onClick={props.onClose}>
           <Icon icon={Logout02Icon} data-icon="inline-start" aria-hidden />
-          {t("review:exit")}
+          <span className="hidden sm:inline">{t("review:exit")}</span>
         </Button>
       </div>
-    </header>
-    <TabsList variant="line" aria-label={t("review:reviewViews")} className="shrink-0 border-b px-3">
-      <TabsTrigger value="overview">{t("review:overview")}</TabsTrigger>
-      <TabsTrigger value="file-changes">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
-    </TabsList>
+    </div>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}
     <TabsContent value="overview" className="min-h-0 overflow-y-auto"><ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} /></TabsContent>
     <TabsContent value="file-changes" className="min-h-0 overflow-hidden">

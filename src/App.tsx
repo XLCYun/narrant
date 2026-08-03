@@ -1236,12 +1236,12 @@ export function App() {
         initialTreeWidth={initialTreeWidth}
         updateAction={<>
           {snapshot.pullRequest && reviewUpdate?.updateAvailable && <div role="status" className="flex items-center gap-2 text-sm">
-            <span className="text-amber-700 dark:text-amber-300">{t("review:pullRequestBranchesUpdated")}</span>
-            <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
+            <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t("review:pullRequestBranchesUpdated")}</span>
+            <Button aria-label={refreshingReview ? t("review:refreshing") : t("review:refresh")} disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>{refreshingReview && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshingReview ? t("review:refreshing") : t("review:refresh")}</span></Button>
           </div>}
           {!snapshot.pullRequest && branchUpdate?.changed && <div role="status" className="flex items-center gap-2 text-sm">
-            <span className="text-amber-700 dark:text-amber-300">{t("review:selectedBranchesUpdated")}</span>
-            <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
+            <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t("review:selectedBranchesUpdated")}</span>
+            <Button aria-label={refreshingReview ? t("review:refreshing") : t("review:refresh")} disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>{refreshingReview && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshingReview ? t("review:refreshing") : t("review:refresh")}</span></Button>
           </div>}
         </>}
         notice={reviewUpdateError ? <p role="alert" className="text-destructive">{reviewUpdateError}</p> : undefined}

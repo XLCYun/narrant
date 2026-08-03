@@ -56,6 +56,11 @@ function mockSystemTheme(initialDark: boolean) {
   };
 }
 
+/** 从默认审核概览显式切换到 File Changes。 */
+async function openFileChanges() {
+  fireEvent.click(await screen.findByRole("tab", { name: "File Changes" }));
+}
+
 describe("App", () => {
   it("打开 Review Snapshot 时在入口显示 Loading 图标并保留来源页面", async () => {
     mockSystemTheme(false);
@@ -97,6 +102,7 @@ describe("App", () => {
       baseRevision: "base-sha", comparisonBase: "base-sha", headRef: "head",
       headRevision: "head-sha", fileChanges: [],
     });
+    await openFileChanges();
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     animationFrame.mockRestore();
   });
@@ -124,6 +130,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
+    await openFileChanges();
     const loading = await screen.findByRole("status", { name: "正在读取 File Change" });
     expect(loading).toHaveAttribute("aria-busy", "true");
     expect(loading.querySelector(".animate-spin")).toBeInTheDocument();
@@ -216,6 +223,7 @@ describe("App", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", {
       reviewId: "review-31",
     }));
+    await openFileChanges();
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
   });
 
@@ -254,6 +262,7 @@ describe("App", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 topic 合入 Base 分支 main/ }));
+    await openFileChanges();
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
@@ -348,13 +357,9 @@ describe("App", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
       repositoryEntryId: 25, repository, pullRequest,
     }));
-    expect(await screen.findByRole("heading", { name: "#42 Local PR Review" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "审核阅读器" })).toHaveTextContent("草稿");
-    expect(screen.queryByRole("dialog", { name: "审核概览" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "打开审核概览" }));
-    expect(await screen.findByRole("dialog", { name: "审核概览" })).toHaveTextContent(
-      /#42.*octocat.*草稿 · 开放/s,
-    );
+    expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
+    expect(screen.getByLabelText("审核阅读器")).toHaveTextContent("草稿");
+    expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/草稿.*#42.*octocat/s);
   });
 
   it("检查更新不切换 Snapshot，只有显式刷新才替换 Review", async () => {
@@ -402,11 +407,10 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Refreshable/ }));
     expect(await screen.findByText("检测到 PR 分支有更新")).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "审核阅读器" })).not.toHaveTextContent("base-1 → head-1");
+    expect(screen.getByLabelText("审核阅读器")).not.toHaveTextContent("base-1 → head-1");
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", expect.anything()));
-    fireEvent.click(screen.getByRole("button", { name: "打开审核概览" }));
-    expect(await screen.findByRole("dialog", { name: "审核概览" })).toHaveTextContent("head-2");
+    expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent("head-2");
   });
 
   it("切换 Review 失败时保留当前 Snapshot 与 File Change", async () => {
@@ -445,6 +449,7 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 current 合入 Base 分支 main/ }));
+    await openFileChanges();
     expect(await screen.findByRole("button", { name: /kept.txt/ })).toBeInTheDocument();
 
     const targetReview = await waitFor(() => {
@@ -617,8 +622,7 @@ describe("App", () => {
       reviewId: "review-42",
       confirmation: update,
     });
-    fireEvent.click(screen.getByRole("button", { name: "打开审核概览" }));
-    expect(await screen.findByRole("dialog", { name: "审核概览" })).toHaveTextContent(/base-2.*head-2/s);
+    expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/head-2.*base-2/s);
   });
 
   it("Base 与 Head 相同时禁用开始审核并显示可翻译说明", async () => {
@@ -724,6 +728,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("origin/topic"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
+    await openFileChanges();
     expect(await screen.findByRole("navigation", { name: "文件树" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: /main.rs.*修改/ })).toBeInTheDocument();
@@ -768,12 +773,10 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("topic"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
-    const reader = await screen.findByRole("region", { name: "审核阅读器" });
+    const reader = await screen.findByLabelText("审核阅读器");
     expect(screen.queryByRole("navigation", { name: "切换审核" })).not.toBeInTheDocument();
-    expect(reader).not.toHaveTextContent("base-rev");
-    expect(reader).not.toHaveTextContent("head-rev");
-    fireEvent.click(screen.getByRole("button", { name: "打开审核概览" }));
-    expect(await screen.findByRole("dialog", { name: "审核概览" })).toHaveTextContent("base-revision-full");
+    expect(reader).toHaveTextContent("base-re");
+    expect(reader).toHaveTextContent("head-re");
   });
 
   it("打开 Review 后按稳定路径顺序自动选择首个 File Change 并高亮当前位置", async () => {
@@ -818,6 +821,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
+    await openFileChanges();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("read_review_file_change", {
       reviewId: "review-auto",
       snapshotId: "snapshot-auto",
@@ -829,7 +833,7 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: /a-first.txt/ })).toBeInTheDocument();
 
     await i18n.changeLanguage("en");
-    expect(screen.getByRole("region", { name: "Review reader" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Review reader")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Switch to inline" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "File tree" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /a-first.txt.*Added/ })).toBeInTheDocument();
@@ -879,6 +883,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
+    await openFileChanges();
     expect(await screen.findByText(/二进制文件/)).toBeInTheDocument();
     expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /library.*修改/ }));
@@ -939,6 +944,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     await waitFor(() => expect(screen.getByLabelText("Head 分支")).toHaveTextContent("topic"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
+    await openFileChanges();
     expect(await screen.findByRole("button", { name: /old.txt/ })).toBeInTheDocument();
 
     expect(await screen.findByText("检测到所选分支有更新")).toBeInTheDocument();
@@ -985,6 +991,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
+    await openFileChanges();
     expect(await screen.findByTestId("diff-editor")).toHaveAttribute("data-theme", "light");
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-font-family", "'JetBrains Mono Variable', monospace");
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "side-by-side");

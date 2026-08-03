@@ -28,6 +28,31 @@ body { margin: 0; background: Canvas; color: CanvasText; }
   html {
     @apply font-sans; } }
 
+@layer components {
+  .review-markdown {
+    @apply text-sm leading-7 text-foreground;
+  }
+  .review-markdown > :first-child { @apply mt-0; }
+  .review-markdown > :last-child { @apply mb-0; }
+  .review-markdown h1 { @apply mt-8 mb-4 border-b pb-2 text-2xl font-semibold tracking-tight; }
+  .review-markdown h2 { @apply mt-7 mb-3 border-b pb-2 text-xl font-semibold tracking-tight; }
+  .review-markdown h3 { @apply mt-6 mb-3 text-lg font-semibold; }
+  .review-markdown h4 { @apply mt-5 mb-2 text-base font-semibold; }
+  .review-markdown h5, .review-markdown h6 { @apply mt-4 mb-2 text-sm font-semibold; }
+  .review-markdown p { @apply my-4; }
+  .review-markdown ul { @apply my-4 list-disc space-y-1 pl-6; }
+  .review-markdown ol { @apply my-4 list-decimal space-y-1 pl-6; }
+  .review-markdown blockquote { @apply my-4 border-l-4 pl-4 text-muted-foreground; }
+  .review-markdown a { @apply font-medium text-primary underline underline-offset-4; }
+  .review-markdown code { @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]; }
+  .review-markdown pre { @apply my-4 max-w-full overflow-x-auto rounded-lg border bg-muted p-4; }
+  .review-markdown pre code { @apply bg-transparent p-0; }
+  .review-markdown table { @apply my-4 block max-w-full overflow-x-auto border-collapse; }
+  .review-markdown th, .review-markdown td { @apply border px-3 py-2 text-left; }
+  .review-markdown th { @apply bg-muted font-semibold; }
+  .review-markdown hr { @apply my-6 border-border; }
+}
+
 :root {
   color-scheme: light;
 }
