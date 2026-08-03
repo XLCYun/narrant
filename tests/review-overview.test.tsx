@@ -29,6 +29,7 @@ describe("ReviewOverview", () => {
     render(<ReviewOverview review={review} onOpenExternal={onOpenExternal} />);
 
     expect(screen.getByRole("heading", { name: "Safe review overview" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Revisions" })).not.toBeInTheDocument();
     expect(screen.getByText("1111111")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Context" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Context", level: 1 })).toBeVisible();
