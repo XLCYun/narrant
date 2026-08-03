@@ -18,7 +18,8 @@ import { ReviewOverview } from "@/components/review-overview";
 import { BranchRelation } from "@/components/branch-relation";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry, type GitHubIdentity } from "@/components/github-identity-entry";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { FileChangeLoading } from "@/components/file-change-loading";
 import { Toaster } from "@/components/ui/sonner";
 import { Icon } from "@/components/ui/icon";
 import type { DiscoveredPullRequest, PullRequestGroup, PullRequestMetadata, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
@@ -178,6 +179,8 @@ export function App() {
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation>();
   const [pendingRepository, setPendingRepository] = useState<RepositoryEntry>();
   const [pendingReview, setPendingReview] = useState<ReviewSummary>();
+  const [reviewOpeningKey, setReviewOpeningKey] = useState<string>();
+  const [grantingTrust, setGrantingTrust] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
@@ -222,6 +225,32 @@ export function App() {
   const activeGitOperationId = useRef<string>();
   const nextGitOperationId = useRef(0);
   const openFileChangeRef = useRef<(path: string) => Promise<void>>();
+  const fileChangeRequestId = useRef(0);
+  const [pendingFilePath, setPendingFilePath] = useState<string>();
+
+  /** 为 Pull Request 入口生成与 Repository Overview 行一致的稳定 pending identity。 */
+  function pullRequestReviewKey(owner: string, repository: string, number: number) {
+    return `${owner.toLowerCase()}/${repository.toLowerCase()}#${number}`;
+  }
+
+  /** 等待 busy 状态完成一次实际绘制，再启动可能阻塞界面线程的后端操作。 */
+  function waitForReviewOpeningPaint() {
+    return new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
+  }
+
+  /** 串行化 Review Reader 导航，并只清理当前操作拥有的 busy 状态。 */
+  async function withReviewOpening<T>(key: string, action: () => Promise<T>): Promise<T | undefined> {
+    if (reviewOpeningKey || refreshingReview || grantingTrust) return undefined;
+    setReviewOpeningKey(key);
+    try {
+      await waitForReviewOpeningPaint();
+      return await action();
+    } finally {
+      setReviewOpeningKey((current) => current === key ? undefined : current);
+    }
+  }
 
   /** 把后端技术错误归类为稳定、可翻译的仓库打开摘要，并保留原始详情。 */
   function repositoryOpenError(reason: unknown) {
@@ -257,6 +286,9 @@ export function App() {
   }
 
   function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
+    fileChangeRequestId.current += 1;
+    setFileChangeLoading(false);
+    setPendingFilePath(undefined);
     const previousReview = activeReview.current;
     const nextReview = nextSnapshot && { reviewId: nextSnapshot.reviewId };
     activeReview.current = nextReview;
@@ -447,8 +479,13 @@ export function App() {
 
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
   async function openSavedReview(review: SavedReviewSummary) {
-    setError("");
-    try {
+    const pullRequest = review.pullRequest;
+    const key = pullRequest
+      ? pullRequestReviewKey(pullRequest.owner, pullRequest.repository, pullRequest.number)
+      : `review:${review.reviewId}`;
+    await withReviewOpening(key, async () => {
+      setError("");
+      try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_saved_review", {
         reviewId: review.reviewId,
       });
@@ -474,9 +511,10 @@ export function App() {
       });
       setReviewUpdate(undefined);
       setFileChange(undefined);
-    } catch (reason) {
-      setError(String(reason));
-    }
+      } catch (reason) {
+        setError(String(reason));
+      }
+    });
   }
 
   /** 在 Repository Entry 已进入后打开 current Snapshot，并更新最近审核排序。 */
@@ -520,12 +558,14 @@ export function App() {
   /** 仅允许一个侧边栏 Review 导航进行，失败时保留当前主视图。 */
   async function navigateToReview(review: ReviewSummary) {
     if (pendingNavigation || snapshot?.reviewId === review.reviewId) return;
-    setPendingNavigation({ type: "review", id: review.reviewId });
-    try {
-      await reopenReview(review);
-    } finally {
-      setPendingNavigation(undefined);
-    }
+    await withReviewOpening(`review:${review.reviewId}`, async () => {
+      setPendingNavigation({ type: "review", id: review.reviewId });
+      try {
+        await reopenReview(review);
+      } finally {
+        setPendingNavigation(undefined);
+      }
+    });
   }
 
   /** 从持久化列表打开 current Snapshot，并在跨仓库进入时恢复 Repository Entry 上下文。 */
@@ -575,8 +615,9 @@ export function App() {
 
   /** 在风险 Dialog 明确确认后持久化 Workspace Trust，并进入待打开仓库。 */
   async function grantWorkspaceTrust() {
-    if (!pendingRepository) return;
+    if (!pendingRepository || grantingTrust) return;
     setError("");
+    setGrantingTrust(true);
     try {
       await invoke("grant_repository_workspace_trust", {
         repositoryEntryId: pendingRepository.id,
@@ -589,6 +630,8 @@ export function App() {
       if (reviewToResume) await reopenResolvedReview(reviewToResume);
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      setGrantingTrust(false);
     }
   }
 
@@ -598,8 +641,10 @@ export function App() {
     pullRequest: DiscoveredPullRequest,
   ) {
     if (!selectedRepository) return;
-    setError("");
-    try {
+    const key = pullRequestReviewKey(repository.owner, repository.name, pullRequest.number);
+    await withReviewOpening(key, async () => {
+      setError("");
+      try {
       const nextSnapshot = await invoke<ReviewSnapshot>("open_pull_request_review", {
         repositoryEntryId: selectedRepository.id,
         repository,
@@ -610,9 +655,10 @@ export function App() {
       replaceSnapshot(nextSnapshot);
       setFileChange(undefined);
       await loadSavedReviews(selectedRepository.id);
-    } catch (reason) {
-      setError(String(reason));
-    }
+      } catch (reason) {
+        setError(String(reason));
+      }
+    });
   }
 
   /** 重新查询 GitHub metadata 并检查候选 revisions，不改变当前 Snapshot。 */
@@ -926,8 +972,10 @@ export function App() {
   }
 
   async function openComparison() {
-    setError("");
-    try {
+    const key = `branch:${baseRef}:${headRef}`;
+    await withReviewOpening(key, async () => {
+      setError("");
+      try {
       const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("compare_local_refs", {
         repositoryEntryId: selectedRepository?.id,
         baseRef,
@@ -948,14 +996,17 @@ export function App() {
       }
       if (selectedRepository) await loadSavedReviews(selectedRepository.id);
     }
-    catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
+      catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
+    });
   }
 
   /** 根据已确认的 moving refs 创建新 Snapshot，再进入同一个 durable Review。 */
   async function updateAndOpenBranchReview() {
     if (!matchingBranchReview || branchSelectionCheck.status !== "update") return;
-    setError("");
-    try {
+    const key = `branch:${baseRef}:${headRef}`;
+    await withReviewOpening(key, async () => {
+      setError("");
+      try {
       await invoke<ReviewSnapshot>("reopen_review", { reviewId: matchingBranchReview.reviewId });
       const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
         reviewId: matchingBranchReview.reviewId,
@@ -973,29 +1024,38 @@ export function App() {
       } else {
         presentReviewSnapshot(nextSnapshot);
       }
-    } catch (reason) {
+      } catch (reason) {
       void Promise.resolve(invoke("close_review", { reviewId: matchingBranchReview.reviewId })).catch(() => undefined);
       replaceSnapshot(undefined);
       setFileChange(undefined);
       setError(String(reason));
-    }
+      }
+    });
   }
 
   async function openFileChange(path: string) {
     if (!snapshot) return;
+    const requestId = ++fileChangeRequestId.current;
     setFileChangeError("");
     setFileChangeLoading(true);
+    setPendingFilePath(path);
     try {
-      setFileChange(await invokeLocalGit<FileChangeContent>("read_review_file_change", {
+      const loaded = await invokeLocalGit<FileChangeContent>("read_review_file_change", {
         reviewId: snapshot.reviewId,
         snapshotId: snapshot.snapshotId,
         path,
-      }));
+      });
+      if (fileChangeRequestId.current === requestId) setFileChange(loaded);
     } catch (reason) {
-      setFileChange(undefined);
-      setFileChangeError(String(reason));
+      if (fileChangeRequestId.current === requestId) {
+        setFileChange(undefined);
+        setFileChangeError(String(reason));
+      }
     } finally {
-      setFileChangeLoading(false);
+      if (fileChangeRequestId.current === requestId) {
+        setFileChangeLoading(false);
+        setPendingFilePath(undefined);
+      }
     }
   }
   openFileChangeRef.current = openFileChange;
@@ -1082,6 +1142,7 @@ export function App() {
   }
 
   function renderDirectory(directory: DirectoryNode) {
+    const reviewNavigationBusy = Boolean(reviewOpeningKey) || refreshingReview || grantingTrust;
     return <>
       {directory.directories.map((child) => <li key={child.name} role="treeitem" aria-label={child.name} aria-expanded="true">
         <span>{child.name}</span>
@@ -1092,7 +1153,9 @@ export function App() {
           variant="ghost"
           type="button"
           role="treeitem"
-          aria-current={fileChange?.path === change.path ? "true" : undefined}
+          aria-current={(pendingFilePath ?? fileChange?.path) === change.path ? "true" : undefined}
+          aria-busy={pendingFilePath === change.path || undefined}
+          disabled={reviewNavigationBusy}
           onClick={() => openFileChange(change.path)}
         >
           <span>{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span>
@@ -1109,7 +1172,8 @@ export function App() {
     activeRepositoryId={selectedRepository?.id}
     activeReviewId={snapshot?.reviewId}
     pendingRepositoryId={pendingNavigation?.type === "repository" ? pendingNavigation.id : undefined}
-    pendingReviewId={pendingNavigation?.type === "review" ? pendingNavigation.id : undefined}
+    pendingReviewId={reviewOpeningKey?.startsWith("review:") ? reviewOpeningKey.slice("review:".length) : undefined}
+    reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
     reviews={recentReviews}
     repositories={repositoryEntries}
     error={!selectedRepository ? error : undefined}
@@ -1151,7 +1215,8 @@ export function App() {
         {recentReviews.length === 0
           ? <p>尚无最近 Review</p>
           : <ul>{recentReviews.map((review) => <li key={review.reviewId}>
-            <Button variant="outline" onClick={() => void reopenReview(review)}>
+            <Button variant="outline" disabled={Boolean(reviewOpeningKey)} aria-busy={reviewOpeningKey === `review:${review.reviewId}` || undefined} onClick={() => void navigateToReview(review)}>
+              {reviewOpeningKey === `review:${review.reviewId}` && <Spinner aria-hidden />}
               <span className="mr-3">{review.repositoryPath}</span><BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
             </Button>
           </li>)}</ul>}
@@ -1179,6 +1244,8 @@ export function App() {
           baseRef={baseRef}
           action={branchSelectorAction}
           showCheckingMessage={showBranchCheckingMessage}
+          opening={reviewOpeningKey === `branch:${baseRef}:${headRef}`}
+          reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
           reloading={branchesReloading}
           reloadError={branchReloadError}
           onHeadChange={setHeadRef}
@@ -1187,10 +1254,12 @@ export function App() {
           onSubmit={() => void (branchSelectorAction === "update" ? updateAndOpenBranchReview() : openComparison())}
         />}
         initialTab={repositoryInitialTab}
+        openingReviewKey={reviewOpeningKey}
+        reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
       />
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
-      if (!open) {
+      if (!open && !grantingTrust) {
         setPendingRepository(undefined);
         setPendingReview(undefined);
       }
@@ -1204,6 +1273,7 @@ export function App() {
         <DialogFooter>
           <Button
             variant="outline"
+            disabled={grantingTrust}
             onClick={() => {
               setPendingRepository(undefined);
               setPendingReview(undefined);
@@ -1211,7 +1281,9 @@ export function App() {
           >
             {t("cancel")}
           </Button>
-          <Button onClick={() => void grantWorkspaceTrust()}>{t("trustAndOpen")}</Button>
+          <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void grantWorkspaceTrust()}>
+            {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1233,8 +1305,11 @@ export function App() {
         .map((review) => <Button
           key={review.reviewId}
           variant="ghost"
-          onClick={() => void reopenReview(review)}
+          disabled={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
+          aria-busy={reviewOpeningKey === `review:${review.reviewId}` || undefined}
+          onClick={() => void navigateToReview(review)}
         >
+          {reviewOpeningKey === `review:${review.reviewId}` && <Spinner aria-hidden />}
           <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
         </Button>)}
     </nav>}
@@ -1244,7 +1319,8 @@ export function App() {
         <Button variant="outline" onClick={() => void loadRefs()}>重新读取分支</Button>
         <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
         <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-        <Button disabled={!baseRef || !headRef || branchSelectionInvalid} onClick={openComparison}>
+        <Button disabled={!baseRef || !headRef || branchSelectionInvalid || Boolean(reviewOpeningKey)} aria-busy={reviewOpeningKey === `branch:${baseRef}:${headRef}` || undefined} onClick={openComparison}>
+          {reviewOpeningKey === `branch:${baseRef}:${headRef}` && <Spinner aria-hidden />}
           {matchingBranchReview ? t("continueReview") : t("startReview")}
         </Button>
         {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
@@ -1260,8 +1336,8 @@ export function App() {
         {reviewUpdate && (reviewUpdate.updateAvailable
           ? <div role="status">
             <p>{t("review:currentAvailable", { current: shortRevision(reviewUpdate.currentHeadRevision), available: shortRevision(reviewUpdate.availableHeadRevision) })}</p>
-            <Button disabled={refreshingReview} onClick={() => void refreshPullRequestReview()}>
-              {refreshingReview ? t("review:refreshing") : t("review:refresh")}
+            <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>
+              {refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}
             </Button>
           </div>
           : <p role="status">{t("review:latest")}</p>)}
@@ -1272,8 +1348,8 @@ export function App() {
       {branchUpdate && !branchUpdate.changed && <p role="status">{t("review:latest")}</p>}
       {branchUpdate?.changed && <div role="status">
         <p>{t("review:currentAvailable", { current: shortRevision(branchUpdate.currentHeadRevision), available: shortRevision(branchUpdate.latestHeadRevision) })}</p>
-        <Button disabled={refreshingReview} onClick={refreshBranchReview}>
-          {refreshingReview ? t("review:refreshing") : t("review:refresh")}
+        <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>
+          {refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}
         </Button>
       </div>}
     </section>}
@@ -1324,7 +1400,7 @@ export function App() {
           </ResizablePanel>
           <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
           <ResizablePanel id="review-diff" minSize="45%">
-            {fileChangeLoading && <div role="status" aria-label={t("review:loadingFileChange")} className="space-y-3 p-4"><Skeleton className="h-6 w-2/3" /><Skeleton className="h-[28rem] w-full" /></div>}
+            {fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
             {fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{fileChangeError}</p>{firstFileChangePath && <Button variant="outline" onClick={() => void openFileChange(firstFileChangePath)}>{t("retry")}</Button>}</div>}
             {fileChange && !fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? fileChange.after ?? "" : undefined}>
               <header className="border-b px-3 py-2">

@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:components": "vitest run",
     "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "td": "pnpm tauri dev"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

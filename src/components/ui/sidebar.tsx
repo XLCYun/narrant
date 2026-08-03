@@ -275,7 +275,7 @@ function SidebarTrigger({
       }}
       {...props}
     >
-      {state === "expanded" ? <Icon icon={PanelLeftCloseIcon} /> : <Icon icon={PanelLeftOpenIcon} />}
+      <Icon icon={state === "expanded" ? PanelLeftOpenIcon : PanelLeftCloseIcon} />
       <span className="sr-only">{t("sidebar")}</span>
     </Button>
   )

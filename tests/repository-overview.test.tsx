@@ -45,6 +45,8 @@ function renderOverview(options: {
   loading?: boolean;
   discoveryError?: string;
   connected?: boolean;
+  openingReviewKey?: string;
+  reviewNavigationBusy?: boolean;
 } = {}) {
   const onOpenSavedReview = vi.fn();
   const onOpenPullRequest = vi.fn();
@@ -59,6 +61,8 @@ function renderOverview(options: {
     discoveryLoading={options.loading ?? false}
     discoveryError={options.discoveryError}
     githubConnected={options.connected ?? true}
+    openingReviewKey={options.openingReviewKey}
+    reviewNavigationBusy={options.reviewNavigationBusy}
     onRetryDiscovery={onRetryDiscovery}
     onConnectGitHub={onConnectGitHub}
     onOpenSavedReview={onOpenSavedReview}
@@ -102,12 +106,24 @@ describe("RepositoryOverview", () => {
     expect(screen.queryByText("octo/narrant")).not.toBeInTheDocument();
   });
 
-  it("后台 discovery 时先保留缓存 Review，失败也能继续并访问本地分支", () => {
-    const { onOpenSavedReview } = renderOverview({
+  it("后台 discovery 时在 Pull Requests 胶囊显示加载图标且不显示文字提示", () => {
+    renderOverview({
       savedReviews: [saved],
       loading: true,
+    });
+
+    const pullRequestsTab = screen.getByRole("tab", { name: "Pull Requests" });
+    expect(pullRequestsTab.querySelector(".animate-spin")).toBeInTheDocument();
+    expect(screen.queryByText(/正在后台刷新 Pull Requests/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/在线元数据可能不是最新/)).not.toBeInTheDocument();
+  });
+
+  it("后台 discovery 失败后恢复原图标，保留缓存 Review 并提示元数据可能过期", () => {
+    const { onOpenSavedReview } = renderOverview({
+      savedReviews: [saved],
       discoveryError: "network unavailable",
     });
+    expect(screen.getByRole("tab", { name: "Pull Requests" }).querySelector(".animate-spin")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /继续审核/ }));
     expect(onOpenSavedReview).toHaveBeenCalledWith(saved);
     expect(screen.getByText(/在线元数据可能不是最新/)).toBeInTheDocument();
@@ -134,6 +150,20 @@ describe("RepositoryOverview", () => {
     expect(startButton).toHaveTextContent(/^开始审核$/);
     fireEvent.click(startButton);
     expect(fresh.onOpenPullRequest).toHaveBeenCalledWith(repository, pullRequest);
+  });
+
+  it("打开 Pull Request Review 时立即在目标按钮显示 Spinner", () => {
+    renderOverview({
+      groups: [{ repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null }],
+      openingReviewKey: "octo/narrant#40",
+      reviewNavigationBusy: true,
+    });
+
+    const openingButton = screen.getByRole("button", { name: /正在打开 Review #40/ });
+    expect(openingButton).toBeDisabled();
+    expect(openingButton).toHaveAttribute("aria-busy", "true");
+    expect(openingButton).toHaveClass("aria-busy:cursor-default", "aria-busy:pointer-events-auto");
+    expect(openingButton.querySelector(".animate-spin")).toBeInTheDocument();
   });
 
   it("多个 repository 局部失败时保留成功结果并提供一次恢复操作", () => {
@@ -168,6 +198,7 @@ describe("RepositoryOverview", () => {
 
   it("未连接 GitHub 时把连接作为空状态主操作", () => {
     const { onConnectGitHub } = renderOverview({ connected: false });
+    expect(screen.queryByText("连接后可以发现当前账号有权访问的私有仓库。")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
     expect(onConnectGitHub).toHaveBeenCalledOnce();
   });

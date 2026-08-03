@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import "@/index.css";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
+import { FileChangeLoading } from "@/components/file-change-loading";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
 
@@ -36,12 +37,14 @@ function BranchSelectorPreview({
   initialBase = "refs/remotes/origin/main",
   currentRef = "refs/heads/release",
   action = "start",
+  opening = false,
 }: {
   refs?: string[];
   initialHead?: string;
   initialBase?: string;
   currentRef?: string;
   action?: BranchSelectorAction;
+  opening?: boolean;
 }) {
   const [headRef, setHeadRef] = useState(initialHead);
   const [baseRef, setBaseRef] = useState(initialBase);
@@ -53,6 +56,8 @@ function BranchSelectorPreview({
     headRef={headRef}
     baseRef={baseRef}
     action={action}
+    opening={opening}
+    reviewNavigationBusy={opening}
     onHeadChange={setHeadRef}
     onBaseChange={setBaseRef}
     onReload={() => undefined}
@@ -86,6 +91,22 @@ const previews: Record<string, PreviewDefinition> = {
       update: {
         label: "检测到更新",
         render: () => <BranchSelectorPreview action="update" />,
+      },
+      opening: {
+        label: "正在打开 Review",
+        render: () => <BranchSelectorPreview action="continue" opening />,
+      },
+    },
+  },
+  "file-change-loading": {
+    label: "File Change 加载",
+    scenarios: {
+      default: {
+        label: "Diff 区域加载",
+        render: () => <section className="min-h-[32rem] overflow-hidden rounded-lg border bg-background">
+          <header className="border-b px-4 py-3 text-sm font-semibold">src/components/example.tsx</header>
+          <FileChangeLoading label="正在读取 File Change" />
+        </section>,
       },
     },
   },

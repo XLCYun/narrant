@@ -65,6 +65,7 @@ type Props = {
   activeReviewId?: string;
   pendingRepositoryId?: number;
   pendingReviewId?: string;
+  reviewNavigationBusy?: boolean;
 };
 
 const preferenceKey = "narrant.sidebar-preferences";
@@ -168,12 +169,14 @@ function ReviewMenuItem({
   onOpen,
   active = false,
   pending = false,
+  disabled = false,
 }: {
   review: ReviewSummary;
   showRepository: boolean;
   onOpen: () => void;
   active?: boolean;
   pending?: boolean;
+  disabled?: boolean;
 }) {
   const { i18n } = useTranslation();
   const locale = normalizeLocale(i18n.resolvedLanguage);
@@ -204,7 +207,7 @@ function ReviewMenuItem({
       onClick={onOpen}
       aria-current={active ? "page" : undefined}
       data-review-id={review.reviewId}
-      disabled={pending}
+      disabled={pending || disabled}
       aria-busy={pending || undefined}
     >
       <span className="flex min-w-0 flex-1 items-center gap-2 text-xs">
@@ -217,7 +220,7 @@ function ReviewMenuItem({
         {identity
           ? <span className="min-w-0 flex-1 truncate">{identity}</span>
           : <CompactBranchRelation baseRef={review.baseRef} headRef={review.headRef} />}
-        <span className="mr-3 shrink-0 text-[11px] text-muted-foreground">{time}</span>
+        {pending ? <Spinner className="mr-3 shrink-0" aria-hidden /> : <span className="mr-3 shrink-0 text-[11px] text-muted-foreground">{time}</span>}
       </span>
     </SidebarMenuButton>
   </SidebarMenuItem>;
@@ -242,6 +245,7 @@ export function AppShell({
   activeReviewId,
   pendingRepositoryId,
   pendingReviewId,
+  reviewNavigationBusy = false,
 }: Props) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState<SidebarPreferences>(readPreferences);
@@ -363,7 +367,7 @@ export function AppShell({
       />
       <SidebarTrigger
         aria-label={openSidebar ? t("collapse") : t("expand")}
-        className="absolute left-3 top-2 z-10 bg-transparent hover:bg-sidebar-accent supports-[padding:max(0px)]:left-[max(0.75rem,env(titlebar-area-x,0px)+5.5rem)]"
+        className="absolute left-3 top-1.5 z-10 bg-transparent hover:bg-sidebar-accent supports-[padding:max(0px)]:left-[max(0.75rem,env(titlebar-area-x,0px)+5.5rem)]"
       />
     </div>
     <div
@@ -412,7 +416,7 @@ export function AppShell({
           {preferences.recentGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
               {reviews.slice(0, preferences.recentExpanded ? 10 : 5).map((review) =>
-                <ReviewMenuItem key={review.reviewId} review={review} showRepository pending={pendingReviewId === review.reviewId} onOpen={() => openRecentReview(review)} />)}
+                <ReviewMenuItem key={review.reviewId} review={review} showRepository pending={pendingReviewId === review.reviewId} disabled={reviewNavigationBusy} onOpen={() => openRecentReview(review)} />)}
               {!reviews.length && <p className="px-2 text-sm text-muted-foreground">{t("noRecent")}</p>}
               {reviews.length > 5 && <SidebarMenuItem>
                 <SidebarMenuButton
@@ -446,7 +450,7 @@ export function AppShell({
                 const repositoryReviews = reviews.filter((review) => review.repositoryEntryId === repository.id);
                 const pending = pendingRepositoryId === repository.id;
                 return <SidebarMenuItem key={repository.id}>
-                  <div className="relative flex items-center">
+                  <div className="group/repository relative flex items-center">
                     <SidebarMenuButton
                       className={cn("min-w-0 flex-1 pr-9", !repository.available && "text-muted-foreground")}
                       tooltip={repository.canonicalPath}
@@ -461,7 +465,7 @@ export function AppShell({
                     <Button
                       variant="outline"
                       size="icon-xs"
-                      className="absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar shadow-xs hover:bg-sidebar-accent active:translate-y-0!"
+                      className="pointer-events-none absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar opacity-0 shadow-xs transition-opacity hover:bg-sidebar-accent active:translate-y-0! group-hover/repository:pointer-events-auto group-hover/repository:opacity-100 group-focus-within/repository:pointer-events-auto group-focus-within/repository:opacity-100"
                       aria-label={t(pending ? "openingRepository" : "openRepository", { name: repositoryName(repository.canonicalPath) })}
                       disabled={pending}
                       aria-busy={pending || undefined}
@@ -472,7 +476,7 @@ export function AppShell({
                   </div>
                   {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
-                      <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} active={activeReviewId === review.reviewId} pending={pendingReviewId === review.reviewId} onOpen={() => onOpenReview(review)} />)}
+                      <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} active={activeReviewId === review.reviewId} pending={pendingReviewId === review.reviewId} disabled={reviewNavigationBusy} onOpen={() => onOpenReview(review)} />)}
                     {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}
                     {repositoryReviews.length > 10 && <SidebarMenuItem>
                       <SidebarMenuButton
@@ -513,7 +517,7 @@ export function AppShell({
             </div>
             <ul className="mt-5 divide-y rounded-lg border">
               {reviews.slice(0, 10).map((review) => <li key={review.reviewId}>
-                <Button variant="ghost" className="h-auto w-full justify-start rounded-none px-4 py-4" onClick={() => openRecentReview(review)}>
+                <Button variant="ghost" className="h-auto w-full justify-start rounded-none px-4 py-4" disabled={reviewNavigationBusy} aria-busy={pendingReviewId === review.reviewId || undefined} onClick={() => openRecentReview(review)}>
                   <span className="flex min-w-0 flex-col items-start gap-2">
                     <span className="flex gap-3">
                       <span className="font-medium">{repositoryName(review.repositoryPath)}</span>
@@ -521,6 +525,7 @@ export function AppShell({
                     </span>
                     <BranchRelation baseRef={review.baseRef} headRef={review.headRef} direction="head-to-base" />
                   </span>
+                  {pendingReviewId === review.reviewId && <Spinner className="ml-auto" aria-hidden />}
                 </Button>
               </li>)}
             </ul>

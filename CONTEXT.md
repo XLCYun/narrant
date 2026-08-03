@@ -50,6 +50,11 @@ _Avoid_: Base Ref, base tip
 The before-and-after content and change metadata for one path in a **Change Comparison**.
 _Avoid_: Diff file, patch item
 
+**Review Reader**:
+The application view that presents one open **Review Snapshot**, including its
+collection of **File Changes** and the selected **File Change** content.
+_Avoid_: File Changes page, Diff page
+
 **Review Snapshot**:
 An immutable **Change Comparison** pinned to exact base, comparison-base, and head
 revisions. Its identity and history remain saved even when its Git objects are no
@@ -106,6 +111,7 @@ _Avoid_: Repository Entry, user worktree
   **Comparison Base** from the current base and head commits; a Pull Request does not
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
+- A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
 - A **Repository Entry** owns zero or more **Reviews**
 - Narrant has at most one current **GitHub Identity**
 - A **GitHub Identity** may be represented by cached public profile information while

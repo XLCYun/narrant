@@ -33,6 +33,8 @@ type Props = {
   baseRef: string;
   action: BranchSelectorAction;
   showCheckingMessage?: boolean;
+  opening?: boolean;
+  reviewNavigationBusy?: boolean;
   reloading?: boolean;
   reloadError?: string;
   onHeadChange: (ref: string) => void;
@@ -297,11 +299,12 @@ export function BranchReviewSelector(props: Props) {
       <Button
         type="button"
         className="w-full sm:w-auto"
-        aria-label={props.action === "checking" ? t("catalog:checkingReviewUpdate") : undefined}
-        disabled={selectionMissing || props.action === "invalid" || props.action === "checking"}
+        aria-label={props.opening ? t("common:openingReview") : props.action === "checking" ? t("catalog:checkingReviewUpdate") : undefined}
+        aria-busy={props.opening || undefined}
+        disabled={selectionMissing || props.action === "invalid" || props.action === "checking" || props.reviewNavigationBusy}
         onClick={props.onSubmit}
       >
-        {props.action === "checking" && <Spinner aria-hidden />}
+        {(props.action === "checking" || props.opening) && <Spinner aria-hidden />}
         {props.action === "update"
           ? t("catalog:updateAndContinueReview")
           : props.action === "fallback" ? t("catalog:continueExistingReview")

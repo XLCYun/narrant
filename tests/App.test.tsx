@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@monaco-editor/react", () => ({
   DiffEditor: ({ theme, options }: { theme?: string; options?: { renderSideBySide?: boolean } }) => (
@@ -56,6 +56,81 @@ function mockSystemTheme(initialDark: boolean) {
 }
 
 describe("App", () => {
+  it("打开 Review Snapshot 时在入口显示 Loading 图标并保留来源页面", async () => {
+    mockSystemTheme(false);
+    const paintFrames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      paintFrames.push(callback);
+      return paintFrames.length;
+    });
+    let resolveComparison!: (value: unknown) => void;
+    const comparison = new Promise((resolve) => { resolveComparison = resolve; });
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_local_refs") {
+        return Promise.resolve({ refs: ["base", "head"], defaultRef: "base", currentRef: "head" });
+      }
+      if (command === "compare_local_refs") return comparison;
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
+    await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
+    const openButton = screen.getByRole("button", { name: "开始审核" });
+    fireEvent.click(openButton);
+
+    expect(openButton).toHaveAttribute("aria-busy", "true");
+    expect(openButton.querySelector(".animate-spin")).toBeInTheDocument();
+    expect(screen.getByLabelText("选择本地仓库")).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("compare_local_refs", expect.anything());
+    const firstPaintFrames = paintFrames.splice(0);
+    await act(async () => { firstPaintFrames.forEach((frame) => frame(0)); });
+    await waitFor(() => expect(paintFrames.length).toBeGreaterThan(0));
+    expect(invoke).not.toHaveBeenCalledWith("compare_local_refs", expect.anything());
+    const secondPaintFrames = paintFrames.splice(0);
+    await act(async () => { secondPaintFrames.forEach((frame) => frame(16)); });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("compare_local_refs", expect.anything()));
+    resolveComparison({
+      reviewId: "review-loading", snapshotId: "snapshot-loading", baseRef: "base",
+      baseRevision: "base-sha", comparisonBase: "base-sha", headRef: "head",
+      headRevision: "head-sha", fileChanges: [],
+    });
+    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
+    animationFrame.mockRestore();
+  });
+
+  it("读取 File Change 时在 Diff 区域同时显示 Spinner 与 Skeleton", async () => {
+    mockSystemTheme(false);
+    let resolveFile!: (value: unknown) => void;
+    const file = new Promise((resolve) => { resolveFile = resolve; });
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_local_refs") {
+        return Promise.resolve({ refs: ["base", "head"], defaultRef: "base", currentRef: "head" });
+      }
+      if (command === "compare_local_refs") return Promise.resolve({
+        reviewId: "review-file-loading", snapshotId: "snapshot-file-loading", baseRef: "base",
+        baseRevision: "base-sha", comparisonBase: "base-sha", headRef: "head",
+        headRevision: "head-sha", fileChanges: [{ path: "slow.txt", oldPath: null, status: "modified" }],
+      });
+      if (command === "read_review_file_change") return file;
+      return Promise.resolve([]);
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("本地仓库路径"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
+    await waitFor(() => expect(screen.getByLabelText("Head Ref")).toHaveTextContent("head"));
+    fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
+
+    const loading = await screen.findByRole("status", { name: "正在读取 File Change" });
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(loading.querySelector(".animate-spin")).toBeInTheDocument();
+    expect(loading.querySelector("[data-slot=skeleton]")).toBeInTheDocument();
+    resolveFile({ path: "slow.txt", oldPath: null, status: "modified", contentKind: "text", beforeSize: 3, afterSize: 3, before: "old", after: "new" });
+    expect(await screen.findByRole("heading", { name: /slow.txt/ })).toBeInTheDocument();
+  });
+
   it("未信任仓库取消时留在首页，确认后才进入仓库页面", async () => {
     await i18n.changeLanguage("zh-CN");
     mockSystemTheme(false);

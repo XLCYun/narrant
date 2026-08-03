@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { BranchRelation } from "@/components/branch-relation";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import { Icon } from "@/components/ui/icon";
+import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime, normalizeLocale } from "@/lib/i18n";
 export type { DiscoveredPullRequest, PullRequestGroup, SavedReviewSummary } from "@/lib/review-types";
@@ -23,6 +24,8 @@ type Props = {
   githubConnected: boolean;
   localBranches: ReactNode;
   initialTab?: "pull-requests" | "branches" | "history";
+  openingReviewKey?: string;
+  reviewNavigationBusy?: boolean;
   onRetryDiscovery: () => void;
   onConnectGitHub: () => void;
   onOpenSavedReview: (review: SavedReviewSummary) => void;
@@ -67,7 +70,7 @@ function PullRequestStatus({
   description?: string;
   action?: ReactNode;
 }) {
-  return <div className="mx-auto flex max-w-[35rem] flex-col items-center rounded-lg border bg-card px-6 py-12 text-center shadow-sm">
+  return <div className="mx-auto flex max-w-[35rem] flex-col items-center px-6 py-12 text-center">
     <Icon icon={icon} className="mb-4 size-7 text-muted-foreground" aria-hidden />
     <p className="font-medium">{title}</p>
     {description && <p className="mt-2 max-w-md text-sm text-muted-foreground">{description}</p>}
@@ -117,12 +120,15 @@ export function RepositoryOverview(props: Props) {
           <TooltipTrigger render={<button type="button" className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />}>
             <h2 className="font-mono text-2xl">{props.repositoryName}</h2>
           </TooltipTrigger>
-          <TooltipContent className="max-w-xl whitespace-normal break-all">{props.repositoryPath}</TooltipContent>
+          <TooltipContent hideArrow side="right" className="max-w-xl whitespace-normal break-all">{props.repositoryPath}</TooltipContent>
         </Tooltip>
       </header>
       <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>
         <TabsList aria-label={t("catalog:tasks")}>
-          <TabsTrigger value="pull-requests"><Icon icon={GitPullRequestIcon} />{t("catalog:tabs.pullRequests")}</TabsTrigger>
+          <TabsTrigger value="pull-requests">
+            {props.discoveryLoading ? <Spinner aria-hidden /> : <Icon icon={GitPullRequestIcon} />}
+            {t("catalog:tabs.pullRequests")}
+          </TabsTrigger>
           <TabsTrigger value="branches"><Icon icon={GitBranchIcon} />{t("catalog:tabs.branches")}</TabsTrigger>
           <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("catalog:tabs.history")}</TabsTrigger>
         </TabsList>
@@ -137,9 +143,8 @@ export function RepositoryOverview(props: Props) {
             </div>
             <Button size="sm" variant="outline" onClick={props.onRetryDiscovery}>{t("catalog:retry")}</Button>
           </div>}
-          {(props.discoveryLoading || props.discoveryError) && rows.length > 0 && <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-            {props.discoveryLoading ? `${t("catalog:refreshing")} ` : ""}
-            {props.discoveryError ? `${props.discoveryError}；` : ""}{t("catalog:stale")}
+          {props.discoveryError && rows.length > 0 && <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+            {props.discoveryError}；{t("catalog:stale")}
           </div>}
           {rows.length > 0 && <ul className="divide-y rounded-lg border">
             {rows.map((row) => {
@@ -151,6 +156,7 @@ export function RepositoryOverview(props: Props) {
                 || row.saved.headRevision !== row.discovered.head.sha
               ));
               const updatedAt = row.discovered?.updatedAt ?? row.saved?.pullRequest?.updatedAt;
+              const opening = props.openingReviewKey === row.key;
               return <li key={row.key} className="flex flex-col items-stretch gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
                 <Icon icon={GitPullRequestIcon} className="hidden shrink-0 text-muted-foreground sm:block" aria-hidden />
                 <div className="min-w-0 flex-1">
@@ -166,15 +172,15 @@ export function RepositoryOverview(props: Props) {
                     {updatedAt && <time dateTime={updatedAt}>{formatRelativeTime(rowUpdatedAt(row), Date.now(), locale)}</time>}
                   </div>
                 </div>
-                <Button className="self-start sm:self-auto" aria-label={`${row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} variant={row.saved ? "outline" : "default"} onClick={() => {
+                <Button className="self-start sm:self-auto" aria-label={`${opening ? t("common:openingReview") : row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} aria-busy={opening || undefined} disabled={props.reviewNavigationBusy} variant={row.saved ? "outline" : "default"} onClick={() => {
                   if (row.saved) props.onOpenSavedReview(row.saved);
                   else if (row.discovered) props.onOpenPullRequest(row.repository, row.discovered);
-                }}>{row.saved ? t("common:continueReview") : t("common:startReview")}</Button>
+                }}>{opening && <Spinner aria-hidden />}{row.saved ? t("common:continueReview") : t("common:startReview")}</Button>
               </li>;
             })}
           </ul>}
           {rows.length === 0 && (!props.githubConnected
-            ? <PullRequestStatus icon={GitPullRequestIcon} title={t("catalog:connectForPrivate")} description={t("catalog:connectForPrivateDescription")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
+            ? <PullRequestStatus icon={GitPullRequestIcon} title={t("catalog:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
             : blockingDiscoveryError
               ? <PullRequestStatus icon={AlertCircleIcon} title={t("catalog:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" onClick={props.onRetryDiscovery}>{t("catalog:retry")}</Button>} />
               : <PullRequestStatus icon={InformationCircleIcon} title={t("catalog:noPullRequests")} description={t("catalog:noPullRequestsDescription")} />)}
