@@ -8,12 +8,14 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = resolve(projectRoot, "public/file-type-icons");
 const manifestOutput = resolve(projectRoot, "src/lib/file-type-icon-manifest.ts");
 const packageDirectory = dirname(fileURLToPath(import.meta.resolve("material-icon-theme/package.json")));
+const sourceIconsDirectory = process.env.FILE_TYPE_ICON_SOURCE_DIRECTORY ?? resolve(packageDirectory, "icons");
 const configuredMaximumIconBytes = Number(process.env.FILE_TYPE_ICON_MAX_BYTES);
 const maximumIconBytes = Number.isFinite(configuredMaximumIconBytes) ? configuredMaximumIconBytes : 2 * 1024 * 1024;
 
 /** 返回主题 manifest 在明暗模式下可能解析出的去重图标名称。 */
 function collectIconNames(manifest) {
   const names = new Set();
+  /** 收集单个明暗主题层内的默认图标与全部路径关联目标。 */
   const collect = (candidate) => {
     if (!candidate) return;
     [candidate.file, candidate.folder, candidate.folderExpanded, candidate.rootFolder, candidate.rootFolderExpanded]
@@ -33,6 +35,7 @@ function collectIconNames(manifest) {
 
 /** 将 manifest 序列化为浏览器可直接使用的确定性匹配表。 */
 function serializeManifest(manifest) {
+  /** 合并默认主题与局部 light override，保留未覆盖的目录和文件关联。 */
   const pick = (base = {}, override = {}) => ({
     file: override.file ?? base.file ?? "file",
     folder: override.folder ?? base.folder ?? "folder",
@@ -53,7 +56,7 @@ await mkdir(outputDirectory, { recursive: true });
 let totalBytes = 0;
 for (const iconName of iconNames) {
   const iconPath = manifest.iconDefinitions?.[iconName]?.iconPath;
-  const source = iconPath ? resolve(packageDirectory, "dist", iconPath) : undefined;
+  const source = iconPath ? resolve(sourceIconsDirectory, iconPath.replace("./../icons/", "")) : undefined;
   const destination = resolve(outputDirectory, `${iconName}.svg`);
   const sourceStat = source ? await stat(source).catch(() => undefined) : undefined;
   if (!sourceStat?.isFile()) throw new Error(`Missing Material Icon Theme asset: ${iconName}.svg`);

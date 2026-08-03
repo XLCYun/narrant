@@ -829,7 +829,9 @@ describe("App", () => {
     }));
     expect(await screen.findByRole("button", { name: /a-first.txt.*新增/ }))
       .toHaveAttribute("aria-current", "true");
-    expect(screen.getByRole("heading", { name: /a-first.txt/ })).toBeInTheDocument();
+    const fileChangeHeading = screen.getByRole("heading", { name: /a-first.txt/ });
+    expect(fileChangeHeading).toBeInTheDocument();
+    expect(fileChangeHeading.querySelector("img")).toHaveAttribute("src", expect.stringContaining("document.svg"));
 
     await i18n.changeLanguage("en");
     expect(screen.getByRole("region", { name: "Review reader" })).toBeInTheDocument();
