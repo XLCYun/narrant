@@ -1123,7 +1123,7 @@ export function App() {
           : <ul>{recentReviews.map((review) => <li key={review.reviewId}>
             <Button variant="outline" disabled={Boolean(reviewOpeningKey)} aria-busy={reviewOpeningKey === `review:${review.reviewId}` || undefined} onClick={() => void navigateToReview(review)}>
               {reviewOpeningKey === `review:${review.reviewId}` && <Spinner aria-hidden />}
-              <span className="mr-3">{review.repositoryPath}</span><BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
+              <span className="mr-3">{review.repositoryPath}</span><BranchRelation baseRef={review.baseRef} headRef={review.headRef} interactive={false} />
             </Button>
           </li>)}</ul>}
       </section>

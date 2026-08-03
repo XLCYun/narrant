@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { PullRequestMetadata } from "@/lib/review-types";
@@ -138,6 +139,7 @@ function editorLanguage(path: string) {
 export function ReviewReader(props: ReviewReaderProps) {
   const { t } = useTranslation(["common", "review"]);
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
+  const [activeView, setActiveView] = useState<"overview" | "file-changes">("overview");
   const selectedPath = props.pendingFilePath ?? props.fileChange?.path;
   const effectiveDiffMode: DiffMode = props.narrow ? "inline" : props.diffMode;
 
@@ -220,7 +222,7 @@ export function ReviewReader(props: ReviewReaderProps) {
     </>;
   }
 
-  return <section aria-label={t("review:reader")} className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
+  return <Tabs defaultValue="overview" onValueChange={(value) => setActiveView(value as "overview" | "file-changes")} aria-label={t("review:reader")} className="h-full min-h-0 overflow-hidden rounded-lg border bg-background">
     <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b px-3 py-2">
       <div className="min-w-0 flex-1">
         <div className="min-w-0">
@@ -233,8 +235,7 @@ export function ReviewReader(props: ReviewReaderProps) {
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
         {props.updateAction}
-        <ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} />
-        <Tooltip>
+        {activeView === "file-changes" && <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Button variant="outline" aria-label={effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}
               aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow}
@@ -244,14 +245,20 @@ export function ReviewReader(props: ReviewReaderProps) {
             </Button>
           </TooltipTrigger>
           <TooltipContent>{props.narrow ? t("review:narrowInlineOnly") : effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}</TooltipContent>
-        </Tooltip>
+        </Tooltip>}
         <Button variant="outline" onClick={props.onClose}>
           <Icon icon={Logout02Icon} data-icon="inline-start" aria-hidden />
           {t("review:exit")}
         </Button>
       </div>
     </header>
+    <TabsList variant="line" aria-label={t("review:reviewViews")} className="shrink-0 border-b px-3">
+      <TabsTrigger value="overview">{t("review:overview")}</TabsTrigger>
+      <TabsTrigger value="file-changes">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
+    </TabsList>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}
+    <TabsContent value="overview" className="min-h-0 overflow-y-auto"><ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} /></TabsContent>
+    <TabsContent value="file-changes" className="min-h-0 overflow-hidden">
     {props.snapshot.fileChanges.length === 0
       ? <div className="grid min-h-0 flex-1 place-content-center px-6 text-center"><h3 className="font-medium">{t("review:emptyTitle")}</h3><p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p></div>
       : <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1"
@@ -276,5 +283,6 @@ export function ReviewReader(props: ReviewReaderProps) {
           </section>}
         </ResizablePanel>
       </ResizablePanelGroup>}
-  </section>;
+    </TabsContent>
+  </Tabs>;
 }
