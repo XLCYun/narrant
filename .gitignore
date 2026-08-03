@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 .worktrees/
+public/file-type-icons/
 dist/
 src-tauri/target/
 .env.local

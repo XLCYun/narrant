@@ -727,10 +727,13 @@ describe("App", () => {
     expect(await screen.findByRole("navigation", { name: "文件树" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: /main.rs.*修改/ })).toBeInTheDocument();
+    expect(screen.getByTestId("file-type-icon-src")).toHaveAttribute("src", expect.stringContaining("folder-src-open.svg"));
+    expect(screen.getByTestId("file-type-icon-main.rs")).toHaveAttribute("src", expect.stringContaining("rust.svg"));
     expect(screen.getAllByRole("img", { name: "新增" })[0]).toHaveClass("text-emerald-600", "bg-emerald-500/10");
 
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     expect(screen.getByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("file-type-icon-src")).toHaveAttribute("src", expect.stringContaining("folder-src.svg"));
     expect(screen.queryByRole("button", { name: /main.rs.*修改/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     expect(screen.getByRole("button", { name: /main.rs.*修改/ })).toBeInTheDocument();

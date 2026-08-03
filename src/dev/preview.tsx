@@ -122,11 +122,15 @@ const readerSnapshot: ReviewReaderSnapshot = {
   headRef: "refs/heads/feature/review-reader",
   headRevision: "274aaa2f9b3b0d3e7363d09fa21dfe76782d25cf",
   fileChanges: [
+    { path: ".github/workflows/ci.yml", oldPath: null, status: "modified" },
+    { path: "Dockerfile", oldPath: null, status: "added" },
     { path: "docs/review-reader.md", oldPath: null, status: "added" },
+    { path: "fixtures/unknown.fixture", oldPath: null, status: "modified" },
     { path: "src/components/review-reader.tsx", oldPath: null, status: "modified" },
     { path: "src/components/legacy-reader.tsx", oldPath: null, status: "deleted" },
     { path: "src/lib/review-navigation.ts", oldPath: "src/lib/diff-navigation.ts", status: "renamed" },
     { path: "tests/review-reader.test.tsx", oldPath: null, status: "modified" },
+    { path: "very-long-directory-name-that-must-truncate/a-very-long-file-name-that-must-truncate-in-a-narrow-file-tree.test.ts", oldPath: null, status: "modified" },
   ],
   pullRequest: {
     owner: "narrant", repository: "desktop", number: 14, title: "Improve the Review Reader",

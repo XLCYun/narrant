@@ -8,8 +8,12 @@
     "node": ">=22.13 <26"
   },
   "scripts": {
+    "generate:file-icons": "node scripts/generate-file-type-icons.mjs",
+    "predev": "pnpm generate:file-icons",
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "predev:preview": "pnpm generate:file-icons",
     "dev:preview": "vite --host 127.0.0.1 --port 1421 --open /preview.html",
+    "prebuild": "pnpm generate:file-icons",
     "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
     "test": "vitest run",
@@ -31,6 +35,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "i18next": "^26.3.6",
+    "material-icon-theme": "^5.37.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-i18next": "^17.0.11",

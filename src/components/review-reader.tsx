@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 
 import { BranchRelation } from "@/components/branch-relation";
 import { FileChangeLoading } from "@/components/file-change-loading";
+import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -140,6 +141,7 @@ export function ReviewReader(props: ReviewReaderProps) {
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const selectedPath = props.pendingFilePath ?? props.fileChange?.path;
   const effectiveDiffMode: DiffMode = props.narrow ? "inline" : props.diffMode;
+  const fileTypeIconTheme = props.editorTheme === "vs-dark" ? "dark" : "light";
 
   /** 使用图标、颜色与本地化名称共同表达 File Change 状态。 */
   function renderChangeStatus(status: ChangeStatus) {
@@ -201,6 +203,7 @@ export function ReviewReader(props: ReviewReaderProps) {
               return next;
             })}>
             <Icon icon={ArrowDown01Icon} className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", collapsed && "-rotate-90")} aria-hidden />
+            <FileTypeIcon path={path} kind="directory" expanded={!collapsed} theme={fileTypeIconTheme} testId={`file-type-icon-${child.name}`} />
             <span className="truncate">{child.name}</span>
           </button>
           {!collapsed && <ul role="group" className="ml-3 border-l pl-1">{renderDirectory(child, path)}</ul>}
@@ -213,6 +216,7 @@ export function ReviewReader(props: ReviewReaderProps) {
           disabled={props.navigationBusy}
           className={cn("h-7 w-full justify-start gap-1.5 rounded-md px-1.5 text-xs font-normal", selectedPath === change.path && "bg-primary/10 text-foreground hover:bg-primary/15")}
           onClick={() => props.onSelectFile(change.path)}>
+          <FileTypeIcon path={change.path} kind="file" theme={fileTypeIconTheme} testId={`file-type-icon-${change.path.split("/").at(-1)}`} />
           <span className="min-w-0 flex-1 truncate text-left">{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span>
           {renderChangeStatus(change.status)}
         </Button>
@@ -268,7 +272,7 @@ export function ReviewReader(props: ReviewReaderProps) {
           {props.fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
           {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={() => props.onRetryFile(props.firstFileChangePath!)}>{t("common:retry")}</Button>}</div>}
           {props.fileChange && !props.fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
-            <header className="flex h-9 items-center border-b px-3"><h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium">{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3></header>
+            <header className="flex h-9 items-center border-b px-3"><h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3></header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
