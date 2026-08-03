@@ -102,6 +102,11 @@ It excludes product and third-party logos, application icons, avatars, and
 content-provided graphics.
 _Avoid_: Logo, brand icon
 
+**File Type Icon**:
+A **UI Icon** that identifies a File Change's file type from its path. It is
+separate from the icon that communicates the File Change status.
+_Avoid_: File Change status icon
+
 **Review Workspace**:
 The Narrant-owned, disposable checkout of the head revision presented by one
 open **Review**. It contains no user-owned state, may be forcibly rebuilt when the
