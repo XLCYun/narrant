@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "dev:preview": "vite --host 127.0.0.1 --port 1421 --open /preview.html",
     "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
     "test": "vitest run",
