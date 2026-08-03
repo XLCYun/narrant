@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RepositoryOverview, type PullRequestGroup, type SavedReviewSummary } from "@/components/repository-overview";
 import { i18n } from "@/lib/i18n";
+import type { ReviewSummary } from "@/lib/review-types";
 
 const repository = { owner: "octo", name: "narrant" };
 const pullRequest = {
@@ -35,6 +36,14 @@ const saved: SavedReviewSummary = {
     synchronizedAt: 1,
   },
 };
+const historyReview: ReviewSummary = {
+  reviewId: "review-history",
+  repositoryEntryId: 7,
+  repositoryPath: "/work/narrant",
+  baseRef: "refs/heads/main",
+  headRef: "refs/heads/topic",
+  lastOpenedAt: 1,
+};
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(cleanup);
@@ -47,17 +56,19 @@ function renderOverview(options: {
   connected?: boolean;
   openingReviewKey?: string;
   reviewNavigationBusy?: boolean;
+  repositoryReviews?: ReviewSummary[];
 } = {}) {
   const onOpenSavedReview = vi.fn();
   const onOpenPullRequest = vi.fn();
   const onRetryDiscovery = vi.fn();
   const onConnectGitHub = vi.fn();
+  const onOpenReview = vi.fn();
   render(<RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
     savedReviews={options.savedReviews ?? []}
     pullRequestGroups={options.groups ?? []}
-    repositoryReviews={[]}
+    repositoryReviews={options.repositoryReviews ?? []}
     discoveryLoading={options.loading ?? false}
     discoveryError={options.discoveryError}
     githubConnected={options.connected ?? true}
@@ -66,10 +77,11 @@ function renderOverview(options: {
     onRetryDiscovery={onRetryDiscovery}
     onConnectGitHub={onConnectGitHub}
     onOpenSavedReview={onOpenSavedReview}
+    onOpenReview={onOpenReview}
     onOpenPullRequest={onOpenPullRequest}
     localBranches={<p>Local branch content</p>}
   />);
-  return { onOpenSavedReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub };
+  return { onOpenSavedReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub, onOpenReview };
 }
 
 describe("RepositoryOverview", () => {
@@ -78,6 +90,34 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "本地分支" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "审核历史" })).toBeInTheDocument();
+  });
+
+  it("从审核历史整行继续 Review", () => {
+    const { onOpenReview } = renderOverview({ repositoryReviews: [historyReview] });
+    fireEvent.click(screen.getByRole("tab", { name: "审核历史" }));
+
+    const reviewRow = screen.getByRole("button", { name: /继续审核.*topic.*main/ });
+    fireEvent.click(reviewRow);
+
+    expect(onOpenReview).toHaveBeenCalledWith(historyReview);
+  });
+
+  it("打开审核历史 Review 时保留行身份并阻止重复导航", () => {
+    const { onOpenReview } = renderOverview({
+      repositoryReviews: [historyReview],
+      openingReviewKey: "review:review-history",
+      reviewNavigationBusy: true,
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "审核历史" }));
+
+    const reviewRow = screen.getByRole("button", { name: /正在打开 Review.*topic.*main/ });
+    expect(reviewRow).toBeDisabled();
+    expect(reviewRow).toHaveAttribute("aria-busy", "true");
+    expect(reviewRow).toHaveTextContent("topic");
+    expect(reviewRow).toHaveTextContent("main");
+    expect(reviewRow.querySelector(".animate-spin")).toBeInTheDocument();
+    fireEvent.click(reviewRow);
+    expect(onOpenReview).not.toHaveBeenCalled();
   });
 
   it("默认隐藏完整路径，并允许通过仓库名称的键盘焦点查看", async () => {

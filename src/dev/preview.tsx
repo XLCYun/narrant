@@ -4,8 +4,10 @@ import { createRoot } from "react-dom/client";
 import "@/index.css";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { FileChangeLoading } from "@/components/file-change-loading";
+import { RepositoryOverview } from "@/components/repository-overview";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
+import type { ReviewSummary } from "@/lib/review-types";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -65,6 +67,50 @@ function BranchSelectorPreview({
   />;
 }
 
+const reviewHistory: ReviewSummary[] = [
+  {
+    reviewId: "review-preview-1",
+    repositoryEntryId: 1,
+    repositoryPath: "/work/narrant",
+    baseRef: "refs/heads/main",
+    headRef: "refs/heads/codex/review-history-navigation",
+    lastOpenedAt: Date.now(),
+  },
+  {
+    reviewId: "review-preview-2",
+    repositoryEntryId: 1,
+    repositoryPath: "/work/narrant",
+    baseRef: "refs/remotes/upstream/release-with-a-long-name",
+    headRef: "refs/heads/feature/a-review-with-an-extraordinarily-long-branch-name",
+    lastOpenedAt: Date.now() - 60_000,
+  },
+];
+
+/** 用本地状态预览审核历史的整行导航与打开反馈。 */
+function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?: boolean }) {
+  const [openingReviewKey, setOpeningReviewKey] = useState(
+    initiallyOpening ? "review:review-preview-1" : undefined,
+  );
+  return <RepositoryOverview
+    repositoryName="narrant"
+    repositoryPath="/work/narrant"
+    savedReviews={[]}
+    pullRequestGroups={[]}
+    repositoryReviews={reviewHistory}
+    discoveryLoading={false}
+    githubConnected
+    localBranches={null}
+    initialTab="history"
+    openingReviewKey={openingReviewKey}
+    reviewNavigationBusy={Boolean(openingReviewKey)}
+    onRetryDiscovery={() => undefined}
+    onConnectGitHub={() => undefined}
+    onOpenSavedReview={() => undefined}
+    onOpenPullRequest={() => undefined}
+    onOpenReview={(review) => setOpeningReviewKey(`review:${review.reviewId}`)}
+  />;
+}
+
 const previews: Record<string, PreviewDefinition> = {
   "branch-selector": {
     label: "分支选择器",
@@ -107,6 +153,19 @@ const previews: Record<string, PreviewDefinition> = {
           <header className="border-b px-4 py-3 text-sm font-semibold">src/components/example.tsx</header>
           <FileChangeLoading label="正在读取 File Change" />
         </section>,
+      },
+    },
+  },
+  "review-history": {
+    label: "审核历史",
+    scenarios: {
+      default: {
+        label: "可点击列表",
+        render: () => <ReviewHistoryPreview />,
+      },
+      opening: {
+        label: "正在打开 Review",
+        render: () => <ReviewHistoryPreview initiallyOpening />,
       },
     },
   },

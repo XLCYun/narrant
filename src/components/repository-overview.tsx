@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslation } from "react-i18next";
-import { BranchRelation } from "@/components/branch-relation";
+import { BranchRelation, branchName } from "@/components/branch-relation";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
@@ -29,6 +29,7 @@ type Props = {
   onRetryDiscovery: () => void;
   onConnectGitHub: () => void;
   onOpenSavedReview: (review: SavedReviewSummary) => void;
+  onOpenReview: (review: ReviewSummary) => void;
   onOpenPullRequest: (
     repository: PullRequestGroup["repository"],
     pullRequest: DiscoveredPullRequest,
@@ -189,7 +190,26 @@ export function RepositoryOverview(props: Props) {
         <TabsContent value="history" className="mt-5">
           {props.repositoryReviews.length === 0
             ? <p className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("catalog:noHistory")}</p>
-            : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => <li className="p-4" key={review.reviewId}><BranchRelation baseRef={review.baseRef} headRef={review.headRef} /></li>)}</ul>}
+            : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => {
+              const opening = props.openingReviewKey === `review:${review.reviewId}`;
+              const mergeDirection = t("catalog:mergeConfirmation", {
+                head: branchName(review.headRef),
+                base: branchName(review.baseRef),
+              });
+              return <li key={review.reviewId}>
+                <Button
+                  variant="ghost"
+                  className="h-auto w-full justify-start rounded-none px-4 py-4"
+                  aria-label={`${t(opening ? "common:openingReview" : "common:continueReview")}：${mergeDirection}`}
+                  aria-busy={opening || undefined}
+                  disabled={props.reviewNavigationBusy}
+                  onClick={() => props.onOpenReview(review)}
+                >
+                  <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
+                  {opening && <Spinner className="ml-auto" aria-hidden />}
+                </Button>
+              </li>;
+            })}</ul>}
         </TabsContent>
       </Tabs>
   </section>;

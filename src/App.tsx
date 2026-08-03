@@ -1235,6 +1235,7 @@ export function App() {
         onRetryDiscovery={() => void loadPullRequestGroups(selectedRepository)}
         onConnectGitHub={() => void connectGitHub()}
         onOpenSavedReview={(review) => void openSavedReview(review)}
+        onOpenReview={(review) => void navigateToReview(review)}
         onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
         localBranches={<BranchReviewSelector
           refs={refs}
