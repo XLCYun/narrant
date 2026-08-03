@@ -205,7 +205,7 @@ export function RepositoryOverview(props: Props) {
                   disabled={props.reviewNavigationBusy}
                   onClick={() => props.onOpenReview(review)}
                 >
-                  <BranchRelation baseRef={review.baseRef} headRef={review.headRef} />
+                  <BranchRelation baseRef={review.baseRef} headRef={review.headRef} interactive={false} />
                   {opening && <Spinner className="ml-auto" aria-hidden />}
                 </Button>
               </li>;

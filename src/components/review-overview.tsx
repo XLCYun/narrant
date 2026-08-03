@@ -1,20 +1,14 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
-import { ExternalLinkIcon, InformationCircleIcon } from "@hugeicons/core-free-icons";
+import { ExternalLinkIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "@hugeicons/core-free-icons";
 
-import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetClose,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
-import type { PullRequestMetadata } from "@/lib/review-types";
+import { branchName } from "@/components/branch-relation";
+import { CopyableReference } from "@/components/copyable-reference";
+import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
+import type { PullRequestMetadata } from "@/lib/review-types";
 
 /** Review 概览所需的来源无关 Snapshot 投影。 */
 export type ReviewOverviewModel = {
@@ -25,11 +19,16 @@ export type ReviewOverviewModel = {
   pullRequest?: PullRequestMetadata;
 };
 
-/** Review 概览组件的公开交互参数。 */
-type ReviewOverviewProps = {
-  review: ReviewOverviewModel;
-  onOpenExternal: (url: string) => void;
-};
+/** 在一个标签中组合可独立复制的用户分支名与精确 revision。 */
+function RevisionReference({ branch, revision }: { branch: string; revision: string }) {
+  const { t } = useTranslation("review");
+  const safeRevision = revision ?? "";
+  const referenceClassName = "inline-flex h-5 cursor-pointer items-center rounded-sm font-mono text-sm leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  return <span className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border bg-muted/60 px-2.5 py-1.5 shadow-xs">
+    <CopyableReference value={branch} copiedLabel={t("branchCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "min-w-0 flex-1 truncate text-left text-foreground hover:bg-muted")}>{branch}</CopyableReference>
+    <CopyableReference value={safeRevision} copiedLabel={t("revisionCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "relative top-px shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground")}>{safeRevision.slice(0, 7) || "—"}</CopyableReference>
+  </span>;
+}
 
 /** 判断 Markdown 链接是否可交给系统默认浏览器。 */
 function isExternalWebUrl(url?: string): url is string {
@@ -42,8 +41,8 @@ function isExternalWebUrl(url?: string): url is string {
   }
 }
 
-/** 将 Review 背景放进默认关闭的右侧 Sheet，避免长期占用 Diff 空间。 */
-export function ReviewOverview({ review, onOpenExternal }: ReviewOverviewProps) {
+/** 概览标签的单栏内容，安全呈现协作 metadata 与 Markdown 描述。 */
+export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverviewModel; onOpenExternal: (url: string) => void }) {
   const { t } = useTranslation("review");
   const pullRequest = review.pullRequest;
 
@@ -53,100 +52,45 @@ export function ReviewOverview({ review, onOpenExternal }: ReviewOverviewProps) 
     if (isExternalWebUrl(url)) onOpenExternal(url);
   }
 
-  return (
-    <Sheet>
-      <SheetTrigger render={<Button variant="outline" />}>
-        <Icon icon={InformationCircleIcon} />
-        {t("openOverview")}
-      </SheetTrigger>
-      <SheetContent
-        side="right"
-        showCloseButton={false}
-        aria-label={t("overview")}
-        className="w-[min(90vw,30rem)] overflow-y-auto sm:max-w-[30rem]"
-      >
-        <SheetHeader className="border-b">
-          <div className="flex items-start justify-between gap-4 pr-1">
-            <div className="min-w-0">
-              <SheetTitle>{t("overview")}</SheetTitle>
-              <SheetDescription>
-                {pullRequest ? t("pullRequestOverviewDescription") : t("branchOverviewDescription")}
-              </SheetDescription>
-            </div>
-            <SheetClose render={<Button size="icon-sm" variant="ghost" aria-label={t("closeOverview")} />}>
-              ×
-            </SheetClose>
-          </div>
-        </SheetHeader>
+  /** 打开已阻止加载的远程图片，保持应用内不自动请求第三方资源。 */
+  function openRemoteImage(url?: string) {
+    if (isExternalWebUrl(url)) onOpenExternal(url);
+  }
 
-        <div className="space-y-6 p-6">
-          <section aria-labelledby="review-overview-identity" className="space-y-3">
-            <h3 id="review-overview-identity" className="font-heading text-base font-medium">
-              {pullRequest ? pullRequest.title : t("localBranchReview")}
-            </h3>
-            {pullRequest && (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">{t("pullRequest")}</dt>
-                <dd>#{pullRequest.number}</dd>
-                <dt className="text-muted-foreground">{t("author")}</dt>
-                <dd>{pullRequest.author}</dd>
-                <dt className="text-muted-foreground">{t("status")}</dt>
-                <dd>{pullRequest.draft ? `${t("draft")} · ` : ""}{t(`state.${pullRequest.state}`)}</dd>
-              </dl>
-            )}
-          </section>
+  return <article className="mx-auto w-full max-w-3xl space-y-8 px-5 py-7 sm:px-8">
+    <header className="space-y-3">
+      <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">{pullRequest?.title ?? t("localBranchReview")}</h2>
+      {pullRequest && <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        {(() => {
+          const state: "draft" | PullRequestMetadata["state"] = pullRequest.draft ? "draft" : pullRequest.state;
+          const icons = { draft: GitPullRequestDraftIcon, open: GitPullRequestIcon, closed: GitPullRequestClosedIcon, merged: GitMergeIcon };
+          const colors = { draft: "bg-amber-500/10 text-amber-700 dark:text-amber-300", open: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300", closed: "bg-muted text-muted-foreground", merged: "bg-violet-500/10 text-violet-700 dark:text-violet-300" };
+          return <Badge variant="secondary" className={cn("border-0", colors[state])}><Icon icon={icons[state]} data-icon="inline-start" aria-hidden />{pullRequest.draft ? t("draft") : t(`state.${pullRequest.state}`)}</Badge>;
+        })()}
+        <span>#{pullRequest.number}</span>
+        <span>{pullRequest.author}</span>
+      </div>}
+      <div aria-label={t("revisionRelationLabel", { head: branchName(review.headRef), base: branchName(review.baseRef) })} className="flex min-w-0 flex-col items-stretch gap-2 text-sm sm:flex-row sm:items-center">
+        <span className="shrink-0 text-muted-foreground">{t("mergeSentenceStart")}</span>
+        <RevisionReference branch={branchName(review.headRef)} revision={review.headRevision} />
+        <span className="shrink-0 text-muted-foreground">{t("mergeSentenceJoin")}</span>
+        <RevisionReference branch={branchName(review.baseRef)} revision={review.baseRevision} />
+      </div>
+    </header>
 
-          <section aria-labelledby="review-overview-revisions" className="space-y-3">
-            <h3 id="review-overview-revisions" className="text-sm font-semibold">{t("revisions")}</h3>
-            <dl className="space-y-4 text-sm">
-              <div>
-                <dt className="text-xs text-muted-foreground">Base</dt>
-                <dd className="mt-1 break-all">{review.baseRef}</dd>
-                <dd className="mt-1 break-all font-mono text-xs">{review.baseRevision}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Head</dt>
-                <dd className="mt-1 break-all">{review.headRef}</dd>
-                <dd className="mt-1 break-all font-mono text-xs">{review.headRevision}</dd>
-              </div>
-            </dl>
-          </section>
-
-          {pullRequest && (
-            <>
-              <section aria-labelledby="review-overview-description" className="space-y-3">
-                <h3 id="review-overview-description" className="text-sm font-semibold">{t("description")}</h3>
-                <div className="prose prose-sm max-w-none break-words dark:prose-invert">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    skipHtml
-                    components={{
-                      img: ({ alt }) => (
-                        <span className="text-muted-foreground">
-                          {alt ? t("blockedRemoteImageWithAlt", { alt }) : t("blockedRemoteImage")}
-                        </span>
-                      ),
-                      a: ({ href, children }) => isExternalWebUrl(href)
-                        ? <a href={href} onClick={(event) => openExternal(event, href)}>{children}</a>
-                        : <span>{children}</span>,
-                    }}
-                  >
-                    {pullRequest.description}
-                  </ReactMarkdown>
-                </div>
-              </section>
-              <a
-                href={pullRequest.url}
-                className="inline-flex items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
-                onClick={(event) => openExternal(event, pullRequest.url)}
-              >
-                {t("viewOnGitHub")}
-                <Icon icon={ExternalLinkIcon} />
-              </a>
-            </>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
-  );
+    {pullRequest && <section aria-labelledby="review-overview-description" className="overflow-hidden rounded-lg border bg-card shadow-xs">
+      <header className="border-b bg-muted/40 px-4 py-3">
+        <h3 id="review-overview-description" className="text-sm font-semibold">{t("description")}</h3>
+      </header>
+      <div className="review-markdown break-words px-4 py-5 sm:px-5">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{
+          img: ({ alt, src }) => <button type="button" className="text-left text-muted-foreground underline underline-offset-4 hover:text-foreground" onClick={() => openRemoteImage(src)}>{alt ? t("blockedRemoteImageWithAlt", { alt }) : t("blockedRemoteImage")}</button>,
+          a: ({ href, children }) => isExternalWebUrl(href) ? <a href={href} onClick={(event) => openExternal(event, href)}>{children}</a> : <span>{children}</span>,
+        }}>{pullRequest.description}</ReactMarkdown>
+      </div>
+      <footer className="border-t bg-muted/20 px-4 py-3 sm:px-5">
+        <a href={pullRequest.url} className="inline-flex items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline" onClick={(event) => openExternal(event, pullRequest.url)}>{t("viewOnGitHub")}<Icon icon={ExternalLinkIcon} /></a>
+      </footer>
+    </section>}
+  </article>;
 }

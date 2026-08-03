@@ -528,7 +528,7 @@ export function AppShell({
                       <span className="font-medium">{repositoryName(review.repositoryPath)}</span>
                       <span className="truncate">{review.pullRequest ? `#${review.pullRequest.number} ${review.pullRequest.title}` : t("localBranch")}</span>
                     </span>
-                    <BranchRelation baseRef={review.baseRef} headRef={review.headRef} direction="head-to-base" />
+                    <BranchRelation baseRef={review.baseRef} headRef={review.headRef} direction="head-to-base" interactive={false} />
                   </span>
                   {pendingReviewId === review.reviewId && <Spinner className="ml-auto" aria-hidden />}
                 </Button>

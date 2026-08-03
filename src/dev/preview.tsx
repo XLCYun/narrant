@@ -116,10 +116,10 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
 const readerSnapshot: ReviewReaderSnapshot = {
   reviewId: "review-reader-preview",
   snapshotId: "snapshot-reader-preview",
-  baseRef: "refs/heads/main",
+  baseRef: "refs/heads/codex/frontend-product-experience-spec",
   baseRevision: "c530a07d6a0bd935a5aa7a62e34f19e2f3ea2bdd",
   comparisonBase: "c530a07d6a0bd935a5aa7a62e34f19e2f3ea2bdd",
-  headRef: "refs/heads/feature/review-reader",
+  headRef: "refs/heads/codex/issue-45-product-experience-with-a-very-long-branch-name",
   headRevision: "274aaa2f9b3b0d3e7363d09fa21dfe76782d25cf",
   fileChanges: [
     { path: ".github/workflows/ci.yml", oldPath: null, status: "modified" },
@@ -134,7 +134,7 @@ const readerSnapshot: ReviewReaderSnapshot = {
   ],
   pullRequest: {
     owner: "narrant", repository: "desktop", number: 14, title: "Improve the Review Reader",
-    description: "Make file changes easier to scan and keep the Diff workspace focused.",
+    description: "# Review context\n\n## User impact\n\nThe Review Reader keeps context and code changes in peer views.\n\n- Clearer information hierarchy\n- Safer Markdown rendering\n\n## Developer impact\n\nUse `ReviewView` as the shared navigation concept.\n\n> Remote images stay blocked until the reviewer opens them explicitly.\n\n```ts\nconst activeView = 'overview';\n```",
     author: "reviewer", state: "open", draft: false,
     url: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
     headRef: "feature/review-reader", synchronizedAt: Date.now(),
@@ -168,7 +168,7 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
       narrow={window.innerWidth < 1200}
       editorTheme={document.documentElement.classList.contains("dark") ? "vs-dark" : "light"}
       initialTreeWidth={26}
-      updateAction={update ? <div role="status" className="flex items-center gap-2 text-sm"><span className="text-amber-700 dark:text-amber-300">检测到 PR 分支有更新</span><Button>刷新审核</Button></div> : undefined}
+      updateAction={update ? <div role="status" className="flex items-center gap-2 text-sm"><span className="hidden text-amber-700 sm:inline dark:text-amber-300">检测到 PR 分支有更新</span><Button aria-label="刷新审核"><span className="hidden sm:inline">刷新审核</span></Button></div> : undefined}
       onSelectFile={setSelectedPath}
       onRetryFile={setSelectedPath}
       onDiffModeChange={setMode}

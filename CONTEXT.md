@@ -56,6 +56,11 @@ collection of **File Changes** and the freely selected **File Change** content. 
 does not assign reading progress or an approval state to File Changes.
 _Avoid_: File Changes page, Diff page
 
+**Review View**:
+One peer presentation of the **Review Snapshot** currently open in the **Review Reader**.
+The available views are Overview and File Changes; switching views does not create another Review.
+_Avoid_: Review mode, sidebar panel
+
 **Review Snapshot**:
 An immutable **Change Comparison** pinned to exact base, comparison-base, and head
 revisions. Its identity and history remain saved even when its Git objects are no
@@ -118,6 +123,7 @@ _Avoid_: Repository Entry, user worktree
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
 - A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
+- A **Review Reader** provides Overview and File Changes as peer **Review Views** over the same open **Review Snapshot**
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
   mark that change as viewed, reviewed, or approved
 - A **Repository Entry** owns zero or more **Reviews**
