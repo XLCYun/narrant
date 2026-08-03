@@ -23,10 +23,10 @@ export type ReviewOverviewModel = {
 function RevisionReference({ branch, revision }: { branch: string; revision: string }) {
   const { t } = useTranslation("review");
   const safeRevision = revision ?? "";
-  const referenceClassName = "cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const referenceClassName = "inline-flex cursor-pointer items-center rounded-sm leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
   return <span className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border bg-muted/60 px-2.5 py-1.5 shadow-xs">
-    <CopyableReference value={branch} copiedLabel={t("branchCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "min-w-0 flex-1 truncate text-left font-mono text-sm text-foreground hover:text-primary")}>{branch}</CopyableReference>
-    <CopyableReference value={safeRevision} copiedLabel={t("revisionCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "shrink-0 font-mono text-xs text-muted-foreground hover:text-foreground")}>{safeRevision.slice(0, 7) || "—"}</CopyableReference>
+    <CopyableReference value={branch} copiedLabel={t("branchCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "min-w-0 flex-1 truncate text-left font-mono text-sm text-foreground hover:bg-muted")}>{branch}</CopyableReference>
+    <CopyableReference value={safeRevision} copiedLabel={t("revisionCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "h-5 shrink-0 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground")}>{safeRevision.slice(0, 7) || "—"}</CopyableReference>
   </span>;
 }
 
@@ -82,15 +82,19 @@ export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverv
       </div>
     </section>
 
-    {pullRequest && <section aria-labelledby="review-overview-description" className="space-y-4">
-      <h3 id="review-overview-description" className="text-sm font-semibold">{t("description")}</h3>
-      <div className="review-markdown break-words">
+    {pullRequest && <section aria-labelledby="review-overview-description" className="overflow-hidden rounded-lg border bg-card shadow-xs">
+      <header className="border-b bg-muted/40 px-4 py-3">
+        <h3 id="review-overview-description" className="text-sm font-semibold">{t("description")}</h3>
+      </header>
+      <div className="review-markdown break-words px-4 py-5 sm:px-5">
         <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{
           img: ({ alt, src }) => <button type="button" className="text-left text-muted-foreground underline underline-offset-4 hover:text-foreground" onClick={() => openRemoteImage(src)}>{alt ? t("blockedRemoteImageWithAlt", { alt }) : t("blockedRemoteImage")}</button>,
           a: ({ href, children }) => isExternalWebUrl(href) ? <a href={href} onClick={(event) => openExternal(event, href)}>{children}</a> : <span>{children}</span>,
         }}>{pullRequest.description}</ReactMarkdown>
       </div>
-      <a href={pullRequest.url} className="inline-flex items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline" onClick={(event) => openExternal(event, pullRequest.url)}>{t("viewOnGitHub")}<Icon icon={ExternalLinkIcon} /></a>
+      <footer className="border-t bg-muted/20 px-4 py-3 sm:px-5">
+        <a href={pullRequest.url} className="inline-flex items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline" onClick={(event) => openExternal(event, pullRequest.url)}>{t("viewOnGitHub")}<Icon icon={ExternalLinkIcon} /></a>
+      </footer>
     </section>}
   </article>;
 }

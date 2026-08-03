@@ -37,5 +37,15 @@ describe("ReviewReader", () => {
 
     fireEvent.click(within(toolbar).getByRole("tab", { name: "File Changes" }));
     expect(within(toolbar).getByRole("button", { name: "切换为双栏" })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: "切换为双栏" })).toHaveTextContent("双栏");
+  });
+
+  it("布局按钮展示点击后将切换到的目标布局", () => {
+    const { rerender } = render(<ReviewReader snapshot={snapshot} diffMode="side-by-side" narrow={false} editorTheme="vs" initialTreeWidth={25} onSelectFile={vi.fn()} onRetryFile={vi.fn()} onDiffModeChange={vi.fn()} onTreeWidthChange={vi.fn()} onOpenExternal={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "File Changes" }));
+    expect(screen.getByRole("button", { name: "切换为单栏" })).toHaveTextContent("单栏");
+
+    rerender(<ReviewReader snapshot={snapshot} diffMode="inline" narrow={false} editorTheme="vs" initialTreeWidth={25} onSelectFile={vi.fn()} onRetryFile={vi.fn()} onDiffModeChange={vi.fn()} onTreeWidthChange={vi.fn()} onOpenExternal={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "切换为双栏" })).toHaveTextContent("双栏");
   });
 });

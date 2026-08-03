@@ -206,8 +206,8 @@ export function ReviewReader(props: ReviewReaderProps) {
             <Button variant="outline" aria-label={effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}
               aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow}
               onClick={() => props.onDiffModeChange(effectiveDiffMode === "side-by-side" ? "inline" : "side-by-side")}>
-              <Icon icon={effectiveDiffMode === "side-by-side" ? LayoutTwoColumnIcon : ViewAgendaIcon} data-icon="inline-start" aria-hidden />
-              <span className="hidden sm:inline">{effectiveDiffMode === "side-by-side" ? t("review:sideBySide") : t("review:inline")}</span>
+              <Icon icon={effectiveDiffMode === "side-by-side" ? ViewAgendaIcon : LayoutTwoColumnIcon} data-icon="inline-start" aria-hidden />
+              <span className="hidden sm:inline">{effectiveDiffMode === "side-by-side" ? t("review:inline") : t("review:sideBySide")}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>{props.narrow ? t("review:narrowInlineOnly") : effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}</TooltipContent>
