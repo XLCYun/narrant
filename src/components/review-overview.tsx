@@ -23,10 +23,10 @@ export type ReviewOverviewModel = {
 function RevisionReference({ branch, revision }: { branch: string; revision: string }) {
   const { t } = useTranslation("review");
   const safeRevision = revision ?? "";
-  const referenceClassName = "inline-flex cursor-pointer items-center rounded-sm leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const referenceClassName = "inline-flex h-5 cursor-pointer items-center rounded-sm font-mono text-sm leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
   return <span className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border bg-muted/60 px-2.5 py-1.5 shadow-xs">
-    <CopyableReference value={branch} copiedLabel={t("branchCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "min-w-0 flex-1 truncate text-left font-mono text-sm text-foreground hover:bg-muted")}>{branch}</CopyableReference>
-    <CopyableReference value={safeRevision} copiedLabel={t("revisionCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "h-5 shrink-0 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground")}>{safeRevision.slice(0, 7) || "—"}</CopyableReference>
+    <CopyableReference value={branch} copiedLabel={t("branchCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "min-w-0 flex-1 truncate text-left text-foreground hover:bg-muted")}>{branch}</CopyableReference>
+    <CopyableReference value={safeRevision} copiedLabel={t("revisionCopied")} copyFailedLabel={t("referenceCopyFailed")} className={cn(referenceClassName, "shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground")}>{safeRevision.slice(0, 7) || "—"}</CopyableReference>
   </span>;
 }
 
@@ -72,7 +72,7 @@ export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverv
       </div>}
     </header>
 
-    <section aria-labelledby="review-overview-revisions" className="space-y-3 border-y py-4">
+    <section aria-labelledby="review-overview-revisions" className="space-y-3">
       <h3 id="review-overview-revisions" className="text-sm font-semibold">{t("revisions")}</h3>
       <div aria-label={t("revisionRelationLabel", { head: branchName(review.headRef), base: branchName(review.baseRef) })} className="flex min-w-0 flex-col items-stretch gap-2 text-sm sm:flex-row sm:items-center">
         <span className="shrink-0 text-muted-foreground">{t("mergeSentenceStart")}</span>
