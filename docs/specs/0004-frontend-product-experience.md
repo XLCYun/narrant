@@ -175,9 +175,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Base Ref 与 Head Ref 相同时禁止开始 Review。此时提交区以普通警示层级就地显示“Head 与 Base 不能是同一分支”，主按钮保持禁用；不把单个合法选择器标记为错误，也不弹出 Toast。用户修改任一选择后立即恢复合入确认文案。相同 Branch Selection 显示“继续审核”。
 - Review 阅读器由紧凑顶栏、可调整宽度的文件树和 Diff 主区域组成。
 - Review 阅读器占满主内容区剩余高度，页面本身不纵向滚动；顶栏固定，文件树与 Diff 独立滚动。Review 切换只由常驻主侧边栏承担，阅读器内容区不再重复展示 Review 切换入口。
-- 顶栏只保留当前 Review 身份、Base/Head 关系、可用更新、概览、Diff 布局和更多操作。正常状态不常驻显示 revision；完整 revision 位于概览 Sheet，检测到更新时才在顶栏显示当前与可用短 revision。
+- 顶栏只保留当前 Review 身份、Base/Head 关系、可用更新、概览、Diff 布局和退出操作。正常状态不常驻显示 revision；完整 revision 位于概览 Sheet，检测到更新时只说明对应分支发生更新，不在紧凑顶栏展示 commit SHA。
 - 第一版文件树不提供搜索、状态筛选、已读或未读状态；显示目录、File Change 状态、总数和当前选择。选择 File Change 只是自由导航，不产生 viewed、reviewed 或 approved 状态。
-- 文件树使用紧凑列表与 disclosure button：目录默认展开并可逐级折叠，切换 Review Snapshot 后恢复默认展开；不伪装成缺少方向键行为的 ARIA Tree。当前文件整行高亮，新增、删除、修改和重命名使用带语义色的 Hugeicons 图标，并通过可访问名称和 Tooltip 同时表达文字状态。
+- 文件树使用紧凑列表与 disclosure button：目录默认展开并可逐级折叠，切换 Review Snapshot 后恢复默认展开；不伪装成缺少方向键行为的 ARIA Tree。当前文件整行高亮，新增、删除、修改和重命名分别使用 Emerald、Rose、Blue 和 Violet 的 Hugeicons 图标，并通过可访问名称和 Tooltip 同时表达文字状态。
 - 打开或刷新 Review 后，按稳定路径顺序自动选择第一个 File Change；零变更显示明确空状态。
 - 所有进入或切换 Review 阅读器的入口在读取 Review Snapshot 期间立即显示 Loading 图标，并保留来源页面或旧 Review 内容；同一期间禁用其他 Review 导航入口，成功后再一次性切换。入口位于列表行时保留 Review 身份并在行尾显示 Loading 图标，位于按钮时用 Loading 图标替换动作图标且保持按钮尺寸稳定。
 - 跨仓库打开 Review 需要 Workspace Trust 时，原入口的 Loading 在信任 Dialog 出现后结束；“信任并打开”从确认开始到 Review Snapshot 就绪期间显示 Loading 图标、禁用取消和关闭，失败时恢复 Dialog 操作并保留原页面。
@@ -192,9 +192,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - revision 之间的变化继续使用从旧 revision 指向新 revision 的向右箭头，避免把版本演进误表达为分支合入关系。
 - Pull Request 描述使用安全 Markdown：跳过原始 HTML、阻止远程图片自动加载，HTTP/HTTPS 链接交给系统浏览器。
 - 打开已有 Review 后后台自动检查 Selection 更新，但不自动刷新 Review Snapshot。
-- “刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间按钮显示 Loading 图标并保留当前 Snapshot 与旧 Diff，同时禁用 Review 切换；成功后原子切换，失败后保留旧 Snapshot。
+- 检测到 Pull Request 更新时显示“检测到 PR 分支有更新”，检测到 Branch Selection 更新时显示“检测到所选分支有更新”。“刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间按钮显示 Loading 图标并保留当前 Snapshot 与旧 Diff，同时禁用 Review 切换；成功后原子切换，失败后保留旧 Snapshot。
 - 点击另一条 Review 直接切换；切换失败保留当前 Review。离开或切换成功后释放旧 Review Workspace。
-- 页面导航自动关闭当前 Review 的运行时资源；更多菜单保留“关闭审核”，执行后返回所属 Repository Entry 的审核历史，不删除 Review 或 Snapshot。从 Review 阅读器点击所属 Repository Entry 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository Entry 直接打开仓库概览时仍默认进入 `Pull Requests`。
+- 页面导航自动关闭当前 Review 的运行时资源；工具栏直接显示普通尺寸的“退出审核”按钮，执行后返回所属 Repository Entry 的审核历史，不删除 Review 或 Snapshot。从 Review 阅读器点击所属 Repository Entry 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository Entry 直接打开仓库概览时仍默认进入 `Pull Requests`。
 - 不可用 Repository Entry 继续显示在主侧边栏中，允许展开历史名称；主区域显示原路径和不可用原因。重新定位和删除不在本规格范围。
 - 错误按范围反馈：短暂且无需立即处理的错误使用 shadcn Sonner；输入错误就地展示；阻断内容区域的错误在区域内展示；风险确认和用户选择使用 Dialog。导航失败若没有合适的就地承载区域，使用 Sonner 错误通知，且不改变当前主视图或选中态。
 - 加载按范围反馈：首页和首次列表使用 Skeleton；后台列表刷新保留内容并显示局部进度；Review Snapshot 导航在触发入口显示 Loading 图标；File Change 读取只占用 Diff 区域并同时显示 Loading 图标与 Skeleton；Snapshot 刷新保留旧 Diff。Loading 图标立即出现且不设置人为最短展示时长；可见文案或可访问名称表达正在执行的操作，图标本身不重复朗读。

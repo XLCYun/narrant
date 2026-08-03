@@ -62,6 +62,11 @@ revisions. Its identity and history remain saved even when its Git objects are n
 longer available in the user's repository.
 _Avoid_: Latest PR, live diff
 
+**Review Update**:
+The condition in which the moving base or head ref of a **Review Selection** no
+longer resolves to the revisions presented by the open **Review Snapshot**.
+_Avoid_: Available version, new Snapshot
+
 **Review**:
 A durable code-review record owned by one **Repository Entry**. It preserves review
 history across application launches, owns one **Review Selection**, and may

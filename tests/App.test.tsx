@@ -257,8 +257,7 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
-    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "关闭审核" }));
+    fireEvent.click(screen.getByRole("button", { name: "退出审核" }));
     expect(await screen.findByRole("tab", { name: "审核历史", selected: true })).toBeInTheDocument();
     expect(screen.getAllByLabelText("将 Head 分支 topic 合入 Base 分支 main").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "纳言" }));
@@ -402,7 +401,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Refreshable/ }));
-    expect(await screen.findByText("当前 head-1 · 可用 head-2")).toBeInTheDocument();
+    expect(await screen.findByText("检测到 PR 分支有更新")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "审核阅读器" })).not.toHaveTextContent("base-1 → head-1");
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", expect.anything()));
@@ -728,7 +727,7 @@ describe("App", () => {
     expect(await screen.findByRole("navigation", { name: "文件树" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: /main.rs.*修改/ })).toBeInTheDocument();
-    expect(screen.getAllByRole("img", { name: "新增" })[0].querySelector("svg")).toHaveClass("text-green-600");
+    expect(screen.getAllByRole("img", { name: "新增" })[0]).toHaveClass("text-emerald-600", "bg-emerald-500/10");
 
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     expect(screen.getByRole("button", { name: "src" })).toHaveAttribute("aria-expanded", "false");
@@ -831,7 +830,7 @@ describe("App", () => {
 
     await i18n.changeLanguage("en");
     expect(screen.getByRole("region", { name: "Review reader" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Side by side" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Switch to inline" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "File tree" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /a-first.txt.*Added/ })).toBeInTheDocument();
   });
@@ -942,7 +941,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
     expect(await screen.findByRole("button", { name: /old.txt/ })).toBeInTheDocument();
 
-    expect(await screen.findByText("当前 head-old · 可用 head-new")).toBeInTheDocument();
+    expect(await screen.findByText("检测到所选分支有更新")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /old.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new.txt/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
@@ -990,17 +989,18 @@ describe("App", () => {
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-font-family", "'JetBrains Mono Variable', monospace");
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "side-by-side");
     expect(screen.getByRole("separator", { name: "调整文件树宽度" })).toHaveAttribute("aria-valuenow", "31");
-    fireEvent.click(screen.getByRole("button", { name: "单栏" }));
+    expect(screen.getByRole("button", { name: "退出审核" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "切换为单栏" }));
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "inline");
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("inline");
-    fireEvent.click(screen.getByRole("button", { name: "双栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "切换为双栏" }));
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
 
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
     fireEvent(window, new Event("resize"));
     await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "inline"));
-    expect(screen.getByRole("button", { name: "单栏" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "双栏" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "切换为双栏" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "切换为双栏" })).toBeDisabled();
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
 
     changeSystemTheme(true);

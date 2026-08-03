@@ -91,8 +91,9 @@ export const resources = {
       localBranchReview: "本地分支审核", pullRequest: "Pull Request", author: "作者", status: "状态", draft: "草稿",
       state: { open: "开放", closed: "已关闭", merged: "已合并" }, revisions: "Revisions", description: "描述",
       blockedRemoteImage: "远程图片已阻止加载", blockedRemoteImageWithAlt: "远程图片“{{alt}}”已阻止加载", viewOnGitHub: "在 GitHub 查看",
-      moreActions: "更多操作", close: "关闭审核", refresh: "刷新审核", refreshing: "正在刷新审核…", latest: "当前已是最新版本",
-      currentAvailable: "当前 {{current}} · 可用 {{available}}", pullRequestUpdate: "Pull Request 更新", branchUpdate: "Branch Review 更新",
+      moreActions: "更多操作", close: "关闭审核", exit: "退出审核", refresh: "刷新审核", refreshing: "正在刷新审核…", latest: "当前已是最新版本",
+      currentAvailable: "当前 {{current}} · 可用 {{available}}", pullRequestBranchesUpdated: "检测到 PR 分支有更新", selectedBranchesUpdated: "检测到所选分支有更新", pullRequestUpdate: "Pull Request 更新", branchUpdate: "Branch Review 更新",
+      switchToInline: "切换为单栏", switchToSideBySide: "切换为双栏", narrowInlineOnly: "当前窗口宽度仅支持单栏",
       fileChangeError: "无法读取 File Change", closeDialog: "关闭",
     },
     github: {
@@ -149,8 +150,9 @@ export const resources = {
       localBranchReview: "Local branch review", pullRequest: "Pull Request", author: "Author", status: "Status", draft: "Draft",
       state: { open: "Open", closed: "Closed", merged: "Merged" }, revisions: "Revisions", description: "Description",
       blockedRemoteImage: "Remote image was blocked", blockedRemoteImageWithAlt: "Remote image \"{{alt}}\" was blocked", viewOnGitHub: "View on GitHub",
-      moreActions: "More actions", close: "Close review", refresh: "Refresh review", refreshing: "Refreshing review…", latest: "Already up to date",
-      currentAvailable: "Current {{current}} · available {{available}}", pullRequestUpdate: "Pull Request update", branchUpdate: "Branch review update",
+      moreActions: "More actions", close: "Close review", exit: "Exit review", refresh: "Refresh review", refreshing: "Refreshing review…", latest: "Already up to date",
+      currentAvailable: "Current {{current}} · available {{available}}", pullRequestBranchesUpdated: "PR branches have updates", selectedBranchesUpdated: "Selected branches have updates", pullRequestUpdate: "Pull Request update", branchUpdate: "Branch review update",
+      switchToInline: "Switch to inline", switchToSideBySide: "Switch to side by side", narrowInlineOnly: "Only inline layout is available at this window width",
       fileChangeError: "Could not load File Change", closeDialog: "Close",
     },
     github: {

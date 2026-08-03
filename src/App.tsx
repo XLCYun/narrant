@@ -1070,10 +1070,6 @@ export function App() {
   }, [snapshot ? `${snapshot.reviewId}:${snapshot.snapshotId ?? `${snapshot.baseRevision}:${snapshot.headRevision}`}` : undefined]);
 
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
-  function shortRevision(revision: string) {
-    return revision.slice(0, 8);
-  }
-
   return <AppShell
     enabled={catalogRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
     fallbackClassName="narrant-app"
@@ -1239,13 +1235,13 @@ export function App() {
         editorTheme={editorTheme}
         initialTreeWidth={initialTreeWidth}
         updateAction={<>
-          {snapshot.pullRequest && reviewUpdate?.updateAvailable && <div role="status" className="flex items-center gap-2 text-xs">
-            <span className="text-amber-700 dark:text-amber-400">{t("review:currentAvailable", { current: shortRevision(reviewUpdate.currentHeadRevision), available: shortRevision(reviewUpdate.availableHeadRevision) })}</span>
-            <Button size="xs" disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
+          {snapshot.pullRequest && reviewUpdate?.updateAvailable && <div role="status" className="flex items-center gap-2 text-sm">
+            <span className="text-amber-700 dark:text-amber-300">{t("review:pullRequestBranchesUpdated")}</span>
+            <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
           </div>}
-          {!snapshot.pullRequest && branchUpdate?.changed && <div role="status" className="flex items-center gap-2 text-xs">
-            <span className="text-amber-700 dark:text-amber-400">{t("review:currentAvailable", { current: shortRevision(branchUpdate.currentHeadRevision), available: shortRevision(branchUpdate.latestHeadRevision) })}</span>
-            <Button size="xs" disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
+          {!snapshot.pullRequest && branchUpdate?.changed && <div role="status" className="flex items-center gap-2 text-sm">
+            <span className="text-amber-700 dark:text-amber-300">{t("review:selectedBranchesUpdated")}</span>
+            <Button disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>{refreshingReview && <Spinner aria-hidden />}{refreshingReview ? t("review:refreshing") : t("review:refresh")}</Button>
           </div>}
         </>}
         notice={reviewUpdateError ? <p role="alert" className="text-destructive">{reviewUpdateError}</p> : undefined}

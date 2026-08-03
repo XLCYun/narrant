@@ -25,11 +25,11 @@ export function BranchRelation({
   const head = branchName(headRef);
   const label = `将 Head 分支 ${head} 合入 Base 分支 ${base}`;
   const baseBadge = <Tooltip>
-    <TooltipTrigger render={<Badge variant="secondary" className="h-auto max-w-full break-all border border-border bg-muted py-0.5 text-left font-mono font-normal text-foreground shadow-xs whitespace-normal hover:bg-muted" />}>{base}</TooltipTrigger>
+    <TooltipTrigger render={<Badge variant="secondary" className="max-w-full break-all border border-border bg-muted text-left font-mono font-normal text-foreground shadow-xs whitespace-normal hover:bg-muted" />}>{base}</TooltipTrigger>
     <TooltipContent>{baseRef}</TooltipContent>
   </Tooltip>;
   const headBadge = <Tooltip>
-    <TooltipTrigger render={<Badge variant="secondary" className="h-auto max-w-full break-all border border-border bg-muted py-0.5 text-left font-mono font-normal text-foreground shadow-xs whitespace-normal hover:bg-muted" />}>{head}</TooltipTrigger>
+    <TooltipTrigger render={<Badge variant="secondary" className="max-w-full break-all border border-border bg-muted text-left font-mono font-normal text-foreground shadow-xs whitespace-normal hover:bg-muted" />}>{head}</TooltipTrigger>
     <TooltipContent>{headRef}</TooltipContent>
   </Tooltip>;
   return <span className={cn("inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5", className)} aria-label={label}>

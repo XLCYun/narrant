@@ -6,15 +6,21 @@ import {
   FileEditIcon,
   FileRemoveIcon,
   FileSyncIcon,
-  MoreHorizontalIcon,
+  GitMergeIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestDraftIcon,
+  GitPullRequestIcon,
+  LayoutTwoColumnIcon,
+  Logout02Icon,
+  ViewAgendaIcon,
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
 import { BranchRelation } from "@/components/branch-relation";
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { ReviewOverview } from "@/components/review-overview";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -141,18 +147,43 @@ export function ReviewReader(props: ReviewReaderProps) {
       added: FileAddIcon, deleted: FileRemoveIcon, modified: FileEditIcon, renamed: FileSyncIcon,
     };
     const colors: Record<ChangeStatus, string> = {
-      added: "text-green-600 dark:text-green-400", deleted: "text-red-600 dark:text-red-400",
-      modified: "text-amber-600 dark:text-amber-400", renamed: "text-blue-600 dark:text-blue-400",
+      added: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      deleted: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+      modified: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+      renamed: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
     };
     const icon = icons[status];
     if (!icon) return null;
     const label = t(`review:${status}`);
     return <Tooltip>
-      <TooltipTrigger render={<span role="img" aria-label={label} className="inline-flex shrink-0" />}>
-        <Icon icon={icon} className={cn("size-3.5", colors[status])} aria-hidden />
+      <TooltipTrigger render={<span role="img" aria-label={label} className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-md", colors[status])} />}>
+        <Icon icon={icon} className="size-3.5" aria-hidden />
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>;
+  }
+
+  /** 使用统一 Badge 呈现 Pull Request 的协作状态。 */
+  function renderPullRequestStatus() {
+    const pullRequest = props.snapshot.pullRequest;
+    if (!pullRequest) return null;
+    const state: "draft" | PullRequestMetadata["state"] = pullRequest.draft ? "draft" : pullRequest.state;
+    const icons = {
+      draft: GitPullRequestDraftIcon,
+      open: GitPullRequestIcon,
+      closed: GitPullRequestClosedIcon,
+      merged: GitMergeIcon,
+    };
+    const colors = {
+      draft: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+      open: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+      closed: "bg-muted text-muted-foreground",
+      merged: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
+    };
+    return <Badge variant="secondary" className={cn("border-0", colors[state])}>
+      <Icon icon={icons[state]} data-icon="inline-start" aria-hidden />
+      {pullRequest.draft ? t("review:draft") : t(`review:state.${pullRequest.state}`)}
+    </Badge>;
   }
 
   /** 递归渲染可独立折叠的紧凑目录。 */
@@ -190,29 +221,34 @@ export function ReviewReader(props: ReviewReaderProps) {
   }
 
   return <section aria-label={t("review:reader")} className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
-    <header className="flex min-h-12 shrink-0 items-center justify-between gap-3 border-b px-3 py-2">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b px-3 py-2">
+      <div className="min-w-0 flex-1">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold">{props.snapshot.pullRequest ? `#${props.snapshot.pullRequest.number} ${props.snapshot.pullRequest.title}` : t("review:localBranchReview")}</h2>
-          <BranchRelation baseRef={props.snapshot.baseRef} headRef={props.snapshot.headRef} className="flex-nowrap [&_[data-slot=badge]]:truncate [&_[data-slot=badge]]:whitespace-nowrap" />
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="truncate text-sm font-semibold">{props.snapshot.pullRequest ? `#${props.snapshot.pullRequest.number} ${props.snapshot.pullRequest.title}` : t("review:localBranchReview")}</h2>
+            {renderPullRequestStatus()}
+          </div>
+          <BranchRelation baseRef={props.snapshot.baseRef} headRef={props.snapshot.headRef} className="mt-1.5 flex-nowrap [&_[data-slot=badge]]:truncate [&_[data-slot=badge]]:whitespace-nowrap" />
         </div>
-        {props.snapshot.pullRequest && <span className="hidden rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground lg:inline">{props.snapshot.pullRequest.draft ? t("review:draft") : t(`review:state.${props.snapshot.pullRequest.state}`)}</span>}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
         {props.updateAction}
         <ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} />
-        <div aria-label={t("review:diffLayout")} className="flex gap-1">
-          <Button size="xs" variant={effectiveDiffMode === "inline" ? "secondary" : "ghost"} aria-pressed={effectiveDiffMode === "inline"} onClick={() => props.onDiffModeChange("inline")}>{t("review:inline")}</Button>
-          <Button size="xs" variant={effectiveDiffMode === "side-by-side" ? "secondary" : "ghost"} aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow} onClick={() => props.onDiffModeChange("side-by-side")}>{t("review:sideBySide")}</Button>
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger aria-label={t("review:moreActions")} render={<Button size="icon-xs" variant="ghost" />}>
-            <Icon icon={MoreHorizontalIcon} aria-hidden />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="bottom" align="end">
-            <DropdownMenuItem onClick={props.onClose}>{t("review:close")}</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" />}>
+            <Button variant="outline" aria-label={effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}
+              aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow}
+              onClick={() => props.onDiffModeChange(effectiveDiffMode === "side-by-side" ? "inline" : "side-by-side")}>
+              <Icon icon={effectiveDiffMode === "side-by-side" ? LayoutTwoColumnIcon : ViewAgendaIcon} data-icon="inline-start" aria-hidden />
+              {effectiveDiffMode === "side-by-side" ? t("review:sideBySide") : t("review:inline")}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{props.narrow ? t("review:narrowInlineOnly") : effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}</TooltipContent>
+        </Tooltip>
+        <Button variant="outline" onClick={props.onClose}>
+          <Icon icon={Logout02Icon} data-icon="inline-start" aria-hidden />
+          {t("review:exit")}
+        </Button>
       </div>
     </header>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}

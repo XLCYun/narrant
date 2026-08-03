@@ -138,8 +138,14 @@ const readerSnapshot: ReviewReaderSnapshot = {
 };
 
 /** 用代表性长短路径和变更内容预览完整 Review Reader。 */
-function ReviewReaderPreview({ empty = false, update = false }: { empty?: boolean; update?: boolean }) {
-  const snapshot = empty ? { ...readerSnapshot, fileChanges: [] } : readerSnapshot;
+function ReviewReaderPreview({ empty = false, merged = false, update = false }: { empty?: boolean; merged?: boolean; update?: boolean }) {
+  const snapshot = {
+    ...readerSnapshot,
+    fileChanges: empty ? [] : readerSnapshot.fileChanges,
+    pullRequest: merged && readerSnapshot.pullRequest
+      ? { ...readerSnapshot.pullRequest, state: "merged" as const }
+      : readerSnapshot.pullRequest,
+  };
   const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => [
     change.path,
     {
@@ -158,7 +164,7 @@ function ReviewReaderPreview({ empty = false, update = false }: { empty?: boolea
       narrow={window.innerWidth < 1200}
       editorTheme={document.documentElement.classList.contains("dark") ? "vs-dark" : "light"}
       initialTreeWidth={26}
-      updateAction={update ? <div role="status" className="flex items-center gap-2 text-xs"><span className="text-amber-700 dark:text-amber-400">当前 274aaa2f · 可用 81bc230a</span><Button size="xs">刷新审核</Button></div> : undefined}
+      updateAction={update ? <div role="status" className="flex items-center gap-2 text-sm"><span className="text-amber-700 dark:text-amber-300">检测到 PR 分支有更新</span><Button>刷新审核</Button></div> : undefined}
       onSelectFile={setSelectedPath}
       onRetryFile={setSelectedPath}
       onDiffModeChange={setMode}
@@ -232,6 +238,7 @@ const previews: Record<string, PreviewDefinition> = {
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
+      merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
     },
   },

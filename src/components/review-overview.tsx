@@ -55,7 +55,7 @@ export function ReviewOverview({ review, onOpenExternal }: ReviewOverviewProps) 
 
   return (
     <Sheet>
-      <SheetTrigger render={<Button size="xs" variant="outline" />}>
+      <SheetTrigger render={<Button variant="outline" />}>
         <Icon icon={InformationCircleIcon} />
         {t("openOverview")}
       </SheetTrigger>
