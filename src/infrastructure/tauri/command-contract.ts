@@ -6,16 +6,7 @@ import type {
   SavedReviewSummary,
 } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
-
-export type RepositoryEntry = {
-  id: number;
-  canonicalPath: string;
-  commonDirectory: string;
-  createdAt: number;
-  lastOpenedAt: number;
-  available: boolean;
-  unavailableReason: string | null;
-};
+import type { BranchRefs, RepositoryEntry } from "@/repository/repository-application";
 
 export type GitHubAuthStatus = {
   configured: boolean;
@@ -31,8 +22,6 @@ export type DeviceAuthorization = {
   expiresIn: number;
   interval: number;
 };
-
-export type BranchRefs = { refs: string[]; defaultRef: string; currentRef: string };
 
 export type BranchReviewUpdate = {
   changed: boolean;

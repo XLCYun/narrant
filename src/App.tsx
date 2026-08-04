@@ -22,6 +22,7 @@ import {
 } from "@/components/review-reader";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
+import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import {
   tauriTransport,
 } from "@/infrastructure/tauri/transport";
@@ -29,8 +30,8 @@ import type {
   BranchReviewUpdate,
   DeviceAuthorization,
   GitHubAuthStatus,
-  RepositoryEntry,
 } from "@/infrastructure/tauri/command-contract";
+import type { RepositoryContext, RepositoryEntry } from "@/repository/repository-application";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import "@/lib/i18n";
 
@@ -71,6 +72,10 @@ export function App() {
   const editorTheme = useSystemTheme();
   const reviewApplicationAdapter = useMemo(
     () => createTauriReviewApplicationAdapter(tauriTransport),
+    [],
+  );
+  const repositoryApplication = useMemo(
+    () => createTauriRepositoryApplicationAdapter(tauriTransport),
     [],
   );
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
@@ -153,18 +158,6 @@ export function App() {
     return `${t(key)} ${detail}`;
   }
 
-  /** 执行可取消的本地 Core Git 命令，并在新操作开始时取消旧操作。 */
-  async function invokeLocalGit(command: "list_local_refs", arguments_: { repositoryEntryId: number }) {
-    activeGitAbort.current?.abort();
-    const abort = new AbortController();
-    activeGitAbort.current = abort;
-    try {
-      return await tauriTransport.invokeCancellable(command, arguments_, abort.signal);
-    } finally {
-      if (activeGitAbort.current === abort) activeGitAbort.current = undefined;
-    }
-  }
-
   /** 后台检查使用独立 operation identity，不取消用户正在读取的 File Change。 */
   async function invokeBackgroundGit(
     command: "check_branch_review_updates",
@@ -208,17 +201,14 @@ export function App() {
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     setCatalogLoading(true);
-    void Promise.all([
-      tauriTransport.invoke("list_repository_entries", {}),
-      tauriTransport.invoke("list_reviews", { repositoryEntryId: null }),
-    ])
-      .then(([entries, reviews]) => {
-        setRepositoryEntries(entries);
-        setRecentReviews(reviews ?? []);
+    void repositoryApplication.loadCatalog()
+      .then(({ repositories, recentReviews }) => {
+        setRepositoryEntries(repositories);
+        setRecentReviews(recentReviews ?? []);
       })
       .catch((reason) => setError(String(reason)))
       .finally(() => setCatalogLoading(false));
-  }, []);
+  }, [repositoryApplication]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -238,9 +228,7 @@ export function App() {
     setError("");
     setCatalogLoading(true);
     try {
-      const entry = await tauriTransport.invoke("register_repository_entry", {
-        path: repositoryPath,
-      });
+      const entry = await repositoryApplication.register(repositoryPath);
       setRepositoryEntries((entries) => upsertRepositoryEntry(entries, entry));
     } catch (reason) {
       setError(String(reason));
@@ -254,7 +242,7 @@ export function App() {
     setRepositoryPath(path);
     setError("");
     try {
-      const entry = await tauriTransport.invoke("register_repository_entry", { path });
+      const entry = await repositoryApplication.register(path);
       setRepositoryEntries((entries) => upsertRepositoryEntry(entries, entry));
       await openRepository(entry);
     } catch (reason) { setError(repositoryOpenError(reason)); }
@@ -277,18 +265,14 @@ export function App() {
 
   /** 从持久化 Catalog 重新加载 Repository Entry 的 Review 历史。 */
   async function loadSavedReviews(repositoryEntryId: number) {
-    const reviews = await tauriTransport.invoke("list_saved_reviews", {
-      repositoryEntryId,
-    });
-    setSavedReviews(reviews ?? []);
+    const loaded = await repositoryApplication.loadReviews(repositoryEntryId);
+    setSavedReviews(loaded.savedReviews ?? []);
+    setRepositoryReviews(loaded.reviews ?? []);
   }
 
   /** 在 Workspace Trust 已确认后进入 Repository Entry 上下文。 */
-  async function enterRepository(opened: RepositoryEntry) {
-    const [saved, reviews] = await Promise.all([
-      tauriTransport.invoke("list_saved_reviews", { repositoryEntryId: opened.id }),
-      tauriTransport.invoke("list_reviews", { repositoryEntryId: opened.id }),
-    ]);
+  async function enterRepository(context: RepositoryContext) {
+    const { repository: opened, savedReviews: saved, reviews } = context;
     setSelectedRepository(opened);
     setSavedReviews(saved ?? []);
     setRepositoryReviews(reviews ?? []);
@@ -308,20 +292,18 @@ export function App() {
     const previousRepositoryId = selectedRepository?.id;
     const leavingReview = Boolean(snapshot);
     try {
-      const opened = await tauriTransport.invoke("open_repository_entry", { id: entry.id });
+      const result = await repositoryApplication.open(entry.id);
+      const opened = result.kind === "ready" ? result.context.repository : result.repository;
       setRepositoryEntries((entries) => upsertRepositoryEntry(entries, opened));
-      if (!opened.available) {
+      if (result.kind === "unavailable") {
         setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
         return "failed";
       }
-      const trusted = await tauriTransport.invoke("repository_workspace_trust", {
-        repositoryEntryId: opened.id,
-      });
-      if (!trusted) {
+      if (result.kind === "trust-required") {
         setPendingRepository(opened);
         return "trust-required";
       }
-      await enterRepository(opened);
+      await enterRepository(result.context);
       if (leavingReview) {
         closeReviewView(previousRepositoryId === opened.id ? "history" : "pull-requests");
       } else {
@@ -366,7 +348,7 @@ export function App() {
     setSelectedRepository((entry) => entry?.id === summary.repositoryEntryId
       ? { ...entry, lastOpenedAt: reopened.lastOpenedAt }
       : entry);
-    void Promise.resolve(tauriTransport.invoke("open_repository_entry", { id: summary.repositoryEntryId }))
+    void Promise.resolve(repositoryApplication.markOpened(summary.repositoryEntryId))
       .catch(() => undefined);
   }
 
@@ -403,25 +385,17 @@ export function App() {
       if (selectedRepository?.id !== summary.repositoryEntryId) {
         const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
         if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
-        const opened = await tauriTransport.invoke("open_repository_entry", { id: entry.id });
-        const trusted = await tauriTransport.invoke("repository_workspace_trust", {
-          repositoryEntryId: opened.id,
-        });
-        if (!trusted) {
-          setPendingRepository(opened);
+        const repositoryResult = await repositoryApplication.open(entry.id);
+        if (repositoryResult.kind === "unavailable") {
+          throw new Error(repositoryResult.repository.unavailableReason ?? "Repository Entry 当前不可用。");
+        }
+        if (repositoryResult.kind === "trust-required") {
+          setPendingRepository(repositoryResult.repository);
           setPendingReview(summary);
           return;
         }
-        const [saved, reviews] = await Promise.all([
-          tauriTransport.invoke("list_saved_reviews", { repositoryEntryId: opened.id }),
-          tauriTransport.invoke("list_reviews", { repositoryEntryId: opened.id }),
-        ]);
-        setSelectedRepository(opened);
-        setSavedReviews(saved ?? []);
-        setRepositoryReviews(reviews ?? []);
-        setRepositoryPath(opened.canonicalPath);
-        setPullRequestGroups([]);
-        setDiscoveryError(undefined);
+        const opened = repositoryResult.context.repository;
+        await enterRepository(repositoryResult.context);
         const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
         if (result.kind !== "opened") throw new Error(result.failure.detail);
         const reopened = { ...summary, lastOpenedAt: Date.now() };
@@ -444,14 +418,12 @@ export function App() {
     setError("");
     setGrantingTrust(true);
     try {
-      await tauriTransport.invoke("grant_repository_workspace_trust", {
-        repositoryEntryId: pendingRepository.id,
-      });
       const trustedRepository = pendingRepository;
       const reviewToResume = pendingReview;
+      const context = await repositoryApplication.grantTrust(trustedRepository);
       setPendingRepository(undefined);
       setPendingReview(undefined);
-      await enterRepository(trustedRepository);
+      await enterRepository(context);
       if (reviewToResume) await reopenResolvedReview(reviewToResume);
     } catch (reason) {
       setError(String(reason));
@@ -659,10 +631,11 @@ export function App() {
     if (resolvedRepositoryEntryId === undefined) return;
     setBranchReloadError("");
     setBranchesReloading(true);
+    activeGitAbort.current?.abort();
+    const abort = new AbortController();
+    activeGitAbort.current = abort;
     try {
-      const branches = await invokeLocalGit("list_local_refs", {
-        repositoryEntryId: resolvedRepositoryEntryId,
-      });
+      const branches = await repositoryApplication.loadBranches(resolvedRepositoryEntryId, abort.signal);
       if (!branches || !Array.isArray(branches.refs)) {
         throw new Error("分支应用边界返回了无效数据。");
       }
@@ -674,6 +647,7 @@ export function App() {
     } catch (reason) {
       setBranchReloadError(String(reason));
     } finally {
+      if (activeGitAbort.current === abort) activeGitAbort.current = undefined;
       setBranchesReloading(false);
     }
   }
