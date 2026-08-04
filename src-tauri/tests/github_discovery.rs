@@ -45,6 +45,7 @@ async fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_
             "user": { "login": "octocat" },
             "state": "closed",
             "merged_at": "2026-07-26T00:00:00Z",
+            "updated_at": "2026-07-31T08:30:00Z",
             "draft": false,
             "html_url": "https://github.com/octo-org/octo-repo/pull/42",
             "base": { "ref": "main", "sha": "base-sha" },
@@ -86,6 +87,7 @@ async fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_
     let pull_request = &groups[1].pull_requests[0];
     assert_eq!(pull_request.number, 42);
     assert_eq!(pull_request.state, "merged");
+    assert_eq!(pull_request.updated_at, "2026-07-31T08:30:00Z");
     assert_eq!(pull_request.base.sha, "base-sha");
     assert_eq!(pull_request.head.sha, "head-sha");
     first_page.assert();

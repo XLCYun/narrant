@@ -40,6 +40,7 @@ pub struct DiscoveredPullRequest {
     pub state: String,
     pub draft: bool,
     pub url: String,
+    pub updated_at: String,
     pub base: PullRequestRevision,
     pub head: PullRequestRevision,
 }
@@ -241,6 +242,7 @@ struct PullRequestListItem {
     merged_at: Option<String>,
     draft: bool,
     html_url: String,
+    updated_at: String,
     base: PullRequestRevision,
     head: PullRequestRevision,
 }
@@ -266,6 +268,7 @@ impl From<PullRequestListItem> for DiscoveredPullRequest {
             },
             draft: value.draft,
             url: value.html_url,
+            updated_at: value.updated_at,
             base: value.base,
             head: value.head,
         }

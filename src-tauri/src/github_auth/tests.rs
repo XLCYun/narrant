@@ -41,6 +41,34 @@ struct FakeOAuthClient {
     device_result: Result<OAuthTokens, String>,
 }
 
+/// 在认证公开边界下提供可观察的 GitHub Identity 缓存。
+struct FakeIdentityProvider {
+    cached: StdMutex<Option<GitHubIdentity>>,
+}
+
+#[async_trait]
+impl GitHubIdentityProvider for FakeIdentityProvider {
+    /// 返回测试预置的公开身份。
+    async fn cached(&self) -> Result<Option<GitHubIdentity>, String> {
+        Ok(self.cached.lock().unwrap().clone())
+    }
+
+    /// 将测试预置身份作为刷新结果。
+    async fn refresh(&self, _: &SecretString) -> Result<GitHubIdentity, String> {
+        self.cached
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "profile unavailable".to_owned())
+    }
+
+    /// 清空测试身份，以便从公开状态观察退出行为。
+    fn clear(&self) -> Result<(), String> {
+        *self.cached.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl OAuthClient for FakeOAuthClient {
     async fn start_device_flow(&self, _: &SecretString) -> Result<OAuthDeviceCodes, String> {
@@ -75,6 +103,15 @@ fn expired_credentials() -> StoredCredentialsWire {
 /// 使用可控 OAuth adapter 构建已配置的认证服务。
 fn auth_with(store: Arc<MemoryStore>, oauth: Arc<FakeOAuthClient>) -> GitHubAuth {
     GitHubAuth::new("client-id", "narrant", oauth, store)
+}
+
+/// 使用可观察的身份缓存构建 GitHub Authentication。
+fn auth_with_identity(
+    store: Arc<MemoryStore>,
+    oauth: Arc<FakeOAuthClient>,
+    identity: Arc<FakeIdentityProvider>,
+) -> GitHubAuth {
+    GitHubAuth::with_identity_provider("client-id", "narrant", oauth, store, identity)
 }
 
 #[tokio::test]
@@ -141,6 +178,46 @@ async fn malformed_credentials_are_deleted_and_not_reported_as_signed_in() {
 
     assert_eq!(auth.status().await.unwrap_err(), reauthorize_error());
     assert_eq!(store.load().unwrap(), None);
+}
+
+#[tokio::test]
+async fn status_exposes_cached_github_identity_and_sign_out_clears_it() {
+    let store = Arc::new(MemoryStore::default());
+    store
+        .save(
+            &serde_json::to_string(&StoredCredentialsWire {
+                access_token: "access".to_owned(),
+                refresh_token: "refresh".to_owned(),
+                expires_at: now_seconds() + 3_600,
+                refresh_token_expires_at: now_seconds() + 7_200,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    let identity = Arc::new(FakeIdentityProvider {
+        cached: StdMutex::new(Some(GitHubIdentity {
+            id: 42,
+            login: "octocat".to_owned(),
+            name: Some("Monalisa".to_owned()),
+            avatar_path: Some("/cache/avatar.png".to_owned()),
+        })),
+    });
+    let auth = auth_with_identity(
+        store,
+        Arc::new(FakeOAuthClient {
+            refreshes: AtomicUsize::new(0),
+            refresh_result: Err("not used".to_owned()),
+            device_result: Err("not used".to_owned()),
+        }),
+        identity.clone(),
+    );
+
+    let status = auth.status().await.unwrap();
+    assert!(status.signed_in);
+    assert_eq!(status.identity.unwrap().login, "octocat");
+
+    auth.sign_out().await.unwrap();
+    assert_eq!(identity.cached().await.unwrap(), None);
 }
 
 #[tokio::test]

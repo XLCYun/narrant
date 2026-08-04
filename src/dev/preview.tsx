@@ -1,0 +1,317 @@
+import { StrictMode, type ReactNode, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+import "@/index.css";
+import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
+import { FileChangeLoading } from "@/components/file-change-loading";
+import { RepositoryOverview } from "@/components/repository-overview";
+import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { i18n } from "@/lib/i18n";
+import type { ReviewSummary } from "@/lib/review-types";
+
+/** 描述一个可以直接在浏览器中验收的组件场景。 */
+type PreviewScenario = {
+  label: string;
+  render: () => ReactNode;
+};
+
+/** 描述一个组件及其可切换的代表性预览场景。 */
+type PreviewDefinition = {
+  label: string;
+  scenarios: Record<string, PreviewScenario>;
+};
+
+const defaultRefs = [
+  "refs/heads/main",
+  "refs/heads/release",
+  "refs/heads/codex/issue-11-system-theme",
+  "refs/heads/codex/issue-21-repository-entries",
+  "refs/remotes/origin/main",
+  "refs/remotes/origin/release",
+];
+
+const longHeadRef = "refs/heads/codex/frontend-product-experience-spec-with-a-very-long-suffix";
+
+/** 用可交互的本地状态承载一个 Branch Selection 预览。 */
+function BranchSelectorPreview({
+  refs = defaultRefs,
+  initialHead = "refs/heads/release",
+  initialBase = "refs/remotes/origin/main",
+  currentRef = "refs/heads/release",
+  action = "start",
+  opening = false,
+}: {
+  refs?: string[];
+  initialHead?: string;
+  initialBase?: string;
+  currentRef?: string;
+  action?: BranchSelectorAction;
+  opening?: boolean;
+}) {
+  const [headRef, setHeadRef] = useState(initialHead);
+  const [baseRef, setBaseRef] = useState(initialBase);
+
+  return <BranchReviewSelector
+    refs={refs}
+    currentRef={currentRef}
+    defaultRef="refs/remotes/origin/main"
+    headRef={headRef}
+    baseRef={baseRef}
+    action={action}
+    opening={opening}
+    reviewNavigationBusy={opening}
+    onHeadChange={setHeadRef}
+    onBaseChange={setBaseRef}
+    onReload={() => undefined}
+    onSubmit={() => undefined}
+  />;
+}
+
+const reviewHistory: ReviewSummary[] = [
+  {
+    reviewId: "review-preview-1",
+    repositoryEntryId: 1,
+    repositoryPath: "/work/narrant",
+    baseRef: "refs/heads/main",
+    headRef: "refs/heads/codex/review-history-navigation",
+    lastOpenedAt: Date.now(),
+  },
+  {
+    reviewId: "review-preview-2",
+    repositoryEntryId: 1,
+    repositoryPath: "/work/narrant",
+    baseRef: "refs/remotes/upstream/release-with-a-long-name",
+    headRef: "refs/heads/feature/a-review-with-an-extraordinarily-long-branch-name",
+    lastOpenedAt: Date.now() - 60_000,
+  },
+];
+
+/** 用本地状态预览审核历史的整行导航与打开反馈。 */
+function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?: boolean }) {
+  const [openingReviewKey, setOpeningReviewKey] = useState(
+    initiallyOpening ? "review:review-preview-1" : undefined,
+  );
+  return <RepositoryOverview
+    repositoryName="narrant"
+    repositoryPath="/work/narrant"
+    savedReviews={[]}
+    pullRequestGroups={[]}
+    repositoryReviews={reviewHistory}
+    discoveryLoading={false}
+    githubConnected
+    localBranches={null}
+    initialTab="history"
+    openingReviewKey={openingReviewKey}
+    reviewNavigationBusy={Boolean(openingReviewKey)}
+    onRetryDiscovery={() => undefined}
+    onConnectGitHub={() => undefined}
+    onOpenSavedReview={() => undefined}
+    onOpenPullRequest={() => undefined}
+    onOpenReview={(review) => setOpeningReviewKey(`review:${review.reviewId}`)}
+  />;
+}
+
+const readerSnapshot: ReviewReaderSnapshot = {
+  reviewId: "review-reader-preview",
+  snapshotId: "snapshot-reader-preview",
+  baseRef: "refs/heads/codex/frontend-product-experience-spec",
+  baseRevision: "c530a07d6a0bd935a5aa7a62e34f19e2f3ea2bdd",
+  comparisonBase: "c530a07d6a0bd935a5aa7a62e34f19e2f3ea2bdd",
+  headRef: "refs/heads/codex/issue-45-product-experience-with-a-very-long-branch-name",
+  headRevision: "274aaa2f9b3b0d3e7363d09fa21dfe76782d25cf",
+  fileChanges: [
+    { path: ".github/workflows/ci.yml", oldPath: null, status: "modified" },
+    { path: "Dockerfile", oldPath: null, status: "added" },
+    { path: "docs/review-reader.md", oldPath: null, status: "added" },
+    { path: "fixtures/unknown.fixture", oldPath: null, status: "modified" },
+    { path: "src/components/review-reader.tsx", oldPath: null, status: "modified" },
+    { path: "src/components/legacy-reader.tsx", oldPath: null, status: "deleted" },
+    { path: "src/lib/review-navigation.ts", oldPath: "src/lib/diff-navigation.ts", status: "renamed" },
+    { path: "tests/review-reader.test.tsx", oldPath: null, status: "modified" },
+    { path: "very-long-directory-name-that-must-truncate/a-very-long-file-name-that-must-truncate-in-a-narrow-file-tree.test.ts", oldPath: null, status: "modified" },
+  ],
+  pullRequest: {
+    owner: "narrant", repository: "desktop", number: 14, title: "Improve the Review Reader",
+    description: "# Review context\n\n## User impact\n\nThe Review Reader keeps context and code changes in peer views.\n\n- Clearer information hierarchy\n- Safer Markdown rendering\n\n## Developer impact\n\nUse `ReviewView` as the shared navigation concept.\n\n> Remote images stay blocked until the reviewer opens them explicitly.\n\n```ts\nconst activeView = 'overview';\n```",
+    author: "reviewer", state: "open", draft: false,
+    url: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
+    headRef: "feature/review-reader", synchronizedAt: Date.now(),
+  },
+};
+
+/** 用代表性长短路径和变更内容预览完整 Review Reader。 */
+function ReviewReaderPreview({ empty = false, merged = false, update = false }: { empty?: boolean; merged?: boolean; update?: boolean }) {
+  const snapshot = {
+    ...readerSnapshot,
+    fileChanges: empty ? [] : readerSnapshot.fileChanges,
+    pullRequest: merged && readerSnapshot.pullRequest
+      ? { ...readerSnapshot.pullRequest, state: "merged" as const }
+      : readerSnapshot.pullRequest,
+  };
+  const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => [
+    change.path,
+    {
+      ...change, contentKind: "text", beforeSize: 48, afterSize: 78,
+      before: "export function review() {\n  return 'old reader';\n}\n",
+      after: "export function review() {\n  return 'focused review reader';\n}\n",
+    },
+  ]));
+  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
+  const [mode, setMode] = useState<DiffMode>("side-by-side");
+  return <div className="h-[calc(100vh-8.5rem)]">
+    <ReviewReader
+      snapshot={snapshot}
+      fileChange={selectedPath ? contents[selectedPath] : undefined}
+      diffMode={mode}
+      narrow={window.innerWidth < 1200}
+      editorTheme={document.documentElement.classList.contains("dark") ? "vs-dark" : "light"}
+      initialTreeWidth={26}
+      updateAction={update ? <div role="status" className="flex items-center gap-2 text-sm"><span className="hidden text-amber-700 sm:inline dark:text-amber-300">检测到 PR 分支有更新</span><Button aria-label="刷新审核"><span className="hidden sm:inline">刷新审核</span></Button></div> : undefined}
+      onSelectFile={setSelectedPath}
+      onRetryFile={setSelectedPath}
+      onDiffModeChange={setMode}
+      onTreeWidthChange={() => undefined}
+      onOpenExternal={() => undefined}
+      onClose={() => undefined}
+    />
+  </div>;
+}
+
+const previews: Record<string, PreviewDefinition> = {
+  "branch-selector": {
+    label: "分支选择器",
+    scenarios: {
+      default: {
+        label: "默认状态",
+        render: () => <BranchSelectorPreview />,
+      },
+      "long-name": {
+        label: "长分支名",
+        render: () => <BranchSelectorPreview
+          refs={[longHeadRef, ...defaultRefs, "refs/remotes/upstream/feature/a-long-remote-tracking-branch-name"]}
+          initialHead={longHeadRef}
+          currentRef={longHeadRef}
+        />,
+      },
+      "many-branches": {
+        label: "大量分支",
+        render: () => <BranchSelectorPreview refs={[
+          ...defaultRefs,
+          ...Array.from({ length: 24 }, (_, index) => `refs/heads/feature/preview-${String(index + 1).padStart(2, "0")}`),
+        ]} />,
+      },
+      update: {
+        label: "检测到更新",
+        render: () => <BranchSelectorPreview action="update" />,
+      },
+      opening: {
+        label: "正在打开 Review",
+        render: () => <BranchSelectorPreview action="continue" opening />,
+      },
+    },
+  },
+  "file-change-loading": {
+    label: "File Change 加载",
+    scenarios: {
+      default: {
+        label: "Diff 区域加载",
+        render: () => <section className="min-h-[32rem] overflow-hidden rounded-lg border bg-background">
+          <header className="border-b px-4 py-3 text-sm font-semibold">src/components/example.tsx</header>
+          <FileChangeLoading label="正在读取 File Change" />
+        </section>,
+      },
+    },
+  },
+  "review-history": {
+    label: "审核历史",
+    scenarios: {
+      default: {
+        label: "可点击列表",
+        render: () => <ReviewHistoryPreview />,
+      },
+      opening: {
+        label: "正在打开 Review",
+        render: () => <ReviewHistoryPreview initiallyOpening />,
+      },
+    },
+  },
+  "review-reader": {
+    label: "Review 阅读器",
+    scenarios: {
+      default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
+      update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
+      merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
+      empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
+    },
+  },
+};
+
+/** 将当前查询参数替换为指定的组件、场景与主题。 */
+function navigatePreview(component: string, scenario: string, theme: string) {
+  const query = new URLSearchParams({ component, scenario, theme });
+  window.location.search = query.toString();
+}
+
+/** 渲染通用预览工具栏与当前选中的组件场景。 */
+function PreviewApp() {
+  const query = new URLSearchParams(window.location.search);
+  const componentKey = query.get("component") ?? "branch-selector";
+  const definition = previews[componentKey] ?? previews["branch-selector"];
+  const requestedScenario = query.get("scenario") ?? "default";
+  const scenarioKey = definition.scenarios[requestedScenario] ? requestedScenario : "default";
+  const theme = query.get("theme") === "light" ? "light" : "dark";
+
+  return <main className="min-h-screen bg-background text-foreground">
+    <header className="sticky top-0 z-50 flex flex-wrap items-end gap-4 border-b bg-background/90 px-5 py-3 backdrop-blur">
+      <div className="mr-auto">
+        <h1 className="font-heading text-base font-semibold">Narrant UI Preview</h1>
+        <p className="text-xs text-muted-foreground">仅使用代表性数据，不连接 Tauri 状态</p>
+      </div>
+      <label className="grid gap-1 text-xs text-muted-foreground">
+        组件
+        <select
+          className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground"
+          value={componentKey}
+          onChange={(event) => navigatePreview(event.target.value, "default", theme)}
+        >
+          {Object.entries(previews).map(([key, preview]) => <option key={key} value={key}>{preview.label}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-xs text-muted-foreground">
+        场景
+        <select
+          className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground"
+          value={scenarioKey}
+          onChange={(event) => navigatePreview(componentKey, event.target.value, theme)}
+        >
+          {Object.entries(definition.scenarios).map(([key, scenario]) => <option key={key} value={key}>{scenario.label}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-xs text-muted-foreground">
+        主题
+        <select
+          className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground"
+          value={theme}
+          onChange={(event) => navigatePreview(componentKey, scenarioKey, event.target.value)}
+        >
+          <option value="dark">深色</option>
+          <option value="light">浅色</option>
+        </select>
+      </label>
+    </header>
+    <section aria-label="组件预览画布" className="p-5 sm:p-8">
+      {definition.scenarios[scenarioKey].render()}
+    </section>
+  </main>;
+}
+
+const initialTheme = new URLSearchParams(window.location.search).get("theme") === "light" ? "light" : "dark";
+document.documentElement.classList.toggle("dark", initialTheme === "dark");
+await i18n.changeLanguage("zh-CN");
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <TooltipProvider><PreviewApp /></TooltipProvider>
+  </StrictMode>,
+);

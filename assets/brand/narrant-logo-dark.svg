@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Narrant logo</title>
+  <desc id="desc">An angular letter N formed from opening and closing code brackets.</desc>
+  <defs>
+    <linearGradient id="signal" x1="160" y1="112" x2="352" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6EE7B7"/>
+      <stop offset="1" stop-color="#22C55E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 深色主题沿用浅色主题的字形几何，仅调整配色。 -->
+  <path d="M176 112 64 256l112 144"
+        fill="none" stroke="#F9FAFB" stroke-width="48"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m336 112 112 144-112 144"
+        fill="none" stroke="#F9FAFB" stroke-width="48"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="m176 112 160 288"
+        fill="none" stroke="url(#signal)" stroke-width="48"
+        stroke-linecap="round"/>
+</svg>

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { openFixtureRepository } from "./helpers/open-repository";
 
 /** 返回 fixture 仓库当前注册的 worktree 数量，不依赖本地化输出。 */
 function worktreeCount(repositoryPath: string) {
@@ -10,12 +11,14 @@ function worktreeCount(repositoryPath: string) {
 
 /** 通过真实 shadcn/Base UI Select 选择一个 canonical ref。 */
 async function selectRef(label: "Base Ref" | "Head Ref", value: string) {
-  await $(`[aria-label='${label}']`).click();
+  const trigger = await $(`[aria-label='${label}']`);
+  await trigger.click();
   await browser.waitUntil(async () => (await $$("[role='option']")).length > 0);
   const options = await $$("[role='option']");
   for (const option of options) {
-    if ((await option.getText()).includes(value)) {
+    if (await option.isDisplayed() && (await option.getText()) === value) {
       await option.click();
+      await browser.waitUntil(async () => (await trigger.getText()) === value);
       return;
     }
   }
@@ -34,35 +37,30 @@ describe("本地分支比较", () => {
 
   it("通过真实 Tauri IPC 显示只读 File Change", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
-    if (await $("button=返回 Repository Entries").isExisting()) {
-      await $("button=返回 Repository Entries").click();
-    }
-    await $("[aria-label='Repository 路径']").setValue(repositoryPath);
-    await $("button=添加 Repository").click();
-    await $("[aria-label='Repository Entries'] button").click();
-    if (await $("button=我了解风险并信任此 Repository Entry").isExisting()) {
-      await $("button=我了解风险并信任此 Repository Entry").click();
-    }
-    await $("button=读取分支").click();
-    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
+    await openFixtureRepository(repositoryPath);
+    await $("[role='tab']=本地分支").click();
+    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await expect($("[aria-label='Head Ref']")).toHaveText("refs/heads/head-ref");
-    await $("button=打开 Review Snapshot").click();
-    await $("[role='treeitem']").click();
+    await $("button=开始审核").click();
+    await expect($("[aria-label='Branch Review 更新'] [role='status']")).toHaveText(
+      "当前已是最新版本",
+    );
     await expect($("[aria-label='File Change']")).toBeDisplayed();
-    await expect($("[aria-label='File Change'] h2")).toHaveText(expect.stringContaining("welcome.txt"));
+    await expect($("[aria-label='File Change'] h3")).toHaveText(expect.stringContaining("welcome.txt"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-before", expect.stringContaining("旧内容"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-after", expect.stringContaining("新内容"));
   });
 
   it("关闭后从最近列表重开 current Snapshot 且只保留一个 Review Workspace", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
-    await expect($("button=关闭 Review")).toBeDisplayed();
+    await $("summary=更多操作").click();
+    await expect($("button=关闭审核")).toBeDisplayed();
     expect(worktreeCount(repositoryPath)).toBe(2);
 
-    await $("button=关闭 Review").click();
+    await $("button=关闭审核").click();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
-    await $("button=返回 Repository Entries").click();
-    const recent = await $("[aria-label='Recent Reviews'] button");
+    await $("button=返回仓库列表").click();
+    const recent = await $("main [aria-label='最近审核'] button");
     await expect(recent).toBeDisplayed();
     await recent.click();
 
@@ -70,14 +68,50 @@ describe("本地分支比较", () => {
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
-    await $("button=读取分支").click();
-    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/base-ref");
+    await $("summary=更多操作").click();
+    await $("button=关闭审核").click();
+    await $("[role='tab']=本地分支").click();
+    await expect($("[aria-label='Base Ref']")).toHaveText("refs/heads/main");
     await selectRef("Base Ref", "refs/heads/head-ref");
     await selectRef("Head Ref", "refs/heads/base-ref");
-    await $("button=打开 Review Snapshot").click();
+    await $("button=开始审核").click();
 
+    await expect($("[aria-label='Branch Review 更新']")).toHaveText(
+      expect.stringContaining("refs/heads/head-ref → refs/heads/base-ref"),
+    );
+    await expect($("h3=没有 File Change")).toBeDisplayed();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === 2);
     expect(worktreeCount(repositoryPath)).toBe(2);
 
+    await $("summary=更多操作").click();
+    await $("button=关闭审核").click();
+    await browser.waitUntil(() => worktreeCount(repositoryPath) === 1);
+    await $("button=返回仓库列表").click();
+    await expect($("main [aria-label='最近审核'] button")).toBeDisplayed();
+  });
+
+  it("英文 900×600 核心旅程可进入仓库、继续审核、读取 Diff 并重开", async () => {
+    const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
+    execFileSync("git", ["commit", "--allow-empty", "-m", "e2e update"], { cwd: repositoryPath });
+    await browser.setWindowSize(900, 600);
+    await openFixtureRepository(repositoryPath, "en");
+    await $("[role='tab']=Local branches").click();
+    await expect($("[aria-label='Base Ref']")).toBeDisplayed();
+    await expect($("[aria-label='Head Ref']")).toBeDisplayed();
+    await $("button=Continue review").click();
+    await expect($("[aria-label='Branch review update'] [role='status']")).toHaveText(expect.stringContaining("available"));
+    await $("button=Refresh review").click();
+    await expect($("[aria-label='Branch review update'] [role='status']")).toHaveText("Already up to date");
+    await expect($("[aria-label='File Change']")).toBeDisplayed();
+    await expect($("[aria-label='File Change']")).toHaveAttribute("data-after", expect.stringContaining("新内容"));
+
+    await $("summary=More actions").click();
+    await $("button=Close review").click();
+    await $("button=Back to repositories").click();
+    const recent = await $("main [aria-label='Recent reviews'] button");
+    await recent.click();
+    await expect($("[aria-label='Review reader']")).toBeDisplayed();
+    await expect($("[aria-label='File Change']")).toBeDisplayed();
+    await browser.setWindowSize(1200, 800);
   });
 });

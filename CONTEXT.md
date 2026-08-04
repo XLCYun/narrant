@@ -50,11 +50,27 @@ _Avoid_: Base Ref, base tip
 The before-and-after content and change metadata for one path in a **Change Comparison**.
 _Avoid_: Diff file, patch item
 
+**Review Reader**:
+The application view that presents one open **Review Snapshot**, including its
+collection of **File Changes** and the freely selected **File Change** content. It
+does not assign reading progress or an approval state to File Changes.
+_Avoid_: File Changes page, Diff page
+
+**Review View**:
+One peer presentation of the **Review Snapshot** currently open in the **Review Reader**.
+The available views are Overview and File Changes; switching views does not create another Review.
+_Avoid_: Review mode, sidebar panel
+
 **Review Snapshot**:
 An immutable **Change Comparison** pinned to exact base, comparison-base, and head
 revisions. Its identity and history remain saved even when its Git objects are no
 longer available in the user's repository.
 _Avoid_: Latest PR, live diff
+
+**Review Update**:
+The condition in which the moving base or head ref of a **Review Selection** no
+longer resolves to the revisions presented by the open **Review Snapshot**.
+_Avoid_: Available version, new Snapshot
 
 **Review**:
 A durable code-review record owned by one **Repository Entry**. It preserves review
@@ -74,6 +90,22 @@ _Avoid_: Project, remote repository
 A reviewer's durable authorization for Narrant to perform normal Git checkout and
 run review tooling for one **Repository Entry**.
 _Avoid_: Safe repository, Review permission
+
+**GitHub Identity**:
+The single GitHub user currently authorized to act through Narrant's GitHub App.
+It is an external authorization identity, not a Narrant-owned user account.
+_Avoid_: Narrant Account, User Profile
+
+**UI Icon**:
+A compact visual symbol that communicates an interface action, object, or status.
+It excludes product and third-party logos, application icons, avatars, and
+content-provided graphics.
+_Avoid_: Logo, brand icon
+
+**File Type Icon**:
+A **UI Icon** that identifies a File Change's file type from its path. It is
+separate from the icon that communicates the File Change status.
+_Avoid_: File Change status icon
 
 **Review Workspace**:
 The Narrant-owned, disposable checkout of the head revision presented by one
@@ -95,7 +127,14 @@ _Avoid_: Repository Entry, user worktree
   **Comparison Base** from the current base and head commits; a Pull Request does not
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
+- A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
+- A **Review Reader** provides Overview and File Changes as peer **Review Views** over the same open **Review Snapshot**
+- Selecting a **File Change** in the **Review Reader** is navigation only; it does not
+  mark that change as viewed, reviewed, or approved
 - A **Repository Entry** owns zero or more **Reviews**
+- Narrant has at most one current **GitHub Identity**
+- A **GitHub Identity** may be represented by cached public profile information while
+  GitHub is temporarily unavailable, but signing out removes that representation
 - Moving a local clone does not create a new **Repository Entry** when the user
   explicitly relocates its saved path
 - A **Repository Entry** may discover pull requests from multiple GitHub repositories

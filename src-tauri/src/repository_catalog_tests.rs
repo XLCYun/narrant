@@ -77,6 +77,36 @@ fn separate_clones_of_the_same_remote_remain_separate_entries() {
 }
 
 #[test]
+fn opening_repository_does_not_change_repository_list_order() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let older = create_repository();
+    let newer = create_repository();
+    let older_entry = catalog.register(older.path()).unwrap();
+    let newer_entry = catalog.register(newer.path()).unwrap();
+
+    assert_eq!(
+        catalog
+            .list()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![newer_entry.id, older_entry.id],
+    );
+    catalog.open_entry(older_entry.id).unwrap();
+    assert_eq!(
+        catalog
+            .list()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![newer_entry.id, older_entry.id],
+    );
+}
+
+#[test]
 fn registering_the_same_clone_reopens_the_existing_entry() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();
@@ -221,6 +251,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
         url: "https://github.com/octo-org/octo-repo/pull/42".to_owned(),
         base_ref: "main".to_owned(),
         head_ref: "feature".to_owned(),
+        updated_at: Some("2026-07-31T08:00:00Z".to_owned()),
         synchronized_at: 1,
     };
 
@@ -292,6 +323,7 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
         url: "https://github.com/octo-org/octo-repo/pull/7".to_owned(),
         base_ref: "main".to_owned(),
         head_ref: "topic".to_owned(),
+        updated_at: Some("2026-07-31T08:00:00Z".to_owned()),
         synchronized_at: 1,
     };
     let first = catalog

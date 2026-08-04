@@ -1,6 +1,8 @@
 mod credential_store;
+mod identity;
 mod oauth_client;
 
+use async_trait::async_trait;
 use oauth_client::{OAuthDeviceCodes, OAuthPollResult, OAuthTokens};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -14,7 +16,50 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
 
 pub use credential_store::{CredentialStore, SystemCredentialStore};
+pub use identity::FileGitHubIdentityProvider;
 pub use oauth_client::{OAuthClient, OctocrabOAuthClient};
+
+/// WebView 可安全展示的 GitHub 公开身份。
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubIdentity {
+    pub id: u64,
+    pub login: String,
+    pub name: Option<String>,
+    pub avatar_path: Option<String>,
+}
+
+/// 隔离 GitHub 公开身份的网络读取和本地缓存。
+#[async_trait]
+pub trait GitHubIdentityProvider: Send + Sync {
+    /// 读取上次成功持久化的公开 GitHub Identity。
+    async fn cached(&self) -> Result<Option<GitHubIdentity>, String>;
+    /// 使用当前 user access token 刷新公开资料和头像缓存。
+    async fn refresh(&self, access_token: &SecretString) -> Result<GitHubIdentity, String>;
+    /// 在退出 GitHub 时删除全部公开身份缓存。
+    fn clear(&self) -> Result<(), String>;
+}
+
+/// 在没有配置身份缓存时维持原有认证能力。
+struct DisabledGitHubIdentityProvider;
+
+#[async_trait]
+impl GitHubIdentityProvider for DisabledGitHubIdentityProvider {
+    /// 未配置 provider 时不存在已缓存身份。
+    async fn cached(&self) -> Result<Option<GitHubIdentity>, String> {
+        Ok(None)
+    }
+
+    /// 未配置 provider 时明确拒绝资料刷新。
+    async fn refresh(&self, _: &SecretString) -> Result<GitHubIdentity, String> {
+        Err("GitHub 身份资料未配置。".to_owned())
+    }
+
+    /// 未配置 provider 时无需清理本地资料。
+    fn clear(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
 
 /// 供 WebView 展示的公开认证状态。
 #[derive(Clone, Debug, Serialize)]
@@ -23,6 +68,7 @@ pub struct AuthorizationStatus {
     pub configured: bool,
     pub signed_in: bool,
     pub app_install_url: Option<String>,
+    pub identity: Option<GitHubIdentity>,
 }
 
 /// 供 WebView 展示的非密钥 Device Flow 信息。
@@ -42,6 +88,7 @@ pub struct GitHubAuth {
     app_slug: String,
     oauth_client: Arc<dyn OAuthClient>,
     store: Arc<dyn CredentialStore>,
+    identity_provider: Arc<dyn GitHubIdentityProvider>,
     credentials: Mutex<Option<StoredCredentials>>,
     authorization_epoch: AtomicU64,
     next_authorization_id: AtomicU64,
@@ -114,11 +161,29 @@ impl GitHubAuth {
         oauth_client: Arc<dyn OAuthClient>,
         store: Arc<dyn CredentialStore>,
     ) -> Self {
+        Self::with_identity_provider(
+            client_id,
+            app_slug,
+            oauth_client,
+            store,
+            Arc::new(DisabledGitHubIdentityProvider),
+        )
+    }
+
+    /// 使用显式身份 provider 构建 GitHub Authentication。
+    pub fn with_identity_provider(
+        client_id: impl Into<String>,
+        app_slug: impl Into<String>,
+        oauth_client: Arc<dyn OAuthClient>,
+        store: Arc<dyn CredentialStore>,
+        identity_provider: Arc<dyn GitHubIdentityProvider>,
+    ) -> Self {
         Self {
             client_id: SecretString::from(client_id.into()),
             app_slug: app_slug.into(),
             oauth_client,
             store,
+            identity_provider,
             credentials: Mutex::new(None),
             authorization_epoch: AtomicU64::new(0),
             next_authorization_id: AtomicU64::new(0),
@@ -130,6 +195,11 @@ impl GitHubAuth {
     pub async fn status(&self) -> Result<AuthorizationStatus, String> {
         let signed_in = self.load_credentials().await?.is_some();
         let configured = !self.client_id.expose_secret().is_empty() && !self.app_slug.is_empty();
+        let identity = if signed_in {
+            self.identity_provider.cached().await.unwrap_or(None)
+        } else {
+            None
+        };
         Ok(AuthorizationStatus {
             configured,
             signed_in,
@@ -139,6 +209,7 @@ impl GitHubAuth {
                     self.app_slug
                 )
             }),
+            identity,
         })
     }
 
@@ -186,7 +257,10 @@ impl GitHubAuth {
                 .await?
             {
                 OAuthPollResult::Authorized(tokens) => {
-                    return self.persist_tokens(tokens, pending.epoch).await;
+                    let access_token = tokens.access_token.clone();
+                    self.persist_tokens(tokens, pending.epoch).await?;
+                    let _ = self.identity_provider.refresh(&access_token).await;
+                    return Ok(());
                 }
                 OAuthPollResult::Pending => {}
                 OAuthPollResult::SlowDown => interval += 5,
@@ -205,7 +279,16 @@ impl GitHubAuth {
         let mut credentials = self.credentials.lock().await;
         self.store.delete()?;
         *credentials = None;
-        Ok(())
+        self.identity_provider.clear()
+    }
+
+    /// 使用当前凭据刷新公开身份；失败不改变登录状态。
+    pub async fn refresh_identity(&self) -> Result<GitHubIdentity, String> {
+        let access_token = self
+            .access_token()
+            .await?
+            .ok_or_else(|| "GitHub 尚未连接。".to_owned())?;
+        self.identity_provider.refresh(&access_token).await
     }
 
     /// 在授权前确保构建时 GitHub App 配置存在。

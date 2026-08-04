@@ -27,9 +27,26 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(JSON.stringify(prod)).not.toMatch(/wdio/i);
   });
 
+  it("macOS 标题栏样式使用当前 Tauri schema 接受的枚举值", () => {
+    const prod = JSON.parse(read("src-tauri/tauri.conf.json"));
+    const schema = JSON.parse(read("node_modules/@tauri-apps/cli/config.schema.json"));
+    const allowed = schema.definitions.TitleBarStyle.oneOf.flatMap(
+      (option: { enum?: string[] }) => option.enum ?? [],
+    );
+    expect(allowed).toContain(prod.app.windows[0].titleBarStyle);
+  });
+
   it("默认 capability 不含 wdio 权限", () => {
     const def = JSON.parse(read("src-tauri/capabilities/default.json"));
     expect(JSON.stringify(def.permissions)).not.toMatch(/wdio/i);
+  });
+
+  it("生产与 E2E capability 只授予原生目录选择所需的 dialog open 权限", () => {
+    const def = JSON.parse(read("src-tauri/capabilities/default.json"));
+    const e2e = JSON.parse(read("src-tauri/tauri.e2e.conf.json"));
+    expect(def.permissions).toContain("dialog:allow-open");
+    expect(JSON.stringify(e2e)).toMatch(/dialog:allow-open/);
+    expect(JSON.stringify(def.permissions)).not.toMatch(/dialog:(?:default|allow-save)/);
   });
 
   it("仅 E2E 配置授予 wdio 权限", () => {
@@ -38,9 +55,15 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
   });
 
   it("前端测试用 data-* endpoint 仅在 VITE_WDIO 下暴露", () => {
-    const app = read("src/App.tsx");
-    expect(app).toMatch(/data-before=\{import\.meta\.env\.VITE_WDIO/);
-    expect(app).toMatch(/data-after=\{import\.meta\.env\.VITE_WDIO/);
+    const reader = read("src/components/review-reader.tsx");
+    const home = read("src/components/home-page.tsx");
+    expect(reader).toMatch(/data-before=\{import\.meta\.env\.VITE_WDIO/);
+    expect(reader).toMatch(/data-after=\{import\.meta\.env\.VITE_WDIO/);
+    expect(home).toMatch(/import\.meta\.env\.VITE_WDIO\s*===\s*"true"/);
+    expect(home).toMatch(/__NARRANT_E2E_DIRECTORY__/);
+    const i18n = read("src/lib/i18n.ts");
+    expect(i18n).toMatch(/import\.meta\.env\.VITE_WDIO\s*===\s*"true"/);
+    expect(i18n).toMatch(/__NARRANT_E2E_SET_LOCALE__/);
   });
 
   it("生产依赖与模块不再包含旧 GitHub code-content 实现", () => {

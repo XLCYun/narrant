@@ -118,6 +118,15 @@ struct SavedReviewSummaryResponse {
     pull_request: Option<repository_catalog::PullRequestMetadata>,
 }
 
+/// Repository Entry 本地分支标签所需的 canonical refs 与显式默认选择。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BranchRefsResponse {
+    refs: Vec<String>,
+    default_ref: String,
+    current_ref: String,
+}
+
 /// 保存当前打开 Review 的运行时读取句柄，并串行化同一 Review 的刷新操作。
 #[derive(Default)]
 struct OpenReviewStore {
@@ -606,36 +615,80 @@ fn refresh_pull_request_review(
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
 ) -> Result<ReviewSnapshotResponse, String> {
-    let current = catalog
-        .open_review(&review_id)
-        .map_err(|error| error.to_string())?;
-    require_pull_request_identity(&current, &repository, &pull_request)?;
-    let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
-    let (calculated, metadata) =
-        calculate_pull_request_review(&repository_path, repository, pull_request)?;
-    if current.base_revision == calculated.snapshot().base_revision
-        && current.head_revision == calculated.snapshot().head_revision
-    {
-        return open_saved_branch_review(&state, &catalog, repository_path, current);
-    }
-    let staged = catalog
-        .stage_pull_request_snapshot(&current, &metadata, calculated.snapshot())
-        .map_err(|error| error.to_string())?;
-    let workspace = catalog
-        .review_workspace_path(&review_id)
-        .map_err(|error| error.to_string())?;
-    let adapter = core_git::GitProcessAdapter::new(&repository_path);
-    adapter
-        .remove_worktree(&workspace, &core_git::CancellationToken::default())
-        .and_then(|_| {
-            adapter.create_detached_worktree(
+    state.begin_refresh(&review_id)?;
+    let result = (|| {
+        let current = catalog
+            .open_review(&review_id)
+            .map_err(|error| error.to_string())?;
+        require_pull_request_identity(&current, &repository, &pull_request)?;
+        let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
+        let entry = catalog
+            .open_entry(current.repository_entry_id)
+            .map_err(|error| error.to_string())?;
+        let (calculated, metadata) =
+            calculate_pull_request_review(&repository_path, repository, pull_request)?;
+        if current.base_revision == calculated.snapshot().base_revision
+            && current.head_revision == calculated.snapshot().head_revision
+        {
+            return Ok(map_snapshot(
+                review_id.clone(),
+                current.snapshot_identity(),
+                &current.snapshot(),
+            ));
+        }
+        let candidate = catalog
+            .stage_pull_request_snapshot(&current, &metadata, calculated.snapshot())
+            .map_err(|error| error.to_string())?;
+        let workspace = catalog
+            .review_workspace_path(&review_id)
+            .map_err(|error| error.to_string())?;
+        let adapter = core_git::GitProcessAdapter::new(&repository_path);
+        let mut reviews = state
+            .reviews
+            .lock()
+            .map_err(|_| "Review 状态不可用。".to_owned())?;
+        adapter
+            .transition_detached_worktree(
                 &workspace,
-                &staged.head_revision,
+                &entry.common_directory,
+                &current.head_revision,
+                &candidate.head_revision,
                 &core_git::CancellationToken::default(),
             )
-        })
-        .map_err(|error| format!("Git transport：{error}"))?;
-    open_saved_branch_review(&state, &catalog, repository_path, staged)
+            .map_err(|error| format!("Git transport：{error}"))?;
+        if let Err(error) = catalog.activate_refresh_snapshot(&candidate, &current) {
+            let rollback = adapter.transition_detached_worktree(
+                &workspace,
+                &entry.common_directory,
+                &candidate.head_revision,
+                &current.head_revision,
+                &core_git::CancellationToken::default(),
+            );
+            return Err(match rollback {
+                Ok(()) => error.to_string(),
+                Err(rollback_error) => {
+                    format!("{error}；恢复旧 Review Workspace 失败：{rollback_error}")
+                }
+            });
+        }
+        let snapshot = candidate.snapshot();
+        reviews.insert(
+            review_id.clone(),
+            Arc::new(Mutex::new(OpenedReview::Local(Box::new(
+                change_content::local::LocalOpenedReview::restore(
+                    &repository_path,
+                    snapshot.clone(),
+                ),
+            )))),
+        );
+        Ok(map_snapshot(
+            review_id.clone(),
+            candidate.snapshot_identity(),
+            &snapshot,
+        ))
+    })();
+    state.finish_refresh(&review_id);
+    result
 }
 
 /// 确保更新请求不会改变 durable Review 的 immutable Selection identity。
@@ -736,6 +789,7 @@ fn calculate_pull_request_review(
         url: pull_request.url,
         base_ref: pull_request.base.reference,
         head_ref: pull_request.head.reference,
+        updated_at: Some(pull_request.updated_at),
         synchronized_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "系统时间早于 Unix epoch，无法保存 GitHub metadata。".to_owned())?
@@ -752,11 +806,16 @@ fn list_local_refs(
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
     operation_id: String,
     repository_entry_id: i64,
-) -> Result<Vec<String>, String> {
+) -> Result<BranchRefsResponse, String> {
     let repository_path = require_available_repository(&catalog, repository_entry_id)?;
     let cancellation = operations.start(operation_id.clone())?;
     let result =
-        change_content::local::list_refs_with_cancellation(&repository_path, &cancellation)
+        change_content::local::list_branch_refs_with_cancellation(&repository_path, &cancellation)
+            .map(|branches| BranchRefsResponse {
+                refs: branches.refs,
+                default_ref: branches.default_ref,
+                current_ref: branches.current_ref,
+            })
             .map_err(|error| error.to_string());
     operations.finish(&operation_id);
     result
@@ -800,6 +859,14 @@ async fn github_auth_status(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
 ) -> Result<github_auth::AuthorizationStatus, String> {
     auth.status().await
+}
+
+/// 在不改变登录状态的情况下刷新 GitHub 公开身份。
+#[tauri::command]
+async fn refresh_github_identity(
+    auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
+) -> Result<github_auth::GitHubIdentity, String> {
+    auth.refresh_identity().await
 }
 
 #[tauri::command]
@@ -1023,33 +1090,38 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let oauth_client = tauri::async_runtime::block_on(async {
-        Arc::new(
-            github_auth::OctocrabOAuthClient::new(&oauth_base_url)
-                .await
-                .expect("build GitHub OAuth client"),
-        )
-    });
-    let auth = Arc::new(github_auth::GitHubAuth::new(
-        option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
-        option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
-        oauth_client,
-        Arc::new(github_auth::SystemCredentialStore),
-    ));
     let builder = tauri::Builder::default()
         .manage(OpenReviewStore::default())
         .manage(GitOperationStore::default())
-        .manage(auth)
-        .setup(|app| {
+        .setup(move |app| {
+            let application_data = app.path().app_data_dir()?;
             #[cfg(feature = "wdio")]
             let database_path = std::env::var_os("NARRANT_DATABASE_PATH")
                 .map(std::path::PathBuf::from)
-                .unwrap_or(app.path().app_data_dir()?.join("narrant.sqlite3"));
+                .unwrap_or(application_data.join("narrant.sqlite3"));
             #[cfg(not(feature = "wdio"))]
-            let database_path = app.path().app_data_dir()?.join("narrant.sqlite3");
+            let database_path = application_data.join("narrant.sqlite3");
             let catalog = repository_catalog::RepositoryCatalog::open(&database_path)?;
             recover_interrupted_review_workspaces(&catalog);
             app.manage(catalog);
+            let oauth_client = tauri::async_runtime::block_on(async {
+                Arc::new(
+                    github_auth::OctocrabOAuthClient::new(&oauth_base_url)
+                        .await
+                        .expect("build GitHub OAuth client"),
+                )
+            });
+            let identity_provider = Arc::new(github_auth::FileGitHubIdentityProvider::new(
+                github_api_base_url(),
+                application_data.join("github-identity"),
+            ));
+            app.manage(Arc::new(github_auth::GitHubAuth::with_identity_provider(
+                option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
+                option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
+                oauth_client,
+                Arc::new(github_auth::SystemCredentialStore),
+                identity_provider,
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1072,13 +1144,15 @@ pub fn run() {
             list_saved_reviews,
             open_saved_review,
             github_auth_status,
+            refresh_github_identity,
             start_github_authorization,
             complete_github_authorization,
             sign_out_github,
             read_review_file_change,
             close_review
         ])
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init());
     #[cfg(feature = "wdio")]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
