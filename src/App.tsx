@@ -24,6 +24,7 @@ import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedRevie
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
+import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastructure/tauri-pull-request-discovery-application-adapter";
 import {
   tauriTransport,
 } from "@/infrastructure/tauri/transport";
@@ -70,9 +71,13 @@ export function App() {
   const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const editorTheme = useSystemTheme();
-  const reviewApplicationAdapter = useMemo(
-    () => createTauriReviewApplicationAdapter(tauriTransport),
+  const pullRequestDiscovery = useMemo(
+    () => createTauriPullRequestDiscoveryApplicationAdapter(tauriTransport),
     [],
+  );
+  const reviewApplicationAdapter = useMemo(
+    () => createTauriReviewApplicationAdapter(tauriTransport, pullRequestDiscovery),
+    [pullRequestDiscovery],
   );
   const repositoryApplication = useMemo(
     () => createTauriRepositoryApplicationAdapter(tauriTransport),
@@ -251,9 +256,7 @@ export function App() {
     setDiscoveryError(undefined);
     setDiscoveryLoading(true);
     try {
-      setPullRequestGroups(await tauriTransport.invoke("discover_github_pull_requests", {
-        repositoryEntryId: entry.id,
-      }));
+      setPullRequestGroups(await pullRequestDiscovery.discover(entry.id));
     } catch (reason) {
       setDiscoveryError(String(reason));
     } finally {

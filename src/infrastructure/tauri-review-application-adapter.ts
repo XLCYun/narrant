@@ -1,17 +1,16 @@
 import { tauriTransport, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
+import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastructure/tauri-pull-request-discovery-application-adapter";
 import type { BranchReviewUpdate } from "@/infrastructure/tauri/command-contract";
-import type { DiscoveredPullRequest, PullRequestGroup } from "@/lib/review-types";
+import type {
+  PullRequestContext,
+  PullRequestDiscoveryApplicationAdapter,
+} from "@/github/pull-request-discovery-application";
 import type {
   ReviewApplicationAdapter,
   ReviewOpenTarget,
   ReviewUpdate,
 } from "@/review/review-application";
 import type { ReviewIdentity, ReviewSnapshot } from "@/review/types";
-
-type PullRequestContext = {
-  repository: PullRequestGroup["repository"];
-  pullRequest: DiscoveredPullRequest;
-};
 
 type PendingUpdate =
   | { kind: "branch"; confirmation: BranchReviewUpdate }
@@ -20,6 +19,7 @@ type PendingUpdate =
 /** 创建把粗粒度 Review lifecycle 操作映射到 Tauri commands 的生产 adapter。 */
 export function createTauriReviewApplicationAdapter(
   transport: TypedTauriTransport = tauriTransport,
+  discovery: PullRequestDiscoveryApplicationAdapter = createTauriPullRequestDiscoveryApplicationAdapter(transport),
 ): ReviewApplicationAdapter {
   const snapshots = new Map<string, ReviewSnapshot>();
   /** 用户检查是有更新，如果有的话会先存在这里，直到用户点击更新才从这里取出来进行真正的刷新操作 */
@@ -41,15 +41,12 @@ export function createTauriReviewApplicationAdapter(
   ): Promise<PullRequestContext> {
     const identity = snapshot.pullRequest;
     if (!identity) throw new Error("Review 不是 Pull Request Selection。");
-    const groups = await transport.invoke("discover_github_pull_requests", {
+    return discovery.resolve({
       repositoryEntryId: await repositoryEntryId(reviewId),
+      owner: identity.owner,
+      repository: identity.repository,
+      number: identity.number,
     });
-    const group = groups.find((candidate) => candidate.repository.owner.toLowerCase() === identity.owner.toLowerCase()
-      && candidate.repository.name.toLowerCase() === identity.repository.toLowerCase());
-    if (group?.error) throw new Error(group.error);
-    const pullRequest = group?.pullRequests.find((candidate) => candidate.number === identity.number);
-    if (!group || !pullRequest) throw new Error("当前无法找到这个 Pull Request。");
-    return { repository: group.repository, pullRequest };
   }
 
   /** 记录 adapter 返回的 current Review Snapshot。 */
@@ -83,20 +80,13 @@ export function createTauriReviewApplicationAdapter(
           }
         }
       } else {
-        const groups = await transport.invoke("discover_github_pull_requests", {
-          repositoryEntryId: target.repositoryEntryId,
-        });
-        const group = groups.find((candidate) => candidate.repository.owner.toLowerCase() === target.owner.toLowerCase()
-          && candidate.repository.name.toLowerCase() === target.repository.toLowerCase());
-        if (group?.error) throw new Error(group.error);
-        const pullRequest = group?.pullRequests.find((candidate) => candidate.number === target.number);
-        if (!group || !pullRequest) throw new Error("当前无法找到这个 Pull Request。");
+        const context = await discovery.resolve(target);
         snapshot = await transport.invokeCancellable("open_pull_request_review", {
           repositoryEntryId: target.repositoryEntryId,
-          repository: group.repository,
-          pullRequest,
+          repository: context.repository,
+          pullRequest: context.pullRequest,
         }, signal);
-        pullRequestContexts.set(snapshot.reviewId, { repository: group.repository, pullRequest });
+        pullRequestContexts.set(snapshot.reviewId, context);
       }
       return remember(snapshot);
     },
