@@ -1,11 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = process.cwd();
 
 function read(rel: string): string {
   return readFileSync(resolve(root, rel), "utf8");
+}
+
+function sourceFiles(directory: string): string[] {
+  return readdirSync(resolve(root, directory)).flatMap((name) => {
+    const relative = `${directory}/${name}`;
+    return statSync(resolve(root, relative)).isDirectory()
+      ? sourceFiles(relative)
+      : /\.(?:ts|tsx)$/.test(name) ? [relative] : [];
+  });
 }
 
 describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不进入生产构建)", () => {
@@ -98,5 +108,13 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(backend).not.toMatch(/ReviewSessionStore|sessionId|ReviewSourceResponse/);
     expect(frontend).not.toMatch(/sessionId|close_review_session|open_github_pull_request/);
     expect(frontend).not.toMatch(/source:\s*["'](?:local|github)["']/);
+  });
+
+  it("裸 Tauri invoke 只存在于 typed transport implementation", () => {
+    const importers = sourceFiles("src").filter((file) =>
+      read(file).includes('from "@tauri-apps/api/core"')
+      && read(file).includes("invoke"),
+    );
+    expect(importers).toEqual(["src/infrastructure/tauri/transport.ts"]);
   });
 });

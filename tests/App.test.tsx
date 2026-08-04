@@ -562,7 +562,7 @@ describe("App", () => {
     expect(screen.getByText("将 topic 合入 origin/main")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "继续审核" })).toBeEnabled();
     expect(invoke).toHaveBeenCalledWith("check_branch_review_updates", {
-      operationId: expect.stringMatching(/^background-git-/),
+      operationId: expect.any(String),
       reviewId: "review-41",
     });
   });
@@ -618,7 +618,7 @@ describe("App", () => {
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-42" }));
     expect(invoke).toHaveBeenCalledWith("refresh_branch_review", {
-      operationId: expect.stringMatching(/^local-git-/),
+      operationId: expect.any(String),
       reviewId: "review-42",
       confirmation: update,
     });

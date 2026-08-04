@@ -1,25 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { FileChangeContent, ReviewIdentity, ReviewSnapshot } from "@/review/types";
+import type {
+  ReviewApplicationAdapter,
+  ReviewOpenTarget,
+  ReviewUpdate,
+} from "@/review/review-application";
+import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 
-/** Workspace Trust 已由 Repository Entry context 确认的 Review 打开目标。 */
-export type ReviewOpenTarget =
-  | { kind: "saved-review"; reviewId: string }
-  | {
-      kind: "pull-request-selection";
-      repositoryEntryId: number;
-      owner: string;
-      repository: string;
-      number: number;
-    }
-  | {
-      kind: "branch-selection";
-      repositoryEntryId: number;
-      baseRef: string;
-      headRef: string;
-      refreshExisting?: boolean;
-      existingReviewId?: string;
-    };
+export type { ReviewApplicationAdapter, ReviewOpenTarget, ReviewUpdate } from "@/review/review-application";
 
 /** Review lifecycle seam 返回的稳定失败投影。 */
 export type ReviewFailure = {
@@ -28,36 +16,6 @@ export type ReviewFailure = {
   retryable: boolean;
 };
 
-/** Review Update 检查得到的 moving revision 对照。 */
-export type ReviewUpdate = {
-  currentBaseRevision: string;
-  currentHeadRevision: string;
-  availableBaseRevision: string;
-  availableHeadRevision: string;
-};
-
-/** Review lifecycle implementation 所依赖的应用 adapter。 */
-export interface ReviewApplicationAdapter {
-  switchReview(
-    target: ReviewOpenTarget,
-    current: ReviewIdentity | null,
-    signal: AbortSignal,
-  ): Promise<ReviewSnapshot>;
-  checkReviewUpdate(current: ReviewIdentity, signal: AbortSignal): Promise<ReviewUpdate | null>;
-  refreshReview(
-    current: ReviewIdentity,
-    signal: AbortSignal,
-  ): Promise<{ kind: "unchanged" } | { kind: "refreshed"; snapshot: ReviewSnapshot }>;
-  readFileChange(
-    current: ReviewIdentity,
-    path: string,
-    signal: AbortSignal,
-  ): Promise<FileChangeContent>;
-  closeReview(
-    current: ReviewIdentity,
-    signal: AbortSignal,
-  ): Promise<{ kind: "closed" } | { kind: "closed-with-cleanup-failure"; detail: string }>;
-}
 
 export type ReviewOpenResult =
   | { kind: "opened"; reviewId: string; snapshotId: string }

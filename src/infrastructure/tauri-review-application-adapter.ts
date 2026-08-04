@@ -1,28 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
-
-import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary } from "@/lib/review-types";
+import { tauriTransport, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
+import type { BranchReviewUpdate } from "@/infrastructure/tauri/command-contract";
+import type { DiscoveredPullRequest, PullRequestGroup } from "@/lib/review-types";
 import type {
   ReviewApplicationAdapter,
   ReviewOpenTarget,
   ReviewUpdate,
-} from "@/review/use-review-lifecycle";
-import type { FileChangeContent, ReviewIdentity, ReviewSnapshot } from "@/review/types";
-
-type BranchReviewUpdate = {
-  changed: boolean;
-  currentBaseRevision: string;
-  currentHeadRevision: string;
-  latestBaseRevision: string;
-  latestHeadRevision: string;
-};
-
-type PullRequestReviewUpdate = {
-  updateAvailable: boolean;
-  currentBaseRevision: string;
-  currentHeadRevision: string;
-  availableBaseRevision: string;
-  availableHeadRevision: string;
-};
+} from "@/review/review-application";
+import type { ReviewIdentity, ReviewSnapshot } from "@/review/types";
 
 type PullRequestContext = {
   repository: PullRequestGroup["repository"];
@@ -34,32 +18,17 @@ type PendingUpdate =
   | { kind: "pull-request"; context: PullRequestContext };
 
 /** 创建把粗粒度 Review lifecycle 操作映射到 Tauri commands 的生产 adapter。 */
-export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter {
-  let nextOperationId = 0;
+export function createTauriReviewApplicationAdapter(
+  transport: TypedTauriTransport = tauriTransport,
+): ReviewApplicationAdapter {
   const snapshots = new Map<string, ReviewSnapshot>();
   /** 用户检查是有更新，如果有的话会先存在这里，直到用户点击更新才从这里取出来进行真正的刷新操作 */
   const pendingUpdates = new Map<string, PendingUpdate>();
   const pullRequestContexts = new Map<string, PullRequestContext>();
 
-  /** 执行支持 cooperative cancellation 的 Core Git command。 */
-  async function invokeGit<T>(
-    command: string,
-    arguments_: Record<string, unknown>,
-    signal: AbortSignal,
-  ): Promise<T> {
-    const operationId = `local-git-${nextOperationId++}`;
-    const cancel = () => { void invoke("cancel_git_operation", { operationId }).catch(() => undefined); };
-    signal.addEventListener("abort", cancel, { once: true });
-    try {
-      return await invoke<T>(command, { ...arguments_, operationId });
-    } finally {
-      signal.removeEventListener("abort", cancel);
-    }
-  }
-
   /** 按 durable Review identity 找到所属 Repository Entry。 */
   async function repositoryEntryId(reviewId: string) {
-    const reviews = await invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: null });
+    const reviews = await transport.invoke("list_reviews", { repositoryEntryId: null });
     const review = reviews.find((candidate) => candidate.reviewId === reviewId);
     if (!review) throw new Error("Review 所属 Repository Entry 不存在。");
     return review.repositoryEntryId;
@@ -72,7 +41,7 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
   ): Promise<PullRequestContext> {
     const identity = snapshot.pullRequest;
     if (!identity) throw new Error("Review 不是 Pull Request Selection。");
-    const groups = await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
+    const groups = await transport.invoke("discover_github_pull_requests", {
       repositoryEntryId: await repositoryEntryId(reviewId),
     });
     const group = groups.find((candidate) => candidate.repository.owner.toLowerCase() === identity.owner.toLowerCase()
@@ -93,28 +62,28 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
     async switchReview(target: ReviewOpenTarget, _current: ReviewIdentity | null, signal: AbortSignal) {
       let snapshot: ReviewSnapshot;
       if (target.kind === "saved-review") {
-        snapshot = await invoke<ReviewSnapshot>("reopen_review", { reviewId: target.reviewId });
+        snapshot = await transport.invoke("reopen_review", { reviewId: target.reviewId });
       } else if (target.kind === "branch-selection") {
         snapshot = target.refreshExisting && target.existingReviewId
-          ? await invoke<ReviewSnapshot>("reopen_review", { reviewId: target.existingReviewId })
-          : await invokeGit<ReviewSnapshot>("compare_local_refs", {
+          ? await transport.invoke("reopen_review", { reviewId: target.existingReviewId })
+          : await transport.invokeCancellable("compare_local_refs", {
               repositoryEntryId: target.repositoryEntryId,
               baseRef: target.baseRef,
               headRef: target.headRef,
             }, signal);
         if (target.refreshExisting) {
-          const update = await invokeGit<BranchReviewUpdate>("check_branch_review_updates", {
+          const update = await transport.invokeCancellable("check_branch_review_updates", {
             reviewId: snapshot.reviewId,
           }, signal);
           if (update.changed) {
-            snapshot = await invokeGit<ReviewSnapshot>("refresh_branch_review", {
+            snapshot = await transport.invokeCancellable("refresh_branch_review", {
               reviewId: snapshot.reviewId,
               confirmation: update,
             }, signal);
           }
         }
       } else {
-        const groups = await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
+        const groups = await transport.invoke("discover_github_pull_requests", {
           repositoryEntryId: target.repositoryEntryId,
         });
         const group = groups.find((candidate) => candidate.repository.owner.toLowerCase() === target.owner.toLowerCase()
@@ -122,7 +91,7 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
         if (group?.error) throw new Error(group.error);
         const pullRequest = group?.pullRequests.find((candidate) => candidate.number === target.number);
         if (!group || !pullRequest) throw new Error("当前无法找到这个 Pull Request。");
-        snapshot = await invokeGit<ReviewSnapshot>("open_pull_request_review", {
+        snapshot = await transport.invokeCancellable("open_pull_request_review", {
           repositoryEntryId: target.repositoryEntryId,
           repository: group.repository,
           pullRequest,
@@ -138,7 +107,7 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
       if (snapshot.pullRequest) {
         const context = pullRequestContexts.get(current.reviewId)
           ?? await discoverPullRequest(current.reviewId, snapshot);
-        const checked = await invokeGit<PullRequestReviewUpdate>("check_pull_request_review_update", {
+        const checked = await transport.invokeCancellable("check_pull_request_review_update", {
           reviewId: current.reviewId,
           repository: context.repository,
           pullRequest: context.pullRequest,
@@ -147,7 +116,7 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
         pendingUpdates.set(current.snapshotId, { kind: "pull-request", context });
         return checked;
       }
-      const checked = await invokeGit<BranchReviewUpdate>("check_branch_review_updates", {
+      const checked = await transport.invokeCancellable("check_branch_review_updates", {
         reviewId: current.reviewId,
       }, signal);
       if (!checked.changed) return null;
@@ -164,11 +133,11 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
       const pending = pendingUpdates.get(current.snapshotId);
       if (!pending) return { kind: "unchanged" };
       const snapshot = pending.kind === "branch"
-        ? await invokeGit<ReviewSnapshot>("refresh_branch_review", {
+        ? await transport.invokeCancellable("refresh_branch_review", {
             reviewId: current.reviewId,
             confirmation: pending.confirmation,
           }, signal)
-        : await invokeGit<ReviewSnapshot>("refresh_pull_request_review", {
+        : await transport.invokeCancellable("refresh_pull_request_review", {
             reviewId: current.reviewId,
             repository: pending.context.repository,
             pullRequest: pending.context.pullRequest,
@@ -182,7 +151,7 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
     },
 
     readFileChange(current, path, signal) {
-      return invokeGit<FileChangeContent>("read_review_file_change", {
+      return transport.invokeCancellable("read_review_file_change", {
         reviewId: current.reviewId,
         snapshotId: current.snapshotId,
         path,
@@ -190,11 +159,16 @@ export function createTauriReviewApplicationAdapter(): ReviewApplicationAdapter 
     },
 
     async closeReview(current) {
-      await invoke("close_review", { reviewId: current.reviewId });
-      snapshots.delete(current.reviewId);
-      pullRequestContexts.delete(current.reviewId);
-      pendingUpdates.delete(current.snapshotId);
-      return { kind: "closed" };
+      try {
+        await transport.invoke("close_review", { reviewId: current.reviewId });
+        return { kind: "closed" };
+      } catch (reason) {
+        return { kind: "closed-with-cleanup-failure", detail: String(reason) };
+      } finally {
+        snapshots.delete(current.reviewId);
+        pullRequestContexts.delete(current.reviewId);
+        pendingUpdates.delete(current.snapshotId);
+      }
     },
   };
 }
