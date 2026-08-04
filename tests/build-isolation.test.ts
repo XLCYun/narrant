@@ -9,6 +9,25 @@ function read(rel: string): string {
 }
 
 describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不进入生产构建)", () => {
+  it("主窗口通过 window-state 插件恢复尺寸、位置与最大化状态", () => {
+    const cargo = read("src-tauri/Cargo.toml");
+    const config = JSON.parse(read("src-tauri/tauri.conf.json"));
+    const backend = read("src-tauri/src/lib.rs");
+    const mainWindow = config.app.windows[0];
+
+    expect(cargo).toMatch(/^tauri-plugin-window-state\s*=\s*"2/m);
+    expect(mainWindow).toMatchObject({
+      width: 1100,
+      height: 760,
+      minWidth: 900,
+      minHeight: 600,
+      visible: false,
+    });
+    expect(backend).toMatch(/tauri_plugin_window_state::Builder::default\(\)/);
+    expect(backend).toMatch(/StateFlags::SIZE\s*\|\s*StateFlags::POSITION\s*\|\s*StateFlags::MAXIMIZED\s*\|\s*StateFlags::VISIBLE/);
+    expect(backend).not.toMatch(/StateFlags::FULLSCREEN/);
+  });
+
   it("wdio 不是默认 Cargo feature,且为可选依赖", () => {
     const cargo = read("src-tauri/Cargo.toml");
     expect(cargo).toMatch(/^default\s*=\s*\[\s*\]/m);
