@@ -6,8 +6,8 @@ import { BranchReviewSelector, type BranchSelectorAction } from "@/components/br
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
+import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
 import { i18n } from "@/lib/i18n";
 import type { ReviewSummary } from "@/lib/review-types";
 
@@ -160,21 +160,32 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
   ]));
   const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
+  const review: ReviewReaderBinding = {
+    snapshot,
+    transition: { kind: "stable" },
+    fileChange: selectedPath
+      ? { kind: "ready", path: selectedPath, content: contents[selectedPath] }
+      : { kind: "empty" },
+    update: update
+      ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
+      : { kind: "current" },
+    selectFileChange: setSelectedPath,
+    retryFileChange: () => undefined,
+    refresh: async () => ({ kind: "unchanged" }),
+    close: async () => ({ kind: "closed" }),
+  };
   return <div className="h-[calc(100vh-8.5rem)]">
     <ReviewReader
-      snapshot={snapshot}
-      fileChange={selectedPath ? contents[selectedPath] : undefined}
-      diffMode={mode}
-      narrow={window.innerWidth < 1200}
-      editorTheme={document.documentElement.classList.contains("dark") ? "vs-dark" : "light"}
-      initialTreeWidth={26}
-      updateAction={update ? <div role="status" className="flex items-center gap-2 text-sm"><span className="hidden text-amber-700 sm:inline dark:text-amber-300">检测到 PR 分支有更新</span><Button aria-label="刷新审核"><span className="hidden sm:inline">刷新审核</span></Button></div> : undefined}
-      onSelectFile={setSelectedPath}
-      onRetryFile={setSelectedPath}
-      onDiffModeChange={setMode}
-      onTreeWidthChange={() => undefined}
-      onOpenExternal={() => undefined}
-      onClose={() => undefined}
+      review={review}
+      appearance={{
+        diffMode: mode,
+        narrow: window.innerWidth < 1200,
+        editorTheme: document.documentElement.classList.contains("dark") ? "vs-dark" : "light",
+        initialTreeWidth: 26,
+        onDiffModeChange: setMode,
+        onTreeWidthChange: () => undefined,
+        onOpenExternal: () => undefined,
+      }}
     />
   </div>;
 }

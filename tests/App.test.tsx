@@ -355,7 +355,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Local PR Review/ }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
-      repositoryEntryId: 25, repository, pullRequest,
+      operationId: expect.any(String), repositoryEntryId: 25, repository, pullRequest,
     }));
     expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).toHaveTextContent("草稿");

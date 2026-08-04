@@ -500,8 +500,6 @@ fn open_saved_branch_review(
     repository_path: std::path::PathBuf,
     saved: repository_catalog::SavedBranchReview,
 ) -> Result<ReviewSnapshotResponse, String> {
-    cleanup_review_workspaces(catalog, Some(&saved.review_id))?;
-    state.retain_only(Some(&saved.review_id))?;
     let workspace = catalog
         .review_workspace_path(&saved.review_id)
         .map_err(|error| error.to_string())?;
@@ -524,6 +522,8 @@ fn open_saved_branch_review(
     ) {
         return Err(error.to_string());
     }
+    cleanup_review_workspaces(catalog, Some(&saved.review_id))?;
+    state.retain_only(Some(&saved.review_id))?;
     if saved.created {
         catalog
             .activate_snapshot(&saved)
@@ -552,7 +552,9 @@ fn open_saved_branch_review(
 #[tauri::command]
 fn open_pull_request_review(
     state: tauri::State<'_, OpenReviewStore>,
+    operations: tauri::State<'_, GitOperationStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    operation_id: String,
     repository_entry_id: i64,
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
@@ -575,8 +577,11 @@ fn open_pull_request_review(
     {
         return open_saved_branch_review(&state, &catalog, repository_path, saved);
     }
-    let (calculated, metadata) =
-        calculate_pull_request_review(&repository_path, repository, pull_request)?;
+    let cancellation = operations.start(operation_id.clone())?;
+    let calculated =
+        calculate_pull_request_review(&repository_path, repository, pull_request, &cancellation);
+    operations.finish(&operation_id);
+    let (calculated, metadata) = calculated?;
     let saved = catalog
         .save_pull_request_review(repository_entry_id, &metadata, calculated.snapshot())
         .map_err(|error| error.to_string())?;
@@ -586,7 +591,9 @@ fn open_pull_request_review(
 /// 检查 Pull Request 当前 revisions；只获取对象并计算候选 Snapshot。
 #[tauri::command]
 fn check_pull_request_review_update(
+    operations: tauri::State<'_, GitOperationStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    operation_id: String,
     review_id: String,
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
@@ -596,7 +603,11 @@ fn check_pull_request_review_update(
         .map_err(|error| error.to_string())?;
     require_pull_request_identity(&current, &repository, &pull_request)?;
     let repository_path = require_available_repository(&catalog, current.repository_entry_id)?;
-    let (available, _) = calculate_pull_request_review(&repository_path, repository, pull_request)?;
+    let cancellation = operations.start(operation_id.clone())?;
+    let available =
+        calculate_pull_request_review(&repository_path, repository, pull_request, &cancellation);
+    operations.finish(&operation_id);
+    let (available, _) = available?;
     Ok(ReviewUpdateResponse {
         update_available: current.base_revision != available.snapshot().base_revision
             || current.head_revision != available.snapshot().head_revision,
@@ -611,7 +622,9 @@ fn check_pull_request_review_update(
 #[tauri::command]
 fn refresh_pull_request_review(
     state: tauri::State<'_, OpenReviewStore>,
+    operations: tauri::State<'_, GitOperationStore>,
     catalog: tauri::State<'_, repository_catalog::RepositoryCatalog>,
+    operation_id: String,
     review_id: String,
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
@@ -626,8 +639,15 @@ fn refresh_pull_request_review(
         let entry = catalog
             .open_entry(current.repository_entry_id)
             .map_err(|error| error.to_string())?;
-        let (calculated, metadata) =
-            calculate_pull_request_review(&repository_path, repository, pull_request)?;
+        let cancellation = operations.start(operation_id.clone())?;
+        let calculated = calculate_pull_request_review(
+            &repository_path,
+            repository,
+            pull_request,
+            &cancellation,
+        );
+        operations.finish(&operation_id);
+        let (calculated, metadata) = calculated?;
         if current.base_revision == calculated.snapshot().base_revision
             && current.head_revision == calculated.snapshot().head_revision
         {
@@ -753,6 +773,7 @@ fn calculate_pull_request_review(
     repository_path: &std::path::Path,
     repository: github_discovery::GitHubRepository,
     pull_request: github_discovery::DiscoveredPullRequest,
+    cancellation: &core_git::CancellationToken,
 ) -> Result<
     (
         change_content::local::LocalOpenedReview,
@@ -776,6 +797,7 @@ fn calculate_pull_request_review(
         &pull_request.base.reference,
         &pull_request.base.sha,
         &pull_request.head.sha,
+        cancellation,
     )
     .map_err(|error| format!("Git transport：{error}"))?;
     let metadata = repository_catalog::PullRequestMetadata {

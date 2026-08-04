@@ -278,6 +278,7 @@ fn fetches_pull_request_objects_without_creating_narrant_refs() {
         "main",
         &base.to_string(),
         &head.to_string(),
+        &CancellationToken::default(),
     )
     .expect("fetch and compare Pull Request objects");
 

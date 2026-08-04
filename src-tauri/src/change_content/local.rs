@@ -304,12 +304,12 @@ pub fn fetch_pull_request_objects(
     base_ref: &str,
     base_revision: &str,
     head_revision: &str,
+    cancellation: &CancellationToken,
 ) -> Result<LocalOpenedReview, GitCommandError> {
     if remote.is_empty() || base_ref.is_empty() || pull_request_number == 0 {
         return Err(GitCommandError::new("Pull Request fetch 参数无效"));
     }
     let adapter = GitProcessAdapter::new(repository_path);
-    let cancellation = CancellationToken::default();
     let base_source = format!("refs/heads/{base_ref}");
     let head_source = format!("refs/pull/{pull_request_number}/head");
     for source in [&base_source, &head_source] {
@@ -321,7 +321,7 @@ pub fn fetch_pull_request_objects(
                 remote,
                 source,
             ],
-            &cancellation,
+            cancellation,
         )?;
     }
     LocalOpenedReview::open_revisions(
@@ -330,7 +330,7 @@ pub fn fetch_pull_request_objects(
         &format!("pull/{pull_request_number}/head"),
         base_revision,
         head_revision,
-        &cancellation,
+        cancellation,
     )
 }
 

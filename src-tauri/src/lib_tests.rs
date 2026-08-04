@@ -160,6 +160,47 @@ fn startup_recovery_removes_only_catalog_owned_registered_workspace() {
     assert!(user_worktree.exists());
 }
 
+#[test]
+fn failed_review_switch_keeps_the_current_review_readable() {
+    let application_data = tempfile::TempDir::new().unwrap();
+    let first_repository = test_repository_with_commit();
+    let target_repository = test_repository_with_commit();
+    let catalog = repository_catalog::RepositoryCatalog::open(
+        &application_data.path().join("catalog.sqlite3"),
+    )
+    .unwrap();
+    let first_entry = catalog.register(first_repository.path()).unwrap();
+    let target_entry = catalog.register(target_repository.path()).unwrap();
+    catalog.grant_workspace_trust(first_entry.id).unwrap();
+    catalog.grant_workspace_trust(target_entry.id).unwrap();
+    let first_saved = save_current_branch_review(&catalog, first_entry.id, first_repository.path());
+    let target_saved =
+        save_current_branch_review(&catalog, target_entry.id, target_repository.path());
+    let store = OpenReviewStore::default();
+
+    open_saved_branch_review(
+        &store,
+        &catalog,
+        first_repository.path().to_path_buf(),
+        first_saved.clone(),
+    )
+    .unwrap();
+    let first_workspace = catalog
+        .review_workspace_path(&first_saved.review_id)
+        .unwrap();
+    assert!(first_workspace.exists());
+
+    let unavailable_target = application_data.path().join("missing-target-repository");
+    let error = match open_saved_branch_review(&store, &catalog, unavailable_target, target_saved) {
+        Ok(_) => panic!("目标 Review materialization 应失败"),
+        Err(error) => error,
+    };
+
+    assert!(!error.is_empty());
+    assert!(store.get(&first_saved.review_id).is_ok());
+    assert!(first_workspace.exists());
+}
+
 /// 创建供 runtime 生命周期测试使用的含提交 working-tree repository。
 fn test_repository_with_commit() -> tempfile::TempDir {
     let repository = tempfile::TempDir::new().unwrap();
@@ -190,6 +231,23 @@ fn test_repository_with_commit() -> tempfile::TempDir {
         .status()
         .unwrap();
     repository
+}
+
+/// 保存一个以当前分支作为 Base Ref 与 Head Ref 的测试 Review。
+fn save_current_branch_review(
+    catalog: &repository_catalog::RepositoryCatalog,
+    repository_entry_id: i64,
+    repository_path: &std::path::Path,
+) -> repository_catalog::SavedBranchReview {
+    let branch = git_text(repository_path, &["symbolic-ref", "--short", "HEAD"]);
+    let branch_ref = format!("refs/heads/{branch}");
+    let opened =
+        change_content::local::LocalOpenedReview::open(repository_path, &branch_ref, &branch_ref)
+            .unwrap();
+    let saved = catalog
+        .save_branch_review(repository_entry_id, opened.snapshot())
+        .unwrap();
+    saved
 }
 
 /// 返回生命周期测试所需的单行 Core Git 输出。

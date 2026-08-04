@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
@@ -20,13 +20,12 @@ import { Icon } from "@/components/ui/icon";
 import {
   ReviewReader,
   type DiffMode,
-  type FileChangeContent,
-  type ReviewReaderSnapshot,
 } from "@/components/review-reader";
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
+import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
+import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import "@/lib/i18n";
 
-type ReviewSnapshot = ReviewReaderSnapshot;
 type BranchReviewUpdate = {
   changed: boolean;
   currentBaseRevision: string;
@@ -45,7 +44,6 @@ type BranchRefs = {
   defaultRef: string;
   currentRef: string;
 };
-type ActiveReview = { reviewId: string };
 /** 侧边栏中正在打开的单一导航目标。 */
 type PendingNavigation = { type: "repository"; id: number } | { type: "review"; id: string };
 type GitHubAuthStatus = {
@@ -70,28 +68,10 @@ type RepositoryEntry = {
   available: boolean;
   unavailableReason: string | null;
 };
-/// 当前由 discovery 选中的 Pull Request identity 与 metadata。
-type SelectedPullRequest = {
-  repository: PullRequestGroup["repository"];
-  pullRequest: DiscoveredPullRequest;
-};
-/// “检查更新”返回的 current 与 available revision 对照。
-type ReviewUpdate = {
-  updateAvailable: boolean;
-  currentBaseRevision: string;
-  currentHeadRevision: string;
-  availableBaseRevision: string;
-  availableHeadRevision: string;
-};
 
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
 const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
-
-/** 以不依赖系统 locale 的代码点顺序稳定排列路径。 */
-function comparePaths(left: string, right: string) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 /** 更新已有 Repository Entry 时保持位置，只把新添加的仓库放到列表前端。 */
 function upsertRepositoryEntry(entries: RepositoryEntry[], entry: RepositoryEntry) {
@@ -115,6 +95,10 @@ export function App() {
   const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const editorTheme = useSystemTheme();
+  const reviewApplicationAdapter = useMemo(() => createTauriReviewApplicationAdapter(), []);
+  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
+  const snapshot = reviewLifecycle.reader?.snapshot;
+  const refreshingReview = reviewLifecycle.reader?.transition.kind === "refreshing";
   const [repositoryPath, setRepositoryPath] = useState("");
   const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
   const [recentReviews, setRecentReviews] = useState<ReviewSummary[]>([]);
@@ -140,16 +124,7 @@ export function App() {
   const [branchesReloading, setBranchesReloading] = useState(false);
   const [branchReloadError, setBranchReloadError] = useState("");
   const branchSelectionCheckId = useRef(0);
-  const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
-  const [selectedPullRequest, setSelectedPullRequest] = useState<SelectedPullRequest>();
-  const [reviewUpdate, setReviewUpdate] = useState<ReviewUpdate>();
-  const [branchUpdate, setBranchUpdate] = useState<BranchReviewUpdate>();
-  const [reviewUpdateError, setReviewUpdateError] = useState("");
-  const [refreshingReview, setRefreshingReview] = useState(false);
   const [repositoryInitialTab, setRepositoryInitialTab] = useState<"pull-requests" | "branches" | "history">("pull-requests");
-  const [fileChange, setFileChange] = useState<FileChangeContent>();
-  const [fileChangeLoading, setFileChangeLoading] = useState(false);
-  const [fileChangeError, setFileChangeError] = useState("");
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
@@ -164,13 +139,8 @@ export function App() {
   const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
     ? savedTreeWidth
     : 24;
-  const activeReview = useRef<ActiveReview>();
-  const activeSnapshotId = useRef<string>();
   const activeGitOperationId = useRef<string>();
   const nextGitOperationId = useRef(0);
-  const openFileChangeRef = useRef<(path: string) => Promise<void>>();
-  const fileChangeRequestId = useRef(0);
-  const [pendingFilePath, setPendingFilePath] = useState<string>();
 
   /** 为 Pull Request 入口生成与 Repository Overview 行一致的稳定 pending identity。 */
   function pullRequestReviewKey(owner: string, repository: string, number: number) {
@@ -229,34 +199,11 @@ export function App() {
     return invoke<T>(command, { ...arguments_, operationId });
   }
 
-  function replaceSnapshot(nextSnapshot?: ReviewSnapshot) {
-    fileChangeRequestId.current += 1;
-    setFileChangeLoading(false);
-    setPendingFilePath(undefined);
-    const previousReview = activeReview.current;
-    const nextReview = nextSnapshot && { reviewId: nextSnapshot.reviewId };
-    activeReview.current = nextReview;
-    activeSnapshotId.current = nextSnapshot?.snapshotId;
-    setSnapshot(nextSnapshot);
-    setBranchUpdate(undefined);
-    if (previousReview && JSON.stringify(previousReview) !== JSON.stringify(nextReview)) {
-      closeActiveReview(previousReview);
-    }
-  }
-
-  /** 使用 durable reviewId 关闭当前运行时资源。 */
-  function closeActiveReview(review: ActiveReview) {
-    void Promise.resolve(invoke("close_review", { reviewId: review.reviewId }))
-      .catch(() => undefined);
-  }
-
   /** 关闭当前 Review 的运行时资源并保留持久化历史。 */
-  function closeReviewView(initialTab: "pull-requests" | "branches" | "history" = "history") {
-    replaceSnapshot(undefined);
-    setFileChange(undefined);
-    setReviewUpdate(undefined);
-    setReviewUpdateError("");
+  async function closeReviewView(initialTab: "pull-requests" | "branches" | "history" = "history") {
+    const result = await reviewLifecycle.close();
     setRepositoryInitialTab(initialTab);
+    return result;
   }
 
   /** 返回 Catalog 时同时关闭当前 Review，避免页面外仍保留 workspace。 */
@@ -271,10 +218,6 @@ export function App() {
       void Promise.resolve(invoke("cancel_git_operation", { operationId: activeGitOperationId.current }))
         .catch(() => undefined);
       activeGitOperationId.current = undefined;
-    }
-    if (activeReview.current) {
-      closeActiveReview(activeReview.current);
-      activeReview.current = undefined;
     }
   }, []);
 
@@ -386,7 +329,6 @@ export function App() {
     void Promise.resolve(invoke<GitHubAuthStatus>("github_auth_status"))
       .then(setAuthStatus)
       .catch(() => setAuthStatus(undefined));
-    if (!snapshot) setFileChange(undefined);
   }
 
   /** 打开 Repository Entry；首次使用时先停留当前页面并请求 Workspace Trust。 */
@@ -429,43 +371,15 @@ export function App() {
       : `review:${review.reviewId}`;
     await withReviewOpening(key, async () => {
       setError("");
-      try {
-      const nextSnapshot = await invoke<ReviewSnapshot>("open_saved_review", {
-        reviewId: review.reviewId,
-      });
-      replaceSnapshot(nextSnapshot);
-      setSelectedPullRequest(nextSnapshot.pullRequest && {
-        repository: {
-          owner: nextSnapshot.pullRequest.owner,
-          name: nextSnapshot.pullRequest.repository,
-        },
-        pullRequest: {
-          number: nextSnapshot.pullRequest.number,
-          title: nextSnapshot.pullRequest.title,
-          description: nextSnapshot.pullRequest.description,
-          author: nextSnapshot.pullRequest.author,
-          state: nextSnapshot.pullRequest.state,
-          draft: nextSnapshot.pullRequest.draft,
-          url: nextSnapshot.pullRequest.url,
-          updatedAt: nextSnapshot.pullRequest.updatedAt
-            ?? new Date(nextSnapshot.pullRequest.synchronizedAt).toISOString(),
-          base: { ref: nextSnapshot.pullRequest.baseRef, sha: nextSnapshot.baseRevision },
-          head: { ref: nextSnapshot.pullRequest.headRef, sha: nextSnapshot.headRevision },
-        },
-      });
-      setReviewUpdate(undefined);
-      setFileChange(undefined);
-      } catch (reason) {
-        setError(String(reason));
-      }
+      const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: review.reviewId });
+      if (result.kind !== "opened") setError(result.failure.detail);
     });
   }
 
   /** 在 Repository Entry 已进入后打开 current Snapshot，并更新最近审核排序。 */
   async function reopenResolvedReview(summary: ReviewSummary) {
-    replaceSnapshot(await invoke<ReviewSnapshot>("reopen_review", {
-      reviewId: summary.reviewId,
-    }));
+    const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
+    if (result.kind !== "opened") throw new Error(result.failure.detail);
     const reopened = { ...summary, lastOpenedAt: Date.now() };
     setRecentReviews((reviews) => [
       reopened,
@@ -483,7 +397,6 @@ export function App() {
       : entry);
     void Promise.resolve(invoke<RepositoryEntry>("open_repository_entry", { id: summary.repositoryEntryId }))
       .catch(() => undefined);
-    setFileChange(undefined);
   }
 
   /** 仅允许一个侧边栏仓库导航进行，成功后由 openRepository 提交主视图。 */
@@ -528,9 +441,6 @@ export function App() {
           setPendingReview(summary);
           return;
         }
-        const nextSnapshot = await invoke<ReviewSnapshot>("reopen_review", {
-          reviewId: summary.reviewId,
-        });
         const [saved, reviews] = await Promise.all([
           invoke<SavedReviewSummary[]>("list_saved_reviews", { repositoryEntryId: opened.id }),
           invoke<ReviewSummary[]>("list_reviews", { repositoryEntryId: opened.id }),
@@ -541,13 +451,13 @@ export function App() {
         setRepositoryPath(opened.canonicalPath);
         setPullRequestGroups([]);
         setDiscoveryError(undefined);
-        replaceSnapshot(nextSnapshot);
+        const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
+        if (result.kind !== "opened") throw new Error(result.failure.detail);
         const reopened = { ...summary, lastOpenedAt: Date.now() };
         setRecentReviews((candidates) => [
           reopened,
           ...candidates.filter((candidate) => candidate.reviewId !== reopened.reviewId),
         ]);
-        setFileChange(undefined);
         void loadPullRequestGroups(opened);
         return;
       }
@@ -588,80 +498,16 @@ export function App() {
     const key = pullRequestReviewKey(repository.owner, repository.name, pullRequest.number);
     await withReviewOpening(key, async () => {
       setError("");
-      try {
-      const nextSnapshot = await invoke<ReviewSnapshot>("open_pull_request_review", {
+      const result = await reviewLifecycle.open({
+        kind: "pull-request-selection",
         repositoryEntryId: selectedRepository.id,
-        repository,
-        pullRequest,
+        owner: repository.owner,
+        repository: repository.name,
+        number: pullRequest.number,
       });
-      setSelectedPullRequest({ repository, pullRequest });
-      setReviewUpdate(undefined);
-      replaceSnapshot(nextSnapshot);
-      setFileChange(undefined);
-      await loadSavedReviews(selectedRepository.id);
-      } catch (reason) {
-        setError(String(reason));
-      }
+      if (result.kind === "opened") await loadSavedReviews(selectedRepository.id);
+      else setError(result.failure.detail);
     });
-  }
-
-  /** 重新查询 GitHub metadata 并检查候选 revisions，不改变当前 Snapshot。 */
-  async function checkPullRequestUpdate() {
-    if (!selectedRepository || !selectedPullRequest || !snapshot) return;
-    const checkedReviewId = snapshot.reviewId;
-    const checkedSnapshotId = snapshot.snapshotId;
-    setReviewUpdateError("");
-    try {
-      const groups = await invoke<PullRequestGroup[]>("discover_github_pull_requests", {
-        repositoryEntryId: selectedRepository.id,
-      });
-      if (activeReview.current?.reviewId !== checkedReviewId
-        || activeSnapshotId.current !== checkedSnapshotId) return;
-      setPullRequestGroups(groups);
-      const identity = `${selectedPullRequest.repository.owner}/${selectedPullRequest.repository.name}`;
-      const group = groups.find((candidate) => (
-        `${candidate.repository.owner}/${candidate.repository.name}` === identity
-      ));
-      if (group?.error) throw new Error(`GitHub metadata：${group.error}`);
-      const current = group?.pullRequests.find(
-        (candidate) => candidate.number === selectedPullRequest.pullRequest.number,
-      );
-      if (!current) throw new Error("GitHub metadata：当前无法找到这个 Pull Request。");
-      setSelectedPullRequest({ repository: group!.repository, pullRequest: current });
-      const update = await invoke<ReviewUpdate>("check_pull_request_review_update", {
-        reviewId: snapshot.reviewId,
-        repository: group!.repository,
-        pullRequest: current,
-      });
-      if (activeReview.current?.reviewId === checkedReviewId
-        && activeSnapshotId.current === checkedSnapshotId
-        && typeof update?.currentHeadRevision === "string") setReviewUpdate(update);
-    } catch (reason) {
-      if (activeReview.current?.reviewId === checkedReviewId
-        && activeSnapshotId.current === checkedSnapshotId) {
-        setReviewUpdateError(String(reason).replace(/^Error: /, ""));
-      }
-    }
-  }
-
-  /** 仅在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
-  async function refreshPullRequestReview() {
-    if (!selectedPullRequest || !snapshot || refreshingReview) return;
-    setReviewUpdateError("");
-    setRefreshingReview(true);
-    try {
-      replaceSnapshot(await invoke<ReviewSnapshot>("refresh_pull_request_review", {
-        reviewId: snapshot.reviewId,
-        repository: selectedPullRequest.repository,
-        pullRequest: selectedPullRequest.pullRequest,
-      }));
-      setReviewUpdate(undefined);
-      setFileChange(undefined);
-    } catch (reason) {
-      setReviewUpdateError(String(reason));
-    } finally {
-      setRefreshingReview(false);
-    }
   }
 
   /** 启动连接向导，并在已配置时将用户带到 GitHub App 安装页。 */
@@ -850,8 +696,6 @@ export function App() {
       setRefs(branches.refs);
       setDefaultRef(branches.defaultRef);
       setCurrentRef(branches.currentRef);
-      replaceSnapshot(undefined);
-      setFileChange(undefined);
       setBaseRef(branches.defaultRef);
       setHeadRef(branches.currentRef);
     } catch (reason) {
@@ -900,11 +744,17 @@ export function App() {
           ? "update"
           : branchSelectionCheck.status === "failed" ? "fallback" : "continue";
 
-  /** 统一呈现新 Snapshot，并在提供摘要时同步仓库与最近审核列表。 */
-  function presentReviewSnapshot(nextSnapshot: ReviewSnapshot, summary?: ReviewSummary) {
-    replaceSnapshot(nextSnapshot);
-    setFileChange(undefined);
-    if (!summary) return;
+  /** 在 Review lifecycle 成功提交后同步 Repository Entry 的导航摘要。 */
+  function recordOpenedBranchReview(reviewId: string, base: string, head: string) {
+    if (!selectedRepository) return;
+    const summary: ReviewSummary = {
+      reviewId,
+      repositoryEntryId: selectedRepository.id,
+      repositoryPath: selectedRepository.canonicalPath,
+      baseRef: base,
+      headRef: head,
+      lastOpenedAt: Date.now(),
+    };
     setRepositoryReviews((reviews) => [
       summary,
       ...reviews.filter((review) => review.reviewId !== summary.reviewId),
@@ -919,155 +769,39 @@ export function App() {
     const key = `branch:${baseRef}:${headRef}`;
     await withReviewOpening(key, async () => {
       setError("");
-      try {
-      const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("compare_local_refs", {
-        repositoryEntryId: selectedRepository?.id,
+      const result = await reviewLifecycle.open({
+        kind: "branch-selection",
+        repositoryEntryId: selectedRepository?.id ?? 0,
         baseRef,
         headRef,
       });
-      if (selectedRepository) {
-        const summary: ReviewSummary = {
-          reviewId: nextSnapshot.reviewId,
-          repositoryEntryId: selectedRepository.id,
-          repositoryPath: selectedRepository.canonicalPath,
-          baseRef: nextSnapshot.baseRef,
-          headRef: nextSnapshot.headRef,
-          lastOpenedAt: Date.now(),
-        };
-        presentReviewSnapshot(nextSnapshot, summary);
-      } else {
-        presentReviewSnapshot(nextSnapshot);
-      }
-      if (selectedRepository) await loadSavedReviews(selectedRepository.id);
-    }
-      catch (reason) { replaceSnapshot(undefined); setFileChange(undefined); setError(String(reason)); }
+      if (result.kind === "opened") {
+        recordOpenedBranchReview(result.reviewId, baseRef, headRef);
+        if (selectedRepository) await loadSavedReviews(selectedRepository.id);
+      } else setError(result.failure.detail);
     });
   }
 
   /** 根据已确认的 moving refs 创建新 Snapshot，再进入同一个 durable Review。 */
   async function updateAndOpenBranchReview() {
-    if (!matchingBranchReview || branchSelectionCheck.status !== "update") return;
+    if (!matchingBranchReview || branchSelectionCheck.status !== "update" || !selectedRepository) return;
     const key = `branch:${baseRef}:${headRef}`;
     await withReviewOpening(key, async () => {
       setError("");
-      try {
-      await invoke<ReviewSnapshot>("reopen_review", { reviewId: matchingBranchReview.reviewId });
-      const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
-        reviewId: matchingBranchReview.reviewId,
-        confirmation: branchSelectionCheck.update,
+      const result = await reviewLifecycle.open({
+        kind: "branch-selection",
+        repositoryEntryId: selectedRepository.id,
+        baseRef,
+        headRef,
+        refreshExisting: true,
+        existingReviewId: matchingBranchReview.reviewId,
       });
-      if (selectedRepository) {
-        const summary: ReviewSummary = {
-          ...matchingBranchReview,
-          lastOpenedAt: Date.now(),
-          baseRef: nextSnapshot.baseRef,
-          headRef: nextSnapshot.headRef,
-        };
-        presentReviewSnapshot(nextSnapshot, summary);
+      if (result.kind === "opened") {
+        recordOpenedBranchReview(result.reviewId, baseRef, headRef);
         await loadSavedReviews(selectedRepository.id);
-      } else {
-        presentReviewSnapshot(nextSnapshot);
-      }
-      } catch (reason) {
-      void Promise.resolve(invoke("close_review", { reviewId: matchingBranchReview.reviewId })).catch(() => undefined);
-      replaceSnapshot(undefined);
-      setFileChange(undefined);
-      setError(String(reason));
-      }
+      } else setError(result.failure.detail);
     });
   }
-
-  async function openFileChange(path: string) {
-    if (!snapshot) return;
-    const requestId = ++fileChangeRequestId.current;
-    setFileChangeError("");
-    setFileChangeLoading(true);
-    setPendingFilePath(path);
-    try {
-      const loaded = await invokeLocalGit<FileChangeContent>("read_review_file_change", {
-        reviewId: snapshot.reviewId,
-        snapshotId: snapshot.snapshotId,
-        path,
-      });
-      if (fileChangeRequestId.current === requestId) setFileChange(loaded);
-    } catch (reason) {
-      if (fileChangeRequestId.current === requestId) {
-        setFileChange(undefined);
-        setFileChangeError(String(reason));
-      }
-    } finally {
-      if (fileChangeRequestId.current === requestId) {
-        setFileChangeLoading(false);
-        setPendingFilePath(undefined);
-      }
-    }
-  }
-  openFileChangeRef.current = openFileChange;
-
-  /** 打开或刷新 Review 后按稳定路径顺序选择第一个 File Change。 */
-  const firstFileChangePath = snapshot
-    ? [...snapshot.fileChanges].sort((left, right) => comparePaths(left.path, right.path))[0]?.path
-    : undefined;
-  useEffect(() => {
-    if (!snapshot?.reviewId) return;
-    if (!firstFileChangePath) {
-      setFileChange(undefined);
-      return;
-    }
-    void openFileChangeRef.current?.(firstFileChangePath);
-  }, [snapshot?.reviewId, snapshot?.snapshotId, firstFileChangePath]);
-
-  /** 只检查 Branch Selection 的 moving refs，不改变正在展示的 Snapshot。 */
-  async function checkBranchReviewUpdates() {
-    if (!snapshot) return;
-    const checkedReviewId = snapshot.reviewId;
-    const checkedSnapshotId = snapshot.snapshotId;
-    setReviewUpdateError("");
-    try {
-      const update = await invokeBackgroundGit<BranchReviewUpdate>("check_branch_review_updates", {
-        reviewId: snapshot.reviewId,
-      });
-      if (activeReview.current?.reviewId === checkedReviewId
-        && activeSnapshotId.current === checkedSnapshotId
-        && typeof update?.currentHeadRevision === "string") setBranchUpdate(update);
-    } catch (reason) {
-      if (activeReview.current?.reviewId === checkedReviewId
-        && activeSnapshotId.current === checkedSnapshotId) {
-        setBranchUpdate(undefined);
-        setReviewUpdateError(String(reason));
-      }
-    }
-  }
-
-  /** 在用户明确确认后刷新 Snapshot、File Changes 与 Review Workspace。 */
-  async function refreshBranchReview() {
-    if (!snapshot || refreshingReview) return;
-    setReviewUpdateError("");
-    setRefreshingReview(true);
-    try {
-      const nextSnapshot = await invokeLocalGit<ReviewSnapshot>("refresh_branch_review", {
-        reviewId: snapshot.reviewId,
-        confirmation: branchUpdate,
-      });
-      presentReviewSnapshot(nextSnapshot);
-    } catch (reason) {
-      setReviewUpdateError(String(reason));
-    } finally {
-      setRefreshingReview(false);
-    }
-  }
-
-  /** 打开已有 Review 后非阻塞检查 moving Selection；检查期间继续展示 current Snapshot。 */
-  useEffect(() => {
-    if (!snapshot) return;
-    if (snapshot.pullRequest && selectedPullRequest) {
-      void checkPullRequestUpdate();
-    } else if (!snapshot.pullRequest) {
-      void checkBranchReviewUpdates();
-    }
-    // 检查只由 immutable Snapshot identity 驱动，避免 discovery state 更新造成重复请求。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot ? `${snapshot.reviewId}:${snapshot.snapshotId ?? `${snapshot.baseRevision}:${snapshot.headRevision}`}` : undefined]);
 
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
   return <AppShell
@@ -1220,37 +954,19 @@ export function App() {
       </section>
     </>}
     {error && <ErrorMessage message={error} />}
-    {snapshot && <div className="h-[calc(100vh-4.5rem)]">
+    {snapshot && reviewLifecycle.reader && <div className="h-[calc(100vh-4.5rem)]">
       <ReviewReader
         key={`${snapshot.reviewId}:${snapshot.snapshotId}`}
-        snapshot={snapshot}
-        fileChange={fileChange}
-        pendingFilePath={pendingFilePath}
-        fileChangeLoading={fileChangeLoading}
-        fileChangeError={fileChangeError}
-        firstFileChangePath={firstFileChangePath}
-        navigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
-        diffMode={diffMode}
-        narrow={narrowReview}
-        editorTheme={editorTheme}
-        initialTreeWidth={initialTreeWidth}
-        updateAction={<>
-          {snapshot.pullRequest && reviewUpdate?.updateAvailable && <div role="status" className="flex items-center gap-2 text-sm">
-            <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t("review:pullRequestBranchesUpdated")}</span>
-            <Button aria-label={refreshingReview ? t("review:refreshing") : t("review:refresh")} disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={() => void refreshPullRequestReview()}>{refreshingReview && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshingReview ? t("review:refreshing") : t("review:refresh")}</span></Button>
-          </div>}
-          {!snapshot.pullRequest && branchUpdate?.changed && <div role="status" className="flex items-center gap-2 text-sm">
-            <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t("review:selectedBranchesUpdated")}</span>
-            <Button aria-label={refreshingReview ? t("review:refreshing") : t("review:refresh")} disabled={refreshingReview || Boolean(reviewOpeningKey)} aria-busy={refreshingReview || undefined} onClick={refreshBranchReview}>{refreshingReview && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshingReview ? t("review:refreshing") : t("review:refresh")}</span></Button>
-          </div>}
-        </>}
-        notice={reviewUpdateError ? <p role="alert" className="text-destructive">{reviewUpdateError}</p> : undefined}
-        onSelectFile={(path) => void openFileChange(path)}
-        onRetryFile={(path) => void openFileChange(path)}
-        onDiffModeChange={selectDiffMode}
-        onTreeWidthChange={(width) => localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(width))}
-        onOpenExternal={(url) => void openUrl(url)}
-        onClose={() => closeReviewView()}
+        review={{ ...reviewLifecycle.reader, close: () => closeReviewView() }}
+        appearance={{
+          diffMode,
+          narrow: narrowReview,
+          editorTheme,
+          initialTreeWidth,
+          onDiffModeChange: selectDiffMode,
+          onTreeWidthChange: (width) => localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(width)),
+          onOpenExternal: (url) => void openUrl(url),
+        }}
       />
     </div>}
     </>}
