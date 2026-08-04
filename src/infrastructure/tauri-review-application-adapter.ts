@@ -1,6 +1,6 @@
 import { tauriTransport, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
 import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastructure/tauri-pull-request-discovery-application-adapter";
-import type { BranchReviewUpdate } from "@/infrastructure/tauri/command-contract";
+import type { BranchSelectionUpdate } from "@/review/review-application";
 import type {
   PullRequestContext,
   PullRequestDiscoveryApplicationAdapter,
@@ -13,7 +13,7 @@ import type {
 import type { ReviewIdentity, ReviewSnapshot } from "@/review/types";
 
 type PendingUpdate =
-  | { kind: "branch"; confirmation: BranchReviewUpdate }
+  | { kind: "branch"; confirmation: BranchSelectionUpdate }
   | { kind: "pull-request"; context: PullRequestContext };
 
 /** 创建把粗粒度 Review lifecycle 操作映射到 Tauri commands 的生产 adapter。 */
@@ -117,6 +117,10 @@ export function createTauriReviewApplicationAdapter(
         availableBaseRevision: checked.latestBaseRevision,
         availableHeadRevision: checked.latestHeadRevision,
       } satisfies ReviewUpdate;
+    },
+
+    checkBranchSelectionUpdate(reviewId, signal) {
+      return transport.invokeCancellable("check_branch_review_updates", { reviewId }, signal);
     },
 
     async refreshReview(current, signal) {

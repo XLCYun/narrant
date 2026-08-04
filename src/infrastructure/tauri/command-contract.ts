@@ -7,15 +7,8 @@ import type {
   SavedReviewSummary,
 } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
+import type { BranchSelectionUpdate } from "@/review/review-application";
 import type { BranchRefs, RepositoryEntry } from "@/repository/repository-application";
-
-export type BranchReviewUpdate = {
-  changed: boolean;
-  currentBaseRevision: string;
-  currentHeadRevision: string;
-  latestBaseRevision: string;
-  latestHeadRevision: string;
-};
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -31,8 +24,8 @@ type EmptyArgs = Record<string, never>;
 export type TauriCommandContract = {
   cancel_git_operation: { args: { operationId: string }; result: void };
   compare_local_refs: { args: { operationId: string; repositoryEntryId: number; baseRef: string; headRef: string }; result: ReviewSnapshot };
-  check_branch_review_updates: { args: { operationId: string; reviewId: string }; result: BranchReviewUpdate };
-  refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchReviewUpdate }; result: ReviewSnapshot };
+  check_branch_review_updates: { args: { operationId: string; reviewId: string }; result: BranchSelectionUpdate };
+  refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
   open_pull_request_review: { args: { operationId: string; repositoryEntryId: number; repository: GitHubRepository; pullRequest: DiscoveredPullRequest }; result: ReviewSnapshot };
   check_pull_request_review_update: { args: { operationId: string; reviewId: string; repository: GitHubRepository; pullRequest: DiscoveredPullRequest }; result: PullRequestReviewUpdate };
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; repository: GitHubRepository; pullRequest: DiscoveredPullRequest }; result: ReviewSnapshot };

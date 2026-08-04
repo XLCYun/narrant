@@ -37,6 +37,15 @@ function createAdapter(): ReviewApplicationAdapter & {
     async checkReviewUpdate() {
       return null;
     },
+    async checkBranchSelectionUpdate() {
+      return {
+        changed: false,
+        currentBaseRevision: "base-1",
+        currentHeadRevision: "head-1",
+        latestBaseRevision: "base-1",
+        latestHeadRevision: "head-1",
+      };
+    },
     async refreshReview() {
       return { kind: "unchanged" };
     },

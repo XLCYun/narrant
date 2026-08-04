@@ -27,6 +27,14 @@ export type ReviewUpdate = {
   availableHeadRevision: string;
 };
 
+export type BranchSelectionUpdate = {
+  changed: boolean;
+  currentBaseRevision: string;
+  currentHeadRevision: string;
+  latestBaseRevision: string;
+  latestHeadRevision: string;
+};
+
 /** Review lifecycle module 所依赖的应用 interface。 */
 export interface ReviewApplicationAdapter {
   switchReview(
@@ -35,6 +43,7 @@ export interface ReviewApplicationAdapter {
     signal: AbortSignal,
   ): Promise<ReviewSnapshot>;
   checkReviewUpdate(current: ReviewIdentity, signal: AbortSignal): Promise<ReviewUpdate | null>;
+  checkBranchSelectionUpdate(reviewId: string, signal: AbortSignal): Promise<BranchSelectionUpdate>;
   refreshReview(
     current: ReviewIdentity,
     signal: AbortSignal,

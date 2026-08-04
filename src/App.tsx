@@ -28,9 +28,7 @@ import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastruct
 import {
   tauriTransport,
 } from "@/infrastructure/tauri/transport";
-import type {
-  BranchReviewUpdate,
-} from "@/infrastructure/tauri/command-contract";
+import type { BranchSelectionUpdate } from "@/review/review-application";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type { RepositoryContext, RepositoryEntry } from "@/repository/repository-application";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
@@ -39,7 +37,7 @@ import "@/lib/i18n";
 /** Repository Entry 中已有 Branch Selection 的更新检查状态。 */
 type BranchSelectionCheck =
   | { status: "idle" | "checking" | "current" }
-  | { status: "update"; update: BranchReviewUpdate }
+  | { status: "update"; update: BranchSelectionUpdate }
   | { status: "failed" };
 /** 应用边界显式返回的分支选项与 Repository Entry 默认选择。 */
 /** 侧边栏中正在打开的单一导航目标。 */
@@ -165,14 +163,6 @@ export function App() {
         ? "repositoryUnavailable"
         : "repositoryRegistrationFailed";
     return `${t(key)} ${detail}`;
-  }
-
-  /** 后台检查使用独立 operation identity，不取消用户正在读取的 File Change。 */
-  async function invokeBackgroundGit(
-    command: "check_branch_review_updates",
-    arguments_: { reviewId: string },
-  ) {
-    return tauriTransport.invokeCancellable(command, arguments_, new AbortController().signal);
   }
 
   /** 关闭当前 Review 的运行时资源并保留持久化历史。 */
@@ -664,16 +654,17 @@ export function App() {
     const messageTimer = window.setTimeout(() => {
       if (branchSelectionCheckId.current === checkId) setShowBranchCheckingMessage(true);
     }, 1000);
-    void invokeBackgroundGit("check_branch_review_updates", {
-      reviewId: matchingBranchReview.reviewId,
-    }).then((update) => {
+    void reviewApplicationAdapter.checkBranchSelectionUpdate(
+      matchingBranchReview.reviewId,
+      new AbortController().signal,
+    ).then((update) => {
       if (branchSelectionCheckId.current !== checkId) return;
       setBranchSelectionCheck(update.changed ? { status: "update", update } : { status: "current" });
     }).catch(() => {
       if (branchSelectionCheckId.current === checkId) setBranchSelectionCheck({ status: "failed" });
     }).finally(() => window.clearTimeout(messageTimer));
     return () => window.clearTimeout(messageTimer);
-    // invokeBackgroundGit 的 identity 由每次调用生成；这里只由用户可见的 Selection 驱动。
+    // 后台检查由每次调用生成独立 identity；这里只由用户可见的 Selection 驱动。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchingBranchReview?.reviewId, baseRef, headRef, branchSelectionInvalid]);
 
