@@ -23,14 +23,14 @@ import {
 import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
+import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
 import {
   tauriTransport,
 } from "@/infrastructure/tauri/transport";
 import type {
   BranchReviewUpdate,
-  DeviceAuthorization,
-  GitHubAuthStatus,
 } from "@/infrastructure/tauri/command-contract";
+import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type { RepositoryContext, RepositoryEntry } from "@/repository/repository-application";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import "@/lib/i18n";
@@ -76,6 +76,10 @@ export function App() {
   );
   const repositoryApplication = useMemo(
     () => createTauriRepositoryApplicationAdapter(tauriTransport),
+    [],
+  );
+  const githubOAuthApplication = useMemo(
+    () => createTauriGitHubOAuthApplicationAdapter(tauriTransport),
     [],
   );
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
@@ -212,16 +216,10 @@ export function App() {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    void tauriTransport.invoke("github_auth_status", {})
-      .then((status) => {
-        setAuthStatus(status);
-        if (!status.signedIn) return;
-        void tauriTransport.invoke("refresh_github_identity", {})
-          .then((identity) => setAuthStatus((current) => current ? { ...current, identity } : current))
-          .catch(() => undefined);
-      })
+    void githubOAuthApplication.loadStatus()
+      .then(setAuthStatus)
       .catch(() => setAuthStatus(undefined));
-  }, []);
+  }, [githubOAuthApplication]);
 
   /** 验证并持久化用户输入的具体本地 clone。 */
   async function registerRepository() {
@@ -281,7 +279,7 @@ export function App() {
     setDiscoveryError(undefined);
     void loadPullRequestGroups(opened);
     if (!testHarnessEnabled) void loadRefs(opened.id);
-    void Promise.resolve(tauriTransport.invoke("github_auth_status", {}))
+    void Promise.resolve(githubOAuthApplication.loadStatus())
       .then(setAuthStatus)
       .catch(() => setAuthStatus(undefined));
   }
@@ -459,7 +457,7 @@ export function App() {
     setCopiedValue(undefined);
     if (!testHarnessEnabled) setGitHubDialogOpen(true);
     try {
-      const status = await tauriTransport.invoke("github_auth_status", {});
+      const status = await githubOAuthApplication.loadStatus();
       setAuthStatus(status);
       if (status.configured && !status.signedIn && status.appInstallUrl) {
         await openUrl(status.appInstallUrl);
@@ -474,7 +472,7 @@ export function App() {
     setCopiedValue(undefined);
     setAuthorizing(true);
     try {
-      const authorization = await tauriTransport.invoke("start_github_authorization", {});
+      const authorization = await githubOAuthApplication.beginAuthorization();
       setDeviceAuthorization(authorization);
       await openUrl(authorization.verificationUri);
     } catch (reason) {
@@ -499,11 +497,8 @@ export function App() {
     setError("");
     setAuthorizing(true);
     try {
-      await tauriTransport.invoke("complete_github_authorization", {
-        authorizationId: deviceAuthorization.authorizationId,
-      });
-      const status = await tauriTransport.invoke("github_auth_status", {});
-      setAuthStatus({ ...status, signedIn: true });
+      const status = await githubOAuthApplication.completeAuthorization(deviceAuthorization.authorizationId);
+      setAuthStatus(status);
       setDeviceAuthorization(undefined);
       setGitHubDialogOpen(false);
       if (selectedRepository) await loadPullRequestGroups(selectedRepository);
@@ -516,17 +511,15 @@ export function App() {
 
   async function signOutGitHub() {
     setError("");
-    try {
-      await tauriTransport.invoke("sign_out_github", {});
-      setAuthStatus((status) => status ? { ...status, signedIn: false, identity: null } : status);
+    const result = await githubOAuthApplication.signOut();
+    if (result.kind === "signed-out") {
+      setAuthStatus(result.status);
       setDeviceAuthorization(undefined);
       if (selectedRepository) await loadPullRequestGroups(selectedRepository);
-    } catch (reason) {
-      void tauriTransport.invoke("github_auth_status", {})
-        .then(setAuthStatus)
-        .catch(() => undefined);
-      setError(String(reason));
+      return;
     }
+    if (result.status) setAuthStatus(result.status);
+    setError(result.detail);
   }
 
   /** 按安装与账号授权两个独立步骤渲染 GitHub 连接向导。 */

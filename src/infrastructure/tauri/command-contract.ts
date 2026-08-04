@@ -1,4 +1,5 @@
 import type { GitHubIdentity } from "@/components/github-identity-entry";
+import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type {
   DiscoveredPullRequest,
   PullRequestGroup,
@@ -7,21 +8,6 @@ import type {
 } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchRefs, RepositoryEntry } from "@/repository/repository-application";
-
-export type GitHubAuthStatus = {
-  configured: boolean;
-  signedIn: boolean;
-  appInstallUrl: string | null;
-  identity: GitHubIdentity | null;
-};
-
-export type DeviceAuthorization = {
-  authorizationId: string;
-  userCode: string;
-  verificationUri: string;
-  expiresIn: number;
-  interval: number;
-};
 
 export type BranchReviewUpdate = {
   changed: boolean;

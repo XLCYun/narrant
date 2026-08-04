@@ -645,10 +645,11 @@ describe("App", () => {
   it("连接 GitHub 会先打开安装页，再引导设备码授权且不接收 token", async () => {
     mockSystemTheme(false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
+    let signedIn = false;
     invoke.mockImplementation((command: string) => {
       if (command === "github_auth_status") return Promise.resolve({
         configured: true,
-        signedIn: false,
+        signedIn,
         appInstallUrl: "https://github.com/apps/narrant/installations/new",
       });
       if (command === "start_github_authorization") return Promise.resolve({
@@ -658,6 +659,10 @@ describe("App", () => {
         expiresIn: 900,
         interval: 5,
       });
+      if (command === "complete_github_authorization") {
+        signedIn = true;
+        return Promise.resolve();
+      }
       return Promise.resolve();
     });
     render(<App />);
