@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
-import { AppShell, type HomeRepository } from "@/components/home-page";
+import { AppShell } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { BranchRelation } from "@/components/branch-relation";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
@@ -33,6 +33,7 @@ import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oaut
 import type { RepositoryEntry } from "@/repository/repository-application";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
+import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import "@/lib/i18n";
 
 /** Repository Entry 中已有 Branch Selection 的更新检查状态。 */
@@ -40,11 +41,6 @@ type BranchSelectionCheck =
   | { status: "idle" | "checking" | "current" }
   | { status: "update"; update: BranchSelectionUpdate }
   | { status: "failed" };
-/** 应用边界显式返回的分支选项与 Repository Entry 默认选择。 */
-/** 侧边栏中正在打开的单一导航目标。 */
-type PendingNavigation = { type: "repository"; id: number } | { type: "review"; id: string };
-
-
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
 const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
 
@@ -81,12 +77,10 @@ export function App() {
   );
   const repositoryContext = useRepositoryEntryContext(repositoryApplication, { enabled: catalogRuntimeEnabled });
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
+  const appShell = useAppShellNavigation(repositoryContext, reviewLifecycle);
   const snapshot = reviewLifecycle.reader?.snapshot;
   const refreshingReview = reviewLifecycle.reader?.transition.kind === "refreshing";
   const [repositoryPath, setRepositoryPath] = useState("");
-  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation>();
-  const [pendingReview, setPendingReview] = useState<ReviewSummary>();
-  const [reviewOpeningKey, setReviewOpeningKey] = useState<string>();
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string>();
@@ -95,7 +89,6 @@ export function App() {
   const [branchSelectionCheck, setBranchSelectionCheck] = useState<BranchSelectionCheck>({ status: "idle" });
   const [showBranchCheckingMessage, setShowBranchCheckingMessage] = useState(false);
   const branchSelectionCheckId = useRef(0);
-  const [repositoryInitialTab, setRepositoryInitialTab] = useState<"pull-requests" | "branches" | "history">("pull-requests");
   const [error, setError] = useState("");
   const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
@@ -115,11 +108,8 @@ export function App() {
   const selectedRepository = repositoryContext.current?.repository;
   const savedReviews = repositoryContext.current?.savedReviews ?? [];
   const repositoryReviews = repositoryContext.current?.reviews ?? [];
-  const pendingRepository = repositoryContext.transition.kind === "trust-required"
-    || repositoryContext.transition.kind === "granting-trust"
-    ? repositoryContext.transition.repository
-    : undefined;
-  const grantingTrust = repositoryContext.transition.kind === "granting-trust";
+  const pendingRepository = appShell.trust?.repository;
+  const grantingTrust = appShell.trust?.granting ?? false;
   const catalogLoading = repositoryContext.catalog.status === "loading"
     || repositoryContext.transition.kind === "registering";
   const branchState = repositoryContext.branches;
@@ -128,31 +118,8 @@ export function App() {
   const currentRef = branchState.kind === "ready" ? branchState.value.currentRef : "";
   const branchesReloading = branchState.kind === "loading";
   const branchReloadError = branchState.kind === "failed" ? branchState.error : "";
-  const visibleError = error || repositoryContext.catalog.error || "";
-
-  /** 为 Pull Request 入口生成与 Repository Overview 行一致的稳定 pending identity。 */
-  function pullRequestReviewKey(owner: string, repository: string, number: number) {
-    return `${owner.toLowerCase()}/${repository.toLowerCase()}#${number}`;
-  }
-
-  /** 等待 busy 状态完成一次实际绘制，再启动可能阻塞界面线程的后端操作。 */
-  function waitForReviewOpeningPaint() {
-    return new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-    });
-  }
-
-  /** 串行化 Review Reader 导航，并只清理当前操作拥有的 busy 状态。 */
-  async function withReviewOpening<T>(key: string, action: () => Promise<T>): Promise<T | undefined> {
-    if (reviewOpeningKey || refreshingReview || grantingTrust) return undefined;
-    setReviewOpeningKey(key);
-    try {
-      await waitForReviewOpeningPaint();
-      return await action();
-    } finally {
-      setReviewOpeningKey((current) => current === key ? undefined : current);
-    }
-  }
+  const visibleError = error || appShell.sidebar.error || "";
+  const reviewOpeningKey = appShell.transition.kind === "opening-review" ? appShell.transition.key : undefined;
 
   /** 把后端技术错误归类为稳定、可翻译的仓库打开摘要，并保留原始详情。 */
   function repositoryOpenError(reason: unknown) {
@@ -163,19 +130,6 @@ export function App() {
         ? "repositoryUnavailable"
         : "repositoryRegistrationFailed";
     return `${t(key)} ${detail}`;
-  }
-
-  /** 关闭当前 Review 的运行时资源并保留持久化历史。 */
-  async function closeReviewView(initialTab: "pull-requests" | "branches" | "history" = "history") {
-    const result = await reviewLifecycle.close();
-    setRepositoryInitialTab(initialTab);
-    return result;
-  }
-
-  /** 返回 Catalog 时同时关闭当前 Review，避免页面外仍保留 workspace。 */
-  function leaveRepository() {
-    closeReviewView();
-    repositoryContext.leave();
   }
 
   useEffect(() => {
@@ -218,10 +172,9 @@ export function App() {
   async function registerRepositoryFolder(path: string) {
     setRepositoryPath(path);
     setError("");
-    try {
-      const entry = await repositoryContext.register(path);
-      await openRepository(entry);
-    } catch (reason) { setError(repositoryOpenError(reason)); }
+    const result = await appShell.registerAndOpen(path);
+    if (result.kind === "failed") setError(repositoryOpenError(result.detail));
+    return result;
   }
 
   /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
@@ -237,146 +190,42 @@ export function App() {
     }
   }
 
-  /** 从持久化 Catalog 重新加载 Repository Entry 的 Review 历史。 */
-  async function loadSavedReviews(repositoryEntryId: number) {
-    if (repositoryContext.current?.repository.id === repositoryEntryId) {
-      await repositoryContext.refreshReviews();
-    }
-  }
-
-  /** Repository context 提交后启动独立的 discovery 与 Branch refs 读取。 */
-  async function enterRepository(opened: RepositoryEntry) {
-    setRepositoryPath(opened.canonicalPath);
+  /** Repository context 提交后启动独立的页面数据读取。 */
+  useEffect(() => {
+    if (!selectedRepository) return;
+    setRepositoryPath(selectedRepository.canonicalPath);
     setPullRequestGroups([]);
     setDiscoveryError(undefined);
-    void loadPullRequestGroups(opened);
+    void loadPullRequestGroups(selectedRepository);
     if (!testHarnessEnabled) void repositoryContext.reloadBranches();
     void Promise.resolve(githubOAuthApplication.loadStatus())
       .then(setAuthStatus)
       .catch(() => setAuthStatus(undefined));
-  }
-
-  /** 打开 Repository Entry；首次使用时先停留当前页面并请求 Workspace Trust。 */
-  async function openRepository(entry: RepositoryEntry): Promise<"entered" | "trust-required" | "failed"> {
-    setError("");
-    const previousRepositoryId = selectedRepository?.id;
-    const leavingReview = Boolean(snapshot);
-    try {
-      const result = await repositoryContext.open(entry.id);
-      if (result.kind === "superseded") return "failed";
-      const opened = result.kind === "ready" ? result.context.repository : result.repository;
-      if (result.kind === "unavailable") {
-        setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
-        return "failed";
-      }
-      if (result.kind === "trust-required") {
-        return "trust-required";
-      }
-      await enterRepository(result.context.repository);
-      if (leavingReview) {
-        closeReviewView(previousRepositoryId === opened.id ? "history" : "pull-requests");
-      } else {
-        setRepositoryInitialTab("pull-requests");
-      }
-      return "entered";
-    } catch (reason) {
-      setError(String(reason));
-      return "failed";
-    }
-  }
+    // 页面数据只在已提交的 Repository Entry identity 改变后重新读取。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRepository?.id]);
 
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
   async function openSavedReview(review: SavedReviewSummary) {
-    const pullRequest = review.pullRequest;
-    const key = pullRequest
-      ? pullRequestReviewKey(pullRequest.owner, pullRequest.repository, pullRequest.number)
-      : `review:${review.reviewId}`;
-    await withReviewOpening(key, async () => {
-      setError("");
-      const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: review.reviewId });
-      if (result.kind !== "opened") setError(result.failure.detail);
+    if (!selectedRepository) return;
+    setError("");
+    const result = await appShell.navigate({
+      kind: "review",
+      repositoryEntryId: selectedRepository.id,
+      target: { kind: "saved-review", reviewId: review.reviewId },
     });
+    if (result.kind === "failed") setError(result.detail);
   }
 
-  /** 在 Repository Entry 已进入后打开 current Snapshot，并更新最近审核排序。 */
-  async function reopenResolvedReview(summary: ReviewSummary) {
-    const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
-    if (result.kind !== "opened") throw new Error(result.failure.detail);
-    const reopened = { ...summary, lastOpenedAt: Date.now() };
-    repositoryContext.recordReviewOpened(reopened);
-  }
-
-  /** 仅允许一个侧边栏仓库导航进行，成功后由 openRepository 提交主视图。 */
-  async function navigateToRepository(repository: HomeRepository) {
-    if (pendingNavigation || (selectedRepository?.id === repository.id && !snapshot)) return;
-    const entry = repositoryEntries.find((candidate) => candidate.id === repository.id);
-    if (!entry) return;
-    setPendingNavigation({ type: "repository", id: repository.id });
-    try {
-      await openRepository(entry);
-    } finally {
-      setPendingNavigation(undefined);
-    }
-  }
-
-  /** 仅允许一个侧边栏 Review 导航进行，失败时保留当前主视图。 */
+  /** 侧边栏 Review 导航统一处理跨仓库、Trust 与失败回滚。 */
   async function navigateToReview(review: ReviewSummary) {
-    if (pendingNavigation || snapshot?.reviewId === review.reviewId) return;
-    await withReviewOpening(`review:${review.reviewId}`, async () => {
-      setPendingNavigation({ type: "review", id: review.reviewId });
-      try {
-        await reopenReview(review);
-      } finally {
-        setPendingNavigation(undefined);
-      }
+    setError("");
+    const result = await appShell.navigate({
+      kind: "review",
+      repositoryEntryId: review.repositoryEntryId,
+      target: { kind: "saved-review", reviewId: review.reviewId },
     });
-  }
-
-  /** 从持久化列表打开 current Snapshot，并在跨仓库进入时恢复 Repository Entry 上下文。 */
-  async function reopenReview(summary: ReviewSummary) {
-    setError("");
-    try {
-      if (selectedRepository?.id !== summary.repositoryEntryId) {
-        const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
-        if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
-        const repositoryResult = await repositoryContext.open(entry.id);
-        if (repositoryResult.kind === "superseded") return;
-        if (repositoryResult.kind === "unavailable") {
-          throw new Error(repositoryResult.repository.unavailableReason ?? "Repository Entry 当前不可用。");
-        }
-        if (repositoryResult.kind === "trust-required") {
-          setPendingReview(summary);
-          return;
-        }
-        const opened = repositoryResult.context.repository;
-        await enterRepository(opened);
-        const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
-        if (result.kind !== "opened") throw new Error(result.failure.detail);
-        const reopened = { ...summary, lastOpenedAt: Date.now() };
-        repositoryContext.recordReviewOpened(reopened);
-        void loadPullRequestGroups(opened);
-        return;
-      }
-      await reopenResolvedReview(summary);
-    } catch (reason) {
-      setError(String(reason));
-    }
-  }
-
-  /** 在风险 Dialog 明确确认后持久化 Workspace Trust，并进入待打开仓库。 */
-  async function grantWorkspaceTrust() {
-    if (!pendingRepository || grantingTrust) return;
-    setError("");
-    try {
-      const reviewToResume = pendingReview;
-      const context = await repositoryContext.confirmTrust();
-      setPendingReview(undefined);
-      if (!context) return;
-      await enterRepository(context.repository);
-      if (reviewToResume) await reopenResolvedReview(reviewToResume);
-    } catch (reason) {
-      setError(String(reason));
-    }
+    if (result.kind === "failed") setError(result.detail);
   }
 
   /** 将 discovery metadata 作为 Selection，并让代码内容完全走本地 Core Git。 */
@@ -385,19 +234,19 @@ export function App() {
     pullRequest: DiscoveredPullRequest,
   ) {
     if (!selectedRepository) return;
-    const key = pullRequestReviewKey(repository.owner, repository.name, pullRequest.number);
-    await withReviewOpening(key, async () => {
-      setError("");
-      const result = await reviewLifecycle.open({
+    setError("");
+    const result = await appShell.navigate({
+      kind: "review",
+      repositoryEntryId: selectedRepository.id,
+      target: {
         kind: "pull-request-selection",
         repositoryEntryId: selectedRepository.id,
         owner: repository.owner,
         repository: repository.name,
         number: pullRequest.number,
-      });
-      if (result.kind === "opened") await loadSavedReviews(selectedRepository.id);
-      else setError(result.failure.detail);
+      },
     });
+    if (result.kind === "failed") setError(result.detail);
   }
 
   /** 启动连接向导，并在已配置时将用户带到 GitHub App 安装页。 */
@@ -618,77 +467,49 @@ export function App() {
           ? "update"
           : branchSelectionCheck.status === "failed" ? "fallback" : "continue";
 
-  /** 在 Review lifecycle 成功提交后同步 Repository Entry 的导航摘要。 */
-  function recordOpenedBranchReview(reviewId: string, base: string, head: string) {
-    if (!selectedRepository) return;
-    const summary: ReviewSummary = {
-      reviewId,
-      repositoryEntryId: selectedRepository.id,
-      repositoryPath: selectedRepository.canonicalPath,
-      baseRef: base,
-      headRef: head,
-      lastOpenedAt: Date.now(),
-    };
-    repositoryContext.recordReviewOpened(summary);
-  }
-
   async function openComparison() {
-    const key = `branch:${baseRef}:${headRef}`;
-    await withReviewOpening(key, async () => {
-      setError("");
-      const result = await reviewLifecycle.open({
-        kind: "branch-selection",
-        repositoryEntryId: selectedRepository?.id ?? 0,
-        baseRef,
-        headRef,
-      });
-      if (result.kind === "opened") {
-        recordOpenedBranchReview(result.reviewId, baseRef, headRef);
-        if (selectedRepository) await loadSavedReviews(selectedRepository.id);
-      } else setError(result.failure.detail);
-    });
+    setError("");
+    const target = {
+      kind: "branch-selection" as const,
+      repositoryEntryId: selectedRepository?.id ?? 0,
+      baseRef,
+      headRef,
+    };
+    const result = await appShell.navigate({ kind: "review", repositoryEntryId: selectedRepository?.id ?? 0, target });
+    if (result.kind === "failed") setError(result.detail);
   }
 
   /** 根据已确认的 moving refs 创建新 Snapshot，再进入同一个 durable Review。 */
   async function updateAndOpenBranchReview() {
     if (!matchingBranchReview || branchSelectionCheck.status !== "update" || !selectedRepository) return;
-    const key = `branch:${baseRef}:${headRef}`;
-    await withReviewOpening(key, async () => {
-      setError("");
-      const result = await reviewLifecycle.open({
+    setError("");
+    const result = await appShell.navigate({
+      kind: "review",
+      repositoryEntryId: selectedRepository.id,
+      target: {
         kind: "branch-selection",
         repositoryEntryId: selectedRepository.id,
         baseRef,
         headRef,
         refreshExisting: true,
         existingReviewId: matchingBranchReview.reviewId,
-      });
-      if (result.kind === "opened") {
-        recordOpenedBranchReview(result.reviewId, baseRef, headRef);
-        await loadSavedReviews(selectedRepository.id);
-      } else setError(result.failure.detail);
+      },
     });
+    if (result.kind === "failed") setError(result.detail);
   }
 
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
   return <AppShell
+    navigation={{
+      ...appShell,
+      registerAndOpen: registerRepositoryFolder,
+      sidebar: {
+        ...appShell.sidebar,
+        error: !selectedRepository ? visibleError || undefined : undefined,
+      },
+    }}
     enabled={catalogRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
     fallbackClassName="narrant-app"
-    showHome={!selectedRepository && !testHarnessEnabled}
-    activeRepositoryId={selectedRepository?.id}
-    activeReviewId={snapshot?.reviewId}
-    pendingRepositoryId={pendingNavigation?.type === "repository" ? pendingNavigation.id : undefined}
-    pendingReviewId={reviewOpeningKey?.startsWith("review:") ? reviewOpeningKey.slice("review:".length) : undefined}
-    reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
-    workspace={Boolean(snapshot)}
-    reviews={recentReviews}
-    repositories={repositoryEntries}
-    error={!selectedRepository ? visibleError : undefined}
-    loading={catalogLoading}
-    onOpenHome={leaveRepository}
-    onOpenReview={(review) => void navigateToReview(review)}
-    onOpenRepository={(repository) => void navigateToRepository(repository)}
-    onOpenFolder={(path) => void registerRepositoryFolder(path)}
     githubIdentityEntry={renderGitHubIdentityEntry()}
   >
     <Toaster position="top-right" />
@@ -708,7 +529,7 @@ export function App() {
         ? <p>{catalogLoading ? "正在加载 Repository Entries…" : "尚未添加 Repository Entry"}</p>
         : <ul aria-label="Repository Entries">
           {repositoryEntries.map((entry) => <li key={entry.id}>
-            <Button variant="outline" disabled={!entry.available} onClick={() => openRepository(entry)}>
+            <Button variant="outline" disabled={!entry.available} onClick={() => void appShell.navigate({ kind: "repository", repositoryEntryId: entry.id })}>
               {entry.canonicalPath}
             </Button>
             {!entry.available && <>
@@ -761,15 +582,14 @@ export function App() {
           onReload={() => void loadRefs()}
           onSubmit={() => void (branchSelectorAction === "update" ? updateAndOpenBranchReview() : openComparison())}
         />}
-        initialTab={repositoryInitialTab}
+        initialTab={appShell.destination.kind === "repository" ? appShell.destination.initialTab : "pull-requests"}
         openingReviewKey={reviewOpeningKey}
         reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
       />
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
       if (!open && !grantingTrust) {
-        repositoryContext.dismissTrust();
-        setPendingReview(undefined);
+        appShell.dismissTrust();
       }
     }}>
       <DialogContent>
@@ -782,14 +602,11 @@ export function App() {
           <Button
             variant="outline"
             disabled={grantingTrust}
-            onClick={() => {
-              repositoryContext.dismissTrust();
-              setPendingReview(undefined);
-            }}
+            onClick={appShell.dismissTrust}
           >
             {t("cancel")}
           </Button>
-          <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void grantWorkspaceTrust()}>
+          <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void appShell.confirmTrust()}>
             {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
           </Button>
         </DialogFooter>
@@ -824,7 +641,14 @@ export function App() {
     {snapshot && reviewLifecycle.reader && <div className="h-[calc(100vh-4.5rem)]">
       <ReviewReader
         key={`${snapshot.reviewId}:${snapshot.snapshotId}`}
-        review={{ ...reviewLifecycle.reader, close: () => closeReviewView() }}
+        review={{
+          ...reviewLifecycle.reader,
+          close: async () => {
+            if (!selectedRepository) return reviewLifecycle.close();
+            await appShell.navigate({ kind: "repository", repositoryEntryId: selectedRepository.id });
+            return { kind: "closed" } as const;
+          },
+        }}
         appearance={{
           diffMode,
           narrow: narrowReview,

@@ -40,13 +40,15 @@ describe("最近审核首页", () => {
       lastOpenedAt: 1,
     };
     render(<AppShell
-      reviews={[review]}
-      repositories={[repository]}
-      activeRepositoryId={1}
-      activeReviewId="review-1"
-      showHome={false}
-      onOpenReview={() => undefined}
-      onOpenFolder={() => undefined}
+      navigation={{
+        destination: { kind: "review", repositoryEntryId: 1, reviewId: "review-1" },
+        sidebar: {
+          reviews: [review], repositories: [repository], loading: false, busy: false,
+          activeRepositoryId: 1, activeReviewId: "review-1",
+        },
+        navigate: async () => ({ kind: "navigated" }),
+        registerAndOpen: async () => ({ kind: "navigated" }),
+      }}
     ><p>Review reader</p></AppShell>);
 
     await waitFor(() => expect(document.querySelectorAll('[data-review-id="review-1"]')).toHaveLength(2));

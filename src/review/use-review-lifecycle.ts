@@ -18,7 +18,7 @@ export type ReviewFailure = {
 
 
 export type ReviewOpenResult =
-  | { kind: "opened"; reviewId: string; snapshotId: string }
+  | { kind: "opened"; reviewId: string; snapshotId: string; snapshot: ReviewSnapshot }
   | { kind: "failed"; failure: ReviewFailure; previousReviewPreserved: true }
   | { kind: "fatal"; failure: ReviewFailure };
 
@@ -60,13 +60,24 @@ export type ReviewReaderBinding = {
   close(): Promise<ReviewCloseResult>;
 };
 
+/** Composition root 与应用级导航 module 消费的 Review lifecycle interface。 */
+export type ReviewLifecycleBinding = {
+  open(target: ReviewOpenTarget): Promise<ReviewOpenResult>;
+  close(): Promise<ReviewCloseResult>;
+  reader: ReviewReaderBinding | null;
+  navigation: {
+    activeReviewId?: string;
+    openingTarget?: ReviewOpenTarget;
+  };
+};
+
 /** 把任意 adapter failure 映射为不依赖字符串分支的稳定失败。 */
 function operationFailure(reason: unknown): ReviewFailure {
   return { kind: "operation-failed", detail: String(reason), retryable: true };
 }
 
 /** 为一个 composition root 提供唯一当前 Review 的完整生命周期。 */
-export function useReviewLifecycle(adapter: ReviewApplicationAdapter) {
+export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLifecycleBinding {
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
   const [openingTarget, setOpeningTarget] = useState<ReviewOpenTarget>();
   const [transition, setTransition] = useState<ReviewReaderBinding["transition"]>({ kind: "stable" });
@@ -151,7 +162,7 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter) {
         abort.signal,
       );
       presentSnapshot(next);
-      return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId };
+      return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: next };
     } catch (reason) {
       if (current) setTransition({ kind: "stable" });
       return { kind: "failed", failure: operationFailure(reason), previousReviewPreserved: true };
