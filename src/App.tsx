@@ -30,8 +30,9 @@ import {
 } from "@/infrastructure/tauri/transport";
 import type { BranchSelectionUpdate } from "@/review/review-application";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
-import type { RepositoryContext, RepositoryEntry } from "@/repository/repository-application";
+import type { RepositoryEntry } from "@/repository/repository-application";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
+import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
 import "@/lib/i18n";
 
 /** Repository Entry 中已有 Branch Selection 的更新检查状态。 */
@@ -46,13 +47,6 @@ type PendingNavigation = { type: "repository"; id: number } | { type: "review"; 
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
 const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
-
-/** 更新已有 Repository Entry 时保持位置，只把新添加的仓库放到列表前端。 */
-function upsertRepositoryEntry(entries: RepositoryEntry[], entry: RepositoryEntry) {
-  return entries.some((candidate) => candidate.id === entry.id)
-    ? entries.map((candidate) => candidate.id === entry.id ? entry : candidate)
-    : [entry, ...entries];
-}
 
 function ErrorMessage({ message }: { message: string }) {
   const { t } = useTranslation("review");
@@ -85,33 +79,21 @@ export function App() {
     () => createTauriGitHubOAuthApplicationAdapter(tauriTransport),
     [],
   );
+  const repositoryContext = useRepositoryEntryContext(repositoryApplication, { enabled: catalogRuntimeEnabled });
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
   const snapshot = reviewLifecycle.reader?.snapshot;
   const refreshingReview = reviewLifecycle.reader?.transition.kind === "refreshing";
   const [repositoryPath, setRepositoryPath] = useState("");
-  const [repositoryEntries, setRepositoryEntries] = useState<RepositoryEntry[]>([]);
-  const [recentReviews, setRecentReviews] = useState<ReviewSummary[]>([]);
-  const [repositoryReviews, setRepositoryReviews] = useState<ReviewSummary[]>([]);
-  const [selectedRepository, setSelectedRepository] = useState<RepositoryEntry>();
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation>();
-  const [pendingRepository, setPendingRepository] = useState<RepositoryEntry>();
   const [pendingReview, setPendingReview] = useState<ReviewSummary>();
   const [reviewOpeningKey, setReviewOpeningKey] = useState<string>();
-  const [grantingTrust, setGrantingTrust] = useState(false);
-  const [catalogLoading, setCatalogLoading] = useState(false);
   const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
-  const [savedReviews, setSavedReviews] = useState<SavedReviewSummary[]>([]);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string>();
-  const [refs, setRefs] = useState<string[]>([]);
-  const [defaultRef, setDefaultRef] = useState("");
-  const [currentRef, setCurrentRef] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [branchSelectionCheck, setBranchSelectionCheck] = useState<BranchSelectionCheck>({ status: "idle" });
   const [showBranchCheckingMessage, setShowBranchCheckingMessage] = useState(false);
-  const [branchesReloading, setBranchesReloading] = useState(false);
-  const [branchReloadError, setBranchReloadError] = useState("");
   const branchSelectionCheckId = useRef(0);
   const [repositoryInitialTab, setRepositoryInitialTab] = useState<"pull-requests" | "branches" | "history">("pull-requests");
   const [error, setError] = useState("");
@@ -128,7 +110,25 @@ export function App() {
   const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
     ? savedTreeWidth
     : 24;
-  const activeGitAbort = useRef<AbortController>();
+  const repositoryEntries = repositoryContext.catalog.repositories;
+  const recentReviews = repositoryContext.catalog.recentReviews;
+  const selectedRepository = repositoryContext.current?.repository;
+  const savedReviews = repositoryContext.current?.savedReviews ?? [];
+  const repositoryReviews = repositoryContext.current?.reviews ?? [];
+  const pendingRepository = repositoryContext.transition.kind === "trust-required"
+    || repositoryContext.transition.kind === "granting-trust"
+    ? repositoryContext.transition.repository
+    : undefined;
+  const grantingTrust = repositoryContext.transition.kind === "granting-trust";
+  const catalogLoading = repositoryContext.catalog.status === "loading"
+    || repositoryContext.transition.kind === "registering";
+  const branchState = repositoryContext.branches;
+  const refs = branchState.kind === "ready" ? branchState.value.refs : [];
+  const defaultRef = branchState.kind === "ready" ? branchState.value.defaultRef : "";
+  const currentRef = branchState.kind === "ready" ? branchState.value.currentRef : "";
+  const branchesReloading = branchState.kind === "loading";
+  const branchReloadError = branchState.kind === "failed" ? branchState.error : "";
+  const visibleError = error || repositoryContext.catalog.error || "";
 
   /** 为 Pull Request 入口生成与 Repository Overview 行一致的稳定 pending identity。 */
   function pullRequestReviewKey(owner: string, repository: string, number: number) {
@@ -175,14 +175,8 @@ export function App() {
   /** 返回 Catalog 时同时关闭当前 Review，避免页面外仍保留 workspace。 */
   function leaveRepository() {
     closeReviewView();
-    setSelectedRepository(undefined);
-    setRepositoryReviews([]);
+    repositoryContext.leave();
   }
-
-  useEffect(() => () => {
-    activeGitAbort.current?.abort();
-    activeGitAbort.current = undefined;
-  }, []);
 
   useEffect(() => {
     /** 窗口变窄时只临时切换显示模式，不覆盖用户保存的 Diff 偏好。 */
@@ -198,16 +192,10 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    setCatalogLoading(true);
-    void repositoryApplication.loadCatalog()
-      .then(({ repositories, recentReviews }) => {
-        setRepositoryEntries(repositories);
-        setRecentReviews(recentReviews ?? []);
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setCatalogLoading(false));
-  }, [repositoryApplication]);
+    if (branchState.kind !== "ready") return;
+    setBaseRef(branchState.value.defaultRef);
+    setHeadRef(branchState.value.currentRef);
+  }, [branchState]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -219,14 +207,10 @@ export function App() {
   /** 验证并持久化用户输入的具体本地 clone。 */
   async function registerRepository() {
     setError("");
-    setCatalogLoading(true);
     try {
-      const entry = await repositoryApplication.register(repositoryPath);
-      setRepositoryEntries((entries) => upsertRepositoryEntry(entries, entry));
+      await repositoryContext.register(repositoryPath);
     } catch (reason) {
       setError(String(reason));
-    } finally {
-      setCatalogLoading(false);
     }
   }
 
@@ -235,8 +219,7 @@ export function App() {
     setRepositoryPath(path);
     setError("");
     try {
-      const entry = await repositoryApplication.register(path);
-      setRepositoryEntries((entries) => upsertRepositoryEntry(entries, entry));
+      const entry = await repositoryContext.register(path);
       await openRepository(entry);
     } catch (reason) { setError(repositoryOpenError(reason)); }
   }
@@ -256,22 +239,18 @@ export function App() {
 
   /** 从持久化 Catalog 重新加载 Repository Entry 的 Review 历史。 */
   async function loadSavedReviews(repositoryEntryId: number) {
-    const loaded = await repositoryApplication.loadReviews(repositoryEntryId);
-    setSavedReviews(loaded.savedReviews ?? []);
-    setRepositoryReviews(loaded.reviews ?? []);
+    if (repositoryContext.current?.repository.id === repositoryEntryId) {
+      await repositoryContext.refreshReviews();
+    }
   }
 
-  /** 在 Workspace Trust 已确认后进入 Repository Entry 上下文。 */
-  async function enterRepository(context: RepositoryContext) {
-    const { repository: opened, savedReviews: saved, reviews } = context;
-    setSelectedRepository(opened);
-    setSavedReviews(saved ?? []);
-    setRepositoryReviews(reviews ?? []);
+  /** Repository context 提交后启动独立的 discovery 与 Branch refs 读取。 */
+  async function enterRepository(opened: RepositoryEntry) {
     setRepositoryPath(opened.canonicalPath);
     setPullRequestGroups([]);
     setDiscoveryError(undefined);
     void loadPullRequestGroups(opened);
-    if (!testHarnessEnabled) void loadRefs(opened.id);
+    if (!testHarnessEnabled) void repositoryContext.reloadBranches();
     void Promise.resolve(githubOAuthApplication.loadStatus())
       .then(setAuthStatus)
       .catch(() => setAuthStatus(undefined));
@@ -283,18 +262,17 @@ export function App() {
     const previousRepositoryId = selectedRepository?.id;
     const leavingReview = Boolean(snapshot);
     try {
-      const result = await repositoryApplication.open(entry.id);
+      const result = await repositoryContext.open(entry.id);
+      if (result.kind === "superseded") return "failed";
       const opened = result.kind === "ready" ? result.context.repository : result.repository;
-      setRepositoryEntries((entries) => upsertRepositoryEntry(entries, opened));
       if (result.kind === "unavailable") {
         setError(repositoryOpenError(opened.unavailableReason ?? "Repository Entry 当前不可用。"));
         return "failed";
       }
       if (result.kind === "trust-required") {
-        setPendingRepository(opened);
         return "trust-required";
       }
-      await enterRepository(result.context);
+      await enterRepository(result.context.repository);
       if (leavingReview) {
         closeReviewView(previousRepositoryId === opened.id ? "history" : "pull-requests");
       } else {
@@ -325,22 +303,7 @@ export function App() {
     const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
     if (result.kind !== "opened") throw new Error(result.failure.detail);
     const reopened = { ...summary, lastOpenedAt: Date.now() };
-    setRecentReviews((reviews) => [
-      reopened,
-      ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
-    ]);
-    setRepositoryReviews((reviews) => [
-      reopened,
-      ...reviews.filter((review) => review.reviewId !== reopened.reviewId),
-    ]);
-    setRepositoryEntries((entries) => entries.map((entry) => entry.id === summary.repositoryEntryId
-      ? { ...entry, lastOpenedAt: reopened.lastOpenedAt }
-      : entry));
-    setSelectedRepository((entry) => entry?.id === summary.repositoryEntryId
-      ? { ...entry, lastOpenedAt: reopened.lastOpenedAt }
-      : entry);
-    void Promise.resolve(repositoryApplication.markOpened(summary.repositoryEntryId))
-      .catch(() => undefined);
+    repositoryContext.recordReviewOpened(reopened);
   }
 
   /** 仅允许一个侧边栏仓库导航进行，成功后由 openRepository 提交主视图。 */
@@ -376,24 +339,21 @@ export function App() {
       if (selectedRepository?.id !== summary.repositoryEntryId) {
         const entry = repositoryEntries.find((candidate) => candidate.id === summary.repositoryEntryId);
         if (!entry) throw new Error("Review 所属 Repository Entry 不存在。");
-        const repositoryResult = await repositoryApplication.open(entry.id);
+        const repositoryResult = await repositoryContext.open(entry.id);
+        if (repositoryResult.kind === "superseded") return;
         if (repositoryResult.kind === "unavailable") {
           throw new Error(repositoryResult.repository.unavailableReason ?? "Repository Entry 当前不可用。");
         }
         if (repositoryResult.kind === "trust-required") {
-          setPendingRepository(repositoryResult.repository);
           setPendingReview(summary);
           return;
         }
         const opened = repositoryResult.context.repository;
-        await enterRepository(repositoryResult.context);
+        await enterRepository(opened);
         const result = await reviewLifecycle.open({ kind: "saved-review", reviewId: summary.reviewId });
         if (result.kind !== "opened") throw new Error(result.failure.detail);
         const reopened = { ...summary, lastOpenedAt: Date.now() };
-        setRecentReviews((candidates) => [
-          reopened,
-          ...candidates.filter((candidate) => candidate.reviewId !== reopened.reviewId),
-        ]);
+        repositoryContext.recordReviewOpened(reopened);
         void loadPullRequestGroups(opened);
         return;
       }
@@ -407,19 +367,15 @@ export function App() {
   async function grantWorkspaceTrust() {
     if (!pendingRepository || grantingTrust) return;
     setError("");
-    setGrantingTrust(true);
     try {
-      const trustedRepository = pendingRepository;
       const reviewToResume = pendingReview;
-      const context = await repositoryApplication.grantTrust(trustedRepository);
-      setPendingRepository(undefined);
+      const context = await repositoryContext.confirmTrust();
       setPendingReview(undefined);
-      await enterRepository(context);
+      if (!context) return;
+      await enterRepository(context.repository);
       if (reviewToResume) await reopenResolvedReview(reviewToResume);
     } catch (reason) {
       setError(String(reason));
-    } finally {
-      setGrantingTrust(false);
     }
   }
 
@@ -615,26 +571,10 @@ export function App() {
   async function loadRefs(repositoryEntryId = selectedRepository?.id) {
     const resolvedRepositoryEntryId = repositoryEntryId ?? (testHarnessEnabled ? 0 : undefined);
     if (resolvedRepositoryEntryId === undefined) return;
-    setBranchReloadError("");
-    setBranchesReloading(true);
-    activeGitAbort.current?.abort();
-    const abort = new AbortController();
-    activeGitAbort.current = abort;
     try {
-      const branches = await repositoryApplication.loadBranches(resolvedRepositoryEntryId, abort.signal);
-      if (!branches || !Array.isArray(branches.refs)) {
-        throw new Error("分支应用边界返回了无效数据。");
-      }
-      setRefs(branches.refs);
-      setDefaultRef(branches.defaultRef);
-      setCurrentRef(branches.currentRef);
-      setBaseRef(branches.defaultRef);
-      setHeadRef(branches.currentRef);
+      await repositoryContext.reloadBranches(resolvedRepositoryEntryId);
     } catch (reason) {
-      setBranchReloadError(String(reason));
-    } finally {
-      if (activeGitAbort.current === abort) activeGitAbort.current = undefined;
-      setBranchesReloading(false);
+      setError(String(reason));
     }
   }
 
@@ -689,14 +629,7 @@ export function App() {
       headRef: head,
       lastOpenedAt: Date.now(),
     };
-    setRepositoryReviews((reviews) => [
-      summary,
-      ...reviews.filter((review) => review.reviewId !== summary.reviewId),
-    ]);
-    setRecentReviews((reviews) => [
-      summary,
-      ...reviews.filter((review) => review.reviewId !== summary.reviewId),
-    ]);
+    repositoryContext.recordReviewOpened(summary);
   }
 
   async function openComparison() {
@@ -750,7 +683,7 @@ export function App() {
     workspace={Boolean(snapshot)}
     reviews={recentReviews}
     repositories={repositoryEntries}
-    error={!selectedRepository ? error : undefined}
+    error={!selectedRepository ? visibleError : undefined}
     loading={catalogLoading}
     onOpenHome={leaveRepository}
     onOpenReview={(review) => void navigateToReview(review)}
@@ -835,7 +768,7 @@ export function App() {
     </article>}
     <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
       if (!open && !grantingTrust) {
-        setPendingRepository(undefined);
+        repositoryContext.dismissTrust();
         setPendingReview(undefined);
       }
     }}>
@@ -850,7 +783,7 @@ export function App() {
             variant="outline"
             disabled={grantingTrust}
             onClick={() => {
-              setPendingRepository(undefined);
+              repositoryContext.dismissTrust();
               setPendingReview(undefined);
             }}
           >
@@ -887,7 +820,7 @@ export function App() {
         {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
       </section>
     </>}
-    {error && <ErrorMessage message={error} />}
+    {visibleError && <ErrorMessage message={visibleError} />}
     {snapshot && reviewLifecycle.reader && <div className="h-[calc(100vh-4.5rem)]">
       <ReviewReader
         key={`${snapshot.reviewId}:${snapshot.snapshotId}`}

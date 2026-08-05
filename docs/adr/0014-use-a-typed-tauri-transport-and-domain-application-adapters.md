@@ -13,6 +13,13 @@ Application behavior does not collect into one all-purpose Tauri adapter. Each d
 module defines the small interface its callers need, and a Tauri adapter implements
 that interface using the shared transport.
 
+Adapters remain stateless I/O implementations. Stateful ordering, cancellation, trust
+gates, and atomic presentation belong to lifecycle modules above those adapters. The
+Repository Entry context module owns the Repository Catalog projection, the current
+Repository Entry context, Workspace Trust transitions, Review summary synchronization,
+and cancellable Branch Ref loading. React composition code consumes that module's
+interface rather than reproducing those transitions with independent state variables.
+
 The Review application adapter is the first migrated vertical slice. The remaining
 planned slices are:
 
