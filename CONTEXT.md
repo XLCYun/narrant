@@ -62,10 +62,16 @@ The available views are Overview and File Changes; switching views does not crea
 _Avoid_: Review mode, sidebar panel
 
 **Review Snapshot**:
-An immutable **Change Comparison** pinned to exact base, comparison-base, and head
-revisions. Its identity and history remain saved even when its Git objects are no
-longer available in the user's repository.
+An immutable **Change Comparison** that became current for a **Review**, pinned to exact
+base, comparison-base, and head revisions. Its identity and history remain saved even
+when its Git objects are no longer available in the user's repository.
 _Avoid_: Latest PR, live diff
+
+**Review Refresh Candidate**:
+An immutable **Change Comparison** prepared by an explicit refresh but not yet made
+current for its **Review**. It becomes a **Review Snapshot** only after the refresh
+transition succeeds; a failed candidate is not part of Review history.
+_Avoid_: Pending Snapshot, draft Snapshot
 
 **Review Update**:
 The condition in which the moving base or head ref of a **Review Selection** no
@@ -143,6 +149,11 @@ _Avoid_: Repository Entry, user worktree
   starts review tooling for it
 - Deleting a **Repository Entry** also deletes its **Workspace Trust**
 - A **Review** contains one or more successive **Review Snapshots**
+- A **Review Refresh Candidate** becomes a **Review Snapshot** only after its Review
+  Workspace and current pointer consistently represent it
+- A failed **Review Refresh Candidate** never appears in Review history
+- Crash recovery restores the last successfully activated current **Review Snapshot**;
+  it never activates an unconfirmed **Review Refresh Candidate**
 - Historical **Review Snapshots** do not keep their Git objects alive and may become
   unavailable after the user's repository discards those objects
 - A **Review** owns exactly one **Review Selection**, while each **Review Snapshot**
@@ -165,6 +176,8 @@ _Avoid_: Repository Entry, user worktree
 - Failure of optional analysis tooling does not roll back a current
   **Review Snapshot**
 - Closing a **Review** releases runtime resources without deleting its saved history
+- A **Review** remains closed when cleanup of its **Review Workspace** fails; the
+  leftover workspace is retained only for a later safe recovery attempt
 - A recent-review list is an aggregate view of **Reviews** across
   **Repository Entries**
 

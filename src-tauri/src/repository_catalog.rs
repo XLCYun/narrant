@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 const ENTRY_COLUMNS: &str = "id, canonical_path, common_directory, created_at, last_opened_at";
 
 /// 已注册的具体本地 clone，以及当前是否仍可访问。
@@ -558,26 +558,21 @@ impl RepositoryCatalog {
         transaction
             .execute(
                 "INSERT INTO review_snapshots (
-                    review_id, base_revision, comparison_base, head_revision, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    review_id, base_revision, comparison_base, head_revision, created_at,
+                    pull_request_metadata
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     review_row_id,
                     snapshot.base_revision,
                     snapshot.comparison_base,
                     snapshot.head_revision,
-                    now
+                    now,
+                    metadata_json
                 ],
             )
             .map_err(database_recovery_error)?;
         let snapshot_id = transaction.last_insert_rowid();
         insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
-        transaction
-            .execute(
-                "UPDATE reviews SET pull_request_metadata = ?1, last_opened_at = ?2
-                 WHERE id = ?3 AND selection_kind = 'pull_request'",
-                params![metadata_json, now, review_row_id],
-            )
-            .map_err(database_recovery_error)?;
         transaction.commit().map_err(database_recovery_error)?;
         Ok(SavedBranchReview {
             review_id: current.review_id.clone(),
@@ -626,10 +621,16 @@ impl RepositoryCatalog {
         review: &SavedBranchReview,
     ) -> Result<(), RepositoryCatalogError> {
         let row_id = parse_review_id(&review.review_id)?;
-        let connection = self.connection()?;
-        let changed = connection
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        let changed = transaction
             .execute(
-                "UPDATE reviews SET current_snapshot_id = ?1
+                "UPDATE reviews SET
+                    current_snapshot_id = ?1,
+                    pull_request_metadata = COALESCE(
+                        (SELECT pull_request_metadata FROM review_snapshots WHERE id = ?1),
+                        pull_request_metadata
+                    )
                  WHERE id = ?2
                    AND (
                      current_snapshot_id = ?3
@@ -647,6 +648,14 @@ impl RepositoryCatalog {
                 "Review current Snapshot 已改变；请重新打开后重试。",
             ));
         }
+        transaction
+            .execute(
+                "UPDATE review_snapshots SET activated_at = COALESCE(activated_at, ?1)
+                 WHERE id = ?2 AND review_id = ?3",
+                params![unix_timestamp_millis()?, review.snapshot_id, row_id],
+            )
+            .map_err(database_recovery_error)?;
+        transaction.commit().map_err(database_recovery_error)?;
         Ok(())
     }
 
@@ -711,14 +720,22 @@ impl RepositoryCatalog {
                 "刷新前后的 Review identity 不一致。",
             ));
         }
-        let connection = self.connection()?;
-        let changed = connection
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        let now = unix_timestamp_millis()?;
+        let changed = transaction
             .execute(
-                "UPDATE reviews SET current_snapshot_id = ?1, last_opened_at = ?2
+                "UPDATE reviews SET
+                    current_snapshot_id = ?1,
+                    last_opened_at = ?2,
+                    pull_request_metadata = COALESCE(
+                        (SELECT pull_request_metadata FROM review_snapshots WHERE id = ?1),
+                        pull_request_metadata
+                    )
                  WHERE id = ?3 AND current_snapshot_id = ?4",
                 params![
                     review.snapshot_id,
-                    unix_timestamp_millis()?,
+                    now,
                     row_id,
                     expected_current.snapshot_id
                 ],
@@ -729,7 +746,98 @@ impl RepositoryCatalog {
                 "Review current Snapshot 已改变；请重新检查更新。",
             ));
         }
+        transaction
+            .execute(
+                "UPDATE review_snapshots SET activated_at = COALESCE(activated_at, ?1)
+                 WHERE id = ?2 AND review_id = ?3",
+                params![now, review.snapshot_id, row_id],
+            )
+            .map_err(database_recovery_error)?;
+        transaction.commit().map_err(database_recovery_error)?;
         Ok(())
+    }
+
+    /// 删除尚未激活的 Review Refresh Candidate 及其 File Changes。
+    pub fn abandon_refresh_candidate(
+        &self,
+        review: &SavedBranchReview,
+    ) -> Result<(), RepositoryCatalogError> {
+        let row_id = parse_review_id(&review.review_id)?;
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "DELETE FROM review_snapshots
+                 WHERE id = ?1 AND review_id = ?2 AND activated_at IS NULL
+                   AND NOT EXISTS(
+                     SELECT 1 FROM reviews
+                     WHERE id = ?2 AND current_snapshot_id = ?1
+                   )",
+                params![review.snapshot_id, row_id],
+            )
+            .map_err(database_recovery_error)?;
+        Ok(())
+    }
+
+    /// 启动恢复时删除全部从未激活的候选，返回被放弃的 Snapshot identities。
+    pub fn abandon_unactivated_candidates(&self) -> Result<Vec<String>, RepositoryCatalogError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(database_recovery_error)?;
+        let candidate_ids = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT s.id FROM review_snapshots s
+                     WHERE s.activated_at IS NULL
+                       AND NOT EXISTS(
+                         SELECT 1 FROM reviews r WHERE r.current_snapshot_id = s.id
+                       )
+                     ORDER BY s.id",
+                )
+                .map_err(database_recovery_error)?;
+            let candidate_ids = statement
+                .query_map([], |row| row.get::<_, i64>(0))
+                .map_err(database_recovery_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(database_recovery_error)?;
+            candidate_ids
+        };
+        transaction
+            .execute(
+                "DELETE FROM review_snapshots
+                 WHERE activated_at IS NULL
+                   AND NOT EXISTS(
+                     SELECT 1 FROM reviews r WHERE r.current_snapshot_id = review_snapshots.id
+                   )",
+                [],
+            )
+            .map_err(database_recovery_error)?;
+        transaction.commit().map_err(database_recovery_error)?;
+        Ok(candidate_ids
+            .into_iter()
+            .map(|id| format!("snapshot-{id}"))
+            .collect())
+    }
+
+    /// 返回一个 Review 曾成功激活的 Snapshot identities，不暴露失败候选。
+    pub fn list_review_snapshot_identities(
+        &self,
+        review_id: &str,
+    ) -> Result<Vec<String>, RepositoryCatalogError> {
+        let row_id = parse_review_id(review_id)?;
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id FROM review_snapshots
+                 WHERE review_id = ?1 AND activated_at IS NOT NULL
+                 ORDER BY id",
+            )
+            .map_err(database_recovery_error)?;
+        let snapshot_ids = statement
+            .query_map([row_id], |row| row.get::<_, i64>(0))
+            .map_err(database_recovery_error)?
+            .map(|id| id.map(|id| format!("snapshot-{id}")))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(database_recovery_error)?;
+        Ok(snapshot_ids)
     }
 
     /// 按 durable reviewId 读取 current Snapshot 及稳定 File Change metadata。
@@ -1007,6 +1115,16 @@ fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
         transaction.execute_batch(
             "ALTER TABLE reviews ADD COLUMN pull_request_metadata TEXT;
              PRAGMA user_version = 3;",
+        )?;
+        transaction.commit()?;
+    }
+    if version < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE review_snapshots ADD COLUMN activated_at INTEGER;
+             ALTER TABLE review_snapshots ADD COLUMN pull_request_metadata TEXT;
+             UPDATE review_snapshots SET activated_at = created_at;
+             PRAGMA user_version = 4;",
         )?;
         transaction.commit()?;
     }

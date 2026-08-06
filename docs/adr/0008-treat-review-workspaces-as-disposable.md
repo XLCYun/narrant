@@ -25,6 +25,8 @@ avoids making external tool side effects part of the Review model.
 - The UI must not present the Review Workspace as a general-purpose editable checkout.
 - Workspaces are created lazily and removed when the Review closes, the user switches
   Reviews, or the application exits; SQLite Review history remains.
+- Closing a Review releases its runtime reader even when workspace removal fails. The
+  cleanup failure remains reportable and recoverable, but does not reopen the Review.
 - The first release keeps at most one Review Workspace active and does not retain an
   unbounded checkout cache for historical Reviews.
 - On startup Narrant automatically cleans up worktrees left by an interrupted prior
