@@ -208,6 +208,24 @@ fn map_presentation(presentation: review_lifecycle::ReviewPresentation) -> Revie
     response
 }
 
+/// 将 Tauri 的字符串 operation identity 与错误契约适配到可取消操作 seam。
+async fn run_cancellable_command<T, F, Fut>(
+    operations: &cancellable_operation::CancellableOperations,
+    operation_id: String,
+    operation: F,
+) -> Result<T, String>
+where
+    F: FnOnce(cancellable_operation::OperationContext) -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let id =
+        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
+    operations
+        .run(id, operation)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 async fn compare_local_refs(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
@@ -217,25 +235,21 @@ async fn compare_local_refs(
     base_ref: String,
     head_ref: String,
 ) -> Result<ReviewSnapshotResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .present(
-                    review_lifecycle::PresentReview::Branch {
-                        repository_entry_id,
-                        base_ref,
-                        head_ref,
-                    },
-                    operation.cancellation(),
-                )
-                .await
-                .map(map_presentation)
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .present(
+                review_lifecycle::PresentReview::Branch {
+                    repository_entry_id,
+                    base_ref,
+                    head_ref,
+                },
+                operation.cancellation(),
+            )
+            .await
+            .map(map_presentation)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 重新获取所选 remote refs 并解析最新版本，但保持 current Snapshot 与 Workspace 不变。
@@ -246,24 +260,20 @@ async fn check_branch_review_updates(
     operation_id: String,
     review_id: String,
 ) -> Result<BranchReviewUpdateResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .check_update(&review_id, operation.cancellation())
-                .await
-                .map(|update| BranchReviewUpdateResponse {
-                    changed: update.update_available,
-                    current_base_revision: update.current_base_revision,
-                    current_head_revision: update.current_head_revision,
-                    latest_base_revision: update.available_base_revision,
-                    latest_head_revision: update.available_head_revision,
-                })
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .check_update(&review_id, operation.cancellation())
+            .await
+            .map(|update| BranchReviewUpdateResponse {
+                changed: update.update_available,
+                current_base_revision: update.current_base_revision,
+                current_head_revision: update.current_head_revision,
+                latest_base_revision: update.available_base_revision,
+                latest_head_revision: update.available_head_revision,
+            })
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 在用户明确确认后创建 Snapshot、重建 Workspace，并以 CAS 推进 current 指针。
@@ -275,27 +285,23 @@ async fn refresh_branch_review(
     review_id: String,
     confirmation: ConfirmedBranchUpdate,
 ) -> Result<ReviewSnapshotResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .refresh(
-                    &review_id,
-                    review_lifecycle::ConfirmedReviewUpdate {
-                        current_base_revision: confirmation.current_base_revision,
-                        current_head_revision: confirmation.current_head_revision,
-                        available_base_revision: confirmation.latest_base_revision,
-                        available_head_revision: confirmation.latest_head_revision,
-                    },
-                    operation.cancellation(),
-                )
-                .await
-                .map(map_presentation)
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .refresh(
+                &review_id,
+                review_lifecycle::ConfirmedReviewUpdate {
+                    current_base_revision: confirmation.current_base_revision,
+                    current_head_revision: confirmation.current_head_revision,
+                    available_base_revision: confirmation.latest_base_revision,
+                    available_head_revision: confirmation.latest_head_revision,
+                },
+                operation.cancellation(),
+            )
+            .await
+            .map(map_presentation)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 从稳定 Selection identity 创建或重开 durable Pull Request Review。
@@ -308,27 +314,20 @@ async fn open_pull_request_review(
     repository: github_discovery::GitHubRepository,
     number: u64,
 ) -> Result<ReviewSnapshotResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .present(
-                    review_lifecycle::PresentReview::PullRequest {
-                        repository_entry_id,
-                        selection: pull_request_selection::PullRequestSelection {
-                            repository,
-                            number,
-                        },
-                    },
-                    operation.cancellation(),
-                )
-                .await
-                .map(map_presentation)
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .present(
+                review_lifecycle::PresentReview::PullRequest {
+                    repository_entry_id,
+                    selection: pull_request_selection::PullRequestSelection { repository, number },
+                },
+                operation.cancellation(),
+            )
+            .await
+            .map(map_presentation)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 检查 Pull Request 当前 revisions；只获取对象并计算候选 Snapshot。
@@ -339,24 +338,20 @@ async fn check_pull_request_review_update(
     operation_id: String,
     review_id: String,
 ) -> Result<ReviewUpdateResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .check_update(&review_id, operation.cancellation())
-                .await
-                .map(|update| ReviewUpdateResponse {
-                    update_available: update.update_available,
-                    current_base_revision: update.current_base_revision,
-                    current_head_revision: update.current_head_revision,
-                    available_base_revision: update.available_base_revision,
-                    available_head_revision: update.available_head_revision,
-                })
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .check_update(&review_id, operation.cancellation())
+            .await
+            .map(|update| ReviewUpdateResponse {
+                update_available: update.update_available,
+                current_base_revision: update.current_base_revision,
+                current_head_revision: update.current_head_revision,
+                available_base_revision: update.available_base_revision,
+                available_head_revision: update.available_head_revision,
+            })
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 显式刷新 Pull Request Review，并在 workspace 对齐后推进 current Snapshot。
@@ -368,27 +363,23 @@ async fn refresh_pull_request_review(
     review_id: String,
     confirmation: ConfirmedPullRequestUpdate,
 ) -> Result<ReviewSnapshotResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .refresh(
-                    &review_id,
-                    review_lifecycle::ConfirmedReviewUpdate {
-                        current_base_revision: confirmation.current_base_revision,
-                        current_head_revision: confirmation.current_head_revision,
-                        available_base_revision: confirmation.available_base_revision,
-                        available_head_revision: confirmation.available_head_revision,
-                    },
-                    operation.cancellation(),
-                )
-                .await
-                .map(map_presentation)
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .refresh(
+                &review_id,
+                review_lifecycle::ConfirmedReviewUpdate {
+                    current_base_revision: confirmation.current_base_revision,
+                    current_head_revision: confirmation.current_head_revision,
+                    available_base_revision: confirmation.available_base_revision,
+                    available_head_revision: confirmation.available_head_revision,
+                },
+                operation.cancellation(),
+            )
+            .await
+            .map(map_presentation)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 列出 Repository Entry 保存的 Reviews；不访问 GitHub，也不创建 workspace。
@@ -439,23 +430,19 @@ async fn list_local_refs(
     repository_entry_id: i64,
 ) -> Result<BranchRefsResponse, String> {
     let repository_path = require_available_repository(lifecycle.catalog(), repository_entry_id)?;
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            change_content::local::list_branch_refs_with_cancellation(
-                &repository_path,
-                operation.cancellation(),
-            )
-            .map(|branches| BranchRefsResponse {
-                refs: branches.refs,
-                default_ref: branches.default_ref,
-                current_ref: branches.current_ref,
-            })
-            .map_err(|error| error.to_string())
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        change_content::local::list_branch_refs_with_cancellation(
+            &repository_path,
+            operation.cancellation(),
+        )
+        .map(|branches| BranchRefsResponse {
+            refs: branches.refs,
+            default_ref: branches.default_ref,
+            current_ref: branches.current_ref,
         })
-        .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -540,17 +527,13 @@ async fn read_review_file_change(
     snapshot_id: String,
     path: String,
 ) -> Result<FileChangeContentResponse, String> {
-    let id =
-        cancellable_operation::OperationId::new(operation_id).map_err(|error| error.to_string())?;
-    operations
-        .run(id, |operation| async move {
-            lifecycle
-                .read_file_change(&review_id, &snapshot_id, &path, operation.cancellation())
-                .map(map_file_content)
-                .map_err(|error| error.to_string())
-        })
-        .await
-        .map_err(|error| error.to_string())?
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .read_file_change(&review_id, &snapshot_id, &path, operation.cancellation())
+            .map(map_file_content)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// 关闭 durable Review 并精确移除它的 disposable linked worktree。

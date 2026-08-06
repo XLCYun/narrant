@@ -201,6 +201,13 @@ impl CoreGitProcess {
         invocation: GitInvocation,
         cancellation: &CancellationToken,
     ) -> Result<GitOutput, CoreGitFailure> {
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            if runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                return tokio::task::block_in_place(|| {
+                    runtime.block_on(self.execute(invocation, cancellation))
+                });
+            }
+        }
         execute_core_git(invocation, cancellation, self.limits)
     }
 }
@@ -497,6 +504,7 @@ fn read_head_object_id(
         })
 }
 
+/// 两条输出读取线程向进程控制循环报告的事件。
 enum ReaderEvent {
     LimitExceeded(GitOutputStream),
     Completed(GitOutputStream, std::io::Result<Vec<u8>>),
@@ -774,25 +782,22 @@ fn drain_reader_events(
 fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
     #[cfg(unix)]
     {
-        if child
+        let child_already_exited = child
             .try_wait()
             .map_err(|error| format!("无法检查 Core Git 子进程状态：{error}"))?
-            .is_some()
-        {
-            return Ok(());
-        }
+            .is_some();
         let process_group = -(child.id() as i32);
         let group_result = unsafe { libc::kill(process_group, libc::SIGKILL) };
-        if group_result != 0
-            && child
-                .try_wait()
-                .map_err(|error| format!("无法检查 Core Git 子进程状态：{error}"))?
-                .is_none()
-        {
+        if group_result != 0 {
             let group_error = std::io::Error::last_os_error();
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("无法终止 Core Git 进程组：{group_error}"));
+            if group_error.raw_os_error() != Some(libc::ESRCH) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("无法终止 Core Git 进程组：{group_error}"));
+            }
+        }
+        if child_already_exited {
+            return Ok(());
         }
     }
     #[cfg(windows)]

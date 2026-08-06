@@ -160,6 +160,36 @@ async fn cancellation_stops_an_already_running_core_git_process() {
     assert_eq!(error.kind(), CoreGitFailureKind::Cancelled);
 }
 
+#[tokio::test]
+#[cfg(unix)]
+async fn cancellation_reaps_descendants_before_returning() {
+    let fixture = repository();
+    let process = CoreGitProcess::default();
+    let cancellation = CancellationToken::default();
+    let cancellation_request = cancellation.clone();
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        cancellation_request.cancel();
+    });
+    let started = Instant::now();
+
+    let error = process
+        .execute(
+            GitInvocation::new(
+                fixture.path(),
+                ["-c", "alias.block=!sleep 30", "block"],
+                GitOperationClass::Query,
+            ),
+            &cancellation,
+        )
+        .await
+        .unwrap_err();
+    canceller.join().unwrap();
+
+    assert_eq!(error.kind(), CoreGitFailureKind::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
 #[test]
 fn review_workspace_is_a_detached_linked_worktree_at_the_snapshot_head() {
     let fixture = repository();

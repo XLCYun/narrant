@@ -21,6 +21,13 @@ type RawTauriInvoke = (command: string, args?: Record<string, unknown>) => Promi
 
 let nextOperationId = 0;
 
+/** 创建跨 transport、页面重载和 WebView 都不会复用的操作身份。 */
+function createOperationId(): string {
+  const randomId = globalThis.crypto?.randomUUID?.();
+  if (randomId) return `operation-${randomId}`;
+  return `operation-${Date.now()}-${nextOperationId++}-${Math.random().toString(36).slice(2)}`;
+}
+
 /** 将 Tauri 的 stringly-typed invoke 收口为应用共享的 typed transport。 */
 export function createTauriTransport(rawInvoke: RawTauriInvoke = tauriInvoke): TypedTauriTransport {
   return {
@@ -30,7 +37,7 @@ export function createTauriTransport(rawInvoke: RawTauriInvoke = tauriInvoke): T
 
     async invokeCancellable(command, args, signal) {
       if (signal.aborted) throw new DOMException("Operation aborted", "AbortError");
-      const operationId = `operation-${nextOperationId++}`;
+      const operationId = createOperationId();
       const cancel = () => {
         void rawInvoke("cancel_operation", { operationId }).catch(() => undefined);
       };

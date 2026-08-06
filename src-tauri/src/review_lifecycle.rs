@@ -258,9 +258,10 @@ impl ReviewLifecycle {
                 {
                     saved
                 } else {
+                    let operation = OperationContext::from_cancellation(cancellation.clone());
                     let resolved = self
                         .pull_requests
-                        .resolve(&repository_path, &selection, cancellation)
+                        .resolve(&repository_path, &selection, &operation)
                         .await
                         .map_err(ReviewLifecycleError::pull_request)?;
                     self.catalog
@@ -288,11 +289,12 @@ impl ReviewLifecycle {
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
         let repository_path = self.require_available_repository(current.repository_entry_id)?;
         let available = if let Some(metadata) = current.pull_request.as_ref() {
+            let operation = OperationContext::from_cancellation(cancellation.clone());
             self.pull_requests
                 .resolve(
                     &repository_path,
                     &pull_request_selection(metadata),
-                    cancellation,
+                    &operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?
@@ -444,12 +446,13 @@ impl ReviewLifecycle {
             return Err(ReviewLifecycleError::StaleCurrent);
         }
         let candidate = if let Some(metadata) = current.pull_request.as_ref() {
+            let operation = OperationContext::from_cancellation(cancellation.clone());
             let available = self
                 .pull_requests
                 .resolve(
                     &repository_path,
                     &pull_request_selection(metadata),
-                    cancellation,
+                    &operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?;

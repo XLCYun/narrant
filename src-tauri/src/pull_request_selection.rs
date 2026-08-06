@@ -1,7 +1,7 @@
+use crate::cancellable_operation::OperationContext;
 use crate::change_content::local::{
     resolve_pull_request_objects, LocalSnapshot, PullRequestObjectResolutionError,
 };
-use crate::core_git::CancellationToken;
 use crate::github_auth::GitHubAuth;
 use crate::github_discovery::{self, GitHubRepository};
 use crate::repository_catalog::PullRequestMetadata;
@@ -98,8 +98,9 @@ impl PullRequestSelectionResolver {
         &self,
         repository_path: &Path,
         selection: &PullRequestSelection,
-        cancellation: &CancellationToken,
+        operation: &OperationContext,
     ) -> Result<ResolvedPullRequestSelection, PullRequestResolutionError> {
+        let cancellation = operation.cancellation();
         if selection.number == 0
             || selection.repository.owner.trim().is_empty()
             || selection.repository.name.trim().is_empty()
@@ -206,7 +207,7 @@ impl PullRequestSelectionResolver {
 
 /// 在任何外部工作开始前响应已经发生的取消。
 fn require_not_cancelled(
-    cancellation: &CancellationToken,
+    cancellation: &crate::core_git::CancellationToken,
 ) -> Result<(), PullRequestResolutionError> {
     if cancellation.is_cancelled() {
         Err(cancelled())
@@ -216,7 +217,7 @@ fn require_not_cancelled(
 }
 
 /// 等待共享 cancellation token，供异步 GitHub 请求参与 select。
-async fn wait_for_cancellation(cancellation: &CancellationToken) {
+async fn wait_for_cancellation(cancellation: &crate::core_git::CancellationToken) {
     while !cancellation.is_cancelled() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }

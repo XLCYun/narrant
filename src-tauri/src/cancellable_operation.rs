@@ -29,6 +29,11 @@ pub struct OperationContext {
 }
 
 impl OperationContext {
+    /// 从已有共享标记创建跨模块传递的操作上下文。
+    pub(crate) fn from_cancellation(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
+    }
+
     /// 返回跨越本次应用操作全部可取消阶段的共享标记。
     pub fn cancellation(&self) -> &CancellationToken {
         &self.cancellation
@@ -65,6 +70,7 @@ impl std::fmt::Display for OperationError {
 
 impl std::error::Error for OperationError {}
 
+/// Registry 中运行项与先到取消请求的内部表示。
 enum OperationEntry {
     EarlyCancellation {
         requested_at: Instant,
@@ -76,6 +82,7 @@ enum OperationEntry {
 }
 
 #[derive(Default)]
+/// 可取消操作 registry 的全部可变状态。
 struct OperationState {
     next_registration: u64,
     entries: HashMap<OperationId, OperationEntry>,
@@ -161,6 +168,7 @@ impl CancellableOperations {
     }
 }
 
+/// 在 future 生命周期结束时精确释放本次注册的 RAII guard。
 struct OperationRegistration {
     state: Arc<Mutex<OperationState>>,
     id: OperationId,
