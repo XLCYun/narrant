@@ -2996,6 +2996,7 @@ dependencies = [
  "httpmock",
  "image",
  "keyring",
+ "libc",
  "octocrab",
  "reqwest 0.12.28",
  "rusqlite",

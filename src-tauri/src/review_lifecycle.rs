@@ -1,3 +1,4 @@
+use crate::cancellable_operation::OperationContext;
 use crate::change_content::local::{LocalOpenedReview, LocalSnapshot};
 use crate::change_content::LoadedFileChange;
 use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
@@ -495,14 +496,14 @@ impl ReviewLifecycle {
             .reviews
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
-        let convergence = CancellationToken::default();
+        let convergence = OperationContext::non_cancellable();
         let adapter = GitProcessAdapter::new(&repository_path);
         if let Err(error) = adapter.transition_detached_worktree(
             &workspace,
             &entry.common_directory,
             &current.head_revision,
             &candidate.head_revision,
-            &convergence,
+            convergence.cancellation(),
         ) {
             let _ = self.catalog.abandon_refresh_candidate(&candidate);
             return Err(ReviewLifecycleError::WorkspaceTransition(error.to_string()));
@@ -514,7 +515,7 @@ impl ReviewLifecycle {
                 &entry.common_directory,
                 &candidate.head_revision,
                 &current.head_revision,
-                &convergence,
+                convergence.cancellation(),
             );
             let _ = self.catalog.abandon_refresh_candidate(&candidate);
             return Err(ReviewLifecycleError::ActivationRollback {

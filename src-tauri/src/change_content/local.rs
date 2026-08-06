@@ -288,7 +288,7 @@ pub fn fetch_selected_remote_refs(
     remotes.sort_unstable();
     remotes.dedup();
     for remote in remotes {
-        adapter.run(
+        adapter.run_network(
             ["fetch", "--no-write-fetch-head", "--", remote],
             cancellation,
         )?;
@@ -369,7 +369,7 @@ pub fn resolve_pull_request_objects(
     let head_source = format!("refs/pull/{pull_request_number}/head");
     for source in [&base_source, &head_source] {
         adapter
-            .run(
+            .run_network(
                 [
                     "fetch",
                     "--no-write-fetch-head",

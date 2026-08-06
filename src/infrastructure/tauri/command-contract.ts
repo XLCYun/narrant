@@ -23,7 +23,7 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
-  cancel_git_operation: { args: { operationId: string }; result: void };
+  cancel_operation: { args: { operationId: string }; result: void };
   compare_local_refs: { args: { operationId: string; repositoryEntryId: number; baseRef: string; headRef: string }; result: ReviewSnapshot };
   check_branch_review_updates: { args: { operationId: string; reviewId: string }; result: BranchSelectionUpdate };
   refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
@@ -78,7 +78,7 @@ export const TAURI_COMMAND_NAMES = [
   "refresh_branch_review",
   "reopen_review",
   "list_local_refs",
-  "cancel_git_operation",
+  "cancel_operation",
   "discover_github_pull_requests",
   "open_pull_request_review",
   "check_pull_request_review_update",

@@ -45,8 +45,29 @@ describe("Typed Tauri transport", () => {
     await result;
 
     const operationId = rawInvoke.mock.calls[0][1].operationId;
-    expect(operationId).toMatch(/^git-operation-/);
-    expect(rawInvoke).toHaveBeenNthCalledWith(2, "cancel_git_operation", { operationId });
+    expect(operationId).toMatch(/^operation-/);
+    expect(rawInvoke).toHaveBeenNthCalledWith(2, "cancel_operation", { operationId });
+  });
+
+  it("不同 transport 实例不会为并发操作分配相同 identity", async () => {
+    const firstInvoke = vi.fn(() => new Promise(() => undefined));
+    const secondInvoke = vi.fn(() => new Promise(() => undefined));
+    const first = createTauriTransport(firstInvoke);
+    const second = createTauriTransport(secondInvoke);
+
+    void first.invokeCancellable(
+      "list_local_refs",
+      { repositoryEntryId: 1 },
+      new AbortController().signal,
+    );
+    void second.invokeCancellable(
+      "list_local_refs",
+      { repositoryEntryId: 1 },
+      new AbortController().signal,
+    );
+
+    expect(firstInvoke.mock.calls[0][1].operationId)
+      .not.toBe(secondInvoke.mock.calls[0][1].operationId);
   });
 
   it("不启动已经取消的 command", async () => {
