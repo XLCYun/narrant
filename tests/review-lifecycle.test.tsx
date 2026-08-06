@@ -25,6 +25,13 @@ const firstSnapshot: ReviewSnapshot = {
   ],
 };
 
+const availableUpdate = {
+  currentBaseRevision: "base-1",
+  currentHeadRevision: "head-1",
+  availableBaseRevision: "base-1",
+  availableHeadRevision: "head-2",
+};
+
 /** 为 Review lifecycle interface 提供可预测结果的内存 adapter。 */
 function createAdapter(): ReviewApplicationAdapter & {
   failTarget?: ReviewOpenTarget;
@@ -105,7 +112,8 @@ describe("Review lifecycle module", () => {
     const events: string[] = [];
     let finishRefresh: (() => void) | undefined;
     const adapter = createAdapter();
-    adapter.refreshReview = async (_identity, signal) => {
+    adapter.checkReviewUpdate = async () => availableUpdate;
+    adapter.refreshReview = async (_snapshot, _confirmation, signal) => {
       events.push("refresh-started");
       await new Promise<void>((resolve) => {
         finishRefresh = () => {
@@ -150,7 +158,8 @@ describe("Review lifecycle module", () => {
     const events: string[] = [];
     let finishRefresh: (() => void) | undefined;
     const adapter = createAdapter();
-    adapter.refreshReview = async (_identity, signal) => {
+    adapter.checkReviewUpdate = async () => availableUpdate;
+    adapter.refreshReview = async (_snapshot, _confirmation, signal) => {
       events.push("refresh-started");
       await new Promise<void>((resolve) => {
         finishRefresh = () => {

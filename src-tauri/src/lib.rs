@@ -2,6 +2,7 @@ pub mod change_content;
 pub mod core_git;
 pub mod github_auth;
 pub mod github_discovery;
+pub mod pull_request_selection;
 pub mod repository_catalog;
 pub mod review_lifecycle;
 
@@ -92,6 +93,16 @@ struct ConfirmedBranchUpdate {
     current_head_revision: String,
     latest_base_revision: String,
     latest_head_revision: String,
+}
+
+/// Pull Request 更新确认仅固定用户刚刚看到的 current/available revisions。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmedPullRequestUpdate {
+    current_base_revision: String,
+    current_head_revision: String,
+    available_base_revision: String,
+    available_head_revision: String,
 }
 
 /// 检查 Pull Request 当前 revisions 后返回，不改变 current Snapshot 或 workspace。
@@ -235,31 +246,8 @@ fn map_presentation(presentation: review_lifecycle::ReviewPresentation) -> Revie
     response
 }
 
-/// 将 GitHub discovery DTO 转为生命周期模块自己的 Pull Request 观察值。
-fn map_pull_request_observation(
-    repository: github_discovery::GitHubRepository,
-    pull_request: github_discovery::DiscoveredPullRequest,
-) -> review_lifecycle::PullRequestObservation {
-    review_lifecycle::PullRequestObservation {
-        owner: repository.owner,
-        repository: repository.name,
-        number: pull_request.number,
-        title: pull_request.title,
-        description: pull_request.description,
-        author: pull_request.author,
-        state: pull_request.state,
-        draft: pull_request.draft,
-        url: pull_request.url,
-        updated_at: pull_request.updated_at,
-        base_ref: pull_request.base.reference,
-        base_revision: pull_request.base.sha,
-        head_ref: pull_request.head.reference,
-        head_revision: pull_request.head.sha,
-    }
-}
-
 #[tauri::command]
-fn compare_local_refs(
+async fn compare_local_refs(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     operations: tauri::State<'_, GitOperationStore>,
     operation_id: String,
@@ -277,6 +265,7 @@ fn compare_local_refs(
             },
             &cancellation,
         )
+        .await
         .map(map_presentation)
         .map_err(|error| error.to_string());
     operations.finish(&operation_id);
@@ -285,7 +274,7 @@ fn compare_local_refs(
 
 /// 重新获取所选 remote refs 并解析最新版本，但保持 current Snapshot 与 Workspace 不变。
 #[tauri::command]
-fn check_branch_review_updates(
+async fn check_branch_review_updates(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     operations: tauri::State<'_, GitOperationStore>,
     operation_id: String,
@@ -293,11 +282,8 @@ fn check_branch_review_updates(
 ) -> Result<BranchReviewUpdateResponse, String> {
     let cancellation = operations.start(operation_id.clone())?;
     let result = lifecycle
-        .check_update(
-            &review_id,
-            review_lifecycle::UpdateSource::Branch,
-            &cancellation,
-        )
+        .check_update(&review_id, &cancellation)
+        .await
         .map(|update| BranchReviewUpdateResponse {
             changed: update.update_available,
             current_base_revision: update.current_base_revision,
@@ -312,7 +298,7 @@ fn check_branch_review_updates(
 
 /// 在用户明确确认后创建 Snapshot、重建 Workspace，并以 CAS 推进 current 指针。
 #[tauri::command]
-fn refresh_branch_review(
+async fn refresh_branch_review(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     operations: tauri::State<'_, GitOperationStore>,
     operation_id: String,
@@ -323,39 +309,41 @@ fn refresh_branch_review(
     let result = lifecycle
         .refresh(
             &review_id,
-            review_lifecycle::RefreshEvidence::Branch {
+            review_lifecycle::ConfirmedReviewUpdate {
                 current_base_revision: confirmation.current_base_revision,
                 current_head_revision: confirmation.current_head_revision,
-                latest_base_revision: confirmation.latest_base_revision,
-                latest_head_revision: confirmation.latest_head_revision,
+                available_base_revision: confirmation.latest_base_revision,
+                available_head_revision: confirmation.latest_head_revision,
             },
             &cancellation,
         )
+        .await
         .map(map_presentation)
         .map_err(|error| error.to_string());
     operations.finish(&operation_id);
     result
 }
 
-/// 从 discovery metadata 创建或重开 durable Pull Request Review。
+/// 从稳定 Selection identity 创建或重开 durable Pull Request Review。
 #[tauri::command]
-fn open_pull_request_review(
+async fn open_pull_request_review(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     operations: tauri::State<'_, GitOperationStore>,
     operation_id: String,
     repository_entry_id: i64,
     repository: github_discovery::GitHubRepository,
-    pull_request: github_discovery::DiscoveredPullRequest,
+    number: u64,
 ) -> Result<ReviewSnapshotResponse, String> {
     let cancellation = operations.start(operation_id.clone())?;
     let result = lifecycle
         .present(
             review_lifecycle::PresentReview::PullRequest {
                 repository_entry_id,
-                observation: Box::new(map_pull_request_observation(repository, pull_request)),
+                selection: pull_request_selection::PullRequestSelection { repository, number },
             },
             &cancellation,
         )
+        .await
         .map(map_presentation)
         .map_err(|error| error.to_string());
     operations.finish(&operation_id);
@@ -364,23 +352,16 @@ fn open_pull_request_review(
 
 /// 检查 Pull Request 当前 revisions；只获取对象并计算候选 Snapshot。
 #[tauri::command]
-fn check_pull_request_review_update(
+async fn check_pull_request_review_update(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     operations: tauri::State<'_, GitOperationStore>,
     operation_id: String,
     review_id: String,
-    repository: github_discovery::GitHubRepository,
-    pull_request: github_discovery::DiscoveredPullRequest,
 ) -> Result<ReviewUpdateResponse, String> {
     let cancellation = operations.start(operation_id.clone())?;
     let result = lifecycle
-        .check_update(
-            &review_id,
-            review_lifecycle::UpdateSource::PullRequest {
-                observation: Box::new(map_pull_request_observation(repository, pull_request)),
-            },
-            &cancellation,
-        )
+        .check_update(&review_id, &cancellation)
+        .await
         .map(|update| ReviewUpdateResponse {
             update_available: update.update_available,
             current_base_revision: update.current_base_revision,
@@ -395,23 +376,26 @@ fn check_pull_request_review_update(
 
 /// 显式刷新 Pull Request Review，并在 workspace 对齐后推进 current Snapshot。
 #[tauri::command]
-fn refresh_pull_request_review(
+async fn refresh_pull_request_review(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     operations: tauri::State<'_, GitOperationStore>,
     operation_id: String,
     review_id: String,
-    repository: github_discovery::GitHubRepository,
-    pull_request: github_discovery::DiscoveredPullRequest,
+    confirmation: ConfirmedPullRequestUpdate,
 ) -> Result<ReviewSnapshotResponse, String> {
     let cancellation = operations.start(operation_id.clone())?;
     let result = lifecycle
         .refresh(
             &review_id,
-            review_lifecycle::RefreshEvidence::PullRequest {
-                observation: Box::new(map_pull_request_observation(repository, pull_request)),
+            review_lifecycle::ConfirmedReviewUpdate {
+                current_base_revision: confirmation.current_base_revision,
+                current_head_revision: confirmation.current_head_revision,
+                available_base_revision: confirmation.available_base_revision,
+                available_head_revision: confirmation.available_head_revision,
             },
             &cancellation,
         )
+        .await
         .map(map_presentation)
         .map_err(|error| error.to_string());
     operations.finish(&operation_id);
@@ -444,7 +428,7 @@ fn list_saved_reviews(
 
 /// 仅用 cached current Snapshot 重开 durable Review，不依赖 GitHub 登录或 discovery。
 #[tauri::command]
-fn open_saved_review(
+async fn open_saved_review(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     review_id: String,
 ) -> Result<ReviewSnapshotResponse, String> {
@@ -453,6 +437,7 @@ fn open_saved_review(
             review_lifecycle::PresentReview::Saved { review_id },
             &core_git::CancellationToken::default(),
         )
+        .await
         .map(map_presentation)
         .map_err(|error| error.to_string())
 }
@@ -640,7 +625,7 @@ fn list_reviews(
 
 /// 使用 current Snapshot 按 durable reviewId 重新物化 Review。
 #[tauri::command]
-fn reopen_review(
+async fn reopen_review(
     lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
     review_id: String,
 ) -> Result<ReviewSnapshotResponse, String> {
@@ -649,6 +634,7 @@ fn reopen_review(
             review_lifecycle::PresentReview::Saved { review_id },
             &core_git::CancellationToken::default(),
         )
+        .await
         .map(map_presentation)
         .map_err(|error| error.to_string())
 }
@@ -696,10 +682,6 @@ pub fn run() {
                 .unwrap_or(application_data.join("narrant.sqlite3"));
             #[cfg(not(feature = "wdio"))]
             let database_path = application_data.join("narrant.sqlite3");
-            let catalog = Arc::new(repository_catalog::RepositoryCatalog::open(&database_path)?);
-            let lifecycle = review_lifecycle::ReviewLifecycle::new(catalog);
-            let _ = lifecycle.recover();
-            app.manage(lifecycle);
             let oauth_client = tauri::async_runtime::block_on(async {
                 Arc::new(
                     github_auth::OctocrabOAuthClient::new(&oauth_base_url)
@@ -711,13 +693,27 @@ pub fn run() {
                 github_api_base_url(),
                 application_data.join("github-identity"),
             ));
-            app.manage(Arc::new(github_auth::GitHubAuth::with_identity_provider(
+            let auth = Arc::new(github_auth::GitHubAuth::with_identity_provider(
                 option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
                 option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
                 oauth_client,
                 Arc::new(github_auth::SystemCredentialStore),
                 identity_provider,
-            )));
+            ));
+            let catalog = Arc::new(repository_catalog::RepositoryCatalog::open(&database_path)?);
+            let pull_requests = Arc::new(
+                pull_request_selection::PullRequestSelectionResolver::authenticated(
+                    github_api_base_url(),
+                    auth.clone(),
+                ),
+            );
+            let lifecycle = review_lifecycle::ReviewLifecycle::with_pull_request_resolver(
+                catalog,
+                pull_requests,
+            );
+            let _ = lifecycle.recover();
+            app.manage(lifecycle);
+            app.manage(auth);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

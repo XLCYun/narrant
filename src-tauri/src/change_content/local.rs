@@ -306,23 +306,80 @@ pub fn fetch_pull_request_objects(
     head_revision: &str,
     cancellation: &CancellationToken,
 ) -> Result<LocalOpenedReview, GitCommandError> {
+    resolve_pull_request_objects(
+        repository_path,
+        remote,
+        pull_request_number,
+        base_ref,
+        base_revision,
+        head_revision,
+        cancellation,
+    )
+    .map_err(PullRequestObjectResolutionError::into_git_error)
+}
+
+/// 区分 remote 获取失败与获取成功后的精确 revision 校验失败。
+pub enum PullRequestObjectResolutionError {
+    Fetch(GitCommandError),
+    ExactRevision(GitCommandError),
+}
+
+impl PullRequestObjectResolutionError {
+    /// 返回底层 Core Git 诊断，供兼容旧调用方使用。
+    fn into_git_error(self) -> GitCommandError {
+        match self {
+            Self::Fetch(error) | Self::ExactRevision(error) => error,
+        }
+    }
+
+    /// 返回底层失败是否来自合作式取消。
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Fetch(error) | Self::ExactRevision(error) => error.is_cancelled(),
+        }
+    }
+}
+
+impl std::fmt::Display for PullRequestObjectResolutionError {
+    /// 输出底层 Core Git 诊断而不暴露错误分类实现。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fetch(error) | Self::ExactRevision(error) => error.fmt(formatter),
+        }
+    }
+}
+
+/// 获取 Pull Request 对象并单独分类精确 revision 校验阶段。
+pub fn resolve_pull_request_objects(
+    repository_path: &Path,
+    remote: &str,
+    pull_request_number: u64,
+    base_ref: &str,
+    base_revision: &str,
+    head_revision: &str,
+    cancellation: &CancellationToken,
+) -> Result<LocalOpenedReview, PullRequestObjectResolutionError> {
     if remote.is_empty() || base_ref.is_empty() || pull_request_number == 0 {
-        return Err(GitCommandError::new("Pull Request fetch 参数无效"));
+        return Err(PullRequestObjectResolutionError::Fetch(
+            GitCommandError::new("Pull Request fetch 参数无效"),
+        ));
     }
     let adapter = GitProcessAdapter::new(repository_path);
     let base_source = format!("refs/heads/{base_ref}");
     let head_source = format!("refs/pull/{pull_request_number}/head");
     for source in [&base_source, &head_source] {
-        adapter.run(
-            [
-                "fetch",
-                "--no-write-fetch-head",
-                "--no-tags",
-                remote,
-                source,
-            ],
-            cancellation,
-        )?;
+        adapter
+            .run(
+                [
+                    "fetch",
+                    "--no-write-fetch-head",
+                    "--no-tags",
+                    remote,
+                    source,
+                ],
+                cancellation,
+            )
+            .map_err(PullRequestObjectResolutionError::Fetch)?;
     }
     LocalOpenedReview::open_revisions(
         repository_path,
@@ -332,6 +389,7 @@ pub fn fetch_pull_request_objects(
         head_revision,
         cancellation,
     )
+    .map_err(PullRequestObjectResolutionError::ExactRevision)
 }
 
 /// 从 canonical remote-tracking ref 提取 remote 名称。

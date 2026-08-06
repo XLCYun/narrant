@@ -355,7 +355,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Local PR Review/ }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
-      operationId: expect.any(String), repositoryEntryId: 25, repository, pullRequest,
+      operationId: expect.any(String), repositoryEntryId: 25, repository, number: 42,
     }));
     expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).toHaveTextContent("草稿");
@@ -409,7 +409,16 @@ describe("App", () => {
     expect(await screen.findByText("检测到 PR 分支有更新")).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).not.toHaveTextContent("base-1 → head-1");
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", expect.anything()));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", {
+      operationId: expect.any(String),
+      reviewId: "review-42",
+      confirmation: {
+        currentBaseRevision: "base-1",
+        currentHeadRevision: "head-1",
+        availableBaseRevision: "base-1",
+        availableHeadRevision: "head-2",
+      },
+    }));
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent("head-2");
   });
 

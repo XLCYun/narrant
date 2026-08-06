@@ -1,4 +1,4 @@
-use crate::core_git::{CancellationToken, GitProcessAdapter};
+use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -88,25 +88,71 @@ pub async fn discover_pull_requests(
     Ok(groups)
 }
 
+/// 按稳定 identity 读取一个 Pull Request 的最新协作 metadata 与 revisions。
+pub async fn observe_pull_request(
+    api_base_url: &str,
+    repository: &GitHubRepository,
+    number: u64,
+    access_token: Option<&SecretString>,
+) -> Result<DiscoveredPullRequest, String> {
+    if number == 0 {
+        return Err("Pull Request number 必须大于零。".to_owned());
+    }
+    let client = Client::builder()
+        .user_agent("Narrant/0.1")
+        .build()
+        .map_err(|_| "GitHub observation client 不可用。".to_owned())?;
+    let endpoint = format!(
+        "{}/repos/{}/{}/pulls/{number}",
+        api_base_url.trim_end_matches('/'),
+        repository.owner,
+        repository.name
+    );
+    let mut request = client.get(endpoint);
+    if let Some(token) = access_token {
+        request = request.bearer_auth(token.expose_secret());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "当前无法连接 GitHub，请检查网络后重试。".to_owned())?;
+    if !response.status().is_success() {
+        return Err(map_discovery_error(
+            response.status().as_u16(),
+            access_token.is_some(),
+        ));
+    }
+    response
+        .json::<PullRequestListItem>()
+        .await
+        .map(DiscoveredPullRequest::from)
+        .map_err(|_| "GitHub 返回了无法识别的 Pull Request metadata。".to_owned())
+}
+
 /// 读取全部 remote URL，并按大小写不敏感的 GitHub identity 合并同仓库 remote。
 fn github_repositories(
     repository_path: &Path,
 ) -> Result<BTreeMap<String, (GitHubRepository, Vec<String>)>, String> {
+    github_repositories_with_cancellation(repository_path, &CancellationToken::default())
+        .map_err(|error| error.to_string())
+}
+
+/// 使用调用方 cancellation 扫描 GitHub remotes。
+fn github_repositories_with_cancellation(
+    repository_path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<BTreeMap<String, (GitHubRepository, Vec<String>)>, GitCommandError> {
     let adapter = GitProcessAdapter::new(repository_path);
-    let remote_names = adapter
-        .run(["remote"], &CancellationToken::default())
-        .map_err(|error| error.to_string())?;
+    let remote_names = adapter.run(["remote"], cancellation)?;
     if remote_names.stdout.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let output = adapter
-        .run(
-            ["config", "--get-regexp", r"^remote\..*\.url$"],
-            &CancellationToken::default(),
-        )
-        .map_err(|error| error.to_string())?;
+    let output = adapter.run(
+        ["config", "--get-regexp", r"^remote\..*\.url$"],
+        cancellation,
+    )?;
     let text = String::from_utf8(output.stdout)
-        .map_err(|_| "Core Git 返回了无法识别的 remote 配置。".to_owned())?;
+        .map_err(|_| GitCommandError::new("Core Git 返回了无法识别的 remote 配置。"))?;
     let mut repositories = BTreeMap::new();
     for line in text.lines() {
         let Some((key, url)) = line.split_once(char::is_whitespace) else {
@@ -138,10 +184,26 @@ pub fn remote_names_for_repository(
     repository_path: &Path,
     repository: &GitHubRepository,
 ) -> Result<Vec<String>, String> {
-    Ok(github_repositories(repository_path)?
-        .remove(&repository.identity())
-        .map(|(_, remote_names)| remote_names)
-        .unwrap_or_default())
+    remote_names_for_repository_with_cancellation(
+        repository_path,
+        repository,
+        &CancellationToken::default(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// 使用调用方 cancellation 查找代表指定 GitHub repository 的 remotes。
+pub fn remote_names_for_repository_with_cancellation(
+    repository_path: &Path,
+    repository: &GitHubRepository,
+    cancellation: &CancellationToken,
+) -> Result<Vec<String>, GitCommandError> {
+    Ok(
+        github_repositories_with_cancellation(repository_path, cancellation)?
+            .remove(&repository.identity().to_ascii_lowercase())
+            .map(|(_, remote_names)| remote_names)
+            .unwrap_or_default(),
+    )
 }
 
 /// 将 GitHub HTTPS、scp-like SSH 与 ssh:// remote 规范化为 repository identity。

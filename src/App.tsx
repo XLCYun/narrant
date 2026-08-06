@@ -64,8 +64,8 @@ export function App() {
     [],
   );
   const reviewApplicationAdapter = useMemo(
-    () => createTauriReviewApplicationAdapter(tauriTransport, pullRequestDiscovery),
-    [pullRequestDiscovery],
+    () => createTauriReviewApplicationAdapter(tauriTransport),
+    [],
   );
   const repositoryApplication = useMemo(
     () => createTauriRepositoryApplicationAdapter(tauriTransport),

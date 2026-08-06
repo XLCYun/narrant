@@ -1,7 +1,6 @@
 import type { GitHubIdentity } from "@/components/github-identity-entry";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type {
-  DiscoveredPullRequest,
   PullRequestGroup,
   ReviewSummary,
   SavedReviewSummary,
@@ -18,6 +17,8 @@ export type PullRequestReviewUpdate = {
   availableHeadRevision: string;
 };
 
+export type ConfirmedPullRequestUpdate = Omit<PullRequestReviewUpdate, "updateAvailable">;
+
 type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
@@ -26,9 +27,9 @@ export type TauriCommandContract = {
   compare_local_refs: { args: { operationId: string; repositoryEntryId: number; baseRef: string; headRef: string }; result: ReviewSnapshot };
   check_branch_review_updates: { args: { operationId: string; reviewId: string }; result: BranchSelectionUpdate };
   refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
-  open_pull_request_review: { args: { operationId: string; repositoryEntryId: number; repository: GitHubRepository; pullRequest: DiscoveredPullRequest }; result: ReviewSnapshot };
-  check_pull_request_review_update: { args: { operationId: string; reviewId: string; repository: GitHubRepository; pullRequest: DiscoveredPullRequest }; result: PullRequestReviewUpdate };
-  refresh_pull_request_review: { args: { operationId: string; reviewId: string; repository: GitHubRepository; pullRequest: DiscoveredPullRequest }; result: ReviewSnapshot };
+  open_pull_request_review: { args: { operationId: string; repositoryEntryId: number; repository: GitHubRepository; number: number }; result: ReviewSnapshot };
+  check_pull_request_review_update: { args: { operationId: string; reviewId: string }; result: PullRequestReviewUpdate };
+  refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot };
   list_local_refs: { args: { operationId: string; repositoryEntryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
   close_review: { args: { reviewId: string }; result: void };

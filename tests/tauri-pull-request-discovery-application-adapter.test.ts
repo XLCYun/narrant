@@ -23,22 +23,14 @@ const groups: PullRequestGroup[] = [{
 }];
 
 describe("Tauri Pull Request Discovery application adapter", () => {
-  it("按 Selection identity 大小写不敏感地解析 Pull Request context", async () => {
+  it("只负责列出 Repository Entry 的 Pull Requests", async () => {
     const invoke = vi.fn().mockResolvedValue(groups);
     const adapter = createTauriPullRequestDiscoveryApplicationAdapter({
       invoke,
       invokeCancellable: vi.fn(),
     } as unknown as TypedTauriTransport);
 
-    await expect(adapter.resolve({
-      repositoryEntryId: 17,
-      owner: "octo-org",
-      repository: "octo-repo",
-      number: 42,
-    })).resolves.toEqual({
-      repository: groups[0].repository,
-      pullRequest: groups[0].pullRequests[0],
-    });
+    await expect(adapter.discover(17)).resolves.toEqual(groups);
     expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryEntryId: 17 });
   });
 });

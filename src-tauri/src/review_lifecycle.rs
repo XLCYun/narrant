@@ -1,14 +1,14 @@
 use crate::change_content::local::{LocalOpenedReview, LocalSnapshot};
 use crate::change_content::LoadedFileChange;
-use crate::core_git::{CancellationToken, GitProcessAdapter};
-use crate::github_discovery;
+use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
+use crate::pull_request_selection::PullRequestResolutionError;
+use crate::pull_request_selection::{PullRequestSelection, PullRequestSelectionResolver};
 use crate::repository_catalog::{
     PullRequestMetadata, RepositoryCatalog, SavedBranchReview, WorkspaceCleanupTarget,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Review 生命周期对外返回的稳定 Snapshot 投影。
 pub struct ReviewPresentation {
@@ -17,24 +17,6 @@ pub struct ReviewPresentation {
     pub snapshot: LocalSnapshot,
     pub pull_request: Option<PullRequestMetadata>,
     pub cleanup_warnings: Vec<String>,
-}
-
-/// 生命周期解析 Pull Request Selection 所需的当前协作观察值。
-pub struct PullRequestObservation {
-    pub owner: String,
-    pub repository: String,
-    pub number: u64,
-    pub title: String,
-    pub description: String,
-    pub author: String,
-    pub state: String,
-    pub draft: bool,
-    pub url: String,
-    pub updated_at: String,
-    pub base_ref: String,
-    pub base_revision: String,
-    pub head_ref: String,
-    pub head_revision: String,
 }
 
 /// 打开或创建 Review 时允许的业务输入。
@@ -49,29 +31,16 @@ pub enum PresentReview {
     },
     PullRequest {
         repository_entry_id: i64,
-        observation: Box<PullRequestObservation>,
+        selection: PullRequestSelection,
     },
 }
 
-/// 更新检查使用的来源；Saved Branch 不需要额外协作 metadata。
-pub enum UpdateSource {
-    Branch,
-    PullRequest {
-        observation: Box<PullRequestObservation>,
-    },
-}
-
-/// 用户确认刷新时携带的精确版本证据。
-pub enum RefreshEvidence {
-    Branch {
-        current_base_revision: String,
-        current_head_revision: String,
-        latest_base_revision: String,
-        latest_head_revision: String,
-    },
-    PullRequest {
-        observation: Box<PullRequestObservation>,
-    },
+/// 用户确认刷新时携带的精确 current 与 available revisions。
+pub struct ConfirmedReviewUpdate {
+    pub current_base_revision: String,
+    pub current_head_revision: String,
+    pub available_base_revision: String,
+    pub available_head_revision: String,
 }
 
 /// 更新检查结果，只描述 current 与 available，不改变任何 current 状态。
@@ -136,12 +105,19 @@ impl ReviewLifecycleError {
     }
 
     /// 将 Core Git 失败分类为取消或普通 Git 故障。
-    fn git(error: impl std::fmt::Display) -> Self {
-        let message = error.to_string();
-        if message.contains("取消") {
-            Self::Cancelled(message)
+    fn git(error: GitCommandError) -> Self {
+        if error.is_cancelled() {
+            Self::Cancelled(error.to_string())
         } else {
-            Self::Git(message)
+            Self::Git(error.to_string())
+        }
+    }
+
+    /// 保留 Pull Request resolver 已识别的协作取消语义。
+    fn pull_request(error: PullRequestResolutionError) -> Self {
+        match error {
+            PullRequestResolutionError::Cancelled(message) => Self::Cancelled(message),
+            error => Self::Operation(error.to_string()),
         }
     }
 }
@@ -187,6 +163,7 @@ impl std::error::Error for ReviewLifecycleError {}
 /// 统一拥有 durable Review、current Snapshot、Workspace 与运行时读取句柄的一致性边界。
 pub struct ReviewLifecycle {
     catalog: Arc<RepositoryCatalog>,
+    pull_requests: Arc<PullRequestSelectionResolver>,
     reviews: Mutex<HashMap<String, Arc<Mutex<LocalOpenedReview>>>>,
     active_refreshes: Mutex<HashSet<String>>,
 }
@@ -194,8 +171,22 @@ pub struct ReviewLifecycle {
 impl ReviewLifecycle {
     /// 使用共享 Repository Catalog 创建生命周期服务。
     pub fn new(catalog: Arc<RepositoryCatalog>) -> Self {
+        Self::with_pull_request_resolver(
+            catalog,
+            Arc::new(PullRequestSelectionResolver::anonymous(
+                "https://api.github.com",
+            )),
+        )
+    }
+
+    /// 使用显式 Pull Request Selection resolver 创建生命周期服务。
+    pub fn with_pull_request_resolver(
+        catalog: Arc<RepositoryCatalog>,
+        pull_requests: Arc<PullRequestSelectionResolver>,
+    ) -> Self {
         Self {
             catalog,
+            pull_requests,
             reviews: Mutex::new(HashMap::new()),
             active_refreshes: Mutex::new(HashSet::new()),
         }
@@ -207,7 +198,7 @@ impl ReviewLifecycle {
     }
 
     /// 创建、重开或切换到指定 Review，并在成功后发布运行时读取句柄。
-    pub fn present(
+    pub async fn present(
         &self,
         request: PresentReview,
         cancellation: &CancellationToken,
@@ -251,28 +242,32 @@ impl ReviewLifecycle {
             }
             PresentReview::PullRequest {
                 repository_entry_id,
-                observation,
+                selection,
             } => {
                 let repository_path = self.require_trusted_repository(repository_entry_id)?;
                 if let Some(saved) = self
                     .catalog
                     .find_pull_request_review(
                         repository_entry_id,
-                        &observation.owner,
-                        &observation.repository,
-                        observation.number,
+                        &selection.repository.owner,
+                        &selection.repository.name,
+                        selection.number,
                     )
                     .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 {
                     saved
                 } else {
-                    let (opened, metadata) = calculate_pull_request_review(
-                        &repository_path,
-                        *observation,
-                        cancellation,
-                    )?;
+                    let resolved = self
+                        .pull_requests
+                        .resolve(&repository_path, &selection, cancellation)
+                        .await
+                        .map_err(ReviewLifecycleError::pull_request)?;
                     self.catalog
-                        .save_pull_request_review(repository_entry_id, &metadata, opened.snapshot())
+                        .save_pull_request_review(
+                            repository_entry_id,
+                            &resolved.metadata,
+                            &resolved.snapshot,
+                        )
                         .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 }
             }
@@ -281,10 +276,9 @@ impl ReviewLifecycle {
     }
 
     /// 解析最新可用版本，但不创建候选、不切换 workspace、不推进 current。
-    pub fn check_update(
+    pub async fn check_update(
         &self,
         review_id: &str,
-        source: UpdateSource,
         cancellation: &CancellationToken,
     ) -> Result<ReviewUpdate, ReviewLifecycleError> {
         let current = self
@@ -292,47 +286,55 @@ impl ReviewLifecycle {
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
         let repository_path = self.require_available_repository(current.repository_entry_id)?;
-        let available = match source {
-            UpdateSource::Branch => {
-                crate::change_content::local::fetch_selected_remote_refs(
+        let available = if let Some(metadata) = current.pull_request.as_ref() {
+            self.pull_requests
+                .resolve(
                     &repository_path,
-                    &current.base_ref,
-                    &current.head_ref,
+                    &pull_request_selection(metadata),
                     cancellation,
                 )
-                .map_err(ReviewLifecycleError::git)?;
-                LocalOpenedReview::open_with_cancellation(
-                    &repository_path,
-                    &current.base_ref,
-                    &current.head_ref,
-                    cancellation,
-                )
-                .map_err(ReviewLifecycleError::git)?
-            }
-            UpdateSource::PullRequest { observation } => {
-                require_pull_request_identity(&current, &observation)?;
-                calculate_pull_request_review(&repository_path, *observation, cancellation)?.0
-            }
+                .await
+                .map_err(ReviewLifecycleError::pull_request)?
+                .snapshot
+        } else {
+            crate::change_content::local::fetch_selected_remote_refs(
+                &repository_path,
+                &current.base_ref,
+                &current.head_ref,
+                cancellation,
+            )
+            .map_err(ReviewLifecycleError::git)?;
+            LocalOpenedReview::open_with_cancellation(
+                &repository_path,
+                &current.base_ref,
+                &current.head_ref,
+                cancellation,
+            )
+            .map_err(ReviewLifecycleError::git)?
+            .snapshot()
+            .clone()
         };
         Ok(ReviewUpdate {
-            update_available: current.base_revision != available.snapshot().base_revision
-                || current.head_revision != available.snapshot().head_revision,
+            update_available: current.base_revision != available.base_revision
+                || current.head_revision != available.head_revision,
             current_base_revision: current.base_revision,
             current_head_revision: current.head_revision,
-            available_base_revision: available.snapshot().base_revision.clone(),
-            available_head_revision: available.snapshot().head_revision.clone(),
+            available_base_revision: available.base_revision,
+            available_head_revision: available.head_revision,
         })
     }
 
     /// 刷新 Review；准备阶段可取消，开始改变 workspace 后必须激活或回滚到旧版本。
-    pub fn refresh(
+    pub async fn refresh(
         &self,
         review_id: &str,
-        evidence: RefreshEvidence,
+        confirmation: ConfirmedReviewUpdate,
         cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         self.begin_refresh(review_id)?;
-        let result = self.refresh_exclusive(review_id, evidence, cancellation);
+        let result = self
+            .refresh_exclusive(review_id, confirmation, cancellation)
+            .await;
         self.finish_refresh(review_id);
         result
     }
@@ -420,10 +422,10 @@ impl ReviewLifecycle {
     }
 
     /// 在刷新互斥区中执行准备、workspace 收敛、激活和必要回滚。
-    fn refresh_exclusive(
+    async fn refresh_exclusive(
         &self,
         review_id: &str,
-        evidence: RefreshEvidence,
+        confirmation: ConfirmedReviewUpdate,
         cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let current = self
@@ -435,61 +437,54 @@ impl ReviewLifecycle {
             .catalog
             .open_entry(current.repository_entry_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
-        let candidate = match evidence {
-            RefreshEvidence::Branch {
-                current_base_revision,
-                current_head_revision,
-                latest_base_revision,
-                latest_head_revision,
-            } => {
-                if current.base_revision != current_base_revision
-                    || current.head_revision != current_head_revision
-                {
-                    return Err(ReviewLifecycleError::StaleCurrent);
-                }
-                crate::change_content::local::fetch_selected_remote_refs(
+        if current.base_revision != confirmation.current_base_revision
+            || current.head_revision != confirmation.current_head_revision
+        {
+            return Err(ReviewLifecycleError::StaleCurrent);
+        }
+        let candidate = if let Some(metadata) = current.pull_request.as_ref() {
+            let available = self
+                .pull_requests
+                .resolve(
                     &repository_path,
-                    &current.base_ref,
-                    &current.head_ref,
+                    &pull_request_selection(metadata),
                     cancellation,
                 )
-                .map_err(ReviewLifecycleError::git)?;
-                let available = LocalOpenedReview::open_with_cancellation(
-                    &repository_path,
-                    &current.base_ref,
-                    &current.head_ref,
-                    cancellation,
-                )
-                .map_err(ReviewLifecycleError::git)?;
-                if available.snapshot().base_revision != latest_base_revision
-                    || available.snapshot().head_revision != latest_head_revision
-                {
-                    return Err(ReviewLifecycleError::SelectionMismatch(
-                        "Branch Selection 在确认后再次变化；请重新检查并确认新版本。".to_owned(),
-                    ));
-                }
-                if current.base_revision == latest_base_revision
-                    && current.head_revision == latest_head_revision
-                {
-                    return Ok(presentation_from_saved(current, Vec::new()));
-                }
-                self.catalog
-                    .save_refresh_snapshot(review_id, available.snapshot())
-                    .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
+                .await
+                .map_err(ReviewLifecycleError::pull_request)?;
+            require_confirmed_available(&confirmation, &available.snapshot, "Pull Request")?;
+            if current.base_revision == available.snapshot.base_revision
+                && current.head_revision == available.snapshot.head_revision
+            {
+                return Ok(presentation_from_saved(current, Vec::new()));
             }
-            RefreshEvidence::PullRequest { observation } => {
-                require_pull_request_identity(&current, &observation)?;
-                let (available, metadata) =
-                    calculate_pull_request_review(&repository_path, *observation, cancellation)?;
-                if current.base_revision == available.snapshot().base_revision
-                    && current.head_revision == available.snapshot().head_revision
-                {
-                    return Ok(presentation_from_saved(current, Vec::new()));
-                }
-                self.catalog
-                    .stage_pull_request_snapshot(&current, &metadata, available.snapshot())
-                    .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
+            self.catalog
+                .stage_pull_request_snapshot(&current, &available.metadata, &available.snapshot)
+                .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
+        } else {
+            crate::change_content::local::fetch_selected_remote_refs(
+                &repository_path,
+                &current.base_ref,
+                &current.head_ref,
+                cancellation,
+            )
+            .map_err(ReviewLifecycleError::git)?;
+            let available = LocalOpenedReview::open_with_cancellation(
+                &repository_path,
+                &current.base_ref,
+                &current.head_ref,
+                cancellation,
+            )
+            .map_err(ReviewLifecycleError::git)?;
+            require_confirmed_available(&confirmation, available.snapshot(), "Branch Selection")?;
+            if current.base_revision == confirmation.available_base_revision
+                && current.head_revision == confirmation.available_head_revision
+            {
+                return Ok(presentation_from_saved(current, Vec::new()));
             }
+            self.catalog
+                .save_refresh_snapshot(review_id, available.snapshot())
+                .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         };
 
         let workspace = self
@@ -710,82 +705,31 @@ fn presentation_from_saved(
     }
 }
 
-/// 验证 Pull Request 请求没有改变 durable Selection identity。
-fn require_pull_request_identity(
-    current: &SavedBranchReview,
-    observation: &PullRequestObservation,
-) -> Result<(), ReviewLifecycleError> {
-    let saved = current.pull_request.as_ref().ok_or_else(|| {
-        ReviewLifecycleError::SelectionMismatch(
-            "该 Review 不是 Pull Request Selection。".to_owned(),
-        )
-    })?;
-    if !saved.owner.eq_ignore_ascii_case(&observation.owner)
-        || !saved
-            .repository
-            .eq_ignore_ascii_case(&observation.repository)
-        || saved.number != observation.number
-    {
-        return Err(ReviewLifecycleError::SelectionMismatch(
-            "Pull Request Selection identity 与 durable Review 不一致。".to_owned(),
-        ));
+/// 从 durable metadata 恢复 Pull Request Selection identity。
+fn pull_request_selection(metadata: &PullRequestMetadata) -> PullRequestSelection {
+    PullRequestSelection {
+        repository: crate::github_discovery::GitHubRepository {
+            owner: metadata.owner.clone(),
+            name: metadata.repository.clone(),
+        },
+        number: metadata.number,
     }
-    Ok(())
 }
 
-/// 将 GitHub metadata 与 Core Git transport 收敛为固定候选 Snapshot。
-fn calculate_pull_request_review(
-    repository_path: &Path,
-    observation: PullRequestObservation,
-    cancellation: &CancellationToken,
-) -> Result<(LocalOpenedReview, PullRequestMetadata), ReviewLifecycleError> {
-    let repository = github_discovery::GitHubRepository {
-        owner: observation.owner.clone(),
-        name: observation.repository.clone(),
-    };
-    let remote = github_discovery::remote_names_for_repository(repository_path, &repository)
-        .map_err(ReviewLifecycleError::new)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            ReviewLifecycleError::new(format!(
-                "Git transport：找不到代表 base repository {}/{} 的 Git remote。",
-                repository.owner, repository.name
-            ))
-        })?;
-    let calculated = crate::change_content::local::fetch_pull_request_objects(
-        repository_path,
-        &remote,
-        observation.number,
-        &observation.base_ref,
-        &observation.base_revision,
-        &observation.head_revision,
-        cancellation,
-    )
-    .map_err(|error| ReviewLifecycleError::git(format!("Git transport：{error}")))?;
-    let metadata = PullRequestMetadata {
-        owner: observation.owner,
-        repository: observation.repository,
-        number: observation.number,
-        title: observation.title,
-        description: observation.description,
-        author: observation.author,
-        state: observation.state,
-        draft: observation.draft,
-        url: observation.url,
-        base_ref: observation.base_ref,
-        head_ref: observation.head_ref,
-        updated_at: Some(observation.updated_at),
-        synchronized_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| {
-                ReviewLifecycleError::new("系统时间早于 Unix epoch，无法保存 GitHub metadata。")
-            })?
-            .as_millis()
-            .try_into()
-            .map_err(|_| ReviewLifecycleError::new("系统时间超出可保存范围。"))?,
-    };
-    Ok((calculated, metadata))
+/// 拒绝用户确认后再次移动的 Review Selection。
+fn require_confirmed_available(
+    confirmation: &ConfirmedReviewUpdate,
+    available: &LocalSnapshot,
+    selection_name: &str,
+) -> Result<(), ReviewLifecycleError> {
+    if available.base_revision != confirmation.available_base_revision
+        || available.head_revision != confirmation.available_head_revision
+    {
+        return Err(ReviewLifecycleError::SelectionMismatch(format!(
+            "{selection_name} 在确认后再次变化；请重新检查并确认新版本。"
+        )));
+    }
+    Ok(())
 }
 
 /// 精确移除已验证归属的受管 workspace。

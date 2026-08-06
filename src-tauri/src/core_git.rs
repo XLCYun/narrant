@@ -23,14 +23,22 @@ impl CancellationToken {
     }
 
     /// 返回调用方是否已经请求取消。
-    fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
+}
+
+/// Core Git 失败的稳定类别；诊断文本不参与业务分支。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitCommandErrorKind {
+    Other,
+    Cancelled,
 }
 
 /// Core Git 命令失败，消息只用于诊断，不参与业务分支判断。
 #[derive(Debug)]
 pub struct GitCommandError {
+    kind: GitCommandErrorKind,
     message: String,
 }
 
@@ -38,8 +46,22 @@ impl GitCommandError {
     /// 构造带有可读诊断信息的 Core Git 错误。
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            kind: GitCommandErrorKind::Other,
             message: message.into(),
         }
+    }
+
+    /// 构造由调用方取消产生的稳定错误类别。
+    fn cancelled() -> Self {
+        Self {
+            kind: GitCommandErrorKind::Cancelled,
+            message: "Core Git 操作已取消".to_owned(),
+        }
+    }
+
+    /// 返回错误是否由合作式取消产生。
+    pub fn is_cancelled(&self) -> bool {
+        self.kind == GitCommandErrorKind::Cancelled
     }
 
     /// 返回可用于测试和界面诊断的错误消息。
@@ -116,7 +138,7 @@ impl GitProcessAdapter {
         let status = loop {
             if cancellation.is_cancelled() {
                 terminate_and_drain(&mut child, stdout_reader, stderr_reader)?;
-                return Err(GitCommandError::new("Core Git 操作已取消"));
+                return Err(GitCommandError::cancelled());
             }
             if started.elapsed() >= self.timeout {
                 terminate_and_drain(&mut child, stdout_reader, stderr_reader)?;

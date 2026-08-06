@@ -56,6 +56,76 @@ describe("Tauri Review application adapter", () => {
     }, signal);
   });
 
+  it("Pull Request lifecycle 只传 Selection identity 与确认 revisions", async () => {
+    const pullRequestSnapshot: ReviewSnapshot = {
+      ...snapshot,
+      pullRequest: {
+        owner: "octo-org",
+        repository: "octo-repo",
+        number: 42,
+        title: "Resolver seam",
+        description: "",
+        author: "octocat",
+        state: "open",
+        draft: false,
+        url: "https://github.com/octo-org/octo-repo/pull/42",
+        baseRef: "main",
+        headRef: "feature",
+        synchronizedAt: 1,
+      },
+    };
+    const update = {
+      updateAvailable: true,
+      currentBaseRevision: "base-1",
+      currentHeadRevision: "head-1",
+      availableBaseRevision: "base-2",
+      availableHeadRevision: "head-2",
+    };
+    const refreshed = { ...pullRequestSnapshot, snapshotId: "snapshot-2", headRevision: "head-2" };
+    const invokeCancellable = vi.fn()
+      .mockResolvedValueOnce(pullRequestSnapshot)
+      .mockResolvedValueOnce(update)
+      .mockResolvedValueOnce(refreshed);
+    const adapter = createTauriReviewApplicationAdapter({
+      invoke: vi.fn(),
+      invokeCancellable,
+    } as unknown as TypedTauriTransport);
+    const signal = new AbortController().signal;
+
+    await adapter.switchReview({
+      kind: "pull-request-selection",
+      repositoryEntryId: 17,
+      owner: "octo-org",
+      repository: "octo-repo",
+      number: 42,
+    }, null, signal);
+    await adapter.checkReviewUpdate(pullRequestSnapshot, signal);
+    await adapter.refreshReview(pullRequestSnapshot, {
+      currentBaseRevision: "base-1",
+      currentHeadRevision: "head-1",
+      availableBaseRevision: "base-2",
+      availableHeadRevision: "head-2",
+    }, signal);
+
+    expect(invokeCancellable).toHaveBeenNthCalledWith(1, "open_pull_request_review", {
+      repositoryEntryId: 17,
+      repository: { owner: "octo-org", name: "octo-repo" },
+      number: 42,
+    }, signal);
+    expect(invokeCancellable).toHaveBeenNthCalledWith(2, "check_pull_request_review_update", {
+      reviewId: "review-1",
+    }, signal);
+    expect(invokeCancellable).toHaveBeenNthCalledWith(3, "refresh_pull_request_review", {
+      reviewId: "review-1",
+      confirmation: {
+        currentBaseRevision: "base-1",
+        currentHeadRevision: "head-1",
+        availableBaseRevision: "base-2",
+        availableHeadRevision: "head-2",
+      },
+    }, signal);
+  });
+
   it("把 workspace 清理失败投影为 close result", async () => {
     const transport = {
       invoke: vi.fn()

@@ -122,7 +122,7 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
     updateAbort.current = abort;
     const identity = { reviewId: current.reviewId, snapshotId: current.snapshotId };
     setUpdate({ kind: "checking" });
-    void adapter.checkReviewUpdate(identity, abort.signal).then((available) => {
+    void adapter.checkReviewUpdate(current, abort.signal).then((available) => {
       const latest = snapshotRef.current;
       if (abort.signal.aborted || latest?.reviewId !== identity.reviewId
         || latest.snapshotId !== identity.snapshotId) return;
@@ -175,7 +175,8 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
   /** 显式刷新当前 Review，失败时保留旧 Snapshot 与 File Change。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
     const current = snapshotRef.current;
-    if (!current) return { kind: "unchanged" };
+    const confirmation = update.kind === "available" ? update.update : undefined;
+    if (!current || !confirmation) return { kind: "unchanged" };
     const abort = new AbortController();
     let finishRefresh: () => void = () => {};
     const settled = new Promise<void>((resolve) => { finishRefresh = resolve; });
@@ -184,7 +185,8 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
     setTransition({ kind: "refreshing" });
     try {
       const result = await adapter.refreshReview(
-        { reviewId: current.reviewId, snapshotId: current.snapshotId },
+        current,
+        confirmation,
         abort.signal,
       );
       if (result.kind === "unchanged") {
@@ -202,7 +204,7 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
       if (refreshOperation.current?.abort === abort) refreshOperation.current = undefined;
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
     }
-  }, [adapter, presentSnapshot]);
+  }, [adapter, presentSnapshot, update]);
 
   /** 关闭当前 Review；清理失败也不再暴露失效 Reader。 */
   const close = useCallback(async (): Promise<ReviewCloseResult> => {

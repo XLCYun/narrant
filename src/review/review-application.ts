@@ -42,10 +42,11 @@ export interface ReviewApplicationAdapter {
     current: ReviewIdentity | null,
     signal: AbortSignal,
   ): Promise<ReviewSnapshot>;
-  checkReviewUpdate(current: ReviewIdentity, signal: AbortSignal): Promise<ReviewUpdate | null>;
+  checkReviewUpdate(current: ReviewSnapshot, signal: AbortSignal): Promise<ReviewUpdate | null>;
   checkBranchSelectionUpdate(reviewId: string, signal: AbortSignal): Promise<BranchSelectionUpdate>;
   refreshReview(
-    current: ReviewIdentity,
+    current: ReviewSnapshot,
+    confirmation: ReviewUpdate,
     signal: AbortSignal,
   ): Promise<{ kind: "unchanged" } | { kind: "refreshed"; snapshot: ReviewSnapshot }>;
   readFileChange(

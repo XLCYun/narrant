@@ -1,4 +1,6 @@
 use super::*;
+use httpmock::prelude::*;
+use std::path::Path;
 use std::process::Command;
 
 #[test]
@@ -15,8 +17,8 @@ fn same_review_cannot_hold_two_refresh_leases() {
     lifecycle.begin_refresh("review-1").unwrap();
 }
 
-#[test]
-fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
+#[tokio::test]
+async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     let fixture = LifecycleFixture::new();
     let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
     let saved = fixture.save_current_review();
@@ -28,6 +30,7 @@ fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
             },
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
     let workspace = fixture
         .catalog
@@ -84,8 +87,8 @@ fn recovery_abandons_unactivated_candidate_without_adding_history() {
     );
 }
 
-#[test]
-fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
+#[tokio::test]
+async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review();
     fixture.catalog.activate_snapshot(&saved).unwrap();
@@ -97,6 +100,7 @@ fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
             },
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
     run_git(fixture.repository.path(), &["checkout", "-q", "topic"]);
     std::fs::write(fixture.repository.path().join("README.md"), "refreshed\n").unwrap();
@@ -105,24 +109,22 @@ fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
         &["commit", "-q", "-am", "refresh"],
     );
     let update = lifecycle
-        .check_update(
-            &saved.review_id,
-            UpdateSource::Branch,
-            &CancellationToken::default(),
-        )
+        .check_update(&saved.review_id, &CancellationToken::default())
+        .await
         .unwrap();
 
     let refreshed = lifecycle
         .refresh(
             &saved.review_id,
-            RefreshEvidence::Branch {
+            ConfirmedReviewUpdate {
                 current_base_revision: update.current_base_revision,
                 current_head_revision: update.current_head_revision,
-                latest_base_revision: update.available_base_revision,
-                latest_head_revision: update.available_head_revision,
+                available_base_revision: update.available_base_revision,
+                available_head_revision: update.available_head_revision,
             },
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
 
     assert_ne!(refreshed.snapshot_id, current.snapshot_id);
@@ -162,8 +164,8 @@ fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
     assert_eq!(content.after.as_deref(), Some("refreshed\n"));
 }
 
-#[test]
-fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
+#[tokio::test]
+async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review();
     fixture.catalog.activate_snapshot(&saved).unwrap();
@@ -175,12 +177,14 @@ fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
             },
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
     let cancellation = CancellationToken::default();
     cancellation.cancel();
 
     let error = lifecycle
-        .check_update(&saved.review_id, UpdateSource::Branch, &cancellation)
+        .check_update(&saved.review_id, &cancellation)
+        .await
         .unwrap_err();
 
     assert!(matches!(error, ReviewLifecycleError::Cancelled(_)));
@@ -202,8 +206,8 @@ fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     );
 }
 
-#[test]
-fn failed_target_materialization_keeps_current_review_readable() {
+#[tokio::test]
+async fn failed_target_materialization_keeps_current_review_readable() {
     let application_data = tempfile::TempDir::new().unwrap();
     let first_repository = test_repository_with_commit();
     let target_repository = test_repository_with_commit();
@@ -226,15 +230,19 @@ fn failed_target_materialization_keeps_current_review_readable() {
             },
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
     std::fs::remove_dir_all(target_repository.path()).unwrap();
 
-    let error = match lifecycle.present(
-        PresentReview::Saved {
-            review_id: target_saved.review_id,
-        },
-        &CancellationToken::default(),
-    ) {
+    let error = match lifecycle
+        .present(
+            PresentReview::Saved {
+                review_id: target_saved.review_id,
+            },
+            &CancellationToken::default(),
+        )
+        .await
+    {
         Ok(_) => panic!("目标 Review materialization 应失败"),
         Err(error) => error,
     };
@@ -252,6 +260,78 @@ fn failed_target_materialization_keeps_current_review_readable() {
         )
         .unwrap();
     assert_eq!(content.path, "README.md");
+}
+
+#[tokio::test]
+async fn pull_request_lifecycle_resolves_durable_selection_without_caller_observation() {
+    let fixture = LifecycleFixture::new();
+    let (base_revision, head_revision) = fixture.configure_pull_request_remote();
+    let server = MockServer::start();
+    let observation = server.mock(|when, then| {
+        when.method(GET).path("/repos/octo-org/octo-repo/pulls/42");
+        then.status(200).json_body(serde_json::json!({
+            "number": 42,
+            "title": "Lifecycle-owned resolution",
+            "body": "",
+            "user": { "login": "octocat" },
+            "state": "open",
+            "merged_at": null,
+            "draft": false,
+            "html_url": "https://github.com/octo-org/octo-repo/pull/42",
+            "updated_at": "2026-08-06T00:00:00Z",
+            "base": { "ref": "base", "sha": base_revision },
+            "head": { "ref": "topic", "sha": head_revision }
+        }));
+    });
+    let lifecycle = ReviewLifecycle::with_pull_request_resolver(
+        fixture.catalog.clone(),
+        Arc::new(PullRequestSelectionResolver::anonymous(server.base_url())),
+    );
+
+    let opened = lifecycle
+        .present(
+            PresentReview::PullRequest {
+                repository_entry_id: fixture.repository_entry_id,
+                selection: PullRequestSelection {
+                    repository: crate::github_discovery::GitHubRepository {
+                        owner: "octo-org".to_owned(),
+                        name: "octo-repo".to_owned(),
+                    },
+                    number: 42,
+                },
+            },
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap();
+    let update = lifecycle
+        .check_update(&opened.review_id, &CancellationToken::default())
+        .await
+        .unwrap();
+    let error = match lifecycle
+        .refresh(
+            &opened.review_id,
+            ConfirmedReviewUpdate {
+                current_base_revision: update.current_base_revision,
+                current_head_revision: update.current_head_revision,
+                available_base_revision: "changed-after-confirmation".to_owned(),
+                available_head_revision: update.available_head_revision,
+            },
+            &CancellationToken::default(),
+        )
+        .await
+    {
+        Ok(_) => panic!("确认后的 Pull Request 移动应拒绝刷新"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        opened.pull_request.unwrap().title,
+        "Lifecycle-owned resolution"
+    );
+    assert!(!update.update_available);
+    assert!(matches!(error, ReviewLifecycleError::SelectionMismatch(_)));
+    assert_eq!(observation.hits(), 3);
 }
 
 /// 生命周期测试所需的应用目录、Repository Catalog 与 Git repository。
@@ -287,6 +367,34 @@ impl LifecycleFixture {
             self.repository_entry_id,
             self.repository.path(),
         )
+    }
+
+    /// 把测试 repository 配成可通过 GitHub identity 匹配的 PR base remote。
+    fn configure_pull_request_remote(&self) -> (String, String) {
+        let base_revision = git_text(self.repository.path(), &["rev-parse", "refs/heads/base"]);
+        let head_revision = git_text(self.repository.path(), &["rev-parse", "refs/heads/topic"]);
+        run_git(
+            self.repository.path(),
+            &["update-ref", "refs/pull/42/head", &head_revision],
+        );
+        run_git(
+            self.repository.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/octo-org/octo-repo.git",
+            ],
+        );
+        run_git(
+            self.repository.path(),
+            &[
+                "config",
+                &format!("url.{}.insteadOf", self.repository.path().display()),
+                "https://github.com/octo-org/octo-repo.git",
+            ],
+        );
+        (base_revision, head_revision)
     }
 }
 
