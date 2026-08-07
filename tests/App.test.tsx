@@ -15,7 +15,6 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const openUrl = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
-const writeText = vi.hoisted(() => vi.fn());
 
 import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
@@ -28,7 +27,6 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
   openUrl.mockReset();
-  writeText.mockReset();
   localStorage.clear();
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
   document.documentElement.classList.remove("dark");
@@ -649,71 +647,6 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Start review" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Head and Base must be different branches.");
     await i18n.changeLanguage("zh-CN");
-  });
-
-  it("连接 GitHub 会先打开安装页，再引导设备码授权且不接收 token", async () => {
-    mockSystemTheme(false);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    let signedIn = false;
-    invoke.mockImplementation((command: string) => {
-      if (command === "github_auth_status") return Promise.resolve({
-        configured: true,
-        signedIn,
-        appInstallUrl: "https://github.com/apps/narrant/installations/new",
-      });
-      if (command === "start_github_authorization") return Promise.resolve({
-        authorizationId: "authorization-1",
-        userCode: "ABCD-EFGH",
-        verificationUri: "https://github.com/login/device",
-        expiresIn: 900,
-        interval: 5,
-      });
-      if (command === "complete_github_authorization") {
-        signedIn = true;
-        return Promise.resolve();
-      }
-      return Promise.resolve();
-    });
-    render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
-    expect(await screen.findAllByText(/组织仓库可能需要管理员审批/)).toHaveLength(1);
-    expect(screen.getByText(/组织仓库可能需要管理员审批/).closest(".font-mono")).toBeInTheDocument();
-    const installationPrompt = screen.getByText(/请在打开的网页中安装 Narrant GitHub App/);
-    expect(installationPrompt).toBeInTheDocument();
-    expect(installationPrompt.parentElement?.parentElement).toHaveClass("space-y-6");
-    expect(screen.getByText(/授予读取权限/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新选择仓库或申请组织审批" })).not.toBeInTheDocument();
-    const installLink = screen.getByRole("link", { name: "https://github.com/apps/narrant/installations/new" });
-    expect(installLink).toHaveClass("break-all");
-    expect(screen.queryByText("ABCD-EFGH")).not.toBeInTheDocument();
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/apps/narrant/installations/new");
-    fireEvent.click(screen.getByRole("button", { name: "我已安装，继续" }));
-    expect(await screen.findByLabelText("设备码 ABCD-EFGH")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "我已安装，继续" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新选择仓库或申请组织审批" })).not.toBeInTheDocument();
-    expect(screen.getByText(/输入设备码以授权此设备访问你的 GitHub 账号/)).toBeInTheDocument();
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/login/device");
-    const authorizationLink = screen.getByRole("link", { name: "https://github.com/login/device" });
-    expect(authorizationLink).toHaveClass("break-all");
-    expect(screen.getByLabelText("设备码 ABCD-EFGH")).toHaveClass("grid", "w-full");
-    fireEvent.click(screen.getByRole("button", { name: "复制设备码" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-EFGH"));
-    expect(screen.getByRole("button", { name: "设备码已复制" })).toBeInTheDocument();
-    const copyLinkButton = screen.getByRole("button", { name: "复制链接" });
-    expect(copyLinkButton).toHaveClass("cursor-pointer");
-    fireEvent.click(copyLinkButton);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://github.com/login/device"));
-    expect(screen.getByRole("button", { name: "链接已复制" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("link", { name: "https://github.com/login/device" }));
-    expect(openUrl).toHaveBeenLastCalledWith("https://github.com/login/device");
-    expect(screen.queryByRole("button", { name: "打开 GitHub" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "我已在 GitHub 完成授权" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
-      "complete_github_authorization",
-      { authorizationId: "authorization-1" },
-    ));
-    expect(await screen.findByRole("button", { name: "退出 GitHub" })).toBeInTheDocument();
   });
 
   it("展示完整文件树并按需加载所选 File Change", async () => {

@@ -102,6 +102,12 @@ The single GitHub user currently authorized to act through Narrant's GitHub App.
 It is an external authorization identity, not a Narrant-owned user account.
 _Avoid_: Narrant Account, User Profile
 
+**Pull Request Discovery**:
+The current observation of accessible **Pull Requests** grouped by the GitHub repositories
+represented by one **Repository Entry**'s remotes. It may be anonymous or use the current
+**GitHub Identity**.
+_Avoid_: PR list, Repository GitHub association
+
 **UI Icon**:
 A compact visual symbol that communicates an interface action, object, or status.
 It excludes product and third-party logos, application icons, avatars, and
@@ -141,6 +147,8 @@ _Avoid_: Repository Entry, user worktree
 - Narrant has at most one current **GitHub Identity**
 - A **GitHub Identity** may be represented by cached public profile information while
   GitHub is temporarily unavailable, but signing out removes that representation
+- A **GitHub Identity** change invalidates the current **Pull Request Discovery**, but
+  navigating between **Repository Entries** does not refresh the **GitHub Identity**
 - Moving a local clone does not create a new **Repository Entry** when the user
   explicitly relocates its saved path
 - A **Repository Entry** may discover pull requests from multiple GitHub repositories

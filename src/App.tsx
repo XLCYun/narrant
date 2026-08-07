@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
-import { Copy01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -13,9 +11,9 @@ import { RepositoryOverview } from "@/components/repository-overview";
 import { BranchRelation } from "@/components/branch-relation";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
+import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { Spinner } from "@/components/ui/spinner";
 import { Toaster } from "@/components/ui/sonner";
-import { Icon } from "@/components/ui/icon";
 import {
   ReviewReader,
   type DiffMode,
@@ -29,8 +27,8 @@ import {
   tauriTransport,
 } from "@/infrastructure/tauri/transport";
 import type { BranchSelectionUpdate } from "@/review/review-application";
-import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
-import type { RepositoryEntry } from "@/repository/repository-application";
+import { useGitHubIdentityLifecycle } from "@/github/use-github-identity-lifecycle";
+import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
@@ -78,23 +76,23 @@ export function App() {
   const repositoryContext = useRepositoryEntryContext(repositoryApplication, { enabled: catalogRuntimeEnabled });
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
   const appShell = useAppShellNavigation(repositoryContext, reviewLifecycle);
+  const selectedRepository = repositoryContext.current?.repository;
+  const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: catalogRuntimeEnabled });
+  const pullRequestDiscoveryLifecycle = usePullRequestDiscoveryLifecycle(pullRequestDiscovery, {
+    enabled: Boolean(selectedRepository),
+    repositoryEntryId: selectedRepository?.id,
+    signedIn: githubIdentity.status?.signedIn ?? false,
+  });
   const snapshot = reviewLifecycle.reader?.snapshot;
   const refreshingReview = reviewLifecycle.reader?.transition.kind === "refreshing";
   const [repositoryPath, setRepositoryPath] = useState("");
-  const [pullRequestGroups, setPullRequestGroups] = useState<PullRequestGroup[]>([]);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState<string>();
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [branchSelectionCheck, setBranchSelectionCheck] = useState<BranchSelectionCheck>({ status: "idle" });
   const [showBranchCheckingMessage, setShowBranchCheckingMessage] = useState(false);
   const branchSelectionCheckId = useRef(0);
   const [error, setError] = useState("");
-  const [authStatus, setAuthStatus] = useState<GitHubAuthStatus>();
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
-  const [deviceAuthorization, setDeviceAuthorization] = useState<DeviceAuthorization>();
-  const [authorizing, setAuthorizing] = useState(false);
-  const [copiedValue, setCopiedValue] = useState<"device-code" | "authorization-url">();
   const [diffMode, setDiffMode] = useState<DiffMode>(() => (
     localStorage.getItem(REVIEW_DIFF_MODE_KEY) === "inline" ? "inline" : "side-by-side"
   ));
@@ -105,7 +103,6 @@ export function App() {
     : 24;
   const repositoryEntries = repositoryContext.catalog.repositories;
   const recentReviews = repositoryContext.catalog.recentReviews;
-  const selectedRepository = repositoryContext.current?.repository;
   const savedReviews = repositoryContext.current?.savedReviews ?? [];
   const repositoryReviews = repositoryContext.current?.reviews ?? [];
   const pendingRepository = appShell.trust?.repository;
@@ -118,6 +115,11 @@ export function App() {
   const currentRef = branchState.kind === "ready" ? branchState.value.currentRef : "";
   const branchesReloading = branchState.kind === "loading";
   const branchReloadError = branchState.kind === "failed" ? branchState.error : "";
+  const authStatus = githubIdentity.status;
+  const pullRequestGroups = pullRequestDiscoveryLifecycle.groups;
+  const discoveryLoading = pullRequestDiscoveryLifecycle.transition.kind === "loading"
+    || pullRequestDiscoveryLifecycle.transition.kind === "refreshing";
+  const discoveryError = pullRequestDiscoveryLifecycle.error?.detail;
   const visibleError = error || appShell.sidebar.error || "";
   const reviewOpeningKey = appShell.transition.kind === "opening-review" ? appShell.transition.key : undefined;
 
@@ -151,13 +153,6 @@ export function App() {
     setHeadRef(branchState.value.currentRef);
   }, [branchState]);
 
-  useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    void githubOAuthApplication.loadStatus()
-      .then(setAuthStatus)
-      .catch(() => setAuthStatus(undefined));
-  }, [githubOAuthApplication]);
-
   /** 验证并持久化用户输入的具体本地 clone。 */
   async function registerRepository() {
     setError("");
@@ -177,30 +172,11 @@ export function App() {
     return result;
   }
 
-  /** 使用当前匿名或已刷新凭据重新加载各 GitHub repository 的独立结果。 */
-  async function loadPullRequestGroups(entry: RepositoryEntry) {
-    setDiscoveryError(undefined);
-    setDiscoveryLoading(true);
-    try {
-      setPullRequestGroups(await pullRequestDiscovery.discover(entry.id));
-    } catch (reason) {
-      setDiscoveryError(String(reason));
-    } finally {
-      setDiscoveryLoading(false);
-    }
-  }
-
   /** Repository context 提交后启动独立的页面数据读取。 */
   useEffect(() => {
     if (!selectedRepository) return;
     setRepositoryPath(selectedRepository.canonicalPath);
-    setPullRequestGroups([]);
-    setDiscoveryError(undefined);
-    void loadPullRequestGroups(selectedRepository);
     if (!testHarnessEnabled) void repositoryContext.reloadBranches();
-    void Promise.resolve(githubOAuthApplication.loadStatus())
-      .then(setAuthStatus)
-      .catch(() => setAuthStatus(undefined));
     // 页面数据只在已提交的 Repository Entry identity 改变后重新读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepository?.id]);
@@ -252,167 +228,39 @@ export function App() {
   /** 启动连接向导，并在已配置时将用户带到 GitHub App 安装页。 */
   async function connectGitHub() {
     setError("");
-    setCopiedValue(undefined);
     if (!testHarnessEnabled) setGitHubDialogOpen(true);
-    try {
-      const status = await githubOAuthApplication.loadStatus();
-      setAuthStatus(status);
-      if (status.configured && !status.signedIn && status.appInstallUrl) {
-        await openUrl(status.appInstallUrl);
-      }
-    } catch (reason) {
-      setError(String(reason));
-    }
-  }
-
-  async function startGitHubAuthorization() {
-    setError("");
-    setCopiedValue(undefined);
-    setAuthorizing(true);
-    try {
-      const authorization = await githubOAuthApplication.beginAuthorization();
-      setDeviceAuthorization(authorization);
-      await openUrl(authorization.verificationUri);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setAuthorizing(false);
-    }
-  }
-
-  /** 将用户主动选择的授权信息复制到系统剪贴板，并反馈复制结果。 */
-  async function copyAuthorizationValue(value: string, copied: "device-code" | "authorization-url") {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedValue(copied);
-    } catch (reason) {
-      toast.error(t("transientError"), { description: String(reason) });
-    }
-  }
-
-  async function completeGitHubAuthorization() {
-    if (!deviceAuthorization) return;
-    setError("");
-    setAuthorizing(true);
-    try {
-      const status = await githubOAuthApplication.completeAuthorization(deviceAuthorization.authorizationId);
-      setAuthStatus(status);
-      setDeviceAuthorization(undefined);
-      setGitHubDialogOpen(false);
-      if (selectedRepository) await loadPullRequestGroups(selectedRepository);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setAuthorizing(false);
+    if (authStatus?.configured && !authStatus.signedIn && authStatus.appInstallUrl) {
+      await openUrl(authStatus.appInstallUrl);
     }
   }
 
   async function signOutGitHub() {
-    setError("");
-    const result = await githubOAuthApplication.signOut();
-    if (result.kind === "signed-out") {
-      setAuthStatus(result.status);
-      setDeviceAuthorization(undefined);
-      if (selectedRepository) await loadPullRequestGroups(selectedRepository);
-      return;
-    }
-    if (result.status) setAuthStatus(result.status);
-    setError(result.detail);
+    await githubIdentity.signOut();
   }
 
-  /** 按安装与账号授权两个独立步骤渲染 GitHub 连接向导。 */
+  /** 复用独立的 GitHub Identity 展示适配器，不在 App 重建 lifecycle 流程。 */
   function renderGitHubControls() {
-    return <div className="min-w-0 space-y-3 font-mono text-sm">
-      {!authStatus && <Button variant="ghost" className="w-full justify-start" onClick={connectGitHub}>{t("github:connect")}</Button>}
-      {authStatus?.signedIn && <Button variant="ghost" className="w-full justify-start" onClick={signOutGitHub}>{t("github:signOut")}</Button>}
-      {authStatus && !authStatus.signedIn && (!authStatus.configured
-        ? <p className="px-2 text-xs text-muted-foreground">{t("github:unconfigured")}</p>
-        : deviceAuthorization
-          ? <div className="min-w-0 space-y-5 py-2">
-            <p className="text-center leading-6">
-              {t("github:authorizationPromptBefore")}{" "}
-              <span>
-                <a
-                  className="break-all underline underline-offset-4 hover:text-foreground"
-                  href={deviceAuthorization.verificationUri}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    void openUrl(deviceAuthorization.verificationUri);
-                  }}
-                >
-                  {deviceAuthorization.verificationUri}
-                </a>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="ml-1 inline-flex cursor-pointer align-middle"
-                  aria-label={copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
-                  onClick={() => void copyAuthorizationValue(deviceAuthorization.verificationUri, "authorization-url")}
-                >
-                  <Icon icon={Copy01Icon} />
-                </Button>
-              </span>{" "}
-              {t("github:authorizationPromptAfter")}
-            </p>
-            <div
-              aria-label={`${t("github:deviceCode")} ${deviceAuthorization.userCode}`}
-              className="grid w-full grid-cols-[repeat(4,minmax(0,1fr))_auto_repeat(4,minmax(0,1fr))] items-center gap-1.5 sm:gap-2"
-            >
-              {Array.from(deviceAuthorization.userCode).map((character, index) => (
-                character === "-"
-                  ? <span key={`${character}-${index}`} aria-hidden className="px-0.5 text-center text-2xl font-bold">-</span>
-                  : <span
-                    key={`${character}-${index}`}
-                    aria-hidden
-                    className="flex aspect-square min-w-0 items-center justify-center rounded-md border bg-input/20 text-xl font-bold"
-                  >
-                    {character}
-                  </span>
-              ))}
-            </div>
-            <Button variant="outline" className="w-full" onClick={() => void copyAuthorizationValue(deviceAuthorization.userCode, "device-code")}>
-              {copiedValue === "device-code" ? t("github:deviceCodeCopied") : t("github:copyDeviceCode")}
-            </Button>
-            <Button className="w-full" disabled={authorizing} onClick={completeGitHubAuthorization}>{t("github:authorizationComplete")}</Button>
-          </div>
-          : <div className="space-y-6">
-          {authStatus.appInstallUrl && <div className="space-y-3 text-center">
-            <p className="leading-6">
-              <a
-                className="break-all text-foreground underline underline-offset-4"
-                href={authStatus.appInstallUrl}
-                onClick={(event) => {
-                  event.preventDefault();
-                  void openUrl(authStatus.appInstallUrl!);
-                }}
-              >
-                {authStatus.appInstallUrl}
-              </a>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="ml-1 inline-flex cursor-pointer align-middle"
-                aria-label={copiedValue === "authorization-url" ? t("github:linkCopied") : t("github:copyLink")}
-                onClick={() => void copyAuthorizationValue(authStatus.appInstallUrl!, "authorization-url")}
-              >
-                <Icon icon={Copy01Icon} />
-              </Button>
-            </p>
-            <p className="leading-6 text-muted-foreground">{t("github:installHelp")}</p>
-          </div>}
-          <Button className="w-full" disabled={authorizing} onClick={startGitHubAuthorization}>{t("github:installedContinue")}</Button>
-        </div>)}
-    </div>;
+    return <GitHubAuthorizationControls
+      identity={githubIdentity}
+      onConnect={() => void connectGitHub()}
+      onAuthorized={() => setGitHubDialogOpen(false)}
+    />;
   }
 
   /** 在主侧栏和旧布局中复用同一个 GitHub Identity 全局入口。 */
   function renderGitHubIdentityEntry(className = "h-auto min-h-12 w-full justify-start py-2") {
+    const entryError = githubIdentity.error?.operation === "load-status"
+      || githubIdentity.error?.operation === "sign-out"
+      ? githubIdentity.error
+      : undefined;
     return <GitHubIdentityEntry
       className={className}
       signedIn={authStatus?.signedIn ?? false}
       identity={authStatus?.identity}
+      error={entryError?.detail}
       onConnect={() => void connectGitHub()}
       onSignOut={() => void signOutGitHub()}
+      onRetry={() => void (entryError?.operation === "sign-out" ? signOutGitHub() : githubIdentity.retry())}
     />;
   }
 
@@ -560,7 +408,7 @@ export function App() {
         discoveryLoading={discoveryLoading}
         discoveryError={discoveryError}
         githubConnected={authStatus?.signedIn ?? false}
-        onRetryDiscovery={() => void loadPullRequestGroups(selectedRepository)}
+        onRetryDiscovery={() => void pullRequestDiscoveryLifecycle.retry()}
         onConnectGitHub={() => void connectGitHub()}
         onOpenSavedReview={(review) => void openSavedReview(review)}
         onOpenReview={(review) => void navigateToReview(review)}

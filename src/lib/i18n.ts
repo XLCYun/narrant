@@ -100,6 +100,7 @@ export const resources = {
     },
     github: {
       connect: "连接 GitHub", connected: "GitHub 已连接", signOut: "退出 GitHub",
+      retryStatus: "重试 GitHub 状态", retryAction: "重试 GitHub 操作",
       unconfigured: "此构建未配置 GitHub App；公开 Pull Request 仍可匿名发现。",
       installHelp: "请在打开的网页中安装 Narrant GitHub App，并为目标仓库授予读取权限（组织仓库可能需要管理员审批）",
       installedContinue: "我已安装，继续", deviceCode: "设备码",
@@ -161,6 +162,7 @@ export const resources = {
     },
     github: {
       connect: "Connect GitHub", connected: "GitHub connected", signOut: "Sign out of GitHub",
+      retryStatus: "Retry GitHub status", retryAction: "Retry GitHub action",
       unconfigured: "This build has no GitHub App configured; public Pull Requests remain available anonymously.",
       installHelp: "Install the Narrant GitHub App with repository read access in the opened webpage (organization repositories may require administrator approval).",
       installedContinue: "Installed, continue", deviceCode: "Device code",

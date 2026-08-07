@@ -4,12 +4,15 @@ import { createRoot } from "react-dom/client";
 import "@/index.css";
 import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
 import { FileChangeLoading } from "@/components/file-change-loading";
+import { GitHubIdentityEntry } from "@/components/github-identity-entry";
+import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
 import type { ReviewSummary } from "@/lib/review-types";
+import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -113,6 +116,51 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
   />;
 }
 
+/** 预览全局 GitHub Identity 入口的正常与可恢复错误状态。 */
+function GitHubIdentityPreview({ error = false, signedIn = false }: { error?: boolean; signedIn?: boolean }) {
+  return <div className="w-64 rounded-xl border bg-background p-3 shadow-sm">
+    <GitHubIdentityEntry
+      className="h-auto min-h-12 w-full justify-start py-2"
+      signedIn={signedIn}
+      identity={signedIn ? { id: 42, login: "octocat", name: "Monalisa", avatarPath: null } : undefined}
+      error={error ? "credential store unavailable" : undefined}
+      onConnect={() => undefined}
+      onSignOut={() => undefined}
+      onRetry={() => undefined}
+    />
+  </div>;
+}
+
+/** 通过 lifecycle interface 的代表性数据预览 GitHub 授权向导。 */
+function GitHubAuthorizationPreview({ deviceFlow = false }: { deviceFlow?: boolean }) {
+  const authorization = deviceFlow ? {
+    authorizationId: "preview-authorization",
+    userCode: "ABCD-EFGH",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+    interval: 5,
+  } : undefined;
+  const identity: GitHubIdentityLifecycleBinding = {
+    status: {
+      configured: true,
+      signedIn: false,
+      appInstallUrl: "https://github.com/apps/narrant/installations/new",
+      identity: null,
+    },
+    authorization,
+    transition: { kind: "stable" },
+    beginAuthorization: async () => authorization
+      ? { kind: "started", authorization }
+      : { kind: "failed" },
+    completeAuthorization: async () => ({ kind: "authorized" }),
+    signOut: async () => ({ kind: "signed-out" }),
+    retry: async () => undefined,
+  };
+  return <div className="mx-auto w-full max-w-lg rounded-xl border bg-background p-6 shadow-sm">
+    <GitHubAuthorizationControls identity={identity} onConnect={() => undefined} />
+  </div>;
+}
+
 const readerSnapshot: ReviewReaderSnapshot = {
   reviewId: "review-reader-preview",
   snapshotId: "snapshot-reader-preview",
@@ -191,6 +239,22 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  "github-authorization": {
+    label: "GitHub 授权",
+    scenarios: {
+      install: { label: "安装 GitHub App", render: () => <GitHubAuthorizationPreview /> },
+      "device-flow": { label: "Device Flow", render: () => <GitHubAuthorizationPreview deviceFlow /> },
+    },
+  },
+  "github-identity": {
+    label: "GitHub Identity",
+    scenarios: {
+      default: { label: "未连接", render: () => <GitHubIdentityPreview /> },
+      error: { label: "状态读取失败", render: () => <GitHubIdentityPreview error /> },
+      "signed-in": { label: "已连接", render: () => <GitHubIdentityPreview signedIn /> },
+      "signed-in-error": { label: "退出失败", render: () => <GitHubIdentityPreview signedIn error /> },
+    },
+  },
   "branch-selector": {
     label: "分支选择器",
     scenarios: {

@@ -18,6 +18,7 @@ export type DeviceAuthorization = {
 /** GitHub App OAuth 与当前 GitHub Identity 的应用 interface。 */
 export interface GitHubOAuthApplicationAdapter {
   loadStatus(): Promise<GitHubAuthStatus>;
+  refreshIdentity(): Promise<GitHubIdentity>;
   beginAuthorization(): Promise<DeviceAuthorization>;
   completeAuthorization(authorizationId: string): Promise<GitHubAuthStatus>;
   signOut(): Promise<

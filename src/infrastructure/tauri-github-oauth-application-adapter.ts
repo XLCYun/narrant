@@ -4,19 +4,14 @@ import type { GitHubOAuthApplicationAdapter } from "@/github/github-oauth-applic
 export function createTauriGitHubOAuthApplicationAdapter(
   transport: TypedTauriTransport = tauriTransport,
 ): GitHubOAuthApplicationAdapter {
-  async function loadStatus() {
-    const status = await transport.invoke("github_auth_status", {});
-    if (!status.signedIn) return status;
-    try {
-      const identity = await transport.invoke("refresh_github_identity", {});
-      return { ...status, identity };
-    } catch {
-      return status;
-    }
-  }
-
   return {
-    loadStatus,
+    loadStatus() {
+      return transport.invoke("github_auth_status", {});
+    },
+
+    refreshIdentity() {
+      return transport.invoke("refresh_github_identity", {});
+    },
 
     beginAuthorization() {
       return transport.invoke("start_github_authorization", {});
@@ -24,7 +19,7 @@ export function createTauriGitHubOAuthApplicationAdapter(
 
     async completeAuthorization(authorizationId) {
       await transport.invoke("complete_github_authorization", { authorizationId });
-      return loadStatus();
+      return transport.invoke("github_auth_status", {});
     },
 
     async signOut() {
