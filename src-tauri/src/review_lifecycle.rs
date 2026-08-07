@@ -349,6 +349,39 @@ impl ReviewLifecycle {
         result
     }
 
+    /// 物化 durable Review 后刷新；刷新失败时关闭刚物化的运行时与 Workspace。
+    pub async fn reopen_and_refresh(
+        &self,
+        review_id: &str,
+        confirmation: ConfirmedReviewUpdate,
+        cancellation: &CancellationToken,
+    ) -> Result<ReviewPresentation, ReviewLifecycleError> {
+        self.present(
+            PresentReview::Saved {
+                review_id: review_id.to_owned(),
+            },
+            cancellation,
+        )
+        .await?;
+        match self.refresh(review_id, confirmation, cancellation).await {
+            Ok(presentation) => Ok(presentation),
+            Err(error) => {
+                let cleanup = self.close(review_id);
+                match cleanup {
+                    Ok(CloseOutcome {
+                        workspace_cleanup: WorkspaceCleanup::Deferred(cleanup_error),
+                    }) => Err(ReviewLifecycleError::new(format!(
+                        "{error}；Review 已关闭，但 Workspace 清理已延后：{cleanup_error}"
+                    ))),
+                    Err(cleanup_error) => Err(ReviewLifecycleError::new(format!(
+                        "{error}；关闭失败：{cleanup_error}"
+                    ))),
+                    Ok(_) => Err(error),
+                }
+            }
+        }
+    }
+
     /// 从已激活的 current Snapshot 读取单个 File Change 内容。
     pub async fn read_file_change(
         &self,

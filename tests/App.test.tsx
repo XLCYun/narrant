@@ -613,7 +613,7 @@ describe("App", () => {
       });
       if (command === "check_branch_review_updates") return Promise.resolve(update);
       if (command === "reopen_review") return Promise.resolve(snapshot("snapshot-1", "base-1", "head-1"));
-      if (command === "refresh_branch_review") return Promise.resolve(snapshot("snapshot-2", "base-2", "head-2"));
+      if (command === "reopen_and_refresh_branch_review") return Promise.resolve(snapshot("snapshot-2", "base-2", "head-2"));
       return Promise.resolve();
     });
     render(<App />);
@@ -623,12 +623,11 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     fireEvent.click(await screen.findByRole("button", { name: "更新并继续审核" }));
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-42" }));
-    expect(invoke).toHaveBeenCalledWith("refresh_branch_review", {
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_and_refresh_branch_review", {
       operationId: expect.any(String),
       reviewId: "review-42",
       confirmation: update,
-    });
+    }));
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/head-2.*base-2/s);
   });
 

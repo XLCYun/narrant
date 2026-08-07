@@ -2,7 +2,7 @@ import { StrictMode, type ReactNode, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import "@/index.css";
-import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
+import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
 import type { ReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
+import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -44,17 +45,23 @@ function BranchSelectorPreview({
   initialBase = "refs/remotes/origin/main",
   currentRef = "refs/heads/release",
   action = "start",
+  continuationState,
   opening = false,
 }: {
   refs?: string[];
   initialHead?: string;
   initialBase?: string;
   currentRef?: string;
-  action?: BranchSelectorAction;
+  action?: Extract<BranchSelectionContinuationBinding["state"], { kind: "ready" }>["action"];
+  continuationState?: BranchSelectionContinuationBinding["state"];
   opening?: boolean;
 }) {
   const [headRef, setHeadRef] = useState(initialHead);
   const [baseRef, setBaseRef] = useState(initialBase);
+  const continuation: BranchSelectionContinuationBinding = {
+    state: continuationState ?? { kind: "ready", action },
+    submit: async () => ({ kind: "ignored" }),
+  };
 
   return <BranchReviewSelector
     refs={refs}
@@ -62,13 +69,12 @@ function BranchSelectorPreview({
     defaultRef="refs/remotes/origin/main"
     headRef={headRef}
     baseRef={baseRef}
-    action={action}
+    continuation={continuation}
     opening={opening}
     reviewNavigationBusy={opening}
     onHeadChange={setHeadRef}
     onBaseChange={setBaseRef}
     onReload={() => undefined}
-    onSubmit={() => undefined}
   />;
 }
 
@@ -279,7 +285,15 @@ const previews: Record<string, PreviewDefinition> = {
       },
       update: {
         label: "检测到更新",
-        render: () => <BranchSelectorPreview action="update" />,
+        render: () => <BranchSelectorPreview action="refresh" />,
+      },
+      checking: {
+        label: "正在检查更新",
+        render: () => <BranchSelectorPreview continuationState={{ kind: "checking", showMessage: true }} />,
+      },
+      fallback: {
+        label: "检查失败降级",
+        render: () => <BranchSelectorPreview action="fallback" />,
       },
       opening: {
         label: "正在打开 Review",

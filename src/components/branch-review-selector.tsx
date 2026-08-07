@@ -20,9 +20,7 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-
-/** 描述分支选择器当前应提供的主操作及其降级状态。 */
-export type BranchSelectorAction = "start" | "continue" | "invalid" | "checking" | "update" | "fallback";
+import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 
 /** 分支审核选择器所需的仓库状态与用户操作回调。 */
 type Props = {
@@ -31,8 +29,7 @@ type Props = {
   defaultRef: string;
   headRef: string;
   baseRef: string;
-  action: BranchSelectorAction;
-  showCheckingMessage?: boolean;
+  continuation: BranchSelectionContinuationBinding;
   opening?: boolean;
   reviewNavigationBusy?: boolean;
   reloading?: boolean;
@@ -40,7 +37,6 @@ type Props = {
   onHeadChange: (ref: string) => void;
   onBaseChange: (ref: string) => void;
   onReload: () => void;
-  onSubmit: () => void;
 };
 
 /** 可搜索分支选择器中的一个稳定分组。 */
@@ -244,6 +240,8 @@ function BranchCombobox(props: BranchComboboxProps) {
 /** 提供创建或继续本地 Branch Selection 的任务面板。 */
 export function BranchReviewSelector(props: Props) {
   const { t } = useTranslation();
+  const continuationState = props.continuation.state;
+  const action = continuationState.kind === "ready" ? continuationState.action : continuationState.kind;
   const selectionMissing = !props.headRef || !props.baseRef;
   const selectedRemoteBranches = [...new Set([props.headRef, props.baseRef]
     .filter((ref) => ref.startsWith("refs/remotes/"))
@@ -274,21 +272,21 @@ export function BranchReviewSelector(props: Props) {
       <BranchCombobox role="base" refs={props.refs} currentRef={props.currentRef} defaultRef={props.defaultRef} value={props.baseRef} onValueChange={props.onBaseChange} />
     </div>
     <div className="mt-5 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-      {props.action === "invalid"
+      {action === "invalid"
         ? <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("common:sameBranchSelection")}</p>
-        : props.action === "fallback"
+        : action === "fallback"
           ? <div role="status" className="text-sm text-amber-700 dark:text-amber-300">
             <p>{selectedRemoteBranches
               ? t("catalog:remoteUpdateCheckFailed", { branch: selectedRemoteBranches })
               : t("catalog:branchUpdateCheckFailed")}</p>
             <p className="mt-1">{t("catalog:reviewMayBeStale")}</p>
           </div>
-        : props.action === "update"
+        : action === "refresh"
           ? <div role="status" className="text-sm">
             <p className="font-medium">{t("catalog:branchUpdateAvailable")}</p>
             <p className="mt-1 text-muted-foreground">{t("catalog:branchUpdateDescription")}</p>
           </div>
-        : props.action === "checking" && props.showCheckingMessage
+        : continuationState.kind === "checking" && continuationState.showMessage
           ? <p role="status" className="text-sm text-muted-foreground">{t("catalog:checkingReviewUpdateMessage")}</p>
         : selectionMissing
           ? <p className="text-sm text-muted-foreground">{t("catalog:chooseBothBranches")}</p>
@@ -299,16 +297,16 @@ export function BranchReviewSelector(props: Props) {
       <Button
         type="button"
         className="w-full sm:w-auto"
-        aria-label={props.opening ? t("common:openingReview") : props.action === "checking" ? t("catalog:checkingReviewUpdate") : undefined}
+        aria-label={props.opening ? t("common:openingReview") : action === "checking" ? t("catalog:checkingReviewUpdate") : undefined}
         aria-busy={props.opening || undefined}
-        disabled={selectionMissing || props.action === "invalid" || props.action === "checking" || props.reviewNavigationBusy}
-        onClick={props.onSubmit}
+        disabled={selectionMissing || action === "incomplete" || action === "invalid" || action === "checking" || props.reviewNavigationBusy}
+        onClick={() => void props.continuation.submit()}
       >
-        {(props.action === "checking" || props.opening) && <Spinner aria-hidden />}
-        {props.action === "update"
+        {(action === "checking" || props.opening) && <Spinner aria-hidden />}
+        {action === "refresh"
           ? t("catalog:updateAndContinueReview")
-          : props.action === "fallback" ? t("catalog:continueExistingReview")
-          : props.action === "continue" || props.action === "checking"
+          : action === "fallback" ? t("catalog:continueExistingReview")
+          : action === "continue" || action === "checking"
             ? t("common:continueReview") : t("common:startReview")}
       </Button>
     </div>

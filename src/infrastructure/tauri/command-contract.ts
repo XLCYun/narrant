@@ -26,6 +26,7 @@ export type TauriCommandContract = {
   cancel_operation: { args: { operationId: string }; result: void };
   compare_local_refs: { args: { operationId: string; repositoryEntryId: number; baseRef: string; headRef: string }; result: ReviewSnapshot };
   check_branch_review_updates: { args: { operationId: string; reviewId: string }; result: BranchSelectionUpdate };
+  reopen_and_refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
   refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
   open_pull_request_review: { args: { operationId: string; repositoryEntryId: number; repository: GitHubRepository; number: number }; result: ReviewSnapshot };
   check_pull_request_review_update: { args: { operationId: string; reviewId: string }; result: PullRequestReviewUpdate };
@@ -54,6 +55,7 @@ export type TauriCommandName = keyof TauriCommandContract;
 export type CancellableTauriCommandName =
   | "compare_local_refs"
   | "check_branch_review_updates"
+  | "reopen_and_refresh_branch_review"
   | "refresh_branch_review"
   | "open_pull_request_review"
   | "check_pull_request_review_update"
@@ -75,6 +77,7 @@ export const TAURI_COMMAND_NAMES = [
   "grant_repository_workspace_trust",
   "compare_local_refs",
   "check_branch_review_updates",
+  "reopen_and_refresh_branch_review",
   "refresh_branch_review",
   "reopen_review",
   "list_local_refs",

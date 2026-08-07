@@ -171,6 +171,51 @@ async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
 }
 
 #[tokio::test]
+async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
+    let fixture = LifecycleFixture::new();
+    let saved = fixture.save_current_review().await;
+    fixture.catalog.activate_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+
+    let error = match lifecycle
+        .reopen_and_refresh(
+            &saved.review_id,
+            ConfirmedReviewUpdate {
+                current_base_revision: "stale-base".to_owned(),
+                current_head_revision: "stale-head".to_owned(),
+                available_base_revision: "next-base".to_owned(),
+                available_head_revision: "next-head".to_owned(),
+            },
+            &CancellationToken::default(),
+        )
+        .await
+    {
+        Ok(_) => panic!("过期确认不应刷新成功"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, ReviewLifecycleError::StaleCurrent));
+    let workspace = fixture
+        .catalog
+        .review_workspace_path(&saved.review_id)
+        .unwrap();
+    assert!(!workspace.exists());
+    let read_error = lifecycle
+        .read_file_change(
+            &saved.review_id,
+            &saved.snapshot_identity(),
+            "README.md",
+            &CancellationToken::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        read_error,
+        ReviewLifecycleError::ReviewUnavailable(_)
+    ));
+}
+
+#[tokio::test]
 async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() {
     let fixture = LifecycleFixture::new();
     run_git(fixture.repository.path(), &["checkout", "-q", "topic"]);

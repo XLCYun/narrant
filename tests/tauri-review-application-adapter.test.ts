@@ -47,12 +47,58 @@ describe("Tauri Review application adapter", () => {
       repositoryEntryId: 17,
       baseRef: "refs/heads/main",
       headRef: "refs/heads/feature",
+      mode: { kind: "start" },
     }, null, signal);
 
     expect(invokeCancellable).toHaveBeenCalledWith("compare_local_refs", {
       repositoryEntryId: 17,
       baseRef: "refs/heads/main",
       headRef: "refs/heads/feature",
+    }, signal);
+  });
+
+  it("Branch Selection continuation 通过单个 lifecycle command 重开并刷新", async () => {
+    const confirmation = {
+      changed: true,
+      currentBaseRevision: "base-1",
+      currentHeadRevision: "head-1",
+      latestBaseRevision: "base-2",
+      latestHeadRevision: "head-2",
+    };
+    const invoke = vi.fn().mockResolvedValue(snapshot);
+    const invokeCancellable = vi.fn().mockResolvedValue({
+      ...snapshot,
+      snapshotId: "snapshot-2",
+      baseRevision: "base-2",
+      headRevision: "head-2",
+    });
+    const adapter = createTauriReviewApplicationAdapter({
+      invoke,
+      invokeCancellable,
+    } as unknown as TypedTauriTransport);
+    const signal = new AbortController().signal;
+    const target = {
+      kind: "branch-selection" as const,
+      repositoryEntryId: 17,
+      baseRef: "refs/heads/main",
+      headRef: "refs/heads/feature",
+    };
+
+    await adapter.switchReview({
+      ...target,
+      mode: { kind: "continue", reviewId: "review-1" },
+    }, null, signal);
+    await adapter.switchReview({
+      ...target,
+      mode: { kind: "refresh", reviewId: "review-1", confirmation },
+    }, null, signal);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenNthCalledWith(1, "reopen_review", { reviewId: "review-1" });
+    expect(invokeCancellable).toHaveBeenCalledOnce();
+    expect(invokeCancellable).toHaveBeenCalledWith("reopen_and_refresh_branch_review", {
+      reviewId: "review-1",
+      confirmation,
     }, signal);
   });
 

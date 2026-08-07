@@ -15,8 +15,10 @@ export type ReviewOpenTarget =
       repositoryEntryId: number;
       baseRef: string;
       headRef: string;
-      refreshExisting?: boolean;
-      existingReviewId?: string;
+      mode:
+        | { kind: "start" }
+        | { kind: "continue"; reviewId: string }
+        | { kind: "refresh"; reviewId: string; confirmation: BranchSelectionUpdate };
     };
 
 /** Review Update 检查得到的 moving revision 对照。 */

@@ -305,6 +305,34 @@ async fn refresh_branch_review(
     .await
 }
 
+/// 原子承接 Branch Selection：重开 durable Review，并使用既有确认刷新。
+#[tauri::command]
+async fn reopen_and_refresh_branch_review(
+    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
+    operations: tauri::State<'_, cancellable_operation::CancellableOperations>,
+    operation_id: String,
+    review_id: String,
+    confirmation: ConfirmedBranchUpdate,
+) -> Result<ReviewSnapshotResponse, String> {
+    run_cancellable_command(&operations, operation_id, |operation| async move {
+        lifecycle
+            .reopen_and_refresh(
+                &review_id,
+                review_lifecycle::ConfirmedReviewUpdate {
+                    current_base_revision: confirmation.current_base_revision,
+                    current_head_revision: confirmation.current_head_revision,
+                    available_base_revision: confirmation.latest_base_revision,
+                    available_head_revision: confirmation.latest_head_revision,
+                },
+                operation.cancellation(),
+            )
+            .await
+            .map(map_presentation)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
 /// 从稳定 Selection identity 创建或重开 durable Pull Request Review。
 #[tauri::command]
 async fn open_pull_request_review(
@@ -710,6 +738,7 @@ pub fn run() {
             grant_repository_workspace_trust,
             compare_local_refs,
             check_branch_review_updates,
+            reopen_and_refresh_branch_review,
             refresh_branch_review,
             reopen_review,
             list_local_refs,

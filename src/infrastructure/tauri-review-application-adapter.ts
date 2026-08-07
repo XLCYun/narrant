@@ -17,23 +17,19 @@ export function createTauriReviewApplicationAdapter(
       if (target.kind === "saved-review") {
         snapshot = await transport.invoke("reopen_review", { reviewId: target.reviewId });
       } else if (target.kind === "branch-selection") {
-        snapshot = target.refreshExisting && target.existingReviewId
-          ? await transport.invoke("reopen_review", { reviewId: target.existingReviewId })
-          : await transport.invokeCancellable("compare_local_refs", {
+        if (target.mode.kind === "start") {
+          snapshot = await transport.invokeCancellable("compare_local_refs", {
               repositoryEntryId: target.repositoryEntryId,
               baseRef: target.baseRef,
               headRef: target.headRef,
             }, signal);
-        if (target.refreshExisting) {
-          const update = await transport.invokeCancellable("check_branch_review_updates", {
-            reviewId: snapshot.reviewId,
+        } else if (target.mode.kind === "continue") {
+          snapshot = await transport.invoke("reopen_review", { reviewId: target.mode.reviewId });
+        } else {
+          snapshot = await transport.invokeCancellable("reopen_and_refresh_branch_review", {
+            reviewId: target.mode.reviewId,
+            confirmation: target.mode.confirmation,
           }, signal);
-          if (update.changed) {
-            snapshot = await transport.invokeCancellable("refresh_branch_review", {
-              reviewId: snapshot.reviewId,
-              confirmation: update,
-            }, signal);
-          }
         }
       } else {
         snapshot = await transport.invokeCancellable("open_pull_request_review", {

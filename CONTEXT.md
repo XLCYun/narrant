@@ -24,6 +24,12 @@ A **Review Selection** identified by canonical local or remote-tracking base and
 head branch refs in one **Repository Entry**.
 _Avoid_: Local PR
 
+**Branch Selection Continuation**:
+The application decision that matches a selected **Branch Selection** to its existing
+**Review**, checks for a **Review Update**, and chooses whether to start, continue, or
+explicitly refresh that Review.
+_Avoid_: Branch Review session, comparison mode
+
 **Local Branch Comparison**:
 A **Change Comparison** whose base and head revisions come from a local Git repository.
 _Avoid_: Local PR, offline PR
@@ -133,6 +139,8 @@ _Avoid_: Repository Entry, user worktree
 - A **Pull Request Selection** retains its pull-request identity while resolving the
   current refs selected by that pull request
 - A **Branch Selection** retains canonical local ref identities
+- A **Branch Selection Continuation** never changes the selected refs; it decides how
+  the resulting Branch Selection opens its unique Review
 - A **Local Branch Comparison** identifies one repository-local **Change Comparison**
 - A **Change Comparison** uses the merge base of its **Base Ref** and **Head Ref** as its **Comparison Base**
 - Both **Branch Selections** and **Pull Request Selections** calculate their

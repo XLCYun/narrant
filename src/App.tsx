@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { useSystemTheme } from "@/lib/use-system-theme";
 import { AppShell } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { BranchRelation } from "@/components/branch-relation";
-import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
+import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { Spinner } from "@/components/ui/spinner";
@@ -26,19 +26,15 @@ import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastruct
 import {
   tauriTransport,
 } from "@/infrastructure/tauri/transport";
-import type { BranchSelectionUpdate } from "@/review/review-application";
+import type { ReviewOpenTarget } from "@/review/review-application";
 import { useGitHubIdentityLifecycle } from "@/github/use-github-identity-lifecycle";
 import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
+import { useBranchSelectionContinuation } from "@/review/use-branch-selection-continuation";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import "@/lib/i18n";
 
-/** Repository Entry 中已有 Branch Selection 的更新检查状态。 */
-type BranchSelectionCheck =
-  | { status: "idle" | "checking" | "current" }
-  | { status: "update"; update: BranchSelectionUpdate }
-  | { status: "failed" };
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
 const REVIEW_DIFF_MODE_KEY = "narrant.review.diffMode";
 
@@ -88,9 +84,6 @@ export function App() {
   const [repositoryPath, setRepositoryPath] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
-  const [branchSelectionCheck, setBranchSelectionCheck] = useState<BranchSelectionCheck>({ status: "idle" });
-  const [showBranchCheckingMessage, setShowBranchCheckingMessage] = useState(false);
-  const branchSelectionCheckId = useRef(0);
   const [error, setError] = useState("");
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
   const [diffMode, setDiffMode] = useState<DiffMode>(() => (
@@ -122,6 +115,25 @@ export function App() {
   const discoveryError = pullRequestDiscoveryLifecycle.error?.detail;
   const visibleError = error || appShell.sidebar.error || "";
   const reviewOpeningKey = appShell.transition.kind === "opening-review" ? appShell.transition.key : undefined;
+  const navigateAppShell = appShell.navigate;
+  /** 将 continuation 的稳定决策交给 App Shell Navigation 执行。 */
+  const openBranchSelection = useCallback(
+    (target: Extract<ReviewOpenTarget, { kind: "branch-selection" }>) => navigateAppShell({
+      kind: "review",
+      repositoryEntryId: target.repositoryEntryId,
+      target,
+    }),
+    [navigateAppShell],
+  );
+  const branchContinuation = useBranchSelectionContinuation(reviewApplicationAdapter, {
+    repositoryEntryId: snapshot
+      ? undefined
+      : selectedRepository?.id ?? (testHarnessEnabled ? 0 : undefined),
+    baseRef,
+    headRef,
+    reviews: repositoryReviews,
+    openReview: openBranchSelection,
+  });
 
   /** 把后端技术错误归类为稳定、可翻译的仓库打开摘要，并保留原始详情。 */
   function repositoryOpenError(reason: unknown) {
@@ -275,77 +287,6 @@ export function App() {
     }
   }
 
-  const matchingBranchReview = repositoryReviews.find(
-    (review) => review.baseRef === baseRef && review.headRef === headRef,
-  );
-  const branchSelectionInvalid = Boolean(baseRef && headRef && baseRef === headRef);
-
-  useEffect(() => {
-    const checkId = ++branchSelectionCheckId.current;
-    setShowBranchCheckingMessage(false);
-    if (!matchingBranchReview || branchSelectionInvalid) {
-      setBranchSelectionCheck({ status: "idle" });
-      return;
-    }
-    setBranchSelectionCheck({ status: "checking" });
-    const messageTimer = window.setTimeout(() => {
-      if (branchSelectionCheckId.current === checkId) setShowBranchCheckingMessage(true);
-    }, 1000);
-    void reviewApplicationAdapter.checkBranchSelectionUpdate(
-      matchingBranchReview.reviewId,
-      new AbortController().signal,
-    ).then((update) => {
-      if (branchSelectionCheckId.current !== checkId) return;
-      setBranchSelectionCheck(update.changed ? { status: "update", update } : { status: "current" });
-    }).catch(() => {
-      if (branchSelectionCheckId.current === checkId) setBranchSelectionCheck({ status: "failed" });
-    }).finally(() => window.clearTimeout(messageTimer));
-    return () => window.clearTimeout(messageTimer);
-    // 后台检查由每次调用生成独立 identity；这里只由用户可见的 Selection 驱动。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matchingBranchReview?.reviewId, baseRef, headRef, branchSelectionInvalid]);
-
-  const branchSelectorAction: BranchSelectorAction = branchSelectionInvalid
-    ? "invalid"
-    : !matchingBranchReview
-      ? "start"
-      : branchSelectionCheck.status === "checking"
-        ? "checking"
-        : branchSelectionCheck.status === "update"
-          ? "update"
-          : branchSelectionCheck.status === "failed" ? "fallback" : "continue";
-
-  async function openComparison() {
-    setError("");
-    const target = {
-      kind: "branch-selection" as const,
-      repositoryEntryId: selectedRepository?.id ?? 0,
-      baseRef,
-      headRef,
-    };
-    const result = await appShell.navigate({ kind: "review", repositoryEntryId: selectedRepository?.id ?? 0, target });
-    if (result.kind === "failed") setError(result.detail);
-  }
-
-  /** 根据已确认的 moving refs 创建新 Snapshot，再进入同一个 durable Review。 */
-  async function updateAndOpenBranchReview() {
-    if (!matchingBranchReview || branchSelectionCheck.status !== "update" || !selectedRepository) return;
-    setError("");
-    const result = await appShell.navigate({
-      kind: "review",
-      repositoryEntryId: selectedRepository.id,
-      target: {
-        kind: "branch-selection",
-        repositoryEntryId: selectedRepository.id,
-        baseRef,
-        headRef,
-        refreshExisting: true,
-        existingReviewId: matchingBranchReview.reviewId,
-      },
-    });
-    if (result.kind === "failed") setError(result.detail);
-  }
-
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
   return <AppShell
     navigation={{
@@ -419,8 +360,7 @@ export function App() {
           defaultRef={defaultRef}
           headRef={headRef}
           baseRef={baseRef}
-          action={branchSelectorAction}
-          showCheckingMessage={showBranchCheckingMessage}
+          continuation={branchContinuation}
           opening={reviewOpeningKey === `branch:${baseRef}:${headRef}`}
           reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
           reloading={branchesReloading}
@@ -428,7 +368,6 @@ export function App() {
           onHeadChange={setHeadRef}
           onBaseChange={setBaseRef}
           onReload={() => void loadRefs()}
-          onSubmit={() => void (branchSelectorAction === "update" ? updateAndOpenBranchReview() : openComparison())}
         />}
         initialTab={appShell.destination.kind === "repository" ? appShell.destination.initialTab : "pull-requests"}
         openingReviewKey={reviewOpeningKey}
@@ -478,11 +417,15 @@ export function App() {
         <Button variant="outline" onClick={() => void loadRefs()}>重新读取分支</Button>
         <label>Base Ref<Select value={baseRef} onValueChange={(value) => setBaseRef(value ?? "")}><SelectTrigger aria-label="Base Ref"><SelectValue placeholder="选择 Base Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
         <label>Head Ref<Select value={headRef} onValueChange={(value) => setHeadRef(value ?? "")}><SelectTrigger aria-label="Head Ref"><SelectValue placeholder="选择 Head Ref" /></SelectTrigger><SelectContent>{refs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent></Select></label>
-        <Button disabled={!baseRef || !headRef || branchSelectionInvalid || Boolean(reviewOpeningKey)} aria-busy={reviewOpeningKey === `branch:${baseRef}:${headRef}` || undefined} onClick={openComparison}>
+        <Button
+          disabled={!baseRef || !headRef || branchContinuation.state.kind === "invalid" || branchContinuation.state.kind === "checking" || Boolean(reviewOpeningKey)}
+          aria-busy={reviewOpeningKey === `branch:${baseRef}:${headRef}` || undefined}
+          onClick={() => void branchContinuation.submit()}
+        >
           {reviewOpeningKey === `branch:${baseRef}:${headRef}` && <Spinner aria-hidden />}
-          {matchingBranchReview ? t("continueReview") : t("startReview")}
+          {branchContinuation.state.kind === "ready" && branchContinuation.state.action !== "start" ? t("continueReview") : t("startReview")}
         </Button>
-        {branchSelectionInvalid && <p role="status">{t("sameBranchSelection")}</p>}
+        {branchContinuation.state.kind === "invalid" && <p role="status">{t("sameBranchSelection")}</p>}
       </section>
     </>}
     {visibleError && <ErrorMessage message={visibleError} />}

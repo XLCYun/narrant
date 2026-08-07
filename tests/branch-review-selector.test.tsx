@@ -3,8 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { i18n } from "@/lib/i18n";
+import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 
 afterEach(() => cleanup());
+
+/** 为纯展示测试构造稳定的 continuation interface。 */
+function continuationBinding(
+  state: BranchSelectionContinuationBinding["state"],
+): BranchSelectionContinuationBinding {
+  return { state, submit: vi.fn(async () => ({ kind: "ignored" })) };
+}
 
 describe("本地 Branch Selection", () => {
   it("按 Head 到 Base 的方向显示短分支名与默认来源", async () => {
@@ -15,11 +23,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/release"
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByLabelText("Head 分支")).toHaveTextContent("release");
@@ -40,11 +47,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef={`refs/heads/${longBranch}`}
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     const headTrigger = screen.getByLabelText("Head 分支");
@@ -66,11 +72,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/main"
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       onHeadChange={onHeadChange}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     fireEvent.click(screen.getByLabelText("Head 分支"));
@@ -91,11 +96,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/release"
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     fireEvent.click(screen.getByLabelText("Head 分支"));
@@ -117,11 +121,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/main"
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     fireEvent.keyDown(screen.getByLabelText("Head 分支"), { key: "z" });
@@ -136,11 +139,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/main"
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     const trigger = screen.getByLabelText("Head 分支");
@@ -158,11 +160,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/heads/main"
       headRef="refs/heads/main"
       baseRef="refs/heads/main"
-      action="invalid"
+      continuation={continuationBinding({ kind: "invalid" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Head 与 Base 不能是同一分支");
@@ -177,12 +178,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/release"
       baseRef="refs/remotes/origin/main"
-      action="checking"
-      showCheckingMessage
+      continuation={continuationBinding({ kind: "checking", showMessage: true })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByRole("button", { name: "正在检查审核更新" })).toBeDisabled();
@@ -197,11 +196,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/release"
       baseRef="refs/remotes/origin/main"
-      action="update"
+      continuation={continuationBinding({ kind: "ready", action: "refresh" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByRole("status")).toHaveTextContent("检测到所选分支有新提交");
@@ -217,11 +215,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/release"
       baseRef="refs/remotes/origin/main"
-      action="fallback"
+      continuation={continuationBinding({ kind: "ready", action: "fallback" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByRole("status")).toHaveTextContent("无法检查 origin/main 的远程更新");
@@ -237,11 +234,10 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/heads/main"
       headRef="refs/heads/release"
       baseRef="refs/heads/main"
-      action="fallback"
+      continuation={continuationBinding({ kind: "ready", action: "fallback" })}
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByRole("status")).toHaveTextContent("无法检查分支更新");
@@ -256,12 +252,11 @@ describe("本地 Branch Selection", () => {
       defaultRef="refs/remotes/origin/main"
       headRef="refs/heads/release"
       baseRef="refs/remotes/origin/main"
-      action="start"
+      continuation={continuationBinding({ kind: "ready", action: "start" })}
       reloading
       onHeadChange={vi.fn()}
       onBaseChange={vi.fn()}
       onReload={vi.fn()}
-      onSubmit={vi.fn()}
     />);
 
     expect(screen.getByLabelText("Head 分支")).toHaveTextContent("release");
