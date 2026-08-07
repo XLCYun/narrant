@@ -1,46 +1,17 @@
 use super::*;
+use crate::cancellable_operation::OperationContext;
 use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
 use std::path::Path;
 
-/// 已打开并固定到精确对象 ID 的本地分支比较。
-pub struct LocalOpenedReview {
+/// 从不可变 Snapshot 恢复并按固定对象 ID 读取内容的运行时 reader。
+#[derive(Clone)]
+pub struct LocalSnapshotReader {
     adapter: GitProcessAdapter,
     snapshot: LocalSnapshot,
 }
 
-impl LocalOpenedReview {
-    /// 解析两个 canonical branch ref，并创建当前 three-dot Review Snapshot。
-    pub fn open(
-        repository_path: &Path,
-        base_ref: &str,
-        head_ref: &str,
-    ) -> Result<Self, GitCommandError> {
-        Self::open_with_cancellation(
-            repository_path,
-            base_ref,
-            head_ref,
-            &CancellationToken::default(),
-        )
-    }
-
-    /// 使用调用方持有的取消标记创建当前 three-dot Review Snapshot。
-    pub fn open_with_cancellation(
-        repository_path: &Path,
-        base_ref: &str,
-        head_ref: &str,
-        cancellation: &CancellationToken,
-    ) -> Result<Self, GitCommandError> {
-        let adapter = GitProcessAdapter::new(repository_path);
-        let snapshot = compare_refs(&adapter, base_ref, head_ref, cancellation)?;
-        Ok(Self { adapter, snapshot })
-    }
-
-    /// 返回打开时固定的 Review Snapshot。
-    pub fn snapshot(&self) -> &LocalSnapshot {
-        &self.snapshot
-    }
-
-    /// 从持久化的不可变 Snapshot 恢复按对象读取能力，不重新解析可移动 branch refs。
+impl LocalSnapshotReader {
+    /// 从持久化 Snapshot 恢复 reader，不重新解析任何可移动 ref。
     pub fn restore(repository_path: &Path, snapshot: LocalSnapshot) -> Self {
         Self {
             adapter: GitProcessAdapter::new(repository_path),
@@ -48,61 +19,18 @@ impl LocalOpenedReview {
         }
     }
 
-    /// 用已获取的精确 base/head commit 创建 Pull Request 的 current three-dot Snapshot。
-    pub fn open_revisions(
-        repository_path: &Path,
-        base_ref: &str,
-        head_ref: &str,
-        base_revision: &str,
-        head_revision: &str,
-        cancellation: &CancellationToken,
-    ) -> Result<Self, GitCommandError> {
-        let adapter = GitProcessAdapter::new(repository_path);
-        let snapshot = compare_revisions(
-            &adapter,
-            base_ref,
-            head_ref,
-            base_revision,
-            head_revision,
-            cancellation,
-        )?;
-        Ok(Self { adapter, snapshot })
-    }
-
-    /// 从 Snapshot 记录的对象 ID 按需读取一个 File Change 的前后内容。
-    pub fn read_file_change(&self, path: &str) -> Result<LoadedFileChange, GitCommandError> {
-        self.read_file_change_with_cancellation(path, &CancellationToken::default())
-    }
-
-    /// 使用调用方持有的取消标记按需读取 File Change 内容。
-    pub fn read_file_change_with_cancellation(
+    /// 使用显式操作上下文读取 Snapshot 中一个 File Change 的固定内容。
+    pub async fn read(
         &self,
         path: &str,
-        cancellation: &CancellationToken,
+        operation: &OperationContext,
     ) -> Result<LoadedFileChange, GitCommandError> {
-        let stored = self
-            .snapshot
-            .file_changes
-            .iter()
-            .find(|change| change.path == path)
-            .ok_or_else(|| {
-                GitCommandError::new("File Change is not part of the Review Snapshot")
-            })?;
-        let before = read_entry(&self.adapter, stored.before_entry.as_ref(), cancellation)?;
-        let after = read_entry(&self.adapter, stored.after_entry.as_ref(), cancellation)?;
-        Ok(LoadedFileChange {
-            path: stored.path.clone(),
-            old_path: stored.old_path.clone(),
-            status: stored.status,
-            content_kind: super::resolved_content_kind([
-                before.as_ref().map(|content| content.kind),
-                after.as_ref().map(|content| content.kind),
-            ]),
-            before_size: before.as_ref().and_then(|entry| entry.size),
-            after_size: after.as_ref().and_then(|entry| entry.size),
-            before: before.and_then(|entry| entry.text),
-            after: after.and_then(|entry| entry.text),
-        })
+        read_file_change(
+            &self.adapter,
+            &self.snapshot,
+            path,
+            operation.cancellation(),
+        )
     }
 }
 
@@ -138,307 +66,28 @@ pub(crate) struct LocalEntry {
     pub(crate) mode: u32,
 }
 
-/// 枚举 canonical local 与 remote-tracking branch refs。
-pub fn list_refs(repository_path: &Path) -> Result<Vec<String>, GitCommandError> {
-    list_refs_with_cancellation(repository_path, &CancellationToken::default())
+/// 已获取的精确 revisions 及 Snapshot 需要保留的展示 refs。
+pub(crate) struct ExactComparison {
+    pub(crate) base_ref: String,
+    pub(crate) head_ref: String,
+    pub(crate) base_revision: String,
+    pub(crate) head_revision: String,
 }
 
-/// Repository Entry 的 canonical 分支选项及 Git 明确报告的默认、当前分支。
-#[derive(Debug, PartialEq, Eq)]
-pub struct BranchRefs {
-    pub refs: Vec<String>,
-    pub default_ref: String,
-    pub current_ref: String,
-}
-
-/// 返回分支选项及默认选择，不以排序后列表的位置推断语义。
-pub fn list_branch_refs(repository_path: &Path) -> Result<BranchRefs, GitCommandError> {
-    list_branch_refs_with_cancellation(repository_path, &CancellationToken::default())
-}
-
-/// 使用调用方取消标记返回分支选项及默认选择。
-pub fn list_branch_refs_with_cancellation(
+/// 验证精确 revisions 并构建不可变的 three-dot Snapshot。
+pub(crate) async fn compare_exact(
     repository_path: &Path,
-    cancellation: &CancellationToken,
-) -> Result<BranchRefs, GitCommandError> {
-    let refs = list_refs_with_cancellation(repository_path, cancellation)?;
-    let adapter = GitProcessAdapter::new(repository_path);
-    let current_ref = text_output(
-        adapter
-            .run(["symbolic-ref", "--quiet", "HEAD"], cancellation)
-            .map_err(|_| GitCommandError::new("Repository Entry 当前未检出本地分支"))?,
-        "当前分支",
-    )?;
-    if !refs.contains(&current_ref) {
-        return Err(GitCommandError::new(
-            "Repository Entry 当前分支不是 canonical 本地分支",
-        ));
-    }
-
-    let symbolic_output = adapter.run(
-        [
-            "for-each-ref",
-            "--format=%(refname)%00%(symref)%00",
-            "refs/remotes",
-        ],
-        cancellation,
-    )?;
-    let mut fields = symbolic_output.stdout.split(|byte| *byte == 0);
-    let mut remote_defaults = Vec::new();
-    while let Some(reference) = fields.next() {
-        let reference = reference
-            .iter()
-            .copied()
-            .skip_while(|byte| *byte == b'\n' || *byte == b'\r')
-            .collect::<Vec<_>>();
-        if reference.is_empty() {
-            break;
-        }
-        let Some(symref) = fields.next() else {
-            return Err(GitCommandError::new("remote default branch 输出字段不完整"));
-        };
-        if !symref.is_empty() {
-            let source = String::from_utf8(reference)
-                .map_err(|_| GitCommandError::new("remote HEAD ref 不是有效的 UTF-8"))?;
-            let target = String::from_utf8(symref.to_vec())
-                .map_err(|_| GitCommandError::new("remote default branch 不是有效的 UTF-8"))?;
-            if refs.contains(&target) {
-                remote_defaults.push((source, target));
-            }
-        }
-    }
-    remote_defaults
-        .sort_by_key(|(source, _)| (!source.starts_with("refs/remotes/origin/"), source.clone()));
-    let default_ref = remote_defaults
-        .into_iter()
-        .map(|(_, target)| target)
-        .next()
-        .or_else(|| {
-            refs.iter()
-                .find(|reference| reference.as_str() == "refs/heads/main")
-                .cloned()
-        })
-        .or_else(|| {
-            refs.iter()
-                .find(|reference| reference.as_str() == "refs/heads/master")
-                .cloned()
-        })
-        .unwrap_or_else(|| current_ref.clone());
-
-    Ok(BranchRefs {
-        refs,
-        default_ref,
-        current_ref,
-    })
-}
-
-/// 使用调用方持有的取消标记枚举 canonical branch refs。
-pub fn list_refs_with_cancellation(
-    repository_path: &Path,
-    cancellation: &CancellationToken,
-) -> Result<Vec<String>, GitCommandError> {
-    let adapter = GitProcessAdapter::new(repository_path);
-    let output = adapter.run(
-        [
-            "for-each-ref",
-            "--format=%(refname)%00%(symref)%00",
-            "refs/heads",
-            "refs/remotes",
-        ],
-        cancellation,
-    )?;
-    let mut fields = output.stdout.split(|byte| *byte == 0);
-    let mut refs = Vec::new();
-    while let Some(reference) = fields.next() {
-        let reference = reference
-            .iter()
-            .copied()
-            .skip_while(|byte| *byte == b'\n' || *byte == b'\r')
-            .collect::<Vec<_>>();
-        if reference.is_empty() {
-            break;
-        }
-        let Some(symref) = fields.next() else {
-            return Err(GitCommandError::new("branch 枚举输出字段不完整"));
-        };
-        if symref.is_empty() {
-            refs.push(
-                String::from_utf8(reference)
-                    .map_err(|_| GitCommandError::new("branch ref 不是有效的 UTF-8"))?,
-            );
-        }
-    }
-    refs.sort();
-    refs.dedup();
-    Ok(refs)
-}
-
-/// 对 Selection 中的 remote-tracking refs 按 remote 去重执行受信任 fetch。
-pub fn fetch_selected_remote_refs(
-    repository_path: &Path,
-    base_ref: &str,
-    head_ref: &str,
-    cancellation: &CancellationToken,
-) -> Result<(), GitCommandError> {
-    let adapter = GitProcessAdapter::new(repository_path);
-    let mut remotes = [base_ref, head_ref]
-        .into_iter()
-        .filter_map(remote_name)
-        .collect::<Vec<_>>();
-    remotes.sort_unstable();
-    remotes.dedup();
-    for remote in remotes {
-        adapter.run_network(
-            ["fetch", "--no-write-fetch-head", "--", remote],
-            cancellation,
-        )?;
-    }
-    Ok(())
-}
-
-/// 通过用户配置的 base repository remote 获取 PR base/head 对象且不创建持久 ref。
-pub fn fetch_pull_request_objects(
-    repository_path: &Path,
-    remote: &str,
-    pull_request_number: u64,
-    base_ref: &str,
-    base_revision: &str,
-    head_revision: &str,
-    cancellation: &CancellationToken,
-) -> Result<LocalOpenedReview, GitCommandError> {
-    resolve_pull_request_objects(
-        repository_path,
-        remote,
-        pull_request_number,
-        base_ref,
-        base_revision,
-        head_revision,
-        cancellation,
-    )
-    .map_err(PullRequestObjectResolutionError::into_git_error)
-}
-
-/// 区分 remote 获取失败与获取成功后的精确 revision 校验失败。
-pub enum PullRequestObjectResolutionError {
-    Fetch(GitCommandError),
-    ExactRevision(GitCommandError),
-}
-
-impl PullRequestObjectResolutionError {
-    /// 返回底层 Core Git 诊断，供兼容旧调用方使用。
-    fn into_git_error(self) -> GitCommandError {
-        match self {
-            Self::Fetch(error) | Self::ExactRevision(error) => error,
-        }
-    }
-
-    /// 返回底层失败是否来自合作式取消。
-    pub fn is_cancelled(&self) -> bool {
-        match self {
-            Self::Fetch(error) | Self::ExactRevision(error) => error.is_cancelled(),
-        }
-    }
-}
-
-impl std::fmt::Display for PullRequestObjectResolutionError {
-    /// 输出底层 Core Git 诊断而不暴露错误分类实现。
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Fetch(error) | Self::ExactRevision(error) => error.fmt(formatter),
-        }
-    }
-}
-
-/// 获取 Pull Request 对象并单独分类精确 revision 校验阶段。
-pub fn resolve_pull_request_objects(
-    repository_path: &Path,
-    remote: &str,
-    pull_request_number: u64,
-    base_ref: &str,
-    base_revision: &str,
-    head_revision: &str,
-    cancellation: &CancellationToken,
-) -> Result<LocalOpenedReview, PullRequestObjectResolutionError> {
-    if remote.is_empty() || base_ref.is_empty() || pull_request_number == 0 {
-        return Err(PullRequestObjectResolutionError::Fetch(
-            GitCommandError::new("Pull Request fetch 参数无效"),
-        ));
-    }
-    let adapter = GitProcessAdapter::new(repository_path);
-    let base_source = format!("refs/heads/{base_ref}");
-    let head_source = format!("refs/pull/{pull_request_number}/head");
-    for source in [&base_source, &head_source] {
-        adapter
-            .run_network(
-                [
-                    "fetch",
-                    "--no-write-fetch-head",
-                    "--no-tags",
-                    remote,
-                    source,
-                ],
-                cancellation,
-            )
-            .map_err(PullRequestObjectResolutionError::Fetch)?;
-    }
-    LocalOpenedReview::open_revisions(
-        repository_path,
-        base_ref,
-        &format!("pull/{pull_request_number}/head"),
-        base_revision,
-        head_revision,
-        cancellation,
-    )
-    .map_err(PullRequestObjectResolutionError::ExactRevision)
-}
-
-/// 从 canonical remote-tracking ref 提取 remote 名称。
-fn remote_name(reference: &str) -> Option<&str> {
-    reference
-        .strip_prefix("refs/remotes/")?
-        .split_once('/')
-        .map(|(remote, _)| remote)
-        .filter(|remote| !remote.is_empty())
-}
-
-/// 解析 refs、计算 merge-base，并用 raw NUL diff 构建 File Changes。
-fn compare_refs(
-    adapter: &GitProcessAdapter,
-    base_ref: &str,
-    head_ref: &str,
-    cancellation: &CancellationToken,
+    comparison: ExactComparison,
+    operation: &OperationContext,
 ) -> Result<LocalSnapshot, GitCommandError> {
-    validate_branch_ref(base_ref)?;
-    validate_branch_ref(head_ref)?;
-    let base_revision = resolve_commit(adapter, base_ref, cancellation)?;
-    let head_revision = resolve_commit(adapter, head_ref, cancellation)?;
-    let comparison_base = text_output(
-        adapter.run(["merge-base", &base_revision, &head_revision], cancellation)?,
-        "merge-base",
-    )?;
-    validate_object_id(&comparison_base)?;
-    let raw = adapter.run(
-        [
-            "diff",
-            "--raw",
-            "-z",
-            "--no-abbrev",
-            "--find-renames",
-            &comparison_base,
-            &head_revision,
-            "--",
-        ],
-        cancellation,
-    )?;
-    let file_changes = parse_raw_diff(&raw.stdout)?;
-    Ok(LocalSnapshot {
-        base_ref: base_ref.to_owned(),
-        head_ref: head_ref.to_owned(),
-        base_revision,
-        comparison_base,
-        head_revision,
-        file_changes,
-    })
+    compare_revisions(
+        &GitProcessAdapter::new(repository_path),
+        &comparison.base_ref,
+        &comparison.head_ref,
+        &comparison.base_revision,
+        &comparison.head_revision,
+        operation.cancellation(),
+    )
 }
 
 /// 校验精确 commit，计算 merge-base，并从 Comparison Base 到 head 生成 File Changes。
@@ -480,38 +129,6 @@ fn compare_revisions(
         head_revision,
         file_changes: parse_raw_diff(&raw.stdout)?,
     })
-}
-
-/// 仅接受产品模型允许的 canonical local 或 remote-tracking branch ref。
-fn validate_branch_ref(reference: &str) -> Result<(), GitCommandError> {
-    if reference.starts_with("refs/heads/") || reference.starts_with("refs/remotes/") {
-        Ok(())
-    } else {
-        Err(GitCommandError::new(
-            "只允许 canonical local 或 remote-tracking branch ref",
-        ))
-    }
-}
-
-/// 将 canonical branch ref 解析为完整 commit object ID。
-fn resolve_commit(
-    adapter: &GitProcessAdapter,
-    reference: &str,
-    cancellation: &CancellationToken,
-) -> Result<String, GitCommandError> {
-    adapter.run(["check-ref-format", reference], cancellation)?;
-    let referenced_object = text_output(
-        adapter.run(["show-ref", "--verify", "--hash", reference], cancellation)?,
-        "ref object",
-    )?;
-    validate_object_id(&referenced_object)?;
-    let revision = format!("{referenced_object}^{{commit}}");
-    let object_id = text_output(
-        adapter.run(["rev-parse", "--verify", &revision], cancellation)?,
-        "revision",
-    )?;
-    validate_object_id(&object_id)?;
-    Ok(object_id)
 }
 
 /// 将已校验的精确对象 ID peel 为 commit，不依赖任何持久 ref。
@@ -634,6 +251,35 @@ fn entry(object_id: &str, mode: u32) -> Option<LocalEntry> {
     })
 }
 
+/// 从固定 Snapshot 的对象记录读取并组合一个 File Change。
+fn read_file_change(
+    adapter: &GitProcessAdapter,
+    snapshot: &LocalSnapshot,
+    path: &str,
+    cancellation: &CancellationToken,
+) -> Result<LoadedFileChange, GitCommandError> {
+    let stored = snapshot
+        .file_changes
+        .iter()
+        .find(|change| change.path == path)
+        .ok_or_else(|| GitCommandError::new("File Change is not part of the Review Snapshot"))?;
+    let before = read_entry(adapter, stored.before_entry.as_ref(), cancellation)?;
+    let after = read_entry(adapter, stored.after_entry.as_ref(), cancellation)?;
+    Ok(LoadedFileChange {
+        path: stored.path.clone(),
+        old_path: stored.old_path.clone(),
+        status: stored.status,
+        content_kind: super::resolved_content_kind([
+            before.as_ref().map(|content| content.kind),
+            after.as_ref().map(|content| content.kind),
+        ]),
+        before_size: before.as_ref().and_then(|entry| entry.size),
+        after_size: after.as_ref().and_then(|entry| entry.size),
+        before: before.and_then(|entry| entry.text),
+        after: after.and_then(|entry| entry.text),
+    })
+}
+
 /// 按对象 ID 读取 blob；gitlink 直接以 commit ID 表示内容。
 fn read_entry(
     adapter: &GitProcessAdapter,
@@ -680,3 +326,7 @@ struct EntryContent {
     size: Option<usize>,
     text: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "../local_change_content_tests.rs"]
+mod tests;

@@ -51,6 +51,12 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
     assert_eq!(resolved.snapshot.file_changes.len(), 1);
     assert_eq!(resolved.snapshot.file_changes[0].path, "feature.txt");
     assert!(!fixture.checkout.path().join(".git/FETCH_HEAD").exists());
+    assert!(!Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", "refs/pull/42/head"])
+        .current_dir(fixture.checkout.path())
+        .status()
+        .unwrap()
+        .success());
 }
 
 #[tokio::test]

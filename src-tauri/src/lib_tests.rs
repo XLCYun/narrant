@@ -1,7 +1,7 @@
 use super::*;
 
-#[test]
-fn snapshot_mapper_preserves_the_existing_ipc_contract() {
+#[tokio::test]
+async fn snapshot_mapper_preserves_the_existing_ipc_contract() {
     let fixture = tempfile::TempDir::new().unwrap();
     let repository = git2::Repository::init(fixture.path()).unwrap();
     let old_blob = repository.blob(b"old\n").unwrap();
@@ -36,17 +36,22 @@ fn snapshot_mapper_preserves_the_existing_ipc_contract() {
     drop(commit);
     drop(tree);
     drop(repository);
-    let review = change_content::local::LocalOpenedReview::open(
-        fixture.path(),
-        "refs/heads/base",
-        "refs/heads/head",
-    )
-    .unwrap();
+    let review = branch_selection::BranchSelectionResolver
+        .resolve(
+            fixture.path(),
+            &branch_selection::BranchSelection {
+                base_ref: "refs/heads/base".to_owned(),
+                head_ref: "refs/heads/head".to_owned(),
+            },
+            &cancellable_operation::OperationContext::non_cancellable(),
+        )
+        .await
+        .unwrap();
 
     let response = map_snapshot(
         "review-42".to_owned(),
         "snapshot-7".to_owned(),
-        review.snapshot(),
+        &review.snapshot,
     );
     let json = serde_json::to_value(&response).unwrap();
 

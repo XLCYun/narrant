@@ -1,11 +1,9 @@
 use git2::{build::CheckoutBuilder, Repository, Signature};
 use httpmock::prelude::*;
-use narrant_lib::change_content::local::{
-    fetch_pull_request_objects, fetch_selected_remote_refs, list_branch_refs, list_refs,
-    LocalOpenedReview,
-};
+use narrant_lib::branch_selection::{BranchRefCatalog, BranchSelection, BranchSelectionResolver};
+use narrant_lib::cancellable_operation::OperationContext;
+use narrant_lib::change_content::local::{LocalSnapshot, LocalSnapshotReader};
 use narrant_lib::change_content::{ChangeStatus, ContentKind};
-use narrant_lib::core_git::CancellationToken;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -68,8 +66,57 @@ fn commit_tree_entry(
         .unwrap()
 }
 
-fn open_comparison(repository_path: &std::path::Path) -> LocalOpenedReview {
-    LocalOpenedReview::open(repository_path, "refs/heads/base", "refs/heads/head").unwrap()
+/// 测试中绑定已解析快照及其只读内容入口。
+struct ResolvedComparison {
+    snapshot: LocalSnapshot,
+    reader: LocalSnapshotReader,
+}
+
+impl ResolvedComparison {
+    /// 从固定快照读取指定文件变更。
+    fn read(
+        &self,
+        path: &str,
+    ) -> Result<narrant_lib::change_content::LoadedFileChange, narrant_lib::core_git::GitCommandError>
+    {
+        block_on(self.reader.read(path, &OperationContext::non_cancellable()))
+    }
+}
+
+/// 在独立运行时中执行异步 Git seam。
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Runtime::new().unwrap().block_on(future)
+}
+
+/// 通过分支选择 seam 解析固定比较。
+fn resolve_comparison(
+    repository_path: &std::path::Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<ResolvedComparison, narrant_lib::branch_selection::BranchSelectionResolutionError> {
+    let resolved = block_on(BranchSelectionResolver.resolve(
+        repository_path,
+        &BranchSelection {
+            base_ref: base_ref.to_owned(),
+            head_ref: head_ref.to_owned(),
+        },
+        &OperationContext::non_cancellable(),
+    ))?;
+    let snapshot = resolved.snapshot;
+    let reader = LocalSnapshotReader::restore(repository_path, snapshot.clone());
+    Ok(ResolvedComparison { snapshot, reader })
+}
+
+/// 打开 fixture 的标准 base/head 比较。
+fn open_comparison(repository_path: &std::path::Path) -> ResolvedComparison {
+    resolve_comparison(repository_path, "refs/heads/base", "refs/heads/head").unwrap()
+}
+
+/// 通过分支目录 seam 读取仓库 refs。
+fn branch_refs(
+    repository_path: &std::path::Path,
+) -> Result<narrant_lib::branch_selection::BranchRefs, narrant_lib::core_git::GitCommandError> {
+    block_on(BranchRefCatalog.list(repository_path, &OperationContext::non_cancellable()))
 }
 
 #[test]
@@ -97,14 +144,14 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
         .unwrap();
     let expected_head = commit_file(&repository, "welcome.txt", "你好，新内容\n", "head");
 
-    let refs = list_refs(fixture.path()).expect("list refs");
+    let refs = branch_refs(fixture.path()).expect("list refs").refs;
     assert_eq!(
         refs,
         vec!["refs/heads/base", "refs/heads/head", "refs/heads/master"]
     );
 
     let content = open_comparison(fixture.path());
-    let snapshot = content.snapshot();
+    let snapshot = &content.snapshot;
 
     assert_eq!(snapshot.base_ref, "refs/heads/base");
     assert_eq!(snapshot.head_ref, "refs/heads/head");
@@ -121,7 +168,7 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
         "move head after opening review",
     );
     let content = content
-        .read_file_change("welcome.txt")
+        .read("welcome.txt")
         .expect("read pinned File Change");
     assert_eq!(content.before.as_deref(), Some("你好，旧内容\n"));
     assert_eq!(content.after.as_deref(), Some("你好，新内容\n"));
@@ -146,7 +193,7 @@ fn lists_local_and_existing_remote_tracking_refs() {
         )
         .unwrap();
 
-    let refs = list_refs(fixture.path()).expect("list refs");
+    let refs = branch_refs(fixture.path()).expect("list refs").refs;
 
     assert_eq!(
         refs,
@@ -178,7 +225,7 @@ fn branch_refs_report_remote_default_and_current_branch_independently_of_ref_ord
         )
         .unwrap();
 
-    let branches = list_branch_refs(fixture.path()).expect("list branch refs");
+    let branches = branch_refs(fixture.path()).expect("list branch refs");
 
     assert_eq!(branches.default_ref, "refs/remotes/origin/main");
     assert_eq!(branches.current_ref, "refs/heads/aaa-topic");
@@ -199,7 +246,7 @@ fn branch_refs_report_detached_head_as_an_actionable_repository_error() {
     let commit = commit_file(&repository, "welcome.txt", "hello\n", "base");
     repository.set_head_detached(commit).unwrap();
 
-    let error = list_branch_refs(fixture.path()).unwrap_err();
+    let error = branch_refs(fixture.path()).unwrap_err();
 
     assert!(error.to_string().contains("当前未检出本地分支"));
 }
@@ -223,75 +270,13 @@ fn compares_from_merge_base_when_base_and_head_have_diverged() {
     commit_file(&repository, "head-only.txt", "head\n", "head advances");
 
     let content = open_comparison(fixture.path());
-    let snapshot = content.snapshot();
+    let snapshot = &content.snapshot;
 
     assert_eq!(snapshot.base_revision, base_tip.to_string());
     assert_eq!(snapshot.comparison_base, common.to_string());
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "head-only.txt");
     assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Added);
-}
-
-#[test]
-fn fetches_pull_request_objects_without_creating_narrant_refs() {
-    let source = TempDir::new().expect("source repository");
-    let source_repository = Repository::init(source.path()).expect("initialize source");
-    let base = commit_file(&source_repository, "README.md", "base\n", "base");
-    source_repository
-        .branch("main", &source_repository.find_commit(base).unwrap(), true)
-        .unwrap();
-    let head = commit_file(&source_repository, "README.md", "head\n", "head");
-    let bare = TempDir::new().expect("bare remote");
-    assert!(Command::new("git")
-        .args(["init", "--bare", "-q"])
-        .arg(bare.path())
-        .status()
-        .unwrap()
-        .success());
-    for (source_ref, destination_ref) in [
-        ("refs/heads/main", "refs/heads/main"),
-        ("HEAD", "refs/pull/42/head"),
-    ] {
-        assert!(Command::new("git")
-            .arg("push")
-            .arg(bare.path())
-            .arg(format!("{source_ref}:{destination_ref}"))
-            .current_dir(source.path())
-            .status()
-            .unwrap()
-            .success());
-    }
-    let clone = TempDir::new().expect("local clone parent");
-    let clone_path = clone.path().join("repo");
-    assert!(Command::new("git")
-        .args(["clone", "-q", "--single-branch", "--branch", "main"])
-        .arg(bare.path())
-        .arg(&clone_path)
-        .status()
-        .unwrap()
-        .success());
-
-    let review = fetch_pull_request_objects(
-        &clone_path,
-        "origin",
-        42,
-        "main",
-        &base.to_string(),
-        &head.to_string(),
-        &CancellationToken::default(),
-    )
-    .expect("fetch and compare Pull Request objects");
-
-    assert_eq!(review.snapshot().comparison_base, base.to_string());
-    assert_eq!(review.snapshot().head_revision, head.to_string());
-    assert_eq!(review.snapshot().file_changes[0].path, "README.md");
-    let refs = Command::new("git")
-        .args(["for-each-ref", "--format=%(refname)", "refs/narrant"])
-        .current_dir(&clone_path)
-        .output()
-        .unwrap();
-    assert!(refs.status.success());
-    assert!(refs.stdout.is_empty());
 }
 
 #[test]
@@ -357,7 +342,7 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
         .unwrap();
 
     let content = open_comparison(fixture.path());
-    let snapshot = content.snapshot();
+    let snapshot = &content.snapshot;
     let statuses = snapshot
         .file_changes
         .iter()
@@ -379,25 +364,25 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
         .find(|change| change.status == ChangeStatus::Renamed)
         .unwrap();
     assert_eq!(renamed.old_path.as_deref(), Some("old-name.txt"));
-    let renamed_content = content.read_file_change("new-name.txt").unwrap();
+    let renamed_content = content.read("new-name.txt").unwrap();
     assert_eq!(renamed_content.before.as_deref(), Some("rename me\n"));
     assert_eq!(renamed_content.after.as_deref(), Some("rename me\n"));
 
-    let old_path_error = content.read_file_change("old-name.txt").unwrap_err();
+    let old_path_error = content.read("old-name.txt").unwrap_err();
     assert_eq!(
         old_path_error.message(),
         "File Change is not part of the Review Snapshot"
     );
 
-    let added = content.read_file_change("added.txt").unwrap();
+    let added = content.read("added.txt").unwrap();
     assert_eq!(added.before, None);
     assert_eq!(added.after.as_deref(), Some("added\n"));
 
-    let deleted = content.read_file_change("deleted.txt").unwrap();
+    let deleted = content.read("deleted.txt").unwrap();
     assert_eq!(deleted.before.as_deref(), Some("deleted\n"));
     assert_eq!(deleted.after, None);
 
-    let modified = content.read_file_change("modified.txt").unwrap();
+    let modified = content.read("modified.txt").unwrap();
     assert_eq!(modified.before.as_deref(), Some("before\n"));
     assert_eq!(modified.after.as_deref(), Some("after\n"));
 }
@@ -413,12 +398,9 @@ fn opens_an_empty_comparison_and_rejects_unknown_paths() {
 
     let review = open_comparison(fixture.path());
 
-    assert!(review.snapshot().file_changes.is_empty());
+    assert!(review.snapshot.file_changes.is_empty());
     assert_eq!(
-        review
-            .read_file_change("missing.txt")
-            .unwrap_err()
-            .message(),
+        review.read("missing.txt").unwrap_err().message(),
         "File Change is not part of the Review Snapshot"
     );
 }
@@ -426,16 +408,13 @@ fn opens_an_empty_comparison_and_rejects_unknown_paths() {
 #[test]
 fn rejects_missing_repositories_and_unknown_refs() {
     let fixture = TempDir::new().unwrap();
-    assert!(LocalOpenedReview::open(fixture.path(), "refs/heads/base", "refs/heads/head").is_err());
+    assert!(resolve_comparison(fixture.path(), "refs/heads/base", "refs/heads/head").is_err());
 
     let repository = Repository::init(fixture.path()).unwrap();
     commit_file(&repository, "README.md", "same\n", "initial");
+    assert!(resolve_comparison(fixture.path(), "refs/heads/missing", "refs/heads/master").is_err());
     assert!(
-        LocalOpenedReview::open(fixture.path(), "refs/heads/missing", "refs/heads/master").is_err()
-    );
-    assert!(
-        LocalOpenedReview::open(fixture.path(), "refs/heads/master~1", "refs/heads/master")
-            .is_err()
+        resolve_comparison(fixture.path(), "refs/heads/master~1", "refs/heads/master").is_err()
     );
 }
 
@@ -461,7 +440,7 @@ fn represents_binary_changes_with_metadata_and_without_text() {
         .unwrap();
 
     let content = open_comparison(fixture.path());
-    let change = content.read_file_change("image.bin").unwrap();
+    let change = content.read("image.bin").unwrap();
 
     assert_eq!(change.content_kind, ContentKind::Binary);
     assert_eq!(change.before_size, Some(3));
@@ -494,7 +473,7 @@ fn reads_lfs_pointer_as_text_from_pinned_revisions() {
         .unwrap();
 
     let content = open_comparison(fixture.path());
-    let content = content.read_file_change("asset.dat").unwrap();
+    let content = content.read("asset.dat").unwrap();
 
     assert_eq!(content.content_kind, ContentKind::Text);
     assert_eq!(content.before.as_deref(), Some(old_pointer));
@@ -526,7 +505,7 @@ fn reads_symlink_targets_without_following_them() {
         .unwrap();
 
     let content = open_comparison(fixture.path());
-    let content = content.read_file_change("link").unwrap();
+    let content = content.read("link").unwrap();
 
     assert_eq!(content.content_kind, ContentKind::Symlink);
     assert_eq!(content.before.as_deref(), Some("missing-old-target"));
@@ -569,7 +548,7 @@ fn reads_submodule_commit_ids_from_pinned_trees() {
         .unwrap();
 
     let content = open_comparison(fixture.path());
-    let content = content.read_file_change("vendor").unwrap();
+    let content = content.read("vendor").unwrap();
 
     assert_eq!(content.content_kind, ContentKind::Submodule);
     assert_eq!(
@@ -611,8 +590,8 @@ fn ignores_staged_unstaged_and_untracked_worktree_content() {
     index.write().unwrap();
 
     let content = open_comparison(fixture.path());
-    let snapshot = content.snapshot();
-    let content = content.read_file_change("tracked.txt").unwrap();
+    let snapshot = &content.snapshot;
+    let content = content.read("tracked.txt").unwrap();
 
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(content.after.as_deref(), Some("committed head\n"));
@@ -634,7 +613,7 @@ fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
 
     let review = open_comparison(fixture.path());
     let mut paths = review
-        .snapshot()
+        .snapshot
         .file_changes
         .iter()
         .map(|change| change.path.as_str())
@@ -643,11 +622,7 @@ fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
 
     assert_eq!(paths, vec!["line\nbreak.txt", "space name.txt", "你好.txt"]);
     assert_eq!(
-        review
-            .read_file_change("line\nbreak.txt")
-            .unwrap()
-            .after
-            .as_deref(),
+        review.read("line\nbreak.txt").unwrap().after.as_deref(),
         Some("special\n")
     );
 }
@@ -666,7 +641,7 @@ fn distinguishes_executable_mode_changes_in_snapshot_metadata() {
     repository.branch("head", &head, true).unwrap();
 
     let review = open_comparison(fixture.path());
-    let change = &review.snapshot().file_changes[0];
+    let change = &review.snapshot.file_changes[0];
 
     assert_eq!(change.status, ChangeStatus::Modified);
     assert_eq!(change.before_mode, Some(0o100644));
@@ -683,12 +658,10 @@ fn recovers_after_a_failed_revision_resolution() {
     repository.branch("base", &commit, true).unwrap();
     repository.branch("head", &commit, true).unwrap();
 
-    assert!(
-        LocalOpenedReview::open(fixture.path(), "refs/heads/missing", "refs/heads/head").is_err()
-    );
+    assert!(resolve_comparison(fixture.path(), "refs/heads/missing", "refs/heads/head").is_err());
     let recovered = open_comparison(fixture.path());
 
-    assert!(recovered.snapshot().file_changes.is_empty());
+    assert!(recovered.snapshot.file_changes.is_empty());
 }
 
 #[test]
@@ -713,18 +686,14 @@ fn compares_canonical_refs_in_a_real_shallow_clone() {
         .expect("run shallow clone");
     assert!(status.success());
 
-    let refs = list_refs(&clone_path).expect("list shallow refs");
+    let refs = branch_refs(&clone_path).expect("list shallow refs").refs;
     assert!(refs.contains(&"refs/heads/head".to_owned()));
     assert!(refs.contains(&"refs/remotes/origin/head".to_owned()));
-    let review =
-        LocalOpenedReview::open(&clone_path, "refs/heads/head", "refs/remotes/origin/head")
-            .expect("compare shallow refs");
+    let review = resolve_comparison(&clone_path, "refs/heads/head", "refs/remotes/origin/head")
+        .expect("compare shallow refs");
 
-    assert_eq!(
-        review.snapshot().base_revision,
-        review.snapshot().head_revision
-    );
-    assert!(review.snapshot().file_changes.is_empty());
+    assert_eq!(review.snapshot.base_revision, review.snapshot.head_revision);
+    assert!(review.snapshot.file_changes.is_empty());
 }
 
 #[test]
@@ -775,11 +744,10 @@ fn selected_remote_fetch_observes_force_push_without_credentials_injection() {
         .success());
     let forced_head = source.head().unwrap().target().unwrap();
 
-    fetch_selected_remote_refs(
+    resolve_comparison(
         &clone_path,
         "refs/remotes/origin/topic",
         "refs/remotes/origin/topic",
-        &CancellationToken::default(),
     )
     .expect("fetch selected remote");
 
@@ -803,13 +771,13 @@ fn selected_remote_fetch_reports_transport_failure_without_moving_tracking_ref()
         .remote("origin", "/definitely/missing/narrant-remote")
         .unwrap();
 
-    let error = fetch_selected_remote_refs(
+    let error = resolve_comparison(
         fixture.path(),
         "refs/remotes/origin/topic",
         "refs/remotes/origin/topic",
-        &CancellationToken::default(),
     )
-    .unwrap_err();
+    .err()
+    .expect("missing remote must fail");
 
     assert!(error.to_string().contains("Core Git 失败"));
     assert_eq!(
@@ -838,13 +806,13 @@ fn selected_remote_fetch_reports_http_authentication_failure_without_moving_ref(
         .remote("origin", &server.url("/private.git"))
         .unwrap();
 
-    let error = fetch_selected_remote_refs(
+    let error = resolve_comparison(
         fixture.path(),
         "refs/remotes/origin/topic",
         "refs/remotes/origin/topic",
-        &CancellationToken::default(),
     )
-    .unwrap_err();
+    .err()
+    .expect("authentication failure must fail");
 
     assert!(error.to_string().contains("Core Git 失败"));
     assert_eq!(
@@ -879,8 +847,7 @@ fn comparison_without_a_common_ancestor_fails_without_mutating_refs() {
     commit_file(&repository, "head.txt", "head\n", "head");
     let head = repository.head().unwrap().target().unwrap();
 
-    let error = match LocalOpenedReview::open(fixture.path(), "refs/heads/base", "refs/heads/head")
-    {
+    let error = match resolve_comparison(fixture.path(), "refs/heads/base", "refs/heads/head") {
         Ok(_) => panic!("unrelated histories must not produce a comparison"),
         Err(error) => error,
     };

@@ -1,7 +1,6 @@
 use crate::cancellable_operation::OperationContext;
-use crate::change_content::local::{
-    resolve_pull_request_objects, LocalSnapshot, PullRequestObjectResolutionError,
-};
+use crate::change_content::local::{self, ExactComparison, LocalSnapshot};
+use crate::core_git::{GitCommandError, GitProcessAdapter};
 use crate::github_auth::GitHubAuth;
 use crate::github_discovery::{self, GitHubRepository};
 use crate::repository_catalog::PullRequestMetadata;
@@ -152,9 +151,11 @@ impl PullRequestSelectionResolver {
                 &observation.base.reference,
                 &observation.base.sha,
                 &observation.head.sha,
-                cancellation,
-            ) {
-                Ok(opened) => {
+                operation,
+            )
+            .await
+            {
+                Ok(snapshot) => {
                     let synchronized_at = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .map_err(|_| PullRequestResolutionError::Clock)?
@@ -176,10 +177,7 @@ impl PullRequestSelectionResolver {
                         updated_at: Some(observation.updated_at),
                         synchronized_at,
                     };
-                    return Ok(ResolvedPullRequestSelection {
-                        snapshot: opened.snapshot().clone(),
-                        metadata,
-                    });
+                    return Ok(ResolvedPullRequestSelection { snapshot, metadata });
                 }
                 Err(error) if error.is_cancelled() => {
                     return Err(PullRequestResolutionError::Cancelled(error.to_string()));
@@ -203,6 +201,76 @@ impl PullRequestSelectionResolver {
             })
         }
     }
+}
+
+/// 区分 remote 获取失败与获取成功后的精确 revision 校验失败。
+enum PullRequestObjectResolutionError {
+    Fetch(GitCommandError),
+    ExactRevision(GitCommandError),
+}
+
+impl PullRequestObjectResolutionError {
+    /// 返回底层失败是否来自合作式取消。
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Fetch(error) | Self::ExactRevision(error) => error.is_cancelled(),
+        }
+    }
+}
+
+impl std::fmt::Display for PullRequestObjectResolutionError {
+    /// 输出底层 Core Git 诊断。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fetch(error) | Self::ExactRevision(error) => error.fmt(formatter),
+        }
+    }
+}
+
+/// 获取 Pull Request 对象并通过共享 kernel 构建精确 comparison。
+async fn resolve_pull_request_objects(
+    repository_path: &Path,
+    remote: &str,
+    pull_request_number: u64,
+    base_ref: &str,
+    base_revision: &str,
+    head_revision: &str,
+    operation: &OperationContext,
+) -> Result<LocalSnapshot, PullRequestObjectResolutionError> {
+    if remote.is_empty() || base_ref.is_empty() || pull_request_number == 0 {
+        return Err(PullRequestObjectResolutionError::Fetch(
+            GitCommandError::new("Pull Request fetch 参数无效"),
+        ));
+    }
+    let adapter = GitProcessAdapter::new(repository_path);
+    let base_source = format!("refs/heads/{base_ref}");
+    let head_source = format!("refs/pull/{pull_request_number}/head");
+    for source in [&base_source, &head_source] {
+        adapter
+            .run_network(
+                [
+                    "fetch",
+                    "--no-write-fetch-head",
+                    "--no-tags",
+                    remote,
+                    source,
+                ],
+                operation.cancellation(),
+            )
+            .map_err(PullRequestObjectResolutionError::Fetch)?;
+    }
+    local::compare_exact(
+        repository_path,
+        ExactComparison {
+            base_ref: base_ref.to_owned(),
+            head_ref: format!("pull/{pull_request_number}/head"),
+            base_revision: base_revision.to_owned(),
+            head_revision: head_revision.to_owned(),
+        },
+        operation,
+    )
+    .await
+    .map_err(PullRequestObjectResolutionError::ExactRevision)
 }
 
 /// 在任何外部工作开始前响应已经发生的取消。

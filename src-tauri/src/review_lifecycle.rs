@@ -1,5 +1,8 @@
+use crate::branch_selection::{
+    BranchSelection, BranchSelectionResolutionError, BranchSelectionResolver,
+};
 use crate::cancellable_operation::OperationContext;
-use crate::change_content::local::{LocalOpenedReview, LocalSnapshot};
+use crate::change_content::local::{LocalSnapshot, LocalSnapshotReader};
 use crate::change_content::LoadedFileChange;
 use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
 use crate::pull_request_selection::PullRequestResolutionError;
@@ -121,6 +124,15 @@ impl ReviewLifecycleError {
             error => Self::Operation(error.to_string()),
         }
     }
+
+    /// 保留 Branch Selection resolver 已识别的取消语义。
+    fn branch(error: BranchSelectionResolutionError) -> Self {
+        if error.is_cancelled() {
+            Self::Cancelled(error.to_string())
+        } else {
+            Self::Git(error.to_string())
+        }
+    }
 }
 
 impl std::fmt::Display for ReviewLifecycleError {
@@ -164,8 +176,9 @@ impl std::error::Error for ReviewLifecycleError {}
 /// 统一拥有 durable Review、current Snapshot、Workspace 与运行时读取句柄的一致性边界。
 pub struct ReviewLifecycle {
     catalog: Arc<RepositoryCatalog>,
+    branch_selections: BranchSelectionResolver,
     pull_requests: Arc<PullRequestSelectionResolver>,
-    reviews: Mutex<HashMap<String, Arc<Mutex<LocalOpenedReview>>>>,
+    reviews: Mutex<HashMap<String, Arc<LocalSnapshotReader>>>,
     active_refreshes: Mutex<HashSet<String>>,
 }
 
@@ -187,6 +200,7 @@ impl ReviewLifecycle {
     ) -> Self {
         Self {
             catalog,
+            branch_selections: BranchSelectionResolver,
             pull_requests,
             reviews: Mutex::new(HashMap::new()),
             active_refreshes: Mutex::new(HashSet::new()),
@@ -222,22 +236,18 @@ impl ReviewLifecycle {
                 {
                     saved
                 } else {
-                    crate::change_content::local::fetch_selected_remote_refs(
-                        &repository,
-                        &base_ref,
-                        &head_ref,
-                        cancellation,
-                    )
-                    .map_err(ReviewLifecycleError::git)?;
-                    let opened = LocalOpenedReview::open_with_cancellation(
-                        &repository,
-                        &base_ref,
-                        &head_ref,
-                        cancellation,
-                    )
-                    .map_err(ReviewLifecycleError::git)?;
+                    let operation = OperationContext::from_cancellation(cancellation.clone());
+                    let resolved = self
+                        .branch_selections
+                        .resolve(
+                            &repository,
+                            &BranchSelection { base_ref, head_ref },
+                            &operation,
+                        )
+                        .await
+                        .map_err(ReviewLifecycleError::branch)?;
                     self.catalog
-                        .save_branch_review(repository_entry_id, opened.snapshot())
+                        .save_branch_review(repository_entry_id, &resolved.snapshot)
                         .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 }
             }
@@ -300,22 +310,19 @@ impl ReviewLifecycle {
                 .map_err(ReviewLifecycleError::pull_request)?
                 .snapshot
         } else {
-            crate::change_content::local::fetch_selected_remote_refs(
-                &repository_path,
-                &current.base_ref,
-                &current.head_ref,
-                cancellation,
-            )
-            .map_err(ReviewLifecycleError::git)?;
-            LocalOpenedReview::open_with_cancellation(
-                &repository_path,
-                &current.base_ref,
-                &current.head_ref,
-                cancellation,
-            )
-            .map_err(ReviewLifecycleError::git)?
-            .snapshot()
-            .clone()
+            let operation = OperationContext::from_cancellation(cancellation.clone());
+            self.branch_selections
+                .resolve(
+                    &repository_path,
+                    &BranchSelection {
+                        base_ref: current.base_ref.clone(),
+                        head_ref: current.head_ref.clone(),
+                    },
+                    &operation,
+                )
+                .await
+                .map_err(ReviewLifecycleError::branch)?
+                .snapshot
         };
         Ok(ReviewUpdate {
             update_available: current.base_revision != available.base_revision
@@ -343,7 +350,7 @@ impl ReviewLifecycle {
     }
 
     /// 从已激活的 current Snapshot 读取单个 File Change 内容。
-    pub fn read_file_change(
+    pub async fn read_file_change(
         &self,
         review_id: &str,
         snapshot_id: &str,
@@ -368,10 +375,10 @@ impl ReviewLifecycle {
                     "Review 已关闭或失效，请重新打开。".to_owned(),
                 )
             })?;
+        let operation = OperationContext::from_cancellation(cancellation.clone());
         let content = review
-            .lock()
-            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
-            .read_file_change_with_cancellation(path, cancellation)
+            .read(path, &operation)
+            .await
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(content)
     }
@@ -466,28 +473,28 @@ impl ReviewLifecycle {
                 .stage_pull_request_snapshot(&current, &available.metadata, &available.snapshot)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         } else {
-            crate::change_content::local::fetch_selected_remote_refs(
-                &repository_path,
-                &current.base_ref,
-                &current.head_ref,
-                cancellation,
-            )
-            .map_err(ReviewLifecycleError::git)?;
-            let available = LocalOpenedReview::open_with_cancellation(
-                &repository_path,
-                &current.base_ref,
-                &current.head_ref,
-                cancellation,
-            )
-            .map_err(ReviewLifecycleError::git)?;
-            require_confirmed_available(&confirmation, available.snapshot(), "Branch Selection")?;
+            let operation = OperationContext::from_cancellation(cancellation.clone());
+            let available = self
+                .branch_selections
+                .resolve(
+                    &repository_path,
+                    &BranchSelection {
+                        base_ref: current.base_ref.clone(),
+                        head_ref: current.head_ref.clone(),
+                    },
+                    &operation,
+                )
+                .await
+                .map_err(ReviewLifecycleError::branch)?
+                .snapshot;
+            require_confirmed_available(&confirmation, &available, "Branch Selection")?;
             if current.base_revision == confirmation.available_base_revision
                 && current.head_revision == confirmation.available_head_revision
             {
                 return Ok(presentation_from_saved(current, Vec::new()));
             }
             self.catalog
-                .save_refresh_snapshot(review_id, available.snapshot())
+                .save_refresh_snapshot(review_id, &available)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         };
 
@@ -529,10 +536,7 @@ impl ReviewLifecycle {
         let snapshot = candidate.snapshot();
         reviews.insert(
             review_id.to_owned(),
-            Arc::new(Mutex::new(LocalOpenedReview::restore(
-                &repository_path,
-                snapshot,
-            ))),
+            Arc::new(LocalSnapshotReader::restore(&repository_path, snapshot)),
         );
         Ok(presentation_from_saved(candidate, Vec::new()))
     }
@@ -583,10 +587,7 @@ impl ReviewLifecycle {
         let snapshot = saved.snapshot();
         reviews.insert(
             saved.review_id.clone(),
-            Arc::new(Mutex::new(LocalOpenedReview::restore(
-                &repository_path,
-                snapshot,
-            ))),
+            Arc::new(LocalSnapshotReader::restore(&repository_path, snapshot)),
         );
         reviews.retain(|review_id, _| review_id == &saved.review_id);
         drop(reviews);

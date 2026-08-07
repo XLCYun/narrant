@@ -266,27 +266,18 @@ fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
     )
     .unwrap();
     let branch_ref = format!("refs/heads/{}", branch.trim());
-    let snapshot = crate::change_content::local::LocalOpenedReview::open(
-        repository.path(),
-        &branch_ref,
-        &branch_ref,
-    )
-    .unwrap();
+    let snapshot = snapshot_for_refs(repository.path(), &branch_ref, &branch_ref);
 
-    let first = catalog
-        .save_branch_review(entry.id, snapshot.snapshot())
-        .unwrap();
+    let first = catalog.save_branch_review(entry.id, &snapshot).unwrap();
     catalog.activate_snapshot(&first).unwrap();
-    let reopened = catalog
-        .save_branch_review(entry.id, snapshot.snapshot())
-        .unwrap();
+    let reopened = catalog.save_branch_review(entry.id, &snapshot).unwrap();
     let loaded = catalog.open_review(&first.review_id).unwrap();
 
     assert_eq!(reopened.review_id, first.review_id);
     assert_eq!(loaded.review_id, first.review_id);
     assert_eq!(loaded.base_ref, branch_ref);
     assert_eq!(loaded.head_ref, branch_ref);
-    assert_eq!(loaded.head_revision, snapshot.snapshot().head_revision);
+    assert_eq!(loaded.head_revision, snapshot.head_revision);
     assert!(loaded.file_changes.is_empty());
 }
 
@@ -307,12 +298,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
     )
     .unwrap();
     let branch_ref = format!("refs/heads/{}", branch.trim());
-    let snapshot = crate::change_content::local::LocalOpenedReview::open(
-        repository.path(),
-        &branch_ref,
-        &branch_ref,
-    )
-    .unwrap();
+    let snapshot = snapshot_for_refs(repository.path(), &branch_ref, &branch_ref);
     let first_metadata = PullRequestMetadata {
         owner: "octo-org".to_owned(),
         repository: "octo-repo".to_owned(),
@@ -330,7 +316,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
     };
 
     let first = catalog
-        .save_pull_request_review(entry.id, &first_metadata, snapshot.snapshot())
+        .save_pull_request_review(entry.id, &first_metadata, &snapshot)
         .unwrap();
     catalog.activate_snapshot(&first).unwrap();
     let reopened = catalog
@@ -342,7 +328,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
                 synchronized_at: 2,
                 ..first_metadata
             },
-            snapshot.snapshot(),
+            &snapshot,
         )
         .unwrap();
 
@@ -379,12 +365,7 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
     )
     .unwrap();
     let branch_ref = format!("refs/heads/{}", branch.trim());
-    let opened = crate::change_content::local::LocalOpenedReview::open(
-        repository.path(),
-        &branch_ref,
-        &branch_ref,
-    )
-    .unwrap();
+    let opened = snapshot_for_refs(repository.path(), &branch_ref, &branch_ref);
     let metadata = PullRequestMetadata {
         owner: "octo-org".to_owned(),
         repository: "octo-repo".to_owned(),
@@ -401,10 +382,10 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
         synchronized_at: 1,
     };
     let first = catalog
-        .save_pull_request_review(entry.id, &metadata, opened.snapshot())
+        .save_pull_request_review(entry.id, &metadata, &opened)
         .unwrap();
     catalog.activate_snapshot(&first).unwrap();
-    let mut next_snapshot = opened.snapshot().clone();
+    let mut next_snapshot = opened.clone();
     next_snapshot.head_revision = "2222222222222222222222222222222222222222".to_owned();
 
     let refreshed_metadata = PullRequestMetadata {
@@ -462,15 +443,8 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     }
     let base_ref = "refs/heads/base";
     let head_ref = "refs/heads/topic";
-    let initial = crate::change_content::local::LocalOpenedReview::open(
-        repository.path(),
-        base_ref,
-        head_ref,
-    )
-    .unwrap();
-    let saved = catalog
-        .save_branch_review(entry.id, initial.snapshot())
-        .unwrap();
+    let initial = snapshot_for_refs(repository.path(), base_ref, head_ref);
+    let saved = catalog.save_branch_review(entry.id, &initial).unwrap();
     catalog.activate_snapshot(&saved).unwrap();
     let old_head = saved.head_revision.clone();
     let workspace = catalog.review_workspace_path(&saved.review_id).unwrap();
@@ -491,15 +465,10 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         .status()
         .unwrap()
         .success());
-    let latest = crate::change_content::local::LocalOpenedReview::open(
-        repository.path(),
-        base_ref,
-        head_ref,
-    )
-    .unwrap();
+    let latest = snapshot_for_refs(repository.path(), base_ref, head_ref);
 
     let candidate = catalog
-        .save_refresh_snapshot(&saved.review_id, latest.snapshot())
+        .save_refresh_snapshot(&saved.review_id, &latest)
         .unwrap();
     assert_eq!(
         catalog.open_review(&saved.review_id).unwrap().head_revision,
@@ -530,7 +499,7 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         .activate_refresh_snapshot(&candidate, &saved)
         .unwrap();
     let refreshed = catalog.open_review(&saved.review_id).unwrap();
-    assert_eq!(refreshed.head_revision, latest.snapshot().head_revision);
+    assert_eq!(refreshed.head_revision, latest.head_revision);
     assert_ne!(refreshed.head_revision, old_head);
     assert_eq!(refreshed.file_changes.len(), 1);
     assert_eq!(refreshed.file_changes[0].path, "README.md");
@@ -604,12 +573,25 @@ fn snapshot_for_head(
     )
     .unwrap();
     let branch_ref = format!("refs/heads/{}", branch.trim());
-    crate::change_content::local::LocalOpenedReview::open(
-        repository.path(),
-        &branch_ref,
-        &branch_ref,
-    )
-    .unwrap()
-    .snapshot()
-    .clone()
+    snapshot_for_refs(repository.path(), &branch_ref, &branch_ref)
+}
+
+/// 通过 Branch Selection seam 从真实 refs 解析固定 Snapshot。
+fn snapshot_for_refs(
+    repository_path: &std::path::Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> crate::change_content::local::LocalSnapshot {
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(crate::branch_selection::BranchSelectionResolver.resolve(
+            repository_path,
+            &crate::branch_selection::BranchSelection {
+                base_ref: base_ref.to_owned(),
+                head_ref: head_ref.to_owned(),
+            },
+            &crate::cancellable_operation::OperationContext::non_cancellable(),
+        ))
+        .unwrap()
+        .snapshot
 }

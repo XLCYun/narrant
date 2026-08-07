@@ -24,7 +24,7 @@ fn same_review_cannot_hold_two_refresh_leases() {
 async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     let fixture = LifecycleFixture::new();
     let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
-    let saved = fixture.save_current_review();
+    let saved = fixture.save_current_review().await;
     fixture.catalog.activate_snapshot(&saved).unwrap();
     let presentation = lifecycle
         .present(
@@ -60,14 +60,15 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
             "README.md",
             &CancellationToken::default(),
         )
+        .await
         .unwrap_err();
     assert_eq!(error.to_string(), "Review 已关闭或失效，请重新打开。");
 }
 
-#[test]
-fn recovery_abandons_unactivated_candidate_without_adding_history() {
+#[tokio::test]
+async fn recovery_abandons_unactivated_candidate_without_adding_history() {
     let fixture = LifecycleFixture::new();
-    let saved = fixture.save_current_review();
+    let saved = fixture.save_current_review().await;
     fixture.catalog.activate_snapshot(&saved).unwrap();
     let candidate = fixture
         .catalog
@@ -93,7 +94,7 @@ fn recovery_abandons_unactivated_candidate_without_adding_history() {
 #[tokio::test]
 async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
     let fixture = LifecycleFixture::new();
-    let saved = fixture.save_current_review();
+    let saved = fixture.save_current_review().await;
     fixture.catalog.activate_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
     let current = lifecycle
@@ -154,6 +155,7 @@ async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
             "README.md",
             &CancellationToken::default(),
         )
+        .await
         .unwrap_err();
     assert!(matches!(stale_error, ReviewLifecycleError::StaleSnapshot));
     let content = lifecycle
@@ -163,6 +165,7 @@ async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
             "README.md",
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
     assert_eq!(content.after.as_deref(), Some("refreshed\n"));
 }
@@ -177,7 +180,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
         fixture.repository.path(),
         &["commit", "-q", "-m", "old workspace"],
     );
-    let saved = fixture.save_current_review();
+    let saved = fixture.save_current_review().await;
     fixture.catalog.activate_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
     lifecycle
@@ -266,7 +269,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
 #[tokio::test]
 async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     let fixture = LifecycleFixture::new();
-    let saved = fixture.save_current_review();
+    let saved = fixture.save_current_review().await;
     fixture.catalog.activate_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
     let current = lifecycle
@@ -317,8 +320,9 @@ async fn failed_target_materialization_keeps_current_review_readable() {
     let target_entry = catalog.register(target_repository.path()).unwrap();
     catalog.grant_workspace_trust(first_entry.id).unwrap();
     catalog.grant_workspace_trust(target_entry.id).unwrap();
-    let first_saved = save_current_review(&catalog, first_entry.id, first_repository.path());
-    let target_saved = save_current_review(&catalog, target_entry.id, target_repository.path());
+    let first_saved = save_current_review(&catalog, first_entry.id, first_repository.path()).await;
+    let target_saved =
+        save_current_review(&catalog, target_entry.id, target_repository.path()).await;
     catalog.activate_snapshot(&first_saved).unwrap();
     catalog.activate_snapshot(&target_saved).unwrap();
     let lifecycle = ReviewLifecycle::new(catalog.clone());
@@ -357,6 +361,7 @@ async fn failed_target_materialization_keeps_current_review_readable() {
             "README.md",
             &CancellationToken::default(),
         )
+        .await
         .unwrap();
     assert_eq!(content.path, "README.md");
 }
@@ -460,12 +465,13 @@ impl LifecycleFixture {
     }
 
     /// 保存当前分支相对其父提交的测试 Review。
-    fn save_current_review(&self) -> SavedBranchReview {
+    async fn save_current_review(&self) -> SavedBranchReview {
         save_current_review(
             &self.catalog,
             self.repository_entry_id,
             self.repository.path(),
         )
+        .await
     }
 
     /// 把测试 repository 配成可通过 GitHub identity 匹配的 PR base remote。
@@ -517,15 +523,24 @@ fn test_repository_with_commit() -> tempfile::TempDir {
 }
 
 /// 保存 base/head 分支组成的测试 Review。
-fn save_current_review(
+async fn save_current_review(
     catalog: &RepositoryCatalog,
     repository_entry_id: i64,
     repository_path: &Path,
 ) -> SavedBranchReview {
-    let opened =
-        LocalOpenedReview::open(repository_path, "refs/heads/base", "refs/heads/topic").unwrap();
+    let resolved = BranchSelectionResolver
+        .resolve(
+            repository_path,
+            &BranchSelection {
+                base_ref: "refs/heads/base".to_owned(),
+                head_ref: "refs/heads/topic".to_owned(),
+            },
+            &OperationContext::non_cancellable(),
+        )
+        .await
+        .unwrap();
     catalog
-        .save_branch_review(repository_entry_id, opened.snapshot())
+        .save_branch_review(repository_entry_id, &resolved.snapshot)
         .unwrap()
 }
 

@@ -1,3 +1,4 @@
+pub mod branch_selection;
 pub mod cancellable_operation;
 pub mod change_content;
 pub mod core_git;
@@ -431,16 +432,15 @@ async fn list_local_refs(
 ) -> Result<BranchRefsResponse, String> {
     let repository_path = require_available_repository(lifecycle.catalog(), repository_entry_id)?;
     run_cancellable_command(&operations, operation_id, |operation| async move {
-        change_content::local::list_branch_refs_with_cancellation(
-            &repository_path,
-            operation.cancellation(),
-        )
-        .map(|branches| BranchRefsResponse {
-            refs: branches.refs,
-            default_ref: branches.default_ref,
-            current_ref: branches.current_ref,
-        })
-        .map_err(|error| error.to_string())
+        branch_selection::BranchRefCatalog
+            .list(&repository_path, &operation)
+            .await
+            .map(|branches| BranchRefsResponse {
+                refs: branches.refs,
+                default_ref: branches.default_ref,
+                current_ref: branches.current_ref,
+            })
+            .map_err(|error| error.to_string())
     })
     .await
 }
@@ -530,6 +530,7 @@ async fn read_review_file_change(
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
             .read_file_change(&review_id, &snapshot_id, &path, operation.cancellation())
+            .await
             .map(map_file_content)
             .map_err(|error| error.to_string())
     })
