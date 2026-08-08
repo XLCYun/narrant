@@ -16,6 +16,15 @@ export type RepositoryContext = {
   reviews: ReviewSummary[];
 };
 
+/** 当前 Repository 页面所需的 saved Snapshot 与 Review 摘要投影。 */
+export type RepositoryReviewsProjection = Pick<RepositoryContext, "savedReviews" | "reviews">;
+
+/** 首页展示的 Repository 列表与全局最近 Review 投影。 */
+export type RepositoryCatalogProjection = {
+  repositories: RepositoryEntry[];
+  recentReviews: ReviewSummary[];
+};
+
 export type BranchRefs = { refs: string[]; defaultRef: string; currentRef: string };
 
 export type OpenRepositoryResult =
@@ -25,11 +34,10 @@ export type OpenRepositoryResult =
 
 /** Repository Catalog 与 Workspace Trust 的应用 interface。 */
 export interface RepositoryApplicationAdapter {
-  loadCatalog(): Promise<{ repositories: RepositoryEntry[]; recentReviews: ReviewSummary[] }>;
+  loadCatalog(): Promise<RepositoryCatalogProjection>;
   register(path: string): Promise<RepositoryEntry>;
   open(repositoryEntryId: number): Promise<OpenRepositoryResult>;
   grantTrust(repository: RepositoryEntry): Promise<RepositoryContext>;
-  loadReviews(repositoryEntryId: number): Promise<Pick<RepositoryContext, "savedReviews" | "reviews">>;
+  loadReviews(repositoryEntryId: number): Promise<RepositoryReviewsProjection>;
   loadBranches(repositoryEntryId: number, signal: AbortSignal): Promise<BranchRefs>;
-  markOpened(repositoryEntryId: number): Promise<RepositoryEntry>;
 }

@@ -5,6 +5,7 @@ pub mod core_git;
 pub mod github_auth;
 pub mod github_discovery;
 pub mod pull_request_selection;
+pub mod repository_application;
 pub mod repository_catalog;
 pub mod review_lifecycle;
 
@@ -115,16 +116,6 @@ struct ReviewUpdateResponse {
     current_head_revision: String,
     available_base_revision: String,
     available_head_revision: String,
-}
-
-/// Repository Entry 页面展示的 durable Review 摘要。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SavedReviewSummaryResponse {
-    review_id: String,
-    base_revision: String,
-    head_revision: String,
-    pull_request: Option<repository_catalog::PullRequestMetadata>,
 }
 
 /// Repository Entry 本地分支标签所需的 canonical refs 与显式默认选择。
@@ -411,54 +402,59 @@ async fn refresh_pull_request_review(
     .await
 }
 
-/// 列出 Repository Entry 保存的 Reviews；不访问 GitHub，也不创建 workspace。
+/// 返回首页所需的 Repository 与全局最近 Review projection。
 #[tauri::command]
-fn list_saved_reviews(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-    repository_entry_id: i64,
-) -> Result<Vec<SavedReviewSummaryResponse>, String> {
-    require_available_repository(lifecycle.catalog(), repository_entry_id)?;
-    lifecycle
-        .catalog()
-        .list_saved_review_snapshots(repository_entry_id)
+fn load_repository_catalog(
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
+) -> Result<repository_application::RepositoryCatalogProjection, String> {
+    application
+        .load_catalog()
         .map_err(|error| error.to_string())
-        .map(|reviews| {
-            reviews
-                .into_iter()
-                .map(|review| SavedReviewSummaryResponse {
-                    review_id: review.review_id,
-                    base_revision: review.base_revision,
-                    head_revision: review.head_revision,
-                    pull_request: review.pull_request,
-                })
-                .collect()
-        })
 }
 
-/// 仅用 cached current Snapshot 重开 durable Review，不依赖 GitHub 登录或 discovery。
+/// 打开 Repository，并将 availability、Trust 与 Review projection 收进一个 command。
 #[tauri::command]
-async fn open_saved_review(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-    review_id: String,
-) -> Result<ReviewSnapshotResponse, String> {
-    lifecycle
-        .present(
-            review_lifecycle::PresentReview::Saved { review_id },
-            &core_git::CancellationToken::default(),
-        )
-        .await
-        .map(map_presentation)
+fn open_repository_context(
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
+    repository_entry_id: i64,
+) -> Result<repository_application::RepositoryOpenResult, String> {
+    application
+        .open_context(repository_entry_id)
+        .map_err(|error| error.to_string())
+}
+
+/// 授予 Repository Workspace Trust 后返回完整可进入 context。
+#[tauri::command]
+fn grant_repository_workspace_trust_and_open(
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
+    repository_entry_id: i64,
+) -> Result<repository_application::RepositoryContext, String> {
+    application
+        .grant_trust_and_open(repository_entry_id)
+        .map_err(|error| error.to_string())
+}
+
+/// 一次读取当前 Repository 的 saved Snapshot 与 Review summaries。
+#[tauri::command]
+fn load_repository_reviews(
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
+    repository_entry_id: i64,
+) -> Result<repository_application::RepositoryReviewsProjection, String> {
+    application
+        .load_reviews(repository_entry_id)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn list_local_refs(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
     operations: tauri::State<'_, cancellable_operation::CancellableOperations>,
     operation_id: String,
     repository_entry_id: i64,
 ) -> Result<BranchRefsResponse, String> {
-    let repository_path = require_available_repository(lifecycle.catalog(), repository_entry_id)?;
+    let repository_path = application
+        .require_available_path(repository_entry_id)
+        .map_err(|error| error.to_string())?;
     run_cancellable_command(&operations, operation_id, |operation| async move {
         branch_selection::BranchRefCatalog
             .list(&repository_path, &operation)
@@ -499,10 +495,12 @@ fn github_api_base_url() -> String {
 #[tauri::command]
 async fn discover_github_pull_requests(
     auth: tauri::State<'_, Arc<github_auth::GitHubAuth>>,
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
     repository_entry_id: i64,
 ) -> Result<Vec<github_discovery::PullRequestGroup>, String> {
-    let repository_path = require_available_repository(lifecycle.catalog(), repository_entry_id)?;
+    let repository_path = application
+        .require_available_path(repository_entry_id)
+        .map_err(|error| error.to_string())?;
     let access_token = auth.access_token().await?;
     let api_base_url = github_api_base_url();
     github_discovery::discover_pull_requests(&repository_path, &api_base_url, access_token).await
@@ -577,62 +575,14 @@ fn close_review(
         .map_err(|error| error.to_string())
 }
 
-/// 查询一个 Repository Entry 的持久化 Workspace Trust。
-#[tauri::command]
-fn repository_workspace_trust(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-    repository_entry_id: i64,
-) -> Result<bool, String> {
-    lifecycle
-        .catalog()
-        .is_workspace_trusted(repository_entry_id)
-        .map_err(|error| error.to_string())
-}
-
-/// 在用户确认风险说明后授予 Repository Entry 级 Workspace Trust。
-#[tauri::command]
-fn grant_repository_workspace_trust(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-    repository_entry_id: i64,
-) -> Result<(), String> {
-    lifecycle
-        .catalog()
-        .grant_workspace_trust(repository_entry_id)
-        .map_err(|error| error.to_string())
-}
-
 /// 注册一个经 Core Git 验证的 Repository Entry。
 #[tauri::command]
 fn register_repository_entry(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
+    application: tauri::State<'_, Arc<repository_application::RepositoryEntryApplication>>,
     path: String,
 ) -> Result<repository_catalog::RepositoryEntry, String> {
-    lifecycle
-        .catalog()
+    application
         .register(std::path::Path::new(&path))
-        .map_err(|error| error.to_string())
-}
-
-/// 列出应用数据库中的全部 Repository Entries。
-#[tauri::command]
-fn list_repository_entries(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-) -> Result<Vec<repository_catalog::RepositoryEntry>, String> {
-    lifecycle
-        .catalog()
-        .list()
-        .map_err(|error| error.to_string())
-}
-
-/// 列出一个 Repository Entry 的 Reviews；空 identity 表示全局最近 Reviews。
-#[tauri::command]
-fn list_reviews(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-    repository_entry_id: Option<i64>,
-) -> Result<Vec<repository_catalog::ReviewSummary>, String> {
-    lifecycle
-        .catalog()
-        .list_reviews(repository_entry_id)
         .map_err(|error| error.to_string())
 }
 
@@ -650,33 +600,6 @@ async fn reopen_review(
         .await
         .map(map_presentation)
         .map_err(|error| error.to_string())
-}
-
-/// 打开 Repository Entry 并更新其最后打开时间。
-#[tauri::command]
-fn open_repository_entry(
-    lifecycle: tauri::State<'_, review_lifecycle::ReviewLifecycle>,
-    id: i64,
-) -> Result<repository_catalog::RepositoryEntry, String> {
-    lifecycle
-        .catalog()
-        .open_entry(id)
-        .map_err(|error| error.to_string())
-}
-
-/// 将 durable Repository Entry identity 解析为当前仍可用的保存路径。
-fn require_available_repository(
-    catalog: &repository_catalog::RepositoryCatalog,
-    id: i64,
-) -> Result<std::path::PathBuf, String> {
-    let entry = catalog.open_entry(id).map_err(|error| error.to_string())?;
-    if entry.available {
-        Ok(entry.canonical_path)
-    } else {
-        Err(entry
-            .unavailable_reason
-            .unwrap_or_else(|| "Repository Entry 当前不可用。".to_owned()))
-    }
 }
 
 pub fn run() {
@@ -720,22 +643,26 @@ pub fn run() {
                     auth.clone(),
                 ),
             );
-            let lifecycle = review_lifecycle::ReviewLifecycle::with_pull_request_resolver(
-                catalog,
+            let repository_application = Arc::new(
+                repository_application::RepositoryEntryApplication::new(catalog.clone()),
+            );
+            let lifecycle = review_lifecycle::ReviewLifecycle::with_repository_application(
+                catalog.clone(),
+                repository_application.clone(),
                 pull_requests,
             );
             let _ = lifecycle.recover();
             app.manage(lifecycle);
+            app.manage(repository_application);
             app.manage(auth);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            load_repository_catalog,
+            open_repository_context,
+            grant_repository_workspace_trust_and_open,
+            load_repository_reviews,
             register_repository_entry,
-            list_repository_entries,
-            list_reviews,
-            open_repository_entry,
-            repository_workspace_trust,
-            grant_repository_workspace_trust,
             compare_local_refs,
             check_branch_review_updates,
             reopen_and_refresh_branch_review,
@@ -747,8 +674,6 @@ pub fn run() {
             open_pull_request_review,
             check_pull_request_review_update,
             refresh_pull_request_review,
-            list_saved_reviews,
-            open_saved_review,
             github_auth_status,
             refresh_github_identity,
             start_github_authorization,

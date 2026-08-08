@@ -1,13 +1,18 @@
 import type { GitHubIdentity } from "@/components/github-identity-entry";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
-import type {
-  PullRequestGroup,
-  ReviewSummary,
-  SavedReviewSummary,
-} from "@/lib/review-types";
+import type { PullRequestGroup } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchSelectionUpdate } from "@/review/review-application";
-import type { BranchRefs, RepositoryEntry } from "@/repository/repository-application";
+import type {
+  BranchRefs,
+  OpenRepositoryResult,
+  RepositoryEntry,
+} from "@/repository/repository-application";
+import type {
+  RepositoryCatalogProjection,
+  RepositoryContext,
+  RepositoryReviewsProjection,
+} from "@/repository/repository-application";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -40,15 +45,12 @@ export type TauriCommandContract = {
   start_github_authorization: { args: EmptyArgs; result: DeviceAuthorization };
   complete_github_authorization: { args: { authorizationId: string }; result: void };
   sign_out_github: { args: EmptyArgs; result: void };
-  list_saved_reviews: { args: { repositoryEntryId: number }; result: SavedReviewSummary[] };
-  repository_workspace_trust: { args: { repositoryEntryId: number }; result: boolean };
-  grant_repository_workspace_trust: { args: { repositoryEntryId: number }; result: void };
+  load_repository_catalog: { args: EmptyArgs; result: RepositoryCatalogProjection };
+  open_repository_context: { args: { repositoryEntryId: number }; result: OpenRepositoryResult };
+  grant_repository_workspace_trust_and_open: { args: { repositoryEntryId: number }; result: RepositoryContext };
+  load_repository_reviews: { args: { repositoryEntryId: number }; result: RepositoryReviewsProjection };
   register_repository_entry: { args: { path: string }; result: RepositoryEntry };
-  list_repository_entries: { args: EmptyArgs; result: RepositoryEntry[] };
-  list_reviews: { args: { repositoryEntryId: number | null }; result: ReviewSummary[] };
   reopen_review: { args: { reviewId: string }; result: ReviewSnapshot };
-  open_saved_review: { args: { reviewId: string }; result: ReviewSnapshot };
-  open_repository_entry: { args: { id: number }; result: RepositoryEntry };
 };
 
 export type TauriCommandName = keyof TauriCommandContract;
@@ -70,11 +72,10 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 /** 与 Rust invoke handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
   "register_repository_entry",
-  "list_repository_entries",
-  "list_reviews",
-  "open_repository_entry",
-  "repository_workspace_trust",
-  "grant_repository_workspace_trust",
+  "load_repository_catalog",
+  "open_repository_context",
+  "grant_repository_workspace_trust_and_open",
+  "load_repository_reviews",
   "compare_local_refs",
   "check_branch_review_updates",
   "reopen_and_refresh_branch_review",
@@ -86,8 +87,6 @@ export const TAURI_COMMAND_NAMES = [
   "open_pull_request_review",
   "check_pull_request_review_update",
   "refresh_pull_request_review",
-  "list_saved_reviews",
-  "open_saved_review",
   "github_auth_status",
   "refresh_github_identity",
   "start_github_authorization",

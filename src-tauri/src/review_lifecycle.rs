@@ -7,6 +7,7 @@ use crate::change_content::LoadedFileChange;
 use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
 use crate::pull_request_selection::PullRequestResolutionError;
 use crate::pull_request_selection::{PullRequestSelection, PullRequestSelectionResolver};
+use crate::repository_application::{RepositoryApplicationError, RepositoryEntryApplication};
 use crate::repository_catalog::{
     PullRequestMetadata, RepositoryCatalog, SavedBranchReview, WorkspaceCleanupTarget,
 };
@@ -176,6 +177,7 @@ impl std::error::Error for ReviewLifecycleError {}
 /// 统一拥有 durable Review、current Snapshot、Workspace 与运行时读取句柄的一致性边界。
 pub struct ReviewLifecycle {
     catalog: Arc<RepositoryCatalog>,
+    repository_application: Arc<RepositoryEntryApplication>,
     branch_selections: BranchSelectionResolver,
     pull_requests: Arc<PullRequestSelectionResolver>,
     reviews: Mutex<HashMap<String, Arc<LocalSnapshotReader>>>,
@@ -198,18 +200,24 @@ impl ReviewLifecycle {
         catalog: Arc<RepositoryCatalog>,
         pull_requests: Arc<PullRequestSelectionResolver>,
     ) -> Self {
+        let repository_application = Arc::new(RepositoryEntryApplication::new(catalog.clone()));
+        Self::with_repository_application(catalog, repository_application, pull_requests)
+    }
+
+    /// 使用生产环境共享的 Repository application 创建生命周期服务。
+    pub fn with_repository_application(
+        catalog: Arc<RepositoryCatalog>,
+        repository_application: Arc<RepositoryEntryApplication>,
+        pull_requests: Arc<PullRequestSelectionResolver>,
+    ) -> Self {
         Self {
             catalog,
+            repository_application,
             branch_selections: BranchSelectionResolver,
             pull_requests,
             reviews: Mutex::new(HashMap::new()),
             active_refreshes: Mutex::new(HashSet::new()),
         }
-    }
-
-    /// 返回底层 Catalog，供尚未迁移的只读 Tauri 查询复用同一连接。
-    pub fn catalog(&self) -> &RepositoryCatalog {
-        &self.catalog
     }
 
     /// 创建、重开或切换到指定 Review，并在成功后发布运行时读取句柄。
@@ -477,8 +485,8 @@ impl ReviewLifecycle {
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
         let repository_path = self.require_available_repository(current.repository_entry_id)?;
         let entry = self
-            .catalog
-            .open_entry(current.repository_entry_id)
+            .repository_application
+            .inspect_entry(current.repository_entry_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         if current.base_revision != confirmation.current_base_revision
             || current.head_revision != confirmation.current_head_revision
@@ -582,8 +590,8 @@ impl ReviewLifecycle {
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let repository_path = self.require_trusted_repository(saved.repository_entry_id)?;
         let entry = self
-            .catalog
-            .open_entry(saved.repository_entry_id)
+            .repository_application
+            .inspect_entry(saved.repository_entry_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         let workspace = self
             .catalog
@@ -634,32 +642,32 @@ impl ReviewLifecycle {
 
     /// 返回可用 Repository Entry 的当前 canonical path。
     fn require_available_repository(&self, id: i64) -> Result<PathBuf, ReviewLifecycleError> {
-        let entry = self
-            .catalog
-            .open_entry(id)
-            .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
-        if entry.available {
-            Ok(entry.canonical_path)
-        } else {
-            Err(ReviewLifecycleError::RepositoryUnavailable(
-                entry
-                    .unavailable_reason
-                    .unwrap_or_else(|| "Repository Entry 当前不可用。".to_owned()),
-            ))
-        }
+        self.repository_application
+            .require_available_path(id)
+            .map_err(Self::repository_application_error)
     }
 
     /// 返回已授权 Workspace Trust 的可用 repository path。
     fn require_trusted_repository(&self, id: i64) -> Result<PathBuf, ReviewLifecycleError> {
-        let repository = self.require_available_repository(id)?;
-        if !self
-            .catalog
-            .is_workspace_trusted(id)
-            .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
-        {
-            return Err(ReviewLifecycleError::WorkspaceTrustRequired);
+        self.repository_application
+            .require_trusted_path(id)
+            .map_err(Self::repository_application_error)
+    }
+
+    /// 将 Repository application 的 gate 结果映射为 Review 生命周期错误。
+    fn repository_application_error(error: RepositoryApplicationError) -> ReviewLifecycleError {
+        match error {
+            RepositoryApplicationError::Unavailable(message) => {
+                ReviewLifecycleError::RepositoryUnavailable(message)
+            }
+            RepositoryApplicationError::WorkspaceTrustRequired => {
+                ReviewLifecycleError::WorkspaceTrustRequired
+            }
+            RepositoryApplicationError::Catalog(message) => ReviewLifecycleError::Catalog(message),
+            RepositoryApplicationError::Operation(message) => {
+                ReviewLifecycleError::Operation(message)
+            }
         }
-        Ok(repository)
     }
 
     /// 获取同一 Review 的独占刷新权。
@@ -695,8 +703,8 @@ impl ReviewLifecycle {
         saved: &SavedBranchReview,
     ) -> Result<WorkspaceCleanupTarget, ReviewLifecycleError> {
         let entry = self
-            .catalog
-            .open_entry(saved.repository_entry_id)
+            .repository_application
+            .inspect_entry(saved.repository_entry_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(WorkspaceCleanupTarget {
             review_id: saved.review_id.clone(),

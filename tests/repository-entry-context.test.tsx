@@ -37,7 +37,6 @@ function createAdapter(): RepositoryApplicationAdapter {
     grantTrust: vi.fn(),
     loadReviews: vi.fn().mockResolvedValue({ savedReviews: [], reviews: [] }),
     loadBranches: vi.fn().mockResolvedValue({ refs: [], defaultRef: "", currentRef: "" }),
-    markOpened: vi.fn().mockResolvedValue(firstRepository),
   };
 }
 
@@ -177,7 +176,6 @@ describe("Repository Entry context lifecycle", () => {
     expect(result.current.catalog.recentReviews).toEqual([openedReview]);
     expect(result.current.catalog.repositories.map((entry) => entry.id)).toEqual([1, 2]);
     expect(result.current.catalog.repositories[0].lastOpenedAt).toBe(42);
-    expect(adapter.markOpened).toHaveBeenCalledWith(firstRepository.id);
   });
 
   it("注册新 Repository 时放到 Catalog 前端，重复注册时保持原位置", async () => {

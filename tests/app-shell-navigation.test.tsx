@@ -43,7 +43,6 @@ function createRepositoryAdapter(options: { trusted?: Set<number> } = {}): Repos
     }),
     loadReviews: vi.fn(async () => ({ savedReviews: [], reviews: [] })),
     loadBranches: vi.fn(async () => ({ refs: [], defaultRef: "", currentRef: "" })),
-    markOpened: vi.fn(async (repositoryEntryId) => repositories.find((candidate) => candidate.id === repositoryEntryId)!),
   };
 }
 
@@ -93,7 +92,6 @@ describe("AppShell navigation module", () => {
     });
 
     expect(result.current.destination).toEqual({ kind: "review", repositoryEntryId: 2, reviewId: "review-2" });
-    expect(repositoryAdapter.markOpened).toHaveBeenCalledWith(2);
   });
 
   it("Workspace Trust 暂停完整导航意图，确认后从同一意图继续", async () => {

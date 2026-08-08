@@ -28,10 +28,10 @@ describe("Repository Catalog 持久化", () => {
     await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
     await expect($("body")).not.toHaveText(expect.stringContaining("已信任"));
 
-    const entries = await browser.tauri.execute(
-      ({ core }) => core.invoke<Array<{ canonicalPath: string }>>("list_repository_entries"),
+    const catalog = await browser.tauri.execute(
+      ({ core }) => core.invoke<{ repositories: Array<{ canonicalPath: string }> }>("load_repository_catalog"),
     );
-    expect(entries.filter((entry) => entry.canonicalPath === repositoryPath)).toHaveLength(1);
+    expect(catalog.repositories.filter((entry) => entry.canonicalPath === repositoryPath)).toHaveLength(1);
 
     await $("button=返回仓库列表").click();
     await setE2ELocale("en");

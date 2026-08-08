@@ -98,6 +98,19 @@ saved review history. Another clone remains a distinct Repository Entry even whe
 clones refer to the same remote repository.
 _Avoid_: Project, remote repository
 
+**Repository Entry Application**:
+The deep application module that projects Repository Entries, Workspace Trust, and
+saved Review summaries into one enterable Repository context. It resolves availability
+and Trust before exposing the context and provides the canonical path needed by local
+Git and Pull Request discovery operations.
+_Avoid_: Catalog adapter, storage service
+
+**Repository Context**:
+The enterable projection of one Repository Entry, including its current availability,
+Trust decision boundary, saved Review summaries, and Review summaries available for
+continuation. It is the application handoff used by the Repository entry flow.
+_Avoid_: Repository Session, Catalog row
+
 **Workspace Trust**:
 A reviewer's durable authorization for Narrant to perform normal Git checkout and
 run review tooling for one **Repository Entry**.
@@ -152,6 +165,8 @@ _Avoid_: Repository Entry, user worktree
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
   mark that change as viewed, reviewed, or approved
 - A **Repository Entry** owns zero or more **Reviews**
+- A **Repository Entry Application** owns the enterable **Repository Context** projection
+  for one or more **Repository Entries**
 - Narrant has at most one current **GitHub Identity**
 - A **GitHub Identity** may be represented by cached public profile information while
   GitHub is temporarily unavailable, but signing out removes that representation

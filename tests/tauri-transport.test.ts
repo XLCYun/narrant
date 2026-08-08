@@ -17,16 +17,18 @@ describe("Typed Tauri transport", () => {
   });
 
   it("把 typed command 与参数原样交给 Tauri invoke", async () => {
-    const rawInvoke = vi.fn().mockResolvedValue(true);
+    const rawInvoke = vi.fn().mockResolvedValue({
+      repositories: [],
+      recentReviews: [],
+    });
     const transport = createTauriTransport(rawInvoke);
 
-    await expect(transport.invoke("repository_workspace_trust", {
-      repositoryEntryId: 17,
-    })).resolves.toBe(true);
-
-    expect(rawInvoke).toHaveBeenCalledWith("repository_workspace_trust", {
-      repositoryEntryId: 17,
+    await expect(transport.invoke("load_repository_catalog", {})).resolves.toEqual({
+      repositories: [],
+      recentReviews: [],
     });
+
+    expect(rawInvoke).toHaveBeenCalledWith("load_repository_catalog", {});
   });
 
   it("为可取消 command 分配 operation identity 并在 abort 时通知后端", async () => {

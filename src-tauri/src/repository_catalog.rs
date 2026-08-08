@@ -233,16 +233,10 @@ impl RepositoryCatalog {
 
     /// 打开一个入口；可用时原子更新最后打开时间，不可用时返回历史入口。
     pub fn open_entry(&self, id: i64) -> Result<RepositoryEntry, RepositoryCatalogError> {
-        let mut connection = self.connection()?;
-        let entry_query = format!("SELECT {ENTRY_COLUMNS} FROM repository_entries WHERE id = ?1");
-        let saved = connection
-            .query_row(&entry_query, [id], saved_entry_from_row)
-            .optional()
-            .map_err(database_recovery_error)?
-            .ok_or_else(|| RepositoryCatalogError::new("Repository Entry 不存在。"))?;
-        let mut entry = resolve_availability(saved);
+        let mut entry = self.inspect_entry(id)?;
         if entry.available {
             let now = unix_timestamp_millis()?;
+            let mut connection = self.connection()?;
             let transaction = connection.transaction().map_err(database_recovery_error)?;
             transaction
                 .execute(
@@ -254,6 +248,18 @@ impl RepositoryCatalog {
             entry.last_opened_at = now;
         }
         Ok(entry)
+    }
+
+    /// 读取 Repository Entry 的当前可用性，不改变最近打开时间。
+    pub fn inspect_entry(&self, id: i64) -> Result<RepositoryEntry, RepositoryCatalogError> {
+        let connection = self.connection()?;
+        let entry_query = format!("SELECT {ENTRY_COLUMNS} FROM repository_entries WHERE id = ?1");
+        connection
+            .query_row(&entry_query, [id], saved_entry_from_row)
+            .optional()
+            .map_err(database_recovery_error)?
+            .map(resolve_availability)
+            .ok_or_else(|| RepositoryCatalogError::new("Repository Entry 不存在。"))
     }
 
     /// 返回 Repository Entry 是否已经获得持久化 Workspace Trust。

@@ -18,8 +18,7 @@ describe("Tauri Repository application adapter", () => {
   it("一次加载 Repository Catalog 与全局最近 Reviews", async () => {
     const recentReviews = [{ reviewId: "review-1" }];
     const invoke = vi.fn(async (command: string) => {
-      if (command === "list_repository_entries") return [repository];
-      if (command === "list_reviews") return recentReviews;
+      if (command === "load_repository_catalog") return { repositories: [repository], recentReviews };
       throw new Error(`unexpected command: ${command}`);
     });
     const adapter = createTauriRepositoryApplicationAdapter({
@@ -31,13 +30,12 @@ describe("Tauri Repository application adapter", () => {
       repositories: [repository],
       recentReviews,
     });
-    expect(invoke).toHaveBeenCalledWith("list_reviews", { repositoryEntryId: null });
+    expect(invoke).toHaveBeenCalledWith("load_repository_catalog", {});
   });
 
   it("打开未授权 Repository 时返回 trust-required 且不加载 Review 列表", async () => {
     const invoke = vi.fn(async (command: string) => {
-      if (command === "open_repository_entry") return repository;
-      if (command === "repository_workspace_trust") return false;
+      if (command === "open_repository_context") return { kind: "trust-required", repository };
       throw new Error(`unexpected command: ${command}`);
     });
     const adapter = createTauriRepositoryApplicationAdapter({
@@ -49,13 +47,12 @@ describe("Tauri Repository application adapter", () => {
       kind: "trust-required",
       repository,
     });
-    expect(invoke).not.toHaveBeenCalledWith("list_saved_reviews", expect.anything());
-    expect(invoke).not.toHaveBeenCalledWith("list_reviews", expect.anything());
+    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it("不可用 Repository 不检查 Workspace Trust", async () => {
     const unavailable = { ...repository, available: false, unavailableReason: "missing" };
-    const invoke = vi.fn().mockResolvedValue(unavailable);
+    const invoke = vi.fn().mockResolvedValue({ kind: "unavailable", repository: unavailable });
     const adapter = createTauriRepositoryApplicationAdapter({
       invoke,
       invokeCancellable: vi.fn(),
@@ -69,9 +66,9 @@ describe("Tauri Repository application adapter", () => {
     const savedReviews = [{ reviewId: "review-1" }];
     const reviews = [{ reviewId: "review-1", repositoryEntryId: 17 }];
     const invoke = vi.fn(async (command: string) => {
-      if (command === "grant_repository_workspace_trust") return undefined;
-      if (command === "list_saved_reviews") return savedReviews;
-      if (command === "list_reviews") return reviews;
+      if (command === "grant_repository_workspace_trust_and_open") {
+        return { repository, savedReviews, reviews };
+      }
       throw new Error(`unexpected command: ${command}`);
     });
     const adapter = createTauriRepositoryApplicationAdapter({
@@ -85,16 +82,14 @@ describe("Tauri Repository application adapter", () => {
       reviews,
     });
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
-      "grant_repository_workspace_trust",
-      "list_saved_reviews",
-      "list_reviews",
+      "grant_repository_workspace_trust_and_open",
     ]);
   });
 
   it("注册 clone 并按 Repository identity 刷新 Review 列表", async () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === "register_repository_entry") return repository;
-      if (command === "list_saved_reviews" || command === "list_reviews") return [];
+      if (command === "load_repository_reviews") return { savedReviews: [], reviews: [] };
       throw new Error(`unexpected command: ${command}`);
     });
     const adapter = createTauriRepositoryApplicationAdapter({
@@ -123,14 +118,15 @@ describe("Tauri Repository application adapter", () => {
     );
   });
 
-  it("记录 Repository 最近打开时间而不重载 context", async () => {
-    const invoke = vi.fn().mockResolvedValue(repository);
+  it("一次读取 Repository Review projection", async () => {
+    const projection = { savedReviews: [], reviews: [] };
+    const invoke = vi.fn().mockResolvedValue(projection);
     const adapter = createTauriRepositoryApplicationAdapter({
       invoke,
       invokeCancellable: vi.fn(),
     } as unknown as TypedTauriTransport);
 
-    await expect(adapter.markOpened(17)).resolves.toBe(repository);
-    expect(invoke).toHaveBeenCalledWith("open_repository_entry", { id: 17 });
+    await expect(adapter.loadReviews(17)).resolves.toBe(projection);
+    expect(invoke).toHaveBeenCalledWith("load_repository_reviews", { repositoryEntryId: 17 });
   });
 });

@@ -212,8 +212,7 @@ export function useRepositoryEntryContext(
         ? { ...entry, lastOpenedAt: review.lastOpenedAt }
         : entry),
     }));
-    void Promise.resolve(adapter.markOpened(review.repositoryEntryId)).catch(() => undefined);
-  }, [adapter]);
+  }, []);
 
   /** 重新读取当前 Repository 的持久化 Review summaries。 */
   const refreshReviews = useCallback(async (): Promise<void> => {
