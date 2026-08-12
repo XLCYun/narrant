@@ -1,0 +1,197 @@
+use super::*;
+
+/// 将一个 Snapshot 的稳定 File Change metadata 写入当前事务。
+pub(super) fn insert_file_changes(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot_id: i64,
+    file_changes: &[LocalFileChange],
+) -> Result<(), RepositoryCatalogError> {
+    for change in file_changes {
+        transaction
+            .execute(
+                "INSERT INTO file_changes (
+                    snapshot_id, path, old_path, status, before_mode, after_mode,
+                    before_object_id, after_object_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    snapshot_id,
+                    change.path,
+                    change.old_path,
+                    status_text(change.status),
+                    change.before_mode,
+                    change.after_mode,
+                    change.before_object_id,
+                    change.after_object_id
+                ],
+            )
+            .map_err(database_recovery_error)?;
+    }
+    Ok(())
+}
+
+/// 将 durable string identity 解析为数据库主键。
+pub(super) fn parse_review_id(review_id: &str) -> Result<i64, RepositoryCatalogError> {
+    review_id
+        .strip_prefix("review-")
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| RepositoryCatalogError::new("reviewId 格式无效。"))
+}
+
+/// 将 domain status 保存成稳定的数据库标签。
+pub(super) fn status_text(status: ChangeStatus) -> &'static str {
+    match status {
+        ChangeStatus::Added => "added",
+        ChangeStatus::Modified => "modified",
+        ChangeStatus::Deleted => "deleted",
+        ChangeStatus::Renamed => "renamed",
+    }
+}
+
+/// 从数据库状态标签恢复 domain status。
+pub(super) fn parse_status(status: &str) -> rusqlite::Result<ChangeStatus> {
+    match status {
+        "added" => Ok(ChangeStatus::Added),
+        "modified" => Ok(ChangeStatus::Modified),
+        "deleted" => Ok(ChangeStatus::Deleted),
+        "renamed" => Ok(ChangeStatus::Renamed),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+/// 用持久化 object ID 与 mode 恢复按需读取条目。
+pub(super) fn entry_from_metadata(
+    object_id: &Option<String>,
+    mode: Option<u32>,
+) -> Option<LocalEntry> {
+    Some(LocalEntry {
+        object_id: object_id.clone()?,
+        mode: mode?,
+    })
+}
+
+/// 从稳定的列顺序重建尚未探测可用性的入口。
+pub(super) fn saved_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepositoryEntry> {
+    Ok(RepositoryEntry {
+        id: row.get(0)?,
+        canonical_path: PathBuf::from(row.get::<_, String>(1)?),
+        common_directory: PathBuf::from(row.get::<_, String>(2)?),
+        created_at: row.get(3)?,
+        last_opened_at: row.get(4)?,
+        available: true,
+        unavailable_reason: None,
+    })
+}
+
+/// 用 Core Git 检查保存的路径，且不改变任何 repository 状态。
+pub(super) fn resolve_availability(mut entry: RepositoryEntry) -> RepositoryEntry {
+    match inspect_repository(&entry.canonical_path) {
+        Ok(inspected)
+            if inspected.canonical_path == entry.canonical_path
+                && inspected.common_directory == entry.common_directory => {}
+        Ok(_) => {
+            entry.available = false;
+            entry.unavailable_reason = Some("保存的路径不再指向原 Repository Entry。".to_owned());
+        }
+        Err(error) => {
+            entry.available = false;
+            entry.unavailable_reason = Some(error.to_string());
+        }
+    }
+    entry
+}
+
+/// 通过机器可读 Core Git 输出验证 working tree、canonical path、common directory 和能力。
+pub(super) fn inspect_repository(
+    selected_path: &Path,
+) -> Result<InspectedRepository, RepositoryCatalogError> {
+    let selected_path = selected_path.canonicalize().map_err(|error| {
+        RepositoryCatalogError::new(format!("Repository Entry 路径不存在或不可访问：{error}"))
+    })?;
+    let adapter = GitProcessAdapter::new(&selected_path);
+    let cancellation = CancellationToken::default();
+    let output = adapter
+        .run(
+            [
+                "rev-parse",
+                "--is-inside-work-tree",
+                "--show-toplevel",
+                "--git-common-dir",
+                "--show-object-format",
+            ],
+            &cancellation,
+        )
+        .map_err(|error| {
+            RepositoryCatalogError::new(format!(
+                "所选路径不是兼容的 working-tree Git 仓库；请确认已安装支持所需能力的 Core Git：{error}"
+            ))
+        })?;
+    let lines = String::from_utf8(output.stdout)
+        .map_err(|_| RepositoryCatalogError::new("Core Git 返回了无效的仓库路径编码。"))?
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if lines.len() != 4 || lines[0] != "true" || lines[3].is_empty() {
+        return Err(RepositoryCatalogError::new(
+            "所选路径不是兼容的 working-tree Git 仓库。",
+        ));
+    }
+    let canonical_path = PathBuf::from(&lines[1]).canonicalize().map_err(|error| {
+        RepositoryCatalogError::new(format!("无法解析 canonical repository path：{error}"))
+    })?;
+    let common_directory = {
+        let path = PathBuf::from(&lines[2]);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            canonical_path.join(path)
+        };
+        path.canonicalize().map_err(|error| {
+            RepositoryCatalogError::new(format!("无法解析 Git common directory：{error}"))
+        })?
+    };
+    probe_required_capabilities(&adapter, &cancellation)?;
+    Ok(InspectedRepository {
+        canonical_path,
+        common_directory,
+    })
+}
+
+/// 只读探测 Repository Entry 页面立即依赖的 refs、remotes 与 worktree 能力。
+pub(super) fn probe_required_capabilities(
+    adapter: &GitProcessAdapter,
+    cancellation: &CancellationToken,
+) -> Result<(), RepositoryCatalogError> {
+    for arguments in [
+        vec![
+            "for-each-ref",
+            "--format=%(refname)%00",
+            "refs/heads",
+            "refs/remotes",
+        ],
+        vec!["remote"],
+        vec!["worktree", "list", "--porcelain", "-z"],
+    ] {
+        adapter.run(arguments, cancellation).map_err(|error| {
+            RepositoryCatalogError::new(format!(
+                "Core Git 缺少 Repository Entry 所需的 refs、remotes 或 worktree 能力：{error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// 返回可排序且无需额外时间依赖的 Unix 毫秒时间。
+pub(super) fn unix_timestamp_millis() -> Result<i64, RepositoryCatalogError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| RepositoryCatalogError::new(format!("系统时间无效：{error}")))?;
+    i64::try_from(duration.as_millis())
+        .map_err(|_| RepositoryCatalogError::new("系统时间超出支持范围。"))
+}
+
+/// 将 SQLite 故障转换为明确的恢复指引。
+pub(super) fn database_recovery_error(error: rusqlite::Error) -> RepositoryCatalogError {
+    RepositoryCatalogError::new(format!(
+        "Repository Catalog 无法打开或迁移：{error}。请完整退出 Narrant，备份后移走或删除数据库以重建 Catalog。"
+    ))
+}

@@ -22,7 +22,7 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
   it("主窗口通过 window-state 插件恢复尺寸、位置与最大化状态", () => {
     const cargo = read("src-tauri/Cargo.toml");
     const config = JSON.parse(read("src-tauri/tauri.conf.json"));
-    const backend = read("src-tauri/src/lib.rs");
+    const backend = read("src-tauri/src/tauri_app/bootstrap.rs");
     const mainWindow = config.app.windows[0];
 
     expect(cargo).toMatch(/^tauri-plugin-window-state\s*=\s*"2/m);
@@ -46,7 +46,7 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
   });
 
   it("wdio 插件仅在 #[cfg(feature = \"wdio\")] 下注册", () => {
-    const lib = read("src-tauri/src/lib.rs");
+    const lib = read("src-tauri/src/tauri_app/bootstrap.rs");
     expect(lib).toMatch(/#\[cfg\(feature = "wdio"\)\]/);
     expect(lib).toMatch(/tauri_plugin_wdio::init\(\)/);
   });
@@ -97,13 +97,13 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
 
   it("生产依赖与模块不再包含旧 GitHub code-content 实现", () => {
     const cargo = read("src-tauri/Cargo.toml");
-    const changeContent = read("src-tauri/src/change_content/mod.rs");
+    const changeContent = read("src-tauri/src/review/content/mod.rs");
     expect(cargo).not.toMatch(/reqwest\s*=.*blocking/);
     expect(changeContent).not.toMatch(/pub\s+mod\s+github/);
   });
 
   it("前后端契约不再暴露 Review Session 或 source-tagged union", () => {
-    const backend = read("src-tauri/src/lib.rs");
+    const backend = read("src-tauri/src/tauri_app/commands/review.rs");
     const frontend = read("src/App.tsx");
     expect(backend).not.toMatch(/ReviewSessionStore|sessionId|ReviewSourceResponse/);
     expect(frontend).not.toMatch(/sessionId|close_review_session|open_github_pull_request/);
