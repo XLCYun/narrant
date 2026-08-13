@@ -21,21 +21,29 @@ export type PullRequestGroup = {
   error: string | null;
 };
 
-/** 无需在线 discovery 即可打开的持久化 Review 投影。 */
-export type SavedReviewSummary = {
-  reviewId: string;
+/** Repository Entry Overview 中显式呈现的 Review Selection。 */
+export type ReviewSelectionSummary =
+  | { kind: "branch"; baseRef: string; headRef: string }
+  | { kind: "pull-request"; baseRef: string; headRef: string; pullRequest: PullRequestMetadata };
+
+/** Review 当前 Snapshot 的完整 revision identity。 */
+export type ReviewSnapshotSummary = {
   baseRevision: string;
+  comparisonBase: string;
   headRevision: string;
-  pullRequest?: PullRequestMetadata;
 };
 
-/** Repository Entry 与最近审核列表共享的 Review 投影。 */
-export type ReviewSummary = {
+/** Repository Entry 范围内可继续打开的 Review 摘要。 */
+export type RepositoryReviewSummary = {
   reviewId: string;
+  selection: ReviewSelectionSummary;
+  currentSnapshot: ReviewSnapshotSummary;
+  lastOpenedAt: number;
+};
+
+/** 首页跨 Repository 聚合的最近 Review 摘要。 */
+export type RecentReviewSummary = {
   repositoryEntryId: number;
   repositoryPath: string;
-  baseRef: string;
-  headRef: string;
-  lastOpenedAt: number;
-  pullRequest?: PullRequestMetadata;
+  review: RepositoryReviewSummary;
 };

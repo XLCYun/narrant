@@ -62,7 +62,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             repository::load_repository_catalog,
-            repository::open_repository_context,
+            repository::open_repository_overview,
             repository::grant_repository_workspace_trust_and_open,
             repository::load_repository_reviews,
             repository::register_repository_entry,

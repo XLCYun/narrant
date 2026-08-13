@@ -18,7 +18,7 @@ export function createTauriRepositoryApplicationAdapter(
     },
 
     async open(repositoryEntryId): Promise<OpenRepositoryResult> {
-      return transport.invoke("open_repository_context", { repositoryEntryId });
+      return transport.invoke("open_repository_overview", { repositoryEntryId });
     },
 
     async grantTrust(repository) {

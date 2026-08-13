@@ -18,6 +18,31 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 
 import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
+import type { PullRequestMetadata, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
+
+/** 用紧凑输入构造 Repository Entry 范围内的 Review 测试投影。 */
+function repositoryReview(input: {
+  reviewId: string; baseRef: string; headRef: string; lastOpenedAt: number;
+  baseRevision?: string; comparisonBase?: string; headRevision?: string; pullRequest?: PullRequestMetadata;
+}): RepositoryReviewSummary {
+  return {
+    reviewId: input.reviewId,
+    selection: input.pullRequest
+      ? { kind: "pull-request", baseRef: input.baseRef, headRef: input.headRef, pullRequest: input.pullRequest }
+      : { kind: "branch", baseRef: input.baseRef, headRef: input.headRef },
+    currentSnapshot: {
+      baseRevision: input.baseRevision ?? "base",
+      comparisonBase: input.comparisonBase ?? "merge-base",
+      headRevision: input.headRevision ?? "head",
+    },
+    lastOpenedAt: input.lastOpenedAt,
+  };
+}
+
+/** 为首页 Catalog 包装 Review 的 Repository 所有权。 */
+function recentReview(repositoryEntryId: number, repositoryPath: string, review: RepositoryReviewSummary): RecentReviewSummary {
+  return { repositoryEntryId, repositoryPath, review };
+}
 
 beforeEach(async () => {
   await i18n.changeLanguage("zh-CN");
@@ -153,8 +178,8 @@ describe("App", () => {
     invoke.mockImplementation((command: string) => {
       if (command === "load_repository_catalog") return Promise.resolve({ repositories: [], recentReviews: [] });
       if (command === "register_repository_entry") return Promise.resolve(entry);
-      if (command === "open_repository_context") return Promise.resolve({ kind: "trust-required", repository: entry });
-      if (command === "grant_repository_workspace_trust_and_open") return Promise.resolve({ repository: entry, savedReviews: [], reviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({ kind: "trust-required", repository: entry });
+      if (command === "grant_repository_workspace_trust_and_open") return Promise.resolve({ repository: entry, reviews: [] });
       return Promise.resolve([]);
     });
     render(<App />);
@@ -197,17 +222,15 @@ describe("App", () => {
       id: 31, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
       createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
     };
-    const review = {
-      reviewId: "review-31", repositoryEntryId: 31, repositoryPath: "/work/narrant",
-      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
-    };
+    const review = repositoryReview({ reviewId: "review-31", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 2 });
+    const recent = recentReview(31, "/work/narrant", review);
     invoke.mockImplementation((command: string) => {
-      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [review] });
-      if (command === "open_repository_context") return Promise.resolve({ kind: "trust-required", repository: entry });
-      if (command === "grant_repository_workspace_trust_and_open") return Promise.resolve({ repository: entry, savedReviews: [], reviews: [review] });
+      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [recent] });
+      if (command === "open_repository_overview") return Promise.resolve({ kind: "trust-required", repository: entry });
+      if (command === "grant_repository_workspace_trust_and_open") return Promise.resolve({ repository: entry, reviews: [review] });
       if (command === "reopen_review") return Promise.resolve({
-        reviewId: review.reviewId, snapshotId: "snapshot-31", baseRef: review.baseRef,
-        baseRevision: "base", comparisonBase: "base", headRef: review.headRef,
+        reviewId: review.reviewId, snapshotId: "snapshot-31", baseRef: review.selection.baseRef,
+        baseRevision: "base", comparisonBase: "base", headRef: review.selection.headRef,
         headRevision: "head", fileChanges: [],
       });
       return Promise.resolve([]);
@@ -231,25 +254,19 @@ describe("App", () => {
       id: 23, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
       createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
     };
-    const summary = {
-      reviewId: "review-23", repositoryEntryId: 23, repositoryPath: "/work/narrant",
-      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 20,
-    };
-    const newerSummary = {
-      ...summary, reviewId: "review-24", baseRef: "refs/heads/release",
-      headRef: "refs/heads/hotfix", lastOpenedAt: 30,
-    };
+    const summary = repositoryReview({ reviewId: "review-23", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 20 });
+    const newerSummary = repositoryReview({ reviewId: "review-24", baseRef: "refs/heads/release", headRef: "refs/heads/hotfix", lastOpenedAt: 30 });
     const snapshot = {
-      reviewId: "review-23", baseRef: summary.baseRef,
-      baseRevision: "base", comparisonBase: "base", headRef: summary.headRef,
+      reviewId: "review-23", baseRef: summary.selection.baseRef,
+      baseRevision: "base", comparisonBase: "base", headRef: summary.selection.headRef,
       headRevision: "head", fileChanges: [],
     };
     invoke.mockImplementation((command: string) => {
-      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [newerSummary, summary] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [summary] },
+      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(23, "/work/narrant", newerSummary), recentReview(23, "/work/narrant", summary)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [summary] },
       });
-      if (command === "load_repository_reviews") return Promise.resolve({ savedReviews: [], reviews: [summary] });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [summary] });
       if (command === "reopen_review") return Promise.resolve(snapshot);
       return Promise.resolve([]);
     });
@@ -278,8 +295,8 @@ describe("App", () => {
     };
     invoke.mockImplementation((command: string) => {
       if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [] },
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
       });
       if (command === "discover_github_pull_requests") return Promise.resolve([
         {
@@ -327,8 +344,8 @@ describe("App", () => {
     };
     invoke.mockImplementation((command: string) => {
       if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [] },
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
       });
       if (command === "discover_github_pull_requests") return Promise.resolve([{
         repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null,
@@ -384,8 +401,8 @@ describe("App", () => {
     });
     invoke.mockImplementation((command: string) => {
       if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [] },
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
       });
       if (command === "discover_github_pull_requests") return Promise.resolve([{
         repository, remoteNames: ["origin"], pullRequests: [{
@@ -426,23 +443,18 @@ describe("App", () => {
       id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
       createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
     };
-    const current = {
-      reviewId: "review-current", repositoryEntryId: 25, repositoryPath: "/work/narrant",
-      baseRef: "refs/heads/main", headRef: "refs/heads/current", lastOpenedAt: 2,
-    };
-    const target = {
-      ...current, reviewId: "review-target", headRef: "refs/heads/target", lastOpenedAt: 1,
-    };
+    const current = repositoryReview({ reviewId: "review-current", baseRef: "refs/heads/main", headRef: "refs/heads/current", lastOpenedAt: 2 });
+    const target = repositoryReview({ reviewId: "review-target", baseRef: "refs/heads/main", headRef: "refs/heads/target", lastOpenedAt: 1 });
     invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
-      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [current, target] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [current, target] },
+      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(25, "/work/narrant", current), recentReview(25, "/work/narrant", target)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [current, target] },
       });
-      if (command === "load_repository_reviews") return Promise.resolve({ savedReviews: [], reviews: [current, target] });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [current, target] });
       if (command === "reopen_review" && arguments_?.reviewId === current.reviewId) {
         return Promise.resolve({
-          reviewId: current.reviewId, snapshotId: "snapshot-current", baseRef: current.baseRef,
-          baseRevision: "base", comparisonBase: "base", headRef: current.headRef,
+          reviewId: current.reviewId, snapshotId: "snapshot-current", baseRef: current.selection.baseRef,
+          baseRevision: "base", comparisonBase: "base", headRef: current.selection.headRef,
           headRevision: "head", fileChanges: [{ path: "kept.txt", oldPath: null, status: "modified" }],
         });
       }
@@ -530,16 +542,13 @@ describe("App", () => {
       id: 41, canonicalPath: "/repo", commonDirectory: "/repo/.git",
       createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
     };
-    const existingReview = {
-      reviewId: "review-41", repositoryEntryId: 41, repositoryPath: "/repo",
-      baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
-    };
+    const existingReview = repositoryReview({ reviewId: "review-41", baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2 });
     invoke.mockImplementation((command: string) => {
-      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [existingReview] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [existingReview] },
+      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(41, "/repo", existingReview)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [existingReview] },
       });
-      if (command === "load_repository_reviews") return Promise.resolve({ savedReviews: [], reviews: [existingReview] });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [existingReview] });
       if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") return Promise.resolve({
         refs: ["refs/heads/topic", "refs/remotes/origin/main"],
@@ -578,10 +587,7 @@ describe("App", () => {
       id: 42, canonicalPath: "/repo", commonDirectory: "/repo/.git",
       createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
     };
-    const review = {
-      reviewId: "review-42", repositoryEntryId: 42, repositoryPath: "/repo",
-      baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
-    };
+    const review = repositoryReview({ reviewId: "review-42", baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2 });
     const update = {
       changed: true,
       currentBaseRevision: "base-1",
@@ -592,22 +598,22 @@ describe("App", () => {
     const snapshot = (snapshotId: string, baseRevision: string, headRevision: string) => ({
       reviewId: review.reviewId,
       snapshotId,
-      baseRef: review.baseRef,
+      baseRef: review.selection.baseRef,
       baseRevision,
       comparisonBase: baseRevision,
-      headRef: review.headRef,
+      headRef: review.selection.headRef,
       headRevision,
       fileChanges: [],
     });
     invoke.mockImplementation((command: string) => {
-      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [review] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [review] },
+      if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(42, "/repo", review)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [review] },
       });
-      if (command === "load_repository_reviews") return Promise.resolve({ savedReviews: [], reviews: [review] });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [review] });
       if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") return Promise.resolve({
-        refs: [review.headRef, review.baseRef], defaultRef: review.baseRef, currentRef: review.headRef,
+        refs: [review.selection.headRef, review.selection.baseRef], defaultRef: review.selection.baseRef, currentRef: review.selection.headRef,
       });
       if (command === "check_branch_review_updates") return Promise.resolve(update);
       if (command === "reopen_review") return Promise.resolve(snapshot("snapshot-1", "base-1", "head-1"));
@@ -861,8 +867,8 @@ describe("App", () => {
     };
     invoke.mockImplementation((command: string) => {
       if (command === "load_repository_catalog") return Promise.resolve({ repositories: [entry], recentReviews: [] });
-      if (command === "open_repository_context") return Promise.resolve({
-        kind: "ready", context: { repository: entry, savedReviews: [], reviews: [] },
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
       });
       if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") {

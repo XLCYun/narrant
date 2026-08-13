@@ -4,14 +4,14 @@ import type {
   OpenRepositoryResult,
   RepositoryApplicationAdapter,
   BranchRefs,
-  RepositoryContext,
+  RepositoryEntryOverview,
   RepositoryEntry,
 } from "@/repository/repository-application";
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RecentReviewSummary } from "@/lib/review-types";
 
 export type RepositoryCatalogState = {
   repositories: RepositoryEntry[];
-  recentReviews: ReviewSummary[];
+  recentReviews: RecentReviewSummary[];
   status: "idle" | "loading" | "ready" | "failed";
   error?: string;
 };
@@ -23,7 +23,7 @@ export type RepositoryEntryTransition =
   | { kind: "trust-required"; repository: RepositoryEntry }
   | { kind: "granting-trust"; repository: RepositoryEntry };
 
-export type RepositoryEntryContextOptions = {
+export type RepositoryEntryOverviewOptions = {
   enabled: boolean;
 };
 
@@ -33,51 +33,51 @@ export type RepositoryBranchesState =
   | { kind: "ready"; value: BranchRefs }
   | { kind: "failed"; error: string };
 
-export type RepositoryEntryContextBinding = {
+export type RepositoryEntryOverviewBinding = {
   catalog: RepositoryCatalogState;
-  current: RepositoryContext | null;
+  current: RepositoryEntryOverview | null;
   transition: RepositoryEntryTransition;
   branches: RepositoryBranchesState;
   register(path: string): Promise<RepositoryEntry>;
   open(repositoryEntryId: number): Promise<RepositoryEntryOpenResult>;
-  confirmTrust(): Promise<RepositoryContext | undefined>;
+  confirmTrust(): Promise<RepositoryEntryOverview | undefined>;
   dismissTrust(): void;
   reloadBranches(repositoryEntryId?: number): Promise<void>;
   refreshReviews(): Promise<void>;
-  recordReviewOpened(review: ReviewSummary): void;
+  recordReviewOpened(review: RecentReviewSummary): void;
   leave(): void;
 };
 
 export type RepositoryEntryOpenResult = OpenRepositoryResult | { kind: "superseded" };
 
-/** 管理 Repository Catalog 与当前 Repository Entry 的原子上下文切换。 */
-export function useRepositoryEntryContext(
+/** 管理 Repository Catalog 与当前 Repository Entry Overview 的原子切换。 */
+export function useRepositoryEntryOverview(
   adapter: RepositoryApplicationAdapter,
-  options: RepositoryEntryContextOptions,
-): RepositoryEntryContextBinding {
+  options: RepositoryEntryOverviewOptions,
+): RepositoryEntryOverviewBinding {
   const [catalog, setCatalog] = useState<RepositoryCatalogState>({
     repositories: [],
     recentReviews: [],
     status: options.enabled ? "loading" : "idle",
   });
-  const [current, setCurrent] = useState<RepositoryContext | null>(null);
+  const [current, setCurrent] = useState<RepositoryEntryOverview | null>(null);
   const [transition, setTransition] = useState<RepositoryEntryTransition>({ kind: "stable" });
   const [branches, setBranches] = useState<RepositoryBranchesState>({ kind: "idle" });
   const mounted = useRef(true);
-  const currentRef = useRef<RepositoryContext | null>(null);
+  const currentRef = useRef<RepositoryEntryOverview | null>(null);
   const branchAbort = useRef<AbortController>();
   const branchRequest = useRef(0);
   const openRequest = useRef(0);
 
-  /** 同步提交 React state 与异步操作读取的当前 Repository context。 */
-  const presentContext = useCallback((context: RepositoryContext) => {
-    currentRef.current = context;
-    setCurrent(context);
+  /** 同步提交 React state 与异步操作读取的当前 Repository Entry Overview。 */
+  const presentOverview = useCallback((overview: RepositoryEntryOverview) => {
+    currentRef.current = overview;
+    setCurrent(overview);
     setBranches({ kind: "idle" });
     setCatalog((value) => ({
       ...value,
-      repositories: value.repositories.map((entry) => entry.id === context.repository.id
-        ? context.repository
+      repositories: value.repositories.map((entry) => entry.id === overview.repository.id
+        ? overview.repository
         : entry),
     }));
   }, []);
@@ -108,7 +108,7 @@ export function useRepositoryEntryContext(
     if (currentRef.current?.repository.id === repositoryEntryId) {
       openRequest.current += 1;
       setTransition({ kind: "stable" });
-      return { kind: "ready", context: currentRef.current };
+      return { kind: "ready", overview: currentRef.current };
     }
     branchAbort.current?.abort();
     branchRequest.current += 1;
@@ -118,7 +118,7 @@ export function useRepositoryEntryContext(
       const result = await adapter.open(repositoryEntryId);
       if (openRequest.current !== request) return { kind: "superseded" };
       if (result.kind === "ready") {
-        presentContext(result.context);
+        presentOverview(result.overview);
         setTransition({ kind: "stable" });
       } else if (result.kind === "trust-required") {
         setTransition({ kind: "trust-required", repository: result.repository });
@@ -130,7 +130,7 @@ export function useRepositoryEntryContext(
       if (mounted.current && openRequest.current === request) setTransition({ kind: "stable" });
       throw reason;
     }
-  }, [adapter, presentContext]);
+  }, [adapter, presentOverview]);
 
   /** 注册具体本地 clone；新 Entry 前置，已有 Entry 仅原位更新。 */
   const register = useCallback(async (path: string): Promise<RepositoryEntry> => {
@@ -151,30 +151,30 @@ export function useRepositoryEntryContext(
     }
   }, [adapter]);
 
-  /** 确认当前待授权 Repository，并只在完整 context 返回后提交切换。 */
-  const confirmTrust = useCallback(async (): Promise<RepositoryContext | undefined> => {
+  /** 确认当前待授权 Repository，并只在完整 Overview 返回后提交切换。 */
+  const confirmTrust = useCallback(async (): Promise<RepositoryEntryOverview | undefined> => {
     if (transition.kind !== "trust-required") return undefined;
     const repository = transition.repository;
     const request = ++openRequest.current;
     setTransition({ kind: "granting-trust", repository });
     try {
-      const context = await adapter.grantTrust(repository);
+      const overview = await adapter.grantTrust(repository);
       if (openRequest.current !== request) return undefined;
-      presentContext(context);
+      presentOverview(overview);
       setTransition({ kind: "stable" });
-      return context;
+      return overview;
     } catch (reason) {
       if (mounted.current && openRequest.current === request) {
         setTransition({ kind: "trust-required", repository });
       }
       throw reason;
     }
-  }, [adapter, presentContext, transition]);
+  }, [adapter, presentOverview, transition]);
 
   /** 加载当前或显式 Repository 的 canonical Branch refs，并隔离已取消请求的迟到结果。 */
   const reloadBranches = useCallback(async (repositoryEntryId?: number): Promise<void> => {
-    const context = currentRef.current;
-    const resolvedRepositoryEntryId = repositoryEntryId ?? context?.repository.id;
+    const overview = currentRef.current;
+    const resolvedRepositoryEntryId = repositoryEntryId ?? overview?.repository.id;
     if (resolvedRepositoryEntryId === undefined) return;
     branchAbort.current?.abort();
     const abort = new AbortController();
@@ -194,21 +194,22 @@ export function useRepositoryEntryContext(
   }, [adapter]);
 
   /** 一次性同步 Review 最近打开记录及其所属 Repository Entry 摘要。 */
-  const recordReviewOpened = useCallback((review: ReviewSummary) => {
-    const context = currentRef.current;
-    if (context?.repository.id === review.repositoryEntryId) {
-      const nextContext = {
-        ...context,
-        repository: { ...context.repository, lastOpenedAt: review.lastOpenedAt },
-        reviews: [review, ...context.reviews.filter((candidate) => candidate.reviewId !== review.reviewId)],
+  const recordReviewOpened = useCallback((recent: RecentReviewSummary) => {
+    const review = recent.review;
+    const overview = currentRef.current;
+    if (overview?.repository.id === recent.repositoryEntryId) {
+      const nextOverview = {
+        ...overview,
+        repository: { ...overview.repository, lastOpenedAt: review.lastOpenedAt },
+        reviews: [review, ...overview.reviews.filter((candidate) => candidate.reviewId !== review.reviewId)],
       };
-      currentRef.current = nextContext;
-      setCurrent(nextContext);
+      currentRef.current = nextOverview;
+      setCurrent(nextOverview);
     }
     setCatalog((value) => ({
       ...value,
-      recentReviews: [review, ...value.recentReviews.filter((candidate) => candidate.reviewId !== review.reviewId)],
-      repositories: value.repositories.map((entry) => entry.id === review.repositoryEntryId
+      recentReviews: [recent, ...value.recentReviews.filter((candidate) => candidate.review.reviewId !== review.reviewId)],
+      repositories: value.repositories.map((entry) => entry.id === recent.repositoryEntryId
         ? { ...entry, lastOpenedAt: review.lastOpenedAt }
         : entry),
     }));
@@ -216,17 +217,17 @@ export function useRepositoryEntryContext(
 
   /** 重新读取当前 Repository 的持久化 Review summaries。 */
   const refreshReviews = useCallback(async (): Promise<void> => {
-    const context = currentRef.current;
-    if (!context) return;
-    const repositoryEntryId = context.repository.id;
+    const overview = currentRef.current;
+    if (!overview) return;
+    const repositoryEntryId = overview.repository.id;
     const loaded = await adapter.loadReviews(repositoryEntryId);
-    if (currentRef.current !== context) return;
-    const nextContext = { ...currentRef.current, ...loaded };
-    currentRef.current = nextContext;
-    setCurrent(nextContext);
+    if (currentRef.current !== overview) return;
+    const nextOverview = { ...currentRef.current, ...loaded };
+    currentRef.current = nextOverview;
+    setCurrent(nextOverview);
   }, [adapter]);
 
-  /** 放弃当前 Workspace Trust 请求但保留已呈现的 Repository context。 */
+  /** 放弃当前 Workspace Trust 请求但保留已呈现的 Repository Entry Overview。 */
   const dismissTrust = useCallback(() => {
     setTransition((value) => value.kind === "trust-required" ? { kind: "stable" } : value);
   }, []);

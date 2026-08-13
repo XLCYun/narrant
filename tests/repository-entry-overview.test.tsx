@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RepositoryApplicationAdapter, RepositoryEntry } from "@/repository/repository-application";
-import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
+import { useRepositoryEntryOverview } from "@/repository/use-repository-entry-overview";
 
 const firstRepository: RepositoryEntry = {
   id: 1,
@@ -21,27 +21,26 @@ const secondRepository: RepositoryEntry = {
   commonDirectory: "/work/second/.git",
 };
 
-/** 为 Repository Entry context seam 提供可预测的内存 adapter。 */
+/** 为 Repository Entry Overview seam 提供可预测的内存 adapter。 */
 function createAdapter(): RepositoryApplicationAdapter {
   return {
     loadCatalog: vi.fn().mockResolvedValue({ repositories: [firstRepository, secondRepository], recentReviews: [] }),
     register: vi.fn().mockResolvedValue(firstRepository),
     open: vi.fn(async (repositoryEntryId) => ({
       kind: "ready",
-      context: {
+      overview: {
         repository: repositoryEntryId === firstRepository.id ? firstRepository : secondRepository,
-        savedReviews: [],
         reviews: [],
       },
     })),
     grantTrust: vi.fn(),
-    loadReviews: vi.fn().mockResolvedValue({ savedReviews: [], reviews: [] }),
+    loadReviews: vi.fn().mockResolvedValue({ reviews: [] }),
     loadBranches: vi.fn().mockResolvedValue({ refs: [], defaultRef: "", currentRef: "" }),
   };
 }
 
-describe("Repository Entry context lifecycle", () => {
-  it("只在目标 Repository context 完整就绪后原子替换当前 context", async () => {
+describe("Repository Entry Overview lifecycle", () => {
+  it("只在目标 Repository Entry Overview 完整就绪后原子替换当前 Overview", async () => {
     const adapter = createAdapter();
     let finishSecondOpen!: () => void;
     vi.mocked(adapter.open).mockImplementation(async (repositoryEntryId) => {
@@ -50,14 +49,13 @@ describe("Repository Entry context lifecycle", () => {
       }
       return {
         kind: "ready",
-        context: {
+        overview: {
           repository: repositoryEntryId === firstRepository.id ? firstRepository : secondRepository,
-          savedReviews: [],
           reviews: [],
         },
       };
     });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
 
     await act(async () => {
@@ -81,17 +79,16 @@ describe("Repository Entry context lifecycle", () => {
     expect(result.current.transition).toEqual({ kind: "stable" });
   });
 
-  it("Workspace Trust 确认前保留旧 context，确认后恢复原 Repository 目标", async () => {
+  it("Workspace Trust 确认前保留旧 Overview，确认后恢复原 Repository 目标", async () => {
     const adapter = createAdapter();
     vi.mocked(adapter.open).mockImplementation(async (repositoryEntryId) => repositoryEntryId === firstRepository.id
-      ? { kind: "ready", context: { repository: firstRepository, savedReviews: [], reviews: [] } }
+      ? { kind: "ready", overview: { repository: firstRepository, reviews: [] } }
       : { kind: "trust-required", repository: secondRepository });
     vi.mocked(adapter.grantTrust).mockResolvedValue({
       repository: secondRepository,
-      savedReviews: [{ reviewId: "saved-2" }],
       reviews: [],
     });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
     await act(async () => { await result.current.open(firstRepository.id); });
 
@@ -109,7 +106,6 @@ describe("Repository Entry context lifecycle", () => {
     expect(adapter.grantTrust).toHaveBeenCalledWith(secondRepository);
     expect(result.current.current).toEqual({
       repository: secondRepository,
-      savedReviews: [{ reviewId: "saved-2" }],
       reviews: [],
     });
     expect(result.current.transition).toEqual({ kind: "stable" });
@@ -127,7 +123,7 @@ describe("Repository Entry context lifecycle", () => {
       }
       return { refs: ["main", "topic"], defaultRef: "main", currentRef: "topic" };
     });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
     await act(async () => { await result.current.open(firstRepository.id); });
 
@@ -157,21 +153,23 @@ describe("Repository Entry context lifecycle", () => {
 
   it("记录打开的 Review 时同步当前仓库、全局最近列表和 Repository 时间", async () => {
     const adapter = createAdapter();
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
     await act(async () => { await result.current.open(firstRepository.id); });
     const openedReview = {
-      reviewId: "review-1",
       repositoryEntryId: firstRepository.id,
       repositoryPath: firstRepository.canonicalPath,
-      baseRef: "refs/heads/main",
-      headRef: "refs/heads/topic",
-      lastOpenedAt: 42,
+      review: {
+        reviewId: "review-1",
+        selection: { kind: "branch" as const, baseRef: "refs/heads/main", headRef: "refs/heads/topic" },
+        currentSnapshot: { baseRevision: "base", comparisonBase: "merge-base", headRevision: "head" },
+        lastOpenedAt: 42,
+      },
     };
 
     act(() => result.current.recordReviewOpened(openedReview));
 
-    expect(result.current.current?.reviews).toEqual([openedReview]);
+    expect(result.current.current?.reviews).toEqual([openedReview.review]);
     expect(result.current.current?.repository.lastOpenedAt).toBe(42);
     expect(result.current.catalog.recentReviews).toEqual([openedReview]);
     expect(result.current.catalog.repositories.map((entry) => entry.id)).toEqual([1, 2]);
@@ -184,7 +182,7 @@ describe("Repository Entry context lifecycle", () => {
     vi.mocked(adapter.register)
       .mockResolvedValueOnce(thirdRepository)
       .mockResolvedValueOnce({ ...secondRepository, available: false });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
 
     await act(async () => { await result.current.register("/work/third"); });
@@ -195,15 +193,14 @@ describe("Repository Entry context lifecycle", () => {
     expect(result.current.catalog.repositories[2].available).toBe(false);
   });
 
-  it("刷新 Review summaries 时只更新当前 Repository context", async () => {
+  it("刷新 Review summaries 时只更新当前 Repository Entry Overview", async () => {
     const adapter = createAdapter();
-    const savedReview = { reviewId: "saved-1" };
     const review = {
       reviewId: "review-1", repositoryEntryId: 1, repositoryPath: "/work/first",
       baseRef: "main", headRef: "topic", lastOpenedAt: 7,
     };
-    vi.mocked(adapter.loadReviews).mockResolvedValue({ savedReviews: [savedReview], reviews: [review] });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    vi.mocked(adapter.loadReviews).mockResolvedValue({ reviews: [review] });
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
     await act(async () => { await result.current.open(firstRepository.id); });
 
@@ -211,7 +208,6 @@ describe("Repository Entry context lifecycle", () => {
 
     expect(result.current.current).toEqual({
       repository: firstRepository,
-      savedReviews: [savedReview],
       reviews: [review],
     });
     expect(adapter.loadReviews).toHaveBeenCalledWith(firstRepository.id);
@@ -221,8 +217,8 @@ describe("Repository Entry context lifecycle", () => {
     const adapter = createAdapter();
     vi.mocked(adapter.open)
       .mockResolvedValueOnce({ kind: "trust-required", repository: firstRepository })
-      .mockResolvedValueOnce({ kind: "ready", context: { repository: firstRepository, savedReviews: [], reviews: [] } });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+      .mockResolvedValueOnce({ kind: "ready", overview: { repository: firstRepository, reviews: [] } });
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
     await act(async () => { await result.current.open(firstRepository.id); });
     act(() => result.current.dismissTrust());
@@ -236,9 +232,9 @@ describe("Repository Entry context lifecycle", () => {
     expect(result.current.branches).toEqual({ kind: "idle" });
   });
 
-  it("重复打开当前 Repository 时复用 context 且不更新时间", async () => {
+  it("重复打开当前 Repository 时复用 Overview 且不更新时间", async () => {
     const adapter = createAdapter();
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
     await act(async () => { await result.current.open(firstRepository.id); });
     vi.mocked(adapter.open).mockClear();
@@ -247,10 +243,10 @@ describe("Repository Entry context lifecycle", () => {
     await act(async () => { outcome = await result.current.open(firstRepository.id); });
 
     expect(adapter.open).not.toHaveBeenCalled();
-    expect(outcome).toEqual({ kind: "ready", context: result.current.current });
+    expect(outcome).toEqual({ kind: "ready", overview: result.current.current });
   });
 
-  it("交错打开 Repository 时只允许最新目标提交 context", async () => {
+  it("交错打开 Repository 时只允许最新目标提交 Overview", async () => {
     const adapter = createAdapter();
     let finishFirst!: () => void;
     vi.mocked(adapter.open).mockImplementation(async (repositoryEntryId) => {
@@ -258,9 +254,9 @@ describe("Repository Entry context lifecycle", () => {
         await new Promise<void>((resolve) => { finishFirst = resolve; });
       }
       const repository = repositoryEntryId === firstRepository.id ? firstRepository : secondRepository;
-      return { kind: "ready", context: { repository, savedReviews: [], reviews: [] } };
+      return { kind: "ready", overview: { repository, reviews: [] } };
     });
-    const { result } = renderHook(() => useRepositoryEntryContext(adapter, { enabled: true }));
+    const { result } = renderHook(() => useRepositoryEntryOverview(adapter, { enabled: true }));
     await waitFor(() => expect(result.current.catalog.status).toBe("ready"));
 
     let firstOpen!: Promise<unknown>;

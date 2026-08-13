@@ -35,7 +35,7 @@ describe("Tauri Repository application adapter", () => {
 
   it("打开未授权 Repository 时返回 trust-required 且不加载 Review 列表", async () => {
     const invoke = vi.fn(async (command: string) => {
-      if (command === "open_repository_context") return { kind: "trust-required", repository };
+      if (command === "open_repository_overview") return { kind: "trust-required", repository };
       throw new Error(`unexpected command: ${command}`);
     });
     const adapter = createTauriRepositoryApplicationAdapter({
@@ -62,12 +62,11 @@ describe("Tauri Repository application adapter", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it("授权后返回可直接进入的 Repository context", async () => {
-    const savedReviews = [{ reviewId: "review-1" }];
+  it("授权后返回可直接进入的 Repository Entry Overview", async () => {
     const reviews = [{ reviewId: "review-1", repositoryEntryId: 17 }];
     const invoke = vi.fn(async (command: string) => {
       if (command === "grant_repository_workspace_trust_and_open") {
-        return { repository, savedReviews, reviews };
+        return { repository, reviews };
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -78,7 +77,6 @@ describe("Tauri Repository application adapter", () => {
 
     await expect(adapter.grantTrust(repository)).resolves.toEqual({
       repository,
-      savedReviews,
       reviews,
     });
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
@@ -89,7 +87,7 @@ describe("Tauri Repository application adapter", () => {
   it("注册 clone 并按 Repository identity 刷新 Review 列表", async () => {
     const invoke = vi.fn(async (command: string) => {
       if (command === "register_repository_entry") return repository;
-      if (command === "load_repository_reviews") return { savedReviews: [], reviews: [] };
+      if (command === "load_repository_reviews") return { reviews: [] };
       throw new Error(`unexpected command: ${command}`);
     });
     const adapter = createTauriRepositoryApplicationAdapter({
@@ -98,7 +96,7 @@ describe("Tauri Repository application adapter", () => {
     } as unknown as TypedTauriTransport);
 
     await expect(adapter.register("/repo")).resolves.toBe(repository);
-    await expect(adapter.loadReviews(17)).resolves.toEqual({ savedReviews: [], reviews: [] });
+    await expect(adapter.loadReviews(17)).resolves.toEqual({ reviews: [] });
   });
 
   it("通过 cancellation interface 加载 Branch refs", async () => {
@@ -119,7 +117,7 @@ describe("Tauri Repository application adapter", () => {
   });
 
   it("一次读取 Repository Review projection", async () => {
-    const projection = { savedReviews: [], reviews: [] };
+    const projection = { reviews: [] };
     const invoke = vi.fn().mockResolvedValue(projection);
     const adapter = createTauriRepositoryApplicationAdapter({
       invoke,

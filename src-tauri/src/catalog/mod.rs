@@ -22,7 +22,7 @@ pub struct RepositoryEntry {
     pub unavailable_reason: Option<String>,
 }
 
-/// 首页与 Repository Entry 页面共享的持久化 Review 列表投影。
+/// application 层一次查询所需的持久化 Review 与 current Snapshot 投影。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewSummary {
@@ -33,6 +33,9 @@ pub struct ReviewSummary {
     pub head_ref: String,
     pub last_opened_at: i64,
     pub pull_request: Option<PullRequestMetadata>,
+    pub base_revision: String,
+    pub comparison_base: String,
+    pub head_revision: String,
 }
 
 /// 清理 Review Workspace 前必须同时匹配的四项持久化所有权证据。

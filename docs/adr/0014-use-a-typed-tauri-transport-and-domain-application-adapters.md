@@ -15,11 +15,11 @@ that interface using the shared transport.
 
 Adapters remain stateless I/O implementations. Stateful ordering, cancellation, trust
 gates, and atomic presentation belong to lifecycle modules above those adapters. The
-Repository Entry context module owns the current Repository Entry context, Trust
+Repository Entry Overview module owns the current Repository Entry Overview, Trust
 transitions, Review summary synchronization, and cancellable Branch Ref loading. Its
 backend Repository Entry application owns the Repository Catalog projection, availability
 gate, Workspace Trust gate, complete Review projection, and canonical path lookup. React
-composition code consumes the context module's interface rather than reproducing those
+composition code consumes the Overview module's interface rather than reproducing those
 transitions with independent state variables.
 
 The Review application adapter was the first migrated vertical slice. The Repository

@@ -10,7 +10,7 @@ import type {
 } from "@/repository/repository-application";
 import type {
   RepositoryCatalogProjection,
-  RepositoryContext,
+  RepositoryEntryOverview,
   RepositoryReviewsProjection,
 } from "@/repository/repository-application";
 
@@ -46,8 +46,8 @@ export type TauriCommandContract = {
   complete_github_authorization: { args: { authorizationId: string }; result: void };
   sign_out_github: { args: EmptyArgs; result: void };
   load_repository_catalog: { args: EmptyArgs; result: RepositoryCatalogProjection };
-  open_repository_context: { args: { repositoryEntryId: number }; result: OpenRepositoryResult };
-  grant_repository_workspace_trust_and_open: { args: { repositoryEntryId: number }; result: RepositoryContext };
+  open_repository_overview: { args: { repositoryEntryId: number }; result: OpenRepositoryResult };
+  grant_repository_workspace_trust_and_open: { args: { repositoryEntryId: number }; result: RepositoryEntryOverview };
   load_repository_reviews: { args: { repositoryEntryId: number }; result: RepositoryReviewsProjection };
   register_repository_entry: { args: { path: string }; result: RepositoryEntry };
   reopen_review: { args: { reviewId: string }; result: ReviewSnapshot };
@@ -73,7 +73,7 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 export const TAURI_COMMAND_NAMES = [
   "register_repository_entry",
   "load_repository_catalog",
-  "open_repository_context",
+  "open_repository_overview",
   "grant_repository_workspace_trust_and_open",
   "load_repository_reviews",
   "compare_local_refs",

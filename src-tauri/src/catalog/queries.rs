@@ -121,9 +121,11 @@ impl RepositoryCatalog {
             .prepare(
                 "SELECT r.id, r.repository_entry_id, e.canonical_path,
                         r.base_ref, r.head_ref, r.last_opened_at,
-                        r.pull_request_metadata
+                        r.pull_request_metadata, s.base_revision,
+                        s.comparison_base, s.head_revision
                  FROM reviews r
                  JOIN repository_entries e ON e.id = r.repository_entry_id
+                 JOIN review_snapshots s ON s.id = r.current_snapshot_id
                  WHERE r.current_snapshot_id IS NOT NULL
                    AND (?1 IS NULL OR r.repository_entry_id = ?1)
                  ORDER BY r.last_opened_at DESC, r.id DESC",
@@ -150,6 +152,9 @@ impl RepositoryCatalog {
                     head_ref: row.get(4)?,
                     last_opened_at: row.get(5)?,
                     pull_request,
+                    base_revision: row.get(7)?,
+                    comparison_base: row.get(8)?,
+                    head_revision: row.get(9)?,
                 })
             })
             .map_err(database_recovery_error)?

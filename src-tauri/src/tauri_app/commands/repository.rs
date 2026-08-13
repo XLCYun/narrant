@@ -28,27 +28,27 @@ pub(crate) fn load_repository_catalog(
 
 /// 打开 Repository，并将 availability、Trust 与 Review projection 收进一个 command。
 #[tauri::command]
-pub(crate) fn open_repository_context(
+pub(crate) fn open_repository_overview(
     application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
     repository_entry_id: i64,
 ) -> Result<repository::RepositoryOpenResult, String> {
     application
-        .open_context(repository_entry_id)
+        .open_overview(repository_entry_id)
         .map_err(|error| error.to_string())
 }
 
-/// 授予 Repository Workspace Trust 后返回完整可进入 context。
+/// 授予 Repository Workspace Trust 后返回完整 Repository Entry Overview。
 #[tauri::command]
 pub(crate) fn grant_repository_workspace_trust_and_open(
     application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
     repository_entry_id: i64,
-) -> Result<repository::RepositoryContext, String> {
+) -> Result<repository::RepositoryEntryOverview, String> {
     application
         .grant_trust_and_open(repository_entry_id)
         .map_err(|error| error.to_string())
 }
 
-/// 一次读取当前 Repository 的 saved Snapshot 与 Review summaries。
+/// 一次读取当前 Repository 的统一 Review summaries。
 #[tauri::command]
 pub(crate) fn load_repository_reviews(
     application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,

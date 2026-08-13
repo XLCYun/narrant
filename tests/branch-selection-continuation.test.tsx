@@ -15,10 +15,8 @@ const selection = {
 
 const existingReview = {
   reviewId: "review-41",
-  repositoryEntryId: 41,
-  repositoryPath: "/repo",
-  baseRef: selection.baseRef,
-  headRef: selection.headRef,
+  selection: { kind: "branch" as const, baseRef: selection.baseRef, headRef: selection.headRef },
+  currentSnapshot: { baseRevision: "base-1", comparisonBase: "merge-base-1", headRevision: "head-1" },
   lastOpenedAt: 1,
 };
 
@@ -92,7 +90,7 @@ describe("Branch Selection continuation", () => {
     const review = reviewOperations(async () => { throw new Error("不应检查更新"); });
     const pullRequestReview = {
       ...existingReview,
-      pullRequest: {
+      selection: { kind: "pull-request" as const, baseRef: selection.baseRef, headRef: selection.headRef, pullRequest: {
         owner: "octo-org",
         repository: "octo-repo",
         number: 42,
@@ -105,7 +103,7 @@ describe("Branch Selection continuation", () => {
         baseRef: "main",
         headRef: "topic",
         synchronizedAt: 1,
-      },
+      } },
     };
     const { result } = renderHook(() => useBranchSelectionContinuation(review, {
       ...selection,
@@ -117,23 +115,6 @@ describe("Branch Selection continuation", () => {
     }));
     await waitFor(() => expect(result.current.state).toEqual({ kind: "ready", action: "start" }));
 
-    await act(async () => { await result.current.submit(); });
-    expect(opened).toEqual([expect.objectContaining({ mode: { kind: "start" } })]);
-  });
-
-  it("不会把其他 Repository Entry 的相同 refs 当作已有 Review", async () => {
-    const opened: unknown[] = [];
-    const review = reviewOperations(async () => { throw new Error("不应检查更新"); });
-    const { result } = renderHook(() => useBranchSelectionContinuation(review, {
-      ...selection,
-      reviews: [{ ...existingReview, reviewId: "review-other", repositoryEntryId: 99 }],
-      openReview: async (target) => {
-        opened.push(target);
-        return { kind: "navigated" };
-      },
-    }));
-
-    await waitFor(() => expect(result.current.state).toEqual({ kind: "ready", action: "start" }));
     await act(async () => { await result.current.submit(); });
     expect(opened).toEqual([expect.objectContaining({ mode: { kind: "start" } })]);
   });
@@ -239,7 +220,7 @@ describe("Branch Selection continuation", () => {
     );
     await waitFor(() => expect(result.current.state.kind).toBe("checking"));
 
-    rerender({ headRef: latestReview.headRef, reviews: [latestReview] });
+    rerender({ headRef: latestReview.selection.headRef, reviews: [latestReview] });
     act(() => latestCheck.resolve(currentUpdate));
     await waitFor(() => expect(result.current.state).toEqual({ kind: "ready", action: "continue" }));
 
@@ -253,7 +234,7 @@ describe("Branch Selection continuation", () => {
       kind: "branch-selection",
       repositoryEntryId: 41,
       baseRef: selection.baseRef,
-      headRef: latestReview.headRef,
+      headRef: latestReview.selection.headRef,
       mode: { kind: "continue", reviewId: "review-42" },
     }]);
   });

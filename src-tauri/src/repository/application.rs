@@ -1,27 +1,58 @@
 use crate::catalog::{
     PullRequestMetadata, RepositoryCatalog, RepositoryCatalogError, RepositoryEntry, ReviewSummary,
-    SavedBranchReview,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// 无需打开 Review 即可展示的持久化 Snapshot 摘要。
+/// Repository Entry Overview 中显式呈现的 Review Selection。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ReviewSelectionSummary {
+    Branch {
+        base_ref: String,
+        head_ref: String,
+    },
+    PullRequest {
+        base_ref: String,
+        head_ref: String,
+        pull_request: PullRequestMetadata,
+    },
+}
+
+/// Review 当前 Snapshot 的完整 revision identity。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SavedReviewSummary {
-    pub review_id: String,
+pub struct ReviewSnapshotSummary {
     pub base_revision: String,
+    pub comparison_base: String,
     pub head_revision: String,
-    pub pull_request: Option<PullRequestMetadata>,
+}
+
+/// Repository Entry 范围内可继续打开的一个 Review 摘要。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryReviewSummary {
+    pub review_id: String,
+    pub selection: ReviewSelectionSummary,
+    pub current_snapshot: ReviewSnapshotSummary,
+    pub last_opened_at: i64,
+}
+
+/// 首页跨 Repository 聚合的最近 Review 摘要。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentReviewSummary {
+    pub repository_entry_id: i64,
+    pub repository_path: PathBuf,
+    pub review: RepositoryReviewSummary,
 }
 
 /// Repository Entry 页面需要的一次完整 Review projection。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryReviewsProjection {
-    pub saved_reviews: Vec<SavedReviewSummary>,
-    pub reviews: Vec<ReviewSummary>,
+    pub reviews: Vec<RepositoryReviewSummary>,
 }
 
 /// 首页需要的 Repository Catalog projection。
@@ -29,16 +60,15 @@ pub struct RepositoryReviewsProjection {
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryCatalogProjection {
     pub repositories: Vec<RepositoryEntry>,
-    pub recent_reviews: Vec<ReviewSummary>,
+    pub recent_reviews: Vec<RecentReviewSummary>,
 }
 
 /// 一个 Repository Entry 的完整可进入上下文。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RepositoryContext {
+pub struct RepositoryEntryOverview {
     pub repository: RepositoryEntry,
-    pub saved_reviews: Vec<SavedReviewSummary>,
-    pub reviews: Vec<ReviewSummary>,
+    pub reviews: Vec<RepositoryReviewSummary>,
 }
 
 /// Repository 打开流程的可观察结果；Trust 与可用性判断留在模块内部。
@@ -47,7 +77,7 @@ pub struct RepositoryContext {
 pub enum RepositoryOpenResult {
     Unavailable { repository: RepositoryEntry },
     TrustRequired { repository: RepositoryEntry },
-    Ready { context: RepositoryContext },
+    Ready { overview: RepositoryEntryOverview },
 }
 
 /// Repository application 对外暴露的可恢复失败类别。
@@ -108,12 +138,17 @@ impl RepositoryEntryApplication {
     pub fn load_catalog(&self) -> Result<RepositoryCatalogProjection, RepositoryApplicationError> {
         Ok(RepositoryCatalogProjection {
             repositories: self.catalog.list()?,
-            recent_reviews: self.catalog.list_reviews(None)?,
+            recent_reviews: self
+                .catalog
+                .list_reviews(None)?
+                .into_iter()
+                .map(recent_review_summary)
+                .collect(),
         })
     }
 
-    /// 打开指定 Repository，并在进入可用 context 前完成 Trust 与 Review projection。
-    pub fn open_context(
+    /// 打开指定 Repository，并在呈现 Overview 前完成 Trust 与 Review projection。
+    pub fn open_overview(
         &self,
         repository_entry_id: i64,
     ) -> Result<RepositoryOpenResult, RepositoryApplicationError> {
@@ -125,19 +160,19 @@ impl RepositoryEntryApplication {
             return Ok(RepositoryOpenResult::TrustRequired { repository });
         }
         Ok(RepositoryOpenResult::Ready {
-            context: self.context(repository)?,
+            overview: self.overview(repository)?,
         })
     }
 
-    /// 持久化 Trust 后返回可直接呈现的完整 Repository context。
+    /// 持久化 Trust 后返回可直接呈现的完整 Repository Entry Overview。
     pub fn grant_trust_and_open(
         &self,
         repository_entry_id: i64,
-    ) -> Result<RepositoryContext, RepositoryApplicationError> {
+    ) -> Result<RepositoryEntryOverview, RepositoryApplicationError> {
         self.catalog.grant_workspace_trust(repository_entry_id)?;
-        let result = self.open_context(repository_entry_id)?;
+        let result = self.open_overview(repository_entry_id)?;
         match result {
-            RepositoryOpenResult::Ready { context } => Ok(context),
+            RepositoryOpenResult::Ready { overview } => Ok(overview),
             RepositoryOpenResult::Unavailable { repository } => {
                 Err(RepositoryApplicationError::Unavailable(
                     repository
@@ -151,7 +186,7 @@ impl RepositoryEntryApplication {
         }
     }
 
-    /// 读取当前 Repository 的两个 Review projection，并拒绝不可用入口。
+    /// 读取当前 Repository 的统一 Review projection，并拒绝不可用入口。
     pub fn load_reviews(
         &self,
         repository_entry_id: i64,
@@ -202,44 +237,64 @@ impl RepositoryEntryApplication {
         Ok(self.catalog.inspect_entry(repository_entry_id)?)
     }
 
-    /// 从已有 Repository projection 组合 application context。
-    fn context(
+    /// 从已有 Repository projection 组合 Repository Entry Overview。
+    fn overview(
         &self,
         repository: RepositoryEntry,
-    ) -> Result<RepositoryContext, RepositoryApplicationError> {
+    ) -> Result<RepositoryEntryOverview, RepositoryApplicationError> {
         let projection = self.review_projection(repository.id)?;
-        Ok(RepositoryContext {
+        Ok(RepositoryEntryOverview {
             repository,
-            saved_reviews: projection.saved_reviews,
             reviews: projection.reviews,
         })
     }
 
-    /// 读取页面同时需要的 saved Snapshot 与 Review summary。
+    /// 一次读取页面所需的统一 Review summaries。
     fn review_projection(
         &self,
         repository_entry_id: i64,
     ) -> Result<RepositoryReviewsProjection, RepositoryApplicationError> {
-        let saved_reviews = self
+        let reviews = self
             .catalog
-            .list_saved_review_snapshots(repository_entry_id)?
+            .list_reviews(Some(repository_entry_id))?
             .into_iter()
-            .map(saved_review_summary)
+            .map(repository_review_summary)
             .collect();
-        Ok(RepositoryReviewsProjection {
-            saved_reviews,
-            reviews: self.catalog.list_reviews(Some(repository_entry_id))?,
-        })
+        Ok(RepositoryReviewsProjection { reviews })
     }
 }
 
-/// 将 Catalog 的完整 Review 模型压缩成 Repository 页面所需的摘要。
-fn saved_review_summary(review: SavedBranchReview) -> SavedReviewSummary {
-    SavedReviewSummary {
+/// 将 Catalog 的统一持久化投影转换成 Repository Entry Overview 摘要。
+fn repository_review_summary(review: ReviewSummary) -> RepositoryReviewSummary {
+    let selection = match review.pull_request {
+        Some(pull_request) => ReviewSelectionSummary::PullRequest {
+            base_ref: review.base_ref,
+            head_ref: review.head_ref,
+            pull_request,
+        },
+        None => ReviewSelectionSummary::Branch {
+            base_ref: review.base_ref,
+            head_ref: review.head_ref,
+        },
+    };
+    RepositoryReviewSummary {
         review_id: review.review_id,
-        base_revision: review.base_revision,
-        head_revision: review.head_revision,
-        pull_request: review.pull_request,
+        selection,
+        current_snapshot: ReviewSnapshotSummary {
+            base_revision: review.base_revision,
+            comparison_base: review.comparison_base,
+            head_revision: review.head_revision,
+        },
+        last_opened_at: review.last_opened_at,
+    }
+}
+
+/// 为全局最近列表补充 Review 的 Repository 所有权。
+fn recent_review_summary(summary: ReviewSummary) -> RecentReviewSummary {
+    RecentReviewSummary {
+        repository_entry_id: summary.repository_entry_id,
+        repository_path: summary.repository_path.clone(),
+        review: repository_review_summary(summary),
     }
 }
 

@@ -18,7 +18,7 @@ import {
   ReviewReader,
   type DiffMode,
 } from "@/components/review-reader";
-import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
+import type { DiscoveredPullRequest, PullRequestGroup, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
@@ -31,7 +31,7 @@ import { useGitHubIdentityLifecycle } from "@/github/use-github-identity-lifecyc
 import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
 import { useBranchSelectionContinuation } from "@/review/use-branch-selection-continuation";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
-import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
+import { useRepositoryEntryOverview } from "@/repository/use-repository-entry-overview";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import "@/lib/i18n";
 
@@ -69,10 +69,10 @@ export function App() {
     () => createTauriGitHubOAuthApplicationAdapter(tauriTransport),
     [],
   );
-  const repositoryContext = useRepositoryEntryContext(repositoryApplication, { enabled: catalogRuntimeEnabled });
+  const repositoryOverview = useRepositoryEntryOverview(repositoryApplication, { enabled: catalogRuntimeEnabled });
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
-  const appShell = useAppShellNavigation(repositoryContext, reviewLifecycle);
-  const selectedRepository = repositoryContext.current?.repository;
+  const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
+  const selectedRepository = repositoryOverview.current?.repository;
   const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: catalogRuntimeEnabled });
   const pullRequestDiscoveryLifecycle = usePullRequestDiscoveryLifecycle(pullRequestDiscovery, {
     enabled: Boolean(selectedRepository),
@@ -94,15 +94,14 @@ export function App() {
   const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
     ? savedTreeWidth
     : 24;
-  const repositoryEntries = repositoryContext.catalog.repositories;
-  const recentReviews = repositoryContext.catalog.recentReviews;
-  const savedReviews = repositoryContext.current?.savedReviews ?? [];
-  const repositoryReviews = repositoryContext.current?.reviews ?? [];
+  const repositoryEntries = repositoryOverview.catalog.repositories;
+  const recentReviews = repositoryOverview.catalog.recentReviews;
+  const repositoryReviews = repositoryOverview.current?.reviews ?? [];
   const pendingRepository = appShell.trust?.repository;
   const grantingTrust = appShell.trust?.granting ?? false;
-  const catalogLoading = repositoryContext.catalog.status === "loading"
-    || repositoryContext.transition.kind === "registering";
-  const branchState = repositoryContext.branches;
+  const catalogLoading = repositoryOverview.catalog.status === "loading"
+    || repositoryOverview.transition.kind === "registering";
+  const branchState = repositoryOverview.branches;
   const refs = branchState.kind === "ready" ? branchState.value.refs : [];
   const defaultRef = branchState.kind === "ready" ? branchState.value.defaultRef : "";
   const currentRef = branchState.kind === "ready" ? branchState.value.currentRef : "";
@@ -169,7 +168,7 @@ export function App() {
   async function registerRepository() {
     setError("");
     try {
-      await repositoryContext.register(repositoryPath);
+      await repositoryOverview.register(repositoryPath);
     } catch (reason) {
       setError(String(reason));
     }
@@ -184,17 +183,17 @@ export function App() {
     return result;
   }
 
-  /** Repository context 提交后启动独立的页面数据读取。 */
+  /** Repository Entry Overview 提交后启动独立的页面数据读取。 */
   useEffect(() => {
     if (!selectedRepository) return;
     setRepositoryPath(selectedRepository.canonicalPath);
-    if (!testHarnessEnabled) void repositoryContext.reloadBranches();
+    if (!testHarnessEnabled) void repositoryOverview.reloadBranches();
     // 页面数据只在已提交的 Repository Entry identity 改变后重新读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepository?.id]);
 
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
-  async function openSavedReview(review: SavedReviewSummary) {
+  async function openSavedReview(review: RepositoryReviewSummary) {
     if (!selectedRepository) return;
     setError("");
     const result = await appShell.navigate({
@@ -206,12 +205,12 @@ export function App() {
   }
 
   /** 侧边栏 Review 导航统一处理跨仓库、Trust 与失败回滚。 */
-  async function navigateToReview(review: ReviewSummary) {
+  async function navigateToReview(review: RecentReviewSummary) {
     setError("");
     const result = await appShell.navigate({
       kind: "review",
       repositoryEntryId: review.repositoryEntryId,
-      target: { kind: "saved-review", reviewId: review.reviewId },
+      target: { kind: "saved-review", reviewId: review.review.reviewId },
     });
     if (result.kind === "failed") setError(result.detail);
   }
@@ -281,7 +280,7 @@ export function App() {
     const resolvedRepositoryEntryId = repositoryEntryId ?? (testHarnessEnabled ? 0 : undefined);
     if (resolvedRepositoryEntryId === undefined) return;
     try {
-      await repositoryContext.reloadBranches(resolvedRepositoryEntryId);
+      await repositoryOverview.reloadBranches(resolvedRepositoryEntryId);
     } catch (reason) {
       setError(String(reason));
     }
@@ -331,10 +330,10 @@ export function App() {
         <h3>Recent Reviews</h3>
         {recentReviews.length === 0
           ? <p>尚无最近 Review</p>
-          : <ul>{recentReviews.map((review) => <li key={review.reviewId}>
-            <Button variant="outline" disabled={Boolean(reviewOpeningKey)} aria-busy={reviewOpeningKey === `review:${review.reviewId}` || undefined} onClick={() => void navigateToReview(review)}>
-              {reviewOpeningKey === `review:${review.reviewId}` && <Spinner aria-hidden />}
-              <span className="mr-3">{review.repositoryPath}</span><BranchRelation baseRef={review.baseRef} headRef={review.headRef} interactive={false} />
+          : <ul>{recentReviews.map((recent) => <li key={recent.review.reviewId}>
+            <Button variant="outline" disabled={Boolean(reviewOpeningKey)} aria-busy={reviewOpeningKey === `review:${recent.review.reviewId}` || undefined} onClick={() => void navigateToReview(recent)}>
+              {reviewOpeningKey === `review:${recent.review.reviewId}` && <Spinner aria-hidden />}
+              <span className="mr-3">{recent.repositoryPath}</span><BranchRelation baseRef={recent.review.selection.baseRef} headRef={recent.review.selection.headRef} interactive={false} />
             </Button>
           </li>)}</ul>}
       </section>
@@ -343,16 +342,14 @@ export function App() {
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
-        savedReviews={savedReviews}
+        reviews={repositoryReviews}
         pullRequestGroups={pullRequestGroups}
-        repositoryReviews={repositoryReviews}
         discoveryLoading={discoveryLoading}
         discoveryError={discoveryError}
         githubConnected={authStatus?.signedIn ?? false}
         onRetryDiscovery={() => void pullRequestDiscoveryLifecycle.retry()}
         onConnectGitHub={() => void connectGitHub()}
-        onOpenSavedReview={(review) => void openSavedReview(review)}
-        onOpenReview={(review) => void navigateToReview(review)}
+        onOpenReview={(review) => void openSavedReview(review)}
         onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
         localBranches={<BranchReviewSelector
           refs={refs}

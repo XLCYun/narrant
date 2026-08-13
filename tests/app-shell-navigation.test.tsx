@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import type { RepositoryApplicationAdapter, RepositoryEntry } from "@/repository/repository-application";
-import { useRepositoryEntryContext } from "@/repository/use-repository-entry-context";
+import { useRepositoryEntryOverview } from "@/repository/use-repository-entry-overview";
 import type { ReviewApplicationAdapter } from "@/review/review-application";
 import type { ReviewSnapshot } from "@/review/types";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
@@ -34,14 +34,14 @@ function createRepositoryAdapter(options: { trusted?: Set<number> } = {}): Repos
     open: vi.fn(async (repositoryEntryId) => {
       const repository = repositories.find((candidate) => candidate.id === repositoryEntryId)!;
       return trusted.has(repositoryEntryId)
-        ? { kind: "ready" as const, context: { repository, savedReviews: [], reviews: [] } }
+        ? { kind: "ready" as const, overview: { repository, reviews: [] } }
         : { kind: "trust-required" as const, repository };
     }),
     grantTrust: vi.fn(async (repository) => {
       trusted.add(repository.id);
-      return { repository, savedReviews: [], reviews: [] };
+      return { repository, reviews: [] };
     }),
-    loadReviews: vi.fn(async () => ({ savedReviews: [], reviews: [] })),
+    loadReviews: vi.fn(async () => ({ reviews: [] })),
     loadBranches: vi.fn(async () => ({ refs: [], defaultRef: "", currentRef: "" })),
   };
 }
@@ -69,7 +69,7 @@ function createReviewAdapter(): ReviewApplicationAdapter & { failedReviewId?: st
 
 function renderNavigation(repositoryAdapter: RepositoryApplicationAdapter, reviewAdapter: ReviewApplicationAdapter) {
   return renderHook(() => {
-    const repository = useRepositoryEntryContext(repositoryAdapter, { enabled: true });
+    const repository = useRepositoryEntryOverview(repositoryAdapter, { enabled: true });
     const review = useReviewLifecycle(reviewAdapter);
     return useAppShellNavigation(repository, review, { waitForPaint: async () => undefined });
   });

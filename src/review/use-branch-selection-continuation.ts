@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { ReviewApplicationAdapter, ReviewOpenTarget } from "@/review/review-application";
 
 /** Branch Selection continuation 可呈现的稳定状态。 */
@@ -20,7 +20,7 @@ export type BranchSelectionContinuationOptions = {
   repositoryEntryId?: number;
   baseRef: string;
   headRef: string;
-  reviews: ReviewSummary[];
+  reviews: RepositoryReviewSummary[];
   openReview(target: Extract<ReviewOpenTarget, { kind: "branch-selection" }>): Promise<BranchSelectionOpenResult>;
 };
 
@@ -42,10 +42,9 @@ export function useBranchSelectionContinuation(
   const requestRef = useRef(0);
   const abortRef = useRef<AbortController>();
   const matchingReviewId = options.reviews.find((candidate) => (
-    !candidate.pullRequest
-    && candidate.repositoryEntryId === options.repositoryEntryId
-    && candidate.baseRef === options.baseRef
-    && candidate.headRef === options.headRef
+    candidate.selection.kind === "branch"
+    && candidate.selection.baseRef === options.baseRef
+    && candidate.selection.headRef === options.headRef
   ))?.reviewId;
 
   useEffect(() => {

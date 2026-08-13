@@ -22,7 +22,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { formatAbsoluteTime, formatRelativeTime, normalizeLocale } from "@/lib/i18n";
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RecentReviewSummary } from "@/lib/review-types";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icon";
 import narrantLogo from "../../assets/brand/narrant-logo.svg";
@@ -49,11 +49,11 @@ type SidebarPreferences = {
 
 /** 独立 HomePage 展示入口的兼容输入。 */
 type HomePageProps = {
-  reviews: ReviewSummary[];
+  reviews: RecentReviewSummary[];
   repositories?: HomeRepository[];
   error?: string;
   loading?: boolean;
-  onOpenReview: (review: ReviewSummary) => void;
+  onOpenReview: (review: RecentReviewSummary) => void;
   onOpenRepository?: (repository: HomeRepository) => void;
   onOpenFolder: (path: string) => void;
   githubIdentityEntry?: ReactNode;
@@ -128,7 +128,7 @@ function PullRequestReviewDetails({
   identity,
   openedAt,
 }: {
-  pullRequest: NonNullable<ReviewSummary["pullRequest"]>;
+  pullRequest: Extract<RecentReviewSummary["review"]["selection"], { kind: "pull-request" }>["pullRequest"];
   repositoryPath: string;
   identity: string;
   openedAt: string;
@@ -159,12 +159,12 @@ function BranchReviewDetails({
   review,
   openedAt,
 }: {
-  review: ReviewSummary;
+  review: RecentReviewSummary;
   openedAt: string;
 }) {
   const { t } = useTranslation();
   const details = [
-    [t("mergeDirection"), `${branchName(review.headRef)} → ${branchName(review.baseRef)}`],
+    [t("mergeDirection"), `${branchName(review.review.selection.headRef)} → ${branchName(review.review.selection.baseRef)}`],
     [t("catalog:repositoryPath"), review.repositoryPath],
     [t("lastOpened"), openedAt],
   ];
@@ -185,7 +185,7 @@ function ReviewMenuItem({
   pending = false,
   disabled = false,
 }: {
-  review: ReviewSummary;
+  review: RecentReviewSummary;
   showRepository: boolean;
   onOpen: () => void;
   active?: boolean;
@@ -194,10 +194,10 @@ function ReviewMenuItem({
 }) {
   const { i18n } = useTranslation();
   const locale = normalizeLocale(i18n.resolvedLanguage);
-  const time = formatRelativeTime(review.lastOpenedAt, Date.now(), locale);
-  const pullRequest = review.pullRequest;
+  const time = formatRelativeTime(review.review.lastOpenedAt, Date.now(), locale);
+  const pullRequest = review.review.selection.kind === "pull-request" ? review.review.selection.pullRequest : undefined;
   const identity = pullRequest ? `#${pullRequest.number} ${pullRequest.title}` : undefined;
-  const openedAt = formatAbsoluteTime(review.lastOpenedAt, locale);
+  const openedAt = formatAbsoluteTime(review.review.lastOpenedAt, locale);
   const tooltip = {
     hidden: false,
     side: "right" as const,
@@ -220,7 +220,7 @@ function ReviewMenuItem({
       isActive={active}
       onClick={onOpen}
       aria-current={active ? "page" : undefined}
-      data-review-id={review.reviewId}
+      data-review-id={review.review.reviewId}
       disabled={pending || disabled}
       aria-busy={pending || undefined}
     >
@@ -233,7 +233,7 @@ function ReviewMenuItem({
         </Badge>}
         {identity
           ? <span className="min-w-0 flex-1 truncate">{identity}</span>
-          : <CompactBranchRelation baseRef={review.baseRef} headRef={review.headRef} />}
+          : <CompactBranchRelation baseRef={review.review.selection.baseRef} headRef={review.review.selection.headRef} />}
         {pending ? <Spinner className="mr-3 shrink-0" aria-hidden /> : <span className="mr-3 shrink-0 text-[11px] text-muted-foreground">{time}</span>}
       </span>
     </SidebarMenuButton>
@@ -250,13 +250,13 @@ export function HomeView({
   onChooseFolder,
   onOpenReview,
 }: {
-  reviews: ReviewSummary[];
+  reviews: RecentReviewSummary[];
   error?: string;
   loading: boolean;
   navigationBusy: boolean;
   pendingReviewId?: string;
   onChooseFolder(): void;
-  onOpenReview(review: ReviewSummary): void;
+  onOpenReview(review: RecentReviewSummary): void;
 }) {
   const { t } = useTranslation();
   return <>
@@ -273,16 +273,18 @@ export function HomeView({
             <Button onClick={onChooseFolder}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button>
           </div>
           <ul className="mt-5 divide-y rounded-lg border">
-            {reviews.slice(0, 10).map((review) => <li key={review.reviewId}>
-              <Button variant="ghost" className="h-auto w-full justify-start rounded-none px-4 py-4" disabled={navigationBusy} aria-busy={pendingReviewId === review.reviewId || undefined} onClick={() => onOpenReview(review)}>
+            {reviews.slice(0, 10).map((review) => <li key={review.review.reviewId}>
+              <Button variant="ghost" className="h-auto w-full justify-start rounded-none px-4 py-4" disabled={navigationBusy} aria-busy={pendingReviewId === review.review.reviewId || undefined} onClick={() => onOpenReview(review)}>
                 <span className="flex min-w-0 flex-col items-start gap-2">
                   <span className="flex gap-3">
                     <span className="font-medium">{repositoryName(review.repositoryPath)}</span>
-                    <span className="truncate">{review.pullRequest ? `#${review.pullRequest.number} ${review.pullRequest.title}` : t("localBranch")}</span>
+                    <span className="truncate">{review.review.selection.kind === "pull-request"
+                      ? `#${review.review.selection.pullRequest.number} ${review.review.selection.pullRequest.title}`
+                      : t("localBranch")}</span>
                   </span>
-                  <BranchRelation baseRef={review.baseRef} headRef={review.headRef} direction="head-to-base" interactive={false} />
+                  <BranchRelation baseRef={review.review.selection.baseRef} headRef={review.review.selection.headRef} direction="head-to-base" interactive={false} />
                 </span>
-                {pendingReviewId === review.reviewId && <Spinner className="ml-auto" aria-hidden />}
+                {pendingReviewId === review.review.reviewId && <Spinner className="ml-auto" aria-hidden />}
               </Button>
             </li>)}
           </ul>
@@ -385,14 +387,14 @@ export function AppShell({
   }
 
   /** 从最近审核进入时展开所属仓库，帮助用户建立导航位置感。 */
-  function openRecentReview(review: ReviewSummary) {
+  function openRecentReview(review: RecentReviewSummary) {
     setPreferences((value) => ({
       ...value,
       expandedRepositories: value.expandedRepositories.includes(review.repositoryEntryId)
         ? value.expandedRepositories
         : [...value.expandedRepositories, review.repositoryEntryId],
     }));
-    void navigation.navigate({ kind: "review", repositoryEntryId: review.repositoryEntryId, target: { kind: "saved-review", reviewId: review.reviewId } });
+    void navigation.navigate({ kind: "review", repositoryEntryId: review.repositoryEntryId, target: { kind: "saved-review", reviewId: review.review.reviewId } });
   }
 
   /** 在非交互顶栏上按下主鼠标键时，显式请求 Tauri 移动原生窗口。 */
@@ -482,7 +484,7 @@ export function AppShell({
           {preferences.recentGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
               {reviews.slice(0, preferences.recentExpanded ? 10 : 5).map((review) =>
-                <ReviewMenuItem key={review.reviewId} review={review} showRepository pending={pendingReviewId === review.reviewId} disabled={reviewNavigationBusy} onOpen={() => openRecentReview(review)} />)}
+                <ReviewMenuItem key={review.review.reviewId} review={review} showRepository pending={pendingReviewId === review.review.reviewId} disabled={reviewNavigationBusy} onOpen={() => openRecentReview(review)} />)}
               {!reviews.length && <p className="px-2 text-sm text-muted-foreground">{t("noRecent")}</p>}
               {reviews.length > 5 && <SidebarMenuItem>
                 <SidebarMenuButton
@@ -542,7 +544,7 @@ export function AppShell({
                   </div>
                   {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
-                      <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} active={activeReviewId === review.reviewId} pending={pendingReviewId === review.reviewId} disabled={reviewNavigationBusy} onOpen={() => void navigation.navigate({ kind: "review", repositoryEntryId: review.repositoryEntryId, target: { kind: "saved-review", reviewId: review.reviewId } })} />)}
+                      <ReviewMenuItem key={review.review.reviewId} review={review} showRepository={false} active={activeReviewId === review.review.reviewId} pending={pendingReviewId === review.review.reviewId} disabled={reviewNavigationBusy} onOpen={() => void navigation.navigate({ kind: "review", repositoryEntryId: review.repositoryEntryId, target: { kind: "saved-review", reviewId: review.review.reviewId } })} />)}
                     {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}
                     {repositoryReviews.length > 10 && <SidebarMenuItem>
                       <SidebarMenuButton
@@ -633,7 +635,7 @@ export function HomePage({
         }
         if (intent.kind === "review" && intent.target.kind === "saved-review") {
           const reviewId = intent.target.reviewId;
-          const review = reviews.find((candidate) => candidate.reviewId === reviewId);
+          const review = reviews.find((candidate) => candidate.review.reviewId === reviewId);
           if (review) onOpenReview(review);
         }
         return navigated();

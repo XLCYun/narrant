@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { RepositoryOverview, type PullRequestGroup, type SavedReviewSummary } from "@/components/repository-overview";
+import { RepositoryOverview, type PullRequestGroup } from "@/components/repository-overview";
 import { i18n } from "@/lib/i18n";
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RepositoryReviewSummary } from "@/lib/review-types";
 
 const repository = { owner: "octo", name: "narrant" };
 const pullRequest = {
@@ -17,11 +17,9 @@ const pullRequest = {
   base: { ref: "main", sha: "base-new" },
   head: { ref: "feature", sha: "head-new" },
 };
-const saved: SavedReviewSummary = {
+const saved: RepositoryReviewSummary = {
   reviewId: "review-40",
-  baseRevision: "base-old",
-  headRevision: "head-old",
-  pullRequest: {
+  selection: { kind: "pull-request", baseRef: "main", headRef: "feature", pullRequest: {
     owner: "octo",
     repository: "narrant",
     number: 40,
@@ -34,14 +32,14 @@ const saved: SavedReviewSummary = {
     baseRef: "main",
     headRef: "feature",
     synchronizedAt: 1,
-  },
+  } },
+  currentSnapshot: { baseRevision: "base-old", comparisonBase: "merge-base-old", headRevision: "head-old" },
+  lastOpenedAt: 1,
 };
-const historyReview: ReviewSummary = {
+const historyReview: RepositoryReviewSummary = {
   reviewId: "review-history",
-  repositoryEntryId: 7,
-  repositoryPath: "/work/narrant",
-  baseRef: "refs/heads/main",
-  headRef: "refs/heads/topic",
+  selection: { kind: "branch", baseRef: "refs/heads/main", headRef: "refs/heads/topic" },
+  currentSnapshot: { baseRevision: "base", comparisonBase: "merge-base", headRevision: "head" },
   lastOpenedAt: 1,
 };
 
@@ -49,16 +47,14 @@ beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(cleanup);
 
 function renderOverview(options: {
-  savedReviews?: SavedReviewSummary[];
+  reviews?: RepositoryReviewSummary[];
   groups?: PullRequestGroup[];
   loading?: boolean;
   discoveryError?: string;
   connected?: boolean;
   openingReviewKey?: string;
   reviewNavigationBusy?: boolean;
-  repositoryReviews?: ReviewSummary[];
 } = {}) {
-  const onOpenSavedReview = vi.fn();
   const onOpenPullRequest = vi.fn();
   const onRetryDiscovery = vi.fn();
   const onConnectGitHub = vi.fn();
@@ -66,9 +62,8 @@ function renderOverview(options: {
   render(<RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
-    savedReviews={options.savedReviews ?? []}
     pullRequestGroups={options.groups ?? []}
-    repositoryReviews={options.repositoryReviews ?? []}
+    reviews={options.reviews ?? []}
     discoveryLoading={options.loading ?? false}
     discoveryError={options.discoveryError}
     githubConnected={options.connected ?? true}
@@ -76,12 +71,11 @@ function renderOverview(options: {
     reviewNavigationBusy={options.reviewNavigationBusy}
     onRetryDiscovery={onRetryDiscovery}
     onConnectGitHub={onConnectGitHub}
-    onOpenSavedReview={onOpenSavedReview}
     onOpenReview={onOpenReview}
     onOpenPullRequest={onOpenPullRequest}
     localBranches={<p>Local branch content</p>}
   />);
-  return { onOpenSavedReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub, onOpenReview };
+  return { onOpenReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub };
 }
 
 describe("RepositoryOverview", () => {
@@ -93,7 +87,7 @@ describe("RepositoryOverview", () => {
   });
 
   it("从审核历史整行继续 Review", () => {
-    const { onOpenReview } = renderOverview({ repositoryReviews: [historyReview] });
+    const { onOpenReview } = renderOverview({ reviews: [historyReview] });
     fireEvent.click(screen.getByRole("tab", { name: "审核历史" }));
 
     const reviewRow = screen.getByRole("button", { name: /继续审核.*topic.*main/ });
@@ -104,7 +98,7 @@ describe("RepositoryOverview", () => {
 
   it("打开审核历史 Review 时保留行身份并阻止重复导航", () => {
     const { onOpenReview } = renderOverview({
-      repositoryReviews: [historyReview],
+      reviews: [historyReview],
       openingReviewKey: "review:review-history",
       reviewNavigationBusy: true,
     });
@@ -148,7 +142,7 @@ describe("RepositoryOverview", () => {
 
   it("后台 discovery 时在 Pull Requests 胶囊显示加载图标且不显示文字提示", () => {
     renderOverview({
-      savedReviews: [saved],
+      reviews: [saved],
       loading: true,
     });
 
@@ -159,13 +153,13 @@ describe("RepositoryOverview", () => {
   });
 
   it("后台 discovery 失败后恢复原图标，保留缓存 Review 并提示元数据可能过期", () => {
-    const { onOpenSavedReview } = renderOverview({
-      savedReviews: [saved],
+    const { onOpenReview } = renderOverview({
+      reviews: [saved],
       discoveryError: "network unavailable",
     });
     expect(screen.getByRole("tab", { name: "Pull Requests" }).querySelector(".animate-spin")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /继续审核/ }));
-    expect(onOpenSavedReview).toHaveBeenCalledWith(saved);
+    expect(onOpenReview).toHaveBeenCalledWith(saved);
     expect(screen.getByText(/在线元数据可能不是最新/)).toBeInTheDocument();
     expect(screen.getByText(/network unavailable/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
@@ -174,15 +168,15 @@ describe("RepositoryOverview", () => {
 
   it("合并在线结果并区分开始、继续与有更新", () => {
     const group = { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null };
-    const { onOpenSavedReview } = renderOverview({
-      savedReviews: [saved],
+    const { onOpenReview } = renderOverview({
+      reviews: [saved],
       groups: [group],
     });
     expect(screen.getByText("有更新")).toBeInTheDocument();
     const continueButton = screen.getByRole("button", { name: /继续审核/ });
     expect(continueButton).toHaveTextContent(/^继续审核$/);
     fireEvent.click(continueButton);
-    expect(onOpenSavedReview).toHaveBeenCalledWith(saved);
+    expect(onOpenReview).toHaveBeenCalledWith(saved);
 
     cleanup();
     const fresh = renderOverview({ groups: [group] });

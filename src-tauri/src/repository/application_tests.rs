@@ -5,12 +5,12 @@ use std::process::Command;
 use std::sync::Arc;
 
 #[test]
-fn open_context_stops_at_availability_and_trust_gates() {
+fn open_overview_stops_at_availability_and_trust_gates() {
     let fixture = Fixture::new();
     let application = fixture.application();
 
     assert!(matches!(
-        application.open_context(fixture.entry.id).unwrap(),
+        application.open_overview(fixture.entry.id).unwrap(),
         RepositoryOpenResult::TrustRequired { .. }
     ));
     assert_eq!(
@@ -22,7 +22,7 @@ fn open_context_stops_at_availability_and_trust_gates() {
 
     fixture.remove_repository();
     assert!(matches!(
-        application.open_context(fixture.entry.id).unwrap(),
+        application.open_overview(fixture.entry.id).unwrap(),
         RepositoryOpenResult::Unavailable { .. }
     ));
     assert!(matches!(
@@ -32,19 +32,18 @@ fn open_context_stops_at_availability_and_trust_gates() {
 }
 
 #[test]
-fn grant_trust_and_open_returns_complete_repository_context() {
+fn grant_trust_and_open_returns_complete_repository_entry_overview() {
     let fixture = Fixture::new();
     let application = fixture.application();
 
-    let context = application.grant_trust_and_open(fixture.entry.id).unwrap();
+    let overview = application.grant_trust_and_open(fixture.entry.id).unwrap();
 
-    assert_eq!(context.repository.id, fixture.entry.id);
+    assert_eq!(overview.repository.id, fixture.entry.id);
     assert_eq!(
-        context.repository.canonical_path,
+        overview.repository.canonical_path,
         fixture.entry.canonical_path
     );
-    assert!(context.saved_reviews.is_empty());
-    assert!(context.reviews.is_empty());
+    assert!(overview.reviews.is_empty());
 }
 
 #[test]
@@ -70,10 +69,28 @@ fn load_catalog_and_reviews_share_the_repository_application_projection() {
     let reviews = application.load_reviews(fixture.entry.id).unwrap();
 
     assert_eq!(catalog.repositories, vec![fixture.entry.clone()]);
-    assert_eq!(catalog.recent_reviews.len(), 1);
-    assert_eq!(reviews.saved_reviews.len(), 1);
-    assert_eq!(reviews.saved_reviews[0].review_id, saved.review_id);
+    assert_eq!(
+        catalog.recent_reviews[0].repository_entry_id,
+        fixture.entry.id
+    );
+    assert_eq!(catalog.recent_reviews[0].review.review_id, saved.review_id);
+    assert_eq!(reviews.reviews.len(), 1);
     assert_eq!(reviews.reviews[0].review_id, saved.review_id);
+    assert_eq!(
+        reviews.reviews[0].selection,
+        ReviewSelectionSummary::Branch {
+            base_ref: "refs/heads/main".to_owned(),
+            head_ref: "refs/heads/topic".to_owned(),
+        }
+    );
+    assert_eq!(
+        reviews.reviews[0].current_snapshot,
+        ReviewSnapshotSummary {
+            base_revision: "base".to_owned(),
+            comparison_base: "base".to_owned(),
+            head_revision: "head".to_owned(),
+        }
+    );
 }
 
 /// 创建一个真实 working-tree 与 SQLite Catalog，覆盖 application seam 的持久化行为。

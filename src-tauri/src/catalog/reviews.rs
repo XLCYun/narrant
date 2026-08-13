@@ -220,6 +220,7 @@ impl RepositoryCatalog {
     }
 
     /// 列出一个 Repository Entry 的全部 current Reviews，供历史列表与重开入口使用。
+    #[cfg(test)]
     pub fn list_saved_review_snapshots(
         &self,
         repository_entry_id: i64,

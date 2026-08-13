@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import type { ReviewSummary } from "@/lib/review-types";
-import type { RepositoryContext, RepositoryEntry } from "@/repository/repository-application";
-import type { RepositoryEntryContextBinding } from "@/repository/use-repository-entry-context";
+import type { RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
+import type { RepositoryEntryOverview, RepositoryEntry } from "@/repository/repository-application";
+import type { RepositoryEntryOverviewBinding } from "@/repository/use-repository-entry-overview";
 import type { ReviewOpenTarget } from "@/review/review-application";
 import type { ReviewLifecycleBinding, ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
@@ -37,7 +37,7 @@ export type AppShellNavigationBinding = {
   reader: ReviewReaderBinding | null;
   sidebar: {
     repositories: RepositoryEntry[];
-    reviews: ReviewSummary[];
+    reviews: RecentReviewSummary[];
     activeRepositoryId?: number;
     activeReviewId?: string;
     pendingRepositoryId?: number;
@@ -63,20 +63,28 @@ function reviewKey(target: ReviewOpenTarget) {
   return `${target.owner.toLowerCase()}/${target.repository.toLowerCase()}#${target.number}`;
 }
 
-function reviewSummary(context: RepositoryContext, snapshot: ReviewReaderBinding["snapshot"]): ReviewSummary {
+function recentReviewSummary(overview: RepositoryEntryOverview, snapshot: ReviewReaderBinding["snapshot"]): RecentReviewSummary {
+  const selection: RepositoryReviewSummary["selection"] = snapshot.pullRequest
+    ? { kind: "pull-request", baseRef: snapshot.baseRef, headRef: snapshot.headRef, pullRequest: snapshot.pullRequest }
+    : { kind: "branch", baseRef: snapshot.baseRef, headRef: snapshot.headRef };
   return {
+    repositoryEntryId: overview.repository.id,
+    repositoryPath: overview.repository.canonicalPath,
+    review: {
     reviewId: snapshot.reviewId,
-    repositoryEntryId: context.repository.id,
-    repositoryPath: context.repository.canonicalPath,
-    baseRef: snapshot.baseRef,
-    headRef: snapshot.headRef,
+    selection,
+    currentSnapshot: {
+      baseRevision: snapshot.baseRevision,
+      comparisonBase: snapshot.comparisonBase,
+      headRevision: snapshot.headRevision,
+    },
     lastOpenedAt: Date.now(),
-    pullRequest: snapshot.pullRequest,
+    },
   };
 }
 
 function initialDestination(
-  repository: RepositoryEntryContextBinding,
+  repository: RepositoryEntryOverviewBinding,
   review: ReviewLifecycleBinding,
 ): AppDestination {
   if (review.reader && repository.current) {
@@ -90,7 +98,7 @@ function initialDestination(
 
 /** 协调 Home、Repository Entry 与 Review 之间的原子应用级导航。 */
 export function useAppShellNavigation(
-  repository: RepositoryEntryContextBinding,
+  repository: RepositoryEntryOverviewBinding,
   review: ReviewLifecycleBinding,
   options: Options = {},
 ): AppShellNavigationBinding {
@@ -114,19 +122,19 @@ export function useAppShellNavigation(
 
   const commitReview = useCallback(async (
     intent: Extract<AppNavigationIntent, { kind: "review" }>,
-    context: RepositoryContext,
+    overview: RepositoryEntryOverview,
     previousRepositoryId?: number,
   ): Promise<AppNavigationResult> => {
     const result = await review.open(intent.target);
     if (result.kind !== "opened") {
-      if (context.repository.id !== previousRepositoryId) await restoreRepository(previousRepositoryId);
+      if (overview.repository.id !== previousRepositoryId) await restoreRepository(previousRepositoryId);
       const detail = result.failure.detail;
       setNavigationError(detail);
       return { kind: "failed", detail, previousDestinationPreserved: true };
     }
-    repository.recordReviewOpened(reviewSummary(context, result.snapshot));
+    repository.recordReviewOpened(recentReviewSummary(overview, result.snapshot));
     void repository.refreshReviews().catch(() => undefined);
-    setDestination({ kind: "review", repositoryEntryId: context.repository.id, reviewId: result.reviewId });
+    setDestination({ kind: "review", repositoryEntryId: overview.repository.id, reviewId: result.reviewId });
     setNavigationError(undefined);
     return { kind: "navigated" };
   }, [repository, restoreRepository, review]);
@@ -163,11 +171,11 @@ export function useAppShellNavigation(
           setTransition({ kind: "stable" });
           return { kind: "failed", detail, previousDestinationPreserved: true };
         }
-        const initialTab = destination.kind === "review" && previousRepositoryId === opened.context.repository.id
+        const initialTab = destination.kind === "review" && previousRepositoryId === opened.overview.repository.id
           ? "history"
           : "pull-requests";
         await review.close();
-        setDestination({ kind: "repository", repositoryEntryId: opened.context.repository.id, initialTab });
+        setDestination({ kind: "repository", repositoryEntryId: opened.overview.repository.id, initialTab });
         setTransition({ kind: "stable" });
         setNavigationError(undefined);
         return { kind: "navigated" };
@@ -175,8 +183,8 @@ export function useAppShellNavigation(
 
       setTransition({ kind: "opening-review", repositoryEntryId: intent.repositoryEntryId, key: reviewKey(intent.target) });
       await waitForPaint();
-      let context = repository.current;
-      if (intent.repositoryEntryId === 0 && !context) {
+      let overview = repository.current;
+      if (intent.repositoryEntryId === 0 && !overview) {
         const result = await review.open(intent.target);
         if (result.kind !== "opened") {
           const detail = result.failure.detail;
@@ -189,7 +197,7 @@ export function useAppShellNavigation(
         setTransition({ kind: "stable" });
         return { kind: "navigated" };
       }
-      if (context?.repository.id !== intent.repositoryEntryId) {
+      if (overview?.repository.id !== intent.repositoryEntryId) {
         const opened = await repository.open(intent.repositoryEntryId);
         if (opened.kind === "superseded") return { kind: "ignored" };
         if (opened.kind === "trust-required") {
@@ -204,9 +212,9 @@ export function useAppShellNavigation(
           setTransition({ kind: "stable" });
           return { kind: "failed", detail, previousDestinationPreserved: true };
         }
-        context = opened.context;
+        overview = opened.overview;
       }
-      const result = await commitReview(intent, context, previousRepositoryId);
+      const result = await commitReview(intent, overview, previousRepositoryId);
       setTransition({ kind: "stable" });
       return result;
     } catch (reason) {
@@ -236,16 +244,16 @@ export function useAppShellNavigation(
     const trustedRepository = transition.repository;
     setTransition({ kind: "granting-trust", repository: trustedRepository });
     try {
-      const context = await repository.confirmTrust();
-      if (!context) return { kind: "ignored" };
+      const overview = await repository.confirmTrust();
+      if (!overview) return { kind: "ignored" };
       const result = pendingIntent.kind === "review"
-        ? await commitReview(pendingIntent, context, pendingPreviousRepositoryId)
+        ? await commitReview(pendingIntent, overview, pendingPreviousRepositoryId)
         : await (async (): Promise<AppNavigationResult> => {
-          const initialTab = destination.kind === "review" && pendingPreviousRepositoryId === context.repository.id
+          const initialTab = destination.kind === "review" && pendingPreviousRepositoryId === overview.repository.id
             ? "history"
             : "pull-requests";
           await review.close();
-          setDestination({ kind: "repository", repositoryEntryId: context.repository.id, initialTab });
+          setDestination({ kind: "repository", repositoryEntryId: overview.repository.id, initialTab });
           setNavigationError(undefined);
           return { kind: "navigated" };
         })();

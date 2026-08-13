@@ -100,16 +100,15 @@ _Avoid_: Project, remote repository
 
 **Repository Entry Application**:
 The deep application module that projects Repository Entries, Workspace Trust, and
-saved Review summaries into one enterable Repository context. It resolves availability
-and Trust before exposing the context and provides the canonical path needed by local
+saved Review summaries into one enterable Repository Entry Overview. It resolves availability
+and Trust before exposing the overview and provides the canonical path needed by local
 Git and Pull Request discovery operations.
 _Avoid_: Catalog adapter, storage service
 
-**Repository Context**:
-The enterable projection of one Repository Entry, including its current availability,
-Trust decision boundary, saved Review summaries, and Review summaries available for
-continuation. It is the application handoff used by the Repository entry flow.
-_Avoid_: Repository Session, Catalog row
+**Repository Entry Overview**:
+The application projection presented after one Repository Entry passes availability and
+Workspace Trust checks. It contains that Repository Entry and its visible Reviews.
+_Avoid_: Repository Context, Repository Session, Catalog row
 
 **Workspace Trust**:
 A reviewer's durable authorization for Narrant to perform normal Git checkout and
@@ -165,8 +164,19 @@ _Avoid_: Repository Entry, user worktree
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
   mark that change as viewed, reviewed, or approved
 - A **Repository Entry** owns zero or more **Reviews**
-- A **Repository Entry Application** owns the enterable **Repository Context** projection
+- A **Repository Entry Application** owns the enterable **Repository Entry Overview** projection
   for one or more **Repository Entries**
+- A **Repository Entry Overview** contains one collection of **Reviews**; a Review's Selection,
+  current Snapshot revisions, and list metadata do not form separate Review collections
+- A current **Review Snapshot** summary identifies its exact base, Comparison Base, and
+  head revisions even when a particular overview uses only part of that identity
+- A Review summary's last-opened time is list activity metadata; it does not belong to
+  the Review Selection or the current Review Snapshot
+- A **Repository Entry Overview** and a cross-Repository recent-review aggregate expose only
+  Reviews with an activated current **Review Snapshot**; an unactivated persistence
+  record is not a visible Review
+- A **Review** inside a **Repository Entry Overview** inherits that overview's Repository Entry
+  identity; only cross-Repository aggregate views identify the owning Repository Entry
 - Narrant has at most one current **GitHub Identity**
 - A **GitHub Identity** may be represented by cached public profile information while
   GitHub is temporarily unavailable, but signing out removes that representation
@@ -189,6 +199,10 @@ _Avoid_: Repository Entry, user worktree
   unavailable after the user's repository discards those objects
 - A **Review** owns exactly one **Review Selection**, while each **Review Snapshot**
   pins the exact commits resolved from that selection at one moment
+- A **Review Selection** is represented explicitly as either a **Branch Selection** or
+  a **Pull Request Selection**; missing Pull Request metadata does not identify its kind
+- A **Pull Request Selection** may carry its persisted Pull Request collaboration metadata
+  as one value; separating that cache from Selection identity is outside the current model
 - A **Review Selection** identity never changes after its **Review** is created; choosing
   another branch pair creates another **Review**
 - Within one **Repository Entry**, the same **Review Selection** reopens its existing
@@ -209,8 +223,8 @@ _Avoid_: Repository Entry, user worktree
 - Closing a **Review** releases runtime resources without deleting its saved history
 - A **Review** remains closed when cleanup of its **Review Workspace** fails; the
   leftover workspace is retained only for a later safe recovery attempt
-- A recent-review list is an aggregate view of **Reviews** across
-  **Repository Entries**
+- A recent-review list is an aggregate view of **Reviews** across **Repository Entries**;
+  each entry identifies both the Review and its owning Repository Entry
 
 ## Example dialogue
 

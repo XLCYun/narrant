@@ -11,7 +11,7 @@ import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderS
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 
@@ -78,21 +78,17 @@ function BranchSelectorPreview({
   />;
 }
 
-const reviewHistory: ReviewSummary[] = [
+const reviewHistory: RepositoryReviewSummary[] = [
   {
     reviewId: "review-preview-1",
-    repositoryEntryId: 1,
-    repositoryPath: "/work/narrant",
-    baseRef: "refs/heads/main",
-    headRef: "refs/heads/codex/review-history-navigation",
+    selection: { kind: "branch", baseRef: "refs/heads/main", headRef: "refs/heads/codex/review-history-navigation" },
+    currentSnapshot: { baseRevision: "base-1", comparisonBase: "merge-base-1", headRevision: "head-1" },
     lastOpenedAt: Date.now(),
   },
   {
     reviewId: "review-preview-2",
-    repositoryEntryId: 1,
-    repositoryPath: "/work/narrant",
-    baseRef: "refs/remotes/upstream/release-with-a-long-name",
-    headRef: "refs/heads/feature/a-review-with-an-extraordinarily-long-branch-name",
+    selection: { kind: "branch", baseRef: "refs/remotes/upstream/release-with-a-long-name", headRef: "refs/heads/feature/a-review-with-an-extraordinarily-long-branch-name" },
+    currentSnapshot: { baseRevision: "base-2", comparisonBase: "merge-base-2", headRevision: "head-2" },
     lastOpenedAt: Date.now() - 60_000,
   },
 ];
@@ -105,9 +101,8 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
   return <RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
-    savedReviews={[]}
+    reviews={reviewHistory}
     pullRequestGroups={[]}
-    repositoryReviews={reviewHistory}
     discoveryLoading={false}
     githubConnected
     localBranches={null}
@@ -116,7 +111,6 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
     reviewNavigationBusy={Boolean(openingReviewKey)}
     onRetryDiscovery={() => undefined}
     onConnectGitHub={() => undefined}
-    onOpenSavedReview={() => undefined}
     onOpenPullRequest={() => undefined}
     onOpenReview={(review) => setOpeningReviewKey(`review:${review.reviewId}`)}
   />;
