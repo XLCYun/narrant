@@ -1,5 +1,5 @@
 use crate::core_git::{CancellationToken, GitProcessAdapter};
-use crate::review::{ChangeStatus, LocalEntry, LocalFileChange, LocalSnapshot};
+use crate::review::{ChangeComparison, FileChange, FileChangeStatus, FileContentRef};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -57,7 +57,7 @@ pub struct SavedBranchReview {
     pub base_revision: String,
     pub comparison_base: String,
     pub head_revision: String,
-    pub file_changes: Vec<LocalFileChange>,
+    pub file_changes: Vec<FileChange>,
     pub created: bool,
     pub pull_request: Option<PullRequestMetadata>,
     snapshot_id: i64,
@@ -71,8 +71,8 @@ impl SavedBranchReview {
     }
 
     /// 将数据库模型还原成 Repository Operations 可读取的不可变 Snapshot。
-    pub fn snapshot(&self) -> LocalSnapshot {
-        LocalSnapshot {
+    pub fn snapshot(&self) -> ChangeComparison {
+        ChangeComparison {
             base_ref: self.base_ref.clone(),
             head_ref: self.head_ref.clone(),
             base_revision: self.base_revision.clone(),

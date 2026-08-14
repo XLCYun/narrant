@@ -6,7 +6,7 @@ impl RepositoryCatalog {
         &self,
         current: &SavedBranchReview,
         metadata: &PullRequestMetadata,
-        snapshot: &LocalSnapshot,
+        comparison: &ChangeComparison,
     ) -> Result<SavedBranchReview, RepositoryCatalogError> {
         let review_row_id = parse_review_id(&current.review_id)?;
         let now = unix_timestamp_millis()?;
@@ -23,26 +23,26 @@ impl RepositoryCatalog {
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     review_row_id,
-                    snapshot.base_revision,
-                    snapshot.comparison_base,
-                    snapshot.head_revision,
+                    comparison.base_revision,
+                    comparison.comparison_base,
+                    comparison.head_revision,
                     now,
                     metadata_json
                 ],
             )
             .map_err(database_recovery_error)?;
         let snapshot_id = transaction.last_insert_rowid();
-        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        insert_file_changes(&transaction, snapshot_id, &comparison.file_changes)?;
         transaction.commit().map_err(database_recovery_error)?;
         Ok(SavedBranchReview {
             review_id: current.review_id.clone(),
             repository_entry_id: current.repository_entry_id,
-            base_ref: snapshot.base_ref.clone(),
-            head_ref: snapshot.head_ref.clone(),
-            base_revision: snapshot.base_revision.clone(),
-            comparison_base: snapshot.comparison_base.clone(),
-            head_revision: snapshot.head_revision.clone(),
-            file_changes: snapshot.file_changes.clone(),
+            base_ref: comparison.base_ref.clone(),
+            head_ref: comparison.head_ref.clone(),
+            base_revision: comparison.base_revision.clone(),
+            comparison_base: comparison.comparison_base.clone(),
+            head_revision: comparison.head_revision.clone(),
+            file_changes: comparison.file_changes.clone(),
             created: true,
             pull_request: Some(metadata.clone()),
             snapshot_id,
@@ -123,11 +123,11 @@ impl RepositoryCatalog {
     pub fn save_refresh_snapshot(
         &self,
         review_id: &str,
-        snapshot: &LocalSnapshot,
+        comparison: &ChangeComparison,
     ) -> Result<SavedBranchReview, RepositoryCatalogError> {
         let row_id = parse_review_id(review_id)?;
         let current = self.open_review(review_id)?;
-        if current.base_ref != snapshot.base_ref || current.head_ref != snapshot.head_ref {
+        if current.base_ref != comparison.base_ref || current.head_ref != comparison.head_ref {
             return Err(RepositoryCatalogError::new(
                 "刷新结果与 Review Selection 不一致。",
             ));
@@ -142,25 +142,25 @@ impl RepositoryCatalog {
                  ) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     row_id,
-                    snapshot.base_revision,
-                    snapshot.comparison_base,
-                    snapshot.head_revision,
+                    comparison.base_revision,
+                    comparison.comparison_base,
+                    comparison.head_revision,
                     now
                 ],
             )
             .map_err(database_recovery_error)?;
         let snapshot_id = transaction.last_insert_rowid();
-        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        insert_file_changes(&transaction, snapshot_id, &comparison.file_changes)?;
         transaction.commit().map_err(database_recovery_error)?;
         Ok(SavedBranchReview {
             review_id: review_id.to_owned(),
             repository_entry_id: current.repository_entry_id,
-            base_ref: snapshot.base_ref.clone(),
-            head_ref: snapshot.head_ref.clone(),
-            base_revision: snapshot.base_revision.clone(),
-            comparison_base: snapshot.comparison_base.clone(),
-            head_revision: snapshot.head_revision.clone(),
-            file_changes: snapshot.file_changes.clone(),
+            base_ref: comparison.base_ref.clone(),
+            head_ref: comparison.head_ref.clone(),
+            base_revision: comparison.base_revision.clone(),
+            comparison_base: comparison.comparison_base.clone(),
+            head_revision: comparison.head_revision.clone(),
+            file_changes: comparison.file_changes.clone(),
             created: true,
             pull_request: current.pull_request,
             snapshot_id,

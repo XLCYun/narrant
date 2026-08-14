@@ -21,11 +21,11 @@ async fn stable_branch_selection_resolves_one_immutable_snapshot() {
         .await
         .unwrap();
 
-    assert_eq!(resolved.snapshot.base_revision, base_revision);
-    assert_eq!(resolved.snapshot.head_revision, head_revision);
-    assert_eq!(resolved.snapshot.comparison_base, base_revision);
-    assert_eq!(resolved.snapshot.file_changes.len(), 1);
-    assert_eq!(resolved.snapshot.file_changes[0].path, "topic.txt");
+    assert_eq!(resolved.comparison.base_revision, base_revision);
+    assert_eq!(resolved.comparison.head_revision, head_revision);
+    assert_eq!(resolved.comparison.comparison_base, base_revision);
+    assert_eq!(resolved.comparison.file_changes.len(), 1);
+    assert_eq!(resolved.comparison.file_changes[0].path, "topic.txt");
 }
 
 #[tokio::test]

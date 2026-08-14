@@ -1,6 +1,6 @@
 use crate::core_git::{CancellationToken, GitCommandError, GitOutput, GitProcessAdapter};
 use crate::operation::OperationContext;
-use crate::review::{compare_exact, ExactComparison, LocalSnapshot};
+use crate::review::{build_comparison, ChangeComparison, ResolvedRevisions};
 use std::path::Path;
 
 /// Review 持久化的 canonical Branch Selection identity。
@@ -10,9 +10,9 @@ pub struct BranchSelection {
     pub head_ref: String,
 }
 
-/// 一次 Branch Selection resolution 固定下来的不可变 Snapshot。
+/// 一次 Branch Selection resolution 固定下来的不可变 Change Comparison。
 pub struct ResolvedBranchSelection {
-    pub snapshot: LocalSnapshot,
+    pub comparison: ChangeComparison,
 }
 
 /// Repository Entry 的 canonical 分支选项及 Git 明确报告的默认、当前分支。
@@ -70,9 +70,9 @@ impl BranchSelectionResolver {
             .map_err(BranchSelectionResolutionError::Git)?;
         let head_revision = resolve_commit(&adapter, &selection.head_ref, operation.cancellation())
             .map_err(BranchSelectionResolutionError::Git)?;
-        let snapshot = compare_exact(
+        let comparison = build_comparison(
             repository_path,
-            ExactComparison {
+            ResolvedRevisions {
                 base_ref: selection.base_ref.clone(),
                 head_ref: selection.head_ref.clone(),
                 base_revision,
@@ -80,9 +80,8 @@ impl BranchSelectionResolver {
             },
             operation,
         )
-        .await
         .map_err(BranchSelectionResolutionError::Git)?;
-        Ok(ResolvedBranchSelection { snapshot })
+        Ok(ResolvedBranchSelection { comparison })
     }
 }
 

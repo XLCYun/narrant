@@ -71,16 +71,12 @@ impl RepositoryCatalog {
                 let after_mode = row.get::<_, Option<u32>>(4)?;
                 let before_object_id = row.get::<_, Option<String>>(5)?;
                 let after_object_id = row.get::<_, Option<String>>(6)?;
-                Ok(LocalFileChange {
+                Ok(FileChange {
                     path: row.get(0)?,
                     old_path: row.get(1)?,
                     status: parse_status(&row.get::<_, String>(2)?)?,
-                    before_mode,
-                    after_mode,
-                    before_entry: entry_from_metadata(&before_object_id, before_mode),
-                    after_entry: entry_from_metadata(&after_object_id, after_mode),
-                    before_object_id,
-                    after_object_id,
+                    before: content_ref_from_metadata(&before_object_id, before_mode),
+                    after: content_ref_from_metadata(&after_object_id, after_mode),
                 })
             })
             .map_err(database_recovery_error)?

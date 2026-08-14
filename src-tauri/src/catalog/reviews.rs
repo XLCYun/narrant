@@ -7,7 +7,7 @@ impl RepositoryCatalog {
     pub fn save_branch_review(
         &self,
         repository_entry_id: i64,
-        snapshot: &LocalSnapshot,
+        comparison: &ChangeComparison,
     ) -> Result<SavedBranchReview, RepositoryCatalogError> {
         if !self.is_workspace_trusted(repository_entry_id)? {
             return Err(RepositoryCatalogError::new(
@@ -27,8 +27,8 @@ impl RepositoryCatalog {
                  DO UPDATE SET last_opened_at = excluded.last_opened_at",
                 params![
                     repository_entry_id,
-                    snapshot.base_ref,
-                    snapshot.head_ref,
+                    comparison.base_ref,
+                    comparison.head_ref,
                     now
                 ],
             )
@@ -38,7 +38,11 @@ impl RepositoryCatalog {
                 "SELECT id FROM reviews
                  WHERE repository_entry_id = ?1 AND selection_kind = 'branch'
                    AND base_ref = ?2 AND head_ref = ?3",
-                params![repository_entry_id, snapshot.base_ref, snapshot.head_ref],
+                params![
+                    repository_entry_id,
+                    comparison.base_ref,
+                    comparison.head_ref
+                ],
                 |row| row.get(0),
             )
             .map_err(database_recovery_error)?;
@@ -61,25 +65,25 @@ impl RepositoryCatalog {
                  ) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     review_row_id,
-                    snapshot.base_revision,
-                    snapshot.comparison_base,
-                    snapshot.head_revision,
+                    comparison.base_revision,
+                    comparison.comparison_base,
+                    comparison.head_revision,
                     now
                 ],
             )
             .map_err(database_recovery_error)?;
         let snapshot_id = transaction.last_insert_rowid();
-        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        insert_file_changes(&transaction, snapshot_id, &comparison.file_changes)?;
         transaction.commit().map_err(database_recovery_error)?;
         Ok(SavedBranchReview {
             review_id: format!("review-{review_row_id}"),
             repository_entry_id,
-            base_ref: snapshot.base_ref.clone(),
-            head_ref: snapshot.head_ref.clone(),
-            base_revision: snapshot.base_revision.clone(),
-            comparison_base: snapshot.comparison_base.clone(),
-            head_revision: snapshot.head_revision.clone(),
-            file_changes: snapshot.file_changes.clone(),
+            base_ref: comparison.base_ref.clone(),
+            head_ref: comparison.head_ref.clone(),
+            base_revision: comparison.base_revision.clone(),
+            comparison_base: comparison.comparison_base.clone(),
+            head_revision: comparison.head_revision.clone(),
+            file_changes: comparison.file_changes.clone(),
             created: true,
             pull_request: None,
             snapshot_id,
@@ -92,7 +96,7 @@ impl RepositoryCatalog {
         &self,
         repository_entry_id: i64,
         metadata: &PullRequestMetadata,
-        snapshot: &LocalSnapshot,
+        comparison: &ChangeComparison,
     ) -> Result<SavedBranchReview, RepositoryCatalogError> {
         if !self.is_workspace_trusted(repository_entry_id)? {
             return Err(RepositoryCatalogError::new(
@@ -158,25 +162,25 @@ impl RepositoryCatalog {
                  ) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     review_row_id,
-                    snapshot.base_revision,
-                    snapshot.comparison_base,
-                    snapshot.head_revision,
+                    comparison.base_revision,
+                    comparison.comparison_base,
+                    comparison.head_revision,
                     now
                 ],
             )
             .map_err(database_recovery_error)?;
         let snapshot_id = transaction.last_insert_rowid();
-        insert_file_changes(&transaction, snapshot_id, &snapshot.file_changes)?;
+        insert_file_changes(&transaction, snapshot_id, &comparison.file_changes)?;
         transaction.commit().map_err(database_recovery_error)?;
         Ok(SavedBranchReview {
             review_id: format!("review-{review_row_id}"),
             repository_entry_id,
-            base_ref: snapshot.base_ref.clone(),
-            head_ref: snapshot.head_ref.clone(),
-            base_revision: snapshot.base_revision.clone(),
-            comparison_base: snapshot.comparison_base.clone(),
-            head_revision: snapshot.head_revision.clone(),
-            file_changes: snapshot.file_changes.clone(),
+            base_ref: comparison.base_ref.clone(),
+            head_ref: comparison.head_ref.clone(),
+            base_revision: comparison.base_revision.clone(),
+            comparison_base: comparison.comparison_base.clone(),
+            head_revision: comparison.head_revision.clone(),
+            file_changes: comparison.file_changes.clone(),
             created: true,
             pull_request: Some(metadata.clone()),
             snapshot_id,

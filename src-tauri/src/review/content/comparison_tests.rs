@@ -19,16 +19,19 @@ async fn restored_snapshot_reader_reads_only_the_pinned_file_change() {
         )
         .await
         .unwrap();
-    let reader = LocalSnapshotReader::restore(repository.path(), resolved.snapshot);
+    let reader = SnapshotContentReader::restore(repository.path(), resolved.comparison);
 
-    let change = reader.read("README.md", &operation).await.unwrap();
-    let error = reader
-        .read("not-in-snapshot.txt", &operation)
-        .await
-        .unwrap_err();
+    let change = reader.read("README.md", &operation).unwrap();
+    let error = reader.read("not-in-snapshot.txt", &operation).unwrap_err();
 
-    assert_eq!(change.before.as_deref(), Some("before\n"));
-    assert_eq!(change.after.as_deref(), Some("after\n"));
+    assert_eq!(
+        change.before.as_ref().and_then(FileContent::text),
+        Some("before\n")
+    );
+    assert_eq!(
+        change.after.as_ref().and_then(FileContent::text),
+        Some("after\n")
+    );
     assert!(error
         .to_string()
         .contains("not part of the Review Snapshot"));

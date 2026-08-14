@@ -36,7 +36,7 @@ impl ReviewLifecycle {
                         .await
                         .map_err(ReviewLifecycleError::branch)?;
                     self.catalog
-                        .save_branch_review(repository_entry_id, &resolved.snapshot)
+                        .save_branch_review(repository_entry_id, &resolved.comparison)
                         .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 }
             }
@@ -67,7 +67,7 @@ impl ReviewLifecycle {
                         .save_pull_request_review(
                             repository_entry_id,
                             &resolved.metadata,
-                            &resolved.snapshot,
+                            &resolved.comparison,
                         )
                         .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 }
@@ -83,7 +83,7 @@ impl ReviewLifecycle {
         snapshot_id: &str,
         path: &str,
         cancellation: &CancellationToken,
-    ) -> Result<LoadedFileChange, ReviewLifecycleError> {
+    ) -> Result<FileChangeContent, ReviewLifecycleError> {
         let current = self
             .catalog
             .open_review(review_id)
@@ -105,7 +105,6 @@ impl ReviewLifecycle {
         let operation = OperationContext::from_cancellation(cancellation.clone());
         let content = review
             .read(path, &operation)
-            .await
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(content)
     }
@@ -156,7 +155,7 @@ impl ReviewLifecycle {
         let snapshot = saved.snapshot();
         reviews.insert(
             saved.review_id.clone(),
-            Arc::new(LocalSnapshotReader::restore(&repository_path, snapshot)),
+            Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),
         );
         reviews.retain(|review_id, _| review_id == &saved.review_id);
         drop(reviews);

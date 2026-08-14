@@ -139,7 +139,7 @@ fn lists_repository_reviews_and_recent_reviews_by_last_opened_time() {
 /// 从真实仓库当前分支构造可持久化的最小 Snapshot。
 fn snapshot_for_head(
     repository: &tempfile::TempDir,
-) -> crate::review::LocalSnapshot {
+) -> crate::review::ChangeComparison {
     let branch = String::from_utf8(
         Command::new("git")
             .args(["symbolic-ref", "--short", "HEAD"])
@@ -158,7 +158,7 @@ fn snapshot_for_refs(
     repository_path: &std::path::Path,
     base_ref: &str,
     head_ref: &str,
-) -> crate::review::LocalSnapshot {
+) -> crate::review::ChangeComparison {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(crate::review::BranchSelectionResolver.resolve(
@@ -170,5 +170,5 @@ fn snapshot_for_refs(
             &crate::operation::OperationContext::non_cancellable(),
         ))
         .unwrap()
-        .snapshot
+        .comparison
 }

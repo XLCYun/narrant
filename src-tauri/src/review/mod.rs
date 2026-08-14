@@ -2,11 +2,11 @@ mod content;
 mod lifecycle;
 mod selection;
 
-pub(crate) use content::local::compare_exact;
-pub(crate) use content::local::{
-    ExactComparison, LocalEntry, LocalFileChange, LocalSnapshot, LocalSnapshotReader,
+pub(crate) use content::comparison::build_comparison;
+pub(crate) use content::comparison::{
+    ChangeComparison, FileChange, FileContentRef, ResolvedRevisions, SnapshotContentReader,
 };
-pub(crate) use content::{ChangeStatus, ContentKind, LoadedFileChange};
+pub(crate) use content::{FileChangeContent, FileChangeStatus, FileContent, FileContentKind};
 pub(crate) use lifecycle::*;
 pub(crate) use selection::*;
 

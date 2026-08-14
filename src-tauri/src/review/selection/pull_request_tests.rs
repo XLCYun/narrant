@@ -45,11 +45,11 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
 
     observation.assert();
     assert_eq!(resolved.metadata.title, "Resolve behind one seam");
-    assert_eq!(resolved.snapshot.base_revision, fixture.base_revision);
-    assert_eq!(resolved.snapshot.head_revision, fixture.head_revision);
-    assert_eq!(resolved.snapshot.comparison_base, fixture.base_revision);
-    assert_eq!(resolved.snapshot.file_changes.len(), 1);
-    assert_eq!(resolved.snapshot.file_changes[0].path, "feature.txt");
+    assert_eq!(resolved.comparison.base_revision, fixture.base_revision);
+    assert_eq!(resolved.comparison.head_revision, fixture.head_revision);
+    assert_eq!(resolved.comparison.comparison_base, fixture.base_revision);
+    assert_eq!(resolved.comparison.file_changes.len(), 1);
+    assert_eq!(resolved.comparison.file_changes[0].path, "feature.txt");
     assert!(!fixture.checkout.path().join(".git/FETCH_HEAD").exists());
     assert!(!Command::new("git")
         .args(["show-ref", "--verify", "--quiet", "refs/pull/42/head"])

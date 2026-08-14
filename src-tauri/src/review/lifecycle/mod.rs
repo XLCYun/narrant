@@ -4,10 +4,10 @@ use crate::catalog::{
 use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
 use crate::operation::OperationContext;
 use crate::repository::{RepositoryApplicationError, RepositoryEntryApplication};
-use crate::review::LoadedFileChange;
+use crate::review::FileChangeContent;
 use crate::review::PullRequestResolutionError;
 use crate::review::{BranchSelection, BranchSelectionResolutionError, BranchSelectionResolver};
-use crate::review::{LocalSnapshot, LocalSnapshotReader};
+use crate::review::{ChangeComparison, SnapshotContentReader};
 use crate::review::{PullRequestSelection, PullRequestSelectionResolver};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 pub struct ReviewPresentation {
     pub review_id: String,
     pub snapshot_id: String,
-    pub snapshot: LocalSnapshot,
+    pub snapshot: ChangeComparison,
     pub pull_request: Option<PullRequestMetadata>,
     #[allow(dead_code, reason = "保留非致命清理诊断，当前 IPC 尚未展示")]
     pub cleanup_warnings: Vec<String>,
@@ -181,7 +181,7 @@ pub struct ReviewLifecycle {
     repository_application: Arc<RepositoryEntryApplication>,
     branch_selections: BranchSelectionResolver,
     pull_requests: Arc<PullRequestSelectionResolver>,
-    reviews: Mutex<HashMap<String, Arc<LocalSnapshotReader>>>,
+    reviews: Mutex<HashMap<String, Arc<SnapshotContentReader>>>,
     active_refreshes: Mutex<HashSet<String>>,
 }
 

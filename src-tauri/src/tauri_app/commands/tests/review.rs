@@ -53,7 +53,7 @@ async fn snapshot_mapper_preserves_the_existing_ipc_contract() {
     let response = map_snapshot(
         "review-42".to_owned(),
         "snapshot-7".to_owned(),
-        &review.snapshot,
+        &review.comparison,
     );
     let json = serde_json::to_value(&response).unwrap();
 
@@ -66,33 +66,58 @@ async fn snapshot_mapper_preserves_the_existing_ipc_contract() {
 #[test]
 fn loaded_file_change_mapper_serializes_every_status_and_content_kind() {
     let statuses = [
-        (review::ChangeStatus::Added, "added"),
-        (review::ChangeStatus::Modified, "modified"),
-        (review::ChangeStatus::Deleted, "deleted"),
-        (review::ChangeStatus::Renamed, "renamed"),
+        (review::FileChangeStatus::Added, "added"),
+        (review::FileChangeStatus::Modified, "modified"),
+        (review::FileChangeStatus::Deleted, "deleted"),
+        (review::FileChangeStatus::Renamed, "renamed"),
     ];
     let kinds = [
-        (review::ContentKind::Text, "text"),
-        (review::ContentKind::Binary, "binary"),
-        (review::ContentKind::Submodule, "submodule"),
-        (review::ContentKind::Symlink, "symlink"),
+        (review::FileContentKind::Text, "text"),
+        (review::FileContentKind::Binary, "binary"),
+        (review::FileContentKind::Submodule, "submodule"),
+        (review::FileContentKind::Symlink, "symlink"),
     ];
     for ((status, expected_status), (kind, expected_kind)) in statuses.into_iter().zip(kinds) {
-        let response = map_file_content(review::LoadedFileChange {
+        let before = sample_content(kind, 3, "old");
+        let after = sample_content(kind, 4, "new\n");
+        let expected_before_size = before.size();
+        let expected_after_size = after.size();
+        let response = map_file_content(review::FileChangeContent {
             path: "new.txt".to_owned(),
             old_path: Some("old.txt".to_owned()),
             status,
-            content_kind: kind,
-            before_size: Some(3),
-            after_size: Some(4),
-            before: Some("old".to_owned()),
-            after: Some("new\n".to_owned()),
+            before: Some(before),
+            after: Some(after),
         });
         let json = serde_json::to_value(response).unwrap();
         assert_eq!(json["status"], expected_status);
         assert_eq!(json["contentKind"], expected_kind);
         assert_eq!(json["oldPath"], "old.txt");
-        assert_eq!(json["beforeSize"], 3);
-        assert_eq!(json["afterSize"], 4);
+        assert_eq!(
+            json["beforeSize"],
+            serde_json::to_value(expected_before_size).unwrap()
+        );
+        assert_eq!(
+            json["afterSize"],
+            serde_json::to_value(expected_after_size).unwrap()
+        );
+    }
+}
+
+/// 构造与指定展示类别一致的有效单侧文件内容。
+fn sample_content(kind: review::FileContentKind, size: usize, text: &str) -> review::FileContent {
+    match kind {
+        review::FileContentKind::Text => review::FileContent::Text {
+            size,
+            text: text.to_owned(),
+        },
+        review::FileContentKind::Binary => review::FileContent::Binary { size },
+        review::FileContentKind::Submodule => review::FileContent::Submodule {
+            commit_id: text.to_owned(),
+        },
+        review::FileContentKind::Symlink => review::FileContent::Symlink {
+            size,
+            target: Some(text.to_owned()),
+        },
     }
 }

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 struct FileChangeSummaryResponse {
     path: String,
     old_path: Option<String>,
-    status: ChangeStatusResponse,
+    status: FileChangeStatusResponse,
     #[serde(skip_serializing_if = "Option::is_none")]
     before_mode: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,8 +28,8 @@ struct FileChangeSummaryResponse {
 pub(crate) struct FileChangeContentResponse {
     path: String,
     old_path: Option<String>,
-    status: ChangeStatusResponse,
-    content_kind: ContentKindResponse,
+    status: FileChangeStatusResponse,
+    content_kind: FileContentKindResponse,
     before_size: Option<usize>,
     after_size: Option<usize>,
     before: Option<String>,
@@ -39,7 +39,7 @@ pub(crate) struct FileChangeContentResponse {
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// File Change 状态的稳定 IPC 表示。
-enum ChangeStatusResponse {
+enum FileChangeStatusResponse {
     Added,
     Modified,
     Deleted,
@@ -49,7 +49,7 @@ enum ChangeStatusResponse {
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 /// File Change 内容类别的稳定 IPC 表示。
-enum ContentKindResponse {
+enum FileContentKindResponse {
     Text,
     Binary,
     Submodule,
@@ -115,36 +115,47 @@ pub(crate) struct ReviewUpdateResponse {
 }
 
 /// 将领域 File Change 状态映射到稳定 IPC 枚举。
-fn map_status(status: review::ChangeStatus) -> ChangeStatusResponse {
+fn map_status(status: review::FileChangeStatus) -> FileChangeStatusResponse {
     match status {
-        review::ChangeStatus::Added => ChangeStatusResponse::Added,
-        review::ChangeStatus::Modified => ChangeStatusResponse::Modified,
-        review::ChangeStatus::Deleted => ChangeStatusResponse::Deleted,
-        review::ChangeStatus::Renamed => ChangeStatusResponse::Renamed,
+        review::FileChangeStatus::Added => FileChangeStatusResponse::Added,
+        review::FileChangeStatus::Modified => FileChangeStatusResponse::Modified,
+        review::FileChangeStatus::Deleted => FileChangeStatusResponse::Deleted,
+        review::FileChangeStatus::Renamed => FileChangeStatusResponse::Renamed,
     }
 }
 
 /// 将领域内容类别映射到稳定 IPC 枚举。
-fn map_content_kind(kind: review::ContentKind) -> ContentKindResponse {
+fn map_content_kind(kind: review::FileContentKind) -> FileContentKindResponse {
     match kind {
-        review::ContentKind::Text => ContentKindResponse::Text,
-        review::ContentKind::Binary => ContentKindResponse::Binary,
-        review::ContentKind::Submodule => ContentKindResponse::Submodule,
-        review::ContentKind::Symlink => ContentKindResponse::Symlink,
+        review::FileContentKind::Text => FileContentKindResponse::Text,
+        review::FileContentKind::Binary => FileContentKindResponse::Binary,
+        review::FileContentKind::Submodule => FileContentKindResponse::Submodule,
+        review::FileContentKind::Symlink => FileContentKindResponse::Symlink,
     }
 }
 
 /// 将固定 Snapshot 中读取的 File Change 映射到 IPC 内容。
-pub(crate) fn map_file_content(change: review::LoadedFileChange) -> FileChangeContentResponse {
+pub(crate) fn map_file_content(change: review::FileChangeContent) -> FileChangeContentResponse {
+    let content_kind = change.content_kind();
+    let before_size = change.before.as_ref().and_then(review::FileContent::size);
+    let after_size = change.after.as_ref().and_then(review::FileContent::size);
     FileChangeContentResponse {
         path: change.path,
         old_path: change.old_path,
         status: map_status(change.status),
-        content_kind: map_content_kind(change.content_kind),
-        before_size: change.before_size,
-        after_size: change.after_size,
-        before: change.before,
-        after: change.after,
+        content_kind: map_content_kind(content_kind),
+        before_size,
+        after_size,
+        before: change
+            .before
+            .as_ref()
+            .and_then(review::FileContent::text)
+            .map(str::to_owned),
+        after: change
+            .after
+            .as_ref()
+            .and_then(review::FileContent::text)
+            .map(str::to_owned),
     }
 }
 
@@ -152,7 +163,7 @@ pub(crate) fn map_file_content(change: review::LoadedFileChange) -> FileChangeCo
 pub(crate) fn map_snapshot(
     review_id: String,
     snapshot_id: String,
-    snapshot: &review::LocalSnapshot,
+    snapshot: &review::ChangeComparison,
 ) -> ReviewSnapshotResponse {
     ReviewSnapshotResponse {
         review_id,
@@ -169,10 +180,16 @@ pub(crate) fn map_snapshot(
                 path: change.path.clone(),
                 old_path: change.old_path.clone(),
                 status: map_status(change.status),
-                before_mode: change.before_mode,
-                after_mode: change.after_mode,
-                before_object_id: change.before_object_id.clone(),
-                after_object_id: change.after_object_id.clone(),
+                before_mode: change.before.as_ref().map(|content| content.mode),
+                after_mode: change.after.as_ref().map(|content| content.mode),
+                before_object_id: change
+                    .before
+                    .as_ref()
+                    .map(|content| content.object_id.clone()),
+                after_object_id: change
+                    .after
+                    .as_ref()
+                    .map(|content| content.object_id.clone()),
             })
             .collect(),
         pull_request: None,

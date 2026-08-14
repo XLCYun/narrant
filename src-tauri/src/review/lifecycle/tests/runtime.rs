@@ -145,5 +145,5 @@ async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
         )
         .await
         .unwrap();
-    assert_eq!(content.after.as_deref(), Some("refreshed\n"));
+    assert_eq!(content.after.as_ref().and_then(FileContent::text), Some("refreshed\n"));
 }

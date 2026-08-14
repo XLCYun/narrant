@@ -3,7 +3,7 @@ use crate::core_git::{GitCommandError, GitProcessAdapter};
 use crate::github::GitHubAuth;
 use crate::github::{self, GitHubRepository};
 use crate::operation::OperationContext;
-use crate::review::{compare_exact, ExactComparison, LocalSnapshot};
+use crate::review::{build_comparison, ChangeComparison, ResolvedRevisions};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -17,9 +17,9 @@ pub struct PullRequestSelection {
     pub number: u64,
 }
 
-/// 一次解析固定下来的本地 Snapshot 与同步协作 metadata。
+/// 一次解析固定下来的 Change Comparison 与同步协作 metadata。
 pub struct ResolvedPullRequestSelection {
-    pub snapshot: LocalSnapshot,
+    pub comparison: ChangeComparison,
     pub metadata: PullRequestMetadata,
 }
 
@@ -156,7 +156,7 @@ impl PullRequestSelectionResolver {
             )
             .await
             {
-                Ok(snapshot) => {
+                Ok(comparison) => {
                     let synchronized_at = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .map_err(|_| PullRequestResolutionError::Clock)?
@@ -178,7 +178,10 @@ impl PullRequestSelectionResolver {
                         updated_at: Some(observation.updated_at),
                         synchronized_at,
                     };
-                    return Ok(ResolvedPullRequestSelection { snapshot, metadata });
+                    return Ok(ResolvedPullRequestSelection {
+                        comparison,
+                        metadata,
+                    });
                 }
                 Err(error) if error.is_cancelled() => {
                     return Err(PullRequestResolutionError::Cancelled(error.to_string()));
@@ -237,7 +240,7 @@ async fn resolve_pull_request_objects(
     base_revision: &str,
     head_revision: &str,
     operation: &OperationContext,
-) -> Result<LocalSnapshot, PullRequestObjectResolutionError> {
+) -> Result<ChangeComparison, PullRequestObjectResolutionError> {
     if remote.is_empty() || base_ref.is_empty() || pull_request_number == 0 {
         return Err(PullRequestObjectResolutionError::Fetch(
             GitCommandError::new("Pull Request fetch 参数无效"),
@@ -260,9 +263,9 @@ async fn resolve_pull_request_objects(
             )
             .map_err(PullRequestObjectResolutionError::Fetch)?;
     }
-    compare_exact(
+    build_comparison(
         repository_path,
-        ExactComparison {
+        ResolvedRevisions {
             base_ref: base_ref.to_owned(),
             head_ref: format!("pull/{pull_request_number}/head"),
             base_revision: base_revision.to_owned(),
@@ -270,7 +273,6 @@ async fn resolve_pull_request_objects(
         },
         operation,
     )
-    .await
     .map_err(PullRequestObjectResolutionError::ExactRevision)
 }
 

@@ -38,7 +38,7 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     assert_eq!(snapshot.head_revision, expected_head.to_string());
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "welcome.txt");
-    assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Modified);
+    assert_eq!(snapshot.file_changes[0].status, FileChangeStatus::Modified);
 
     commit_file(
         &repository,
@@ -49,8 +49,8 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     let content = content
         .read("welcome.txt")
         .expect("read pinned File Change");
-    assert_eq!(content.before.as_deref(), Some("你好，旧内容\n"));
-    assert_eq!(content.after.as_deref(), Some("你好，新内容\n"));
+    assert_eq!(content.before.as_ref().and_then(FileContent::text), Some("你好，旧内容\n"));
+    assert_eq!(content.after.as_ref().and_then(FileContent::text), Some("你好，新内容\n"));
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn compares_from_merge_base_when_base_and_head_have_diverged() {
     assert_eq!(snapshot.comparison_base, common.to_string());
     assert_eq!(snapshot.file_changes.len(), 1);
     assert_eq!(snapshot.file_changes[0].path, "head-only.txt");
-    assert_eq!(snapshot.file_changes[0].status, ChangeStatus::Added);
+    assert_eq!(snapshot.file_changes[0].status, FileChangeStatus::Added);
 }
 
 #[test]
@@ -231,21 +231,21 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
     assert_eq!(
         statuses,
         vec![
-            ("added.txt", ChangeStatus::Added),
-            ("deleted.txt", ChangeStatus::Deleted),
-            ("modified.txt", ChangeStatus::Modified),
-            ("new-name.txt", ChangeStatus::Renamed),
+            ("added.txt", FileChangeStatus::Added),
+            ("deleted.txt", FileChangeStatus::Deleted),
+            ("modified.txt", FileChangeStatus::Modified),
+            ("new-name.txt", FileChangeStatus::Renamed),
         ]
     );
     let renamed = snapshot
         .file_changes
         .iter()
-        .find(|change| change.status == ChangeStatus::Renamed)
+        .find(|change| change.status == FileChangeStatus::Renamed)
         .unwrap();
     assert_eq!(renamed.old_path.as_deref(), Some("old-name.txt"));
     let renamed_content = content.read("new-name.txt").unwrap();
-    assert_eq!(renamed_content.before.as_deref(), Some("rename me\n"));
-    assert_eq!(renamed_content.after.as_deref(), Some("rename me\n"));
+    assert_eq!(renamed_content.before.as_ref().and_then(FileContent::text), Some("rename me\n"));
+    assert_eq!(renamed_content.after.as_ref().and_then(FileContent::text), Some("rename me\n"));
 
     let old_path_error = content.read("old-name.txt").unwrap_err();
     assert_eq!(
@@ -255,13 +255,13 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
 
     let added = content.read("added.txt").unwrap();
     assert_eq!(added.before, None);
-    assert_eq!(added.after.as_deref(), Some("added\n"));
+    assert_eq!(added.after.as_ref().and_then(FileContent::text), Some("added\n"));
 
     let deleted = content.read("deleted.txt").unwrap();
-    assert_eq!(deleted.before.as_deref(), Some("deleted\n"));
+    assert_eq!(deleted.before.as_ref().and_then(FileContent::text), Some("deleted\n"));
     assert_eq!(deleted.after, None);
 
     let modified = content.read("modified.txt").unwrap();
-    assert_eq!(modified.before.as_deref(), Some("before\n"));
-    assert_eq!(modified.after.as_deref(), Some("after\n"));
+    assert_eq!(modified.before.as_ref().and_then(FileContent::text), Some("before\n"));
+    assert_eq!(modified.after.as_ref().and_then(FileContent::text), Some("after\n"));
 }

@@ -23,7 +23,7 @@ fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
 
     assert_eq!(paths, vec!["line\nbreak.txt", "space name.txt", "你好.txt"]);
     assert_eq!(
-        review.read("line\nbreak.txt").unwrap().after.as_deref(),
+        review.read("line\nbreak.txt").unwrap().after.as_ref().and_then(FileContent::text),
         Some("special\n")
     );
 }
@@ -44,10 +44,13 @@ fn distinguishes_executable_mode_changes_in_snapshot_metadata() {
     let review = open_comparison(fixture.path());
     let change = &review.snapshot.file_changes[0];
 
-    assert_eq!(change.status, ChangeStatus::Modified);
-    assert_eq!(change.before_mode, Some(0o100644));
-    assert_eq!(change.after_mode, Some(0o100755));
-    assert_eq!(change.before_object_id, change.after_object_id);
+    assert_eq!(change.status, FileChangeStatus::Modified);
+    assert_eq!(change.before.as_ref().map(|content| content.mode), Some(0o100644));
+    assert_eq!(change.after.as_ref().map(|content| content.mode), Some(0o100755));
+    assert_eq!(
+        change.before.as_ref().map(|content| &content.object_id),
+        change.after.as_ref().map(|content| &content.object_id)
+    );
 }
 
 #[test]

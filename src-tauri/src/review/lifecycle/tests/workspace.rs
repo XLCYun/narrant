@@ -230,7 +230,7 @@ async fn save_current_review(
         .await
         .unwrap();
     catalog
-        .save_branch_review(repository_entry_id, &resolved.snapshot)
+        .save_branch_review(repository_entry_id, &resolved.comparison)
         .unwrap()
 }
 

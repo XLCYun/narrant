@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-# Narrow Local Change Content Interface
+# Narrow Change Comparison Content Interface
 
 ## Problem Statement
 
@@ -12,7 +12,7 @@ and contains Pull Request-specific fetch refs and error classification. Its publ
 interface therefore exposes orchestration that now belongs behind the Branch Selection,
 Pull Request Selection, and cancellable-operation seams.
 
-Narrant needs a smaller local change-content interface that owns only exact immutable
+Narrant needs a smaller Change Comparison content interface that owns only immutable
 comparison construction and content reads pinned to a saved Snapshot.
 
 ## Scope
@@ -22,7 +22,8 @@ comparison construction and content reads pinned to a saved Snapshot.
   immutable comparison construction behind one interface.
 - Introduce a Branch Ref catalog that returns canonical refs plus explicit current and
   default refs through one cancellable interface.
-- Replace `LocalOpenedReview` with a Snapshot reader restored from an immutable Snapshot;
+- Replace `LocalOpenedReview` with a Snapshot content reader restored from an immutable
+  Change Comparison;
   the reader exposes one cancellable File Change read operation.
 - Keep one crate-private exact-comparison kernel shared by Branch and Pull Request
   resolution.
@@ -52,14 +53,14 @@ BranchSelectionResolver::resolve(repository_path, selection, operation)
 BranchRefCatalog::list(repository_path, operation)
     -> BranchRefs
 
-LocalSnapshotReader::restore(repository_path, snapshot)
-LocalSnapshotReader::read(path, operation)
-    -> LoadedFileChange
+SnapshotContentReader::restore(repository_path, comparison)
+SnapshotContentReader::read(path, operation)
+    -> FileChangeContent
 ```
 
-The shared exact-comparison kernel is crate-private. It accepts a grouped
-`ExactComparison` containing display refs and already acquired exact base/head revisions,
-then verifies commits, computes the merge base, and parses the raw diff into a Snapshot.
+The shared comparison builder is crate-private. It accepts grouped `ResolvedRevisions`
+containing display refs and already acquired exact base/head revisions, then verifies
+commits, computes the merge base, and parses the raw diff into a `ChangeComparison`.
 
 ## Ownership
 
@@ -67,7 +68,7 @@ then verifies commits, computes the merge base, and parses the raw diff into a S
   ref-to-commit resolution, and current three-dot comparison construction.
 - Pull Request Selection resolution owns GitHub observation, matching-remotes fallback,
   `refs/pull/<number>/head` fetch, and fetch-versus-exact-revision diagnostics.
-- Local change content owns exact comparison construction and Snapshot-pinned object reads.
+- Change Comparison content owns comparison construction and Snapshot-pinned object reads.
 - Review lifecycle calls one resolver per source and continues to own all persistence,
   Workspace, activation, rollback, and runtime state transitions.
 - Core Git process remains unaware of Selections, Pull Requests, Snapshots, and File
@@ -88,7 +89,7 @@ then verifies commits, computes the merge base, and parses the raw diff into a S
 ## Acceptance Criteria
 
 1. Review lifecycle contains no Branch `fetch` followed by comparison-open protocol.
-2. `change_content/local` exposes no Pull Request number, `refs/pull/*`, matching-remote
+2. `review/content/comparison` exposes no Pull Request number, `refs/pull/*`, matching-remote
    fallback, or Pull Request-specific error type.
 3. No public local I/O operation has cancellable and non-cancellable variants.
 4. `LocalOpenedReview`, `open`, `open_with_cancellation`, `open_revisions`,

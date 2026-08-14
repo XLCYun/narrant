@@ -1,6 +1,6 @@
 use super::*;
 use crate::catalog::RepositoryCatalog;
-use crate::review::LocalSnapshot;
+use crate::review::ChangeComparison;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -50,7 +50,7 @@ fn grant_trust_and_open_returns_complete_repository_entry_overview() {
 fn load_catalog_and_reviews_share_the_repository_application_projection() {
     let fixture = Fixture::new();
     fixture.grant_trust();
-    let snapshot = LocalSnapshot {
+    let snapshot = ChangeComparison {
         base_ref: "refs/heads/main".to_owned(),
         comparison_base: "base".to_owned(),
         base_revision: "base".to_owned(),

@@ -1,7 +1,7 @@
 use crate::core_git::GitCommandError;
 use crate::operation::OperationContext;
-use crate::review::{LocalSnapshot, LocalSnapshotReader};
-use crate::review::{ChangeStatus, ContentKind, LoadedFileChange};
+use crate::review::{ChangeComparison, SnapshotContentReader};
+use crate::review::{FileChangeContent, FileChangeStatus, FileContent, FileContentKind};
 use crate::review::{
     BranchRefCatalog, BranchRefs, BranchSelection, BranchSelectionResolutionError,
     BranchSelectionResolver,
@@ -72,14 +72,15 @@ fn commit_tree_entry(
 
 /// 测试中绑定已解析快照及其只读内容入口。
 struct ResolvedComparison {
-    snapshot: LocalSnapshot,
-    reader: LocalSnapshotReader,
+    snapshot: ChangeComparison,
+    reader: SnapshotContentReader,
 }
 
 impl ResolvedComparison {
     /// 从固定快照读取指定文件变更。
-    fn read(&self, path: &str) -> Result<LoadedFileChange, GitCommandError> {
-        block_on(self.reader.read(path, &OperationContext::non_cancellable()))
+    fn read(&self, path: &str) -> Result<FileChangeContent, GitCommandError> {
+        self.reader
+            .read(path, &OperationContext::non_cancellable())
     }
 }
 
@@ -102,8 +103,8 @@ fn resolve_comparison(
         },
         &OperationContext::non_cancellable(),
     ))?;
-    let snapshot = resolved.snapshot;
-    let reader = LocalSnapshotReader::restore(repository_path, snapshot.clone());
+    let snapshot = resolved.comparison;
+    let reader = SnapshotContentReader::restore(repository_path, snapshot.clone());
     Ok(ResolvedComparison { snapshot, reader })
 }
 

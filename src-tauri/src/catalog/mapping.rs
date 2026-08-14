@@ -4,7 +4,7 @@ use super::*;
 pub(super) fn insert_file_changes(
     transaction: &rusqlite::Transaction<'_>,
     snapshot_id: i64,
-    file_changes: &[LocalFileChange],
+    file_changes: &[FileChange],
 ) -> Result<(), RepositoryCatalogError> {
     for change in file_changes {
         transaction
@@ -18,10 +18,10 @@ pub(super) fn insert_file_changes(
                     change.path,
                     change.old_path,
                     status_text(change.status),
-                    change.before_mode,
-                    change.after_mode,
-                    change.before_object_id,
-                    change.after_object_id
+                    change.before.as_ref().map(|content| content.mode),
+                    change.after.as_ref().map(|content| content.mode),
+                    change.before.as_ref().map(|content| &content.object_id),
+                    change.after.as_ref().map(|content| &content.object_id)
                 ],
             )
             .map_err(database_recovery_error)?;
@@ -38,32 +38,32 @@ pub(super) fn parse_review_id(review_id: &str) -> Result<i64, RepositoryCatalogE
 }
 
 /// 将 domain status 保存成稳定的数据库标签。
-pub(super) fn status_text(status: ChangeStatus) -> &'static str {
+pub(super) fn status_text(status: FileChangeStatus) -> &'static str {
     match status {
-        ChangeStatus::Added => "added",
-        ChangeStatus::Modified => "modified",
-        ChangeStatus::Deleted => "deleted",
-        ChangeStatus::Renamed => "renamed",
+        FileChangeStatus::Added => "added",
+        FileChangeStatus::Modified => "modified",
+        FileChangeStatus::Deleted => "deleted",
+        FileChangeStatus::Renamed => "renamed",
     }
 }
 
 /// 从数据库状态标签恢复 domain status。
-pub(super) fn parse_status(status: &str) -> rusqlite::Result<ChangeStatus> {
+pub(super) fn parse_status(status: &str) -> rusqlite::Result<FileChangeStatus> {
     match status {
-        "added" => Ok(ChangeStatus::Added),
-        "modified" => Ok(ChangeStatus::Modified),
-        "deleted" => Ok(ChangeStatus::Deleted),
-        "renamed" => Ok(ChangeStatus::Renamed),
+        "added" => Ok(FileChangeStatus::Added),
+        "modified" => Ok(FileChangeStatus::Modified),
+        "deleted" => Ok(FileChangeStatus::Deleted),
+        "renamed" => Ok(FileChangeStatus::Renamed),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }
 
-/// 用持久化 object ID 与 mode 恢复按需读取条目。
-pub(super) fn entry_from_metadata(
+/// 用持久化 object ID 与 mode 恢复 File Content Reference。
+pub(super) fn content_ref_from_metadata(
     object_id: &Option<String>,
     mode: Option<u32>,
-) -> Option<LocalEntry> {
-    Some(LocalEntry {
+) -> Option<FileContentRef> {
+    Some(FileContentRef {
         object_id: object_id.clone()?,
         mode: mode?,
     })

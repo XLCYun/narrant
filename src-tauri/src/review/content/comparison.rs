@@ -5,105 +5,103 @@ use std::path::Path;
 
 /// 从不可变 Snapshot 恢复并按固定对象 ID 读取内容的运行时 reader。
 #[derive(Clone)]
-pub struct LocalSnapshotReader {
+pub struct SnapshotContentReader {
     adapter: GitProcessAdapter,
-    snapshot: LocalSnapshot,
+    comparison: ChangeComparison,
 }
 
-impl LocalSnapshotReader {
+impl SnapshotContentReader {
     /// 从持久化 Snapshot 恢复 reader，不重新解析任何可移动 ref。
-    pub fn restore(repository_path: &Path, snapshot: LocalSnapshot) -> Self {
+    pub fn restore(repository_path: &Path, comparison: ChangeComparison) -> Self {
         Self {
             adapter: GitProcessAdapter::new(repository_path),
-            snapshot,
+            comparison,
         }
     }
 
     /// 使用显式操作上下文读取 Snapshot 中一个 File Change 的固定内容。
-    pub async fn read(
+    pub fn read(
         &self,
         path: &str,
         operation: &OperationContext,
-    ) -> Result<LoadedFileChange, GitCommandError> {
-        read_file_change(
+    ) -> Result<FileChangeContent, GitCommandError> {
+        let change = self
+            .comparison
+            .file_changes
+            .iter()
+            .find(|change| change.path == path)
+            .ok_or_else(|| {
+                GitCommandError::new("File Change is not part of the Review Snapshot")
+            })?;
+        let before = read_content(
             &self.adapter,
-            &self.snapshot,
-            path,
+            change.before.as_ref(),
             operation.cancellation(),
-        )
+        )?;
+        let after = read_content(
+            &self.adapter,
+            change.after.as_ref(),
+            operation.cancellation(),
+        )?;
+        Ok(FileChangeContent {
+            path: change.path.clone(),
+            old_path: change.old_path.clone(),
+            status: change.status,
+            before,
+            after,
+        })
     }
 }
 
-/// 固定 base、Comparison Base、head 与 File Changes 的本地 Snapshot。
+/// 固定 base、Comparison Base、head 与 File Changes 的不可变 Change Comparison。
 #[derive(Clone)]
-pub struct LocalSnapshot {
+pub struct ChangeComparison {
     pub base_ref: String,
     pub head_ref: String,
     pub base_revision: String,
     pub comparison_base: String,
     pub head_revision: String,
-    pub file_changes: Vec<LocalFileChange>,
+    pub file_changes: Vec<FileChange>,
 }
 
 /// 不含实际内容、可持久化的 File Change 元数据。
 #[derive(Clone)]
-pub struct LocalFileChange {
+pub struct FileChange {
     pub path: String,
     pub old_path: Option<String>,
-    pub status: ChangeStatus,
-    pub before_mode: Option<u32>,
-    pub after_mode: Option<u32>,
-    pub before_object_id: Option<String>,
-    pub after_object_id: Option<String>,
-    pub(crate) before_entry: Option<LocalEntry>,
-    pub(crate) after_entry: Option<LocalEntry>,
+    pub status: FileChangeStatus,
+    pub before: Option<FileContentRef>,
+    pub after: Option<FileContentRef>,
 }
 
-/// 固定到 Git 对象和 tree mode 的单侧文件条目。
-#[derive(Clone)]
-pub(crate) struct LocalEntry {
+/// File Change 单侧固定到 Git 对象和 tree mode 的内容引用。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileContentRef {
     pub(crate) object_id: String,
     pub(crate) mode: u32,
 }
 
-/// 已获取的精确 revisions 及 Snapshot 需要保留的展示 refs。
-pub(crate) struct ExactComparison {
+/// 已获取的精确 revisions 及 Change Comparison 需要保留的展示 refs。
+pub(crate) struct ResolvedRevisions {
     pub(crate) base_ref: String,
     pub(crate) head_ref: String,
     pub(crate) base_revision: String,
     pub(crate) head_revision: String,
 }
 
-/// 验证精确 revisions 并构建不可变的 three-dot Snapshot。
-pub(crate) async fn compare_exact(
+/// 验证已解析 revisions 并构建不可变的 three-dot Change Comparison。
+pub(crate) fn build_comparison(
     repository_path: &Path,
-    comparison: ExactComparison,
+    comparison: ResolvedRevisions,
     operation: &OperationContext,
-) -> Result<LocalSnapshot, GitCommandError> {
-    compare_revisions(
-        &GitProcessAdapter::new(repository_path),
-        &comparison.base_ref,
-        &comparison.head_ref,
-        &comparison.base_revision,
-        &comparison.head_revision,
-        operation.cancellation(),
-    )
-}
-
-/// 校验精确 commit，计算 merge-base，并从 Comparison Base 到 head 生成 File Changes。
-fn compare_revisions(
-    adapter: &GitProcessAdapter,
-    base_ref: &str,
-    head_ref: &str,
-    base_revision: &str,
-    head_revision: &str,
-    cancellation: &CancellationToken,
-) -> Result<LocalSnapshot, GitCommandError> {
-    validate_object_id(base_revision)?;
-    validate_object_id(head_revision)?;
-    let base_revision = resolve_object_commit(adapter, base_revision, cancellation)?;
-    let head_revision = resolve_object_commit(adapter, head_revision, cancellation)?;
-    let comparison_base = text_output(
+) -> Result<ChangeComparison, GitCommandError> {
+    let adapter = GitProcessAdapter::new(repository_path);
+    let cancellation = operation.cancellation();
+    validate_object_id(&comparison.base_revision)?;
+    validate_object_id(&comparison.head_revision)?;
+    let base_revision = peel_to_commit_id(&adapter, &comparison.base_revision, cancellation)?;
+    let head_revision = peel_to_commit_id(&adapter, &comparison.head_revision, cancellation)?;
+    let comparison_base = parse_single_line_output(
         adapter.run(["merge-base", &base_revision, &head_revision], cancellation)?,
         "merge-base",
     )?;
@@ -121,9 +119,9 @@ fn compare_revisions(
         ],
         cancellation,
     )?;
-    Ok(LocalSnapshot {
-        base_ref: base_ref.to_owned(),
-        head_ref: head_ref.to_owned(),
+    Ok(ChangeComparison {
+        base_ref: comparison.base_ref,
+        head_ref: comparison.head_ref,
         base_revision,
         comparison_base,
         head_revision,
@@ -132,14 +130,14 @@ fn compare_revisions(
 }
 
 /// 将已校验的精确对象 ID peel 为 commit，不依赖任何持久 ref。
-fn resolve_object_commit(
+fn peel_to_commit_id(
     adapter: &GitProcessAdapter,
     object_id: &str,
     cancellation: &CancellationToken,
 ) -> Result<String, GitCommandError> {
     validate_object_id(object_id)?;
     let revision = format!("{object_id}^{{commit}}");
-    let commit = text_output(
+    let commit = parse_single_line_output(
         adapter.run(["rev-parse", "--verify", &revision], cancellation)?,
         "revision",
     )?;
@@ -148,7 +146,10 @@ fn resolve_object_commit(
 }
 
 /// 从显式单行机器输出提取文本。
-fn text_output(output: crate::core_git::GitOutput, label: &str) -> Result<String, GitCommandError> {
+fn parse_single_line_output(
+    output: crate::core_git::GitOutput,
+    label: &str,
+) -> Result<String, GitCommandError> {
     let text = std::str::from_utf8(&output.stdout)
         .map_err(|_| GitCommandError::new(format!("{label} 输出不是 UTF-8")))?
         .trim();
@@ -170,7 +171,7 @@ fn validate_object_id(object_id: &str) -> Result<(), GitCommandError> {
 }
 
 /// 解析 `git diff --raw -z`，路径始终由 NUL 边界确定。
-fn parse_raw_diff(bytes: &[u8]) -> Result<Vec<LocalFileChange>, GitCommandError> {
+fn parse_raw_diff(bytes: &[u8]) -> Result<Vec<FileChange>, GitCommandError> {
     let mut records = bytes.split(|byte| *byte == 0).peekable();
     let mut changes = Vec::new();
     while let Some(header) = records.next() {
@@ -202,8 +203,8 @@ fn parse_raw_diff(bytes: &[u8]) -> Result<Vec<LocalFileChange>, GitCommandError>
                 .ok_or_else(|| GitCommandError::new("raw diff 缺少路径"))?,
         )?;
         let (path, old_path, status) = match status_code {
-            b'A' => (first_path, None, ChangeStatus::Added),
-            b'D' => (first_path, None, ChangeStatus::Deleted),
+            b'A' => (first_path, None, FileChangeStatus::Added),
+            b'D' => (first_path, None, FileChangeStatus::Deleted),
             b'R' => (
                 parse_path(
                     records
@@ -211,22 +212,18 @@ fn parse_raw_diff(bytes: &[u8]) -> Result<Vec<LocalFileChange>, GitCommandError>
                         .ok_or_else(|| GitCommandError::new("rename 缺少新路径"))?,
                 )?,
                 Some(first_path),
-                ChangeStatus::Renamed,
+                FileChangeStatus::Renamed,
             ),
-            _ => (first_path, None, ChangeStatus::Modified),
+            _ => (first_path, None, FileChangeStatus::Modified),
         };
-        let before_entry = entry(fields[2], old_mode);
-        let after_entry = entry(fields[3], new_mode);
-        changes.push(LocalFileChange {
+        let before = file_content_ref(fields[2], old_mode);
+        let after = file_content_ref(fields[3], new_mode);
+        changes.push(FileChange {
             path,
             old_path,
             status,
-            before_mode: before_entry.as_ref().map(|entry| entry.mode),
-            after_mode: after_entry.as_ref().map(|entry| entry.mode),
-            before_object_id: before_entry.as_ref().map(|entry| entry.object_id.clone()),
-            after_object_id: after_entry.as_ref().map(|entry| entry.object_id.clone()),
-            before_entry,
-            after_entry,
+            before,
+            after,
         });
     }
     Ok(changes)
@@ -243,90 +240,55 @@ fn parse_path(path: &[u8]) -> Result<String, GitCommandError> {
         .map_err(|_| GitCommandError::new("File Change 路径不是有效的 UTF-8"))
 }
 
-/// 将非空 tree entry 元数据转换为可按需读取的条目。
-fn entry(object_id: &str, mode: u32) -> Option<LocalEntry> {
-    (mode != 0).then(|| LocalEntry {
+/// 将 raw diff 中非空一侧转换为固定的 File Content Reference。
+fn file_content_ref(object_id: &str, mode: u32) -> Option<FileContentRef> {
+    (mode != 0).then(|| FileContentRef {
         object_id: object_id.to_owned(),
         mode,
     })
 }
 
-/// 从固定 Snapshot 的对象记录读取并组合一个 File Change。
-fn read_file_change(
-    adapter: &GitProcessAdapter,
-    snapshot: &LocalSnapshot,
-    path: &str,
-    cancellation: &CancellationToken,
-) -> Result<LoadedFileChange, GitCommandError> {
-    let stored = snapshot
-        .file_changes
-        .iter()
-        .find(|change| change.path == path)
-        .ok_or_else(|| GitCommandError::new("File Change is not part of the Review Snapshot"))?;
-    let before = read_entry(adapter, stored.before_entry.as_ref(), cancellation)?;
-    let after = read_entry(adapter, stored.after_entry.as_ref(), cancellation)?;
-    Ok(LoadedFileChange {
-        path: stored.path.clone(),
-        old_path: stored.old_path.clone(),
-        status: stored.status,
-        content_kind: super::resolved_content_kind([
-            before.as_ref().map(|content| content.kind),
-            after.as_ref().map(|content| content.kind),
-        ]),
-        before_size: before.as_ref().and_then(|entry| entry.size),
-        after_size: after.as_ref().and_then(|entry| entry.size),
-        before: before.and_then(|entry| entry.text),
-        after: after.and_then(|entry| entry.text),
-    })
-}
-
 /// 按对象 ID 读取 blob；gitlink 直接以 commit ID 表示内容。
-fn read_entry(
+fn read_content(
     adapter: &GitProcessAdapter,
-    entry: Option<&LocalEntry>,
+    content_ref: Option<&FileContentRef>,
     cancellation: &CancellationToken,
-) -> Result<Option<EntryContent>, GitCommandError> {
-    let Some(entry) = entry else { return Ok(None) };
-    if entry.mode == 0o160000 {
-        return Ok(Some(EntryContent {
-            kind: ContentKind::Submodule,
-            size: None,
-            text: Some(entry.object_id.clone()),
+) -> Result<Option<FileContent>, GitCommandError> {
+    let Some(content_ref) = content_ref else {
+        return Ok(None);
+    };
+    if content_ref.mode == 0o160000 {
+        return Ok(Some(FileContent::Submodule {
+            commit_id: content_ref.object_id.clone(),
         }));
     }
-    let size_text = text_output(
-        adapter.run(["cat-file", "-s", &entry.object_id], cancellation)?,
+    let size_text = parse_single_line_output(
+        adapter.run(["cat-file", "-s", &content_ref.object_id], cancellation)?,
         "blob size",
     )?;
     let size = size_text
         .parse::<usize>()
         .map_err(|_| GitCommandError::new("blob size 输出无效"))?;
     let content = adapter
-        .run(["cat-file", "blob", &entry.object_id], cancellation)?
+        .run(["cat-file", "blob", &content_ref.object_id], cancellation)?
         .stdout;
-    let kind = if entry.mode == 0o120000 {
-        ContentKind::Symlink
+    let content = if content_ref.mode == 0o120000 {
+        FileContent::Symlink {
+            size,
+            target: String::from_utf8(content).ok(),
+        }
     } else if content.contains(&0) || std::str::from_utf8(&content).is_err() {
-        ContentKind::Binary
+        FileContent::Binary { size }
     } else {
-        ContentKind::Text
+        FileContent::Text {
+            size,
+            text: String::from_utf8(content)
+                .map_err(|_| GitCommandError::new("文本 blob 不是有效的 UTF-8"))?,
+        }
     };
-    Ok(Some(EntryContent {
-        kind,
-        size: Some(size),
-        text: (kind != ContentKind::Binary)
-            .then(|| String::from_utf8(content).ok())
-            .flatten(),
-    }))
-}
-
-/// 单侧文件内容及其展示类型。
-struct EntryContent {
-    kind: ContentKind,
-    size: Option<usize>,
-    text: Option<String>,
+    Ok(Some(content))
 }
 
 #[cfg(test)]
-#[path = "local_tests.rs"]
+#[path = "comparison_tests.rs"]
 mod tests;

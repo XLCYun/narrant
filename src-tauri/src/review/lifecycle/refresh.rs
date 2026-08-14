@@ -23,7 +23,7 @@ impl ReviewLifecycle {
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?
-                .snapshot
+                .comparison
         } else {
             let operation = OperationContext::from_cancellation(cancellation.clone());
             self.branch_selections
@@ -37,7 +37,7 @@ impl ReviewLifecycle {
                 )
                 .await
                 .map_err(ReviewLifecycleError::branch)?
-                .snapshot
+                .comparison
         };
         Ok(ReviewUpdate {
             update_available: current.base_revision != available.base_revision
@@ -129,14 +129,14 @@ impl ReviewLifecycle {
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?;
-            require_confirmed_available(&confirmation, &available.snapshot, "Pull Request")?;
-            if current.base_revision == available.snapshot.base_revision
-                && current.head_revision == available.snapshot.head_revision
+            require_confirmed_available(&confirmation, &available.comparison, "Pull Request")?;
+            if current.base_revision == available.comparison.base_revision
+                && current.head_revision == available.comparison.head_revision
             {
                 return Ok(presentation_from_saved(current, Vec::new()));
             }
             self.catalog
-                .stage_pull_request_snapshot(&current, &available.metadata, &available.snapshot)
+                .stage_pull_request_snapshot(&current, &available.metadata, &available.comparison)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         } else {
             let operation = OperationContext::from_cancellation(cancellation.clone());
@@ -152,7 +152,7 @@ impl ReviewLifecycle {
                 )
                 .await
                 .map_err(ReviewLifecycleError::branch)?
-                .snapshot;
+                .comparison;
             require_confirmed_available(&confirmation, &available, "Branch Selection")?;
             if current.base_revision == confirmation.available_base_revision
                 && current.head_revision == confirmation.available_head_revision
@@ -202,7 +202,7 @@ impl ReviewLifecycle {
         let snapshot = candidate.snapshot();
         reviews.insert(
             review_id.to_owned(),
-            Arc::new(LocalSnapshotReader::restore(&repository_path, snapshot)),
+            Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),
         );
         Ok(presentation_from_saved(candidate, Vec::new()))
     }
@@ -249,7 +249,7 @@ fn pull_request_selection(metadata: &PullRequestMetadata) -> PullRequestSelectio
 /// 拒绝用户确认后再次移动的 Review Selection。
 fn require_confirmed_available(
     confirmation: &ConfirmedReviewUpdate,
-    available: &LocalSnapshot,
+    available: &ChangeComparison,
     selection_name: &str,
 ) -> Result<(), ReviewLifecycleError> {
     if available.base_revision != confirmation.available_base_revision

@@ -53,11 +53,11 @@ fn represents_binary_changes_with_metadata_and_without_text() {
     let content = open_comparison(fixture.path());
     let change = content.read("image.bin").unwrap();
 
-    assert_eq!(change.content_kind, ContentKind::Binary);
-    assert_eq!(change.before_size, Some(3));
-    assert_eq!(change.after_size, Some(4));
-    assert_eq!(change.before, None);
-    assert_eq!(change.after, None);
+    assert_eq!(change.content_kind(), FileContentKind::Binary);
+    assert_eq!(change.before.as_ref().and_then(FileContent::size), Some(3));
+    assert_eq!(change.after.as_ref().and_then(FileContent::size), Some(4));
+    assert_eq!(change.before.as_ref().and_then(FileContent::text), None);
+    assert_eq!(change.after.as_ref().and_then(FileContent::text), None);
 }
 
 #[test]
@@ -86,9 +86,9 @@ fn reads_lfs_pointer_as_text_from_pinned_revisions() {
     let content = open_comparison(fixture.path());
     let content = content.read("asset.dat").unwrap();
 
-    assert_eq!(content.content_kind, ContentKind::Text);
-    assert_eq!(content.before.as_deref(), Some(old_pointer));
-    assert_eq!(content.after.as_deref(), Some(new_pointer));
+    assert_eq!(content.content_kind(), FileContentKind::Text);
+    assert_eq!(content.before.as_ref().and_then(FileContent::text), Some(old_pointer));
+    assert_eq!(content.after.as_ref().and_then(FileContent::text), Some(new_pointer));
 }
 
 #[test]
@@ -118,9 +118,9 @@ fn reads_symlink_targets_without_following_them() {
     let content = open_comparison(fixture.path());
     let content = content.read("link").unwrap();
 
-    assert_eq!(content.content_kind, ContentKind::Symlink);
-    assert_eq!(content.before.as_deref(), Some("missing-old-target"));
-    assert_eq!(content.after.as_deref(), Some("missing-new-target"));
+    assert_eq!(content.content_kind(), FileContentKind::Symlink);
+    assert_eq!(content.before.as_ref().and_then(FileContent::text), Some("missing-old-target"));
+    assert_eq!(content.after.as_ref().and_then(FileContent::text), Some("missing-new-target"));
 }
 
 #[test]
@@ -161,13 +161,13 @@ fn reads_submodule_commit_ids_from_pinned_trees() {
     let content = open_comparison(fixture.path());
     let content = content.read("vendor").unwrap();
 
-    assert_eq!(content.content_kind, ContentKind::Submodule);
+    assert_eq!(content.content_kind(), FileContentKind::Submodule);
     assert_eq!(
-        content.before.as_deref(),
+        content.before.as_ref().and_then(FileContent::text),
         Some(old_submodule.to_string().as_str())
     );
     assert_eq!(
-        content.after.as_deref(),
+        content.after.as_ref().and_then(FileContent::text),
         Some(new_submodule.to_string().as_str())
     );
 }
@@ -205,5 +205,5 @@ fn ignores_staged_unstaged_and_untracked_worktree_content() {
     let content = content.read("tracked.txt").unwrap();
 
     assert_eq!(snapshot.file_changes.len(), 1);
-    assert_eq!(content.after.as_deref(), Some("committed head\n"));
+    assert_eq!(content.after.as_ref().and_then(FileContent::text), Some("committed head\n"));
 }

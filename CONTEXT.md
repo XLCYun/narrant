@@ -56,6 +56,12 @@ _Avoid_: Base Ref, base tip
 The before-and-after content and change metadata for one path in a **Change Comparison**.
 _Avoid_: Diff file, patch item
 
+**File Content Reference**:
+An immutable reference from one side of a **File Change** to the exact content pinned by
+its **Review Snapshot**. A File Change may have a before reference, an after reference,
+or both.
+_Avoid_: Entry, File Entry, File Version
+
 **Review Reader**:
 The application view that presents one open **Review Snapshot**, including its
 collection of **File Changes** and the freely selected **File Change** content. It
