@@ -117,7 +117,7 @@ fn sample_content(kind: review::FileContentKind, size: usize, text: &str) -> rev
         },
         review::FileContentKind::Symlink => review::FileContent::Symlink {
             size,
-            target: Some(text.to_owned()),
+            target: text.to_owned(),
         },
     }
 }

@@ -6,11 +6,11 @@ status: accepted
 
 ## Problem Statement
 
-`change_content/local` currently exposes parallel cancellable and non-cancellable entry
-points, makes Review lifecycle coordinate Branch fetch followed by comparison creation,
-and contains Pull Request-specific fetch refs and error classification. Its public
-interface therefore exposes orchestration that now belongs behind the Branch Selection,
-Pull Request Selection, and cancellable-operation seams.
+The former `change_content/local` interface exposed parallel cancellable and
+non-cancellable entry points, made Review lifecycle coordinate Branch fetch followed by
+comparison creation, and contained Pull Request-specific fetch refs and error
+classification. That public interface exposed orchestration that belongs behind the
+Branch Selection, Pull Request Selection, and cancellable-operation seams.
 
 Narrant needs a smaller Change Comparison content interface that owns only immutable
 comparison construction and content reads pinned to a saved Snapshot.

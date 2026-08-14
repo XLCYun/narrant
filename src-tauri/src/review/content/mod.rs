@@ -23,39 +23,34 @@ impl FileChangeContent {
 pub enum FileContent {
     Text { size: usize, text: String },
     Binary { size: usize },
-    Symlink { size: usize, target: Option<String> },
+    Symlink { size: usize, target: String },
     Submodule { commit_id: String },
 }
 
 impl FileContent {
+    /// 一次分派得到内容的类别、大小和可展示文本。
+    fn parts(&self) -> (FileContentKind, Option<usize>, Option<&str>) {
+        match self {
+            Self::Text { size, text } => (FileContentKind::Text, Some(*size), Some(text)),
+            Self::Binary { size } => (FileContentKind::Binary, Some(*size), None),
+            Self::Symlink { size, target } => (FileContentKind::Symlink, Some(*size), Some(target)),
+            Self::Submodule { commit_id } => (FileContentKind::Submodule, None, Some(commit_id)),
+        }
+    }
+
     /// 返回内容对应的稳定展示类别。
     pub fn kind(&self) -> FileContentKind {
-        match self {
-            Self::Text { .. } => FileContentKind::Text,
-            Self::Binary { .. } => FileContentKind::Binary,
-            Self::Symlink { .. } => FileContentKind::Symlink,
-            Self::Submodule { .. } => FileContentKind::Submodule,
-        }
+        self.parts().0
     }
 
     /// 返回具有 blob 字节大小语义的内容大小。
     pub fn size(&self) -> Option<usize> {
-        match self {
-            Self::Text { size, .. } | Self::Binary { size } | Self::Symlink { size, .. } => {
-                Some(*size)
-            }
-            Self::Submodule { .. } => None,
-        }
+        self.parts().1
     }
 
     /// 借用可作为界面文本展示的内容。
     pub fn text(&self) -> Option<&str> {
-        match self {
-            Self::Text { text, .. } => Some(text),
-            Self::Symlink { target, .. } => target.as_deref(),
-            Self::Submodule { commit_id } => Some(commit_id),
-            Self::Binary { .. } => None,
-        }
+        self.parts().2
     }
 }
 
@@ -93,4 +88,9 @@ fn most_restrictive_content_kind(
         .unwrap_or(FileContentKind::Text)
 }
 
-pub(super) mod comparison;
+pub(crate) use comparison::{
+    build_comparison, ChangeComparison, FileChange, FileContentRef, ResolvedRevisions,
+    SnapshotContentReader,
+};
+
+mod comparison;

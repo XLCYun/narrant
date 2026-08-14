@@ -2,9 +2,9 @@ mod content;
 mod lifecycle;
 mod selection;
 
-pub(crate) use content::comparison::build_comparison;
-pub(crate) use content::comparison::{
-    ChangeComparison, FileChange, FileContentRef, ResolvedRevisions, SnapshotContentReader,
+pub(crate) use content::{
+    build_comparison, ChangeComparison, FileChange, FileContentRef, ResolvedRevisions,
+    SnapshotContentReader,
 };
 pub(crate) use content::{FileChangeContent, FileChangeStatus, FileContent, FileContentKind};
 pub(crate) use lifecycle::*;

@@ -14,7 +14,7 @@ fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
 
     let review = open_comparison(fixture.path());
     let mut paths = review
-        .snapshot
+        .comparison
         .file_changes
         .iter()
         .map(|change| change.path.as_str())
@@ -42,7 +42,7 @@ fn distinguishes_executable_mode_changes_in_snapshot_metadata() {
     repository.branch("head", &head, true).unwrap();
 
     let review = open_comparison(fixture.path());
-    let change = &review.snapshot.file_changes[0];
+    let change = &review.comparison.file_changes[0];
 
     assert_eq!(change.status, FileChangeStatus::Modified);
     assert_eq!(change.before.as_ref().map(|content| content.mode), Some(0o100644));
@@ -65,7 +65,7 @@ fn recovers_after_a_failed_revision_resolution() {
     assert!(resolve_comparison(fixture.path(), "refs/heads/missing", "refs/heads/head").is_err());
     let recovered = open_comparison(fixture.path());
 
-    assert!(recovered.snapshot.file_changes.is_empty());
+    assert!(recovered.comparison.file_changes.is_empty());
 }
 
 #[test]
@@ -96,8 +96,8 @@ fn compares_canonical_refs_in_a_real_shallow_clone() {
     let review = resolve_comparison(&clone_path, "refs/heads/head", "refs/remotes/origin/head")
         .expect("compare shallow refs");
 
-    assert_eq!(review.snapshot.base_revision, review.snapshot.head_revision);
-    assert!(review.snapshot.file_changes.is_empty());
+    assert_eq!(review.comparison.base_revision, review.comparison.head_revision);
+    assert!(review.comparison.file_changes.is_empty());
 }
 
 #[test]

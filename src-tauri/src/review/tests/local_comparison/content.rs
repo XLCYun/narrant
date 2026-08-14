@@ -9,7 +9,7 @@ fn opens_an_empty_comparison_and_rejects_unknown_paths() {
 
     let review = open_comparison(fixture.path());
 
-    assert!(review.snapshot.file_changes.is_empty());
+    assert!(review.comparison.file_changes.is_empty());
     assert_eq!(
         review.read("missing.txt").unwrap_err().message(),
         "File Change is not part of the Review Snapshot"
@@ -201,9 +201,9 @@ fn ignores_staged_unstaged_and_untracked_worktree_content() {
     index.write().unwrap();
 
     let content = open_comparison(fixture.path());
-    let snapshot = &content.snapshot;
+    let comparison = &content.comparison;
     let content = content.read("tracked.txt").unwrap();
 
-    assert_eq!(snapshot.file_changes.len(), 1);
+    assert_eq!(comparison.file_changes.len(), 1);
     assert_eq!(content.after.as_ref().and_then(FileContent::text), Some("committed head\n"));
 }

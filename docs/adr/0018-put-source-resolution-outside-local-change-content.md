@@ -26,4 +26,4 @@ than a second convenience method.
   source-resolution protocols, across callers.
 
 The governing requirements are in
-[Narrow Local Change Content Interface](../specs/0011-narrow-local-change-content-interface.md).
+[Narrow Local Change Content Interface](../specs/0011-narrow-change-comparison-content-interface.md).

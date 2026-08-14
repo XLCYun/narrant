@@ -118,17 +118,17 @@ pub(crate) struct ResolvedRevisions {
 /// 验证已解析 revisions 并构建不可变的 three-dot Change Comparison。
 pub(crate) fn build_comparison(
     repository_path: &Path,
-    comparison: ResolvedRevisions,
+    revisions: ResolvedRevisions,
     operation: &OperationContext,
 ) -> Result<ChangeComparison, GitCommandError> {
     // builder 是同步函数：Core Git adapter 当前同步等待子进程，内部没有异步 await 点。
     let adapter = GitProcessAdapter::new(repository_path);
     let cancellation = operation.cancellation();
     // 先验证只含十六进制，再 peel 为 commit，避免重新解释任意 ref/revision 表达式。
-    validate_object_id(&comparison.base_revision)?;
-    validate_object_id(&comparison.head_revision)?;
-    let base_revision = peel_to_commit_id(&adapter, &comparison.base_revision, cancellation)?;
-    let head_revision = peel_to_commit_id(&adapter, &comparison.head_revision, cancellation)?;
+    validate_object_id(&revisions.base_revision)?;
+    validate_object_id(&revisions.head_revision)?;
+    let base_revision = peel_to_commit_id(&adapter, &revisions.base_revision, cancellation)?;
+    let head_revision = peel_to_commit_id(&adapter, &revisions.head_revision, cancellation)?;
     // three-dot 语义的比较起点必须是两个 commits 的共同祖先。
     let comparison_base = parse_single_line_output(
         adapter.run(["merge-base", &base_revision, &head_revision], cancellation)?,
@@ -150,8 +150,8 @@ pub(crate) fn build_comparison(
         cancellation,
     )?;
     Ok(ChangeComparison {
-        base_ref: comparison.base_ref,
-        head_ref: comparison.head_ref,
+        base_ref: revisions.base_ref,
+        head_ref: revisions.head_ref,
         base_revision,
         comparison_base,
         head_revision,
@@ -309,10 +309,11 @@ fn read_content(
         .run(["cat-file", "blob", &content_ref.object_id], cancellation)?
         .stdout;
     let content = if content_ref.mode == 0o120000 {
-        // symlink blob 存的是链接目标；目标可能不是 UTF-8，因此文本保持可选。
+        // symlink blob 存的是链接目标；界面模型要求 UTF-8，非法目标会返回明确错误。
         FileContent::Symlink {
             size,
-            target: String::from_utf8(content).ok(),
+            target: String::from_utf8(content)
+                .map_err(|_| GitCommandError::new("symlink target 不是有效的 UTF-8"))?,
         }
     } else if content.contains(&0) || std::str::from_utf8(&content).is_err() {
         // 含 NUL 或无法解码为 UTF-8时，保留大小但不制造文本。

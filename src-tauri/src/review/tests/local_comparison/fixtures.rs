@@ -72,7 +72,7 @@ fn commit_tree_entry(
 
 /// 测试中绑定已解析快照及其只读内容入口。
 struct ResolvedComparison {
-    snapshot: ChangeComparison,
+    comparison: ChangeComparison,
     reader: SnapshotContentReader,
 }
 
@@ -103,9 +103,9 @@ fn resolve_comparison(
         },
         &OperationContext::non_cancellable(),
     ))?;
-    let snapshot = resolved.comparison;
-    let reader = SnapshotContentReader::restore(repository_path, snapshot.clone());
-    Ok(ResolvedComparison { snapshot, reader })
+    let comparison = resolved.comparison;
+    let reader = SnapshotContentReader::restore(repository_path, comparison.clone());
+    Ok(ResolvedComparison { comparison, reader })
 }
 
 /// 打开 fixture 的标准 base/head 比较。

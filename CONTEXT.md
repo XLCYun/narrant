@@ -57,9 +57,9 @@ The before-and-after content and change metadata for one path in a **Change Comp
 _Avoid_: Diff file, patch item
 
 **File Content Reference**:
-An immutable reference from one side of a **File Change** to the exact content pinned by
-its **Review Snapshot**. A File Change may have a before reference, an after reference,
-or both.
+An immutable reference from one side of a **File Change** to content pinned by a
+**Change Comparison**'s exact revisions and retained if that comparison becomes a
+**Review Snapshot**. A File Change may have a before reference, an after reference, or both.
 _Avoid_: Entry, File Entry, File Version
 
 **Review Reader**:

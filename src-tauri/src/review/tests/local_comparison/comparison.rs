@@ -30,15 +30,15 @@ fn compares_committed_base_and_head_refs_as_a_pinned_file_change() {
     );
 
     let content = open_comparison(fixture.path());
-    let snapshot = &content.snapshot;
+    let comparison = &content.comparison;
 
-    assert_eq!(snapshot.base_ref, "refs/heads/base");
-    assert_eq!(snapshot.head_ref, "refs/heads/head");
-    assert_eq!(snapshot.comparison_base, snapshot.base_revision);
-    assert_eq!(snapshot.head_revision, expected_head.to_string());
-    assert_eq!(snapshot.file_changes.len(), 1);
-    assert_eq!(snapshot.file_changes[0].path, "welcome.txt");
-    assert_eq!(snapshot.file_changes[0].status, FileChangeStatus::Modified);
+    assert_eq!(comparison.base_ref, "refs/heads/base");
+    assert_eq!(comparison.head_ref, "refs/heads/head");
+    assert_eq!(comparison.comparison_base, comparison.base_revision);
+    assert_eq!(comparison.head_revision, expected_head.to_string());
+    assert_eq!(comparison.file_changes.len(), 1);
+    assert_eq!(comparison.file_changes[0].path, "welcome.txt");
+    assert_eq!(comparison.file_changes[0].status, FileChangeStatus::Modified);
 
     commit_file(
         &repository,
@@ -149,13 +149,13 @@ fn compares_from_merge_base_when_base_and_head_have_diverged() {
     commit_file(&repository, "head-only.txt", "head\n", "head advances");
 
     let content = open_comparison(fixture.path());
-    let snapshot = &content.snapshot;
+    let comparison = &content.comparison;
 
-    assert_eq!(snapshot.base_revision, base_tip.to_string());
-    assert_eq!(snapshot.comparison_base, common.to_string());
-    assert_eq!(snapshot.file_changes.len(), 1);
-    assert_eq!(snapshot.file_changes[0].path, "head-only.txt");
-    assert_eq!(snapshot.file_changes[0].status, FileChangeStatus::Added);
+    assert_eq!(comparison.base_revision, base_tip.to_string());
+    assert_eq!(comparison.comparison_base, common.to_string());
+    assert_eq!(comparison.file_changes.len(), 1);
+    assert_eq!(comparison.file_changes[0].path, "head-only.txt");
+    assert_eq!(comparison.file_changes[0].status, FileChangeStatus::Added);
 }
 
 #[test]
@@ -221,8 +221,8 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
         .unwrap();
 
     let content = open_comparison(fixture.path());
-    let snapshot = &content.snapshot;
-    let statuses = snapshot
+    let comparison = &content.comparison;
+    let statuses = comparison
         .file_changes
         .iter()
         .map(|change| (change.path.as_str(), change.status))
@@ -237,7 +237,7 @@ fn reports_added_modified_deleted_and_renamed_file_changes() {
             ("new-name.txt", FileChangeStatus::Renamed),
         ]
     );
-    let renamed = snapshot
+    let renamed = comparison
         .file_changes
         .iter()
         .find(|change| change.status == FileChangeStatus::Renamed)

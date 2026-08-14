@@ -92,15 +92,15 @@ pub(crate) struct ResolvedRevisions {
 /// 验证已解析 revisions 并构建不可变的 three-dot Change Comparison。
 pub(crate) fn build_comparison(
     repository_path: &Path,
-    comparison: ResolvedRevisions,
+    revisions: ResolvedRevisions,
     operation: &OperationContext,
 ) -> Result<ChangeComparison, GitCommandError> {
     let adapter = GitProcessAdapter::new(repository_path);
     let cancellation = operation.cancellation();
-    validate_object_id(&comparison.base_revision)?;
-    validate_object_id(&comparison.head_revision)?;
-    let base_revision = peel_to_commit_id(&adapter, &comparison.base_revision, cancellation)?;
-    let head_revision = peel_to_commit_id(&adapter, &comparison.head_revision, cancellation)?;
+    validate_object_id(&revisions.base_revision)?;
+    validate_object_id(&revisions.head_revision)?;
+    let base_revision = peel_to_commit_id(&adapter, &revisions.base_revision, cancellation)?;
+    let head_revision = peel_to_commit_id(&adapter, &revisions.head_revision, cancellation)?;
     let comparison_base = parse_single_line_output(
         adapter.run(["merge-base", &base_revision, &head_revision], cancellation)?,
         "merge-base",
@@ -120,8 +120,8 @@ pub(crate) fn build_comparison(
         cancellation,
     )?;
     Ok(ChangeComparison {
-        base_ref: comparison.base_ref,
-        head_ref: comparison.head_ref,
+        base_ref: revisions.base_ref,
+        head_ref: revisions.head_ref,
         base_revision,
         comparison_base,
         head_revision,
@@ -275,7 +275,8 @@ fn read_content(
     let content = if content_ref.mode == 0o120000 {
         FileContent::Symlink {
             size,
-            target: String::from_utf8(content).ok(),
+            target: String::from_utf8(content)
+                .map_err(|_| GitCommandError::new("symlink target 不是有效的 UTF-8"))?,
         }
     } else if content.contains(&0) || std::str::from_utf8(&content).is_err() {
         FileContent::Binary { size }
