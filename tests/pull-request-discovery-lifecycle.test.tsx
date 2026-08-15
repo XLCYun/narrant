@@ -77,7 +77,7 @@ describe("Pull Request Discovery lifecycle", () => {
     await waitFor(() => expect(result.current.groups).toEqual(otherGroups));
   });
 
-  it("Repository Entry 变化时清空旧结果且不发布迟到 discovery", async () => {
+  it("Repository 变化时清空旧结果且不发布迟到 discovery", async () => {
     const requests = new Map<number, ReturnType<typeof deferred<PullRequestGroup[]>>>();
     const adapter: PullRequestDiscoveryApplicationAdapter = {
       discover: (repositoryId) => {

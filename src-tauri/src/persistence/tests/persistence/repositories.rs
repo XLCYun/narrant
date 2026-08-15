@@ -1,5 +1,5 @@
 #[test]
-fn registered_repository_survives_catalog_reopen() {
+fn registered_repository_survives_persistence_reopen() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();
 
@@ -120,7 +120,7 @@ fn corrupt_database_reports_a_recovery_error() {
 }
 
 #[test]
-fn workspace_trust_survives_catalog_reopen_for_one_repository_entry() {
+fn workspace_trust_survives_persistence_reopen_for_one_repository() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();
 

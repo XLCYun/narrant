@@ -1,7 +1,8 @@
-use super::{verify_repository_location, ReviewStore};
+use super::ReviewStore;
+use crate::repository::verify_repository_location;
 use std::process::Command;
 
-/// 创建供 Catalog 黑盒 integration 使用的真实 working-tree repository。
+/// 创建供 Persistence 黑盒 integration 使用的真实 working-tree repository。
 fn create_repository() -> tempfile::TempDir {
     let repository = tempfile::TempDir::new().unwrap();
     for arguments in [
@@ -20,7 +21,7 @@ fn create_repository() -> tempfile::TempDir {
 }
 
 #[test]
-fn add_and_reopen_repository_entry_through_the_public_catalog_boundary() {
+fn add_and_reopen_repository_through_the_public_persistence_boundary() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();
     let entry_id = ReviewStore::open(database.path())

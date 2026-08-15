@@ -70,7 +70,7 @@ async fn recovery_abandons_unactivated_candidate_without_adding_history() {
 }
 
 #[tokio::test]
-async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
+async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
     fixture.store.activate_snapshot(&saved).unwrap();

@@ -1,6 +1,6 @@
 import { chooseRepositoryFolder, setE2ELocale } from "./helpers/open-repository";
 
-describe("Repository Catalog 持久化", () => {
+describe("Repository Persistence", () => {
   it("通过原生目录选择、首次信任并在再次选择时复用仓库", async () => {
     const repositoryPath = process.env.NARRANT_E2E_TRUST_REPOSITORY!;
     await setE2ELocale("zh-CN");
@@ -16,26 +16,26 @@ describe("Repository Catalog 持久化", () => {
     await expect($("[role='dialog']")).toHaveText(expect.stringContaining("hooks、filters 和 Git LFS"));
     await $("button=取消").click();
     await expect($("[role='dialog']")).not.toBeDisplayed();
-    await expect($("[aria-label='Repository Entry']")).not.toExist();
+    await expect($("[aria-label='Repository']")).not.toExist();
 
     await chooseRepositoryFolder(repositoryPath);
     await $("button=信任并打开").click();
-    await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
+    await expect($("[aria-label='Repository']")).toBeDisplayed();
     await $("button=返回仓库列表").click();
 
     await chooseRepositoryFolder(repositoryPath);
     await expect($("[role='dialog']")).not.toBeDisplayed();
-    await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
+    await expect($("[aria-label='Repository']")).toBeDisplayed();
     await expect($("body")).not.toHaveText(expect.stringContaining("已信任"));
 
-    const catalog = await browser.tauri.execute(
-      ({ core }) => core.invoke<{ repositories: Array<{ canonicalPath: string }> }>("load_repository_catalog"),
+    const navigation = await browser.tauri.execute(
+      ({ core }) => core.invoke<{ repositories: Array<{ canonicalPath: string }> }>("load_repository_navigation"),
     );
-    expect(catalog.repositories.filter((entry) => entry.canonicalPath === repositoryPath)).toHaveLength(1);
+    expect(navigation.repositories.filter((repository) => repository.canonicalPath === repositoryPath)).toHaveLength(1);
 
     await $("button=返回仓库列表").click();
     await setE2ELocale("en");
     await chooseRepositoryFolder(repositoryPath, "Open repository folder");
-    await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
+    await expect($("[aria-label='Repository']")).toBeDisplayed();
   });
 });

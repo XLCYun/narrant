@@ -200,7 +200,7 @@ export function useRepositoryOverview(
     if (overview?.repository.id === recent.repositoryId) {
       const nextOverview = {
         ...overview,
-        repository: { ...overview.repository, lastOpenedAt: review.lastOpenedAt },
+        repository: { ...overview.repository, lastOpenedAtMillis: review.lastOpenedAt },
         reviews: [review, ...overview.reviews.filter((candidate) => candidate.reviewId !== review.reviewId)],
       };
       currentRef.current = nextOverview;
@@ -210,7 +210,7 @@ export function useRepositoryOverview(
       ...value,
       recentReviews: [recent, ...value.recentReviews.filter((candidate) => candidate.review.reviewId !== review.reviewId)],
       repositories: value.repositories.map((entry) => entry.id === recent.repositoryId
-        ? { ...entry, lastOpenedAt: review.lastOpenedAt }
+        ? { ...entry, lastOpenedAtMillis: review.lastOpenedAt }
         : entry),
     }));
   }, []);

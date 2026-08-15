@@ -23,7 +23,7 @@ const groups: PullRequestGroup[] = [{
 }];
 
 describe("Tauri Pull Request Discovery application adapter", () => {
-  it("只负责列出 Repository Entry 的 Pull Requests", async () => {
+  it("只负责列出 Repository 的 Pull Requests", async () => {
     const invoke = vi.fn().mockResolvedValue(groups);
     const adapter = createTauriPullRequestDiscoveryApplicationAdapter({
       invoke,

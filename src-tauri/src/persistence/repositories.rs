@@ -31,7 +31,7 @@ impl ReviewStore {
     /// 保存经 Repository Application 验证的仓库位置；重复路径更新原记录。
     pub(crate) fn upsert_repository(
         &self,
-        location: &VerifiedRepositoryLocation,
+        location: &RepositoryLocation,
     ) -> Result<Repository, PersistenceError> {
         let now = current_unix_time_millis()?;
         let mut connection = self.lock_connection()?;

@@ -14,7 +14,7 @@ const repository: RepositorySummary = {
 };
 
 describe("Tauri Repository application adapter", () => {
-  it("一次加载 Repository Catalog 与全局最近 Reviews", async () => {
+  it("一次加载 Repository Navigation 与全局最近 Reviews", async () => {
     const recentReviews = [{ reviewId: "review-1" }];
     const invoke = vi.fn(async (command: string) => {
       if (command === "load_repository_navigation") return { repositories: [repository], recentReviews };
@@ -61,7 +61,7 @@ describe("Tauri Repository application adapter", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it("授权后返回可直接进入的 Repository Entry Overview", async () => {
+  it("授权后返回可直接进入的 Repository Overview", async () => {
     const reviews = [{ reviewId: "review-1", repositoryId: 17 }];
     const invoke = vi.fn(async (command: string) => {
       if (command === "grant_repository_workspace_trust_and_open") {

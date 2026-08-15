@@ -32,7 +32,7 @@ fn open_overview_stops_at_availability_and_trust_gates() {
 }
 
 #[test]
-fn grant_trust_and_open_returns_complete_repository_entry_overview() {
+fn grant_trust_and_open_returns_complete_repository_overview() {
     let fixture = Fixture::new();
     let application = fixture.application();
 
@@ -47,7 +47,7 @@ fn grant_trust_and_open_returns_complete_repository_entry_overview() {
 }
 
 #[test]
-fn load_catalog_and_reviews_share_the_repository_application_projection() {
+fn load_persistence_and_reviews_share_the_repository_application_projection() {
     let fixture = Fixture::new();
     fixture.grant_trust();
     let snapshot = ChangeComparison {
@@ -90,7 +90,7 @@ fn load_catalog_and_reviews_share_the_repository_application_projection() {
     );
 }
 
-/// 创建一个真实 working-tree 与 SQLite Catalog，覆盖 application seam 的持久化行为。
+/// 创建一个真实 working-tree 与 SQLite Persistence，覆盖 application seam 的持久化行为。
 struct Fixture {
     _application_data: tempfile::TempDir,
     repository: tempfile::TempDir,
@@ -116,7 +116,7 @@ impl Fixture {
         }
     }
 
-    /// 创建与 production 相同的共享 Catalog application。
+    /// 创建与 production 相同的共享 Persistence application。
     fn application(&self) -> RepositoryApplication {
         RepositoryApplication::new(self.store.clone())
     }

@@ -43,10 +43,10 @@ export async function openFixtureRepository(repositoryPath: string, locale: "zh-
   await chooseRepositoryFolder(repositoryPath, openFolder);
   await browser.waitUntil(async () => (
     await $(`button=${trustAndOpen}`).isExisting()
-    || await $("[aria-label='Repository Entry']").isExisting()
+    || await $("[aria-label='Repository']").isExisting()
   ));
   if (await $(`button=${trustAndOpen}`).isExisting()) {
     await $(`button=${trustAndOpen}`).click();
   }
-  await expect($("[aria-label='Repository Entry']")).toBeDisplayed();
+  await expect($("[aria-label='Repository']")).toBeDisplayed();
 }

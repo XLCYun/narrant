@@ -1,4 +1,3 @@
-use crate::core_git::{CancellationToken, GitProcessAdapter};
 use crate::review::{
     ChangeComparison, FileChange, FileChangeStatus, FileContentRef, PullRequestMetadata,
 };
@@ -84,9 +83,9 @@ impl PersistedReviewState {
     }
 }
 
-/// 经 Core Git 验证后的 working-tree repository 身份。
+/// Repository Application 写入持久化边界的稳定仓库位置。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VerifiedRepositoryLocation {
+pub(crate) struct RepositoryLocation {
     pub(crate) canonical_path: PathBuf,
     pub(crate) git_common_directory: PathBuf,
 }
@@ -137,7 +136,6 @@ mod repositories;
 mod review_snapshots;
 mod reviews;
 
-pub(crate) use mapping::verify_repository_location;
 use mapping::*;
 use migration::migrate;
 

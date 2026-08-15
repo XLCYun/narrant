@@ -20,7 +20,7 @@ const secondRepository: Repository = {
   gitCommonDirectory: "/work/second/.git",
 };
 
-/** 为 Repository Entry Overview seam 提供可预测的内存 adapter。 */
+/** 为 Repository Overview seam 提供可预测的内存 adapter。 */
 function createAdapter(): RepositoryApplicationAdapter {
   return {
     loadNavigation: vi.fn().mockResolvedValue({ repositories: [firstRepository, secondRepository], recentReviews: [] }),
@@ -38,8 +38,8 @@ function createAdapter(): RepositoryApplicationAdapter {
   };
 }
 
-describe("Repository Entry Overview lifecycle", () => {
-  it("只在目标 Repository Entry Overview 完整就绪后原子替换当前 Overview", async () => {
+describe("Repository Overview lifecycle", () => {
+  it("只在目标 Repository Overview 完整就绪后原子替换当前 Overview", async () => {
     const adapter = createAdapter();
     let finishSecondOpen!: () => void;
     vi.mocked(adapter.open).mockImplementation(async (repositoryId) => {
@@ -169,13 +169,13 @@ describe("Repository Entry Overview lifecycle", () => {
     act(() => result.current.recordReviewOpened(openedReview));
 
     expect(result.current.current?.reviews).toEqual([openedReview.review]);
-    expect(result.current.current?.repository.lastOpenedAt).toBe(42);
+    expect(result.current.current?.repository.lastOpenedAtMillis).toBe(42);
     expect(result.current.navigation.recentReviews).toEqual([openedReview]);
     expect(result.current.navigation.repositories.map((entry) => entry.id)).toEqual([1, 2]);
-    expect(result.current.navigation.repositories[0].lastOpenedAt).toBe(42);
+    expect(result.current.navigation.repositories[0].lastOpenedAtMillis).toBe(42);
   });
 
-  it("注册新 Repository 时放到 Catalog 前端，重复注册时保持原位置", async () => {
+  it("注册新 Repository 时放到 Navigation 前端，重复注册时保持原位置", async () => {
     const adapter = createAdapter();
     const thirdRepository = { ...firstRepository, id: 3, canonicalPath: "/work/third" };
     vi.mocked(adapter.register)
@@ -192,7 +192,7 @@ describe("Repository Entry Overview lifecycle", () => {
     expect(result.current.navigation.repositories[2].availability.kind).toBe("unavailable");
   });
 
-  it("刷新 Review summaries 时只更新当前 Repository Entry Overview", async () => {
+  it("刷新 Review summaries 时只更新当前 Repository Overview", async () => {
     const adapter = createAdapter();
     const review = {
       reviewId: "review-1", repositoryId: 1, repositoryPath: "/work/first",

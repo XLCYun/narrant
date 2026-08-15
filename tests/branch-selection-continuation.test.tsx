@@ -278,7 +278,7 @@ describe("Branch Selection continuation", () => {
     expect(checks).toBe(2);
   });
 
-  it("离开 Repository Entry 时中止检查并清除旧决策", async () => {
+  it("离开 Repository 时中止检查并清除旧决策", async () => {
     const pending = deferred<typeof availableUpdate>();
     let signal!: AbortSignal;
     const review = reviewOperations((_reviewId, operationSignal) => {

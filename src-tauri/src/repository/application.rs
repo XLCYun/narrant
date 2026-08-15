@@ -1,6 +1,5 @@
-use crate::persistence::{
-    verify_repository_location, PersistenceError, Repository, ReviewStore, ReviewSummary,
-};
+use super::verify_repository_location;
+use crate::persistence::{PersistenceError, Repository, ReviewStore, ReviewSummary};
 use crate::review::PullRequestMetadata;
 use serde::Serialize;
 use std::path::{Path, PathBuf};

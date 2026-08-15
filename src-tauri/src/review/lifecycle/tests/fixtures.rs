@@ -20,4 +20,4 @@ fn same_review_cannot_hold_two_refresh_leases() {
     lifecycle.finish_refresh("review-1");
     lifecycle.begin_refresh("review-1").unwrap();
 }
-use crate::persistence::verify_repository_location;
+use crate::repository::verify_repository_location;

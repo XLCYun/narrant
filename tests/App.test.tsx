@@ -20,7 +20,7 @@ import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
 import type { PullRequestMetadata, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 
-/** 用紧凑输入构造 Repository Entry 范围内的 Review 测试投影。 */
+/** 用紧凑输入构造 Repository 范围内的 Review 测试投影。 */
 function repositoryReview(input: {
   reviewId: string; baseRef: string; headRef: string; lastOpenedAt: number;
   baseRevision?: string; comparisonBase?: string; headRevision?: string; pullRequest?: PullRequestMetadata;
@@ -39,7 +39,7 @@ function repositoryReview(input: {
   };
 }
 
-/** 为首页 Catalog 包装 Review 的 Repository 所有权。 */
+/** 为首页 Navigation 包装 Review 的 Repository 所有权。 */
 function recentReview(repositoryId: number, repositoryPath: string, review: RepositoryReviewSummary): RecentReviewSummary {
   return { repositoryId, repositoryPath, review };
 }
@@ -246,7 +246,7 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
   });
 
-  it("从首页最近列表和 Repository Entry 重新打开持久化 Review", async () => {
+  it("从首页最近列表和 Repository 重新打开持久化 Review", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
@@ -481,7 +481,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /kept.txt/ })).toBeInTheDocument();
   });
 
-  it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
+  it("保留并展示已移动 Repository 的可恢复不可用状态", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invoke.mockImplementation((command: string) => {
@@ -491,7 +491,7 @@ describe("App", () => {
         gitCommonDirectory: "/missing/repository/.git",
         createdAtMillis: 1,
         lastOpenedAtMillis: 1,
-        availability: { kind: "unavailable", reason: "Repository Entry 路径不存在或不可访问" },
+        availability: { kind: "unavailable", reason: "Repository 路径不存在或不可访问" },
       }], recentReviews: [] });
       return Promise.resolve();
     });
@@ -499,7 +499,7 @@ describe("App", () => {
 
     expect(await screen.findByText("/missing/repository")).toBeInTheDocument();
     expect(screen.getByText("不可用")).toBeInTheDocument();
-    expect(screen.getByText("Repository Entry 路径不存在或不可访问")).toBeInTheDocument();
+    expect(screen.getByText("Repository 路径不存在或不可访问")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "/missing/repository" })).toBeDisabled();
   });
 

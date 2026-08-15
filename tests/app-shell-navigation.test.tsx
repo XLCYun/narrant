@@ -162,7 +162,7 @@ describe("AppShell navigation module", () => {
     expect(repositoryAdapter.open).toHaveBeenLastCalledWith(1);
   });
 
-  it("返回 Home 时统一关闭 Review 并离开 Repository Entry", async () => {
+  it("返回 Home 时统一关闭 Review 并离开 Repository", async () => {
     const repositoryAdapter = createRepositoryAdapter();
     const reviewAdapter = createReviewAdapter();
     const closeReview = vi.spyOn(reviewAdapter, "closeReview");
