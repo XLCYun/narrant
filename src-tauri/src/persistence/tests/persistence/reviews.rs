@@ -18,7 +18,7 @@ fn same_branch_selection_reuses_review_and_preserves_snapshot_metadata() {
     let snapshot = snapshot_for_refs(repository.path(), &branch_ref, &branch_ref);
 
     let first = store.save_branch_review(entry.id, &snapshot).unwrap();
-    store.activate_snapshot(&first).unwrap();
+    store.activate_initial_snapshot(&first).unwrap();
     let reopened = store.save_branch_review(entry.id, &snapshot).unwrap();
     let loaded = store.open_review(&first.review_id).unwrap();
 
@@ -66,7 +66,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
     let first = store
         .save_pull_request_review(entry.id, &first_metadata, &snapshot)
         .unwrap();
-    store.activate_snapshot(&first).unwrap();
+    store.activate_initial_snapshot(&first).unwrap();
     let reopened = store
         .save_pull_request_review(
             entry.id,
@@ -96,7 +96,7 @@ fn same_pull_request_selection_reuses_review_when_base_branch_changes() {
     );
 }
 #[test]
-fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
+fn pull_request_refresh_candidate_does_not_advance_until_explicit_activation() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();
     let store = ReviewStore::open(database.path()).unwrap();
@@ -131,7 +131,7 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
     let first = store
         .save_pull_request_review(entry.id, &metadata, &opened)
         .unwrap();
-    store.activate_snapshot(&first).unwrap();
+    store.activate_initial_snapshot(&first).unwrap();
     let mut next_snapshot = opened.clone();
     next_snapshot.head_revision = "2222222222222222222222222222222222222222".to_owned();
 
@@ -141,7 +141,7 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
         ..metadata
     };
     let staged = store
-        .stage_pull_request_snapshot(&first, &refreshed_metadata, &next_snapshot)
+        .stage_pull_request_refresh_candidate(&first, &refreshed_metadata, &next_snapshot)
         .unwrap();
     let before_activation = store.open_review(&first.review_id).unwrap();
     assert_eq!(before_activation.head_revision, first.head_revision);
@@ -153,7 +153,7 @@ fn staged_pull_request_snapshot_does_not_advance_until_explicit_activation() {
         vec![first.snapshot_identity()]
     );
 
-    store.activate_snapshot(&staged).unwrap();
+    store.activate_refresh_candidate(&staged, &first).unwrap();
     let after_activation = store.open_review(&first.review_id).unwrap();
     assert_eq!(after_activation.head_revision, next_snapshot.head_revision);
     assert_eq!(

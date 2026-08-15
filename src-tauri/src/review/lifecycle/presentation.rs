@@ -138,7 +138,7 @@ impl ReviewLifecycle {
             .create_detached_worktree(&workspace, &saved.head_revision, cancellation)
             .map_err(ReviewLifecycleError::git)?;
         if saved.created {
-            if let Err(error) = self.store.activate_snapshot(&saved) {
+            if let Err(error) = self.store.activate_initial_snapshot(&saved) {
                 let cleanup = adapter.remove_owned_worktree(
                     &workspace,
                     &entry.git_common_directory,

@@ -13,8 +13,8 @@ async fn failed_target_materialization_keeps_current_review_readable() {
     let first_saved = save_current_review(&store, first_entry.id, first_repository.path()).await;
     let target_saved =
         save_current_review(&store, target_entry.id, target_repository.path()).await;
-    store.activate_snapshot(&first_saved).unwrap();
-    store.activate_snapshot(&target_saved).unwrap();
+    store.activate_initial_snapshot(&first_saved).unwrap();
+    store.activate_initial_snapshot(&target_saved).unwrap();
     let lifecycle = ReviewLifecycle::new(store.clone());
     let first = lifecycle
         .present(

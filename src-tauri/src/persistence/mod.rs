@@ -61,7 +61,6 @@ pub struct PersistedReviewState {
     pub created: bool,
     pub pull_request: Option<PullRequestMetadata>,
     snapshot_id: i64,
-    expected_current_snapshot_id: Option<i64>,
 }
 
 impl PersistedReviewState {

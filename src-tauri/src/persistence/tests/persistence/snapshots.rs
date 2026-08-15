@@ -22,7 +22,7 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     let head_ref = "refs/heads/topic";
     let initial = snapshot_for_refs(repository.path(), base_ref, head_ref);
     let saved = store.save_branch_review(entry.id, &initial).unwrap();
-    store.activate_snapshot(&saved).unwrap();
+    store.activate_initial_snapshot(&saved).unwrap();
     let old_head = saved.head_revision.clone();
     let workspace = store.review_workspace_path(&saved.review_id).unwrap();
     GitProcessAdapter::new(repository.path())
@@ -45,7 +45,7 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     let latest = snapshot_for_refs(repository.path(), base_ref, head_ref);
 
     let candidate = store
-        .save_refresh_snapshot(&saved.review_id, &latest)
+        .stage_branch_refresh_candidate(&saved.review_id, &latest)
         .unwrap();
     assert_eq!(
         store.open_review(&saved.review_id).unwrap().head_revision,
@@ -73,7 +73,7 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         )
         .unwrap();
     store
-        .activate_refresh_snapshot(&candidate, &saved)
+        .activate_refresh_candidate(&candidate, &saved)
         .unwrap();
     let refreshed = store.open_review(&saved.review_id).unwrap();
     assert_eq!(refreshed.head_revision, latest.head_revision);
@@ -114,12 +114,12 @@ fn lists_repository_reviews_and_recent_reviews_by_last_opened_time() {
     let first_review = store
         .save_branch_review(first_entry.id, &first_snapshot)
         .unwrap();
-    store.activate_snapshot(&first_review).unwrap();
+    store.activate_initial_snapshot(&first_review).unwrap();
     let second_snapshot = snapshot_for_head(&second_repository);
     let second_review = store
         .save_branch_review(second_entry.id, &second_snapshot)
         .unwrap();
-    store.activate_snapshot(&second_review).unwrap();
+    store.activate_initial_snapshot(&second_review).unwrap();
 
     let repository_reviews = store.list_reviews(Some(first_entry.id)).unwrap();
     let recent_reviews = store.list_reviews(None).unwrap();

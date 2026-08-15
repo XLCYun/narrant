@@ -62,7 +62,7 @@ fn load_persistence_and_reviews_share_the_repository_application_projection() {
         .store
         .save_branch_review(fixture.entry.id, &snapshot)
         .unwrap();
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let application = fixture.application();
 
     let store = application.load_navigation().unwrap();

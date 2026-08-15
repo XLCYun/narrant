@@ -74,7 +74,6 @@ impl ReviewStore {
             created: true,
             pull_request: None,
             snapshot_id,
-            expected_current_snapshot_id: None,
         })
     }
 
@@ -173,7 +172,6 @@ impl ReviewStore {
             created: true,
             pull_request: Some(metadata.clone()),
             snapshot_id,
-            expected_current_snapshot_id: None,
         })
     }
 

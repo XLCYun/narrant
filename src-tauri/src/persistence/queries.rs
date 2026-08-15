@@ -102,7 +102,6 @@ impl ReviewStore {
             created: false,
             pull_request,
             snapshot_id: review.7,
-            expected_current_snapshot_id: Some(review.7),
         })
     }
 

@@ -2,7 +2,7 @@
 async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
 
     let error = match lifecycle
@@ -53,7 +53,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
         &["commit", "-q", "-m", "old workspace"],
     );
     let saved = fixture.save_current_review().await;
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     lifecycle
         .present(
@@ -141,7 +141,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
 async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let current = lifecycle
         .present(

@@ -136,7 +136,11 @@ impl ReviewLifecycle {
                 return Ok(presentation_from_saved(current, Vec::new()));
             }
             self.store
-                .stage_pull_request_snapshot(&current, &available.metadata, &available.comparison)
+                .stage_pull_request_refresh_candidate(
+                    &current,
+                    &available.metadata,
+                    &available.comparison,
+                )
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         } else {
             let operation = OperationContext::from_cancellation(cancellation.clone());
@@ -160,7 +164,7 @@ impl ReviewLifecycle {
                 return Ok(presentation_from_saved(current, Vec::new()));
             }
             self.store
-                .save_refresh_snapshot(review_id, &available)
+                .stage_branch_refresh_candidate(review_id, &available)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         };
 
@@ -184,7 +188,7 @@ impl ReviewLifecycle {
             let _ = self.store.abandon_refresh_candidate(&candidate);
             return Err(ReviewLifecycleError::WorkspaceTransition(error.to_string()));
         }
-        if let Err(activation_error) = self.store.activate_refresh_snapshot(&candidate, &current) {
+        if let Err(activation_error) = self.store.activate_refresh_candidate(&candidate, &current) {
             let rollback = adapter.transition_detached_worktree(
                 &workspace,
                 &entry.git_common_directory,

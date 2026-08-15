@@ -3,7 +3,7 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     let fixture = LifecycleFixture::new();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let saved = fixture.save_current_review().await;
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let presentation = lifecycle
         .present(
             PresentReview::Saved {
@@ -47,10 +47,10 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
 async fn recovery_abandons_unactivated_candidate_without_adding_history() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let candidate = fixture
         .store
-        .save_refresh_snapshot(&saved.review_id, &saved.to_change_comparison())
+        .stage_branch_refresh_candidate(&saved.review_id, &saved.to_change_comparison())
         .unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
 
@@ -73,7 +73,7 @@ async fn recovery_abandons_unactivated_candidate_without_adding_history() {
 async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.store.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let current = lifecycle
         .present(
