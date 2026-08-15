@@ -200,14 +200,11 @@ fn execute_core_git(
                 Ok(Some(exit)) => status = Some(exit),
                 Ok(None) => {}
                 Err(error) => {
-                    let wait_failure = CoreGitFailure::from_kind(
+                    failure = Some(CoreGitFailure::from_kind(
                         CoreGitFailureKind::WaitFailed,
                         format!("等待 Core Git 进程失败：{error}"),
-                    );
-                    terminate_process_tree(&mut child).map_err(|detail| {
-                        CoreGitFailure::from_kind(CoreGitFailureKind::TerminationFailed, detail)
-                    })?;
-                    return Err(wait_failure);
+                    ));
+                    continue;
                 }
             }
         }
