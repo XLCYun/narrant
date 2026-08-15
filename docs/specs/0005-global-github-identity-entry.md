@@ -88,7 +88,7 @@ not be shown.
 - Preserve contextual prompts such as the private Pull Request empty state and its
   connection action, because those prompts explain why content is unavailable.
 - The global entry appears throughout the main application rather than belonging to a
-  particular Repository Entry or Review.
+  particular Repository or Review.
 
 ## Public Application Contract
 

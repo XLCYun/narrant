@@ -10,7 +10,7 @@ The Tauri command module currently coordinates Review persistence, Core Git work
 Review Workspace transitions, optimistic current-Snapshot activation, rollback,
 cancellation, and runtime readers. Branch Selection and Pull Request Selection refresh
 commands repeat the same ordering protocol, while tests reproduce that protocol by
-calling the Repository Catalog and Core Git adapter directly. The command seam therefore
+calling Persistence and the Core Git adapter directly. The command seam therefore
 leaks lifecycle knowledge and is not the test surface for the behavior it exposes.
 
 Narrant needs one deep Review lifecycle module whose interface expresses Review intent
@@ -23,17 +23,17 @@ adapter and existing frontend command contracts remain stable during this refact
   refresh, File Change reads, closing, and startup recovery.
 - Keep the runtime representation keyed by durable `reviewId`, even while the first
   release continues to present only one active Review.
-- Move Workspace Trust gates, Repository Entry availability checks, Review Selection
+- Move Workspace Trust gates, Repository availability checks, Review Selection
   validation, Review Workspace ordering, current-Snapshot activation, rollback, runtime
   reader replacement, and cleanup outcomes behind the lifecycle seam.
 - Keep Tauri types, serialized command responses, command names, operation IDs, and user
   error messages outside the lifecycle module.
 - Keep SQLite and Core Git as concrete local-substitutable dependencies. Tests use a
-  temporary SQLite catalog and real temporary Git repositories rather than new mock
+  temporary SQLite persistence database and real temporary Git repositories rather than new mock
   traits.
 - Make Review Refresh Candidate persistence distinct from Review Snapshot history.
 - Replace tests that manually reproduce lifecycle ordering with tests through the new
-  lifecycle interface. Retain focused catalog migration, Core Git machine-format, and
+  lifecycle interface. Retain focused persistence migration, Core Git machine-format, and
   Review Workspace ownership tests.
 
 ## Non-goals
@@ -42,7 +42,7 @@ adapter and existing frontend command contracts remain stable during this refact
 - Do not move GitHub authentication or Pull Request discovery into the lifecycle module.
 - Do not redesign Pull Request Selection resolution; the transport adapter may continue
   to provide a current Pull Request observation during the first migration.
-- Do not add a Core Git, Repository Catalog, clock, filesystem, or runtime-state trait
+- Do not add a Core Git, Persistence, clock, filesystem, or runtime-state trait
   without a second real adapter.
 - Do not enable multiple simultaneously presented Reviews yet.
 - Do not add analysis tooling, Review deletion, historical Snapshot browsing, or new UI.
@@ -63,7 +63,7 @@ recover()
 The exact Rust types may evolve during implementation, but the following interface
 rules are normative:
 
-- Inputs use Review, Review Selection, Repository Entry, and Snapshot identities rather
+- Inputs use Review, Review Selection, Repository, and Snapshot identities rather
   than Tauri state or serialized response models.
 - Branch and Pull Request differences are represented by typed domain variants.
 - Results and failures are typed lifecycle outcomes. The Tauri adapter maps them to the
@@ -75,7 +75,7 @@ rules are normative:
 
 ### Opening and switching
 
-1. Validate the Repository Entry and Workspace Trust before fetch or checkout.
+1. Validate the Repository and Workspace Trust before fetch or checkout.
 2. Resolve or restore the target Review without changing the currently readable Review.
 3. Materialize and validate the target Review Workspace.
 4. Install the target runtime reader only after the target is internally consistent.
@@ -116,7 +116,7 @@ convergence:
 
 If activation fails, restore the previous Review Workspace with an internal
 non-cancellable operation and preserve the previous runtime reader. A result may report
-success only when catalog current state, the Review Workspace, and the runtime reader
+success only when persisted current state, the Review Workspace, and the runtime reader
 refer to the same Review Snapshot.
 
 ### File Change reads
@@ -139,14 +139,14 @@ refer to the same Review Snapshot.
 - The last successfully activated current Review Snapshot is authoritative.
 - Recovery never completes an unconfirmed refresh after a crash.
 - Unactivated candidates remain outside Review history and are abandoned or deleted.
-- Leftover Review Workspaces are removed only after the exact catalog record, Git common
+- Leftover Review Workspaces are removed only after the exact persistence record, Git common
   directory, registered worktree path, and Narrant-managed path prove ownership.
 - One failed recovery target does not block other safe targets.
 - Recovery never performs broad worktree pruning.
 
 ## Persistence
 
-The Review Catalog must distinguish an activated Review Snapshot from a Review Refresh
+The Review Persistence must distinguish an activated Review Snapshot from a Review Refresh
 Candidate. Historical Snapshot queries return only candidates that were successfully
 activated at least once. A schema migration must preserve every existing Snapshot as
 activated because older releases persisted only successful historical/current
@@ -175,7 +175,7 @@ The lifecycle module distinguishes at least:
 - Review missing, closed, or busy;
 - stale current Snapshot and Selection identity mismatch;
 - cancellation during preparation;
-- catalog and Core Git failures;
+- persistence and Core Git failures;
 - Workspace ownership or transition failure;
 - activation failure with successful rollback;
 - activation and rollback failure requiring recovery;
@@ -188,7 +188,7 @@ command contract.
 
 - Exercise lifecycle behavior through the same public Rust interface used by Tauri
   adapters.
-- Use temporary SQLite catalogs and real temporary Git repositories.
+- Use temporary SQLite persistence databases and real temporary Git repositories.
 - Cover Branch Selection and Pull Request Selection with the same convergence assertions.
 - Cover preparation cancellation, concurrent refresh rejection, stale activation,
   successful refresh, activation rollback, failed switch preserving the previous Review,
@@ -196,7 +196,7 @@ command contract.
 - Delete or rewrite orchestration tests that call candidate persistence, Workspace
   transition, and activation as an externally ordered protocol.
 - Retain focused low-level tests for Core Git cancellation and limits, machine-format
-  parsing, Workspace ownership validation, catalog migrations, and GitHub metadata-only
+  parsing, Workspace ownership validation, persistence migrations, and GitHub metadata-only
   discovery.
 
 ## Acceptance Criteria
@@ -226,7 +226,7 @@ command contract.
 - [ADR-0006: Use Core Git for repository operations](../adr/0006-use-core-git-for-repository-operations.md)
 - [ADR-0007: Require Workspace Trust](../adr/0007-require-workspace-trust.md)
 - [ADR-0008: Treat Review Workspaces as disposable](../adr/0008-treat-review-workspaces-as-disposable.md)
-- [ADR-0011: Store Review catalog in SQLite](../adr/0011-store-review-catalog-in-sqlite.md)
+- [ADR-0011: Store Review persistence in SQLite](../adr/0011-store-review-catalog-in-sqlite.md)
 - [ADR-0012: Separate Review refresh from analysis readiness](../adr/0012-separate-review-refresh-from-analysis-readiness.md)
 - [ADR-0013: Unify Reviews on local repositories](../adr/0013-unify-reviews-on-local-repositories.md)
 - [ADR-0014: Use a typed Tauri transport and domain application adapters](../adr/0014-use-a-typed-tauri-transport-and-domain-application-adapters.md)

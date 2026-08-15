@@ -1,6 +1,6 @@
 mod application;
 
 pub(crate) use application::{
-    RepositoryApplicationError, RepositoryCatalogProjection, RepositoryEntryApplication,
-    RepositoryEntryOverview, RepositoryOpenResult, RepositoryReviewsProjection,
+    RepositoryApplication, RepositoryApplicationError, RepositoryNavigation, RepositoryOpenResult,
+    RepositoryOverview, RepositoryReviewList, RepositorySummary,
 };

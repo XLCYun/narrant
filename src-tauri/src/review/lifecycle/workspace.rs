@@ -11,7 +11,7 @@ impl ReviewLifecycle {
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
             .remove(review_id);
         let saved = self
-            .catalog
+            .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         let target = self.cleanup_target(&saved)?;
@@ -30,9 +30,9 @@ impl ReviewLifecycle {
     /// 启动时放弃未激活候选，并逐项清理遗留受管 workspace。
     pub fn recover(&self) -> Result<RecoveryReport, ReviewLifecycleError> {
         let abandoned_snapshot_ids = self
-            .catalog
+            .store
             .abandon_unactivated_candidates()
-            .map_err(ReviewLifecycleError::catalog)?;
+            .map_err(ReviewLifecycleError::persistence)?;
         let cleanup_warnings = self.cleanup_workspaces(None)?;
         Ok(RecoveryReport {
             abandoned_snapshot_ids,
@@ -52,18 +52,18 @@ impl ReviewLifecycle {
     /// 构造某个 Review 的精确清理目标。
     fn cleanup_target(
         &self,
-        saved: &SavedBranchReview,
-    ) -> Result<WorkspaceCleanupTarget, ReviewLifecycleError> {
+        saved: &PersistedReviewState,
+    ) -> Result<ReviewWorkspaceCleanupTarget, ReviewLifecycleError> {
         let entry = self
             .repository_application
-            .inspect_entry(saved.repository_entry_id)
+            .get_repository(saved.repository_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
-        Ok(WorkspaceCleanupTarget {
+        Ok(ReviewWorkspaceCleanupTarget {
             review_id: saved.review_id.clone(),
             repository_path: entry.canonical_path,
-            common_directory: entry.common_directory,
+            git_common_directory: entry.git_common_directory,
             workspace_path: self
-                .catalog
+                .store
                 .review_workspace_path(&saved.review_id)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?,
         })
@@ -75,8 +75,8 @@ impl ReviewLifecycle {
         except_review_id: Option<&str>,
     ) -> Result<Vec<String>, ReviewLifecycleError> {
         let targets = self
-            .catalog
-            .workspace_cleanup_targets()
+            .store
+            .review_workspace_cleanup_targets()
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(targets
             .into_iter()
@@ -90,11 +90,11 @@ impl ReviewLifecycle {
 }
 
 /// 精确移除已验证归属的受管 workspace。
-fn remove_workspace(target: &WorkspaceCleanupTarget) -> Result<(), String> {
+fn remove_workspace(target: &ReviewWorkspaceCleanupTarget) -> Result<(), String> {
     GitProcessAdapter::new(&target.repository_path)
         .remove_owned_worktree(
             &target.workspace_path,
-            &target.common_directory,
+            &target.git_common_directory,
             &CancellationToken::default(),
         )
         .map_err(|error| format!("{}：{error}", target.review_id))

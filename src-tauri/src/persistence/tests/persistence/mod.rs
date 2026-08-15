@@ -1,4 +1,4 @@
 include!("fixtures.rs");
-include!("repository_entries.rs");
+include!("repositories.rs");
 include!("reviews.rs");
 include!("snapshots.rs");

@@ -1,10 +1,9 @@
-use crate::catalog::{
-    PullRequestMetadata, RepositoryCatalog, SavedBranchReview, WorkspaceCleanupTarget,
-};
 use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
 use crate::operation::OperationContext;
-use crate::repository::{RepositoryApplicationError, RepositoryEntryApplication};
+use crate::persistence::{PersistedReviewState, ReviewStore, ReviewWorkspaceCleanupTarget};
+use crate::repository::{RepositoryApplication, RepositoryApplicationError};
 use crate::review::FileChangeContent;
+use crate::review::PullRequestMetadata;
 use crate::review::PullRequestResolutionError;
 use crate::review::{BranchSelection, BranchSelectionResolutionError, BranchSelectionResolver};
 use crate::review::{ChangeComparison, SnapshotContentReader};
@@ -29,12 +28,12 @@ pub enum PresentReview {
         review_id: String,
     },
     Branch {
-        repository_entry_id: i64,
+        repository_id: i64,
         base_ref: String,
         head_ref: String,
     },
     PullRequest {
-        repository_entry_id: i64,
+        repository_id: i64,
         selection: PullRequestSelection,
     },
 }
@@ -88,7 +87,7 @@ pub enum ReviewLifecycleError {
     StaleCurrent,
     SelectionMismatch(String),
     Cancelled(String),
-    Catalog(String),
+    Persistence(String),
     Git(String),
     WorkspaceTransition(String),
     ActivationRollback {
@@ -105,9 +104,9 @@ impl ReviewLifecycleError {
         Self::Operation(message.into())
     }
 
-    /// 将 Catalog 失败标记为持久化边界故障。
-    fn catalog(error: impl std::fmt::Display) -> Self {
-        Self::Catalog(error.to_string())
+    /// 将 Persistence 失败标记为持久化边界故障。
+    fn persistence(error: impl std::fmt::Display) -> Self {
+        Self::Persistence(error.to_string())
     }
 
     /// 将 Core Git 失败分类为取消或普通 Git 故障。
@@ -145,7 +144,7 @@ impl std::fmt::Display for ReviewLifecycleError {
             | Self::ReviewUnavailable(message)
             | Self::SelectionMismatch(message)
             | Self::Cancelled(message)
-            | Self::Catalog(message)
+            | Self::Persistence(message)
             | Self::Git(message)
             | Self::WorkspaceTransition(message)
             | Self::Operation(message) => formatter.write_str(message),
@@ -177,8 +176,8 @@ impl std::error::Error for ReviewLifecycleError {}
 
 /// 统一拥有 durable Review、current Snapshot、Workspace 与运行时读取句柄的一致性边界。
 pub struct ReviewLifecycle {
-    catalog: Arc<RepositoryCatalog>,
-    repository_application: Arc<RepositoryEntryApplication>,
+    store: Arc<ReviewStore>,
+    repository_application: Arc<RepositoryApplication>,
     branch_selections: BranchSelectionResolver,
     pull_requests: Arc<PullRequestSelectionResolver>,
     reviews: Mutex<HashMap<String, Arc<SnapshotContentReader>>>,
@@ -186,14 +185,14 @@ pub struct ReviewLifecycle {
 }
 
 impl ReviewLifecycle {
-    /// 使用共享 Repository Catalog 创建生命周期服务。
+    /// 使用共享 Persistence 创建生命周期服务。
     #[allow(
         dead_code,
         reason = "保留匿名 Pull Request resolver 的便捷构造 interface"
     )]
-    pub fn new(catalog: Arc<RepositoryCatalog>) -> Self {
+    pub fn new(store: Arc<ReviewStore>) -> Self {
         Self::with_pull_request_resolver(
-            catalog,
+            store,
             Arc::new(PullRequestSelectionResolver::anonymous(
                 "https://api.github.com",
             )),
@@ -203,21 +202,21 @@ impl ReviewLifecycle {
     /// 使用显式 Pull Request Selection resolver 创建生命周期服务。
     #[allow(dead_code, reason = "保留显式 resolver 注入 interface")]
     pub fn with_pull_request_resolver(
-        catalog: Arc<RepositoryCatalog>,
+        store: Arc<ReviewStore>,
         pull_requests: Arc<PullRequestSelectionResolver>,
     ) -> Self {
-        let repository_application = Arc::new(RepositoryEntryApplication::new(catalog.clone()));
-        Self::with_repository_application(catalog, repository_application, pull_requests)
+        let repository_application = Arc::new(RepositoryApplication::new(store.clone()));
+        Self::with_repository_application(store, repository_application, pull_requests)
     }
 
     /// 使用生产环境共享的 Repository application 创建生命周期服务。
     pub fn with_repository_application(
-        catalog: Arc<RepositoryCatalog>,
-        repository_application: Arc<RepositoryEntryApplication>,
+        store: Arc<ReviewStore>,
+        repository_application: Arc<RepositoryApplication>,
         pull_requests: Arc<PullRequestSelectionResolver>,
     ) -> Self {
         Self {
-            catalog,
+            store,
             repository_application,
             branch_selections: BranchSelectionResolver,
             pull_requests,

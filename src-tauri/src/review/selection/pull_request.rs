@@ -1,4 +1,3 @@
-use crate::catalog::PullRequestMetadata;
 use crate::core_git::{GitCommandError, GitProcessAdapter};
 use crate::github::GitHubAuth;
 use crate::github::{self, GitHubRepository};
@@ -15,6 +14,35 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct PullRequestSelection {
     pub repository: GitHubRepository,
     pub number: u64,
+}
+
+/// Pull Request Selection 最近同步的协作元数据。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestMetadata {
+    pub owner: String,
+    pub repository: String,
+    pub number: u64,
+    pub title: String,
+    pub description: String,
+    pub author_username: String,
+    pub state: PullRequestState,
+    pub is_draft: bool,
+    pub web_url: String,
+    pub base_ref: String,
+    pub head_ref: String,
+    #[serde(default)]
+    pub github_updated_at: Option<String>,
+    pub synchronized_at_millis: i64,
+}
+
+/// Narrant 归一化后的 Pull Request 生命周期状态。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PullRequestState {
+    Open,
+    Closed,
+    Merged,
 }
 
 /// 一次解析固定下来的 Change Comparison 与同步协作 metadata。
@@ -169,14 +197,23 @@ impl PullRequestSelectionResolver {
                         number: selection.number,
                         title: observation.title,
                         description: observation.description,
-                        author: observation.author,
-                        state: observation.state,
-                        draft: observation.draft,
-                        url: observation.url,
+                        author_username: observation.author_username,
+                        state: match observation.state.as_str() {
+                            "open" => PullRequestState::Open,
+                            "closed" => PullRequestState::Closed,
+                            "merged" => PullRequestState::Merged,
+                            _ => {
+                                return Err(PullRequestResolutionError::GitHub(
+                                    "GitHub 返回了无法识别的 Pull Request 状态。".to_owned(),
+                                ))
+                            }
+                        },
+                        is_draft: observation.is_draft,
+                        web_url: observation.web_url,
                         base_ref: observation.base.reference,
                         head_ref: observation.head.reference,
-                        updated_at: Some(observation.updated_at),
-                        synchronized_at,
+                        github_updated_at: Some(observation.github_updated_at),
+                        synchronized_at_millis: synchronized_at,
                     };
                     return Ok(ResolvedPullRequestSelection {
                         comparison,

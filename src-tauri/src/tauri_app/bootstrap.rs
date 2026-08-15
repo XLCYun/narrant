@@ -1,5 +1,5 @@
 use super::commands::{github as github_commands, repository, review as review_commands};
-use crate::{catalog, github, operation, repository as repository_module, review};
+use crate::{github, operation, persistence, repository as repository_module, review};
 use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
@@ -41,16 +41,15 @@ pub fn run() {
                 Arc::new(github::SystemCredentialStore),
                 identity_provider,
             ));
-            let catalog = Arc::new(catalog::RepositoryCatalog::open(&database_path)?);
+            let store = Arc::new(persistence::ReviewStore::open(&database_path)?);
             let pull_requests = Arc::new(review::PullRequestSelectionResolver::authenticated(
                 github_api_base_url(),
                 auth.clone(),
             ));
-            let repository_application = Arc::new(
-                repository_module::RepositoryEntryApplication::new(catalog.clone()),
-            );
+            let repository_application =
+                Arc::new(repository_module::RepositoryApplication::new(store.clone()));
             let lifecycle = review::ReviewLifecycle::with_repository_application(
-                catalog.clone(),
+                store.clone(),
                 repository_application.clone(),
                 pull_requests,
             );
@@ -61,11 +60,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            repository::load_repository_catalog,
+            repository::load_repository_navigation,
             repository::open_repository_overview,
             repository::grant_repository_workspace_trust_and_open,
             repository::load_repository_reviews,
-            repository::register_repository_entry,
+            repository::register_repository,
             review_commands::compare_local_refs,
             review_commands::check_branch_review_updates,
             review_commands::reopen_and_refresh_branch_review,

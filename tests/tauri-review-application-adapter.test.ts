@@ -44,14 +44,14 @@ describe("Tauri Review application adapter", () => {
 
     await adapter.switchReview({
       kind: "branch-selection",
-      repositoryEntryId: 17,
+      repositoryId: 17,
       baseRef: "refs/heads/main",
       headRef: "refs/heads/feature",
       mode: { kind: "start" },
     }, null, signal);
 
     expect(invokeCancellable).toHaveBeenCalledWith("compare_local_refs", {
-      repositoryEntryId: 17,
+      repositoryId: 17,
       baseRef: "refs/heads/main",
       headRef: "refs/heads/feature",
     }, signal);
@@ -79,7 +79,7 @@ describe("Tauri Review application adapter", () => {
     const signal = new AbortController().signal;
     const target = {
       kind: "branch-selection" as const,
-      repositoryEntryId: 17,
+      repositoryId: 17,
       baseRef: "refs/heads/main",
       headRef: "refs/heads/feature",
     };
@@ -111,13 +111,13 @@ describe("Tauri Review application adapter", () => {
         number: 42,
         title: "Resolver seam",
         description: "",
-        author: "octocat",
+        authorUsername: "octocat",
         state: "open",
-        draft: false,
-        url: "https://github.com/octo-org/octo-repo/pull/42",
+        isDraft: false,
+        webUrl: "https://github.com/octo-org/octo-repo/pull/42",
         baseRef: "main",
         headRef: "feature",
-        synchronizedAt: 1,
+        synchronizedAtMillis: 1,
       },
     };
     const update = {
@@ -140,7 +140,7 @@ describe("Tauri Review application adapter", () => {
 
     await adapter.switchReview({
       kind: "pull-request-selection",
-      repositoryEntryId: 17,
+      repositoryId: 17,
       owner: "octo-org",
       repository: "octo-repo",
       number: 42,
@@ -154,7 +154,7 @@ describe("Tauri Review application adapter", () => {
     }, signal);
 
     expect(invokeCancellable).toHaveBeenNthCalledWith(1, "open_pull_request_review", {
-      repositoryEntryId: 17,
+      repositoryId: 17,
       repository: { owner: "octo-org", name: "octo-repo" },
       number: 42,
     }, signal);

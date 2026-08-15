@@ -2,26 +2,26 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
-import type { RepositoryApplicationAdapter, RepositoryEntry } from "@/repository/repository-application";
-import { useRepositoryEntryOverview } from "@/repository/use-repository-entry-overview";
+import type { RepositoryApplicationAdapter, RepositorySummary } from "@/repository/repository-application";
+import { useRepositoryOverview } from "@/repository/use-repository-overview";
 import type { ReviewApplicationAdapter } from "@/review/review-application";
 import type { ReviewSnapshot } from "@/review/types";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 
-const repositories: RepositoryEntry[] = [
-  { id: 1, canonicalPath: "/work/one", commonDirectory: "/work", createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null },
-  { id: 2, canonicalPath: "/work/two", commonDirectory: "/work", createdAt: 2, lastOpenedAt: 2, available: true, unavailableReason: null },
+const repositories: RepositorySummary[] = [
+  { id: 1, canonicalPath: "/work/one", gitCommonDirectory: "/work", createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" } },
+  { id: 2, canonicalPath: "/work/two", gitCommonDirectory: "/work", createdAtMillis: 2, lastOpenedAtMillis: 2, availability: { kind: "available" } },
 ];
 
-function snapshot(reviewId: string, repositoryEntryId: number): ReviewSnapshot {
+function snapshot(reviewId: string, repositoryId: number): ReviewSnapshot {
   return {
     reviewId,
     snapshotId: `${reviewId}-snapshot`,
     baseRef: "refs/heads/main",
-    baseRevision: `base-${repositoryEntryId}`,
-    comparisonBase: `base-${repositoryEntryId}`,
+    baseRevision: `base-${repositoryId}`,
+    comparisonBase: `base-${repositoryId}`,
     headRef: "refs/heads/topic",
-    headRevision: `head-${repositoryEntryId}`,
+    headRevision: `head-${repositoryId}`,
     fileChanges: [],
   };
 }
@@ -29,11 +29,11 @@ function snapshot(reviewId: string, repositoryEntryId: number): ReviewSnapshot {
 function createRepositoryAdapter(options: { trusted?: Set<number> } = {}): RepositoryApplicationAdapter {
   const trusted = options.trusted ?? new Set(repositories.map((repository) => repository.id));
   return {
-    loadCatalog: vi.fn(async () => ({ repositories, recentReviews: [] })),
+    loadNavigation: vi.fn(async () => ({ repositories, recentReviews: [] })),
     register: vi.fn(async () => repositories[0]),
-    open: vi.fn(async (repositoryEntryId) => {
-      const repository = repositories.find((candidate) => candidate.id === repositoryEntryId)!;
-      return trusted.has(repositoryEntryId)
+    open: vi.fn(async (repositoryId) => {
+      const repository = repositories.find((candidate) => candidate.id === repositoryId)!;
+      return trusted.has(repositoryId)
         ? { kind: "ready" as const, overview: { repository, reviews: [] } }
         : { kind: "trust-required" as const, repository };
     }),
@@ -49,12 +49,12 @@ function createRepositoryAdapter(options: { trusted?: Set<number> } = {}): Repos
 function createReviewAdapter(): ReviewApplicationAdapter & { failedReviewId?: string } {
   const adapter: ReviewApplicationAdapter & { failedReviewId?: string } = {
     async switchReview(target) {
-      const reviewId = target.kind === "saved-review" ? target.reviewId : `review-${target.repositoryEntryId}`;
+      const reviewId = target.kind === "saved-review" ? target.reviewId : `review-${target.repositoryId}`;
       if (reviewId === adapter.failedReviewId) throw new Error("无法打开目标 Review");
-      const repositoryEntryId = target.kind === "saved-review"
+      const repositoryId = target.kind === "saved-review"
         ? Number(reviewId.split("-").at(-1))
-        : target.repositoryEntryId;
-      return snapshot(reviewId, repositoryEntryId);
+        : target.repositoryId;
+      return snapshot(reviewId, repositoryId);
     },
     async checkReviewUpdate() { return null; },
     async checkBranchSelectionUpdate() {
@@ -69,7 +69,7 @@ function createReviewAdapter(): ReviewApplicationAdapter & { failedReviewId?: st
 
 function renderNavigation(repositoryAdapter: RepositoryApplicationAdapter, reviewAdapter: ReviewApplicationAdapter) {
   return renderHook(() => {
-    const repository = useRepositoryEntryOverview(repositoryAdapter, { enabled: true });
+    const repository = useRepositoryOverview(repositoryAdapter, { enabled: true });
     const review = useReviewLifecycle(reviewAdapter);
     return useAppShellNavigation(repository, review, { waitForPaint: async () => undefined });
   });
@@ -85,13 +85,13 @@ describe("AppShell navigation module", () => {
     await act(async () => {
       const outcome = await result.current.navigate({
         kind: "review",
-        repositoryEntryId: 2,
+        repositoryId: 2,
         target: { kind: "saved-review", reviewId: "review-2" },
       });
       expect(outcome.kind).toBe("navigated");
     });
 
-    expect(result.current.destination).toEqual({ kind: "review", repositoryEntryId: 2, reviewId: "review-2" });
+    expect(result.current.destination).toEqual({ kind: "review", repositoryId: 2, reviewId: "review-2" });
   });
 
   it("Workspace Trust 暂停完整导航意图，确认后从同一意图继续", async () => {
@@ -102,7 +102,7 @@ describe("AppShell navigation module", () => {
     await act(async () => {
       const outcome = await result.current.navigate({
         kind: "review",
-        repositoryEntryId: 2,
+        repositoryId: 2,
         target: { kind: "saved-review", reviewId: "review-2" },
       });
       expect(outcome.kind).toBe("trust-required");
@@ -114,7 +114,7 @@ describe("AppShell navigation module", () => {
       const outcome = await result.current.confirmTrust();
       expect(outcome.kind).toBe("navigated");
     });
-    expect(result.current.destination).toEqual({ kind: "review", repositoryEntryId: 2, reviewId: "review-2" });
+    expect(result.current.destination).toEqual({ kind: "review", repositoryId: 2, reviewId: "review-2" });
     expect(result.current.trust).toBeNull();
   });
 
@@ -124,14 +124,14 @@ describe("AppShell navigation module", () => {
     await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
 
     await act(async () => {
-      expect((await result.current.navigate({ kind: "repository", repositoryEntryId: 2 })).kind).toBe("trust-required");
+      expect((await result.current.navigate({ kind: "repository", repositoryId: 2 })).kind).toBe("trust-required");
     });
     expect(result.current.destination).toEqual({ kind: "home" });
 
     await act(async () => {
       expect((await result.current.confirmTrust()).kind).toBe("navigated");
     });
-    expect(result.current.destination).toEqual({ kind: "repository", repositoryEntryId: 2, initialTab: "pull-requests" });
+    expect(result.current.destination).toEqual({ kind: "repository", repositoryId: 2, initialTab: "pull-requests" });
   });
 
   it("跨 Repository Review 打开失败时恢复原 Repository 与原 Review", async () => {
@@ -142,7 +142,7 @@ describe("AppShell navigation module", () => {
     await act(async () => {
       await result.current.navigate({
         kind: "review",
-        repositoryEntryId: 1,
+        repositoryId: 1,
         target: { kind: "saved-review", reviewId: "review-1" },
       });
     });
@@ -151,13 +151,13 @@ describe("AppShell navigation module", () => {
     await act(async () => {
       const outcome = await result.current.navigate({
         kind: "review",
-        repositoryEntryId: 2,
+        repositoryId: 2,
         target: { kind: "saved-review", reviewId: "review-2" },
       });
       expect(outcome).toMatchObject({ kind: "failed", previousDestinationPreserved: true });
     });
 
-    expect(result.current.destination).toEqual({ kind: "review", repositoryEntryId: 1, reviewId: "review-1" });
+    expect(result.current.destination).toEqual({ kind: "review", repositoryId: 1, reviewId: "review-1" });
     expect(result.current.reader?.snapshot.reviewId).toBe("review-1");
     expect(repositoryAdapter.open).toHaveBeenLastCalledWith(1);
   });
@@ -171,7 +171,7 @@ describe("AppShell navigation module", () => {
     await act(async () => {
       await result.current.navigate({
         kind: "review",
-        repositoryEntryId: 1,
+        repositoryId: 1,
         target: { kind: "saved-review", reviewId: "review-1" },
       });
       await result.current.navigate({ kind: "home" });

@@ -87,7 +87,7 @@ async fn discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_
     let pull_request = &groups[1].pull_requests[0];
     assert_eq!(pull_request.number, 42);
     assert_eq!(pull_request.state, "merged");
-    assert_eq!(pull_request.updated_at, "2026-07-31T08:30:00Z");
+    assert_eq!(pull_request.github_updated_at, "2026-07-31T08:30:00Z");
     assert_eq!(pull_request.base.sha, "base-sha");
     assert_eq!(pull_request.head.sha, "head-sha");
     first_page.assert();

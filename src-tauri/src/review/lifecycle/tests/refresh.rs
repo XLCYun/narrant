@@ -2,8 +2,8 @@
 async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.catalog.activate_snapshot(&saved).unwrap();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    fixture.store.activate_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
 
     let error = match lifecycle
         .reopen_and_refresh(
@@ -24,7 +24,7 @@ async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
 
     assert!(matches!(error, ReviewLifecycleError::StaleCurrent));
     let workspace = fixture
-        .catalog
+        .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
     assert!(!workspace.exists());
@@ -53,8 +53,8 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
         &["commit", "-q", "-m", "old workspace"],
     );
     let saved = fixture.save_current_review().await;
-    fixture.catalog.activate_snapshot(&saved).unwrap();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    fixture.store.activate_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     lifecycle
         .present(
             PresentReview::Saved {
@@ -85,7 +85,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
         .await
         .unwrap();
     let workspace = fixture
-        .catalog
+        .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
     let cancellation = CancellationToken::default();
@@ -126,7 +126,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
     assert!(cancellation.is_cancelled());
     assert_eq!(
         fixture
-            .catalog
+            .store
             .open_review(&saved.review_id)
             .unwrap()
             .snapshot_identity(),
@@ -141,8 +141,8 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
 async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.catalog.activate_snapshot(&saved).unwrap();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    fixture.store.activate_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let current = lifecycle
         .present(
             PresentReview::Saved {
@@ -163,14 +163,14 @@ async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     assert!(matches!(error, ReviewLifecycleError::Cancelled(_)));
     assert_eq!(
         fixture
-            .catalog
+            .store
             .open_review(&saved.review_id)
             .unwrap()
             .snapshot_identity(),
         current.snapshot_id
     );
     let workspace = fixture
-        .catalog
+        .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
     assert_eq!(

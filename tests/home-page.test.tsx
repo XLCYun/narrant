@@ -6,11 +6,11 @@ import type { PullRequestMetadata, RecentReviewSummary } from "@/lib/review-type
 
 /** 用紧凑输入构造跨 Repository 的最近 Review 测试投影。 */
 function recentReview(input: {
-  reviewId: string; repositoryEntryId: number; repositoryPath: string;
+  reviewId: string; repositoryId: number; repositoryPath: string;
   baseRef: string; headRef: string; lastOpenedAt: number; pullRequest?: PullRequestMetadata;
 }): RecentReviewSummary {
   return {
-    repositoryEntryId: input.repositoryEntryId,
+    repositoryId: input.repositoryId,
     repositoryPath: input.repositoryPath,
     review: {
       reviewId: input.reviewId,
@@ -50,10 +50,10 @@ describe("最近审核首页", () => {
   });
 
   it("Review 阅读器只选中所属仓库树中的 Review", async () => {
-    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
+    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAtMillis: 1, availability: { kind: "available" } };
     const review = recentReview({
       reviewId: "review-1",
-      repositoryEntryId: 1,
+      repositoryId: 1,
       repositoryPath: "/work/repo",
       baseRef: "refs/heads/main",
       headRef: "refs/heads/topic",
@@ -61,7 +61,7 @@ describe("最近审核首页", () => {
     });
     render(<AppShell
       navigation={{
-        destination: { kind: "review", repositoryEntryId: 1, reviewId: "review-1" },
+        destination: { kind: "review", repositoryId: 1, reviewId: "review-1" },
         sidebar: {
           reviews: [review], repositories: [repository], loading: false, busy: false,
           activeRepositoryId: 1, activeReviewId: "review-1",
@@ -102,7 +102,7 @@ describe("最近审核首页", () => {
 
   it("侧边栏默认展示五条最近审核，可展开到十条，并恢复折叠偏好", async () => {
     window.localStorage.setItem("narrant.sidebar-preferences", JSON.stringify({ open: false }));
-    const reviews = Array.from({ length: 11 }, (_, index) => recentReview({ reviewId: `${index}`, repositoryEntryId: 1, repositoryPath: `/work/repo-${index}`, baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: index }));
+    const reviews = Array.from({ length: 11 }, (_, index) => recentReview({ reviewId: `${index}`, repositoryId: 1, repositoryPath: `/work/repo-${index}`, baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: index }));
     render(<HomePage reviews={reviews} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
     expect(screen.getAllByLabelText("将 Head 分支 topic 合入 Base 分支 main")).toHaveLength(15);
     fireEvent.click(screen.getByRole("button", { name: "查看全部" }));
@@ -115,8 +115,8 @@ describe("最近审核首页", () => {
   });
 
   it("分组标题整行可折叠内容，并持久化展开状态", () => {
-    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
-    const reviews = [recentReview({ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 })];
+    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAtMillis: 1, availability: { kind: "available" } };
+    const reviews = [recentReview({ reviewId: "1", repositoryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 })];
     render(<HomePage reviews={reviews} repositories={[repository]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
     const recentGroup = screen.getByRole("button", { name: "最近审核" });
@@ -139,7 +139,7 @@ describe("最近审核首页", () => {
   it("最近审核列表文字与分组标题左对齐", () => {
     const reviews = [recentReview({
       reviewId: "1",
-      repositoryEntryId: 1,
+      repositoryId: 1,
       repositoryPath: "/work/repo",
       baseRef: "refs/heads/main",
       headRef: "refs/heads/topic",
@@ -156,7 +156,7 @@ describe("最近审核首页", () => {
   });
 
   it("已有审核时不重复展示主体品牌，并把打开仓库入口放在最近审核标题行", () => {
-    const reviews = [recentReview({ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 })];
+    const reviews = [recentReview({ reviewId: "1", repositoryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 })];
     render(<HomePage reviews={reviews} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
     const recent = screen.getByRole("region", { name: "最近审核" });
@@ -219,16 +219,16 @@ describe("最近审核首页", () => {
   it("仓库主体独立展开 Review 列表，右侧按钮打开仓库", async () => {
     await i18n.changeLanguage("zh-CN");
     const repositories = [
-      { id: 1, canonicalPath: "/work/older", lastOpenedAt: 1, available: true },
-      { id: 2, canonicalPath: "/work/newer", lastOpenedAt: 2, available: true },
+      { id: 1, canonicalPath: "/work/older", lastOpenedAtMillis: 1, availability: { kind: "available" } },
+      { id: 2, canonicalPath: "/work/newer", lastOpenedAtMillis: 2, availability: { kind: "available" } },
     ];
     const reviews = repositories.map((repository) => recentReview({
       reviewId: String(repository.id),
-      repositoryEntryId: repository.id,
+      repositoryId: repository.id,
       repositoryPath: repository.canonicalPath,
       baseRef: "refs/heads/main",
       headRef: `refs/heads/topic-${repository.id}`,
-      lastOpenedAt: repository.lastOpenedAt,
+      lastOpenedAt: repository.lastOpenedAtMillis,
     }));
     const onOpenRepository = vi.fn();
     render(<HomePage reviews={reviews} repositories={repositories} onOpenReview={() => undefined} onOpenRepository={onOpenRepository} onOpenFolder={() => undefined} />);
@@ -251,8 +251,8 @@ describe("最近审核首页", () => {
 
   it("打开仓库期间仅把目标仓库的箭头替换为可访问的加载状态", () => {
     const repositories = [
-      { id: 1, canonicalPath: "/work/first", lastOpenedAt: 1, available: true },
-      { id: 2, canonicalPath: "/work/second", lastOpenedAt: 2, available: true },
+      { id: 1, canonicalPath: "/work/first", lastOpenedAtMillis: 1, availability: { kind: "available" } },
+      { id: 2, canonicalPath: "/work/second", lastOpenedAtMillis: 2, availability: { kind: "available" } },
     ];
 
     render(
@@ -277,10 +277,10 @@ describe("最近审核首页", () => {
   });
 
   it("侧边栏把本地分支 Review 压缩为不含类型复述的单行", () => {
-    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAt: 1, available: true };
+    const repository = { id: 1, canonicalPath: "/work/repo", lastOpenedAtMillis: 1, availability: { kind: "available" } };
     const reviews = [recentReview({
       reviewId: "1",
-      repositoryEntryId: 1,
+      repositoryId: 1,
       repositoryPath: repository.canonicalPath,
       baseRef: "refs/heads/main",
       headRef: "refs/heads/topic",
@@ -321,7 +321,7 @@ describe("最近审核首页", () => {
     const openedAt = new Date("2026-07-30T08:15:00Z").getTime();
     const review = recentReview({
       reviewId: "1",
-      repositoryEntryId: 1,
+      repositoryId: 1,
       repositoryPath: "/work/narrant",
       baseRef: "refs/remotes/origin/main",
       headRef: "refs/remotes/origin/feature/compact-reviews",
@@ -332,13 +332,13 @@ describe("最近审核首页", () => {
         number: 42,
         title: "Compact review navigation",
         description: "不应进入 tooltip",
-        author: "octocat",
+        authorUsername: "octocat",
         state: "open" as const,
-        draft: true,
-        url: "https://github.com/octo-org/narrant/pull/42",
+        isDraft: true,
+        webUrl: "https://github.com/octo-org/narrant/pull/42",
         baseRef: "main",
         headRef: "feature/compact-reviews",
-        synchronizedAt: 1,
+        synchronizedAtMillis: 1,
       },
     });
     const { container } = render(
@@ -356,7 +356,7 @@ describe("最近审核首页", () => {
   });
 
   it("没有 Review 的仓库展开后显示空状态", () => {
-    const repository = { id: 1, canonicalPath: "/work/empty", lastOpenedAt: 1, available: false };
+    const repository = { id: 1, canonicalPath: "/work/empty", lastOpenedAtMillis: 1, availability: { kind: "unavailable", reason: "missing" } };
     const onOpenRepository = vi.fn();
     render(<HomePage reviews={[]} repositories={[repository]} onOpenReview={() => undefined} onOpenRepository={onOpenRepository} onOpenFolder={() => undefined} />);
 
@@ -382,7 +382,7 @@ describe("最近审核首页", () => {
 
   it("最近审核首页仍提供文件夹入口并显示本地化仓库错误", async () => {
     await i18n.changeLanguage("en");
-    const reviews = [recentReview({ reviewId: "1", repositoryEntryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 })];
+    const reviews = [recentReview({ reviewId: "1", repositoryId: 1, repositoryPath: "/work/repo", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 1 })];
     render(<HomePage reviews={reviews} error="The selected folder is not a Git repository." onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
     expect(screen.getByRole("button", { name: "Open repository folder" })).toBeVisible();

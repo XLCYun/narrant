@@ -11,8 +11,8 @@ const review = {
   pullRequest: {
     owner: "octo-org", repository: "narrant", number: 43, title: "Safe review overview",
     description: "# Context\n\n## User impact\n\n- Easier review\n\nHello <script>alert('no')</script>\n\n![tracker](https://example.com/pixel.png)\n\n[Read more](https://example.com/details)\n\n[Unsafe](javascript:alert('no'))",
-    author: "octocat", state: "open" as const, draft: false, url: "https://github.com/octo-org/narrant/pull/43",
-    baseRef: "main", headRef: "feature/safe-markdown", synchronizedAt: 1,
+    authorUsername: "octocat", state: "open" as const, isDraft: false, webUrl: "https://github.com/octo-org/narrant/pull/43",
+    baseRef: "main", headRef: "feature/safe-markdown", synchronizedAtMillis: 1,
   },
 };
 

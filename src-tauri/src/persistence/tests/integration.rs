@@ -1,4 +1,4 @@
-use super::RepositoryCatalog;
+use super::{verify_repository_location, ReviewStore};
 use std::process::Command;
 
 /// 创建供 Catalog 黑盒 integration 使用的真实 working-tree repository。
@@ -23,18 +23,17 @@ fn create_repository() -> tempfile::TempDir {
 fn add_and_reopen_repository_entry_through_the_public_catalog_boundary() {
     let database = tempfile::NamedTempFile::new().unwrap();
     let repository = create_repository();
-    let entry_id = RepositoryCatalog::open(database.path())
+    let entry_id = ReviewStore::open(database.path())
         .unwrap()
-        .register(repository.path())
+        .upsert_repository(&verify_repository_location(repository.path()).unwrap())
         .unwrap()
         .id;
 
-    let reopened = RepositoryCatalog::open(database.path())
+    let reopened = ReviewStore::open(database.path())
         .unwrap()
-        .open_entry(entry_id)
+        .get_repository(entry_id)
         .unwrap();
 
-    assert!(reopened.available);
     assert_eq!(
         reopened.canonical_path,
         repository.path().canonicalize().unwrap()

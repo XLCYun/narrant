@@ -43,7 +43,7 @@ describe("Pull Request Discovery lifecycle", () => {
     const { result, rerender } = renderHook(
       ({ signedIn }) => usePullRequestDiscoveryLifecycle(adapter, {
         enabled: true,
-        repositoryEntryId: 17,
+        repositoryId: 17,
         signedIn,
       }),
       { initialProps: { signedIn: false } },
@@ -80,23 +80,23 @@ describe("Pull Request Discovery lifecycle", () => {
   it("Repository Entry 变化时清空旧结果且不发布迟到 discovery", async () => {
     const requests = new Map<number, ReturnType<typeof deferred<PullRequestGroup[]>>>();
     const adapter: PullRequestDiscoveryApplicationAdapter = {
-      discover: (repositoryEntryId) => {
+      discover: (repositoryId) => {
         const request = deferred<PullRequestGroup[]>();
-        requests.set(repositoryEntryId, request);
+        requests.set(repositoryId, request);
         return request.promise;
       },
     };
     const { result, rerender } = renderHook(
-      ({ repositoryEntryId }) => usePullRequestDiscoveryLifecycle(adapter, {
+      ({ repositoryId }) => usePullRequestDiscoveryLifecycle(adapter, {
         enabled: true,
-        repositoryEntryId,
+        repositoryId,
         signedIn: false,
       }),
-      { initialProps: { repositoryEntryId: 17 } },
+      { initialProps: { repositoryId: 17 } },
     );
     await waitFor(() => expect(requests.has(17)).toBe(true));
 
-    rerender({ repositoryEntryId: 23 });
+    rerender({ repositoryId: 23 });
     await waitFor(() => expect(requests.has(23)).toBe(true));
     expect(result.current.groups).toEqual([]);
 

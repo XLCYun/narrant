@@ -15,9 +15,9 @@ export type BranchSelectionOpenResult =
   | { kind: "navigated" | "trust-required" | "ignored" }
   | { kind: "failed"; detail: string; previousDestinationPreserved: true };
 
-/** Branch Selection continuation 的当前 Repository Entry 输入。 */
+/** Branch Selection continuation 的当前 Repository 输入。 */
 export type BranchSelectionContinuationOptions = {
-  repositoryEntryId?: number;
+  repositoryId?: number;
   baseRef: string;
   headRef: string;
   reviews: RepositoryReviewSummary[];
@@ -35,7 +35,7 @@ export function useBranchSelectionContinuation(
   review: Pick<ReviewApplicationAdapter, "checkBranchSelectionUpdate">,
   options: BranchSelectionContinuationOptions,
 ): BranchSelectionContinuationBinding {
-  const { repositoryEntryId, baseRef, headRef, openReview } = options;
+  const { repositoryId, baseRef, headRef, openReview } = options;
   const [state, setState] = useState<BranchSelectionContinuationState>({ kind: "incomplete" });
   const [checkAttempt, setCheckAttempt] = useState(0);
   const decisionRef = useRef<Extract<ReviewOpenTarget, { kind: "branch-selection" }>>();
@@ -51,7 +51,7 @@ export function useBranchSelectionContinuation(
     const request = ++requestRef.current;
     abortRef.current?.abort();
     decisionRef.current = undefined;
-    if (options.repositoryEntryId === undefined || !options.baseRef || !options.headRef) {
+    if (options.repositoryId === undefined || !options.baseRef || !options.headRef) {
       setState({ kind: "incomplete" });
       return;
     }
@@ -73,7 +73,7 @@ export function useBranchSelectionContinuation(
         if (abort.signal.aborted || request !== requestRef.current) return;
         decisionRef.current = {
           kind: "branch-selection",
-          repositoryEntryId: options.repositoryEntryId!,
+          repositoryId: options.repositoryId!,
           baseRef: options.baseRef,
           headRef: options.headRef,
           mode: update.changed
@@ -85,7 +85,7 @@ export function useBranchSelectionContinuation(
         if (abort.signal.aborted || request !== requestRef.current) return;
         decisionRef.current = {
           kind: "branch-selection",
-          repositoryEntryId: options.repositoryEntryId!,
+          repositoryId: options.repositoryId!,
           baseRef: options.baseRef,
           headRef: options.headRef,
           mode: { kind: "continue", reviewId: matchingReviewId },
@@ -99,21 +99,21 @@ export function useBranchSelectionContinuation(
     }
     decisionRef.current = {
       kind: "branch-selection",
-      repositoryEntryId: options.repositoryEntryId,
+      repositoryId: options.repositoryId,
       baseRef: options.baseRef,
       headRef: options.headRef,
       mode: { kind: "start" },
     };
     setState({ kind: "ready", action: "start" });
-  }, [checkAttempt, matchingReviewId, options.baseRef, options.headRef, options.repositoryEntryId, review]);
+  }, [checkAttempt, matchingReviewId, options.baseRef, options.headRef, options.repositoryId, review]);
 
   /** 提交当前稳定决策；不可提交状态不产生导航副作用。 */
   const submit = useCallback(async (): Promise<BranchSelectionOpenResult> => {
-    if (repositoryEntryId === undefined || !baseRef || !headRef || baseRef === headRef) {
+    if (repositoryId === undefined || !baseRef || !headRef || baseRef === headRef) {
       return { kind: "ignored" };
     }
     const decision = decisionRef.current;
-    if (!decision || decision.repositoryEntryId !== repositoryEntryId
+    if (!decision || decision.repositoryId !== repositoryId
       || decision.baseRef !== baseRef || decision.headRef !== headRef) {
       return { kind: "ignored" };
     }
@@ -123,9 +123,9 @@ export function useBranchSelectionContinuation(
       setCheckAttempt((attempt) => attempt + 1);
     }
     return result;
-  }, [baseRef, headRef, openReview, repositoryEntryId]);
+  }, [baseRef, headRef, openReview, repositoryId]);
 
-  const visibleState = options.repositoryEntryId === undefined || !options.baseRef || !options.headRef
+  const visibleState = options.repositoryId === undefined || !options.baseRef || !options.headRef
     ? { kind: "incomplete" } as const
     : options.baseRef === options.headRef
       ? { kind: "invalid" } as const

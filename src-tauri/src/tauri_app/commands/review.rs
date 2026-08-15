@@ -1,4 +1,3 @@
-use crate::catalog;
 use crate::core_git;
 use crate::github::GitHubRepository;
 use crate::operation;
@@ -69,7 +68,7 @@ pub(crate) struct ReviewSnapshotResponse {
     head_revision: String,
     file_changes: Vec<FileChangeSummaryResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pull_request: Option<catalog::PullRequestMetadata>,
+    pull_request: Option<review::PullRequestMetadata>,
 }
 
 /// 检查 moving refs 后返回的版本差异，不携带或切换候选 File Changes。
@@ -230,7 +229,7 @@ pub(crate) async fn compare_local_refs(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
     operations: tauri::State<'_, operation::CancellableOperations>,
     operation_id: String,
-    repository_entry_id: i64,
+    repository_id: i64,
     base_ref: String,
     head_ref: String,
 ) -> Result<ReviewSnapshotResponse, String> {
@@ -238,7 +237,7 @@ pub(crate) async fn compare_local_refs(
         lifecycle
             .present(
                 review::PresentReview::Branch {
-                    repository_entry_id,
+                    repository_id,
                     base_ref,
                     head_ref,
                 },
@@ -337,7 +336,7 @@ pub(crate) async fn open_pull_request_review(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
     operations: tauri::State<'_, operation::CancellableOperations>,
     operation_id: String,
-    repository_entry_id: i64,
+    repository_id: i64,
     repository: GitHubRepository,
     number: u64,
 ) -> Result<ReviewSnapshotResponse, String> {
@@ -345,7 +344,7 @@ pub(crate) async fn open_pull_request_review(
         lifecycle
             .present(
                 review::PresentReview::PullRequest {
-                    repository_entry_id,
+                    repository_id,
                     selection: review::PullRequestSelection { repository, number },
                 },
                 operation.cancellation(),

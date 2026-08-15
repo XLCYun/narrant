@@ -9,11 +9,11 @@ const pullRequest = {
   number: 40,
   title: "Repository overview",
   description: "",
-  author: "octocat",
+  authorUsername: "octocat",
   state: "open",
-  draft: false,
-  url: "https://github.com/octo/narrant/pull/40",
-  updatedAt: "2026-07-31T08:00:00Z",
+  isDraft: false,
+  webUrl: "https://github.com/octo/narrant/pull/40",
+  githubUpdatedAt: "2026-07-31T08:00:00Z",
   base: { ref: "main", sha: "base-new" },
   head: { ref: "feature", sha: "head-new" },
 };
@@ -25,13 +25,13 @@ const saved: RepositoryReviewSummary = {
     number: 40,
     title: "Cached title",
     description: "",
-    author: "octocat",
+    authorUsername: "octocat",
     state: "open",
-    draft: false,
-    url: pullRequest.url,
+    isDraft: false,
+    webUrl: pullRequest.webUrl,
     baseRef: "main",
     headRef: "feature",
-    synchronizedAt: 1,
+    synchronizedAtMillis: 1,
   } },
   currentSnapshot: { baseRevision: "base-old", comparisonBase: "merge-base-old", headRevision: "head-old" },
   lastOpenedAt: 1,
@@ -122,8 +122,8 @@ describe("RepositoryOverview", () => {
   });
 
   it("把多个 GitHub repository 合并为按更新时间排序的列表，并只在多仓库时显示来源", () => {
-    const older = { ...pullRequest, number: 99, title: "Older", updatedAt: "2026-07-30T08:00:00Z" };
-    const newer = { ...pullRequest, number: 2, title: "Newer", updatedAt: "2026-08-01T08:00:00Z" };
+    const older = { ...pullRequest, number: 99, title: "Older", githubUpdatedAt: "2026-07-30T08:00:00Z" };
+    const newer = { ...pullRequest, number: 2, title: "Newer", githubUpdatedAt: "2026-08-01T08:00:00Z" };
     renderOverview({ groups: [
       { repository, remoteNames: ["origin"], pullRequests: [older], error: null },
       { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [newer], error: null },

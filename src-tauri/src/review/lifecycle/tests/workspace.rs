@@ -3,19 +3,19 @@ async fn failed_target_materialization_keeps_current_review_readable() {
     let application_data = tempfile::TempDir::new().unwrap();
     let first_repository = test_repository_with_commit();
     let target_repository = test_repository_with_commit();
-    let catalog = Arc::new(
-        RepositoryCatalog::open(&application_data.path().join("catalog.sqlite3")).unwrap(),
+    let store = Arc::new(
+        ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap(),
     );
-    let first_entry = catalog.register(first_repository.path()).unwrap();
-    let target_entry = catalog.register(target_repository.path()).unwrap();
-    catalog.grant_workspace_trust(first_entry.id).unwrap();
-    catalog.grant_workspace_trust(target_entry.id).unwrap();
-    let first_saved = save_current_review(&catalog, first_entry.id, first_repository.path()).await;
+    let first_entry = store.upsert_repository(&verify_repository_location(first_repository.path()).unwrap()).unwrap();
+    let target_entry = store.upsert_repository(&verify_repository_location(target_repository.path()).unwrap()).unwrap();
+    store.insert_workspace_trust(first_entry.id).unwrap();
+    store.insert_workspace_trust(target_entry.id).unwrap();
+    let first_saved = save_current_review(&store, first_entry.id, first_repository.path()).await;
     let target_saved =
-        save_current_review(&catalog, target_entry.id, target_repository.path()).await;
-    catalog.activate_snapshot(&first_saved).unwrap();
-    catalog.activate_snapshot(&target_saved).unwrap();
-    let lifecycle = ReviewLifecycle::new(catalog.clone());
+        save_current_review(&store, target_entry.id, target_repository.path()).await;
+    store.activate_snapshot(&first_saved).unwrap();
+    store.activate_snapshot(&target_saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(store.clone());
     let first = lifecycle
         .present(
             PresentReview::Saved {
@@ -78,14 +78,14 @@ async fn pull_request_lifecycle_resolves_durable_selection_without_caller_observ
         }));
     });
     let lifecycle = ReviewLifecycle::with_pull_request_resolver(
-        fixture.catalog.clone(),
+        fixture.store.clone(),
         Arc::new(PullRequestSelectionResolver::anonymous(server.base_url())),
     );
 
     let opened = lifecycle
         .present(
             PresentReview::PullRequest {
-                repository_entry_id: fixture.repository_entry_id,
+                repository_id: fixture.repository_id,
                 selection: PullRequestSelection {
                     repository: crate::github::GitHubRepository {
                         owner: "octo-org".to_owned(),
@@ -128,12 +128,12 @@ async fn pull_request_lifecycle_resolves_durable_selection_without_caller_observ
     assert_eq!(observation.hits(), 3);
 }
 
-/// 生命周期测试所需的应用目录、Repository Catalog 与 Git repository。
+/// 生命周期测试所需的应用目录、Persistence 与 Git repository。
 struct LifecycleFixture {
     _application_data: tempfile::TempDir,
     repository: tempfile::TempDir,
-    catalog: Arc<RepositoryCatalog>,
-    repository_entry_id: i64,
+    store: Arc<ReviewStore>,
+    repository_id: i64,
 }
 
 impl LifecycleFixture {
@@ -141,24 +141,24 @@ impl LifecycleFixture {
     fn new() -> Self {
         let application_data = tempfile::TempDir::new().unwrap();
         let repository = test_repository_with_commit();
-        let catalog = Arc::new(
-            RepositoryCatalog::open(&application_data.path().join("catalog.sqlite3")).unwrap(),
+        let store = Arc::new(
+            ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap(),
         );
-        let entry = catalog.register(repository.path()).unwrap();
-        catalog.grant_workspace_trust(entry.id).unwrap();
+        let entry = store.upsert_repository(&verify_repository_location(repository.path()).unwrap()).unwrap();
+        store.insert_workspace_trust(entry.id).unwrap();
         Self {
             _application_data: application_data,
             repository,
-            catalog,
-            repository_entry_id: entry.id,
+            store,
+            repository_id: entry.id,
         }
     }
 
     /// 保存当前分支相对其父提交的测试 Review。
-    async fn save_current_review(&self) -> SavedBranchReview {
+    async fn save_current_review(&self) -> PersistedReviewState {
         save_current_review(
-            &self.catalog,
-            self.repository_entry_id,
+            &self.store,
+            self.repository_id,
             self.repository.path(),
         )
         .await
@@ -214,10 +214,10 @@ fn test_repository_with_commit() -> tempfile::TempDir {
 
 /// 保存 base/head 分支组成的测试 Review。
 async fn save_current_review(
-    catalog: &RepositoryCatalog,
-    repository_entry_id: i64,
+    store: &ReviewStore,
+    repository_id: i64,
     repository_path: &Path,
-) -> SavedBranchReview {
+) -> PersistedReviewState {
     let resolved = BranchSelectionResolver
         .resolve(
             repository_path,
@@ -229,8 +229,8 @@ async fn save_current_review(
         )
         .await
         .unwrap();
-    catalog
-        .save_branch_review(repository_entry_id, &resolved.comparison)
+    store
+        .save_branch_review(repository_id, &resolved.comparison)
         .unwrap()
 }
 

@@ -1,6 +1,6 @@
 # Window State Restoration
 
-Narrant currently starts every desktop session at the configured default size, which discards a reviewer’s working layout. The application must restore a safe, user-selected desktop window state across launches without mixing it into Review or Repository Entry data.
+Narrant currently starts every desktop session at the configured default size, which discards a reviewer’s working layout. The application must restore a safe, user-selected desktop window state across launches without mixing it into Review or Repository data.
 
 ## Scope
 
@@ -9,7 +9,7 @@ Narrant currently starts every desktop session at the configured default size, w
 - Do not persist or restore fullscreen state.
 - Start the configured window hidden so the plugin can restore it before showing it, preventing visible movement at launch.
 - Rely on the plugin’s built-in monitor-intersection check: when the saved position does not intersect an available display, do not restore that position and let the operating system choose placement. A malformed state file is treated as no saved state.
-- Keep this application-level state separate from the Review catalog and frontend layout preferences.
+- Keep this application-level state separate from the Review persistence and frontend layout preferences.
 
 ## Non-goals
 

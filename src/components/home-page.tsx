@@ -28,14 +28,10 @@ import { Icon } from "@/components/ui/icon";
 import narrantLogo from "../../assets/brand/narrant-logo.svg";
 import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg";
 import type { AppNavigationResult, AppShellNavigationBinding } from "@/app/use-app-shell-navigation";
+import type { RepositorySummary } from "@/repository/repository-application";
 
 /** 首页侧边栏所需的持久化仓库投影。 */
-export type HomeRepository = {
-  id: number;
-  canonicalPath: string;
-  lastOpenedAt: number;
-  available: boolean;
-};
+export type HomeRepository = RepositorySummary;
 
 type SidebarPreferences = {
   open: boolean;
@@ -84,7 +80,7 @@ type AppShellProps = {
 
 const preferenceKey = "narrant.sidebar-preferences";
 
-/** 从路径中提取 Repository Entry 的稳定可见名称。 */
+/** 从路径中提取 Repository 的稳定可见名称。 */
 function repositoryName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }
@@ -135,12 +131,12 @@ function PullRequestReviewDetails({
 }) {
   const { t } = useTranslation();
   const details = [
-    [t("review:author"), pullRequest.author],
+    [t("review:author"), pullRequest.authorUsername],
     [
       t("mergeDirection"),
       `${branchName(pullRequest.headRef)} → ${branchName(pullRequest.baseRef)}`,
     ],
-    [t("catalog:repositoryPath"), repositoryPath],
+    [t("repository:repositoryPath"), repositoryPath],
     [t("lastOpened"), openedAt],
   ];
   return <div className="w-72 text-left">
@@ -165,7 +161,7 @@ function BranchReviewDetails({
   const { t } = useTranslation();
   const details = [
     [t("mergeDirection"), `${branchName(review.review.selection.headRef)} → ${branchName(review.review.selection.baseRef)}`],
-    [t("catalog:repositoryPath"), review.repositoryPath],
+    [t("repository:repositoryPath"), review.repositoryPath],
     [t("lastOpened"), openedAt],
   ];
   return <dl className="grid w-72 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-left">
@@ -390,11 +386,11 @@ export function AppShell({
   function openRecentReview(review: RecentReviewSummary) {
     setPreferences((value) => ({
       ...value,
-      expandedRepositories: value.expandedRepositories.includes(review.repositoryEntryId)
+      expandedRepositories: value.expandedRepositories.includes(review.repositoryId)
         ? value.expandedRepositories
-        : [...value.expandedRepositories, review.repositoryEntryId],
+        : [...value.expandedRepositories, review.repositoryId],
     }));
-    void navigation.navigate({ kind: "review", repositoryEntryId: review.repositoryEntryId, target: { kind: "saved-review", reviewId: review.review.reviewId } });
+    void navigation.navigate({ kind: "review", repositoryId: review.repositoryId, target: { kind: "saved-review", reviewId: review.review.reviewId } });
   }
 
   /** 在非交互顶栏上按下主鼠标键时，显式请求 Tauri 移动原生窗口。 */
@@ -515,12 +511,12 @@ export function AppShell({
               {repositories.map((repository) => {
                 const expanded = preferences.expandedRepositories.includes(repository.id);
                 const all = preferences.allRepositoryReviews.includes(repository.id);
-                const repositoryReviews = reviews.filter((review) => review.repositoryEntryId === repository.id);
+                const repositoryReviews = reviews.filter((review) => review.repositoryId === repository.id);
                 const pending = pendingRepositoryId === repository.id;
                 return <SidebarMenuItem key={repository.id}>
                   <div className="group/repository relative flex items-center">
                     <SidebarMenuButton
-                      className={cn("min-w-0 flex-1 pr-9", !repository.available && "text-muted-foreground")}
+                      className={cn("min-w-0 flex-1 pr-9", repository.availability.kind !== "available" && "text-muted-foreground")}
                       tooltip={repository.canonicalPath}
                       isActive={activeRepositoryId === repository.id && !activeReviewId}
                       aria-expanded={expanded}
@@ -537,14 +533,14 @@ export function AppShell({
                       aria-label={t(pending ? "openingRepository" : "openRepository", { name: repositoryName(repository.canonicalPath) })}
                       disabled={pending}
                       aria-busy={pending || undefined}
-                      onClick={() => void navigation.navigate({ kind: "repository", repositoryEntryId: repository.id })}
+                      onClick={() => void navigation.navigate({ kind: "repository", repositoryId: repository.id })}
                     >
                       {pending ? <Spinner aria-hidden /> : <Icon icon={ArrowRight02Icon} />}
                     </Button>
                   </div>
                   {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
-                      <ReviewMenuItem key={review.review.reviewId} review={review} showRepository={false} active={activeReviewId === review.review.reviewId} pending={pendingReviewId === review.review.reviewId} disabled={reviewNavigationBusy} onOpen={() => void navigation.navigate({ kind: "review", repositoryEntryId: review.repositoryEntryId, target: { kind: "saved-review", reviewId: review.review.reviewId } })} />)}
+                      <ReviewMenuItem key={review.review.reviewId} review={review} showRepository={false} active={activeReviewId === review.review.reviewId} pending={pendingReviewId === review.review.reviewId} disabled={reviewNavigationBusy} onOpen={() => void navigation.navigate({ kind: "review", repositoryId: review.repositoryId, target: { kind: "saved-review", reviewId: review.review.reviewId } })} />)}
                     {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}
                     {repositoryReviews.length > 10 && <SidebarMenuItem>
                       <SidebarMenuButton
@@ -610,8 +606,8 @@ export function HomePage({
   const destination = showHome
     ? { kind: "home" as const }
     : activeReviewId && activeRepositoryId !== undefined
-      ? { kind: "review" as const, repositoryEntryId: activeRepositoryId, reviewId: activeReviewId }
-      : { kind: "repository" as const, repositoryEntryId: activeRepositoryId ?? 0, initialTab: "pull-requests" as const };
+      ? { kind: "review" as const, repositoryId: activeRepositoryId, reviewId: activeReviewId }
+      : { kind: "repository" as const, repositoryId: activeRepositoryId ?? 0, initialTab: "pull-requests" as const };
   const navigated = (): Promise<AppNavigationResult> => Promise.resolve({ kind: "navigated" });
   return <AppShell
     navigation={{
@@ -630,7 +626,7 @@ export function HomePage({
       navigate(intent) {
         if (intent.kind === "home") onOpenHome();
         if (intent.kind === "repository") {
-          const repository = repositories.find((candidate) => candidate.id === intent.repositoryEntryId);
+          const repository = repositories.find((candidate) => candidate.id === intent.repositoryId);
           if (repository) onOpenRepository(repository);
         }
         if (intent.kind === "review" && intent.target.kind === "saved-review") {

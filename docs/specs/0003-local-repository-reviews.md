@@ -22,7 +22,7 @@ repository history, File Changes, file content, and Review Workspaces.
 The application has a repository-first information architecture:
 
 ```text
-Repository Entry
+Repository
 ├── Workspace Trust
 ├── available Branch Selections
 ├── GitHub remotes and their Pull Requests
@@ -32,8 +32,8 @@ Repository Entry
     └── temporary Review Workspace while open
 ```
 
-The home view lists registered Repository Entries and a cross-repository recent-Review
-projection. Opening a Repository Entry shows its saved Reviews and the two ways to
+The home view lists registered Repositories and a cross-repository recent-Review
+projection. Opening a Repository shows its saved Reviews and the two ways to
 create or reopen one:
 
 1. Select a local or remote-tracking base/head branch pair.
@@ -44,16 +44,16 @@ pipeline.
 
 ## Domain Rules
 
-- A Repository Entry identifies one concrete local clone by its saved canonical path.
+- A Repository identifies one concrete local clone by its saved canonical path.
   Another clone is a different entry even when both have identical remotes.
-- A Review belongs to exactly one Repository Entry and owns one immutable Review
+- A Review belongs to exactly one Repository and owns one immutable Review
   Selection identity.
 - A Branch Selection is identified by canonical `refs/heads/*` or
   `refs/remotes/*` base and head refs. Arbitrary revspecs, tags, and directly entered
   object IDs are not accepted in the first release.
 - A Pull Request Selection is identified by the base GitHub repository identity and
   Pull Request number.
-- The same Selection within one Repository Entry reopens the existing Review rather than
+- The same Selection within one Repository reopens the existing Review rather than
   creating a duplicate.
 - Changing a Branch Selection creates another Review. A Pull Request changing its base
   branch remains the same Review because its Pull Request identity did not change.
@@ -68,12 +68,12 @@ pipeline.
 The canonical vocabulary and relationships remain defined in the repository root
 `CONTEXT.md`.
 
-## Repository Catalog and Persistence
+## Repository Persistence
 
 Narrant stores one application-level SQLite database in the operating system's
 application-data directory. It persists:
 
-- Repository Entries, canonical paths, creation time, and last-opened time;
+- Repositories, canonical paths, creation time, and last-opened time;
 - Workspace Trust;
 - Reviews and their last-opened ordering;
 - tagged Branch or Pull Request Selections;
@@ -91,9 +91,9 @@ No persisted Review data exists in previous releases, so the first schema does n
 import legacy runtime Review Sessions. Existing GitHub credentials remain in their
 current system credential slot.
 
-## Repository Entry Lifecycle
+## Repository Lifecycle
 
-Adding a Repository Entry:
+Adding a Repository:
 
 1. Canonicalizes and validates the selected path as a working-tree Git repository.
 2. Locates Core Git, probes the capabilities required by this specification, and
@@ -104,21 +104,21 @@ Adding a Repository Entry:
 5. Presents Workspace Trust before the first fetch, worktree checkout, or review-tool
    startup.
 
-Workspace Trust applies to the whole Repository Entry and future Reviews created from
+Workspace Trust applies to the whole Repository and future Reviews created from
 it. The warning explains that normal checkout may execute Git hooks and filters, access
 Git LFS, and later allow language servers or other review tools to act on
 repository-controlled configuration. The first release has no separate revoke action;
-future deletion of the Repository Entry removes its trust record.
+future deletion of the Repository removes its trust record.
 
-If the saved local path no longer exists, the Repository Entry and Review history remain
+If the saved local path no longer exists, the Repository and Review history remain
 visible but unavailable. A future relocate action may update the path after validating
 another local repository. Matching remotes do not automatically merge separate clones.
 
 ## GitHub Pull Request Discovery
 
-Narrant normalizes every GitHub HTTPS or SSH remote in a Repository Entry, de-duplicates
+Narrant normalizes every GitHub HTTPS or SSH remote in a Repository, de-duplicates
 the represented GitHub repositories, and groups their accessible Pull Requests by
-repository. A Repository Entry does not have one exclusive GitHub association.
+repository. A Repository does not have one exclusive GitHub association.
 
 The GitHub App uses only:
 
@@ -138,7 +138,7 @@ Pull Request metadata failures and Git transport failures are distinct. A succes
 GitHub API request does not imply that Core Git can fetch the corresponding objects.
 
 GitHub sign-out removes access and refresh credentials plus pending authorization state.
-It does not delete Repository Entries, Reviews, Snapshots, worktrees, cached Pull
+It does not delete Repositories, Reviews, Snapshots, worktrees, cached Pull
 Request metadata, or recent-Review history.
 
 ## Core Git Repository Operations
@@ -162,7 +162,7 @@ formats, and porcelain formats. Localized stderr and progress output are diagnos
 never drive business logic.
 
 Commands have cancellation, timeout, and output limits. Every destructive operation
-validates the exact Repository Entry, Git common directory, registered worktree, Review
+validates the exact Repository, Git common directory, registered worktree, Review
 identity, and Narrant-managed absolute path before execution.
 
 `git2-rs` is removed as a production source of Git semantics rather than retained as a
@@ -282,8 +282,8 @@ metadata remain distinguishable.
 
 ## Cross-ticket Acceptance Criteria
 
-- Repository Entries and Reviews survive a complete application restart.
-- Two clones with the same remote create separate Repository Entries.
+- Repositories and Reviews survive a complete application restart.
+- Two clones with the same remote create separate Repositories.
 - Duplicate Branch or Pull Request Selections reopen the existing Review.
 - Branch selectors expose only canonical local and remote-tracking branches and exclude
   Narrant-internal refs.
@@ -316,7 +316,7 @@ metadata remain distinguishable.
 - AI code reading, AI Findings, or model integration.
 - Dependency installation, builds, tests, code generation, or automatic submodule
   initialization.
-- Repository Entry, Review, or Snapshot deletion UI.
+- Repository, Review, or Snapshot deletion UI.
 - Workspace Trust revocation UI.
 - Historical Snapshot browsing UI.
 - Arbitrary revision expressions, tags, or direct object-ID selections.
@@ -334,4 +334,4 @@ sign-out cleanup, and permission requirements no longer apply.
 
 The implementation is intentionally allowed to replace existing frontend commands and
 models without compatibility aliases because prior Review Sessions were transient and
-no persisted Review catalog exists.
+no persisted Review persistence exists.

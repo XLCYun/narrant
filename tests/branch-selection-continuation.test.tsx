@@ -8,7 +8,7 @@ import {
 } from "@/review/use-branch-selection-continuation";
 
 const selection = {
-  repositoryEntryId: 41,
+  repositoryId: 41,
   baseRef: "refs/remotes/origin/main",
   headRef: "refs/heads/topic",
 };
@@ -96,13 +96,13 @@ describe("Branch Selection continuation", () => {
         number: 42,
         title: "Same labels",
         description: "",
-        author: "octocat",
+        authorUsername: "octocat",
         state: "open" as const,
-        draft: false,
-        url: "https://github.com/octo-org/octo-repo/pull/42",
+        isDraft: false,
+        webUrl: "https://github.com/octo-org/octo-repo/pull/42",
         baseRef: "main",
         headRef: "topic",
-        synchronizedAt: 1,
+        synchronizedAtMillis: 1,
       } },
     };
     const { result } = renderHook(() => useBranchSelectionContinuation(review, {
@@ -232,7 +232,7 @@ describe("Branch Selection continuation", () => {
     });
     expect(opened).toEqual([{
       kind: "branch-selection",
-      repositoryEntryId: 41,
+      repositoryId: 41,
       baseRef: selection.baseRef,
       headRef: latestReview.selection.headRef,
       mode: { kind: "continue", reviewId: "review-42" },
@@ -287,20 +287,20 @@ describe("Branch Selection continuation", () => {
     });
     const opened: unknown[] = [];
     const { result, rerender } = renderHook(
-      ({ repositoryEntryId }) => useBranchSelectionContinuation(review, {
+      ({ repositoryId }) => useBranchSelectionContinuation(review, {
         ...selection,
-        repositoryEntryId,
+        repositoryId,
         reviews: [existingReview],
         openReview: async (target) => {
           opened.push(target);
           return { kind: "navigated" };
         },
       }),
-      { initialProps: { repositoryEntryId: 41 as number | undefined } },
+      { initialProps: { repositoryId: 41 as number | undefined } },
     );
     expect(result.current.state.kind).toBe("checking");
 
-    rerender({ repositoryEntryId: undefined });
+    rerender({ repositoryId: undefined });
     expect(result.current.state).toEqual({ kind: "incomplete" });
     expect(signal.aborted).toBe(true);
     act(() => pending.resolve(availableUpdate));

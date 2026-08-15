@@ -57,7 +57,7 @@ calculation remain implementation details.
 
 ## Review Lifecycle Integration
 
-- Opening a new Pull Request Review resolves `{ repositoryEntryId, owner, repository,
+- Opening a new Pull Request Review resolves `{ repositoryId, owner, repository,
   number }`; reopening a saved Review uses its current Snapshot without GitHub access.
 - Checking for updates takes only `reviewId`, resolves the Review's durable Selection, and
   never creates a candidate or mutates the current Workspace.
@@ -88,7 +88,7 @@ validation failure. The Tauri adapter keeps mapping typed failures into the exis
 ## Acceptance Criteria
 
 1. Frontend Review code no longer resolves or caches Pull Request observations.
-2. `open_pull_request_review` accepts only Repository Entry identity and Pull Request
+2. `open_pull_request_review` accepts only Repository identity and Pull Request
    Selection identity.
 3. `check_pull_request_review_update` accepts only `reviewId` and operation identity.
 4. `refresh_pull_request_review` accepts only `reviewId`, operation identity, and confirmed

@@ -4,26 +4,26 @@ import type {
   OpenRepositoryResult,
   RepositoryApplicationAdapter,
   BranchRefs,
-  RepositoryEntryOverview,
-  RepositoryEntry,
+  RepositoryOverview,
+  RepositorySummary,
 } from "@/repository/repository-application";
 import type { RecentReviewSummary } from "@/lib/review-types";
 
-export type RepositoryCatalogState = {
-  repositories: RepositoryEntry[];
+export type RepositoryNavigationState = {
+  repositories: RepositorySummary[];
   recentReviews: RecentReviewSummary[];
   status: "idle" | "loading" | "ready" | "failed";
   error?: string;
 };
 
-export type RepositoryEntryTransition =
+export type RepositoryTransition =
   | { kind: "stable" }
   | { kind: "registering"; path: string }
-  | { kind: "opening"; repositoryEntryId: number }
-  | { kind: "trust-required"; repository: RepositoryEntry }
-  | { kind: "granting-trust"; repository: RepositoryEntry };
+  | { kind: "opening"; repositoryId: number }
+  | { kind: "trust-required"; repository: RepositorySummary }
+  | { kind: "granting-trust"; repository: RepositorySummary };
 
-export type RepositoryEntryOverviewOptions = {
+export type RepositoryOverviewOptions = {
   enabled: boolean;
 };
 
@@ -33,48 +33,48 @@ export type RepositoryBranchesState =
   | { kind: "ready"; value: BranchRefs }
   | { kind: "failed"; error: string };
 
-export type RepositoryEntryOverviewBinding = {
-  catalog: RepositoryCatalogState;
-  current: RepositoryEntryOverview | null;
-  transition: RepositoryEntryTransition;
+export type RepositoryOverviewBinding = {
+  navigation: RepositoryNavigationState;
+  current: RepositoryOverview | null;
+  transition: RepositoryTransition;
   branches: RepositoryBranchesState;
-  register(path: string): Promise<RepositoryEntry>;
-  open(repositoryEntryId: number): Promise<RepositoryEntryOpenResult>;
-  confirmTrust(): Promise<RepositoryEntryOverview | undefined>;
+  register(path: string): Promise<RepositorySummary>;
+  open(repositoryId: number): Promise<RepositoryOpenResult>;
+  confirmTrust(): Promise<RepositoryOverview | undefined>;
   dismissTrust(): void;
-  reloadBranches(repositoryEntryId?: number): Promise<void>;
+  reloadBranches(repositoryId?: number): Promise<void>;
   refreshReviews(): Promise<void>;
   recordReviewOpened(review: RecentReviewSummary): void;
   leave(): void;
 };
 
-export type RepositoryEntryOpenResult = OpenRepositoryResult | { kind: "superseded" };
+export type RepositoryOpenResult = OpenRepositoryResult | { kind: "superseded" };
 
-/** 管理 Repository Catalog 与当前 Repository Entry Overview 的原子切换。 */
-export function useRepositoryEntryOverview(
+/** 管理 Repository Navigation 与当前 Repository Overview 的原子切换。 */
+export function useRepositoryOverview(
   adapter: RepositoryApplicationAdapter,
-  options: RepositoryEntryOverviewOptions,
-): RepositoryEntryOverviewBinding {
-  const [catalog, setCatalog] = useState<RepositoryCatalogState>({
+  options: RepositoryOverviewOptions,
+): RepositoryOverviewBinding {
+  const [navigation, setNavigation] = useState<RepositoryNavigationState>({
     repositories: [],
     recentReviews: [],
     status: options.enabled ? "loading" : "idle",
   });
-  const [current, setCurrent] = useState<RepositoryEntryOverview | null>(null);
-  const [transition, setTransition] = useState<RepositoryEntryTransition>({ kind: "stable" });
+  const [current, setCurrent] = useState<RepositoryOverview | null>(null);
+  const [transition, setTransition] = useState<RepositoryTransition>({ kind: "stable" });
   const [branches, setBranches] = useState<RepositoryBranchesState>({ kind: "idle" });
   const mounted = useRef(true);
-  const currentRef = useRef<RepositoryEntryOverview | null>(null);
+  const currentRef = useRef<RepositoryOverview | null>(null);
   const branchAbort = useRef<AbortController>();
   const branchRequest = useRef(0);
   const openRequest = useRef(0);
 
-  /** 同步提交 React state 与异步操作读取的当前 Repository Entry Overview。 */
-  const presentOverview = useCallback((overview: RepositoryEntryOverview) => {
+  /** 同步提交 React state 与异步操作读取的当前 Repository Overview。 */
+  const presentOverview = useCallback((overview: RepositoryOverview) => {
     currentRef.current = overview;
     setCurrent(overview);
     setBranches({ kind: "idle" });
-    setCatalog((value) => ({
+    setNavigation((value) => ({
       ...value,
       repositories: value.repositories.map((entry) => entry.id === overview.repository.id
         ? overview.repository
@@ -92,20 +92,20 @@ export function useRepositoryEntryOverview(
 
   useEffect(() => {
     if (!options.enabled) return;
-    setCatalog((value) => ({ ...value, status: "loading", error: undefined }));
-    void adapter.loadCatalog()
+    setNavigation((value) => ({ ...value, status: "loading", error: undefined }));
+    void adapter.loadNavigation()
       .then(({ repositories, recentReviews }) => {
         if (!mounted.current) return;
-        setCatalog({ repositories: repositories ?? [], recentReviews: recentReviews ?? [], status: "ready" });
+        setNavigation({ repositories: repositories ?? [], recentReviews: recentReviews ?? [], status: "ready" });
       })
       .catch((reason) => {
         if (!mounted.current) return;
-        setCatalog((value) => ({ ...value, status: "failed", error: String(reason) }));
+        setNavigation((value) => ({ ...value, status: "failed", error: String(reason) }));
       });
   }, [adapter, options.enabled]);
 
-  const open = useCallback(async (repositoryEntryId: number): Promise<RepositoryEntryOpenResult> => {
-    if (currentRef.current?.repository.id === repositoryEntryId) {
+  const open = useCallback(async (repositoryId: number): Promise<RepositoryOpenResult> => {
+    if (currentRef.current?.repository.id === repositoryId) {
       openRequest.current += 1;
       setTransition({ kind: "stable" });
       return { kind: "ready", overview: currentRef.current };
@@ -113,9 +113,9 @@ export function useRepositoryEntryOverview(
     branchAbort.current?.abort();
     branchRequest.current += 1;
     const request = ++openRequest.current;
-    setTransition({ kind: "opening", repositoryEntryId });
+    setTransition({ kind: "opening", repositoryId });
     try {
-      const result = await adapter.open(repositoryEntryId);
+      const result = await adapter.open(repositoryId);
       if (openRequest.current !== request) return { kind: "superseded" };
       if (result.kind === "ready") {
         presentOverview(result.overview);
@@ -133,11 +133,11 @@ export function useRepositoryEntryOverview(
   }, [adapter, presentOverview]);
 
   /** 注册具体本地 clone；新 Entry 前置，已有 Entry 仅原位更新。 */
-  const register = useCallback(async (path: string): Promise<RepositoryEntry> => {
+  const register = useCallback(async (path: string): Promise<RepositorySummary> => {
     setTransition({ kind: "registering", path });
     try {
       const repository = await adapter.register(path);
-      setCatalog((value) => ({
+      setNavigation((value) => ({
         ...value,
         repositories: value.repositories.some((entry) => entry.id === repository.id)
           ? value.repositories.map((entry) => entry.id === repository.id ? repository : entry)
@@ -152,7 +152,7 @@ export function useRepositoryEntryOverview(
   }, [adapter]);
 
   /** 确认当前待授权 Repository，并只在完整 Overview 返回后提交切换。 */
-  const confirmTrust = useCallback(async (): Promise<RepositoryEntryOverview | undefined> => {
+  const confirmTrust = useCallback(async (): Promise<RepositoryOverview | undefined> => {
     if (transition.kind !== "trust-required") return undefined;
     const repository = transition.repository;
     const request = ++openRequest.current;
@@ -172,17 +172,17 @@ export function useRepositoryEntryOverview(
   }, [adapter, presentOverview, transition]);
 
   /** 加载当前或显式 Repository 的 canonical Branch refs，并隔离已取消请求的迟到结果。 */
-  const reloadBranches = useCallback(async (repositoryEntryId?: number): Promise<void> => {
+  const reloadBranches = useCallback(async (repositoryId?: number): Promise<void> => {
     const overview = currentRef.current;
-    const resolvedRepositoryEntryId = repositoryEntryId ?? overview?.repository.id;
-    if (resolvedRepositoryEntryId === undefined) return;
+    const resolvedRepositoryId = repositoryId ?? overview?.repository.id;
+    if (resolvedRepositoryId === undefined) return;
     branchAbort.current?.abort();
     const abort = new AbortController();
     branchAbort.current = abort;
     const request = ++branchRequest.current;
     setBranches({ kind: "loading" });
     try {
-      const value = await adapter.loadBranches(resolvedRepositoryEntryId, abort.signal);
+      const value = await adapter.loadBranches(resolvedRepositoryId, abort.signal);
       if (branchRequest.current === request && !abort.signal.aborted) setBranches({ kind: "ready", value });
     } catch (reason) {
       if (branchRequest.current === request && !abort.signal.aborted) {
@@ -193,11 +193,11 @@ export function useRepositoryEntryOverview(
     }
   }, [adapter]);
 
-  /** 一次性同步 Review 最近打开记录及其所属 Repository Entry 摘要。 */
+  /** 一次性同步 Review 最近打开记录及其所属 Repository 摘要。 */
   const recordReviewOpened = useCallback((recent: RecentReviewSummary) => {
     const review = recent.review;
     const overview = currentRef.current;
-    if (overview?.repository.id === recent.repositoryEntryId) {
+    if (overview?.repository.id === recent.repositoryId) {
       const nextOverview = {
         ...overview,
         repository: { ...overview.repository, lastOpenedAt: review.lastOpenedAt },
@@ -206,10 +206,10 @@ export function useRepositoryEntryOverview(
       currentRef.current = nextOverview;
       setCurrent(nextOverview);
     }
-    setCatalog((value) => ({
+    setNavigation((value) => ({
       ...value,
       recentReviews: [recent, ...value.recentReviews.filter((candidate) => candidate.review.reviewId !== review.reviewId)],
-      repositories: value.repositories.map((entry) => entry.id === recent.repositoryEntryId
+      repositories: value.repositories.map((entry) => entry.id === recent.repositoryId
         ? { ...entry, lastOpenedAt: review.lastOpenedAt }
         : entry),
     }));
@@ -219,20 +219,20 @@ export function useRepositoryEntryOverview(
   const refreshReviews = useCallback(async (): Promise<void> => {
     const overview = currentRef.current;
     if (!overview) return;
-    const repositoryEntryId = overview.repository.id;
-    const loaded = await adapter.loadReviews(repositoryEntryId);
+    const repositoryId = overview.repository.id;
+    const loaded = await adapter.loadReviews(repositoryId);
     if (currentRef.current !== overview) return;
     const nextOverview = { ...currentRef.current, ...loaded };
     currentRef.current = nextOverview;
     setCurrent(nextOverview);
   }, [adapter]);
 
-  /** 放弃当前 Workspace Trust 请求但保留已呈现的 Repository Entry Overview。 */
+  /** 放弃当前 Workspace Trust 请求但保留已呈现的 Repository Overview。 */
   const dismissTrust = useCallback(() => {
     setTransition((value) => value.kind === "trust-required" ? { kind: "stable" } : value);
   }, []);
 
-  /** 离开 Repository Entry，并取消所有 Repository-scoped 后台读取。 */
+  /** 离开 Repository，并取消所有 Repository-scoped 后台读取。 */
   const leave = useCallback(() => {
     branchAbort.current?.abort();
     branchRequest.current += 1;
@@ -245,7 +245,7 @@ export function useRepositoryEntryOverview(
 
   return useMemo(
     () => ({
-      catalog,
+      navigation,
       current,
       transition,
       branches,
@@ -258,6 +258,6 @@ export function useRepositoryEntryOverview(
       dismissTrust,
       leave,
     }),
-    [branches, catalog, confirmTrust, current, dismissTrust, leave, open, recordReviewOpened, refreshReviews, register, reloadBranches, transition],
+    [branches, navigation, confirmTrust, current, dismissTrust, leave, open, recordReviewOpened, refreshReviews, register, reloadBranches, transition],
   );
 }

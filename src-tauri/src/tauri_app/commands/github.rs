@@ -15,15 +15,15 @@ pub(crate) fn github_api_base_url() -> String {
     }
 }
 
-/// 为 Repository Entry 的全部 GitHub remotes 独立发现 Pull Requests。
+/// 为 Repository 的全部 GitHub remotes 独立发现 Pull Requests。
 #[tauri::command]
 pub(crate) async fn discover_github_pull_requests(
     auth: tauri::State<'_, Arc<github::GitHubAuth>>,
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
-    repository_entry_id: i64,
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
+    repository_id: i64,
 ) -> Result<Vec<github::PullRequestGroup>, String> {
     let repository_path = application
-        .require_available_path(repository_entry_id)
+        .require_available_path(repository_id)
         .map_err(|error| error.to_string())?;
     let access_token = auth.access_token().await?;
     let api_base_url = github_api_base_url();

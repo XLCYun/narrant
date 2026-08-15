@@ -274,7 +274,7 @@ impl GitHubAuth {
         }
     }
 
-    /// 清除凭据与待完成授权，不修改 Repository Entry 或 Review 历史。
+    /// 清除凭据与待完成授权，不修改 Repository 或 Review 历史。
     pub async fn sign_out(&self) -> Result<(), String> {
         self.authorization_epoch.fetch_add(1, Ordering::AcqRel);
         self.pending_authorizations.lock().await.clear();

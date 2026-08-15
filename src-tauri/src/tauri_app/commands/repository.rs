@@ -1,4 +1,3 @@
-use crate::catalog;
 use crate::operation;
 use crate::repository;
 use crate::review;
@@ -7,7 +6,7 @@ use std::sync::Arc;
 
 use super::review::run_cancellable_command;
 
-/// Repository Entry 本地分支标签所需的 canonical refs 与显式默认选择。
+/// Repository 本地分支标签所需的 canonical refs 与显式默认选择。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BranchRefsResponse {
@@ -18,57 +17,57 @@ pub(crate) struct BranchRefsResponse {
 
 #[tauri::command]
 /// 返回首页所需的 Repository 与全局最近 Review projection。
-pub(crate) fn load_repository_catalog(
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
-) -> Result<repository::RepositoryCatalogProjection, String> {
+pub(crate) fn load_repository_navigation(
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
+) -> Result<repository::RepositoryNavigation, String> {
     application
-        .load_catalog()
+        .load_navigation()
         .map_err(|error| error.to_string())
 }
 
 /// 打开 Repository，并将 availability、Trust 与 Review projection 收进一个 command。
 #[tauri::command]
 pub(crate) fn open_repository_overview(
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
-    repository_entry_id: i64,
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
+    repository_id: i64,
 ) -> Result<repository::RepositoryOpenResult, String> {
     application
-        .open_overview(repository_entry_id)
+        .open_overview(repository_id)
         .map_err(|error| error.to_string())
 }
 
-/// 授予 Repository Workspace Trust 后返回完整 Repository Entry Overview。
+/// 授予 Repository Workspace Trust 后返回完整 Repository Overview。
 #[tauri::command]
 pub(crate) fn grant_repository_workspace_trust_and_open(
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
-    repository_entry_id: i64,
-) -> Result<repository::RepositoryEntryOverview, String> {
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
+    repository_id: i64,
+) -> Result<repository::RepositoryOverview, String> {
     application
-        .grant_trust_and_open(repository_entry_id)
+        .grant_trust_and_open(repository_id)
         .map_err(|error| error.to_string())
 }
 
 /// 一次读取当前 Repository 的统一 Review summaries。
 #[tauri::command]
 pub(crate) fn load_repository_reviews(
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
-    repository_entry_id: i64,
-) -> Result<repository::RepositoryReviewsProjection, String> {
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
+    repository_id: i64,
+) -> Result<repository::RepositoryReviewList, String> {
     application
-        .load_reviews(repository_entry_id)
+        .load_reviews(repository_id)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-/// 返回 Repository Entry 的 canonical local refs。
+/// 返回 Repository 的 canonical local refs。
 pub(crate) async fn list_local_refs(
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
     operations: tauri::State<'_, operation::CancellableOperations>,
     operation_id: String,
-    repository_entry_id: i64,
+    repository_id: i64,
 ) -> Result<BranchRefsResponse, String> {
     let repository_path = application
-        .require_available_path(repository_entry_id)
+        .require_available_path(repository_id)
         .map_err(|error| error.to_string())?;
     run_cancellable_command(&operations, operation_id, |operation| async move {
         review::BranchRefCatalog
@@ -95,12 +94,12 @@ pub(crate) fn cancel_operation(
 }
 
 #[tauri::command]
-/// 注册一个经 Core Git 验证的 Repository Entry。
-pub(crate) fn register_repository_entry(
-    application: tauri::State<'_, Arc<repository::RepositoryEntryApplication>>,
+/// 注册一个经 Core Git 验证的 Repository。
+pub(crate) fn register_repository(
+    application: tauri::State<'_, Arc<repository::RepositoryApplication>>,
     path: String,
-) -> Result<catalog::RepositoryEntry, String> {
+) -> Result<repository::RepositorySummary, String> {
     application
-        .register(std::path::Path::new(&path))
+        .register_repository(std::path::Path::new(&path))
         .map_err(|error| error.to_string())
 }

@@ -1,9 +1,9 @@
 #[tokio::test]
 async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     let fixture = LifecycleFixture::new();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let saved = fixture.save_current_review().await;
-    fixture.catalog.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_snapshot(&saved).unwrap();
     let presentation = lifecycle
         .present(
             PresentReview::Saved {
@@ -14,7 +14,7 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
         .await
         .unwrap();
     let workspace = fixture
-        .catalog
+        .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
     Command::new("git")
@@ -47,12 +47,12 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
 async fn recovery_abandons_unactivated_candidate_without_adding_history() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.catalog.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_snapshot(&saved).unwrap();
     let candidate = fixture
-        .catalog
-        .save_refresh_snapshot(&saved.review_id, &saved.snapshot())
+        .store
+        .save_refresh_snapshot(&saved.review_id, &saved.to_change_comparison())
         .unwrap();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
 
     let report = lifecycle.recover().unwrap();
 
@@ -62,7 +62,7 @@ async fn recovery_abandons_unactivated_candidate_without_adding_history() {
     );
     assert_eq!(
         fixture
-            .catalog
+            .store
             .list_review_snapshot_identities(&saved.review_id)
             .unwrap(),
         vec![saved.snapshot_identity()]
@@ -73,8 +73,8 @@ async fn recovery_abandons_unactivated_candidate_without_adding_history() {
 async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
-    fixture.catalog.activate_snapshot(&saved).unwrap();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    fixture.store.activate_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let current = lifecycle
         .present(
             PresentReview::Saved {
@@ -112,14 +112,14 @@ async fn branch_refresh_converges_catalog_workspace_and_runtime_reader() {
     assert_ne!(refreshed.snapshot_id, current.snapshot_id);
     assert_eq!(
         fixture
-            .catalog
+            .store
             .open_review(&saved.review_id)
             .unwrap()
             .snapshot_identity(),
         refreshed.snapshot_id
     );
     let workspace = fixture
-        .catalog
+        .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
     assert_eq!(

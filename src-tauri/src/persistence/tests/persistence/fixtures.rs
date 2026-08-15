@@ -1,4 +1,5 @@
 use super::*;
+use crate::review::PullRequestState;
 use std::process::Command;
 
 #[test]
@@ -67,10 +68,10 @@ fn version_three_migration_preserves_existing_snapshots_as_activated_history() {
         .unwrap();
     drop(connection);
 
-    let catalog = RepositoryCatalog::open(database.path()).unwrap();
+    let store = ReviewStore::open(database.path()).unwrap();
 
     assert_eq!(
-        catalog.list_review_snapshot_identities("review-1").unwrap(),
+        store.list_review_snapshot_identities("review-1").unwrap(),
         vec!["snapshot-1"]
     );
 }

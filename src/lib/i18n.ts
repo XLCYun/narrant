@@ -60,7 +60,7 @@ export const resources = {
       repositoryRegistrationFailed: "无法打开所选仓库。", startReview: "开始审核", continueReview: "继续审核",
       sameBranchSelection: "Head 与 Base 不能是同一分支。", transientError: "操作失败",
     },
-    catalog: {
+    repository: {
       sidebar: "仓库侧边栏", tasks: "仓库任务", tabs: { pullRequests: "Pull Requests", branches: "本地分支", history: "审核历史" },
       refreshing: "正在后台刷新 Pull Requests。", stale: "在线元数据可能不是最新。", updateAvailable: "有更新",
       draft: "草稿", noPullRequests: "没有可审核的 Pull Request", noPullRequestsDescription: "当前 GitHub 仓库暂时没有可审核的 Pull Request。",
@@ -122,7 +122,7 @@ export const resources = {
       repositoryRegistrationFailed: "The selected repository could not be opened.", startReview: "Start review", continueReview: "Continue review",
       sameBranchSelection: "Head and Base must be different branches.", transientError: "Operation failed",
     },
-    catalog: {
+    repository: {
       sidebar: "Repository sidebar", tasks: "Repository tasks", tabs: { pullRequests: "Pull Requests", branches: "Local branches", history: "Review history" },
       refreshing: "Refreshing Pull Requests in the background.", stale: "Online metadata may be out of date.", updateAvailable: "Update available",
       draft: "Draft", noPullRequests: "No Pull Requests to review", noPullRequestsDescription: "The current GitHub repositories have no Pull Requests to review.",
@@ -178,7 +178,7 @@ void i18n.use(initReactI18next).init({
   lng: resolveLocale(window.localStorage?.getItem(localePreferenceKey) ?? undefined, navigator.language),
   fallbackLng: "zh-CN",
   defaultNS: "common",
-  ns: ["common", "catalog", "review", "github"],
+  ns: ["common", "repository", "review", "github"],
   interpolation: { escapeValue: false },
 });
 

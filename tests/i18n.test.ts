@@ -31,8 +31,8 @@ describe("离线国际化边界", () => {
     expect(formatRelativeTime(earlier, now, "zh-CN")).toBe("2小时前");
   });
 
-  it("离线提供 common、catalog、review、github 四个 namespace", () => {
-    expect(i18n.t("catalog:tabs.branches", { lng: "en" })).toBe("Local branches");
+  it("离线提供 common、repository、review、github 四个 namespace", () => {
+    expect(i18n.t("repository:tabs.branches", { lng: "en" })).toBe("Local branches");
     expect(i18n.t("github:connect", { lng: "en" })).toBe("Connect GitHub");
     expect(i18n.t("review:refresh", { lng: "zh-CN" })).toBe("刷新审核");
     expect(i18n.t("common:retry", { lng: "zh-CN" })).toBe("重试");

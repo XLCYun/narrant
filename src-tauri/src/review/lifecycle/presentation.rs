@@ -9,18 +9,18 @@ impl ReviewLifecycle {
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let saved = match request {
             PresentReview::Saved { review_id } => self
-                .catalog
+                .store
                 .open_review(&review_id)
                 .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?,
             PresentReview::Branch {
-                repository_entry_id,
+                repository_id,
                 base_ref,
                 head_ref,
             } => {
-                let repository = self.require_trusted_repository(repository_entry_id)?;
+                let repository = self.require_trusted_repository(repository_id)?;
                 if let Some(saved) = self
-                    .catalog
-                    .find_branch_review(repository_entry_id, &base_ref, &head_ref)
+                    .store
+                    .find_branch_review(repository_id, &base_ref, &head_ref)
                     .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 {
                     saved
@@ -35,20 +35,20 @@ impl ReviewLifecycle {
                         )
                         .await
                         .map_err(ReviewLifecycleError::branch)?;
-                    self.catalog
-                        .save_branch_review(repository_entry_id, &resolved.comparison)
+                    self.store
+                        .save_branch_review(repository_id, &resolved.comparison)
                         .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
                 }
             }
             PresentReview::PullRequest {
-                repository_entry_id,
+                repository_id,
                 selection,
             } => {
-                let repository_path = self.require_trusted_repository(repository_entry_id)?;
+                let repository_path = self.require_trusted_repository(repository_id)?;
                 if let Some(saved) = self
-                    .catalog
+                    .store
                     .find_pull_request_review(
-                        repository_entry_id,
+                        repository_id,
                         &selection.repository.owner,
                         &selection.repository.name,
                         selection.number,
@@ -63,9 +63,9 @@ impl ReviewLifecycle {
                         .resolve(&repository_path, &selection, &operation)
                         .await
                         .map_err(ReviewLifecycleError::pull_request)?;
-                    self.catalog
+                    self.store
                         .save_pull_request_review(
-                            repository_entry_id,
+                            repository_id,
                             &resolved.metadata,
                             &resolved.comparison,
                         )
@@ -85,7 +85,7 @@ impl ReviewLifecycle {
         cancellation: &CancellationToken,
     ) -> Result<FileChangeContent, ReviewLifecycleError> {
         let current = self
-            .catalog
+            .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
         if current.snapshot_identity() != snapshot_id {
@@ -112,16 +112,16 @@ impl ReviewLifecycle {
     /// 将 durable current Snapshot 物化为 workspace 与运行时读取句柄。
     fn materialize(
         &self,
-        saved: SavedBranchReview,
+        saved: PersistedReviewState,
         cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
-        let repository_path = self.require_trusted_repository(saved.repository_entry_id)?;
+        let repository_path = self.require_trusted_repository(saved.repository_id)?;
         let entry = self
             .repository_application
-            .inspect_entry(saved.repository_entry_id)
+            .get_repository(saved.repository_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         let workspace = self
-            .catalog
+            .store
             .review_workspace_path(&saved.review_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         let mut reviews = self
@@ -131,17 +131,17 @@ impl ReviewLifecycle {
         let adapter = GitProcessAdapter::new(&repository_path);
         if workspace.exists() {
             adapter
-                .validate_owned_worktree(&workspace, &entry.common_directory, cancellation)
+                .validate_owned_worktree(&workspace, &entry.git_common_directory, cancellation)
                 .map_err(|error| ReviewLifecycleError::WorkspaceTransition(error.to_string()))?;
         }
         adapter
             .create_detached_worktree(&workspace, &saved.head_revision, cancellation)
             .map_err(ReviewLifecycleError::git)?;
         if saved.created {
-            if let Err(error) = self.catalog.activate_snapshot(&saved) {
+            if let Err(error) = self.store.activate_snapshot(&saved) {
                 let cleanup = adapter.remove_owned_worktree(
                     &workspace,
-                    &entry.common_directory,
+                    &entry.git_common_directory,
                     &CancellationToken::default(),
                 );
                 return Err(ReviewLifecycleError::new(match cleanup {
@@ -152,7 +152,7 @@ impl ReviewLifecycle {
                 }));
             }
         }
-        let snapshot = saved.snapshot();
+        let snapshot = saved.to_change_comparison();
         reviews.insert(
             saved.review_id.clone(),
             Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),
@@ -160,14 +160,14 @@ impl ReviewLifecycle {
         reviews.retain(|review_id, _| review_id == &saved.review_id);
         drop(reviews);
         let mut cleanup_warnings = Vec::new();
-        if let Err(error) = self.catalog.mark_review_opened(&saved.review_id) {
+        if let Err(error) = self.store.mark_review_opened(&saved.review_id) {
             cleanup_warnings.push(error.to_string());
         }
         cleanup_warnings.extend(self.cleanup_workspaces(Some(&saved.review_id))?);
         Ok(presentation_from_saved(saved, cleanup_warnings))
     }
 
-    /// 返回可用 Repository Entry 的当前 canonical path。
+    /// 返回可用 Repository 的当前 canonical path。
     pub(super) fn require_available_repository(
         &self,
         id: i64,
@@ -193,7 +193,9 @@ impl ReviewLifecycle {
             RepositoryApplicationError::WorkspaceTrustRequired => {
                 ReviewLifecycleError::WorkspaceTrustRequired
             }
-            RepositoryApplicationError::Catalog(message) => ReviewLifecycleError::Catalog(message),
+            RepositoryApplicationError::Persistence(message) => {
+                ReviewLifecycleError::Persistence(message)
+            }
             RepositoryApplicationError::Operation(message) => {
                 ReviewLifecycleError::Operation(message)
             }
@@ -203,13 +205,13 @@ impl ReviewLifecycle {
 
 /// 将 durable Snapshot 转为稳定的生命周期输出。
 pub(super) fn presentation_from_saved(
-    saved: SavedBranchReview,
+    saved: PersistedReviewState,
     cleanup_warnings: Vec<String>,
 ) -> ReviewPresentation {
     ReviewPresentation {
         review_id: saved.review_id.clone(),
         snapshot_id: saved.snapshot_identity(),
-        snapshot: saved.snapshot(),
+        snapshot: saved.to_change_comparison(),
         pull_request: saved.pull_request,
         cleanup_warnings,
     }

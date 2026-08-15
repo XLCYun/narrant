@@ -15,7 +15,7 @@ pub struct ResolvedBranchSelection {
     pub comparison: ChangeComparison,
 }
 
-/// Repository Entry 的 canonical 分支选项及 Git 明确报告的默认、当前分支。
+/// Repository 的 canonical 分支选项及 Git 明确报告的默认、当前分支。
 #[derive(Debug, PartialEq, Eq)]
 pub struct BranchRefs {
     pub refs: Vec<String>,
@@ -102,12 +102,12 @@ impl BranchRefCatalog {
         let current_ref = text_output(
             adapter
                 .run(["symbolic-ref", "--quiet", "HEAD"], cancellation)
-                .map_err(|_| GitCommandError::new("Repository Entry 当前未检出本地分支"))?,
+                .map_err(|_| GitCommandError::new("Repository 当前未检出本地分支"))?,
             "当前分支",
         )?;
         if !refs.contains(&current_ref) {
             return Err(GitCommandError::new(
-                "Repository Entry 当前分支不是 canonical 本地分支",
+                "Repository 当前分支不是 canonical 本地分支",
             ));
         }
         let default_ref = default_branch_ref(&adapter, &refs, &current_ref, cancellation)?;

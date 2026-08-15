@@ -23,12 +23,12 @@ describe("Typed Tauri transport", () => {
     });
     const transport = createTauriTransport(rawInvoke);
 
-    await expect(transport.invoke("load_repository_catalog", {})).resolves.toEqual({
+    await expect(transport.invoke("load_repository_navigation", {})).resolves.toEqual({
       repositories: [],
       recentReviews: [],
     });
 
-    expect(rawInvoke).toHaveBeenCalledWith("load_repository_catalog", {});
+    expect(rawInvoke).toHaveBeenCalledWith("load_repository_navigation", {});
   });
 
   it("为可取消 command 分配 operation identity 并在 abort 时通知后端", async () => {
@@ -40,7 +40,7 @@ describe("Typed Tauri transport", () => {
     const abort = new AbortController();
 
     const result = transport.invokeCancellable("list_local_refs", {
-      repositoryEntryId: 17,
+      repositoryId: 17,
     }, abort.signal);
     abort.abort();
     resolveCommand({ refs: ["refs/heads/main"], defaultRef: "refs/heads/main", currentRef: "refs/heads/main" });
@@ -59,12 +59,12 @@ describe("Typed Tauri transport", () => {
 
     void first.invokeCancellable(
       "list_local_refs",
-      { repositoryEntryId: 1 },
+      { repositoryId: 1 },
       new AbortController().signal,
     );
     void second.invokeCancellable(
       "list_local_refs",
-      { repositoryEntryId: 1 },
+      { repositoryId: 1 },
       new AbortController().signal,
     );
 
@@ -79,7 +79,7 @@ describe("Typed Tauri transport", () => {
     abort.abort();
 
     await expect(transport.invokeCancellable("list_local_refs", {
-      repositoryEntryId: 17,
+      repositoryId: 17,
     }, abort.signal)).rejects.toMatchObject({ name: "AbortError" });
     expect(rawInvoke).not.toHaveBeenCalled();
   });

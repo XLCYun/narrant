@@ -118,8 +118,8 @@ function BranchOption({ refName, currentRef, defaultRef, highlighted = false }: 
   const { t } = useTranslation();
   return <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
     <TruncatedBranchName name={branchName(refName)} highlighted={highlighted} />
-    {refName === currentRef && <Badge className="h-5 shrink-0 py-0 leading-none" variant="secondary">{t("catalog:currentBranch")}</Badge>}
-    {refName === defaultRef && <Badge className="h-5 shrink-0 py-0 leading-none" variant="secondary">{t("catalog:defaultBranch")}</Badge>}
+    {refName === currentRef && <Badge className="h-5 shrink-0 py-0 leading-none" variant="secondary">{t("repository:currentBranch")}</Badge>}
+    {refName === defaultRef && <Badge className="h-5 shrink-0 py-0 leading-none" variant="secondary">{t("repository:defaultBranch")}</Badge>}
   </span>;
 }
 
@@ -138,12 +138,12 @@ function BranchCombobox(props: BranchComboboxProps) {
     /** 按短分支名执行不区分大小写的自然排序。 */
     const sortRefs = (refs: string[]) => [...refs].sort((left, right) => branchCollator.compare(branchName(left), branchName(right)));
     return [
-      { value: t("catalog:localBranchesGroup"), items: sortRefs(props.refs.filter(isLocalBranch)) },
-      { value: t("catalog:remoteTrackingBranchesGroup"), items: sortRefs(props.refs.filter((ref) => !isLocalBranch(ref))) },
+      { value: t("repository:localBranchesGroup"), items: sortRefs(props.refs.filter(isLocalBranch)) },
+      { value: t("repository:remoteTrackingBranchesGroup"), items: sortRefs(props.refs.filter((ref) => !isLocalBranch(ref))) },
     ].filter((group) => group.items.length > 0);
   }, [props.refs, t]);
 
-  const label = props.role === "head" ? t("catalog:headBranch") : t("catalog:baseBranch");
+  const label = props.role === "head" ? t("repository:headBranch") : t("repository:baseBranch");
 
   useLayoutEffect(() => {
     const row = wrapperRef.current?.parentElement;
@@ -203,7 +203,7 @@ function BranchCombobox(props: BranchComboboxProps) {
       >
         {props.value
           ? <BranchOption refName={props.value} currentRef={props.currentRef} defaultRef={props.defaultRef} highlighted={triggerFocused} />
-          : <span className="text-muted-foreground">{props.role === "head" ? t("catalog:selectHead") : t("catalog:selectBase")}</span>}
+          : <span className="text-muted-foreground">{props.role === "head" ? t("repository:selectHead") : t("repository:selectBase")}</span>}
       </ComboboxTrigger>
       <ComboboxContent
         align={props.role === "base" && horizontalLayout ? "end" : "start"}
@@ -213,10 +213,10 @@ function BranchCombobox(props: BranchComboboxProps) {
           autoFocus
           showTrigger={false}
           showClear={query.length > 0}
-          placeholder={t("catalog:searchBranches")}
-          aria-label={t("catalog:searchBranches")}
+          placeholder={t("repository:searchBranches")}
+          aria-label={t("repository:searchBranches")}
         />
-        <ComboboxEmpty>{t("catalog:noMatchingBranches")}</ComboboxEmpty>
+        <ComboboxEmpty>{t("repository:noMatchingBranches")}</ComboboxEmpty>
         <ComboboxList className="max-h-[min(22rem,calc(var(--available-height)-3rem))]">
           {(group: BranchGroup) => <ComboboxGroup key={group.value} items={group.items}>
             <ComboboxLabel className="sticky top-0 z-10 bg-popover/95">{group.value}</ComboboxLabel>
@@ -248,21 +248,21 @@ export function BranchReviewSelector(props: Props) {
     .map(branchName))].join(", ");
 
   return <TooltipProvider delay={400}>
-    <section aria-label={t("catalog:branchSelectionTitle")} className="@container/branches w-full max-w-[72rem] rounded-xl border bg-card/40 p-5">
+    <section aria-label={t("repository:branchSelectionTitle")} className="@container/branches w-full max-w-[72rem] rounded-xl border bg-card/40 p-5">
     <div className="flex items-center justify-between gap-3">
-      <h3 className="font-heading text-base font-semibold">{t("catalog:branchSelectionTitle")}</h3>
+      <h3 className="font-heading text-base font-semibold">{t("repository:branchSelectionTitle")}</h3>
       <Tooltip>
         <TooltipTrigger render={<Button
           type="button"
           size="icon-sm"
           variant="ghost"
-          aria-label={props.reloading ? t("catalog:reloadingBranches") : t("catalog:reloadBranches")}
+          aria-label={props.reloading ? t("repository:reloadingBranches") : t("repository:reloadBranches")}
           disabled={props.reloading}
           onClick={props.onReload}
         />}>
           {props.reloading ? <Spinner aria-hidden /> : <Icon icon={Refresh01Icon} />}
         </TooltipTrigger>
-        <TooltipContent>{t("catalog:reloadBranches")}</TooltipContent>
+        <TooltipContent>{t("repository:reloadBranches")}</TooltipContent>
       </Tooltip>
     </div>
     {props.reloadError && <p role="alert" className="mt-3 text-sm text-destructive">{props.reloadError}</p>}
@@ -277,35 +277,35 @@ export function BranchReviewSelector(props: Props) {
         : action === "fallback"
           ? <div role="status" className="text-sm text-amber-700 dark:text-amber-300">
             <p>{selectedRemoteBranches
-              ? t("catalog:remoteUpdateCheckFailed", { branch: selectedRemoteBranches })
-              : t("catalog:branchUpdateCheckFailed")}</p>
-            <p className="mt-1">{t("catalog:reviewMayBeStale")}</p>
+              ? t("repository:remoteUpdateCheckFailed", { branch: selectedRemoteBranches })
+              : t("repository:branchUpdateCheckFailed")}</p>
+            <p className="mt-1">{t("repository:reviewMayBeStale")}</p>
           </div>
         : action === "refresh"
           ? <div role="status" className="text-sm">
-            <p className="font-medium">{t("catalog:branchUpdateAvailable")}</p>
-            <p className="mt-1 text-muted-foreground">{t("catalog:branchUpdateDescription")}</p>
+            <p className="font-medium">{t("repository:branchUpdateAvailable")}</p>
+            <p className="mt-1 text-muted-foreground">{t("repository:branchUpdateDescription")}</p>
           </div>
         : continuationState.kind === "checking" && continuationState.showMessage
-          ? <p role="status" className="text-sm text-muted-foreground">{t("catalog:checkingReviewUpdateMessage")}</p>
+          ? <p role="status" className="text-sm text-muted-foreground">{t("repository:checkingReviewUpdateMessage")}</p>
         : selectionMissing
-          ? <p className="text-sm text-muted-foreground">{t("catalog:chooseBothBranches")}</p>
-          : <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{t("catalog:mergeConfirmation", {
+          ? <p className="text-sm text-muted-foreground">{t("repository:chooseBothBranches")}</p>
+          : <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{t("repository:mergeConfirmation", {
             head: branchName(props.headRef),
             base: branchName(props.baseRef),
           })}</p>}
       <Button
         type="button"
         className="w-full sm:w-auto"
-        aria-label={props.opening ? t("common:openingReview") : action === "checking" ? t("catalog:checkingReviewUpdate") : undefined}
+        aria-label={props.opening ? t("common:openingReview") : action === "checking" ? t("repository:checkingReviewUpdate") : undefined}
         aria-busy={props.opening || undefined}
         disabled={selectionMissing || action === "incomplete" || action === "invalid" || action === "checking" || props.reviewNavigationBusy}
         onClick={() => void props.continuation.submit()}
       >
         {(action === "checking" || props.opening) && <Spinner aria-hidden />}
         {action === "refresh"
-          ? t("catalog:updateAndContinueReview")
-          : action === "fallback" ? t("catalog:continueExistingReview")
+          ? t("repository:updateAndContinueReview")
+          : action === "fallback" ? t("repository:continueExistingReview")
           : action === "continue" || action === "checking"
             ? t("common:continueReview") : t("common:startReview")}
       </Button>

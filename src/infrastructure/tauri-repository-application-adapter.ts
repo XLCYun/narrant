@@ -4,35 +4,35 @@ import type {
   RepositoryApplicationAdapter,
 } from "@/repository/repository-application";
 
-/** 创建以 Repository Entry 与 Workspace Trust 为 seam 的 Tauri adapter。 */
+/** 创建以 Repository 与 Workspace Trust 为 seam 的 Tauri adapter。 */
 export function createTauriRepositoryApplicationAdapter(
   transport: TypedTauriTransport = tauriTransport,
 ): RepositoryApplicationAdapter {
   return {
-    async loadCatalog() {
-      return transport.invoke("load_repository_catalog", {});
+    async loadNavigation() {
+      return transport.invoke("load_repository_navigation", {});
     },
 
     register(path) {
-      return transport.invoke("register_repository_entry", { path });
+      return transport.invoke("register_repository", { path });
     },
 
-    async open(repositoryEntryId): Promise<OpenRepositoryResult> {
-      return transport.invoke("open_repository_overview", { repositoryEntryId });
+    async open(repositoryId): Promise<OpenRepositoryResult> {
+      return transport.invoke("open_repository_overview", { repositoryId });
     },
 
     async grantTrust(repository) {
       return transport.invoke("grant_repository_workspace_trust_and_open", {
-        repositoryEntryId: repository.id,
+        repositoryId: repository.id,
       });
     },
 
-    loadReviews(repositoryEntryId) {
-      return transport.invoke("load_repository_reviews", { repositoryEntryId });
+    loadReviews(repositoryId) {
+      return transport.invoke("load_repository_reviews", { repositoryId });
     },
 
-    loadBranches(repositoryEntryId, signal) {
-      return transport.invokeCancellable("list_local_refs", { repositoryEntryId }, signal);
+    loadBranches(repositoryId, signal) {
+      return transport.invokeCancellable("list_local_refs", { repositoryId }, signal);
     },
 
   };

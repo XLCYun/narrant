@@ -1,25 +1,26 @@
 use crate::core_git::{CancellationToken, GitProcessAdapter};
-use crate::review::{ChangeComparison, FileChange, FileChangeStatus, FileContentRef};
+use crate::review::{
+    ChangeComparison, FileChange, FileChangeStatus, FileContentRef, PullRequestMetadata,
+};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CURRENT_SCHEMA_VERSION: i64 = 4;
-const ENTRY_COLUMNS: &str = "id, canonical_path, common_directory, created_at, last_opened_at";
+const CURRENT_SCHEMA_VERSION: i64 = 5;
+const REPOSITORY_COLUMNS: &str =
+    "id, canonical_path, git_common_directory, created_at_millis, last_opened_at_millis";
 
-/// 已注册的具体本地 clone，以及当前是否仍可访问。
+/// 注册到 Narrant 并拥有 Review 历史的具体本地 Git 仓库。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RepositoryEntry {
+pub struct Repository {
     pub id: i64,
     pub canonical_path: PathBuf,
-    pub common_directory: PathBuf,
-    pub created_at: i64,
-    pub last_opened_at: i64,
-    pub available: bool,
-    pub unavailable_reason: Option<String>,
+    pub git_common_directory: PathBuf,
+    pub created_at_millis: i64,
+    pub last_opened_at_millis: i64,
 }
 
 /// application 层一次查询所需的持久化 Review 与 current Snapshot 投影。
@@ -27,11 +28,11 @@ pub struct RepositoryEntry {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewSummary {
     pub review_id: String,
-    pub repository_entry_id: i64,
+    pub repository_id: i64,
     pub repository_path: PathBuf,
     pub base_ref: String,
     pub head_ref: String,
-    pub last_opened_at: i64,
+    pub last_opened_at_millis: i64,
     pub pull_request: Option<PullRequestMetadata>,
     pub base_revision: String,
     pub comparison_base: String,
@@ -40,18 +41,18 @@ pub struct ReviewSummary {
 
 /// 清理 Review Workspace 前必须同时匹配的四项持久化所有权证据。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WorkspaceCleanupTarget {
+pub struct ReviewWorkspaceCleanupTarget {
     pub review_id: String,
     pub repository_path: PathBuf,
-    pub common_directory: PathBuf,
+    pub git_common_directory: PathBuf,
     pub workspace_path: PathBuf,
 }
 
 /// 持久化 Review 及其 current immutable Snapshot 的完整本地读取模型。
 #[derive(Clone)]
-pub struct SavedBranchReview {
+pub struct PersistedReviewState {
     pub review_id: String,
-    pub repository_entry_id: i64,
+    pub repository_id: i64,
     pub base_ref: String,
     pub head_ref: String,
     pub base_revision: String,
@@ -64,14 +65,14 @@ pub struct SavedBranchReview {
     expected_current_snapshot_id: Option<i64>,
 }
 
-impl SavedBranchReview {
+impl PersistedReviewState {
     /// 返回可供 IPC 校验的 immutable Snapshot identity。
     pub fn snapshot_identity(&self) -> String {
         format!("snapshot-{}", self.snapshot_id)
     }
 
     /// 将数据库模型还原成 Repository Operations 可读取的不可变 Snapshot。
-    pub fn snapshot(&self) -> ChangeComparison {
+    pub fn to_change_comparison(&self) -> ChangeComparison {
         ChangeComparison {
             base_ref: self.base_ref.clone(),
             head_ref: self.head_ref.clone(),
@@ -83,41 +84,21 @@ impl SavedBranchReview {
     }
 }
 
-/// Pull Request Selection 随 Review 保存的协作 metadata，不包含代码内容。
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PullRequestMetadata {
-    pub owner: String,
-    pub repository: String,
-    pub number: u64,
-    pub title: String,
-    pub description: String,
-    pub author: String,
-    pub state: String,
-    pub draft: bool,
-    pub url: String,
-    pub base_ref: String,
-    pub head_ref: String,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    pub synchronized_at: i64,
-}
-
 /// 经 Core Git 验证后的 working-tree repository 身份。
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct InspectedRepository {
-    canonical_path: PathBuf,
-    common_directory: PathBuf,
+pub(crate) struct VerifiedRepositoryLocation {
+    pub(crate) canonical_path: PathBuf,
+    pub(crate) git_common_directory: PathBuf,
 }
 
-/// Repository Catalog 的持久化或仓库验证错误。
+/// Persistence 的持久化或仓库验证错误。
 #[derive(Debug)]
-pub struct RepositoryCatalogError {
+pub struct PersistenceError {
     message: String,
 }
 
-impl RepositoryCatalogError {
-    /// 创建可直接显示给用户的 Catalog 错误。
+impl PersistenceError {
+    /// 创建可直接显示给用户的 Persistence 错误。
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -125,26 +106,26 @@ impl RepositoryCatalogError {
     }
 }
 
-impl std::fmt::Display for RepositoryCatalogError {
+impl std::fmt::Display for PersistenceError {
     /// 输出稳定且可恢复的中文诊断。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
-impl std::error::Error for RepositoryCatalogError {}
+impl std::error::Error for PersistenceError {}
 
-/// 应用级 SQLite Repository Catalog；所有写入通过事务原子完成。
-pub struct RepositoryCatalog {
+/// 应用级 SQLite Persistence；所有写入通过事务原子完成。
+pub struct ReviewStore {
     connection: Mutex<Connection>,
     workspace_root: PathBuf,
 }
 
-impl std::fmt::Debug for RepositoryCatalog {
+impl std::fmt::Debug for ReviewStore {
     /// 避免调试输出泄露数据库内部状态。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("RepositoryCatalog")
+            .debug_struct("ReviewStore")
             .finish_non_exhaustive()
     }
 }
@@ -152,15 +133,16 @@ impl std::fmt::Debug for RepositoryCatalog {
 mod mapping;
 mod migration;
 mod queries;
-mod repository_entries;
+mod repositories;
+mod review_snapshots;
 mod reviews;
-mod snapshots;
 
+pub(crate) use mapping::verify_repository_location;
 use mapping::*;
 use migration::migrate;
 
 #[cfg(test)]
-#[path = "tests/catalog/mod.rs"]
+#[path = "tests/persistence/mod.rs"]
 mod tests;
 
 #[cfg(test)]

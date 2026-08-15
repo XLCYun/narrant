@@ -6,6 +6,11 @@ pub(crate) use branch::BranchRefs;
 pub(crate) use branch::{
     BranchRefCatalog, BranchSelection, BranchSelectionResolutionError, BranchSelectionResolver,
 };
+#[allow(
+    unused_imports,
+    reason = "供 Persistence 测试构造强类型 Pull Request 状态"
+)]
 pub(crate) use pull_request::{
-    PullRequestResolutionError, PullRequestSelection, PullRequestSelectionResolver,
+    PullRequestMetadata, PullRequestResolutionError, PullRequestSelection,
+    PullRequestSelectionResolver, PullRequestState,
 };

@@ -19,7 +19,7 @@ export function createTauriReviewApplicationAdapter(
       } else if (target.kind === "branch-selection") {
         if (target.mode.kind === "start") {
           snapshot = await transport.invokeCancellable("compare_local_refs", {
-              repositoryEntryId: target.repositoryEntryId,
+              repositoryId: target.repositoryId,
               baseRef: target.baseRef,
               headRef: target.headRef,
             }, signal);
@@ -33,7 +33,7 @@ export function createTauriReviewApplicationAdapter(
         }
       } else {
         snapshot = await transport.invokeCancellable("open_pull_request_review", {
-          repositoryEntryId: target.repositoryEntryId,
+          repositoryId: target.repositoryId,
           repository: { owner: target.owner, name: target.repository },
           number: target.number,
         }, signal);

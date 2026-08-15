@@ -12,11 +12,11 @@ const groups: PullRequestGroup[] = [{
     number: 42,
     title: "Typed discovery",
     description: "",
-    author: "octocat",
+    authorUsername: "octocat",
     state: "open",
-    draft: false,
-    url: "https://github.com/octo-org/octo-repo/pull/42",
-    updatedAt: "2026-08-04T00:00:00Z",
+    isDraft: false,
+    webUrl: "https://github.com/octo-org/octo-repo/pull/42",
+    githubUpdatedAt: "2026-08-04T00:00:00Z",
     base: { ref: "main", sha: "base" },
     head: { ref: "feature", sha: "head" },
   }],
@@ -31,6 +31,6 @@ describe("Tauri Pull Request Discovery application adapter", () => {
     } as unknown as TypedTauriTransport);
 
     await expect(adapter.discover(17)).resolves.toEqual(groups);
-    expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryEntryId: 17 });
+    expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 17 });
   });
 });

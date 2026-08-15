@@ -5,9 +5,9 @@ export function createTauriPullRequestDiscoveryApplicationAdapter(
   transport: TypedTauriTransport = tauriTransport,
 ): PullRequestDiscoveryApplicationAdapter {
   return {
-    /** 列出 Repository Entry 全部 GitHub remotes 对应的 Pull Requests。 */
-    discover(repositoryEntryId: number) {
-      return transport.invoke("discover_github_pull_requests", { repositoryEntryId });
+    /** 列出 Repository 全部 GitHub remotes 对应的 Pull Requests。 */
+    discover(repositoryId: number) {
+      return transport.invoke("discover_github_pull_requests", { repositoryId });
     },
   };
 }

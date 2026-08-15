@@ -1,7 +1,7 @@
-mod catalog;
 mod core_git;
 mod github;
 mod operation;
+mod persistence;
 mod repository;
 mod review;
 mod tauri_app;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::catalog::RepositoryCatalog;
+use crate::persistence::ReviewStore;
 use crate::review::ChangeComparison;
 use std::process::Command;
 use std::sync::Arc;
@@ -38,9 +38,9 @@ fn grant_trust_and_open_returns_complete_repository_entry_overview() {
 
     let overview = application.grant_trust_and_open(fixture.entry.id).unwrap();
 
-    assert_eq!(overview.repository.id, fixture.entry.id);
+    assert_eq!(overview.repository.repository.id, fixture.entry.id);
     assert_eq!(
-        overview.repository.canonical_path,
+        overview.repository.repository.canonical_path,
         fixture.entry.canonical_path
     );
     assert!(overview.reviews.is_empty());
@@ -59,21 +59,18 @@ fn load_catalog_and_reviews_share_the_repository_application_projection() {
         file_changes: Vec::new(),
     };
     let saved = fixture
-        .catalog
+        .store
         .save_branch_review(fixture.entry.id, &snapshot)
         .unwrap();
-    fixture.catalog.activate_snapshot(&saved).unwrap();
+    fixture.store.activate_snapshot(&saved).unwrap();
     let application = fixture.application();
 
-    let catalog = application.load_catalog().unwrap();
+    let store = application.load_navigation().unwrap();
     let reviews = application.load_reviews(fixture.entry.id).unwrap();
 
-    assert_eq!(catalog.repositories, vec![fixture.entry.clone()]);
-    assert_eq!(
-        catalog.recent_reviews[0].repository_entry_id,
-        fixture.entry.id
-    );
-    assert_eq!(catalog.recent_reviews[0].review.review_id, saved.review_id);
+    assert_eq!(store.repositories[0].repository, fixture.entry);
+    assert_eq!(store.recent_reviews[0].repository_id, fixture.entry.id);
+    assert_eq!(store.recent_reviews[0].review.review_id, saved.review_id);
     assert_eq!(reviews.reviews.len(), 1);
     assert_eq!(reviews.reviews[0].review_id, saved.review_id);
     assert_eq!(
@@ -97,38 +94,39 @@ fn load_catalog_and_reviews_share_the_repository_application_projection() {
 struct Fixture {
     _application_data: tempfile::TempDir,
     repository: tempfile::TempDir,
-    catalog: Arc<RepositoryCatalog>,
-    entry: RepositoryEntry,
+    store: Arc<ReviewStore>,
+    entry: Repository,
 }
 
 impl Fixture {
-    /// 初始化未授予 Workspace Trust 的 Repository Entry。
+    /// 初始化未授予 Workspace Trust 的 Repository。
     fn new() -> Self {
         let application_data = tempfile::TempDir::new().unwrap();
         let repository = test_repository();
-        let catalog = Arc::new(
-            RepositoryCatalog::open(&application_data.path().join("catalog.sqlite3")).unwrap(),
-        );
-        let entry = catalog.register(repository.path()).unwrap();
+        let store =
+            Arc::new(ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap());
+        let entry = store
+            .upsert_repository(&verify_repository_location(repository.path()).unwrap())
+            .unwrap();
         Self {
             _application_data: application_data,
             repository,
-            catalog,
+            store,
             entry,
         }
     }
 
     /// 创建与 production 相同的共享 Catalog application。
-    fn application(&self) -> RepositoryEntryApplication {
-        RepositoryEntryApplication::new(self.catalog.clone())
+    fn application(&self) -> RepositoryApplication {
+        RepositoryApplication::new(self.store.clone())
     }
 
     /// 授予测试 Repository 后续 projection 所需的 Trust。
     fn grant_trust(&self) {
-        self.catalog.grant_workspace_trust(self.entry.id).unwrap();
+        self.store.insert_workspace_trust(self.entry.id).unwrap();
     }
 
-    /// 删除 working tree，模拟已保存但当前不可用的 Repository Entry。
+    /// 删除 working tree，模拟已保存但当前不可用的 Repository。
     fn remove_repository(&self) {
         std::fs::remove_dir_all(self.repository.path()).unwrap();
     }

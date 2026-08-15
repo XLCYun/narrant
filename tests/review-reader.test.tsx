@@ -9,7 +9,7 @@ const snapshot = {
   reviewId: "review-1", snapshotId: "snapshot-1", baseRef: "refs/heads/main", baseRevision: "1111111111111111111111111111111111111111",
   comparisonBase: "0000000000000000000000000000000000000000", headRef: "refs/heads/topic", headRevision: "2222222222222222222222222222222222222222",
   fileChanges: [{ path: "src/example.ts", oldPath: null, status: "modified" as const }],
-  pullRequest: { owner: "octo-org", repository: "narrant", number: 42, title: "Review tabs", description: "Review context", author: "octocat", state: "open" as const, draft: false, url: "https://github.com/octo-org/narrant/pull/42", baseRef: "main", headRef: "topic", synchronizedAt: 1 },
+  pullRequest: { owner: "octo-org", repository: "narrant", number: 42, title: "Review tabs", description: "Review context", authorUsername: "octocat", state: "open" as const, isDraft: false, webUrl: "https://github.com/octo-org/narrant/pull/42", baseRef: "main", headRef: "topic", synchronizedAtMillis: 1 },
 };
 
 /** 构造 Review Reader 测试所需的稳定 lifecycle binding。 */

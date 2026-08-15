@@ -183,9 +183,9 @@ const readerSnapshot: ReviewReaderSnapshot = {
   pullRequest: {
     owner: "narrant", repository: "desktop", number: 14, title: "Improve the Review Reader",
     description: "# Review context\n\n## User impact\n\nThe Review Reader keeps context and code changes in peer views.\n\n- Clearer information hierarchy\n- Safer Markdown rendering\n\n## Developer impact\n\nUse `ReviewView` as the shared navigation concept.\n\n> Remote images stay blocked until the reviewer opens them explicitly.\n\n```ts\nconst activeView = 'overview';\n```",
-    author: "reviewer", state: "open", draft: false,
-    url: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
-    headRef: "feature/review-reader", synchronizedAt: Date.now(),
+    authorUsername: "reviewer", state: "open", isDraft: false,
+    webUrl: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
+    headRef: "feature/review-reader", synchronizedAtMillis: Date.now(),
   },
 };
 

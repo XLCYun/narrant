@@ -15,7 +15,7 @@ export type PullRequestDiscoveryTransition =
 /** Pull Request Discovery lifecycle 的输入 identity。 */
 export type PullRequestDiscoveryLifecycleOptions = {
   enabled: boolean;
-  repositoryEntryId?: number;
+  repositoryId?: number;
   signedIn: boolean;
 };
 
@@ -27,7 +27,7 @@ export type PullRequestDiscoveryLifecycleBinding = {
   retry(): Promise<void>;
 };
 
-/** 管理 Repository Entry 与 GitHub Identity 变化下的 Pull Request Discovery。 */
+/** 管理 Repository 与 GitHub Identity 变化下的 Pull Request Discovery。 */
 export function usePullRequestDiscoveryLifecycle(
   adapter: PullRequestDiscoveryApplicationAdapter,
   options: PullRequestDiscoveryLifecycleOptions,
@@ -39,9 +39,9 @@ export function usePullRequestDiscoveryLifecycle(
   const repositoryRef = useRef<number>();
   const requestRef = useRef(0);
 
-  /** 加载当前 Repository Entry，并只允许最新 intent 发布结果。 */
+  /** 加载当前 Repository，并只允许最新 intent 发布结果。 */
   const load = useCallback(async (clear: boolean) => {
-    if (!options.enabled || options.repositoryEntryId === undefined) return;
+    if (!options.enabled || options.repositoryId === undefined) return;
     const request = ++requestRef.current;
     if (clear) {
       groupsRef.current = [];
@@ -50,7 +50,7 @@ export function usePullRequestDiscoveryLifecycle(
     setError(undefined);
     setTransition({ kind: clear || groupsRef.current.length === 0 ? "loading" : "refreshing" });
     try {
-      const discovered = await adapter.discover(options.repositoryEntryId);
+      const discovered = await adapter.discover(options.repositoryId);
       if (request !== requestRef.current) return;
       groupsRef.current = discovered;
       setGroups(discovered);
@@ -60,12 +60,12 @@ export function usePullRequestDiscoveryLifecycle(
     } finally {
       if (request === requestRef.current) setTransition({ kind: "stable" });
     }
-  }, [adapter, options.enabled, options.repositoryEntryId]);
+  }, [adapter, options.enabled, options.repositoryId]);
 
   useEffect(() => {
-    const repositoryChanged = repositoryRef.current !== options.repositoryEntryId;
-    repositoryRef.current = options.repositoryEntryId;
-    if (!options.enabled || options.repositoryEntryId === undefined) {
+    const repositoryChanged = repositoryRef.current !== options.repositoryId;
+    repositoryRef.current = options.repositoryId;
+    if (!options.enabled || options.repositoryId === undefined) {
       requestRef.current += 1;
       groupsRef.current = [];
       setGroups([]);
@@ -77,7 +77,7 @@ export function usePullRequestDiscoveryLifecycle(
     return () => {
       requestRef.current += 1;
     };
-  }, [load, options.enabled, options.repositoryEntryId, options.signedIn]);
+  }, [load, options.enabled, options.repositoryId, options.signedIn]);
 
   return { groups, transition, error, retry: () => load(false) };
 }

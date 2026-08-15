@@ -31,7 +31,7 @@ import { useGitHubIdentityLifecycle } from "@/github/use-github-identity-lifecyc
 import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
 import { useBranchSelectionContinuation } from "@/review/use-branch-selection-continuation";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
-import { useRepositoryEntryOverview } from "@/repository/use-repository-entry-overview";
+import { useRepositoryOverview } from "@/repository/use-repository-overview";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import "@/lib/i18n";
 
@@ -50,7 +50,7 @@ function ErrorMessage({ message }: { message: string }) {
 
 export function App() {
   const { t } = useTranslation(["common", "review"]);
-  const catalogRuntimeEnabled = "__TAURI_INTERNALS__" in window;
+  const desktopRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const editorTheme = useSystemTheme();
   const pullRequestDiscovery = useMemo(
@@ -69,14 +69,14 @@ export function App() {
     () => createTauriGitHubOAuthApplicationAdapter(tauriTransport),
     [],
   );
-  const repositoryOverview = useRepositoryEntryOverview(repositoryApplication, { enabled: catalogRuntimeEnabled });
+  const repositoryOverview = useRepositoryOverview(repositoryApplication, { enabled: desktopRuntimeEnabled });
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
-  const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: catalogRuntimeEnabled });
+  const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: desktopRuntimeEnabled });
   const pullRequestDiscoveryLifecycle = usePullRequestDiscoveryLifecycle(pullRequestDiscovery, {
     enabled: Boolean(selectedRepository),
-    repositoryEntryId: selectedRepository?.id,
+    repositoryId: selectedRepository?.id,
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
   const snapshot = reviewLifecycle.reader?.snapshot;
@@ -94,12 +94,12 @@ export function App() {
   const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
     ? savedTreeWidth
     : 24;
-  const repositoryEntries = repositoryOverview.catalog.repositories;
-  const recentReviews = repositoryOverview.catalog.recentReviews;
+  const repositoryEntries = repositoryOverview.navigation.repositories;
+  const recentReviews = repositoryOverview.navigation.recentReviews;
   const repositoryReviews = repositoryOverview.current?.reviews ?? [];
   const pendingRepository = appShell.trust?.repository;
   const grantingTrust = appShell.trust?.granting ?? false;
-  const catalogLoading = repositoryOverview.catalog.status === "loading"
+  const navigationLoading = repositoryOverview.navigation.status === "loading"
     || repositoryOverview.transition.kind === "registering";
   const branchState = repositoryOverview.branches;
   const refs = branchState.kind === "ready" ? branchState.value.refs : [];
@@ -119,13 +119,13 @@ export function App() {
   const openBranchSelection = useCallback(
     (target: Extract<ReviewOpenTarget, { kind: "branch-selection" }>) => navigateAppShell({
       kind: "review",
-      repositoryEntryId: target.repositoryEntryId,
+      repositoryId: target.repositoryId,
       target,
     }),
     [navigateAppShell],
   );
   const branchContinuation = useBranchSelectionContinuation(reviewApplicationAdapter, {
-    repositoryEntryId: snapshot
+    repositoryId: snapshot
       ? undefined
       : selectedRepository?.id ?? (testHarnessEnabled ? 0 : undefined),
     baseRef,
@@ -174,7 +174,7 @@ export function App() {
     }
   }
 
-  /** 原生目录选择后的 Repository Entry 注册入口。 */
+  /** 原生目录选择后的 Repository 注册入口。 */
   async function registerRepositoryFolder(path: string) {
     setRepositoryPath(path);
     setError("");
@@ -183,12 +183,12 @@ export function App() {
     return result;
   }
 
-  /** Repository Entry Overview 提交后启动独立的页面数据读取。 */
+  /** Repository Overview 提交后启动独立的页面数据读取。 */
   useEffect(() => {
     if (!selectedRepository) return;
     setRepositoryPath(selectedRepository.canonicalPath);
     if (!testHarnessEnabled) void repositoryOverview.reloadBranches();
-    // 页面数据只在已提交的 Repository Entry identity 改变后重新读取。
+    // 页面数据只在已提交的 Repository identity 改变后重新读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepository?.id]);
 
@@ -198,7 +198,7 @@ export function App() {
     setError("");
     const result = await appShell.navigate({
       kind: "review",
-      repositoryEntryId: selectedRepository.id,
+      repositoryId: selectedRepository.id,
       target: { kind: "saved-review", reviewId: review.reviewId },
     });
     if (result.kind === "failed") setError(result.detail);
@@ -209,7 +209,7 @@ export function App() {
     setError("");
     const result = await appShell.navigate({
       kind: "review",
-      repositoryEntryId: review.repositoryEntryId,
+      repositoryId: review.repositoryId,
       target: { kind: "saved-review", reviewId: review.review.reviewId },
     });
     if (result.kind === "failed") setError(result.detail);
@@ -224,10 +224,10 @@ export function App() {
     setError("");
     const result = await appShell.navigate({
       kind: "review",
-      repositoryEntryId: selectedRepository.id,
+      repositoryId: selectedRepository.id,
       target: {
         kind: "pull-request-selection",
-        repositoryEntryId: selectedRepository.id,
+        repositoryId: selectedRepository.id,
         owner: repository.owner,
         repository: repository.name,
         number: pullRequest.number,
@@ -276,11 +276,11 @@ export function App() {
   }
 
   /** 加载 canonical refs，并使用后端识别的默认分支和当前检出分支初始化选择。 */
-  async function loadRefs(repositoryEntryId = selectedRepository?.id) {
-    const resolvedRepositoryEntryId = repositoryEntryId ?? (testHarnessEnabled ? 0 : undefined);
-    if (resolvedRepositoryEntryId === undefined) return;
+  async function loadRefs(repositoryId = selectedRepository?.id) {
+    const resolvedRepositoryId = repositoryId ?? (testHarnessEnabled ? 0 : undefined);
+    if (resolvedRepositoryId === undefined) return;
     try {
-      await repositoryOverview.reloadBranches(resolvedRepositoryEntryId);
+      await repositoryOverview.reloadBranches(resolvedRepositoryId);
     } catch (reason) {
       setError(String(reason));
     }
@@ -296,33 +296,33 @@ export function App() {
         error: !selectedRepository ? visibleError || undefined : undefined,
       },
     }}
-    enabled={catalogRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
+    enabled={desktopRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
     fallbackClassName="narrant-app"
     githubIdentityEntry={renderGitHubIdentityEntry()}
   >
     <Toaster position="top-right" />
-    {(!catalogRuntimeEnabled || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
-    {!testHarnessEnabled && !catalogRuntimeEnabled && <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur">
+    {(!desktopRuntimeEnabled || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
+    {!testHarnessEnabled && !desktopRuntimeEnabled && <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur">
       {renderGitHubIdentityEntry()}
     </div>}
-    {catalogRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Repository Catalog">
-      <h2>Repository Entries</h2>
+    {desktopRuntimeEnabled && !selectedRepository && testHarnessEnabled && <article aria-label="Persistence">
+      <h2>Repositories</h2>
       <section aria-label="添加 Repository" className="flex flex-wrap items-end gap-3">
         <label>Repository 路径<Input aria-label="Repository 路径" value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} /></label>
-        <Button disabled={!repositoryPath || catalogLoading} onClick={registerRepository}>
-          {catalogLoading ? "正在读取…" : "添加 Repository"}
+        <Button disabled={!repositoryPath || navigationLoading} onClick={registerRepository}>
+          {navigationLoading ? "正在读取…" : "添加 Repository"}
         </Button>
       </section>
       {repositoryEntries.length === 0
-        ? <p>{catalogLoading ? "正在加载 Repository Entries…" : "尚未添加 Repository Entry"}</p>
-        : <ul aria-label="Repository Entries">
+        ? <p>{navigationLoading ? "正在加载 Repositories…" : "尚未添加 Repository"}</p>
+        : <ul aria-label="Repositories">
           {repositoryEntries.map((entry) => <li key={entry.id}>
-            <Button variant="outline" disabled={!entry.available} onClick={() => void appShell.navigate({ kind: "repository", repositoryEntryId: entry.id })}>
+            <Button variant="outline" disabled={entry.availability.kind !== "available"} onClick={() => void appShell.navigate({ kind: "repository", repositoryId: entry.id })}>
               {entry.canonicalPath}
             </Button>
-            {!entry.available && <>
+            {entry.availability.kind !== "available" && <>
               <strong>不可用</strong>
-              <p>{entry.unavailableReason}</p>
+              <p>{entry.availability.kind === "unavailable" ? entry.availability.reason : undefined}</p>
             </>}
           </li>)}
         </ul>}
@@ -338,7 +338,7 @@ export function App() {
           </li>)}</ul>}
       </section>
     </article>}
-    {selectedRepository && !snapshot && <article aria-label="Repository Entry">
+    {selectedRepository && !snapshot && <article aria-label="Repository">
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
@@ -405,7 +405,7 @@ export function App() {
         {renderGitHubControls()}
       </DialogContent>
     </Dialog>
-    {!catalogRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
+    {!desktopRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
     {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
     {!selectedRepository && <><p>本地分支比较</p>
@@ -433,7 +433,7 @@ export function App() {
           ...reviewLifecycle.reader,
           close: async () => {
             if (!selectedRepository) return reviewLifecycle.close();
-            await appShell.navigate({ kind: "repository", repositoryEntryId: selectedRepository.id });
+            await appShell.navigate({ kind: "repository", repositoryId: selectedRepository.id });
             return { kind: "closed" } as const;
           },
         }}

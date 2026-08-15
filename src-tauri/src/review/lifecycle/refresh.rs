@@ -9,10 +9,10 @@ impl ReviewLifecycle {
         cancellation: &CancellationToken,
     ) -> Result<ReviewUpdate, ReviewLifecycleError> {
         let current = self
-            .catalog
+            .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
-        let repository_path = self.require_available_repository(current.repository_entry_id)?;
+        let repository_path = self.require_available_repository(current.repository_id)?;
         let available = if let Some(metadata) = current.pull_request.as_ref() {
             let operation = OperationContext::from_cancellation(cancellation.clone());
             self.pull_requests
@@ -105,13 +105,13 @@ impl ReviewLifecycle {
         cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let current = self
-            .catalog
+            .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
-        let repository_path = self.require_available_repository(current.repository_entry_id)?;
+        let repository_path = self.require_available_repository(current.repository_id)?;
         let entry = self
             .repository_application
-            .inspect_entry(current.repository_entry_id)
+            .get_repository(current.repository_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         if current.base_revision != confirmation.current_base_revision
             || current.head_revision != confirmation.current_head_revision
@@ -135,7 +135,7 @@ impl ReviewLifecycle {
             {
                 return Ok(presentation_from_saved(current, Vec::new()));
             }
-            self.catalog
+            self.store
                 .stage_pull_request_snapshot(&current, &available.metadata, &available.comparison)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         } else {
@@ -159,13 +159,13 @@ impl ReviewLifecycle {
             {
                 return Ok(presentation_from_saved(current, Vec::new()));
             }
-            self.catalog
+            self.store
                 .save_refresh_snapshot(review_id, &available)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         };
 
         let workspace = self
-            .catalog
+            .store
             .review_workspace_path(review_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         let mut reviews = self
@@ -176,30 +176,29 @@ impl ReviewLifecycle {
         let adapter = GitProcessAdapter::new(&repository_path);
         if let Err(error) = adapter.transition_detached_worktree(
             &workspace,
-            &entry.common_directory,
+            &entry.git_common_directory,
             &current.head_revision,
             &candidate.head_revision,
             convergence.cancellation(),
         ) {
-            let _ = self.catalog.abandon_refresh_candidate(&candidate);
+            let _ = self.store.abandon_refresh_candidate(&candidate);
             return Err(ReviewLifecycleError::WorkspaceTransition(error.to_string()));
         }
-        if let Err(activation_error) = self.catalog.activate_refresh_snapshot(&candidate, &current)
-        {
+        if let Err(activation_error) = self.store.activate_refresh_snapshot(&candidate, &current) {
             let rollback = adapter.transition_detached_worktree(
                 &workspace,
-                &entry.common_directory,
+                &entry.git_common_directory,
                 &candidate.head_revision,
                 &current.head_revision,
                 convergence.cancellation(),
             );
-            let _ = self.catalog.abandon_refresh_candidate(&candidate);
+            let _ = self.store.abandon_refresh_candidate(&candidate);
             return Err(ReviewLifecycleError::ActivationRollback {
                 activation: activation_error.to_string(),
                 rollback: rollback.err().map(|error| error.to_string()),
             });
         }
-        let snapshot = candidate.snapshot();
+        let snapshot = candidate.to_change_comparison();
         reviews.insert(
             review_id.to_owned(),
             Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),

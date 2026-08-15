@@ -10,7 +10,7 @@ use std::time::Duration;
 #[test]
 fn same_review_cannot_hold_two_refresh_leases() {
     let fixture = LifecycleFixture::new();
-    let lifecycle = ReviewLifecycle::new(fixture.catalog.clone());
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
 
     lifecycle.begin_refresh("review-1").unwrap();
     let error = lifecycle.begin_refresh("review-1").unwrap_err();
@@ -20,3 +20,4 @@ fn same_review_cannot_hold_two_refresh_leases() {
     lifecycle.finish_refresh("review-1");
     lifecycle.begin_refresh("review-1").unwrap();
 }
+use crate::persistence::verify_repository_location;

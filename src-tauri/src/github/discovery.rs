@@ -36,11 +36,11 @@ pub struct DiscoveredPullRequest {
     pub number: u64,
     pub title: String,
     pub description: String,
-    pub author: String,
+    pub author_username: String,
     pub state: String,
-    pub draft: bool,
-    pub url: String,
-    pub updated_at: String,
+    pub is_draft: bool,
+    pub web_url: String,
+    pub github_updated_at: String,
     pub base: PullRequestRevision,
     pub head: PullRequestRevision,
 }
@@ -55,7 +55,7 @@ pub struct PullRequestGroup {
     pub error: Option<String>,
 }
 
-/// 扫描 Repository Entry 的全部 remotes，按 GitHub repository 去重并列出 Pull Requests。
+/// 扫描 Repository 的全部 remotes，按 GitHub repository 去重并列出 Pull Requests。
 pub async fn discover_pull_requests(
     repository_path: &Path,
     api_base_url: &str,
@@ -323,15 +323,15 @@ impl From<PullRequestListItem> for DiscoveredPullRequest {
             number: value.number,
             title: value.title,
             description: value.body.unwrap_or_default(),
-            author: value.user.login,
+            author_username: value.user.login,
             state: if value.merged_at.is_some() {
                 "merged".to_owned()
             } else {
                 value.state
             },
-            draft: value.draft,
-            url: value.html_url,
-            updated_at: value.updated_at,
+            is_draft: value.draft,
+            web_url: value.html_url,
+            github_updated_at: value.updated_at,
             base: value.base,
             head: value.head,
         }

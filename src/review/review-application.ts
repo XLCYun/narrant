@@ -1,18 +1,18 @@
 import type { FileChangeContent, ReviewIdentity, ReviewSnapshot } from "@/review/types";
 
-/** Workspace Trust 已由 Repository Entry context 确认的 Review 打开目标。 */
+/** Workspace Trust 已由 Repository context 确认的 Review 打开目标。 */
 export type ReviewOpenTarget =
   | { kind: "saved-review"; reviewId: string }
   | {
       kind: "pull-request-selection";
-      repositoryEntryId: number;
+      repositoryId: number;
       owner: string;
       repository: string;
       number: number;
     }
   | {
       kind: "branch-selection";
-      repositoryEntryId: number;
+      repositoryId: number;
       baseRef: string;
       headRef: string;
       mode:
