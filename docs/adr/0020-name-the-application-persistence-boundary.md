@@ -31,8 +31,9 @@ Request number. Neither representation reuses columns named for the other.
   persisted Repository fields.
 - Rust, Tauri IPC, TypeScript, tests, and current specifications use the same terminology without
   compatibility aliases.
-- A new schema migration updates current table and column names while historical migrations retain
-  the schema vocabulary they originally created.
+- During single-developer development, the only legacy local database was upgraded once and backed
+  up. The migration history is then squashed so a new database creates the current schema directly;
+  intermediate schema versions are intentionally unsupported.
 
 This decision supersedes the naming portions of ADR 0011 and ADR 0019. Their decisions to use
 SQLite for structured Review history and to keep one application-wide persistence boundary remain
