@@ -72,5 +72,5 @@ impl GitHubAuth {
 }
 
 #[cfg(test)]
-#[path = "device_authorization_tests.rs"]
+#[path = "../tests/service/device_authorization.rs"]
 mod tests;

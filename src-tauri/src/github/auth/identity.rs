@@ -223,5 +223,5 @@ fn remove_other_avatars(directory: &Path, retained_file: &str) {
 }
 
 #[cfg(test)]
-#[path = "identity_tests.rs"]
+#[path = "tests/identity.rs"]
 mod tests;

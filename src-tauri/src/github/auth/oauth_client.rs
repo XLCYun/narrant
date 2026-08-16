@@ -140,7 +140,7 @@ impl OAuthClient for OctocrabOAuthClient {
 }
 
 #[cfg(test)]
-#[path = "oauth_client_tests.rs"]
+#[path = "tests/oauth_client.rs"]
 mod tests;
 
 /// 序列化由 Octocrab 处理的 GitHub refresh-token 请求。

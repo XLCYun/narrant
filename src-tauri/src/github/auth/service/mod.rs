@@ -142,7 +142,9 @@ impl GitHubAuth {
 }
 
 #[cfg(test)]
+#[path = "../tests/service/test_support.rs"]
 mod test_support;
 
 #[cfg(test)]
+#[path = "../tests/service/mod.rs"]
 mod tests;

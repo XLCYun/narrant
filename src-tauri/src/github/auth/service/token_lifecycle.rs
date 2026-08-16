@@ -160,5 +160,5 @@ fn reauthorize_error() -> String {
 }
 
 #[cfg(test)]
-#[path = "token_lifecycle_tests.rs"]
+#[path = "../tests/service/token_lifecycle.rs"]
 mod tests;
