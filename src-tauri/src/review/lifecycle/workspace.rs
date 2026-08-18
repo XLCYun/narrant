@@ -1,0 +1,100 @@
+use super::*;
+
+impl ReviewLifecycle {
+    /// 先完成逻辑关闭，再尝试清理 workspace；清理失败不会重新打开 Review。
+    pub fn close(&self, review_id: &str) -> Result<CloseOutcome, ReviewLifecycleError> {
+        if self.is_refreshing(review_id)? {
+            return Err(ReviewLifecycleError::Busy);
+        }
+        self.reviews
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .remove(review_id);
+        let saved = self
+            .store
+            .open_review(review_id)
+            .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
+        let target = self.cleanup_target(&saved)?;
+        if !target.workspace_path.exists() {
+            return Ok(CloseOutcome {
+                workspace_cleanup: WorkspaceCleanup::NotNeeded,
+            });
+        }
+        let cleanup = remove_workspace(&target)
+            .map_or_else(WorkspaceCleanup::Deferred, |()| WorkspaceCleanup::Complete);
+        Ok(CloseOutcome {
+            workspace_cleanup: cleanup,
+        })
+    }
+
+    /// 启动时先用持久化所有权证据清理 workspace，再放弃未激活候选。
+    pub fn recover(&self) -> Result<RecoveryReport, ReviewLifecycleError> {
+        let cleanup_warnings = self.cleanup_workspaces(None)?;
+        let abandoned_snapshot_ids = self
+            .store
+            .abandon_unactivated_candidates()
+            .map_err(ReviewLifecycleError::persistence)?;
+        Ok(RecoveryReport {
+            abandoned_snapshot_ids,
+            cleanup_warnings,
+        })
+    }
+
+    /// 应用退出时清空运行时句柄，并尽力清理全部 workspace。
+    pub fn shutdown(&self) -> Result<Vec<String>, ReviewLifecycleError> {
+        self.reviews
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .clear();
+        self.cleanup_workspaces(None)
+    }
+
+    /// 构造某个 Review 的精确清理目标。
+    fn cleanup_target(
+        &self,
+        saved: &PersistedReviewState,
+    ) -> Result<ReviewWorkspaceCleanupTarget, ReviewLifecycleError> {
+        let entry = self
+            .repository_application
+            .get_repository(saved.repository_id)
+            .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
+        Ok(ReviewWorkspaceCleanupTarget {
+            review_id: saved.review_id.clone(),
+            repository_path: entry.canonical_path,
+            git_common_directory: entry.git_common_directory,
+            workspace_path: self
+                .store
+                .review_workspace_path(&saved.review_id)
+                .map_err(|error| ReviewLifecycleError::new(error.to_string()))?,
+        })
+    }
+
+    /// 尽力清理除指定 Review 外的受管 workspace，并保留全部可恢复诊断。
+    pub(super) fn cleanup_workspaces(
+        &self,
+        except_review_id: Option<&str>,
+    ) -> Result<Vec<String>, ReviewLifecycleError> {
+        let targets = self
+            .store
+            .review_workspace_cleanup_targets()
+            .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
+        Ok(targets
+            .into_iter()
+            .filter(|target| {
+                !except_review_id.is_some_and(|review_id| review_id == target.review_id)
+            })
+            .filter_map(|target| remove_workspace(&target).err())
+            .collect())
+    }
+}
+
+/// 精确移除已验证归属的受管 workspace。
+fn remove_workspace(target: &ReviewWorkspaceCleanupTarget) -> Result<(), String> {
+    GitProcessAdapter::new(&target.repository_path)
+        .remove_owned_worktree_if_present(
+            &target.workspace_path,
+            &target.git_common_directory,
+            OperationContext::background().cancellation(),
+        )
+        .map_err(|error| format!("{}：{error}", target.review_id))
+}

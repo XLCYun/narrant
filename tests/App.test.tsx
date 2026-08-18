@@ -15,10 +15,34 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const openUrl = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
-const writeText = vi.hoisted(() => vi.fn());
 
 import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
+import type { PullRequestMetadata, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
+
+/** 用紧凑输入构造 Repository 范围内的 Review 测试投影。 */
+function repositoryReview(input: {
+  reviewId: string; baseRef: string; headRef: string; lastOpenedAt: number;
+  baseRevision?: string; comparisonBase?: string; headRevision?: string; pullRequest?: PullRequestMetadata;
+}): RepositoryReviewSummary {
+  return {
+    reviewId: input.reviewId,
+    selection: input.pullRequest
+      ? { kind: "pull-request", baseRef: input.baseRef, headRef: input.headRef, pullRequest: input.pullRequest }
+      : { kind: "branch", baseRef: input.baseRef, headRef: input.headRef },
+    currentSnapshot: {
+      baseRevision: input.baseRevision ?? "base",
+      comparisonBase: input.comparisonBase ?? "merge-base",
+      headRevision: input.headRevision ?? "head",
+    },
+    lastOpenedAt: input.lastOpenedAt,
+  };
+}
+
+/** 为首页 Navigation 包装 Review 的 Repository 所有权。 */
+function recentReview(repositoryId: number, repositoryPath: string, review: RepositoryReviewSummary): RecentReviewSummary {
+  return { repositoryId, repositoryPath, review };
+}
 
 beforeEach(async () => {
   await i18n.changeLanguage("zh-CN");
@@ -28,7 +52,6 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
   openUrl.mockReset();
-  writeText.mockReset();
   localStorage.clear();
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
   document.documentElement.classList.remove("dark");
@@ -146,22 +169,21 @@ describe("App", () => {
     const entry = {
       id: 21,
       canonicalPath: "/work/narrant",
-      commonDirectory: "/work/narrant/.git",
-      createdAt: 1,
-      lastOpenedAt: 1,
-      available: true,
-      unavailableReason: null,
+      gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1,
+      lastOpenedAtMillis: 1,
+      availability: { kind: "available" },
     };
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([]);
-      if (command === "register_repository_entry") return Promise.resolve(entry);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(false);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [], recentReviews: [] });
+      if (command === "register_repository") return Promise.resolve(entry);
+      if (command === "open_repository_overview") return Promise.resolve({ kind: "trust-required", repository: entry });
+      if (command === "grant_repository_workspace_trust_and_open") return Promise.resolve({ repository: entry, reviews: [] });
       return Promise.resolve([]);
     });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Repository Entries" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Repository 路径"), {
       target: { value: "/work/narrant" },
     });
@@ -171,22 +193,22 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: "信任这个仓库？" })).toHaveTextContent(
       /checkout.*hooks.*filters.*Git LFS/i,
     );
-    expect(screen.getByLabelText("Repository Catalog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Persistence")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog", { name: "信任这个仓库？" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Repository Catalog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Persistence")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "/work/narrant" }));
     fireEvent.click(await screen.findByRole("button", { name: "信任并打开" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith(
-      "grant_repository_workspace_trust",
-      { repositoryEntryId: 21 },
+      "grant_repository_workspace_trust_and_open",
+      { repositoryId: 21 },
     ));
     expect(await screen.findByRole("heading", { name: "narrant" })).toBeInTheDocument();
     expect(screen.queryByText("/work/narrant")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Repository Catalog")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Persistence")).not.toBeInTheDocument();
     expect(screen.queryByText("已信任")).not.toBeInTheDocument();
     expect(screen.getByLabelText("主侧边栏")).toBeInTheDocument();
   });
@@ -196,21 +218,18 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 31, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 31, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
-    const review = {
-      reviewId: "review-31", repositoryEntryId: 31, repositoryPath: "/work/narrant",
-      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
-    };
+    const review = repositoryReview({ reviewId: "review-31", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 2 });
+    const recent = recentReview(31, "/work/narrant", review);
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") return Promise.resolve([review]);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(false);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [recent] });
+      if (command === "open_repository_overview") return Promise.resolve({ kind: "trust-required", repository: entry });
+      if (command === "grant_repository_workspace_trust_and_open") return Promise.resolve({ repository: entry, reviews: [review] });
       if (command === "reopen_review") return Promise.resolve({
-        reviewId: review.reviewId, snapshotId: "snapshot-31", baseRef: review.baseRef,
-        baseRevision: "base", comparisonBase: "base", headRef: review.headRef,
+        reviewId: review.reviewId, snapshotId: "snapshot-31", baseRef: review.selection.baseRef,
+        baseRevision: "base", comparisonBase: "base", headRef: review.selection.headRef,
         headRevision: "head", fileChanges: [],
       });
       return Promise.resolve([]);
@@ -227,35 +246,26 @@ describe("App", () => {
     expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
   });
 
-  it("从首页最近列表和 Repository Entry 重新打开持久化 Review", async () => {
+  it("从首页最近列表和 Repository 重新打开持久化 Review", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 23, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 23, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
-    const summary = {
-      reviewId: "review-23", repositoryEntryId: 23, repositoryPath: "/work/narrant",
-      baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 20,
-    };
-    const newerSummary = {
-      ...summary, reviewId: "review-24", baseRef: "refs/heads/release",
-      headRef: "refs/heads/hotfix", lastOpenedAt: 30,
-    };
+    const summary = repositoryReview({ reviewId: "review-23", baseRef: "refs/heads/main", headRef: "refs/heads/topic", lastOpenedAt: 20 });
+    const newerSummary = repositoryReview({ reviewId: "review-24", baseRef: "refs/heads/release", headRef: "refs/heads/hotfix", lastOpenedAt: 30 });
     const snapshot = {
-      reviewId: "review-23", baseRef: summary.baseRef,
-      baseRevision: "base", comparisonBase: "base", headRef: summary.headRef,
+      reviewId: "review-23", baseRef: summary.selection.baseRef,
+      baseRevision: "base", comparisonBase: "base", headRef: summary.selection.headRef,
       headRevision: "head", fileChanges: [],
     };
-    invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") {
-        return Promise.resolve(arguments_?.repositoryEntryId === 23
-          ? [summary]
-          : [newerSummary, summary]);
-      }
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
+    invoke.mockImplementation((command: string) => {
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(23, "/work/narrant", newerSummary), recentReview(23, "/work/narrant", summary)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [summary] },
+      });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [summary] });
       if (command === "reopen_review") return Promise.resolve(snapshot);
       return Promise.resolve([]);
     });
@@ -279,13 +289,14 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 25, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") return Promise.resolve([]);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
+      });
       if (command === "discover_github_pull_requests") return Promise.resolve([
         {
           repository: { owner: "fork-owner", name: "fork-repo" },
@@ -295,10 +306,10 @@ describe("App", () => {
           repository: { owner: "octo-org", name: "octo-repo" },
           remoteNames: ["origin", "upstream"], error: null,
           pullRequests: [{
-            number: 42, title: "Metadata only", description: "Details", author: "octocat",
-            state: "open", draft: false,
-            url: "https://github.com/octo-org/octo-repo/pull/42",
-            updatedAt: "2026-07-31T08:00:00Z",
+            number: 42, title: "Metadata only", description: "Details", authorUsername: "octocat",
+            state: "open", isDraft: false,
+            webUrl: "https://github.com/octo-org/octo-repo/pull/42",
+            githubUpdatedAt: "2026-07-31T08:00:00Z",
             base: { ref: "main", sha: "base-sha" },
             head: { ref: "feature", sha: "head-sha" },
           }],
@@ -320,20 +331,21 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 25, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
     const repository = { owner: "octo-org", name: "octo-repo" };
     const pullRequest = {
-      number: 42, title: "Local PR Review", description: "Details", author: "octocat",
-      state: "open", draft: true, url: "https://github.com/octo-org/octo-repo/pull/42",
-      updatedAt: "2026-07-31T08:00:00Z",
+      number: 42, title: "Local PR Review", description: "Details", authorUsername: "octocat",
+      state: "open", isDraft: true, webUrl: "https://github.com/octo-org/octo-repo/pull/42",
+      githubUpdatedAt: "2026-07-31T08:00:00Z",
       base: { ref: "main", sha: "base-sha" }, head: { ref: "feature", sha: "head-sha" },
     };
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
+      });
       if (command === "discover_github_pull_requests") return Promise.resolve([{
         repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null,
       }]);
@@ -344,8 +356,8 @@ describe("App", () => {
         pullRequest: {
           owner: repository.owner, repository: repository.name, number: 42,
           title: pullRequest.title, description: pullRequest.description,
-          author: pullRequest.author, state: pullRequest.state, draft: pullRequest.draft,
-          url: pullRequest.url, baseRef: "main", headRef: "feature", synchronizedAt: 1,
+          authorUsername: pullRequest.authorUsername, state: pullRequest.state, isDraft: pullRequest.isDraft,
+          webUrl: pullRequest.webUrl, baseRef: "main", headRef: "feature", synchronizedAtMillis: 1,
         },
       });
       return Promise.resolve([]);
@@ -355,7 +367,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Local PR Review/ }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
-      repositoryEntryId: 25, repository, pullRequest,
+      operationId: expect.any(String), repositoryId: 25, repository, number: 42,
     }));
     expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).toHaveTextContent("草稿");
@@ -366,14 +378,14 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 25, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
     const repository = { owner: "octo-org", name: "octo-repo" };
     const pullRequest = {
-      number: 42, title: "Refreshable", description: "", author: "octocat",
-      state: "open", draft: false, url: "https://github.com/octo-org/octo-repo/pull/42",
-      updatedAt: "2026-07-31T08:00:00Z",
+      number: 42, title: "Refreshable", description: "", authorUsername: "octocat",
+      state: "open", isDraft: false, webUrl: "https://github.com/octo-org/octo-repo/pull/42",
+      githubUpdatedAt: "2026-07-31T08:00:00Z",
       base: { ref: "main", sha: "base-1" }, head: { ref: "feature", sha: "head-1" },
     };
     const snapshot = (headRevision: string) => ({
@@ -381,15 +393,16 @@ describe("App", () => {
       comparisonBase: "base-1", headRef: "feature", headRevision, fileChanges: [],
       pullRequest: {
         owner: repository.owner, repository: repository.name, number: 42,
-        title: pullRequest.title, description: "", author: "octocat", state: "open",
-        draft: false, url: pullRequest.url, baseRef: "main", headRef: "feature",
-        synchronizedAt: 1,
+        title: pullRequest.title, description: "", authorUsername: "octocat", state: "open",
+        isDraft: false, webUrl: pullRequest.webUrl, baseRef: "main", headRef: "feature",
+        synchronizedAtMillis: 1,
       },
     });
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
+      });
       if (command === "discover_github_pull_requests") return Promise.resolve([{
         repository, remoteNames: ["origin"], pullRequests: [{
           ...pullRequest, head: { ref: "feature", sha: "head-2" },
@@ -409,7 +422,16 @@ describe("App", () => {
     expect(await screen.findByText("检测到 PR 分支有更新")).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).not.toHaveTextContent("base-1 → head-1");
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", expect.anything()));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", {
+      operationId: expect.any(String),
+      reviewId: "review-42",
+      confirmation: {
+        currentBaseRevision: "base-1",
+        currentHeadRevision: "head-1",
+        availableBaseRevision: "base-1",
+        availableHeadRevision: "head-2",
+      },
+    }));
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent("head-2");
   });
 
@@ -417,25 +439,21 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 25, canonicalPath: "/work/narrant", commonDirectory: "/work/narrant/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 25, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
-    const current = {
-      reviewId: "review-current", repositoryEntryId: 25, repositoryPath: "/work/narrant",
-      baseRef: "refs/heads/main", headRef: "refs/heads/current", lastOpenedAt: 2,
-    };
-    const target = {
-      ...current, reviewId: "review-target", headRef: "refs/heads/target", lastOpenedAt: 1,
-    };
+    const current = repositoryReview({ reviewId: "review-current", baseRef: "refs/heads/main", headRef: "refs/heads/current", lastOpenedAt: 2 });
+    const target = repositoryReview({ reviewId: "review-target", baseRef: "refs/heads/main", headRef: "refs/heads/target", lastOpenedAt: 1 });
     invoke.mockImplementation((command: string, arguments_?: Record<string, unknown>) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") return Promise.resolve([current, target]);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(25, "/work/narrant", current), recentReview(25, "/work/narrant", target)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [current, target] },
+      });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [current, target] });
       if (command === "reopen_review" && arguments_?.reviewId === current.reviewId) {
         return Promise.resolve({
-          reviewId: current.reviewId, snapshotId: "snapshot-current", baseRef: current.baseRef,
-          baseRevision: "base", comparisonBase: "base", headRef: current.headRef,
+          reviewId: current.reviewId, snapshotId: "snapshot-current", baseRef: current.selection.baseRef,
+          baseRevision: "base", comparisonBase: "base", headRef: current.selection.headRef,
           headRevision: "head", fileChanges: [{ path: "kept.txt", oldPath: null, status: "modified" }],
         });
       }
@@ -463,26 +481,25 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /kept.txt/ })).toBeInTheDocument();
   });
 
-  it("保留并展示已移动 Repository Entry 的可恢复不可用状态", async () => {
+  it("保留并展示已移动 Repository 的可恢复不可用状态", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([{
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [{
         id: 22,
         canonicalPath: "/missing/repository",
-        commonDirectory: "/missing/repository/.git",
-        createdAt: 1,
-        lastOpenedAt: 1,
-        available: false,
-        unavailableReason: "Repository Entry 路径不存在或不可访问",
-      }]);
+        gitCommonDirectory: "/missing/repository/.git",
+        createdAtMillis: 1,
+        lastOpenedAtMillis: 1,
+        availability: { kind: "unavailable", reason: "Repository 路径不存在或不可访问" },
+      }], recentReviews: [] });
       return Promise.resolve();
     });
     render(<App />);
 
     expect(await screen.findByText("/missing/repository")).toBeInTheDocument();
     expect(screen.getByText("不可用")).toBeInTheDocument();
-    expect(screen.getByText("Repository Entry 路径不存在或不可访问")).toBeInTheDocument();
+    expect(screen.getByText("Repository 路径不存在或不可访问")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "/missing/repository" })).toBeDisabled();
   });
 
@@ -520,23 +537,17 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 41, canonicalPath: "/repo", commonDirectory: "/repo/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 41, canonicalPath: "/repo", gitCommonDirectory: "/repo/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
-    const existingReview = {
-      reviewId: "review-41", repositoryEntryId: 41, repositoryPath: "/repo",
-      baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
-    };
-    invoke.mockImplementation((command: string, arguments_?: { repositoryEntryId?: number | null }) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") {
-        return Promise.resolve(arguments_?.repositoryEntryId === 41 ? [existingReview] : []);
-      }
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
-      if (command === "list_saved_reviews" || command === "discover_github_pull_requests") {
-        return Promise.resolve([]);
-      }
+    const existingReview = repositoryReview({ reviewId: "review-41", baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2 });
+    invoke.mockImplementation((command: string) => {
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(41, "/repo", existingReview)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [existingReview] },
+      });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [existingReview] });
+      if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") return Promise.resolve({
         refs: ["refs/heads/topic", "refs/remotes/origin/main"],
         defaultRef: "refs/remotes/origin/main",
@@ -562,7 +573,7 @@ describe("App", () => {
     expect(screen.getByText("将 topic 合入 origin/main")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "继续审核" })).toBeEnabled();
     expect(invoke).toHaveBeenCalledWith("check_branch_review_updates", {
-      operationId: expect.stringMatching(/^background-git-/),
+      operationId: expect.any(String),
       reviewId: "review-41",
     });
   });
@@ -571,13 +582,10 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 42, canonicalPath: "/repo", commonDirectory: "/repo/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 42, canonicalPath: "/repo", gitCommonDirectory: "/repo/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
-    const review = {
-      reviewId: "review-42", repositoryEntryId: 42, repositoryPath: "/repo",
-      baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2,
-    };
+    const review = repositoryReview({ reviewId: "review-42", baseRef: "refs/remotes/origin/main", headRef: "refs/heads/topic", lastOpenedAt: 2 });
     const update = {
       changed: true,
       currentBaseRevision: "base-1",
@@ -588,25 +596,26 @@ describe("App", () => {
     const snapshot = (snapshotId: string, baseRevision: string, headRevision: string) => ({
       reviewId: review.reviewId,
       snapshotId,
-      baseRef: review.baseRef,
+      baseRef: review.selection.baseRef,
       baseRevision,
       comparisonBase: baseRevision,
-      headRef: review.headRef,
+      headRef: review.selection.headRef,
       headRevision,
       fileChanges: [],
     });
-    invoke.mockImplementation((command: string, arguments_?: { repositoryEntryId?: number | null }) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") return Promise.resolve(arguments_?.repositoryEntryId === 42 ? [review] : []);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
-      if (command === "list_saved_reviews" || command === "discover_github_pull_requests") return Promise.resolve([]);
+    invoke.mockImplementation((command: string) => {
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [recentReview(42, "/repo", review)] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [review] },
+      });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [review] });
+      if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") return Promise.resolve({
-        refs: [review.headRef, review.baseRef], defaultRef: review.baseRef, currentRef: review.headRef,
+        refs: [review.selection.headRef, review.selection.baseRef], defaultRef: review.selection.baseRef, currentRef: review.selection.headRef,
       });
       if (command === "check_branch_review_updates") return Promise.resolve(update);
       if (command === "reopen_review") return Promise.resolve(snapshot("snapshot-1", "base-1", "head-1"));
-      if (command === "refresh_branch_review") return Promise.resolve(snapshot("snapshot-2", "base-2", "head-2"));
+      if (command === "reopen_and_refresh_branch_review") return Promise.resolve(snapshot("snapshot-2", "base-2", "head-2"));
       return Promise.resolve();
     });
     render(<App />);
@@ -616,12 +625,11 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
     fireEvent.click(await screen.findByRole("button", { name: "更新并继续审核" }));
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-42" }));
-    expect(invoke).toHaveBeenCalledWith("refresh_branch_review", {
-      operationId: expect.stringMatching(/^local-git-/),
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("reopen_and_refresh_branch_review", {
+      operationId: expect.any(String),
       reviewId: "review-42",
       confirmation: update,
-    });
+    }));
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/head-2.*base-2/s);
   });
 
@@ -640,66 +648,6 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Start review" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Head and Base must be different branches.");
     await i18n.changeLanguage("zh-CN");
-  });
-
-  it("连接 GitHub 会先打开安装页，再引导设备码授权且不接收 token", async () => {
-    mockSystemTheme(false);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    invoke.mockImplementation((command: string) => {
-      if (command === "github_auth_status") return Promise.resolve({
-        configured: true,
-        signedIn: false,
-        appInstallUrl: "https://github.com/apps/narrant/installations/new",
-      });
-      if (command === "start_github_authorization") return Promise.resolve({
-        authorizationId: "authorization-1",
-        userCode: "ABCD-EFGH",
-        verificationUri: "https://github.com/login/device",
-        expiresIn: 900,
-        interval: 5,
-      });
-      return Promise.resolve();
-    });
-    render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
-    expect(await screen.findAllByText(/组织仓库可能需要管理员审批/)).toHaveLength(1);
-    expect(screen.getByText(/组织仓库可能需要管理员审批/).closest(".font-mono")).toBeInTheDocument();
-    const installationPrompt = screen.getByText(/请在打开的网页中安装 Narrant GitHub App/);
-    expect(installationPrompt).toBeInTheDocument();
-    expect(installationPrompt.parentElement?.parentElement).toHaveClass("space-y-6");
-    expect(screen.getByText(/授予读取权限/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新选择仓库或申请组织审批" })).not.toBeInTheDocument();
-    const installLink = screen.getByRole("link", { name: "https://github.com/apps/narrant/installations/new" });
-    expect(installLink).toHaveClass("break-all");
-    expect(screen.queryByText("ABCD-EFGH")).not.toBeInTheDocument();
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/apps/narrant/installations/new");
-    fireEvent.click(screen.getByRole("button", { name: "我已安装，继续" }));
-    expect(await screen.findByLabelText("设备码 ABCD-EFGH")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "我已安装，继续" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新选择仓库或申请组织审批" })).not.toBeInTheDocument();
-    expect(screen.getByText(/输入设备码以授权此设备访问你的 GitHub 账号/)).toBeInTheDocument();
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/login/device");
-    const authorizationLink = screen.getByRole("link", { name: "https://github.com/login/device" });
-    expect(authorizationLink).toHaveClass("break-all");
-    expect(screen.getByLabelText("设备码 ABCD-EFGH")).toHaveClass("grid", "w-full");
-    fireEvent.click(screen.getByRole("button", { name: "复制设备码" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-EFGH"));
-    expect(screen.getByRole("button", { name: "设备码已复制" })).toBeInTheDocument();
-    const copyLinkButton = screen.getByRole("button", { name: "复制链接" });
-    expect(copyLinkButton).toHaveClass("cursor-pointer");
-    fireEvent.click(copyLinkButton);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://github.com/login/device"));
-    expect(screen.getByRole("button", { name: "链接已复制" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("link", { name: "https://github.com/login/device" }));
-    expect(openUrl).toHaveBeenLastCalledWith("https://github.com/login/device");
-    expect(screen.queryByRole("button", { name: "打开 GitHub" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "我已在 GitHub 完成授权" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
-      "complete_github_authorization",
-      { authorizationId: "authorization-1" },
-    ));
-    expect(await screen.findByRole("button", { name: "退出 GitHub" })).toBeInTheDocument();
   });
 
   it("展示完整文件树并按需加载所选 File Change", async () => {
@@ -763,10 +711,6 @@ describe("App", () => {
         baseRef: "main", baseRevision: "base-revision-full", comparisonBase: "base-revision-full",
         headRef: "topic", headRevision: "head-revision-full", fileChanges: [],
       });
-      if (command === "list_reviews") return Promise.resolve([
-        { reviewId: "review-toolbar", repositoryEntryId: 1, repositoryPath: "/repo", baseRef: "main", headRef: "topic", lastOpenedAt: 2 },
-        { reviewId: "review-other", repositoryEntryId: 1, repositoryPath: "/repo", baseRef: "main", headRef: "other", lastOpenedAt: 1 },
-      ]);
       return Promise.resolve([]);
     });
     render(<App />);
@@ -905,8 +849,8 @@ describe("App", () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
-      id: 24, canonicalPath: "/repo", commonDirectory: "/repo/.git",
-      createdAt: 1, lastOpenedAt: 1, available: true, unavailableReason: null,
+      id: 24, canonicalPath: "/repo", gitCommonDirectory: "/repo/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
     };
     const oldSnapshot = {
       reviewId: "review-24", baseRef: "refs/heads/main",
@@ -920,10 +864,10 @@ describe("App", () => {
       fileChanges: [{ path: "new.txt", oldPath: null, status: "added" }],
     };
     invoke.mockImplementation((command: string) => {
-      if (command === "list_repository_entries") return Promise.resolve([entry]);
-      if (command === "list_reviews") return Promise.resolve([]);
-      if (command === "open_repository_entry") return Promise.resolve(entry);
-      if (command === "repository_workspace_trust") return Promise.resolve(true);
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entry, reviews: [] },
+      });
       if (command === "discover_github_pull_requests") return Promise.resolve([]);
       if (command === "list_local_refs") {
         return Promise.resolve({

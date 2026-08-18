@@ -1,0 +1,42 @@
+use super::ReviewStore;
+use crate::repository::verify_repository_location;
+use std::process::Command;
+
+/// 创建供 Persistence 黑盒 integration 使用的真实 working-tree repository。
+fn create_repository() -> tempfile::TempDir {
+    let repository = tempfile::TempDir::new().unwrap();
+    for arguments in [
+        &["init", "-q"][..],
+        &["config", "user.email", "integration@narrant.invalid"][..],
+        &["config", "user.name", "Narrant Integration"][..],
+    ] {
+        assert!(Command::new("git")
+            .args(arguments)
+            .current_dir(repository.path())
+            .status()
+            .unwrap()
+            .success());
+    }
+    repository
+}
+
+#[test]
+fn add_and_reopen_repository_through_the_public_persistence_boundary() {
+    let database = tempfile::NamedTempFile::new().unwrap();
+    let repository = create_repository();
+    let entry_id = ReviewStore::open(database.path())
+        .unwrap()
+        .upsert_repository(&verify_repository_location(repository.path()).unwrap())
+        .unwrap()
+        .id;
+
+    let reopened = ReviewStore::open(database.path())
+        .unwrap()
+        .get_repository(entry_id)
+        .unwrap();
+
+    assert_eq!(
+        reopened.canonical_path,
+        repository.path().canonicalize().unwrap()
+    );
+}

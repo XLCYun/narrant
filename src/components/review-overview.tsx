@@ -42,7 +42,7 @@ function isExternalWebUrl(url?: string): url is string {
 }
 
 /** 概览标签的单栏内容，安全呈现协作 metadata 与 Markdown 描述。 */
-export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverviewModel; onOpenExternal: (url: string) => void }) {
+export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverviewModel; onOpenExternal: (webUrl: string) => void }) {
   const { t } = useTranslation("review");
   const pullRequest = review.pullRequest;
 
@@ -62,13 +62,13 @@ export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverv
       <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">{pullRequest?.title ?? t("localBranchReview")}</h2>
       {pullRequest && <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         {(() => {
-          const state: "draft" | PullRequestMetadata["state"] = pullRequest.draft ? "draft" : pullRequest.state;
+          const state: "draft" | PullRequestMetadata["state"] = pullRequest.isDraft ? "draft" : pullRequest.state;
           const icons = { draft: GitPullRequestDraftIcon, open: GitPullRequestIcon, closed: GitPullRequestClosedIcon, merged: GitMergeIcon };
           const colors = { draft: "bg-amber-500/10 text-amber-700 dark:text-amber-300", open: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300", closed: "bg-muted text-muted-foreground", merged: "bg-violet-500/10 text-violet-700 dark:text-violet-300" };
-          return <Badge variant="secondary" className={cn("border-0", colors[state])}><Icon icon={icons[state]} data-icon="inline-start" aria-hidden />{pullRequest.draft ? t("draft") : t(`state.${pullRequest.state}`)}</Badge>;
+          return <Badge variant="secondary" className={cn("border-0", colors[state])}><Icon icon={icons[state]} data-icon="inline-start" aria-hidden />{pullRequest.isDraft ? t("draft") : t(`state.${pullRequest.state}`)}</Badge>;
         })()}
         <span>#{pullRequest.number}</span>
-        <span>{pullRequest.author}</span>
+        <span>{pullRequest.authorUsername}</span>
       </div>}
       <div aria-label={t("revisionRelationLabel", { head: branchName(review.headRef), base: branchName(review.baseRef) })} className="flex min-w-0 flex-col items-stretch gap-2 text-sm sm:flex-row sm:items-center">
         <span className="shrink-0 text-muted-foreground">{t("mergeSentenceStart")}</span>
@@ -89,7 +89,7 @@ export function ReviewOverview({ review, onOpenExternal }: { review: ReviewOverv
         }}>{pullRequest.description}</ReactMarkdown>
       </div>
       <footer className="border-t bg-muted/20 px-4 py-3 sm:px-5">
-        <a href={pullRequest.url} className="inline-flex items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline" onClick={(event) => openExternal(event, pullRequest.url)}>{t("viewOnGitHub")}<Icon icon={ExternalLinkIcon} /></a>
+        <a href={pullRequest.webUrl} className="inline-flex items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline" onClick={(event) => openExternal(event, pullRequest.webUrl)}>{t("viewOnGitHub")}<Icon icon={ExternalLinkIcon} /></a>
       </footer>
     </section>}
   </article>;

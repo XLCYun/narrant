@@ -5,20 +5,19 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslation } from "react-i18next";
 import { BranchRelation, branchName } from "@/components/branch-relation";
-import type { DiscoveredPullRequest, PullRequestGroup, ReviewSummary, SavedReviewSummary } from "@/lib/review-types";
+import type { DiscoveredPullRequest, PullRequestGroup, RepositoryReviewSummary } from "@/lib/review-types";
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime, normalizeLocale } from "@/lib/i18n";
-export type { DiscoveredPullRequest, PullRequestGroup, SavedReviewSummary } from "@/lib/review-types";
+export type { DiscoveredPullRequest, PullRequestGroup, RepositoryReviewSummary } from "@/lib/review-types";
 
-/** Repository Entry 概览所需的外部状态与用户动作。 */
+/** Repository 概览所需的外部状态与用户动作。 */
 type Props = {
   repositoryName: string;
   repositoryPath: string;
-  savedReviews: SavedReviewSummary[];
+  reviews: RepositoryReviewSummary[];
   pullRequestGroups: PullRequestGroup[];
-  repositoryReviews: ReviewSummary[];
   discoveryLoading: boolean;
   discoveryError?: string;
   githubConnected: boolean;
@@ -28,8 +27,7 @@ type Props = {
   reviewNavigationBusy?: boolean;
   onRetryDiscovery: () => void;
   onConnectGitHub: () => void;
-  onOpenSavedReview: (review: SavedReviewSummary) => void;
-  onOpenReview: (review: ReviewSummary) => void;
+  onOpenReview: (review: RepositoryReviewSummary) => void;
   onOpenPullRequest: (
     repository: PullRequestGroup["repository"],
     pullRequest: DiscoveredPullRequest,
@@ -40,7 +38,7 @@ type Props = {
 type PullRequestRow = {
   key: string;
   repository: PullRequestGroup["repository"];
-  saved?: SavedReviewSummary;
+  saved?: RepositoryReviewSummary;
   discovered?: DiscoveredPullRequest;
 };
 
@@ -52,10 +50,13 @@ function parseGitHubTimestamp(value?: string, fallback = 0) {
 
 /** 返回列表排序所使用的 GitHub 最近更新时间；旧缓存退回到 metadata 同步时间。 */
 function rowUpdatedAt(row: PullRequestRow) {
-  if (row.discovered) return parseGitHubTimestamp(row.discovered.updatedAt);
+  if (row.discovered) return parseGitHubTimestamp(row.discovered.githubUpdatedAt);
+  const metadata = row.saved?.selection.kind === "pull-request"
+    ? row.saved.selection.pullRequest
+    : undefined;
   return parseGitHubTimestamp(
-    row.saved?.pullRequest?.updatedAt,
-    row.saved?.pullRequest?.synchronizedAt ?? 0,
+    metadata?.githubUpdatedAt,
+    metadata?.synchronizedAtMillis ?? 0,
   );
 }
 
@@ -80,12 +81,13 @@ function PullRequestStatus({
 }
 
 /** 按稳定的 Pull Request Selection identity 合并本地 Review 与后台 discovery 结果。 */
-function mergePullRequests(savedReviews: SavedReviewSummary[], groups: PullRequestGroup[]): PullRequestRow[] {
+function mergePullRequests(reviews: RepositoryReviewSummary[], groups: PullRequestGroup[]): PullRequestRow[] {
   const rows = new Map<string, PullRequestRow>();
-  for (const saved of savedReviews) {
-    if (!saved.pullRequest) continue;
-    const repository = { owner: saved.pullRequest.owner, name: saved.pullRequest.repository };
-    const key = `${repository.owner.toLowerCase()}/${repository.name.toLowerCase()}#${saved.pullRequest.number}`;
+  for (const saved of reviews) {
+    if (saved.selection.kind !== "pull-request") continue;
+    const metadata = saved.selection.pullRequest;
+    const repository = { owner: metadata.owner, name: metadata.repository };
+    const key = `${repository.owner.toLowerCase()}/${repository.name.toLowerCase()}#${metadata.number}`;
     rows.set(key, { key, repository, saved });
   }
   for (const group of groups) {
@@ -99,18 +101,18 @@ function mergePullRequests(savedReviews: SavedReviewSummary[], groups: PullReque
   });
 }
 
-/** Repository Entry 的任务概览：缓存优先呈现 Pull Request，并隔离远端失败。 */
+/** Repository 的任务概览：缓存优先呈现 Pull Request，并隔离远端失败。 */
 export function RepositoryOverview(props: Props) {
-  const { t, i18n } = useTranslation(["catalog", "common", "github"]);
-  const rows = mergePullRequests(props.savedReviews, props.pullRequestGroups);
+  const { t, i18n } = useTranslation(["repository", "common", "github"]);
+  const rows = mergePullRequests(props.reviews, props.pullRequestGroups);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
   const hasSuccessfulGroup = props.pullRequestGroups.some((group) => !group.error);
   const hasPartialFailure = hasSuccessfulGroup && groupErrors.length > 0;
   const blockingDiscoveryError = props.discoveryError ?? (hasPartialFailure ? undefined : groupErrors[0]);
   const repositoryIdentities = new Set([
     ...props.pullRequestGroups.map((group) => `${group.repository.owner.toLowerCase()}/${group.repository.name.toLowerCase()}`),
-    ...props.savedReviews.flatMap((review) => review.pullRequest
-      ? [`${review.pullRequest.owner.toLowerCase()}/${review.pullRequest.repository.toLowerCase()}`]
+    ...props.reviews.flatMap((review) => review.selection.kind === "pull-request"
+      ? [`${review.selection.pullRequest.owner.toLowerCase()}/${review.selection.pullRequest.repository.toLowerCase()}`]
       : []),
   ]);
   const showRepositoryIdentity = repositoryIdentities.size > 1;
@@ -125,13 +127,13 @@ export function RepositoryOverview(props: Props) {
         </Tooltip>
       </header>
       <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>
-        <TabsList aria-label={t("catalog:tasks")}>
+        <TabsList aria-label={t("repository:tasks")}>
           <TabsTrigger value="pull-requests">
             {props.discoveryLoading ? <Spinner aria-hidden /> : <Icon icon={GitPullRequestIcon} />}
-            {t("catalog:tabs.pullRequests")}
+            {t("repository:tabs.pullRequests")}
           </TabsTrigger>
-          <TabsTrigger value="branches"><Icon icon={GitBranchIcon} />{t("catalog:tabs.branches")}</TabsTrigger>
-          <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("catalog:tabs.history")}</TabsTrigger>
+          <TabsTrigger value="branches"><Icon icon={GitBranchIcon} />{t("repository:tabs.branches")}</TabsTrigger>
+          <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("repository:tabs.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="pull-requests" className="mt-5">
           {hasPartialFailure && <div className="mb-4 flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
@@ -139,24 +141,25 @@ export function RepositoryOverview(props: Props) {
             <div className="min-w-0 flex-1 space-y-1">
               {props.pullRequestGroups.filter((group) => group.error).map((group) => {
                 const identity = `${group.repository.owner}/${group.repository.name}`;
-                return <p key={identity}>{t("catalog:partialFailure", { repository: identity, error: group.error })}</p>;
+                return <p key={identity}>{t("repository:partialFailure", { repository: identity, error: group.error })}</p>;
               })}
             </div>
-            <Button size="sm" variant="outline" onClick={props.onRetryDiscovery}>{t("catalog:retry")}</Button>
+            <Button size="sm" variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>
           </div>}
           {props.discoveryError && rows.length > 0 && <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-            {props.discoveryError}；{t("catalog:stale")}
+            {props.discoveryError}；{t("repository:stale")}
           </div>}
           {rows.length > 0 && <ul className="divide-y rounded-lg border">
             {rows.map((row) => {
-              const metadata = row.discovered ?? row.saved!.pullRequest!;
-              const baseRef = row.discovered?.base.ref ?? row.saved?.pullRequest?.baseRef;
-              const headRef = row.discovered?.head.ref ?? row.saved?.pullRequest?.headRef;
+              const savedSelection = row.saved?.selection.kind === "pull-request" ? row.saved.selection : undefined;
+              const metadata = row.discovered ?? savedSelection!.pullRequest;
+              const baseRef = row.discovered?.base.ref ?? savedSelection?.baseRef;
+              const headRef = row.discovered?.head.ref ?? savedSelection?.headRef;
               const updated = Boolean(row.saved && row.discovered && (
-                row.saved.baseRevision !== row.discovered.base.sha
-                || row.saved.headRevision !== row.discovered.head.sha
+                row.saved.currentSnapshot.baseRevision !== row.discovered.base.sha
+                || row.saved.currentSnapshot.headRevision !== row.discovered.head.sha
               ));
-              const updatedAt = row.discovered?.updatedAt ?? row.saved?.pullRequest?.updatedAt;
+              const githubUpdatedAt = row.discovered?.githubUpdatedAt ?? savedSelection?.pullRequest.githubUpdatedAt;
               const opening = props.openingReviewKey === row.key;
               return <li key={row.key} className="flex flex-col items-stretch gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
                 <Icon icon={GitPullRequestIcon} className="hidden shrink-0 text-muted-foreground sm:block" aria-hidden />
@@ -164,37 +167,38 @@ export function RepositoryOverview(props: Props) {
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="truncate font-medium">#{metadata.number} {metadata.title}</p>
                     {showRepositoryIdentity && <Badge variant="outline">{row.repository.owner}/{row.repository.name}</Badge>}
-                    {metadata.draft && <Badge variant="secondary">{t("catalog:draft")}</Badge>}
-                    {updated && <Badge>{t("catalog:updateAvailable")}</Badge>}
+                    {metadata.isDraft && <Badge variant="secondary">{t("repository:draft")}</Badge>}
+                    {updated && <Badge>{t("repository:updateAvailable")}</Badge>}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>{metadata.author}</span><span>{metadata.state}</span>
+                    <span>{metadata.authorUsername}</span><span>{metadata.state}</span>
                     {baseRef && headRef && <BranchRelation baseRef={baseRef} headRef={headRef} />}
-                    {updatedAt && <time dateTime={updatedAt}>{formatRelativeTime(rowUpdatedAt(row), Date.now(), locale)}</time>}
+                    {githubUpdatedAt && <time dateTime={githubUpdatedAt}>{formatRelativeTime(rowUpdatedAt(row), Date.now(), locale)}</time>}
                   </div>
                 </div>
                 <Button className="self-start sm:self-auto" aria-label={`${opening ? t("common:openingReview") : row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} aria-busy={opening || undefined} disabled={props.reviewNavigationBusy} variant={row.saved ? "outline" : "default"} onClick={() => {
-                  if (row.saved) props.onOpenSavedReview(row.saved);
+                  if (row.saved) props.onOpenReview(row.saved);
                   else if (row.discovered) props.onOpenPullRequest(row.repository, row.discovered);
                 }}>{opening && <Spinner aria-hidden />}{row.saved ? t("common:continueReview") : t("common:startReview")}</Button>
               </li>;
             })}
           </ul>}
           {rows.length === 0 && (!props.githubConnected
-            ? <PullRequestStatus icon={GitPullRequestIcon} title={t("catalog:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
+            ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
             : blockingDiscoveryError
-              ? <PullRequestStatus icon={AlertCircleIcon} title={t("catalog:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" onClick={props.onRetryDiscovery}>{t("catalog:retry")}</Button>} />
-              : <PullRequestStatus icon={InformationCircleIcon} title={t("catalog:noPullRequests")} description={t("catalog:noPullRequestsDescription")} />)}
+              ? <PullRequestStatus icon={AlertCircleIcon} title={t("repository:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>} />
+              : <PullRequestStatus icon={InformationCircleIcon} title={t("repository:noPullRequests")} description={t("repository:noPullRequestsDescription")} />)}
         </TabsContent>
         <TabsContent value="branches" className="mt-5">{props.localBranches}</TabsContent>
         <TabsContent value="history" className="mt-5">
-          {props.repositoryReviews.length === 0
-            ? <p className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("catalog:noHistory")}</p>
-            : <ul className="divide-y rounded-lg border">{props.repositoryReviews.map((review) => {
+          {props.reviews.length === 0
+            ? <p className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">{t("repository:noHistory")}</p>
+            : <ul className="divide-y rounded-lg border">{props.reviews.map((review) => {
+              const selection = review.selection;
               const opening = props.openingReviewKey === `review:${review.reviewId}`;
-              const mergeDirection = t("catalog:mergeConfirmation", {
-                head: branchName(review.headRef),
-                base: branchName(review.baseRef),
+              const mergeDirection = t("repository:mergeConfirmation", {
+                head: branchName(selection.headRef),
+                base: branchName(selection.baseRef),
               });
               return <li key={review.reviewId}>
                 <Button
@@ -205,7 +209,7 @@ export function RepositoryOverview(props: Props) {
                   disabled={props.reviewNavigationBusy}
                   onClick={() => props.onOpenReview(review)}
                 >
-                  <BranchRelation baseRef={review.baseRef} headRef={review.headRef} interactive={false} />
+                  <BranchRelation baseRef={selection.baseRef} headRef={selection.headRef} interactive={false} />
                   {opening && <Spinner className="ml-auto" aria-hidden />}
                 </Button>
               </li>;

@@ -2,14 +2,18 @@ import { StrictMode, type ReactNode, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import "@/index.css";
-import { BranchReviewSelector, type BranchSelectorAction } from "@/components/branch-review-selector";
+import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { FileChangeLoading } from "@/components/file-change-loading";
+import { GitHubIdentityEntry } from "@/components/github-identity-entry";
+import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
+import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
 import { i18n } from "@/lib/i18n";
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RepositoryReviewSummary } from "@/lib/review-types";
+import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
+import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -41,17 +45,23 @@ function BranchSelectorPreview({
   initialBase = "refs/remotes/origin/main",
   currentRef = "refs/heads/release",
   action = "start",
+  continuationState,
   opening = false,
 }: {
   refs?: string[];
   initialHead?: string;
   initialBase?: string;
   currentRef?: string;
-  action?: BranchSelectorAction;
+  action?: Extract<BranchSelectionContinuationBinding["state"], { kind: "ready" }>["action"];
+  continuationState?: BranchSelectionContinuationBinding["state"];
   opening?: boolean;
 }) {
   const [headRef, setHeadRef] = useState(initialHead);
   const [baseRef, setBaseRef] = useState(initialBase);
+  const continuation: BranchSelectionContinuationBinding = {
+    state: continuationState ?? { kind: "ready", action },
+    submit: async () => ({ kind: "ignored" }),
+  };
 
   return <BranchReviewSelector
     refs={refs}
@@ -59,31 +69,26 @@ function BranchSelectorPreview({
     defaultRef="refs/remotes/origin/main"
     headRef={headRef}
     baseRef={baseRef}
-    action={action}
+    continuation={continuation}
     opening={opening}
     reviewNavigationBusy={opening}
     onHeadChange={setHeadRef}
     onBaseChange={setBaseRef}
     onReload={() => undefined}
-    onSubmit={() => undefined}
   />;
 }
 
-const reviewHistory: ReviewSummary[] = [
+const reviewHistory: RepositoryReviewSummary[] = [
   {
     reviewId: "review-preview-1",
-    repositoryEntryId: 1,
-    repositoryPath: "/work/narrant",
-    baseRef: "refs/heads/main",
-    headRef: "refs/heads/codex/review-history-navigation",
+    selection: { kind: "branch", baseRef: "refs/heads/main", headRef: "refs/heads/codex/review-history-navigation" },
+    currentSnapshot: { baseRevision: "base-1", comparisonBase: "merge-base-1", headRevision: "head-1" },
     lastOpenedAt: Date.now(),
   },
   {
     reviewId: "review-preview-2",
-    repositoryEntryId: 1,
-    repositoryPath: "/work/narrant",
-    baseRef: "refs/remotes/upstream/release-with-a-long-name",
-    headRef: "refs/heads/feature/a-review-with-an-extraordinarily-long-branch-name",
+    selection: { kind: "branch", baseRef: "refs/remotes/upstream/release-with-a-long-name", headRef: "refs/heads/feature/a-review-with-an-extraordinarily-long-branch-name" },
+    currentSnapshot: { baseRevision: "base-2", comparisonBase: "merge-base-2", headRevision: "head-2" },
     lastOpenedAt: Date.now() - 60_000,
   },
 ];
@@ -96,9 +101,8 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
   return <RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
-    savedReviews={[]}
+    reviews={reviewHistory}
     pullRequestGroups={[]}
-    repositoryReviews={reviewHistory}
     discoveryLoading={false}
     githubConnected
     localBranches={null}
@@ -107,10 +111,54 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
     reviewNavigationBusy={Boolean(openingReviewKey)}
     onRetryDiscovery={() => undefined}
     onConnectGitHub={() => undefined}
-    onOpenSavedReview={() => undefined}
     onOpenPullRequest={() => undefined}
     onOpenReview={(review) => setOpeningReviewKey(`review:${review.reviewId}`)}
   />;
+}
+
+/** 预览全局 GitHub Identity 入口的正常与可恢复错误状态。 */
+function GitHubIdentityPreview({ error = false, signedIn = false }: { error?: boolean; signedIn?: boolean }) {
+  return <div className="w-64 rounded-xl border bg-background p-3 shadow-sm">
+    <GitHubIdentityEntry
+      className="h-auto min-h-12 w-full justify-start py-2"
+      signedIn={signedIn}
+      identity={signedIn ? { id: 42, login: "octocat", name: "Monalisa", avatarPath: null } : undefined}
+      error={error ? "credential store unavailable" : undefined}
+      onConnect={() => undefined}
+      onSignOut={() => undefined}
+      onRetry={() => undefined}
+    />
+  </div>;
+}
+
+/** 通过 lifecycle interface 的代表性数据预览 GitHub 授权向导。 */
+function GitHubAuthorizationPreview({ deviceFlow = false }: { deviceFlow?: boolean }) {
+  const authorization = deviceFlow ? {
+    authorizationId: "preview-authorization",
+    userCode: "ABCD-EFGH",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+    interval: 5,
+  } : undefined;
+  const identity: GitHubIdentityLifecycleBinding = {
+    status: {
+      configured: true,
+      signedIn: false,
+      appInstallUrl: "https://github.com/apps/narrant/installations/new",
+      identity: null,
+    },
+    authorization,
+    transition: { kind: "stable" },
+    beginAuthorization: async () => authorization
+      ? { kind: "started", authorization }
+      : { kind: "failed" },
+    completeAuthorization: async () => ({ kind: "authorized" }),
+    signOut: async () => ({ kind: "signed-out" }),
+    retry: async () => undefined,
+  };
+  return <div className="mx-auto w-full max-w-lg rounded-xl border bg-background p-6 shadow-sm">
+    <GitHubAuthorizationControls identity={identity} onConnect={() => undefined} />
+  </div>;
 }
 
 const readerSnapshot: ReviewReaderSnapshot = {
@@ -135,9 +183,9 @@ const readerSnapshot: ReviewReaderSnapshot = {
   pullRequest: {
     owner: "narrant", repository: "desktop", number: 14, title: "Improve the Review Reader",
     description: "# Review context\n\n## User impact\n\nThe Review Reader keeps context and code changes in peer views.\n\n- Clearer information hierarchy\n- Safer Markdown rendering\n\n## Developer impact\n\nUse `ReviewView` as the shared navigation concept.\n\n> Remote images stay blocked until the reviewer opens them explicitly.\n\n```ts\nconst activeView = 'overview';\n```",
-    author: "reviewer", state: "open", draft: false,
-    url: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
-    headRef: "feature/review-reader", synchronizedAt: Date.now(),
+    authorUsername: "reviewer", state: "open", isDraft: false,
+    webUrl: "https://github.com/narrant/desktop/pull/14", baseRef: "main",
+    headRef: "feature/review-reader", synchronizedAtMillis: Date.now(),
   },
 };
 
@@ -160,26 +208,53 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
   ]));
   const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
+  const review: ReviewReaderBinding = {
+    snapshot,
+    transition: { kind: "stable" },
+    fileChange: selectedPath
+      ? { kind: "ready", path: selectedPath, content: contents[selectedPath] }
+      : { kind: "empty" },
+    update: update
+      ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
+      : { kind: "current" },
+    selectFileChange: setSelectedPath,
+    retryFileChange: () => undefined,
+    refresh: async () => ({ kind: "unchanged" }),
+    close: async () => ({ kind: "closed" }),
+  };
   return <div className="h-[calc(100vh-8.5rem)]">
     <ReviewReader
-      snapshot={snapshot}
-      fileChange={selectedPath ? contents[selectedPath] : undefined}
-      diffMode={mode}
-      narrow={window.innerWidth < 1200}
-      editorTheme={document.documentElement.classList.contains("dark") ? "vs-dark" : "light"}
-      initialTreeWidth={26}
-      updateAction={update ? <div role="status" className="flex items-center gap-2 text-sm"><span className="hidden text-amber-700 sm:inline dark:text-amber-300">检测到 PR 分支有更新</span><Button aria-label="刷新审核"><span className="hidden sm:inline">刷新审核</span></Button></div> : undefined}
-      onSelectFile={setSelectedPath}
-      onRetryFile={setSelectedPath}
-      onDiffModeChange={setMode}
-      onTreeWidthChange={() => undefined}
-      onOpenExternal={() => undefined}
-      onClose={() => undefined}
+      review={review}
+      appearance={{
+        diffMode: mode,
+        narrow: window.innerWidth < 1200,
+        editorTheme: document.documentElement.classList.contains("dark") ? "vs-dark" : "light",
+        initialTreeWidth: 26,
+        onDiffModeChange: setMode,
+        onTreeWidthChange: () => undefined,
+        onOpenExternal: () => undefined,
+      }}
     />
   </div>;
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  "github-authorization": {
+    label: "GitHub 授权",
+    scenarios: {
+      install: { label: "安装 GitHub App", render: () => <GitHubAuthorizationPreview /> },
+      "device-flow": { label: "Device Flow", render: () => <GitHubAuthorizationPreview deviceFlow /> },
+    },
+  },
+  "github-identity": {
+    label: "GitHub Identity",
+    scenarios: {
+      default: { label: "未连接", render: () => <GitHubIdentityPreview /> },
+      error: { label: "状态读取失败", render: () => <GitHubIdentityPreview error /> },
+      "signed-in": { label: "已连接", render: () => <GitHubIdentityPreview signedIn /> },
+      "signed-in-error": { label: "退出失败", render: () => <GitHubIdentityPreview signedIn error /> },
+    },
+  },
   "branch-selector": {
     label: "分支选择器",
     scenarios: {
@@ -204,7 +279,15 @@ const previews: Record<string, PreviewDefinition> = {
       },
       update: {
         label: "检测到更新",
-        render: () => <BranchSelectorPreview action="update" />,
+        render: () => <BranchSelectorPreview action="refresh" />,
+      },
+      checking: {
+        label: "正在检查更新",
+        render: () => <BranchSelectorPreview continuationState={{ kind: "checking", showMessage: true }} />,
+      },
+      fallback: {
+        label: "检查失败降级",
+        render: () => <BranchSelectorPreview action="fallback" />,
       },
       opening: {
         label: "正在打开 Review",

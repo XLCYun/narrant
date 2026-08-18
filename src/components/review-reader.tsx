@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { DiffEditor } from "@monaco-editor/react";
 import {
   ArrowDown01Icon,
@@ -17,43 +17,14 @@ import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { Spinner } from "@/components/ui/spinner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { PullRequestMetadata } from "@/lib/review-types";
-
-/** File Change 在树和 Diff 标题中共享的状态。 */
-export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
-
-/** Review Reader 文件树所需的轻量 File Change 投影。 */
-export type FileChangeSummary = {
-  path: string;
-  oldPath: string | null;
-  status: ChangeStatus;
-};
-
-/** 当前选中文件的可展示内容。 */
-export type FileChangeContent = FileChangeSummary & {
-  contentKind: "text" | "binary" | "submodule" | "symlink";
-  beforeSize: number | null;
-  afterSize: number | null;
-  before: string | null;
-  after: string | null;
-};
-
-/** Review Reader 当前呈现的不可变 Snapshot。 */
-export type ReviewReaderSnapshot = {
-  reviewId: string;
-  snapshotId: string;
-  baseRef: string;
-  baseRevision: string;
-  comparisonBase: string;
-  headRef: string;
-  headRevision: string;
-  fileChanges: FileChangeSummary[];
-  pullRequest?: PullRequestMetadata;
-};
+import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
+import type { ChangeStatus, FileChangeSummary } from "@/review/types";
+export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
 
 /** Monaco Diff 阅读器支持的持久化展示布局。 */
 export type DiffMode = "side-by-side" | "inline";
@@ -67,25 +38,16 @@ type DirectoryNode = {
 
 /** Review Reader 的公开展示状态与用户动作。 */
 type ReviewReaderProps = {
-  snapshot: ReviewReaderSnapshot;
-  fileChange?: FileChangeContent;
-  pendingFilePath?: string;
-  fileChangeLoading?: boolean;
-  fileChangeError?: string;
-  firstFileChangePath?: string;
-  navigationBusy?: boolean;
-  diffMode: DiffMode;
-  narrow: boolean;
-  editorTheme: string;
-  initialTreeWidth: number;
-  updateAction?: ReactNode;
-  notice?: ReactNode;
-  onSelectFile: (path: string) => void;
-  onRetryFile: (path: string) => void;
-  onDiffModeChange: (mode: DiffMode) => void;
-  onTreeWidthChange: (width: number) => void;
-  onOpenExternal: (url: string) => void;
-  onClose: () => void;
+  review: ReviewReaderBinding;
+  appearance: {
+    diffMode: DiffMode;
+    narrow: boolean;
+    editorTheme: string;
+    initialTreeWidth: number;
+    onDiffModeChange: (mode: DiffMode) => void;
+    onTreeWidthChange: (width: number) => void;
+    onOpenExternal: (url: string) => void;
+  };
 };
 
 /** 以不依赖系统 locale 的代码点顺序稳定排列 File Change 路径。 */
@@ -126,13 +88,35 @@ function editorLanguage(path: string) {
     js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
     md: "markdown", json: "json", css: "css", html: "html", rs: "rust",
     py: "python", go: "go", java: "java", yml: "yaml", yaml: "yaml",
+    c: "c", cpp: "cpp", h: "cpp", cs: "csharp", sh: "shell",
+    sql: "sql", php: "php", rb: "ruby", kt: "kotlin", xml: "xml",
   };
   return extension ? languages[extension] ?? "plaintext" : "plaintext";
 }
 
 /** 呈现满高、自由浏览且无审核进度语义的 Review Reader。 */
-export function ReviewReader(props: ReviewReaderProps) {
+export function ReviewReader(input: ReviewReaderProps) {
   const { t } = useTranslation(["common", "review"]);
+  const { review, appearance } = input;
+  const refreshing = review.transition.kind === "refreshing";
+  const props = {
+    snapshot: review.snapshot,
+    fileChange: review.fileChange.kind === "ready" ? review.fileChange.content : undefined,
+    pendingFilePath: review.fileChange.kind === "loading" ? review.fileChange.path : undefined,
+    fileChangeLoading: review.fileChange.kind === "loading",
+    fileChangeError: review.fileChange.kind === "failed" ? review.fileChange.failure.detail : undefined,
+    firstFileChangePath: review.fileChange.kind === "failed" ? review.fileChange.path : undefined,
+    navigationBusy: review.transition.kind !== "stable",
+    ...appearance,
+    updateAction: review.update.kind === "available" ? <div role="status" className="flex items-center gap-2 text-sm">
+      <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t(review.snapshot.pullRequest ? "review:pullRequestBranchesUpdated" : "review:selectedBranchesUpdated")}</span>
+      <Button aria-label={refreshing ? t("review:refreshing") : t("review:refresh")} disabled={refreshing} aria-busy={refreshing || undefined} onClick={() => void review.refresh()}>{refreshing && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshing ? t("review:refreshing") : t("review:refresh")}</span></Button>
+    </div> : undefined,
+    notice: review.update.kind === "failed" ? <p role="alert" className="text-destructive">{review.update.failure.detail}</p> : undefined,
+    onSelectFile: review.selectFileChange,
+    onRetryFile: review.retryFileChange,
+    onClose: () => void review.close(),
+  };
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
   const [activeView, setActiveView] = useState<"overview" | "file-changes">("overview");
   const selectedPath = props.pendingFilePath ?? props.fileChange?.path;
@@ -239,7 +223,7 @@ export function ReviewReader(props: ReviewReaderProps) {
         <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
         <ResizablePanel id="review-diff" minSize="45%">
           {props.fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
-          {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={() => props.onRetryFile(props.firstFileChangePath!)}>{t("common:retry")}</Button>}</div>}
+          {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={props.onRetryFile}>{t("common:retry")}</Button>}</div>}
           {props.fileChange && !props.fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
             <header className="flex h-9 items-center border-b px-3"><h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3></header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}

@@ -22,19 +22,16 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { formatAbsoluteTime, formatRelativeTime, normalizeLocale } from "@/lib/i18n";
-import type { ReviewSummary } from "@/lib/review-types";
+import type { RecentReviewSummary } from "@/lib/review-types";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icon";
 import narrantLogo from "../../assets/brand/narrant-logo.svg";
 import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg";
+import type { AppNavigationResult, AppShellNavigationBinding } from "@/app/use-app-shell-navigation";
+import type { RepositorySummary } from "@/repository/repository-application";
 
 /** 首页侧边栏所需的持久化仓库投影。 */
-export type HomeRepository = {
-  id: number;
-  canonicalPath: string;
-  lastOpenedAt: number;
-  available: boolean;
-};
+export type HomeRepository = RepositorySummary;
 
 type SidebarPreferences = {
   open: boolean;
@@ -46,13 +43,13 @@ type SidebarPreferences = {
   allRepositoryReviews: number[];
 };
 
-/** 应用外壳、主侧边栏与最近审核首页共享的外部状态和用户动作。 */
-type Props = {
-  reviews: ReviewSummary[];
+/** 独立 HomePage 展示入口的兼容输入。 */
+type HomePageProps = {
+  reviews: RecentReviewSummary[];
   repositories?: HomeRepository[];
   error?: string;
   loading?: boolean;
-  onOpenReview: (review: ReviewSummary) => void;
+  onOpenReview: (review: RecentReviewSummary) => void;
   onOpenRepository?: (repository: HomeRepository) => void;
   onOpenFolder: (path: string) => void;
   githubIdentityEntry?: ReactNode;
@@ -69,9 +66,21 @@ type Props = {
   workspace?: boolean;
 };
 
+type AppShellNavigation = Pick<AppShellNavigationBinding, "destination" | "navigate" | "registerAndOpen"> & {
+  sidebar: Omit<AppShellNavigationBinding["sidebar"], "repositories"> & { repositories: HomeRepository[] };
+};
+
+type AppShellProps = {
+  navigation: AppShellNavigation;
+  githubIdentityEntry?: ReactNode;
+  children?: ReactNode;
+  enabled?: boolean;
+  fallbackClassName?: string;
+};
+
 const preferenceKey = "narrant.sidebar-preferences";
 
-/** 从路径中提取 Repository Entry 的稳定可见名称。 */
+/** 从路径中提取 Repository 的稳定可见名称。 */
 function repositoryName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }
@@ -115,19 +124,19 @@ function PullRequestReviewDetails({
   identity,
   openedAt,
 }: {
-  pullRequest: NonNullable<ReviewSummary["pullRequest"]>;
+  pullRequest: Extract<RecentReviewSummary["review"]["selection"], { kind: "pull-request" }>["pullRequest"];
   repositoryPath: string;
   identity: string;
   openedAt: string;
 }) {
   const { t } = useTranslation();
   const details = [
-    [t("review:author"), pullRequest.author],
+    [t("review:author"), pullRequest.authorUsername],
     [
       t("mergeDirection"),
       `${branchName(pullRequest.headRef)} → ${branchName(pullRequest.baseRef)}`,
     ],
-    [t("catalog:repositoryPath"), repositoryPath],
+    [t("repository:repositoryPath"), repositoryPath],
     [t("lastOpened"), openedAt],
   ];
   return <div className="w-72 text-left">
@@ -146,13 +155,13 @@ function BranchReviewDetails({
   review,
   openedAt,
 }: {
-  review: ReviewSummary;
+  review: RecentReviewSummary;
   openedAt: string;
 }) {
   const { t } = useTranslation();
   const details = [
-    [t("mergeDirection"), `${branchName(review.headRef)} → ${branchName(review.baseRef)}`],
-    [t("catalog:repositoryPath"), review.repositoryPath],
+    [t("mergeDirection"), `${branchName(review.review.selection.headRef)} → ${branchName(review.review.selection.baseRef)}`],
+    [t("repository:repositoryPath"), review.repositoryPath],
     [t("lastOpened"), openedAt],
   ];
   return <dl className="grid w-72 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-left">
@@ -172,7 +181,7 @@ function ReviewMenuItem({
   pending = false,
   disabled = false,
 }: {
-  review: ReviewSummary;
+  review: RecentReviewSummary;
   showRepository: boolean;
   onOpen: () => void;
   active?: boolean;
@@ -181,10 +190,10 @@ function ReviewMenuItem({
 }) {
   const { i18n } = useTranslation();
   const locale = normalizeLocale(i18n.resolvedLanguage);
-  const time = formatRelativeTime(review.lastOpenedAt, Date.now(), locale);
-  const pullRequest = review.pullRequest;
+  const time = formatRelativeTime(review.review.lastOpenedAt, Date.now(), locale);
+  const pullRequest = review.review.selection.kind === "pull-request" ? review.review.selection.pullRequest : undefined;
   const identity = pullRequest ? `#${pullRequest.number} ${pullRequest.title}` : undefined;
-  const openedAt = formatAbsoluteTime(review.lastOpenedAt, locale);
+  const openedAt = formatAbsoluteTime(review.review.lastOpenedAt, locale);
   const tooltip = {
     hidden: false,
     side: "right" as const,
@@ -207,7 +216,7 @@ function ReviewMenuItem({
       isActive={active}
       onClick={onOpen}
       aria-current={active ? "page" : undefined}
-      data-review-id={review.reviewId}
+      data-review-id={review.review.reviewId}
       disabled={pending || disabled}
       aria-busy={pending || undefined}
     >
@@ -220,36 +229,89 @@ function ReviewMenuItem({
         </Badge>}
         {identity
           ? <span className="min-w-0 flex-1 truncate">{identity}</span>
-          : <CompactBranchRelation baseRef={review.baseRef} headRef={review.headRef} />}
+          : <CompactBranchRelation baseRef={review.review.selection.baseRef} headRef={review.review.selection.headRef} />}
         {pending ? <Spinner className="mr-3 shrink-0" aria-hidden /> : <span className="mr-3 shrink-0 text-[11px] text-muted-foreground">{time}</span>}
       </span>
     </SidebarMenuButton>
   </SidebarMenuItem>;
 }
 
+/** 最近审核首页只消费 AppShell navigation 投影，不参与主视图事务。 */
+export function HomeView({
+  reviews,
+  error,
+  loading,
+  navigationBusy,
+  pendingReviewId,
+  onChooseFolder,
+  onOpenReview,
+}: {
+  reviews: RecentReviewSummary[];
+  error?: string;
+  loading: boolean;
+  navigationBusy: boolean;
+  pendingReviewId?: string;
+  onChooseFolder(): void;
+  onOpenReview(review: RecentReviewSummary): void;
+}) {
+  const { t } = useTranslation();
+  return <>
+    {!reviews.length && <header className="flex items-center gap-3 border-b pb-5">
+      <div><h1 className="font-brand text-xl">{t("brand")}</h1><p className="text-sm text-muted-foreground">{t("subtitle")}</p></div>
+    </header>}
+    {error && <p role="alert" className="mx-auto mt-6 max-w-3xl rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
+    {loading
+      ? <section role="status" aria-label={t("loadingRecent")} className="mx-auto max-w-3xl space-y-4 py-10"><Skeleton className="h-8 w-40" /><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></section>
+      : reviews.length
+        ? <section className="mx-auto max-w-3xl py-10" aria-label={t("recent")}>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="font-heading text-2xl">{t("recent")}</h2>
+            <Button onClick={onChooseFolder}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button>
+          </div>
+          <ul className="mt-5 divide-y rounded-lg border">
+            {reviews.slice(0, 10).map((review) => <li key={review.review.reviewId}>
+              <Button variant="ghost" className="h-auto w-full justify-start rounded-none px-4 py-4" disabled={navigationBusy} aria-busy={pendingReviewId === review.review.reviewId || undefined} onClick={() => onOpenReview(review)}>
+                <span className="flex min-w-0 flex-col items-start gap-2">
+                  <span className="flex gap-3">
+                    <span className="font-medium">{repositoryName(review.repositoryPath)}</span>
+                    <span className="truncate">{review.review.selection.kind === "pull-request"
+                      ? `#${review.review.selection.pullRequest.number} ${review.review.selection.pullRequest.title}`
+                      : t("localBranch")}</span>
+                  </span>
+                  <BranchRelation baseRef={review.review.selection.baseRef} headRef={review.review.selection.headRef} direction="head-to-base" interactive={false} />
+                </span>
+                {pendingReviewId === review.review.reviewId && <Spinner className="ml-auto" aria-hidden />}
+              </Button>
+            </li>)}
+          </ul>
+        </section>
+        : <section className="mx-auto flex max-w-xl flex-col items-start gap-5 py-24"><h2 className="font-brand text-3xl">{t("emptyTitle")}</h2><p className="text-muted-foreground">{t("emptyDescription")}</p><Button size="lg" onClick={onChooseFolder}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button></section>}
+  </>;
+}
+
 /** 最近审核首页，以及仓库和 Review 历史的常驻导航。 */
 export function AppShell({
-  reviews,
-  repositories = [],
-  error,
-  loading = false,
-  onOpenReview,
-  onOpenRepository = () => undefined,
-  onOpenFolder,
+  navigation,
   githubIdentityEntry,
   children,
-  showHome = true,
-  onOpenHome = () => undefined,
   enabled = true,
   fallbackClassName,
-  activeRepositoryId,
-  activeReviewId,
-  pendingRepositoryId,
-  pendingReviewId,
-  reviewNavigationBusy = false,
-  workspace = false,
-}: Props) {
+}: AppShellProps) {
   const { t } = useTranslation();
+  const { destination, sidebar } = navigation;
+  const {
+    reviews,
+    repositories,
+    error,
+    loading,
+    activeRepositoryId,
+    activeReviewId,
+    pendingRepositoryId,
+    pendingReviewId,
+    busy: reviewNavigationBusy,
+  } = sidebar;
+  const showHome = destination.kind === "home";
+  const workspace = destination.kind === "review";
   const [preferences, setPreferences] = useState<SidebarPreferences>(readPreferences);
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const seenActiveRepositories = useRef(new Set<number>());
@@ -307,7 +369,7 @@ export function AppShell({
     const path = import.meta.env.VITE_WDIO === "true" && e2ePath
       ? e2ePath
       : await open({ directory: true, multiple: false });
-    if (typeof path === "string") onOpenFolder(path);
+    if (typeof path === "string") void navigation.registerAndOpen(path);
   }
 
   /** 独立切换一个仓库的 Review 历史，不触发仓库导航。 */
@@ -321,14 +383,14 @@ export function AppShell({
   }
 
   /** 从最近审核进入时展开所属仓库，帮助用户建立导航位置感。 */
-  function openRecentReview(review: ReviewSummary) {
+  function openRecentReview(review: RecentReviewSummary) {
     setPreferences((value) => ({
       ...value,
-      expandedRepositories: value.expandedRepositories.includes(review.repositoryEntryId)
+      expandedRepositories: value.expandedRepositories.includes(review.repositoryId)
         ? value.expandedRepositories
-        : [...value.expandedRepositories, review.repositoryEntryId],
+        : [...value.expandedRepositories, review.repositoryId],
     }));
-    onOpenReview(review);
+    void navigation.navigate({ kind: "review", repositoryId: review.repositoryId, target: { kind: "saved-review", reviewId: review.review.reviewId } });
   }
 
   /** 在非交互顶栏上按下主鼠标键时，显式请求 Tauri 移动原生窗口。 */
@@ -389,7 +451,7 @@ export function AppShell({
           aria-label={t("brand")}
           aria-current={showHome ? "page" : undefined}
           className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          onClick={onOpenHome}
+          onClick={() => void navigation.navigate({ kind: "home" })}
         >
           <picture className="size-12 shrink-0">
             <source media="(prefers-color-scheme: dark)" srcSet={narrantLogoDark} />
@@ -418,7 +480,7 @@ export function AppShell({
           {preferences.recentGroupOpen && <SidebarGroupContent>
             <SidebarMenu>
               {reviews.slice(0, preferences.recentExpanded ? 10 : 5).map((review) =>
-                <ReviewMenuItem key={review.reviewId} review={review} showRepository pending={pendingReviewId === review.reviewId} disabled={reviewNavigationBusy} onOpen={() => openRecentReview(review)} />)}
+                <ReviewMenuItem key={review.review.reviewId} review={review} showRepository pending={pendingReviewId === review.review.reviewId} disabled={reviewNavigationBusy} onOpen={() => openRecentReview(review)} />)}
               {!reviews.length && <p className="px-2 text-sm text-muted-foreground">{t("noRecent")}</p>}
               {reviews.length > 5 && <SidebarMenuItem>
                 <SidebarMenuButton
@@ -449,12 +511,12 @@ export function AppShell({
               {repositories.map((repository) => {
                 const expanded = preferences.expandedRepositories.includes(repository.id);
                 const all = preferences.allRepositoryReviews.includes(repository.id);
-                const repositoryReviews = reviews.filter((review) => review.repositoryEntryId === repository.id);
+                const repositoryReviews = reviews.filter((review) => review.repositoryId === repository.id);
                 const pending = pendingRepositoryId === repository.id;
                 return <SidebarMenuItem key={repository.id}>
                   <div className="group/repository relative flex items-center">
                     <SidebarMenuButton
-                      className={cn("min-w-0 flex-1 pr-9", !repository.available && "text-muted-foreground")}
+                      className={cn("min-w-0 flex-1 pr-9", repository.availability.kind !== "available" && "text-muted-foreground")}
                       tooltip={repository.canonicalPath}
                       isActive={activeRepositoryId === repository.id && !activeReviewId}
                       aria-expanded={expanded}
@@ -471,14 +533,14 @@ export function AppShell({
                       aria-label={t(pending ? "openingRepository" : "openRepository", { name: repositoryName(repository.canonicalPath) })}
                       disabled={pending}
                       aria-busy={pending || undefined}
-                      onClick={() => onOpenRepository(repository)}
+                      onClick={() => void navigation.navigate({ kind: "repository", repositoryId: repository.id })}
                     >
                       {pending ? <Spinner aria-hidden /> : <Icon icon={ArrowRight02Icon} />}
                     </Button>
                   </div>
                   {expanded && <SidebarMenu className="ml-5 mt-1 w-auto pl-2">
                     {repositoryReviews.slice(0, all ? undefined : 10).map((review) =>
-                      <ReviewMenuItem key={review.reviewId} review={review} showRepository={false} active={activeReviewId === review.reviewId} pending={pendingReviewId === review.reviewId} disabled={reviewNavigationBusy} onOpen={() => onOpenReview(review)} />)}
+                      <ReviewMenuItem key={review.review.reviewId} review={review} showRepository={false} active={activeReviewId === review.review.reviewId} pending={pendingReviewId === review.review.reviewId} disabled={reviewNavigationBusy} onOpen={() => void navigation.navigate({ kind: "review", repositoryId: review.repositoryId, target: { kind: "saved-review", reviewId: review.review.reviewId } })} />)}
                     {!repositoryReviews.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("noRecent")}</p>}
                     {repositoryReviews.length > 10 && <SidebarMenuItem>
                       <SidebarMenuButton
@@ -507,41 +569,80 @@ export function AppShell({
       "relative z-20 w-full bg-background px-8 pt-14",
       workspace ? "h-screen overflow-hidden pb-4" : "min-h-screen pb-8",
     )}>
-      {!showHome ? children : <>
-      {!reviews.length && <header className="flex items-center gap-3 border-b pb-5">
-        <div><h1 className="font-brand text-xl">{t("brand")}</h1><p className="text-sm text-muted-foreground">{t("subtitle")}</p></div>
-      </header>}
-      {error && <p role="alert" className="mx-auto mt-6 max-w-3xl rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
-      {loading
-        ? <section role="status" aria-label={t("loadingRecent")} className="mx-auto max-w-3xl space-y-4 py-10"><Skeleton className="h-8 w-40" /><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></section>
-        : reviews.length
-          ? <section className="mx-auto max-w-3xl py-10" aria-label={t("recent")}>
-            <div className="flex items-center justify-between gap-4">
-              <h2 className="font-heading text-2xl">{t("recent")}</h2>
-              <Button onClick={() => void chooseFolder()}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button>
-            </div>
-            <ul className="mt-5 divide-y rounded-lg border">
-              {reviews.slice(0, 10).map((review) => <li key={review.reviewId}>
-                <Button variant="ghost" className="h-auto w-full justify-start rounded-none px-4 py-4" disabled={reviewNavigationBusy} aria-busy={pendingReviewId === review.reviewId || undefined} onClick={() => openRecentReview(review)}>
-                  <span className="flex min-w-0 flex-col items-start gap-2">
-                    <span className="flex gap-3">
-                      <span className="font-medium">{repositoryName(review.repositoryPath)}</span>
-                      <span className="truncate">{review.pullRequest ? `#${review.pullRequest.number} ${review.pullRequest.title}` : t("localBranch")}</span>
-                    </span>
-                    <BranchRelation baseRef={review.baseRef} headRef={review.headRef} direction="head-to-base" interactive={false} />
-                  </span>
-                  {pendingReviewId === review.reviewId && <Spinner className="ml-auto" aria-hidden />}
-                </Button>
-              </li>)}
-            </ul>
-          </section>
-          : <section className="mx-auto flex max-w-xl flex-col items-start gap-5 py-24"><h2 className="font-brand text-3xl">{t("emptyTitle")}</h2><p className="text-muted-foreground">{t("emptyDescription")}</p><Button size="lg" onClick={() => void chooseFolder()}><Icon icon={FolderOpenIcon} />{t("openFolder")}</Button></section>}
-      </>}
+      {!showHome ? children : <HomeView
+        reviews={reviews}
+        error={error}
+        loading={loading}
+        navigationBusy={reviewNavigationBusy}
+        pendingReviewId={pendingReviewId}
+        onChooseFolder={() => void chooseFolder()}
+        onOpenReview={openRecentReview}
+      />}
     </main>
   </SidebarProvider>;
 }
 
 /** 为首页组件测试与独立展示保留的最近审核首页入口。 */
-export function HomePage(props: Props) {
-  return <AppShell {...props} showHome />;
+export function HomePage({
+  reviews,
+  repositories = [],
+  error,
+  loading = false,
+  onOpenReview,
+  onOpenRepository = () => undefined,
+  onOpenFolder,
+  githubIdentityEntry,
+  children,
+  showHome = true,
+  onOpenHome = () => undefined,
+  enabled = true,
+  fallbackClassName,
+  activeRepositoryId,
+  activeReviewId,
+  pendingRepositoryId,
+  pendingReviewId,
+  reviewNavigationBusy = false,
+}: HomePageProps) {
+  const destination = showHome
+    ? { kind: "home" as const }
+    : activeReviewId && activeRepositoryId !== undefined
+      ? { kind: "review" as const, repositoryId: activeRepositoryId, reviewId: activeReviewId }
+      : { kind: "repository" as const, repositoryId: activeRepositoryId ?? 0, initialTab: "pull-requests" as const };
+  const navigated = (): Promise<AppNavigationResult> => Promise.resolve({ kind: "navigated" });
+  return <AppShell
+    navigation={{
+      destination,
+      sidebar: {
+        reviews,
+        repositories,
+        error,
+        loading,
+        activeRepositoryId,
+        activeReviewId,
+        pendingRepositoryId,
+        pendingReviewId,
+        busy: reviewNavigationBusy,
+      },
+      navigate(intent) {
+        if (intent.kind === "home") onOpenHome();
+        if (intent.kind === "repository") {
+          const repository = repositories.find((candidate) => candidate.id === intent.repositoryId);
+          if (repository) onOpenRepository(repository);
+        }
+        if (intent.kind === "review" && intent.target.kind === "saved-review") {
+          const reviewId = intent.target.reviewId;
+          const review = reviews.find((candidate) => candidate.review.reviewId === reviewId);
+          if (review) onOpenReview(review);
+        }
+        return navigated();
+      },
+      registerAndOpen(path) {
+        onOpenFolder(path);
+        return navigated();
+      },
+    }}
+    githubIdentityEntry={githubIdentityEntry}
+    enabled={enabled}
+    fallbackClassName={fallbackClassName}
+  >{children}</AppShell>;
 }

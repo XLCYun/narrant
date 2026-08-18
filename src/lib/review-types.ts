@@ -1,14 +1,14 @@
 /** 已持久化的 Pull Request 协作元数据。 */
 export type PullRequestMetadata = {
   owner: string; repository: string; number: number; title: string; description: string;
-  author: string; state: "open" | "closed" | "merged"; draft: boolean; url: string;
-  baseRef: string; headRef: string; updatedAt?: string; synchronizedAt: number;
+  authorUsername: string; state: "open" | "closed" | "merged"; isDraft: boolean; webUrl: string;
+  baseRef: string; headRef: string; githubUpdatedAt?: string; synchronizedAtMillis: number;
 };
 
 /** GitHub discovery 返回的一个 Pull Request。 */
 export type DiscoveredPullRequest = {
-  number: number; title: string; description: string; author: string; state: string;
-  draft: boolean; url: string; updatedAt: string;
+  number: number; title: string; description: string; authorUsername: string; state: string;
+  isDraft: boolean; webUrl: string; githubUpdatedAt: string;
   base: { ref: string; sha: string };
   head: { ref: string; sha: string };
 };
@@ -21,21 +21,29 @@ export type PullRequestGroup = {
   error: string | null;
 };
 
-/** 无需在线 discovery 即可打开的持久化 Review 投影。 */
-export type SavedReviewSummary = {
-  reviewId: string;
+/** Repository Overview 中显式呈现的 Review Selection。 */
+export type ReviewSelectionSummary =
+  | { kind: "branch"; baseRef: string; headRef: string }
+  | { kind: "pull-request"; baseRef: string; headRef: string; pullRequest: PullRequestMetadata };
+
+/** Review 当前 Snapshot 的完整 revision identity。 */
+export type ReviewSnapshotSummary = {
   baseRevision: string;
+  comparisonBase: string;
   headRevision: string;
-  pullRequest?: PullRequestMetadata;
 };
 
-/** Repository Entry 与最近审核列表共享的 Review 投影。 */
-export type ReviewSummary = {
+/** Repository 范围内可继续打开的 Review 摘要。 */
+export type RepositoryReviewSummary = {
   reviewId: string;
-  repositoryEntryId: number;
-  repositoryPath: string;
-  baseRef: string;
-  headRef: string;
+  selection: ReviewSelectionSummary;
+  currentSnapshot: ReviewSnapshotSummary;
   lastOpenedAt: number;
-  pullRequest?: PullRequestMetadata;
+};
+
+/** 首页跨 Repository 聚合的最近 Review 摘要。 */
+export type RecentReviewSummary = {
+  repositoryId: number;
+  repositoryPath: string;
+  review: RepositoryReviewSummary;
 };

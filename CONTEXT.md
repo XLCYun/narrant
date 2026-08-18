@@ -21,8 +21,14 @@ _Avoid_: GitHub comparison
 
 **Branch Selection**:
 A **Review Selection** identified by canonical local or remote-tracking base and
-head branch refs in one **Repository Entry**.
+head branch refs in one **Repository**.
 _Avoid_: Local PR
+
+**Branch Selection Continuation**:
+The application decision that matches a selected **Branch Selection** to its existing
+**Review**, checks for a **Review Update**, and chooses whether to start, continue, or
+explicitly refresh that Review.
+_Avoid_: Branch Review session, comparison mode
 
 **Local Branch Comparison**:
 A **Change Comparison** whose base and head revisions come from a local Git repository.
@@ -50,6 +56,12 @@ _Avoid_: Base Ref, base tip
 The before-and-after content and change metadata for one path in a **Change Comparison**.
 _Avoid_: Diff file, patch item
 
+**File Content Reference**:
+An immutable reference from one side of a **File Change** to content pinned by a
+**Change Comparison**'s exact revisions and retained if that comparison becomes a
+**Review Snapshot**. A File Change may have a before reference, an after reference, or both.
+_Avoid_: Entry, File Entry, File Version
+
 **Review Reader**:
 The application view that presents one open **Review Snapshot**, including its
 collection of **File Changes** and the freely selected **File Change** content. It
@@ -62,10 +74,16 @@ The available views are Overview and File Changes; switching views does not crea
 _Avoid_: Review mode, sidebar panel
 
 **Review Snapshot**:
-An immutable **Change Comparison** pinned to exact base, comparison-base, and head
-revisions. Its identity and history remain saved even when its Git objects are no
-longer available in the user's repository.
+An immutable **Change Comparison** that became current for a **Review**, pinned to exact
+base, comparison-base, and head revisions. Its identity and history remain saved even
+when its Git objects are no longer available in the user's repository.
 _Avoid_: Latest PR, live diff
+
+**Review Refresh Candidate**:
+An immutable **Change Comparison** prepared by an explicit refresh but not yet made
+current for its **Review**. It becomes a **Review Snapshot** only after the refresh
+transition succeeds; a failed candidate is not part of Review history.
+_Avoid_: Pending Snapshot, draft Snapshot
 
 **Review Update**:
 The condition in which the moving base or head ref of a **Review Selection** no
@@ -73,28 +91,46 @@ longer resolves to the revisions presented by the open **Review Snapshot**.
 _Avoid_: Available version, new Snapshot
 
 **Review**:
-A durable code-review record owned by one **Repository Entry**. It preserves review
+A durable code-review record owned by one **Repository**. It preserves review
 history across application launches, owns one **Review Selection**, and may
 contain successive **Review Snapshots** as those refs move.
 Opening it activates the runtime resources needed to inspect its current snapshot.
 The same **Review** cannot be opened more than once concurrently.
 _Avoid_: Review Session, cached review
 
-**Repository Entry**:
+**Repository**:
 A specific locally cloned Git repository registered with Narrant as the home of its
-saved review history. Another clone remains a distinct Repository Entry even when both
+saved review history. Another clone remains a distinct Repository even when both
 clones refer to the same remote repository.
 _Avoid_: Project, remote repository
 
+**Repository Application**:
+The deep application module that projects Repositories, Workspace Trust, and
+saved Review summaries into one enterable Repository Overview. It resolves availability
+and Trust before exposing the overview and provides the canonical path needed by local
+Git and Pull Request discovery operations.
+_Avoid_: Catalog adapter, storage service
+
+**Repository Overview**:
+The application projection presented after one Repository passes availability and
+Workspace Trust checks. It contains that Repository and its visible Reviews.
+_Avoid_: Repository Context, Repository Session, Catalog row
+
 **Workspace Trust**:
 A reviewer's durable authorization for Narrant to perform normal Git checkout and
-run review tooling for one **Repository Entry**.
+run review tooling for one **Repository**.
 _Avoid_: Safe repository, Review permission
 
 **GitHub Identity**:
 The single GitHub user currently authorized to act through Narrant's GitHub App.
 It is an external authorization identity, not a Narrant-owned user account.
 _Avoid_: Narrant Account, User Profile
+
+**Pull Request Discovery**:
+The current observation of accessible **Pull Requests** grouped by the GitHub repositories
+represented by one **Repository**'s remotes. It may be anonymous or use the current
+**GitHub Identity**.
+_Avoid_: PR list, Repository GitHub association
 
 **UI Icon**:
 A compact visual symbol that communicates an interface action, object, or status.
@@ -111,7 +147,7 @@ _Avoid_: File Change status icon
 The Narrant-owned, disposable checkout of the head revision presented by one
 open **Review**. It contains no user-owned state, may be forcibly rebuilt when the
 review advances to another snapshot, and is removed when the review closes.
-_Avoid_: Repository Entry, user worktree
+_Avoid_: Repository, user worktree
 
 ## Relationships
 
@@ -121,6 +157,8 @@ _Avoid_: Repository Entry, user worktree
 - A **Pull Request Selection** retains its pull-request identity while resolving the
   current refs selected by that pull request
 - A **Branch Selection** retains canonical local ref identities
+- A **Branch Selection Continuation** never changes the selected refs; it decides how
+  the resulting Branch Selection opens its unique Review
 - A **Local Branch Comparison** identifies one repository-local **Change Comparison**
 - A **Change Comparison** uses the merge base of its **Base Ref** and **Head Ref** as its **Comparison Base**
 - Both **Branch Selections** and **Pull Request Selections** calculate their
@@ -131,25 +169,49 @@ _Avoid_: Repository Entry, user worktree
 - A **Review Reader** provides Overview and File Changes as peer **Review Views** over the same open **Review Snapshot**
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
   mark that change as viewed, reviewed, or approved
-- A **Repository Entry** owns zero or more **Reviews**
+- A **Repository** owns zero or more **Reviews**
+- A **Repository Application** owns the enterable **Repository Overview** projection
+  for one or more **Repositories**
+- A **Repository Overview** contains one collection of **Reviews**; a Review's Selection,
+  current Snapshot revisions, and list metadata do not form separate Review collections
+- A current **Review Snapshot** summary identifies its exact base, Comparison Base, and
+  head revisions even when a particular overview uses only part of that identity
+- A Review summary's last-opened time is list activity metadata; it does not belong to
+  the Review Selection or the current Review Snapshot
+- A **Repository Overview** and a cross-Repository recent-review aggregate expose only
+  Reviews with an activated current **Review Snapshot**; an unactivated persistence
+  record is not a visible Review
+- A **Review** inside a **Repository Overview** inherits that overview's Repository
+  identity; only cross-Repository aggregate views identify the owning Repository
 - Narrant has at most one current **GitHub Identity**
 - A **GitHub Identity** may be represented by cached public profile information while
   GitHub is temporarily unavailable, but signing out removes that representation
-- Moving a local clone does not create a new **Repository Entry** when the user
+- A **GitHub Identity** change invalidates the current **Pull Request Discovery**, but
+  navigating between **Repositories** does not refresh the **GitHub Identity**
+- Moving a local clone does not create a new **Repository** when the user
   explicitly relocates its saved path
-- A **Repository Entry** may discover pull requests from multiple GitHub repositories
+- A **Repository** may discover pull requests from multiple GitHub repositories
   represented by its Git remotes; it does not own one exclusive GitHub association
-- A **Repository Entry** must have **Workspace Trust** before Narrant checks out code or
+- A **Repository** must have **Workspace Trust** before Narrant checks out code or
   starts review tooling for it
-- Deleting a **Repository Entry** also deletes its **Workspace Trust**
+- Deleting a **Repository** also deletes its **Workspace Trust**
 - A **Review** contains one or more successive **Review Snapshots**
+- A **Review Refresh Candidate** becomes a **Review Snapshot** only after its Review
+  Workspace and current pointer consistently represent it
+- A failed **Review Refresh Candidate** never appears in Review history
+- Crash recovery restores the last successfully activated current **Review Snapshot**;
+  it never activates an unconfirmed **Review Refresh Candidate**
 - Historical **Review Snapshots** do not keep their Git objects alive and may become
   unavailable after the user's repository discards those objects
 - A **Review** owns exactly one **Review Selection**, while each **Review Snapshot**
   pins the exact commits resolved from that selection at one moment
+- A **Review Selection** is represented explicitly as either a **Branch Selection** or
+  a **Pull Request Selection**; missing Pull Request metadata does not identify its kind
+- A **Pull Request Selection** may carry its persisted Pull Request collaboration metadata
+  as one value; separating that cache from Selection identity is outside the current model
 - A **Review Selection** identity never changes after its **Review** is created; choosing
   another branch pair creates another **Review**
-- Within one **Repository Entry**, the same **Review Selection** reopens its existing
+- Within one **Repository**, the same **Review Selection** reopens its existing
   **Review** rather than creating a duplicate
 - An open **Review** owns one disposable **Review Workspace** whose repository checkout
   presents the head revision of its current **Review Snapshot**
@@ -165,8 +227,10 @@ _Avoid_: Repository Entry, user worktree
 - Failure of optional analysis tooling does not roll back a current
   **Review Snapshot**
 - Closing a **Review** releases runtime resources without deleting its saved history
-- A recent-review list is an aggregate view of **Reviews** across
-  **Repository Entries**
+- A **Review** remains closed when cleanup of its **Review Workspace** fails; the
+  leftover workspace is retained only for a later safe recovery attempt
+- A recent-review list is an aggregate view of **Reviews** across **Repositories**;
+  each entry identifies both the Review and its owning Repository
 
 ## Example dialogue
 

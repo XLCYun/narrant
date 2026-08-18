@@ -26,8 +26,10 @@ export type GitHubIdentity = {
 type Props = {
   signedIn: boolean;
   identity?: GitHubIdentity | null;
+  error?: string;
   onConnect: () => void;
   onSignOut: () => void;
+  onRetry?: () => void;
   className?: string;
 };
 
@@ -41,13 +43,13 @@ function identityInitials(identity: GitHubIdentity) {
 }
 
 /** 全局 GitHub Identity 入口，统一承载连接、身份确认和退出。 */
-export function GitHubIdentityEntry({ signedIn, identity, onConnect, onSignOut, className }: Props) {
-  const { t } = useTranslation("github");
+export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSignOut, onRetry, className }: Props) {
+  const { t } = useTranslation(["github", "common"]);
 
   if (!signedIn) {
-    return <Button variant="ghost" className={className} onClick={onConnect}>
+    return <Button variant="ghost" className={className} onClick={error && onRetry ? onRetry : onConnect}>
       <GitHubMark />
-      <span className="truncate">{t("connect")}</span>
+      <span className="truncate">{error ? t("retryStatus") : t("connect")}</span>
     </Button>;
   }
 
@@ -55,40 +57,46 @@ export function GitHubIdentityEntry({ signedIn, identity, onConnect, onSignOut, 
   const avatarUrl = identity?.avatarPath
     ? ("__TAURI_INTERNALS__" in window ? convertFileSrc(identity.avatarPath) : identity.avatarPath)
     : null;
-  return <DropdownMenu>
-    <DropdownMenuTrigger
-      aria-label={compactName}
-      className={className}
-      render={<Button variant="ghost" />}
-    >
-      {identity
-        ? <Avatar className="size-8">
-          {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
-          <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
-        </Avatar>
-        : <GitHubMark />}
-      <span className="truncate">{compactName}</span>
-    </DropdownMenuTrigger>
-    <DropdownMenuContent side="top" align="start" className="w-64">
-      {identity && <>
-        <DropdownMenuGroup>
-          <DropdownMenuLabel className="flex items-center gap-3">
-            <Avatar className="size-9">
-              {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
-              <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
-            </Avatar>
-            <span className="min-w-0">
-              <span className="block truncate font-medium">{compactName}</span>
-              <span className="block truncate text-xs font-normal text-muted-foreground">@{identity.login}</span>
-            </span>
-          </DropdownMenuLabel>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-      </>}
-      <DropdownMenuItem variant="destructive" onClick={onSignOut}>
-        <Icon icon={LogoutSquare01Icon} />
-        {t("signOut")}
-      </DropdownMenuItem>
-    </DropdownMenuContent>
-  </DropdownMenu>;
+  return <div className="min-w-0 space-y-1">
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={compactName}
+        className={className}
+        render={<Button variant="ghost" />}
+      >
+        {identity
+          ? <Avatar className="size-8">
+            {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+            <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
+          </Avatar>
+          : <GitHubMark />}
+        <span className="truncate">{compactName}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="w-64">
+        {identity && <>
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="flex items-center gap-3">
+              <Avatar className="size-9">
+                {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+                <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
+              </Avatar>
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{compactName}</span>
+                <span className="block truncate text-xs font-normal text-muted-foreground">@{identity.login}</span>
+              </span>
+            </DropdownMenuLabel>
+          </DropdownMenuGroup>
+          <DropdownMenuSeparator />
+        </>}
+        <DropdownMenuItem variant="destructive" onClick={onSignOut}>
+          <Icon icon={LogoutSquare01Icon} />
+          {t("signOut")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+    {error && <div className="space-y-1 px-2 text-xs text-destructive">
+      <p role="alert" className="break-words">{error}</p>
+      {onRetry && <Button variant="outline" size="sm" className="w-full" onClick={onRetry}>{t("retryAction")}</Button>}
+    </div>}
+  </div>;
 }

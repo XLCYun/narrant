@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Narrant 已经能够围绕本地 **Repository Entry** 创建和持久化 **Review**，支持
+Narrant 已经能够围绕本地 **Repository** 创建和持久化 **Review**，支持
 **Pull Request Selection** 与 **Branch Selection**、显式刷新
 **Review Snapshot**、浏览 **File Change**，以及通过 GitHub App 发现 Pull
 Request。然而，现有前端把仓库注册、GitHub 授权、Review 历史、分支选择、更新检查和
@@ -19,7 +19,7 @@ Narrant 还将面向中文和英文用户。当前界面文案直接写在组件
 ## Solution
 
 Narrant 将采用面向桌面代码审核的应用框架：左侧常驻、可调整和可折叠的主侧边栏用于
-最近 Review、Repository Entry 和 Review 历史导航；右侧主区域根据当前选择展示首页、
+最近 Review、Repository 和 Review 历史导航；右侧主区域根据当前选择展示首页、
 仓库概览或 Review 阅读器。首页优先帮助用户继续最近 Review 或通过系统文件夹选择器
 打开本地 Git clone。仓库概览通过 Pull Requests、本地分支和 Review 历史三个标签组织
 创建与继续 Review 的入口。Review 阅读器把空间优先分配给文件树和 Monaco Diff，
@@ -41,7 +41,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 3. 作为回访用户，我希望启动后看到最近 5 条 Review，并可展开到最近 10 条，以便快速继续上次工作且避免侧边栏过长。
 4. 作为回访用户，我希望最近 Review 同时显示仓库、Review 身份和最后打开时间，以便辨认目标。
 5. 作为回访用户，我希望点击最近 Review 的整行即可继续，以便减少导航步骤。
-6. 作为维护多个仓库的审核者，我希望在常驻侧边栏中看到所有 Repository Entry，以便随时切换上下文。
+6. 作为维护多个仓库的审核者，我希望在常驻侧边栏中看到所有 Repository，以便随时切换上下文。
 7. 作为维护多个仓库的审核者，我希望展开一个仓库时先看到最近 10 条 Review，以便侧边栏保持紧凑。
 8. 作为拥有大量 Review 历史的审核者，我希望点击“查看全部”后在侧边栏中看到该仓库的全部 Review，以便查找较早记录。
 9. 作为拥有大量 Review 历史的审核者，我希望把完整列表收起到最近 10 条，以便恢复侧边栏空间。
@@ -67,7 +67,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 29. 作为本地分支审核者，我希望 Base 与 Head 相同时无法开始 Review，以便避免无意义比较。
 30. 作为本地分支审核者，我希望已有相同 Branch Selection 时显示“继续审核”，以便复用已有 Review。
 31. 作为本地分支审核者，我希望能够选择其他本地或远程跟踪分支，以便审核非默认分支组合。
-32. 作为首次打开 Repository Entry 的用户，我希望在进入仓库前看到 Workspace Trust 风险说明，以便理解 checkout、hooks、filters 和 Git LFS 风险。
+32. 作为首次打开 Repository 的用户，我希望在进入仓库前看到 Workspace Trust 风险说明，以便理解 checkout、hooks、filters 和 Git LFS 风险。
 33. 作为已经授予信任的用户，我希望后续直接进入仓库且不再显示“已信任”状态，以便安全确认不成为持续噪音。
 34. 作为选择了非 Git 文件夹的用户，我希望停留在原页面并看到明确错误，以便立即改正选择。
 35. 作为 Review 阅读者，我希望打开 Review 后自动展示按路径排序的第一个 File Change，以便主区域不会空白。
@@ -99,7 +99,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 61. 作为同时处理多个 Review 的用户，我希望新 Review 打开失败时继续保留当前 Review，以便错误不会让我落入空白页面。
 62. 作为离开 Review 的用户，我希望应用自动释放临时 Review Workspace，以便本地资源得到及时清理。
 63. 作为需要明确结束当前 Review 的用户，我希望在更多菜单中使用“关闭审核”，以便释放 Workspace 而不删除历史。
-64. 作为仓库文件夹被移动或删除的用户，我希望侧边栏保留 Repository Entry 和历史 Review 名称，以便知道原有记录仍存在。
+64. 作为仓库文件夹被移动或删除的用户，我希望侧边栏保留 Repository 和历史 Review 名称，以便知道原有记录仍存在。
 65. 作为仓库文件夹不可用的用户，我希望仓库页面展示原路径和不可用原因，以便理解为何不能打开 Review。
 66. 作为执行耗时操作的用户，我希望加载反馈只出现在受影响区域，以便应用其他部分保持可用。
 67. 作为执行后台刷新的用户，我希望已有列表和旧 Diff 保持可见，以便内容不会因刷新闪烁。
@@ -117,34 +117,34 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 
 ## Implementation Decisions
 
-- 应用采用三个主视图：最近 Review 首页、Repository Entry 概览和 Review 阅读器。
+- 应用采用三个主视图：最近 Review 首页、Repository 概览和 Review 阅读器。
 - 不设置横跨全窗口的全局顶栏。品牌区位于主侧边栏顶部，GitHub 连接入口位于底部，每个主视图拥有自己的页面级标题栏。
-- 三个主视图共享同一个应用外壳，不引入 URL Router；主侧边栏承担主视图切换。点击品牌区进入首页，点击 Repository Entry 右侧独立小按钮进入仓库概览，点击 Review 条目进入 Review 阅读器。
-- 当前主视图在侧边栏中只对应一个选中项：品牌区在首页保留 `aria-current="page"` 语义但不显示常驻选中背景；仓库概览选中 Repository Entry 名称，Review 阅读器选中所属 Repository Entry 下的 Review 条目并自动滚动到、展开所属 Repository Entry，但不同时选中 Repository Entry 名称。品牌区始终可点击返回首页，使用 pointer 光标、悬停灰色背景与键盘焦点环。“最近审核”仅作为跨仓库快捷入口，其中的 Review 条目永不显示选中态；从这里打开 Review 后，选中态落到所属 Repository Entry 下的对应条目。不额外设置导航条或面包屑。
+- 三个主视图共享同一个应用外壳，不引入 URL Router；主侧边栏承担主视图切换。点击品牌区进入首页，点击 Repository 右侧独立小按钮进入仓库概览，点击 Review 条目进入 Review 阅读器。
+- 当前主视图在侧边栏中只对应一个选中项：品牌区在首页保留 `aria-current="page"` 语义但不显示常驻选中背景；仓库概览选中 Repository 名称，Review 阅读器选中所属 Repository 下的 Review 条目并自动滚动到、展开所属 Repository，但不同时选中 Repository 名称。品牌区始终可点击返回首页，使用 pointer 光标、悬停灰色背景与键盘焦点环。“最近审核”仅作为跨仓库快捷入口，其中的 Review 条目永不显示选中态；从这里打开 Review 后，选中态落到所属 Repository 下的对应条目。不额外设置导航条或面包屑。
 - 主侧边栏默认宽度约 280px，可拖动调整、折叠并保存前端偏好。拖动期间宽度必须逐帧跟随指针，临时关闭宽度过渡并禁止页面文本选择；折叠或展开仍可保留过渡。折叠后侧边栏宽度为零，不保留仅含展开按钮的图标窄栏。小窗口下使用临时侧栏。
-- 主视图切换不重新挂载或重置主侧边栏；其宽度、开合状态和各 Repository Entry 的历史展开状态在视图间保持，并从前端本地偏好恢复。小窗口的临时侧栏在点击品牌区、Repository Entry 名称或 Review 条目后都保持打开，只由用户显式关闭。
+- 主视图切换不重新挂载或重置主侧边栏；其宽度、开合状态和各 Repository 的历史展开状态在视图间保持，并从前端本地偏好恢复。小窗口的临时侧栏在点击品牌区、Repository 名称或 Review 条目后都保持打开，只由用户显式关闭。
 - 主侧边栏使用唯一的展开/收起按钮：macOS 将按钮放在红黄绿窗口控件右侧的标题栏区域，Windows 和 Linux 将按钮放在主内容顶部工具区；按钮不随侧边栏一起隐藏。
-- 主侧边栏的“最近审核”默认显示跨 Repository Entry 最近 5 条 Review；记录超过 5 条时提供“查看全部”，展开后显示最近 10 条。
+- 主侧边栏的“最近审核”默认显示跨 Repository 最近 5 条 Review；记录超过 5 条时提供“查看全部”，展开后显示最近 10 条。
 - “最近审核”展开到 10 条后提供收起操作，恢复为最近 5 条。
 - 首页主内容不复用侧边栏的折叠状态，始终直接显示最近 10 条 Review。
-- 每个 Repository Entry 首次展开显示最近 10 条 Review；超过 10 条时提供“查看全部”，展开后提供“收起到最近 10 条”。
-- 点击 Repository Entry 主体（包括名称）只展开或收起 Review 历史；只有点击右侧独立小按钮才打开 Repository Entry 概览。
-- 多个 Repository Entry 可以同时展开，各自的展开状态作为前端本地偏好保存并在应用重启后恢复；打开 Repository Entry 概览不隐式改变其展开状态。
-- 首次显示仓库列表时，当前 Repository Entry 自动展开，其他 Repository Entry 默认收起。此后以各仓库的持久化展开状态为准；从“最近审核”打开 Review 时自动展开其所属 Repository Entry，并保存该状态。
-- Repository Entry 保持稳定的添加顺序，新添加的仓库位于前端；打开 Repository Entry 或其任一 Review 都不改变仓库之间的排列位置。当前 Repository Entry 仅显示选中态，不在列表中创建固定副本。
-- Review 按最近打开时间降序排列；打开已有 Review 或创建并打开新 Review 都会更新其最近打开时间，使当前 Review 自然进入所属 Repository Entry 的列表顶部并成为选中项，不为旧 Review 创建固定副本或强制切换“查看全部”状态。
-- 再次点击当前已选中的 Repository Entry 或 Review 不重新加载内容、重建 Review Workspace 或更新最近打开时间；内容刷新只由对应主视图中的明确操作触发。
-- 从侧边栏打开另一个 Repository Entry 或 Review 时，原主视图和原选中项保持到新目标成功打开；目标条目局部显示加载状态并禁止重复触发。成功后原子切换主内容和选中态，失败则保留原视图与选中态。
+- 每个 Repository 首次展开显示最近 10 条 Review；超过 10 条时提供“查看全部”，展开后提供“收起到最近 10 条”。
+- 点击 Repository 主体（包括名称）只展开或收起 Review 历史；只有点击右侧独立小按钮才打开 Repository 概览。
+- 多个 Repository 可以同时展开，各自的展开状态作为前端本地偏好保存并在应用重启后恢复；打开 Repository 概览不隐式改变其展开状态。
+- 首次显示仓库列表时，当前 Repository 自动展开，其他 Repository 默认收起。此后以各仓库的持久化展开状态为准；从“最近审核”打开 Review 时自动展开其所属 Repository，并保存该状态。
+- Repository 保持稳定的添加顺序，新添加的仓库位于前端；打开 Repository 或其任一 Review 都不改变仓库之间的排列位置。当前 Repository 仅显示选中态，不在列表中创建固定副本。
+- Review 按最近打开时间降序排列；打开已有 Review 或创建并打开新 Review 都会更新其最近打开时间，使当前 Review 自然进入所属 Repository 的列表顶部并成为选中项，不为旧 Review 创建固定副本或强制切换“查看全部”状态。
+- 再次点击当前已选中的 Repository 或 Review 不重新加载内容、重建 Review Workspace 或更新最近打开时间；内容刷新只由对应主视图中的明确操作触发。
+- 从侧边栏打开另一个 Repository 或 Review 时，原主视图和原选中项保持到新目标成功打开；目标条目局部显示加载状态并禁止重复触发。成功后原子切换主内容和选中态，失败则保留原视图与选中态。
 - 侧边栏所有 Review 条目统一使用两行布局。Pull Request Review 第一行显示 `#编号 标题`，Branch Selection Review 第一行显示“本地分支”；相对时间作为独立列位于第一行右侧，并与侧边栏分隔线保留安全间距。第二行统一显示 Base/Head 分支关系。分支名溢出时截断，并通过 Tooltip 提供完整 ref；整行作为继续 Review 的点击目标，不显示额外操作按钮。
-- 跨 Repository Entry 的“最近审核”条目在第一行先显示仓库名，再以布局间距分隔 Pull Request 的 `#编号 标题` 或“本地分支”；不使用点号或其他文本分隔符。第二行继续显示 Base/Head 分支关系。
+- 跨 Repository 的“最近审核”条目在第一行先显示仓库名，再以布局间距分隔 Pull Request 的 `#编号 标题` 或“本地分支”；不使用点号或其他文本分隔符。第二行继续显示 Base/Head 分支关系。
 - 没有 Review 的首次使用首页展示品牌、slogan“纳言：审好代码，睡安稳觉”、产品说明和“打开仓库文件夹”主按钮。
 - 已有 Review 的正常首页使用“最近审核”作为标题，不重复展示完整品牌和 slogan；“打开仓库文件夹”位于同一标题行右侧。
 - “打开仓库文件夹”使用系统原生目录选择器，不把手工路径输入作为主要交互。
-- 选择目录后依次验证 Git 仓库、复用或注册 Repository Entry、检查 Workspace Trust，并仅在必要时显示风险 Dialog。
-- 已经获得 Workspace Trust 的 Repository Entry 直接打开，不持续显示“已信任”状态。
-- Repository Entry 概览使用 `Pull Requests`、`本地分支`、`审核历史` 三个标签，默认选择 Pull Requests。
-- Repository Entry 概览默认只显示仓库名称；完整本地路径通过仓库名称的 hover 与键盘 focus Tooltip 提供，路径不截断并允许换行。
-- Repository Entry 概览主内容左对齐，宽窗口中的最大宽度为约 1100–1200px；三个任务标签保留紧凑胶囊式选中态。
+- 选择目录后依次验证 Git 仓库、复用或注册 Repository、检查 Workspace Trust，并仅在必要时显示风险 Dialog。
+- 已经获得 Workspace Trust 的 Repository 直接打开，不持续显示“已信任”状态。
+- Repository 概览使用 `Pull Requests`、`本地分支`、`审核历史` 三个标签，默认选择 Pull Requests。
+- Repository 概览默认只显示仓库名称；完整本地路径通过仓库名称的 hover 与键盘 focus Tooltip 提供，路径不截断并允许换行。
+- Repository 概览主内容左对齐，宽窗口中的最大宽度为约 1100–1200px；三个任务标签保留紧凑胶囊式选中态。
 - Pull Request 列表把未创建 Review 与已有 Review 分别标记为“开始审核”和“继续审核”。相同 Pull Request Selection 继续复用已有 Review。
 - 多个 GitHub repository 的 Pull Requests 使用一个按 GitHub 最近更新时间降序排列的扁平列表，不按 Git remote 或 GitHub repository 分组。只有发现多个不同 GitHub repository identity 时，每行才以弱化标签显示 `owner/repository`；`origin`、`upstream` 等 remote 名称仅用于诊断，不进入正常界面。
 - Pull Request 行在标题中显示一次 `#编号`，右侧操作只显示“开始审核”或“继续审核”；整行不作为点击目标。列表显示 Pull Request 相对更新时间。
@@ -153,7 +153,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Pull Request 空状态区分未连接 GitHub、确实没有 Pull Request 和 GitHub 请求失败；连接 GitHub 必须由用户主动触发。
 - 未连接 GitHub、没有 Pull Request 与 GitHub 请求失败共用宽度约 480–560px 的紧凑状态面板，只展示一次状态信息；可恢复状态使用中性层级，destructive 颜色仅用于具体阻断错误。未连接时提供“连接 GitHub”，请求失败时提供“重新尝试”，正常空状态不显示错误样式。
 - 多个 GitHub repository 中只有部分 discovery 失败时继续显示成功结果，并在列表上方按 repository identity 给出低干扰的局部失败提示与“重新尝试”，不把整个 Pull Request 标签切换为错误状态。
-- GitHub App 安装、Device Flow、复制授权信息和退出登录进入侧边栏底部的 GitHub 连接界面，不长期占用 Repository Entry 概览。
+- GitHub App 安装、Device Flow、复制授权信息和退出登录进入侧边栏底部的 GitHub 连接界面，不长期占用 Repository 概览。
 - 本地分支标签默认使用仓库默认分支作为 Base Ref、当前检出分支作为 Head Ref。需要在应用边界提供这两项信息，而不是继续依赖分支列表顺序。
 - Head 与 Base 选择器通过弱化标记解释自动默认值：当前检出分支标记为“当前分支”，仓库默认分支标记为“默认分支”；展开后的对应选项保留相同标记。标记使用固定高度的 `inline-flex` 居中盒，文字在选中值和弹层选项中都保持水平、垂直居中。一个分支同时具备两种身份时展示两个标记，但仍按 Base 与 Head 相同的规则禁止开始 Review。
 - Head 与 Base 选择器显示去掉 `refs/heads/` 或 `refs/remotes/` 前缀后的短分支名，展开列表按“本地分支”和“远程跟踪分支”分组；远程跟踪分支保留 remote 名称，例如 `origin/main`。界面不展示 canonical ref，也不专门为它提供 Tooltip；只有短分支名因空间不足被截断时，Tooltip 才回显该完整短分支名。
@@ -164,7 +164,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 完整列表和搜索结果始终先显示“本地分支”，再显示“远程跟踪分支”；每组内部按短分支名自然排序。搜索只过滤结果，不按相关度重新排序；当前分支、默认分支与已选择分支不置顶，而是通过身份标记与选中状态表达。
 - Combobox 选项使用固定的三段布局：左侧为等宽的选中勾选区，中间为占据剩余空间且可截断的短分支名，右侧为不可收缩的“当前分支 / 默认分支”身份标记；两个身份同时存在时并排显示。下拉箭头只出现在关闭状态的触发器中。鼠标 hover、键盘高亮与已选中是独立状态，不得只用同一种背景表达。
 - Head 与 Base 选择器下方随选择即时显示“将 `{head}` 合入 `{base}`”确认文案，帮助用户在开始审核前核对方向；分支名保持原文。
-- 分支选择器使用左对齐、与 Repository Entry 主内容区域一致的轻量面板，宽窗口中可扩展至约 1100–1200px；以细边框、轻微背景层次和中等内边距聚合任务，不使用强阴影或品牌绿色描边。Head 与 Base 选择器不强制等宽，而是按内容自适应分配：每个关闭状态选择器的最小宽度约 180px，理想宽度由短分支名、身份标记、下拉箭头和内边距共同决定，不设置独立的固定最大宽度，只受整行可用空间限制。短名称只占其理想宽度，长名称优先使用剩余空间；两者总宽度超出整行时先压缩较长的一项，短项保持理想宽度，只有整行空间确实不足时才截断。面板标题为“选择要审核的分支”，刷新操作位于标题右侧；仓库名称保留在页面标题中，完整本地路径只通过仓库名称的 Tooltip 提供，不进入面板。
+- 分支选择器使用左对齐、与 Repository 主内容区域一致的轻量面板，宽窗口中可扩展至约 1100–1200px；以细边框、轻微背景层次和中等内边距聚合任务，不使用强阴影或品牌绿色描边。Head 与 Base 选择器不强制等宽，而是按内容自适应分配：每个关闭状态选择器的最小宽度约 180px，理想宽度由短分支名、身份标记、下拉箭头和内边距共同决定，不设置独立的固定最大宽度，只受整行可用空间限制。短名称只占其理想宽度，长名称优先使用剩余空间；两者总宽度超出整行时先压缩较长的一项，短项保持理想宽度，只有整行空间确实不足时才截断。面板标题为“选择要审核的分支”，刷新操作位于标题右侧；仓库名称保留在页面标题中，完整本地路径只通过仓库名称的 Tooltip 提供，不进入面板。
 - 当可用宽度无法同时容纳两个选择器的合理最小宽度时，Head 与 Base 主动切换为纵向布局：Head 在上、Base 在下，中间使用向下箭头继续表达“将 Head 合入 Base”，两个选择器各自占满面板宽度。不得为了维持横排而把两个选择器持续压缩；纵向布局中仍只有名称本身超出可用宽度时才截断。
 - 选择器区域底部使用提交区：宽窗口中左侧显示合入确认文案、右侧显示主按钮；窄窗口中上下排列，主按钮占满可用宽度。未创建 Review 时按钮显示“开始审核”；已有相同 Branch Selection 且 refs 未移动时显示“继续审核”；已有相同 Branch Selection 且检测到新 commit 时显示“更新并继续审核”。点击“更新并继续审核”复用同一个 Review，基于最新 Base 与 Head 创建并切换到新的 immutable Review Snapshot，同时保留旧 Snapshot，不覆盖已有审核版本。
 - 已有相同 Branch Selection 且 refs 未移动时，提交区只保留合入确认文案与“继续审核”按钮，不重复显示“已有审核”或最近打开时间；时间信息留在审核历史中。
@@ -187,51 +187,51 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 二进制、Symlink 与 Submodule File Change 使用专用内容状态，不实例化无意义的文本 Diff。
 - Pull Request 与本地分支 Review 共用 Review 概览 Sheet。Sheet 默认关闭，通过 Review 顶栏打开。
 - Pull Request 概览展示描述、作者、状态、Base/Head、完整 revisions 和 GitHub 链接；本地分支概览展示分支与 revisions。
-- 侧边栏 Review 条目、首页最近审核、Repository Entry 概览、审核历史、Review 顶栏、概览 Sheet 和本地分支选择器中的 Base/Head 分支关系，统一显示为“Head 分支名 Badge、向右箭头图标、Base 分支名 Badge”，表达“将 Head 分支合入 Base 分支”。紧凑展示不额外显示 `Head`、`Base` 角色文字，不使用文本箭头或点号分隔；本地分支选择器保留可见的 `Head 分支`、`Base 分支`字段标签，辅助技术文案明确读作“将 Head 分支合入 Base 分支”。
+- 侧边栏 Review 条目、首页最近审核、Repository 概览、审核历史、Review 顶栏、概览 Sheet 和本地分支选择器中的 Base/Head 分支关系，统一显示为“Head 分支名 Badge、向右箭头图标、Base 分支名 Badge”，表达“将 Head 分支合入 Base 分支”。紧凑展示不额外显示 `Head`、`Base` 角色文字，不使用文本箭头或点号分隔；本地分支选择器保留可见的 `Head 分支`、`Base 分支`字段标签，辅助技术文案明确读作“将 Head 分支合入 Base 分支”。
 - Base 与 Head 使用相同、具有清晰边框和背景对比的中性 Badge 样式，不用颜色区分角色或暗示状态；悬停不得降低其对比度，当前 Review 由条目整体的选中背景表达。
 - revision 之间的变化继续使用从旧 revision 指向新 revision 的向右箭头，避免把版本演进误表达为分支合入关系。
 - Pull Request 描述使用安全 Markdown：跳过原始 HTML、阻止远程图片自动加载，HTTP/HTTPS 链接交给系统浏览器。
 - 打开已有 Review 后后台自动检查 Selection 更新，但不自动刷新 Review Snapshot。
 - 检测到 Pull Request 更新时显示“检测到 PR 分支有更新”，检测到 Branch Selection 更新时显示“检测到所选分支有更新”。“刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间按钮显示 Loading 图标并保留当前 Snapshot 与旧 Diff，同时禁用 Review 切换；成功后原子切换，失败后保留旧 Snapshot。
 - 点击另一条 Review 直接切换；切换失败保留当前 Review。离开或切换成功后释放旧 Review Workspace。
-- 页面导航自动关闭当前 Review 的运行时资源；工具栏直接显示普通尺寸的“退出审核”按钮，执行后返回所属 Repository Entry 的审核历史，不删除 Review 或 Snapshot。从 Review 阅读器点击所属 Repository Entry 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository Entry 直接打开仓库概览时仍默认进入 `Pull Requests`。
-- 不可用 Repository Entry 继续显示在主侧边栏中，允许展开历史名称；主区域显示原路径和不可用原因。重新定位和删除不在本规格范围。
+- 页面导航自动关闭当前 Review 的运行时资源；工具栏直接显示普通尺寸的“退出审核”按钮，执行后返回所属 Repository 的审核历史，不删除 Review 或 Snapshot。从 Review 阅读器点击所属 Repository 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository 直接打开仓库概览时仍默认进入 `Pull Requests`。
+- 不可用 Repository 继续显示在主侧边栏中，允许展开历史名称；主区域显示原路径和不可用原因。重新定位和删除不在本规格范围。
 - 错误按范围反馈：短暂且无需立即处理的错误使用 shadcn Sonner；输入错误就地展示；阻断内容区域的错误在区域内展示；风险确认和用户选择使用 Dialog。导航失败若没有合适的就地承载区域，使用 Sonner 错误通知，且不改变当前主视图或选中态。
 - 加载按范围反馈：首页和首次列表使用 Skeleton；后台列表刷新保留内容并显示局部进度；Review Snapshot 导航在触发入口显示 Loading 图标；File Change 读取只占用 Diff 区域并同时显示 Loading 图标与 Skeleton；Snapshot 刷新保留旧 Diff。Loading 图标立即出现且不设置人为最短展示时长；可见文案或可访问名称表达正在执行的操作，图标本身不重复朗读。
 - 快速操作避免闪烁；只有持续约一秒的操作才增加文字说明。正常成功操作不普遍使用 Toast。
 - UI 以中文为主，保留 Pull Request、Diff、Base、Head 和 GitHub 等约定术语。代码和领域文档继续使用 `CONTEXT.md` 的规范英文术语。
-- 用户界面中的 Review、Repository Entry、Workspace Trust 和 Review Snapshot 分别显示为“审核”“仓库”“仓库信任”和“审核版本”。
+- 用户界面中的 Review、Repository、Workspace Trust 和 Review Snapshot 分别显示为“审核”“仓库”“仓库信任”和“审核版本”。
 - 引入 `i18next` 与 `react-i18next`。第一阶段支持 `zh-CN` 和 `en`，以 `zh-CN` 作为回退语言。
 - 语言优先级为已保存的显式偏好、Tauri 系统 locale、`zh-CN` 回退。第一阶段不提供手动语言切换入口，但基础设施允许后续增加。
-- 使用白名单规范化 BCP-47 locale。翻译资源随应用打包，并按 `common`、`catalog`、`review`、`github` namespace 加载。
+- 使用白名单规范化 BCP-47 locale。翻译资源随应用打包，并按 `common`、`repository`、`review`、`github` namespace 加载。
 - 使用原生 `Intl.DateTimeFormat` 与 `Intl.RelativeTimeFormat` 格式化绝对和相对时间。
 - 翻译资源使用 TypeScript 常量和 i18next 类型扩展检查 message key。ARIA、Tooltip、空状态、Toast、Dialog 和恢复动作全部纳入翻译资源。
 - Git 与 Rust 原始错误作为不可翻译技术详情；面向用户的摘要使用稳定、可翻译的错误类别。
 - UI 优先使用现有 shadcn `base-maia` preset、taupe 色系、Remix Icon、主题 token、圆角和组件尺寸。
 - 需要的通用能力优先安装和使用 shadcn 的 Sidebar、Resizable、Tabs、Sheet、Dialog、Dropdown Menu、Tooltip、Skeleton、Badge 和 Sonner；只有默认组件无法满足领域交互时才组合或新增组件。
 - 视觉采用克制的桌面开发工具风格。品牌绿色仅用于主操作、选中和焦点；内容区域使用中性色、细边框和有限卡片。
-- 首页和首次空状态使用舒展密度，Repository Entry 概览使用中等密度，主侧边栏、文件树和 Review 顶栏使用紧凑密度。
+- 首页和首次空状态使用舒展密度，Repository 概览使用中等密度，主侧边栏、文件树和 Review 顶栏使用紧凑密度。
 - 标题、正文、分支、路径与 revision 统一使用 Oxanium；只有 Monaco Diff 中的代码内容使用 JetBrains Mono。
 - File Change 状态使用一致语义颜色：新增绿色、删除红色、修改橙色或黄色、重命名蓝色，并同时提供文字或图标，不能仅依赖颜色。
 - 最小可用窗口目标为 900×600。1200px 以上同时展示主侧边栏、文件树和双栏 Diff；900–1199px 默认收起主侧边栏并允许 Diff 临时单栏。
 - 第一版不增加产品级键盘快捷键，但所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。
 - 主视图切换不额外编排键盘焦点，沿用按钮和侧边栏组件的标准焦点行为；为显示当前 Review 而自动滚动侧边栏时不主动抢占焦点。
-- 本规格不改变 Review、Review Selection、Review Snapshot、Repository Entry 或 Workspace Trust 的领域关系，也不改变只有一个 Review 同时打开的约束。
+- 本规格不改变 Review、Review Selection、Review Snapshot、Repository 或 Workspace Trust 的领域关系，也不改变只有一个 Review 同时打开的约束。
 
 ## Testing Decisions
 
 - 测试只观察用户可见行为、Tauri 命令边界和持久化结果，不断言 React 内部 state、组件实现细节、Tailwind class 或 shadcn 内部结构。
-- 主要测试 seam 是通过 WebdriverIO 驱动真实 Tauri 应用和系统 WebView，沿用现有 Repository Catalog、本地分支比较和 GitHub mock server E2E 基础设施。
-- 真实 Tauri E2E 覆盖首次启动、原生目录选择、Workspace Trust、Repository Entry 概览、开始或继续 Review、自动选择 File Change、Diff 展示、显式刷新、Review 切换、Workspace 释放和应用重启恢复。
+- 主要测试 seam 是通过 WebdriverIO 驱动真实 Tauri 应用和系统 WebView，沿用现有 Persistence、本地分支比较和 GitHub mock server E2E 基础设施。
+- 真实 Tauri E2E 覆盖首次启动、原生目录选择、Workspace Trust、Repository 概览、开始或继续 Review、自动选择 File Change、Diff 展示、显式刷新、Review 切换、Workspace 释放和应用重启恢复。
 - E2E 至少覆盖一条中文核心路径和一条英文核心路径；测试环境显式固定 locale，不依赖 CI 主机语言。
 - React 外部行为测试作为辅助 seam，通过 Testing Library 和 mock Tauri IPC 覆盖大量状态组合，继续使用 accessible role、name 和可见文案查询。
-- React 测试覆盖侧边栏最近 5 条、展开到最近 10 条、Repository Entry 最近 10 条、查看全部、收起、主视图导航、Tabs、Sheet、Dialog、Toast、Skeleton 和空状态。
-- 主视图导航测试验证三个主视图共用常驻侧边栏，品牌区、Repository Entry 和 Review 可切换对应内容，仓库树中只有当前项高亮且“最近审核”永不高亮，打开 Review 后所属 Repository Entry 展开、选中项可见且 Review 按更新后的最近打开时间排序。同时覆盖异步加载、打开失败保留原视图、重复点击不重载，以及小窗口切换后临时侧栏保持打开。测试不断言 `AppShell`、`MainSidebar` 或主视图状态的内部组件结构。
-- React 测试覆盖 Pull Request 离线缓存、局部 GitHub 失败、不可用 Repository Entry、Review 切换失败保留当前内容，以及不同错误作用域。
+- React 测试覆盖侧边栏最近 5 条、展开到最近 10 条、Repository 最近 10 条、查看全部、收起、主视图导航、Tabs、Sheet、Dialog、Toast、Skeleton 和空状态。
+- 主视图导航测试验证三个主视图共用常驻侧边栏，品牌区、Repository 和 Review 可切换对应内容，仓库树中只有当前项高亮且“最近审核”永不高亮，打开 Review 后所属 Repository 展开、选中项可见且 Review 按更新后的最近打开时间排序。同时覆盖异步加载、打开失败保留原视图、重复点击不重载，以及小窗口切换后临时侧栏保持打开。测试不断言 `AppShell`、`MainSidebar` 或主视图状态的内部组件结构。
+- React 测试覆盖 Pull Request 离线缓存、局部 GitHub 失败、不可用 Repository、Review 切换失败保留当前内容，以及不同错误作用域。
 - React 测试覆盖文件树自动选择、零变更、特殊 File Change、单栏与双栏切换、响应式降级和前端偏好恢复。
 - i18n 单元测试覆盖 locale 规范化、显式偏好优先级、未知语言回退、namespace loader 白名单、绝对时间和相对时间格式。
 - 每个 i18n 组件测试创建独立 i18next 实例并注入同步内存资源，避免全局实例在并行测试之间泄漏。
-- 中文测试显式使用 `zh-CN`；首页、Repository Entry 空状态和 Review 更新至少各有英文 smoke test。
+- 中文测试显式使用 `zh-CN`；首页、Repository 空状态和 Review 更新至少各有英文 smoke test。
 - i18n 测试覆盖可见文案以外的 ARIA label、Tooltip、Toast、Dialog 和恢复动作，确保辅助技术接收到同一语言。
 - 新增的系统 locale、默认分支和当前分支应用边界需要 Rust 契约测试；现有 Review、Snapshot、Workspace 和 SQLite 行为继续由已有 Rust 测试覆盖，不因 UI 重构重复测试内部实现。
 - Snapshot 更新测试必须证明自动检查不改变当前 Snapshot、失败刷新保留旧 Snapshot、成功刷新后数据库、File Changes 和 Review Workspace 一致。
@@ -245,9 +245,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - AI 代码分析、AI Findings、模型集成或报告生成。
 - Language Server 安装、索引、代码导航或符号理解。
 - Review Snapshot 历史浏览 UI。
-- Repository Entry、Review 或 Snapshot 删除 UI。
+- Repository、Review 或 Snapshot 删除 UI。
 - Workspace Trust 撤销 UI。
-- 不可用 Repository Entry 的重新定位 UI。
+- 不可用 Repository 的重新定位 UI。
 - 多个同时打开的 Review、标签页式 Review 或保留多个 Review Workspace。
 - 文件树搜索、状态筛选、已读或未读状态、隐藏已查看文件。
 - 产品级键盘快捷键和快捷键自定义。
@@ -266,7 +266,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 国际化技术调研见
   [Narrant 前端国际化方案调研](../research/frontend-i18n.md)。
 - 本规格是整体产品体验目标，应拆分为若干可独立交付的垂直切片；每个切片都应保持至少一条从用户操作到真实应用边界的可运行路径。
-- UI 重构应优先建立应用框架、i18n 与首页垂直切片，再迁移 Repository Entry 概览和 Review 阅读器，避免在一个超大改动中同时替换所有界面。
+- UI 重构应优先建立应用框架、i18n 与首页垂直切片，再迁移 Repository 概览和 Review 阅读器，避免在一个超大改动中同时替换所有界面。
 - 设计稿和实现不得把 Review Workspace 表现为用户可编辑的普通 checkout。
 - 用户生成的标题、分支名、路径、Pull Request 描述和 Git/Rust 技术详情保持原文，不属于翻译资源。
 - 本规格没有形成新的领域术语，也不修改根目录 `CONTEXT.md`。

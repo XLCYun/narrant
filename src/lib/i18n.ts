@@ -60,7 +60,7 @@ export const resources = {
       repositoryRegistrationFailed: "无法打开所选仓库。", startReview: "开始审核", continueReview: "继续审核",
       sameBranchSelection: "Head 与 Base 不能是同一分支。", transientError: "操作失败",
     },
-    catalog: {
+    repository: {
       sidebar: "仓库侧边栏", tasks: "仓库任务", tabs: { pullRequests: "Pull Requests", branches: "本地分支", history: "审核历史" },
       refreshing: "正在后台刷新 Pull Requests。", stale: "在线元数据可能不是最新。", updateAvailable: "有更新",
       draft: "草稿", noPullRequests: "没有可审核的 Pull Request", noPullRequestsDescription: "当前 GitHub 仓库暂时没有可审核的 Pull Request。",
@@ -100,6 +100,7 @@ export const resources = {
     },
     github: {
       connect: "连接 GitHub", connected: "GitHub 已连接", signOut: "退出 GitHub",
+      retryStatus: "重试 GitHub 状态", retryAction: "重试 GitHub 操作",
       unconfigured: "此构建未配置 GitHub App；公开 Pull Request 仍可匿名发现。",
       installHelp: "请在打开的网页中安装 Narrant GitHub App，并为目标仓库授予读取权限（组织仓库可能需要管理员审批）",
       installedContinue: "我已安装，继续", deviceCode: "设备码",
@@ -121,7 +122,7 @@ export const resources = {
       repositoryRegistrationFailed: "The selected repository could not be opened.", startReview: "Start review", continueReview: "Continue review",
       sameBranchSelection: "Head and Base must be different branches.", transientError: "Operation failed",
     },
-    catalog: {
+    repository: {
       sidebar: "Repository sidebar", tasks: "Repository tasks", tabs: { pullRequests: "Pull Requests", branches: "Local branches", history: "Review history" },
       refreshing: "Refreshing Pull Requests in the background.", stale: "Online metadata may be out of date.", updateAvailable: "Update available",
       draft: "Draft", noPullRequests: "No Pull Requests to review", noPullRequestsDescription: "The current GitHub repositories have no Pull Requests to review.",
@@ -161,6 +162,7 @@ export const resources = {
     },
     github: {
       connect: "Connect GitHub", connected: "GitHub connected", signOut: "Sign out of GitHub",
+      retryStatus: "Retry GitHub status", retryAction: "Retry GitHub action",
       unconfigured: "This build has no GitHub App configured; public Pull Requests remain available anonymously.",
       installHelp: "Install the Narrant GitHub App with repository read access in the opened webpage (organization repositories may require administrator approval).",
       installedContinue: "Installed, continue", deviceCode: "Device code",
@@ -176,7 +178,7 @@ void i18n.use(initReactI18next).init({
   lng: resolveLocale(window.localStorage?.getItem(localePreferenceKey) ?? undefined, navigator.language),
   fallbackLng: "zh-CN",
   defaultNS: "common",
-  ns: ["common", "catalog", "review", "github"],
+  ns: ["common", "repository", "review", "github"],
   interpolation: { escapeValue: false },
 });
 
