@@ -1,4 +1,5 @@
 use super::*;
+use crate::operation::OperationContext;
 
 impl GitProcessAdapter {
     /// 在精确受管路径创建 detached linked worktree，并校验其 HEAD。
@@ -6,7 +7,7 @@ impl GitProcessAdapter {
         &self,
         workspace_path: &Path,
         head_object_id: &str,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         if workspace_path.exists() {
             let actual_head = read_head_object_id(workspace_path, cancellation)?;
@@ -61,7 +62,10 @@ impl GitProcessAdapter {
         workspace_path: &Path,
         error: GitCommandError,
     ) -> GitCommandError {
-        match self.remove_worktree(workspace_path, &CancellationToken::default()) {
+        match self.remove_worktree(
+            workspace_path,
+            OperationContext::background().cancellation(),
+        ) {
             Ok(()) => error,
             Err(cleanup_error) => error.with_context(format!(
                 "自动清理失败：{cleanup_error}。请关闭 Narrant 并检查该仓库的 linked worktrees"
@@ -74,7 +78,7 @@ impl GitProcessAdapter {
         &self,
         workspace_path: &Path,
         head_object_id: &str,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         self.remove_worktree(workspace_path, cancellation)?;
         self.create_detached_worktree(workspace_path, head_object_id, cancellation)
@@ -87,7 +91,7 @@ impl GitProcessAdapter {
         expected_common_directory: &Path,
         previous_head_object_id: &str,
         next_head_object_id: &str,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
         self.validate_registered_worktree(workspace_path, previous_head_object_id, cancellation)?;
@@ -97,7 +101,7 @@ impl GitProcessAdapter {
             let rollback = self.force_restore_detached_worktree(
                 workspace_path,
                 previous_head_object_id,
-                &CancellationToken::default(),
+                OperationContext::background().cancellation(),
             );
             return Err(match rollback {
                 Ok(()) => error,
@@ -114,7 +118,7 @@ impl GitProcessAdapter {
         &self,
         workspace_path: &Path,
         expected_head_object_id: &str,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         let output = self.run_workspace(["worktree", "list", "--porcelain", "-z"], cancellation)?;
         let canonical_workspace = workspace_path.canonicalize().map_err(|error| {
@@ -139,7 +143,7 @@ impl GitProcessAdapter {
     pub fn remove_worktree(
         &self,
         workspace_path: &Path,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         if !workspace_path.exists() && !self.is_registered_worktree(workspace_path, cancellation)? {
             return Ok(());
@@ -164,7 +168,7 @@ impl GitProcessAdapter {
         &self,
         workspace_path: &Path,
         expected_common_directory: &Path,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
         self.remove_worktree(workspace_path, cancellation)
@@ -175,7 +179,7 @@ impl GitProcessAdapter {
         &self,
         workspace_path: &Path,
         expected_common_directory: &Path,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         if !workspace_path.exists() && !self.is_registered_worktree(workspace_path, cancellation)? {
             return Ok(());
@@ -188,7 +192,7 @@ impl GitProcessAdapter {
         &self,
         workspace_path: &Path,
         expected_common_directory: &Path,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         let actual_common = self
             .run(
@@ -224,7 +228,7 @@ impl GitProcessAdapter {
     fn is_registered_worktree(
         &self,
         workspace_path: &Path,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<bool, GitCommandError> {
         let expected_workspace = canonicalize_with_missing_tail(workspace_path)?;
         let expected_field =
@@ -265,7 +269,7 @@ fn canonicalize_with_missing_tail(path: &Path) -> Result<PathBuf, GitCommandErro
 /// 读取 linked worktree 的精确 HEAD object ID，供创建前后统一校验。
 fn read_head_object_id(
     workspace_path: &Path,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<String, GitCommandError> {
     GitProcessAdapter::new(workspace_path)
         .run(["rev-parse", "HEAD"], cancellation)

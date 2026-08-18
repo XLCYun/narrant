@@ -5,8 +5,8 @@ impl ReviewLifecycle {
     /// 解析最新可用版本，但不创建候选、不切换 workspace、不推进 current。
     pub async fn check_update(
         &self,
+        operation: &OperationContext,
         review_id: &str,
-        cancellation: &CancellationToken,
     ) -> Result<ReviewUpdate, ReviewLifecycleError> {
         let current = self
             .store
@@ -14,18 +14,16 @@ impl ReviewLifecycle {
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
         let repository_path = self.require_available_repository(current.repository_id)?;
         let available = if let Some(metadata) = current.pull_request.as_ref() {
-            let operation = OperationContext::from_cancellation(cancellation.clone());
             self.pull_requests
                 .resolve(
                     &repository_path,
                     &pull_request_selection(metadata),
-                    &operation,
+                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?
                 .comparison
         } else {
-            let operation = OperationContext::from_cancellation(cancellation.clone());
             self.branch_selections
                 .resolve(
                     &repository_path,
@@ -33,7 +31,7 @@ impl ReviewLifecycle {
                         base_ref: current.base_ref.clone(),
                         head_ref: current.head_ref.clone(),
                     },
-                    &operation,
+                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::branch)?
@@ -52,13 +50,13 @@ impl ReviewLifecycle {
     /// 刷新 Review；准备阶段可取消，开始改变 workspace 后必须激活或回滚到旧版本。
     pub async fn refresh(
         &self,
+        operation: &OperationContext,
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
-        cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         self.begin_refresh(review_id)?;
         let result = self
-            .refresh_exclusive(review_id, confirmation, cancellation)
+            .refresh_exclusive(operation, review_id, confirmation)
             .await;
         self.finish_refresh(review_id);
         result
@@ -67,18 +65,18 @@ impl ReviewLifecycle {
     /// 物化 durable Review 后刷新；刷新失败时关闭刚物化的运行时与 Workspace。
     pub async fn reopen_and_refresh(
         &self,
+        operation: &OperationContext,
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
-        cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         self.present(
+            operation,
             PresentReview::Saved {
                 review_id: review_id.to_owned(),
             },
-            cancellation,
         )
         .await?;
-        match self.refresh(review_id, confirmation, cancellation).await {
+        match self.refresh(operation, review_id, confirmation).await {
             Ok(presentation) => Ok(presentation),
             Err(error) => {
                 let cleanup = self.close(review_id);
@@ -100,9 +98,9 @@ impl ReviewLifecycle {
     /// 在刷新互斥区中执行准备、workspace 收敛、激活和必要回滚。
     async fn refresh_exclusive(
         &self,
+        operation: &OperationContext,
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
-        cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let current = self
             .store
@@ -119,13 +117,12 @@ impl ReviewLifecycle {
             return Err(ReviewLifecycleError::StaleCurrent);
         }
         let candidate = if let Some(metadata) = current.pull_request.as_ref() {
-            let operation = OperationContext::from_cancellation(cancellation.clone());
             let available = self
                 .pull_requests
                 .resolve(
                     &repository_path,
                     &pull_request_selection(metadata),
-                    &operation,
+                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?;
@@ -143,7 +140,6 @@ impl ReviewLifecycle {
                 )
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         } else {
-            let operation = OperationContext::from_cancellation(cancellation.clone());
             let available = self
                 .branch_selections
                 .resolve(
@@ -152,7 +148,7 @@ impl ReviewLifecycle {
                         base_ref: current.base_ref.clone(),
                         head_ref: current.head_ref.clone(),
                     },
-                    &operation,
+                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::branch)?
@@ -176,7 +172,7 @@ impl ReviewLifecycle {
             .reviews
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
-        let convergence = OperationContext::non_cancellable();
+        let convergence = operation.without_cancellation();
         let adapter = GitProcessAdapter::new(&repository_path);
         if let Err(error) = adapter.transition_detached_worktree(
             &workspace,

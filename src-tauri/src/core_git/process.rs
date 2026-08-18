@@ -5,7 +5,7 @@ impl CoreGitProcess {
     pub async fn execute(
         &self,
         invocation: GitInvocation,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<GitOutput, CoreGitFailure> {
         let cancellation = cancellation.clone();
         let limits = self.limits;
@@ -31,7 +31,7 @@ impl CoreGitProcess {
     fn execute_blocking(
         &self,
         invocation: GitInvocation,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<GitOutput, CoreGitFailure> {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             if runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
@@ -49,7 +49,7 @@ impl GitProcessAdapter {
     pub(crate) fn run<I, S>(
         &self,
         arguments: I,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<GitOutput, GitCommandError>
     where
         I: IntoIterator<Item = S>,
@@ -62,7 +62,7 @@ impl GitProcessAdapter {
     pub(crate) fn run_network<I, S>(
         &self,
         arguments: I,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<GitOutput, GitCommandError>
     where
         I: IntoIterator<Item = S>,
@@ -75,7 +75,7 @@ impl GitProcessAdapter {
     pub(super) fn run_workspace<I, S>(
         &self,
         arguments: I,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<GitOutput, GitCommandError>
     where
         I: IntoIterator<Item = S>,
@@ -89,7 +89,7 @@ impl GitProcessAdapter {
         &self,
         arguments: I,
         class: GitOperationClass,
-        cancellation: &CancellationToken,
+        cancellation: &CancellationSignal,
     ) -> Result<GitOutput, GitCommandError>
     where
         I: IntoIterator<Item = S>,
@@ -109,7 +109,7 @@ enum ReaderEvent {
 
 fn execute_core_git(
     invocation: GitInvocation,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
     limits: Option<(Duration, usize)>,
 ) -> Result<GitOutput, CoreGitFailure> {
     let (timeout, output_limit) = limits.unwrap_or_else(|| policy_for(invocation.class));

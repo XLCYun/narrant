@@ -1,7 +1,9 @@
-use crate::core_git::CancellationToken;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 
 const EARLY_CANCELLATION_TTL: Duration = Duration::from_secs(60);
@@ -22,27 +24,123 @@ impl OperationId {
     }
 }
 
+/// 应用操作可只读观察的取消信号，不能触发上层操作取消。
+#[derive(Clone, Default)]
+pub(crate) struct CancellationSignal(Arc<AtomicBool>);
+
+impl CancellationSignal {
+    /// 仅由同模块的取消 source 标记共享状态。
+    fn mark_cancelled(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// 返回调用方是否已经请求取消。
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// 仅供操作 registry 持有的取消触发权。
+#[derive(Clone, Default)]
+struct CancellationSource(CancellationSignal);
+
+impl CancellationSource {
+    /// 创建一对共享状态的触发源和只读观察信号。
+    fn new() -> (Self, CancellationSignal) {
+        let signal = CancellationSignal::default();
+        (Self(signal.clone()), signal)
+    }
+
+    /// 请求取消所有共享此 source 的操作阶段。
+    fn cancel(&self) {
+        self.0.mark_cancelled();
+    }
+}
+
+/// 仅测试使用的取消触发器，避免向生产调用链暴露取消权限。
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestCancellationController(CancellationSource);
+
+#[cfg(test)]
+impl TestCancellationController {
+    /// 请求取消测试中与其配对的只读信号。
+    pub(crate) fn cancel(&self) {
+        self.0.cancel();
+    }
+}
+
+/// 为机制层测试构造取消 source 与只读 signal 配对。
+#[cfg(test)]
+pub(crate) fn test_cancellation_signal() -> (TestCancellationController, CancellationSignal) {
+    let (source, signal) = CancellationSource::new();
+    (TestCancellationController(source), signal)
+}
+
+/// 机制层测试可用的取消配对，同时保持生产 API 只读。
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestCancellation {
+    controller: TestCancellationController,
+    signal: CancellationSignal,
+}
+
+#[cfg(test)]
+impl Default for TestCancellation {
+    /// 创建尚未取消的测试信号。
+    fn default() -> Self {
+        let (controller, signal) = test_cancellation_signal();
+        Self { controller, signal }
+    }
+}
+
+#[cfg(test)]
+impl TestCancellation {
+    /// 请求取消配对信号。
+    pub(crate) fn cancel(&self) {
+        self.controller.cancel();
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for TestCancellation {
+    type Target = CancellationSignal;
+
+    /// 将测试配对透明借用为机制层需要的只读信号。
+    fn deref(&self) -> &Self::Target {
+        &self.signal
+    }
+}
+
 /// 一次应用操作可以观察的运行上下文。
 #[derive(Clone)]
 pub struct OperationContext {
-    cancellation: CancellationToken,
+    cancellation: CancellationSignal,
 }
 
 impl OperationContext {
-    /// 从已有共享标记创建跨模块传递的操作上下文。
-    pub(crate) fn from_cancellation(cancellation: CancellationToken) -> Self {
-        Self { cancellation }
+    /// 创建没有外部取消来源的后台根操作上下文。
+    pub fn background() -> Self {
+        Self {
+            cancellation: CancellationSignal::default(),
+        }
     }
 
-    /// 返回跨越本次应用操作全部可取消阶段的共享标记。
-    pub fn cancellation(&self) -> &CancellationToken {
+    /// 从当前上下文派生一个保留未来字段但不响应取消的收敛上下文。
+    pub fn without_cancellation(&self) -> Self {
+        Self::background()
+    }
+
+    /// 返回跨越本次应用操作全部可取消阶段的只读共享信号。
+    pub(crate) fn cancellation(&self) -> &CancellationSignal {
         &self.cancellation
     }
 
-    /// 创建不响应外部取消的上下文，供必须收敛的领域阶段使用。
-    pub fn non_cancellable() -> Self {
+    /// 从测试信号构造上下文，以验证取消传播而不开放生产构造入口。
+    #[cfg(test)]
+    pub(crate) fn from_test_cancellation(cancellation: &TestCancellation) -> Self {
         Self {
-            cancellation: CancellationToken::default(),
+            cancellation: cancellation.signal.clone(),
         }
     }
 }
@@ -77,7 +175,7 @@ enum OperationEntry {
     },
     Running {
         registration: u64,
-        token: CancellationToken,
+        source: CancellationSource,
     },
 }
 
@@ -119,20 +217,15 @@ impl CancellableOperations {
             }
             state.next_registration = state.next_registration.wrapping_add(1);
             let registration = state.next_registration;
-            let token = CancellationToken::default();
+            let (source, cancellation) = CancellationSource::new();
             state.entries.insert(
                 id.clone(),
                 OperationEntry::Running {
                     registration,
-                    token: token.clone(),
+                    source,
                 },
             );
-            (
-                OperationContext {
-                    cancellation: token,
-                },
-                registration,
-            )
+            (OperationContext { cancellation }, registration)
         };
         let _release = OperationRegistration {
             state: self.state.clone(),
@@ -150,7 +243,7 @@ impl CancellableOperations {
             .map_err(|_| OperationError::RegistryUnavailable)?;
         prune_early_cancellations(&mut state);
         match state.entries.get(id) {
-            Some(OperationEntry::Running { token, .. }) => token.cancel(),
+            Some(OperationEntry::Running { source, .. }) => source.cancel(),
             Some(OperationEntry::EarlyCancellation { .. }) => {}
             None => {
                 if early_cancellation_count(&state) >= MAX_EARLY_CANCELLATIONS {

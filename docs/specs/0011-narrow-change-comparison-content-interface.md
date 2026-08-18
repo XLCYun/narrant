@@ -29,9 +29,9 @@ comparison construction and content reads pinned to a saved Snapshot.
   resolution.
 - Move Pull Request fetch refs and fetch/exact-revision error classification into the
   Pull Request Selection resolver.
-- Require `OperationContext` at every public local Git I/O interface. Callers that
-  deliberately do not observe external cancellation must say so with
-  `OperationContext::non_cancellable()`.
+- Require `OperationContext` at every public local Git I/O interface. Callers without an
+  external operation use `OperationContext::background()`; a convergence phase derives
+  `without_cancellation()` from its current context.
 - Remove the old fetch-then-open protocol and cancellable/non-cancellable wrapper pairs.
 
 ## Non-goals

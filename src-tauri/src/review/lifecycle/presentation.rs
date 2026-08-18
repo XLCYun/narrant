@@ -4,8 +4,8 @@ impl ReviewLifecycle {
     /// 创建、重开或切换到指定 Review，并在成功后发布运行时读取句柄。
     pub async fn present(
         &self,
+        operation: &OperationContext,
         request: PresentReview,
-        cancellation: &CancellationToken,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let saved = match request {
             PresentReview::Saved { review_id } => self
@@ -25,13 +25,12 @@ impl ReviewLifecycle {
                 {
                     saved
                 } else {
-                    let operation = OperationContext::from_cancellation(cancellation.clone());
                     let resolved = self
                         .branch_selections
                         .resolve(
                             &repository,
                             &BranchSelection { base_ref, head_ref },
-                            &operation,
+                            operation,
                         )
                         .await
                         .map_err(ReviewLifecycleError::branch)?;
@@ -57,10 +56,9 @@ impl ReviewLifecycle {
                 {
                     saved
                 } else {
-                    let operation = OperationContext::from_cancellation(cancellation.clone());
                     let resolved = self
                         .pull_requests
-                        .resolve(&repository_path, &selection, &operation)
+                        .resolve(&repository_path, &selection, operation)
                         .await
                         .map_err(ReviewLifecycleError::pull_request)?;
                     self.store
@@ -73,16 +71,16 @@ impl ReviewLifecycle {
                 }
             }
         };
-        self.materialize(saved, cancellation)
+        self.materialize(saved, operation)
     }
 
     /// 从已激活的 current Snapshot 读取单个 File Change 内容。
     pub async fn read_file_change(
         &self,
+        operation: &OperationContext,
         review_id: &str,
         snapshot_id: &str,
         path: &str,
-        cancellation: &CancellationToken,
     ) -> Result<FileChangeContent, ReviewLifecycleError> {
         let current = self
             .store
@@ -102,9 +100,8 @@ impl ReviewLifecycle {
                     "Review 已关闭或失效，请重新打开。".to_owned(),
                 )
             })?;
-        let operation = OperationContext::from_cancellation(cancellation.clone());
         let content = review
-            .read(path, &operation)
+            .read(path, operation)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(content)
     }
@@ -113,7 +110,7 @@ impl ReviewLifecycle {
     fn materialize(
         &self,
         saved: PersistedReviewState,
-        cancellation: &CancellationToken,
+        operation: &OperationContext,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         let repository_path = self.require_trusted_repository(saved.repository_id)?;
         let entry = self
@@ -129,7 +126,7 @@ impl ReviewLifecycle {
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
         let adapter = GitProcessAdapter::new(&repository_path);
-        if cancellation.is_cancelled() {
+        if operation.cancellation().is_cancelled() {
             if saved.created {
                 self.store
                     .abandon_refresh_candidate(&saved)
@@ -137,7 +134,7 @@ impl ReviewLifecycle {
             }
             return Err(ReviewLifecycleError::Cancelled("操作已取消。".to_owned()));
         }
-        let convergence = OperationContext::non_cancellable();
+        let convergence = operation.without_cancellation();
         if workspace.exists() {
             adapter
                 .validate_owned_worktree(

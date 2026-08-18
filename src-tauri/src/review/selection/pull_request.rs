@@ -315,7 +315,7 @@ async fn resolve_pull_request_objects(
 
 /// 在任何外部工作开始前响应已经发生的取消。
 fn require_not_cancelled(
-    cancellation: &crate::core_git::CancellationToken,
+    cancellation: &crate::operation::CancellationSignal,
 ) -> Result<(), PullRequestResolutionError> {
     if cancellation.is_cancelled() {
         Err(cancelled())
@@ -325,7 +325,7 @@ fn require_not_cancelled(
 }
 
 /// 等待共享 cancellation token，供异步 GitHub 请求参与 select。
-async fn wait_for_cancellation(cancellation: &crate::core_git::CancellationToken) {
+async fn wait_for_cancellation(cancellation: &crate::operation::CancellationSignal) {
     while !cancellation.is_cancelled() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }

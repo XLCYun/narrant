@@ -7,7 +7,7 @@ use std::process::Command;
 #[tokio::test]
 async fn restored_snapshot_reader_reads_only_the_pinned_file_change() {
     let repository = repository_with_changed_file();
-    let operation = OperationContext::non_cancellable();
+    let operation = OperationContext::background();
     let resolved = BranchSelectionResolver
         .resolve(
             repository.path(),

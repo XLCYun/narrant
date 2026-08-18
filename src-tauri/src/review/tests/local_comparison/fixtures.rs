@@ -80,7 +80,7 @@ impl ResolvedComparison {
     /// 从固定快照读取指定文件变更。
     fn read(&self, path: &str) -> Result<FileChangeContent, GitCommandError> {
         self.reader
-            .read(path, &OperationContext::non_cancellable())
+            .read(path, &OperationContext::background())
     }
 }
 
@@ -101,7 +101,7 @@ fn resolve_comparison(
             base_ref: base_ref.to_owned(),
             head_ref: head_ref.to_owned(),
         },
-        &OperationContext::non_cancellable(),
+        &OperationContext::background(),
     ))?;
     let comparison = resolved.comparison;
     let reader = SnapshotContentReader::restore(repository_path, comparison.clone());
@@ -115,5 +115,5 @@ fn open_comparison(repository_path: &std::path::Path) -> ResolvedComparison {
 
 /// 通过分支目录 seam 读取仓库 refs。
 fn branch_refs(repository_path: &std::path::Path) -> Result<BranchRefs, GitCommandError> {
-    block_on(BranchRefCatalog.list(repository_path, &OperationContext::non_cancellable()))
+    block_on(BranchRefCatalog.list(repository_path, &OperationContext::background()))
 }

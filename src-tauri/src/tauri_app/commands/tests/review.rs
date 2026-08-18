@@ -45,7 +45,7 @@ async fn snapshot_mapper_preserves_the_existing_ipc_contract() {
                 base_ref: "refs/heads/base".to_owned(),
                 head_ref: "refs/heads/head".to_owned(),
             },
-            &operation::OperationContext::non_cancellable(),
+            &operation::OperationContext::background(),
         )
         .await
         .unwrap();

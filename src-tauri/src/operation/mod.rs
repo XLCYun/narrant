@@ -1,3 +1,7 @@
 mod cancellable;
 
-pub(crate) use cancellable::{CancellableOperations, OperationContext, OperationId};
+#[cfg(test)]
+pub(crate) use cancellable::TestCancellation;
+pub(crate) use cancellable::{
+    CancellableOperations, CancellationSignal, OperationContext, OperationId,
+};

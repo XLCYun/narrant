@@ -1,5 +1,6 @@
 use super::*;
-use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
+use crate::core_git::{GitCommandError, GitProcessAdapter};
+use crate::operation::CancellationSignal;
 use crate::operation::OperationContext;
 use std::path::Path;
 
@@ -133,7 +134,7 @@ pub(crate) fn build_comparison(
 fn peel_to_commit_id(
     adapter: &GitProcessAdapter,
     object_id: &str,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<String, GitCommandError> {
     validate_object_id(object_id)?;
     let revision = format!("{object_id}^{{commit}}");
@@ -252,7 +253,7 @@ fn file_content_ref(object_id: &str, mode: u32) -> Option<FileContentRef> {
 fn read_content(
     adapter: &GitProcessAdapter,
     content_ref: Option<&FileContentRef>,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<Option<FileContent>, GitCommandError> {
     let Some(content_ref) = content_ref else {
         return Ok(None);

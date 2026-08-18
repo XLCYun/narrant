@@ -16,7 +16,7 @@ async fn stable_branch_selection_resolves_one_immutable_snapshot() {
                 base_ref: "refs/heads/base".to_owned(),
                 head_ref: "refs/heads/topic".to_owned(),
             },
-            &OperationContext::non_cancellable(),
+            &OperationContext::background(),
         )
         .await
         .unwrap();
@@ -33,7 +33,7 @@ async fn branch_ref_catalog_reports_canonical_refs_and_explicit_choices() {
     let repository = repository_with_branch_comparison();
 
     let branches = BranchRefCatalog
-        .list(repository.path(), &OperationContext::non_cancellable())
+        .list(repository.path(), &OperationContext::background())
         .await
         .unwrap();
 
@@ -47,9 +47,9 @@ async fn branch_ref_catalog_reports_canonical_refs_and_explicit_choices() {
 
 #[tokio::test]
 async fn cancelled_branch_selection_stops_before_repository_access() {
-    let cancellation = crate::core_git::CancellationToken::default();
+    let cancellation = crate::operation::TestCancellation::default();
     cancellation.cancel();
-    let operation = OperationContext::from_cancellation(cancellation);
+    let operation = OperationContext::from_test_cancellation(&cancellation);
 
     let error = match BranchSelectionResolver
         .resolve(

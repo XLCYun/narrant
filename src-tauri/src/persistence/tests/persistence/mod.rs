@@ -1,4 +1,5 @@
-use crate::core_git::{CancellationToken, GitProcessAdapter};
+use crate::core_git::GitProcessAdapter;
+use crate::operation::OperationContext;
 use crate::repository::verify_repository_location;
 
 include!("fixtures.rs");

@@ -55,8 +55,12 @@ CoreGitProcess::execute(invocation, cancellation)
     -> Result<GitOutput, CoreGitFailure>
 ```
 
-`OperationContext` supplies the shared cancellation token. `run` owns registration and
-release; callers do not receive start/finish methods. Cancelling an unknown ID records a
+`OperationContext` supplies the shared read-only cancellation signal and is passed through
+application operations as their first argument after `self`. `run` owns registration,
+the private cancellation source, and release; callers do not receive start/finish methods
+or cancellation authority. Core Git receives only the signal. `background()` creates a
+root context without an external source, while `without_cancellation()` derives a
+non-observing convergence context from the current call. Cancelling an unknown ID records a
 bounded short-lived early-cancellation entry so an abort racing command dispatch is not
 lost. A second running operation with the same ID fails without affecting the first.
 
@@ -71,10 +75,11 @@ or termination policy.
   Core Git preparation stages.
 - Branch and Pull Request preparation observe that context.
 - Review lifecycle performs one final cancellation check before initial materialization or
-  refresh Workspace convergence, then creates an explicit non-cancellable context.
+  refresh Workspace convergence, then derives `without_cancellation()`.
   Workspace creation, activation, and rollback therefore complete even if the original
   operation is cancelled during convergence.
-- A failed or cancelled Core Git worktree creation compensates with a non-cancellable removal.
+- A failed or cancelled Core Git worktree creation compensates with a derived convergence
+  context.
   Startup recovery removes managed Workspaces for unactivated Reviews before abandoning their
   candidate Snapshots, so the persisted ownership evidence remains available during cleanup.
 
@@ -85,7 +90,7 @@ or termination policy.
 - Test `CoreGitProcess` with real temporary Git repositories: success, cancellation,
   timeout, output-limit classification, and contextual error-kind preservation.
 - Test Review lifecycle only for the domain transition from cancellable preparation to
-  non-cancellable convergence during initial materialization and refresh.
+  derived cancellation-free convergence during initial materialization and refresh.
 - Test Core Git worktree creation cancellation with a real repository and require the partial
   directory and linked-worktree registration to be gone before the operation returns.
 - Test startup recovery with an unactivated Review that already owns a linked worktree.
@@ -104,8 +109,8 @@ or termination policy.
    before returning.
 8. Stdout and stderr are drained concurrently and either stream crossing its limit stops
    the command promptly.
-9. Review preparation remains cancellable and Workspace convergence remains
-   non-cancellable.
+9. Review preparation remains cancellable and Workspace convergence derives a context that
+   does not observe later parent cancellation.
 10. Rust formatting, Clippy, Rust tests, frontend tests, lint, typechecking, and production
     build pass.
 11. Initial materialization cancellation cannot interrupt Workspace creation after convergence

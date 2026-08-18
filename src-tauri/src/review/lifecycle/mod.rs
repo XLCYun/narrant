@@ -1,4 +1,4 @@
-use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
+use crate::core_git::{GitCommandError, GitProcessAdapter};
 use crate::operation::OperationContext;
 use crate::persistence::{PersistedReviewState, ReviewStore, ReviewWorkspaceCleanupTarget};
 use crate::repository::{RepositoryApplication, RepositoryApplicationError};

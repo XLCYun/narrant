@@ -1,6 +1,5 @@
 use super::*;
-use crate::core_git::CancellationToken;
-use crate::operation::OperationContext;
+use crate::operation::{OperationContext, TestCancellation};
 use httpmock::prelude::*;
 use std::path::Path;
 use std::process::Command;
@@ -26,7 +25,7 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
         }));
     });
     let resolver = PullRequestSelectionResolver::anonymous(server.base_url());
-    let operation = OperationContext::non_cancellable();
+    let operation = OperationContext::background();
 
     let resolved = resolver
         .resolve(
@@ -61,9 +60,9 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
 
 #[tokio::test]
 async fn cancelled_selection_stops_before_github_observation() {
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     cancellation.cancel();
-    let operation = OperationContext::from_cancellation(cancellation);
+    let operation = OperationContext::from_test_cancellation(&cancellation);
     let resolver = PullRequestSelectionResolver::anonymous("http://127.0.0.1:1");
 
     let error = match resolver
@@ -108,7 +107,7 @@ async fn fetched_objects_with_unverifiable_sha_report_exact_revision_failure() {
         }));
     });
     let resolver = PullRequestSelectionResolver::anonymous(server.base_url());
-    let operation = OperationContext::non_cancellable();
+    let operation = OperationContext::background();
 
     let error = match resolver
         .resolve(
