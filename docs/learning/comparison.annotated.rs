@@ -13,8 +13,9 @@ FileContentRef --read_content--> FileContent
 */
 
 use super::*;
-// 取消令牌贯穿每次 Git I/O；错误统一成 GitCommandError；适配器绑定具体仓库路径。
-use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
+// 机制层只观察取消信号；错误统一成 GitCommandError；适配器绑定具体仓库路径。
+use crate::core_git::{GitCommandError, GitProcessAdapter};
+use crate::operation::CancellationSignal;
 // OperationContext 表达这次业务操作的取消策略，reader 不自行创建策略。
 use crate::operation::OperationContext;
 use std::path::Path;
@@ -40,8 +41,8 @@ impl SnapshotContentReader {
     /// 使用显式操作上下文读取 Snapshot 中一个 File Change 的固定内容。
     pub fn read(
         &self,
-        path: &str,
         operation: &OperationContext,
+        path: &str,
     ) -> Result<FileChangeContent, GitCommandError> {
         // path 是 Snapshot 对外暴露的稳定查找键；rename 使用新路径。
         let change = self
@@ -117,9 +118,9 @@ pub(crate) struct ResolvedRevisions {
 
 /// 验证已解析 revisions 并构建不可变的 three-dot Change Comparison。
 pub(crate) fn build_comparison(
+    operation: &OperationContext,
     repository_path: &Path,
     revisions: ResolvedRevisions,
-    operation: &OperationContext,
 ) -> Result<ChangeComparison, GitCommandError> {
     // builder 是同步函数：Core Git adapter 当前同步等待子进程，内部没有异步 await 点。
     let adapter = GitProcessAdapter::new(repository_path);
@@ -163,7 +164,7 @@ pub(crate) fn build_comparison(
 fn peel_to_commit_id(
     adapter: &GitProcessAdapter,
     object_id: &str,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<String, GitCommandError> {
     validate_object_id(object_id)?;
     let revision = format!("{object_id}^{{commit}}");
@@ -287,7 +288,7 @@ fn file_content_ref(object_id: &str, mode: u32) -> Option<FileContentRef> {
 fn read_content(
     adapter: &GitProcessAdapter,
     content_ref: Option<&FileContentRef>,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<Option<FileContent>, GitCommandError> {
     let Some(content_ref) = content_ref else {
         return Ok(None);

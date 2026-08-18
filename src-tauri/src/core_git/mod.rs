@@ -1,11 +1,9 @@
+use crate::operation::CancellationSignal;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
-};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,22 +12,6 @@ use std::os::unix::process::CommandExt;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
-
-/// 可由调用方共享的取消标记，用于终止正在运行的 Core Git 子进程。
-#[derive(Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
-
-impl CancellationToken {
-    /// 请求取消所有共享此标记的 Core Git 操作。
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    /// 返回调用方是否已经请求取消。
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
 
 /// 产生超限输出的 Core Git 管道。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

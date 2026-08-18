@@ -1,4 +1,5 @@
-use crate::core_git::{CancellationToken, GitCommandError, GitProcessAdapter};
+use crate::core_git::{GitCommandError, GitProcessAdapter};
+use crate::operation::{CancellationSignal, OperationContext};
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -133,14 +134,17 @@ pub async fn observe_pull_request(
 fn github_repositories(
     repository_path: &Path,
 ) -> Result<BTreeMap<String, (GitHubRepository, Vec<String>)>, String> {
-    github_repositories_with_cancellation(repository_path, &CancellationToken::default())
-        .map_err(|error| error.to_string())
+    github_repositories_with_cancellation(
+        repository_path,
+        OperationContext::background().cancellation(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// 使用调用方 cancellation 扫描 GitHub remotes。
 fn github_repositories_with_cancellation(
     repository_path: &Path,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<BTreeMap<String, (GitHubRepository, Vec<String>)>, GitCommandError> {
     let adapter = GitProcessAdapter::new(repository_path);
     let remote_names = adapter.run(["remote"], cancellation)?;
@@ -188,7 +192,7 @@ pub fn remote_names_for_repository(
     remote_names_for_repository_with_cancellation(
         repository_path,
         repository,
-        &CancellationToken::default(),
+        OperationContext::background().cancellation(),
     )
     .map_err(|error| error.to_string())
 }
@@ -197,7 +201,7 @@ pub fn remote_names_for_repository(
 pub fn remote_names_for_repository_with_cancellation(
     repository_path: &Path,
     repository: &GitHubRepository,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<Vec<String>, GitCommandError> {
     Ok(
         github_repositories_with_cancellation(repository_path, cancellation)?

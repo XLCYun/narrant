@@ -94,7 +94,7 @@ fn remove_workspace(target: &ReviewWorkspaceCleanupTarget) -> Result<(), String>
         .remove_owned_worktree_if_present(
             &target.workspace_path,
             &target.git_common_directory,
-            &CancellationToken::default(),
+            OperationContext::background().cancellation(),
         )
         .map_err(|error| format!("{}：{error}", target.review_id))
 }

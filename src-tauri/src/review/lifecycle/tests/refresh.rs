@@ -7,6 +7,7 @@ async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
 
     let error = match lifecycle
         .reopen_and_refresh(
+            &OperationContext::background(),
             &saved.review_id,
             ConfirmedReviewUpdate {
                 current_base_revision: "stale-base".to_owned(),
@@ -14,7 +15,6 @@ async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
                 available_base_revision: "next-base".to_owned(),
                 available_head_revision: "next-head".to_owned(),
             },
-            &CancellationToken::default(),
         )
         .await
     {
@@ -30,10 +30,10 @@ async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
     assert!(!workspace.exists());
     let read_error = lifecycle
         .read_file_change(
+            &OperationContext::background(),
             &saved.review_id,
             &saved.snapshot_identity(),
             "README.md",
-            &CancellationToken::default(),
         )
         .await
         .unwrap_err();
@@ -57,10 +57,10 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::Saved {
                 review_id: saved.review_id.clone(),
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
@@ -81,14 +81,15 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
         &["commit", "-q", "-m", "large refresh"],
     );
     let update = lifecycle
-        .check_update(&saved.review_id, &CancellationToken::default())
+        .check_update(&OperationContext::background(), &saved.review_id)
         .await
         .unwrap();
     let workspace = fixture
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    let cancellation = CancellationToken::default();
+    let cancellation = crate::operation::TestCancellation::default();
+    let operation = OperationContext::from_test_cancellation(&cancellation);
     let cancellation_request = cancellation.clone();
     let refresh_completed = Arc::new(AtomicBool::new(false));
     let completion_observer = refresh_completed.clone();
@@ -106,6 +107,7 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
 
     let refresh_result = lifecycle
         .refresh(
+            &operation,
             &saved.review_id,
             ConfirmedReviewUpdate {
                 current_base_revision: update.current_base_revision,
@@ -113,7 +115,6 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
                 available_base_revision: update.available_base_revision,
                 available_head_revision: update.available_head_revision,
             },
-            &cancellation,
         )
         .await;
     refresh_completed.store(true, Ordering::Release);
@@ -145,18 +146,19 @@ async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let current = lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::Saved {
                 review_id: saved.review_id.clone(),
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
-    let cancellation = CancellationToken::default();
+    let cancellation = crate::operation::TestCancellation::default();
     cancellation.cancel();
+    let operation = OperationContext::from_test_cancellation(&cancellation);
 
     let error = lifecycle
-        .check_update(&saved.review_id, &cancellation)
+        .check_update(&operation, &saved.review_id)
         .await
         .unwrap_err();
 
@@ -176,5 +178,56 @@ async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
     assert_eq!(
         git_text(&workspace, &["rev-parse", "HEAD"]),
         current.snapshot.head_revision
+    );
+}
+
+#[tokio::test]
+async fn cancellation_after_candidate_staging_abandons_candidate_before_workspace_transition() {
+    let fixture = LifecycleFixture::new();
+    let saved = fixture.save_current_review().await;
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+    let current = lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: saved.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let workspace = fixture
+        .store
+        .review_workspace_path(&saved.review_id)
+        .unwrap();
+    let workspace_head = git_text(&workspace, &["rev-parse", "HEAD"]);
+    let candidate = fixture
+        .store
+        .stage_branch_refresh_candidate(&saved.review_id, &saved.to_change_comparison())
+        .unwrap();
+    let cancellation = crate::operation::TestCancellation::default();
+    cancellation.cancel();
+    let operation = OperationContext::from_test_cancellation(&cancellation);
+
+    let error = lifecycle
+        .cancel_staged_refresh(&operation, &candidate)
+        .unwrap_err();
+
+    assert!(matches!(error, ReviewLifecycleError::Cancelled(_)));
+    assert_eq!(
+        fixture
+            .store
+            .open_review(&saved.review_id)
+            .unwrap()
+            .snapshot_identity(),
+        current.snapshot_id
+    );
+    assert_eq!(git_text(&workspace, &["rev-parse", "HEAD"]), workspace_head);
+    assert_eq!(
+        fixture
+            .store
+            .list_review_snapshot_identities(&saved.review_id)
+            .unwrap(),
+        vec![current.snapshot_id]
     );
 }

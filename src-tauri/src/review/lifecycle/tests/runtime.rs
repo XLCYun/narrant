@@ -6,10 +6,10 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     fixture.store.activate_initial_snapshot(&saved).unwrap();
     let presentation = lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::Saved {
                 review_id: saved.review_id.clone(),
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
@@ -33,10 +33,10 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     ));
     let error = lifecycle
         .read_file_change(
+            &OperationContext::background(),
             &saved.review_id,
             &presentation.snapshot_id,
             "README.md",
-            &CancellationToken::default(),
         )
         .await
         .unwrap_err();
@@ -77,10 +77,10 @@ async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
     let current = lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::Saved {
                 review_id: saved.review_id.clone(),
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
@@ -91,12 +91,13 @@ async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
         &["commit", "-q", "-am", "refresh"],
     );
     let update = lifecycle
-        .check_update(&saved.review_id, &CancellationToken::default())
+        .check_update(&OperationContext::background(), &saved.review_id)
         .await
         .unwrap();
 
     let refreshed = lifecycle
         .refresh(
+            &OperationContext::background(),
             &saved.review_id,
             ConfirmedReviewUpdate {
                 current_base_revision: update.current_base_revision,
@@ -104,7 +105,6 @@ async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
                 available_base_revision: update.available_base_revision,
                 available_head_revision: update.available_head_revision,
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
@@ -128,20 +128,20 @@ async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
     );
     let stale_error = lifecycle
         .read_file_change(
+            &OperationContext::background(),
             &saved.review_id,
             &current.snapshot_id,
             "README.md",
-            &CancellationToken::default(),
         )
         .await
         .unwrap_err();
     assert!(matches!(stale_error, ReviewLifecycleError::StaleSnapshot));
     let content = lifecycle
         .read_file_change(
+            &OperationContext::background(),
             &saved.review_id,
             &refreshed.snapshot_id,
             "README.md",
-            &CancellationToken::default(),
         )
         .await
         .unwrap();

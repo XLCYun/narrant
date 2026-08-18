@@ -26,7 +26,12 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     let old_head = saved.head_revision.clone();
     let workspace = store.review_workspace_path(&saved.review_id).unwrap();
     GitProcessAdapter::new(repository.path())
-        .create_detached_worktree(&workspace, &old_head, &CancellationToken::default())
+        .create_detached_worktree(
+            &workspace,
+            &old_head,
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
 
     std::fs::write(repository.path().join("README.md"), "refreshed").unwrap();
@@ -69,7 +74,8 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
             &entry.git_common_directory,
             &old_head,
             &candidate.head_revision,
-            &CancellationToken::default(),
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
         )
         .unwrap();
     store
@@ -162,12 +168,12 @@ fn snapshot_for_refs(
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(crate::review::BranchSelectionResolver.resolve(
+            &crate::operation::OperationContext::background(),
             repository_path,
             &crate::review::BranchSelection {
                 base_ref: base_ref.to_owned(),
                 head_ref: head_ref.to_owned(),
             },
-            &crate::operation::OperationContext::non_cancellable(),
         ))
         .unwrap()
         .comparison

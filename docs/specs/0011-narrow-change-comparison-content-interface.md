@@ -29,9 +29,9 @@ comparison construction and content reads pinned to a saved Snapshot.
   resolution.
 - Move Pull Request fetch refs and fetch/exact-revision error classification into the
   Pull Request Selection resolver.
-- Require `OperationContext` at every public local Git I/O interface. Callers that
-  deliberately do not observe external cancellation must say so with
-  `OperationContext::non_cancellable()`.
+- Require `OperationContext` at every public local Git I/O interface. Callers without an
+  external operation use `OperationContext::background()`; a convergence phase derives
+  `without_cancellation()` from its current context.
 - Remove the old fetch-then-open protocol and cancellable/non-cancellable wrapper pairs.
 
 ## Non-goals
@@ -47,14 +47,14 @@ comparison construction and content reads pinned to a saved Snapshot.
 ## Interfaces
 
 ```rust
-BranchSelectionResolver::resolve(repository_path, selection, operation)
+BranchSelectionResolver::resolve(operation, repository_path, selection)
     -> ResolvedBranchSelection
 
-BranchRefCatalog::list(repository_path, operation)
+BranchRefCatalog::list(operation, repository_path)
     -> BranchRefs
 
 SnapshotContentReader::restore(repository_path, comparison)
-SnapshotContentReader::read(path, operation)
+SnapshotContentReader::read(operation, path)
     -> FileChangeContent
 ```
 

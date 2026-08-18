@@ -1,4 +1,5 @@
 use super::*;
+use crate::operation::{OperationContext, TestCancellation};
 
 /// 创建最小真实仓库，供 adapter 限制测试执行机器格式命令。
 fn repository() -> tempfile::TempDir {
@@ -51,7 +52,7 @@ fn read_git<const N: usize>(path: &Path, arguments: [&str; N]) -> String {
 async fn cancellation_stops_a_core_git_operation() {
     let fixture = repository();
     let process = CoreGitProcess::default();
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     cancellation.cancel();
     let error = process
         .execute(
@@ -78,7 +79,7 @@ async fn core_git_process_returns_machine_output_through_its_public_seam() {
     );
 
     let output = process
-        .execute(invocation, &CancellationToken::default())
+        .execute(invocation, OperationContext::background().cancellation())
         .await
         .unwrap();
 
@@ -96,7 +97,7 @@ async fn core_git_process_preserves_failure_kind_when_context_is_added() {
     );
 
     let error = process
-        .execute(invocation, &CancellationToken::default())
+        .execute(invocation, OperationContext::background().cancellation())
         .await
         .unwrap_err()
         .with_context("解析仓库");
@@ -116,7 +117,7 @@ async fn core_git_process_classifies_the_stream_that_crosses_its_limit() {
     );
 
     let error = process
-        .execute(invocation, &CancellationToken::default())
+        .execute(invocation, OperationContext::background().cancellation())
         .await
         .unwrap_err();
 
@@ -138,7 +139,7 @@ async fn cancellation_stops_an_already_running_core_git_process() {
     let fixture = repository();
     std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let process = CoreGitProcess::default();
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     let cancellation_request = cancellation.clone();
     let socket = fixture.path().join("credential-cache.socket");
     let canceller = thread::spawn(move || {
@@ -165,7 +166,7 @@ async fn cancellation_stops_an_already_running_core_git_process() {
 async fn cancellation_reaps_descendants_before_returning() {
     let fixture = repository();
     let process = CoreGitProcess::default();
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     let cancellation_request = cancellation.clone();
     let canceller = thread::spawn(move || {
         thread::sleep(Duration::from_millis(100));
@@ -230,7 +231,12 @@ fn review_workspace_is_a_detached_linked_worktree_at_the_snapshot_head() {
     let adapter = GitProcessAdapter::new(fixture.path());
 
     adapter
-        .create_detached_worktree(&workspace, &head, &CancellationToken::default())
+        .create_detached_worktree(
+            &workspace,
+            &head,
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
 
     let workspace_head = String::from_utf8(
@@ -266,7 +272,7 @@ fn cancelled_workspace_creation_removes_its_partial_worktree() {
     let head = read_git(fixture.path(), ["rev-parse", "HEAD"]);
     let managed = tempfile::TempDir::new().unwrap();
     let workspace = managed.path().join("reviews/review-1/repo");
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     let cancellation_request = cancellation.clone();
     let observed_workspace = workspace.clone();
     let observer = thread::spawn(move || {
@@ -280,8 +286,10 @@ fn cancelled_workspace_creation_removes_its_partial_worktree() {
         false
     });
 
+    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let convergence = operation.without_cancellation();
     let error = GitProcessAdapter::new(fixture.path())
-        .create_detached_worktree(&workspace, &head, &cancellation)
+        .create_detached_worktree(&workspace, &head, &cancellation, convergence.cancellation())
         .unwrap_err();
 
     assert!(
@@ -302,12 +310,17 @@ fn removal_clears_a_registered_worktree_after_its_directory_disappears() {
     let workspace = managed.path().join("reviews/review-1/repo");
     let adapter = GitProcessAdapter::new(fixture.path());
     adapter
-        .create_detached_worktree(&workspace, &head, &CancellationToken::default())
+        .create_detached_worktree(
+            &workspace,
+            &head,
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
     std::fs::remove_dir_all(&workspace).unwrap();
 
     adapter
-        .remove_worktree(&workspace, &CancellationToken::default())
+        .remove_worktree(&workspace, OperationContext::background().cancellation())
         .unwrap();
 
     let worktree_list = read_git(fixture.path(), ["worktree", "list", "--porcelain"]);
@@ -318,7 +331,7 @@ fn removal_clears_a_registered_worktree_after_its_directory_disappears() {
 fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head() {
     let repository = committed_repository();
     let adapter = GitProcessAdapter::new(repository.path());
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     let first_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
     let common_directory = PathBuf::from(read_git(
         repository.path(),
@@ -327,7 +340,12 @@ fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head()
     let workspace_root = tempfile::TempDir::new().unwrap();
     let workspace = workspace_root.path().join("repo");
     adapter
-        .create_detached_worktree(&workspace, &first_head, &cancellation)
+        .create_detached_worktree(
+            &workspace,
+            &first_head,
+            &cancellation,
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
     std::fs::write(workspace.join("dirty.txt"), "discard me").unwrap();
 
@@ -343,6 +361,7 @@ fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head()
             &first_head,
             &next_head,
             &cancellation,
+            OperationContext::background().cancellation(),
         )
         .unwrap();
 
@@ -374,7 +393,8 @@ fn workspace_transition_rejects_an_unregistered_directory_before_deletion() {
             &common_directory,
             &head,
             &head,
-            &CancellationToken::default(),
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
         )
         .unwrap_err();
 
@@ -389,7 +409,7 @@ fn workspace_transition_rejects_an_unregistered_directory_before_deletion() {
 fn failed_workspace_transition_restores_the_previous_snapshot_head() {
     let repository = committed_repository();
     let adapter = GitProcessAdapter::new(repository.path());
-    let cancellation = CancellationToken::default();
+    let cancellation = TestCancellation::default();
     let old_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
     let common_directory = PathBuf::from(read_git(
         repository.path(),
@@ -398,7 +418,12 @@ fn failed_workspace_transition_restores_the_previous_snapshot_head() {
     let workspace_root = tempfile::TempDir::new().unwrap();
     let workspace = workspace_root.path().join("repo");
     adapter
-        .create_detached_worktree(&workspace, &old_head, &cancellation)
+        .create_detached_worktree(
+            &workspace,
+            &old_head,
+            &cancellation,
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
 
     let error = adapter
@@ -408,6 +433,7 @@ fn failed_workspace_transition_restores_the_previous_snapshot_head() {
             &old_head,
             "0000000000000000000000000000000000000000",
             &cancellation,
+            OperationContext::background().cancellation(),
         )
         .unwrap_err();
 
@@ -428,7 +454,12 @@ fn removes_only_an_exact_registered_owned_worktree_even_when_dirty() {
     let user_worktree = managed.path().join("user-worktree");
     let adapter = GitProcessAdapter::new(fixture.path());
     adapter
-        .create_detached_worktree(&workspace, &head, &CancellationToken::default())
+        .create_detached_worktree(
+            &workspace,
+            &head,
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
     Command::new("git")
         .args(["worktree", "add", "--detach", "--"])
@@ -443,7 +474,11 @@ fn removes_only_an_exact_registered_owned_worktree_even_when_dirty() {
     std::fs::write(workspace.join("ignored.txt"), "ignored").unwrap();
 
     adapter
-        .remove_owned_worktree(&workspace, &common_directory, &CancellationToken::default())
+        .remove_owned_worktree(
+            &workspace,
+            &common_directory,
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
 
     assert!(!workspace.exists());
@@ -452,7 +487,7 @@ fn removes_only_an_exact_registered_owned_worktree_even_when_dirty() {
         .remove_owned_worktree(
             &managed.path().join("not-registered"),
             &common_directory,
-            &CancellationToken::default(),
+            OperationContext::background().cancellation(),
         )
         .unwrap_err();
     assert!(error.message().contains("所有权验证失败"));

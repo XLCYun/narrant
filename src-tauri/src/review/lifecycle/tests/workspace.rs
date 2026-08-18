@@ -10,7 +10,8 @@ async fn recovery_removes_registration_for_an_unactivated_review_without_a_works
         .create_detached_worktree(
             &workspace,
             &candidate.head_revision,
-            &CancellationToken::default(),
+            OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
         )
         .unwrap();
     std::fs::remove_dir_all(&workspace).unwrap();
@@ -58,7 +59,8 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    let cancellation = CancellationToken::default();
+    let cancellation = crate::operation::TestCancellation::default();
+    let operation = OperationContext::from_test_cancellation(&cancellation);
     let cancellation_request = cancellation.clone();
     let observed_workspace = workspace.clone();
     let observer = thread::spawn(move || {
@@ -75,10 +77,10 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
 
     let opened = lifecycle
         .present(
+            &operation,
             PresentReview::Saved {
                 review_id: saved.review_id.clone(),
             },
-            &cancellation,
         )
         .await;
 
@@ -111,10 +113,10 @@ async fn failed_target_materialization_keeps_current_review_readable() {
     let lifecycle = ReviewLifecycle::new(store.clone());
     let first = lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::Saved {
                 review_id: first_saved.review_id.clone(),
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
@@ -122,10 +124,10 @@ async fn failed_target_materialization_keeps_current_review_readable() {
 
     let error = match lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::Saved {
                 review_id: target_saved.review_id,
             },
-            &CancellationToken::default(),
         )
         .await
     {
@@ -139,10 +141,10 @@ async fn failed_target_materialization_keeps_current_review_readable() {
     ));
     let content = lifecycle
         .read_file_change(
+            &OperationContext::background(),
             &first_saved.review_id,
             &first.snapshot_id,
             "README.md",
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
@@ -177,6 +179,7 @@ async fn pull_request_lifecycle_resolves_durable_selection_without_caller_observ
 
     let opened = lifecycle
         .present(
+            &OperationContext::background(),
             PresentReview::PullRequest {
                 repository_id: fixture.repository_id,
                 selection: PullRequestSelection {
@@ -187,16 +190,16 @@ async fn pull_request_lifecycle_resolves_durable_selection_without_caller_observ
                     number: 42,
                 },
             },
-            &CancellationToken::default(),
         )
         .await
         .unwrap();
     let update = lifecycle
-        .check_update(&opened.review_id, &CancellationToken::default())
+        .check_update(&OperationContext::background(), &opened.review_id)
         .await
         .unwrap();
     let error = match lifecycle
         .refresh(
+            &OperationContext::background(),
             &opened.review_id,
             ConfirmedReviewUpdate {
                 current_base_revision: update.current_base_revision,
@@ -204,7 +207,6 @@ async fn pull_request_lifecycle_resolves_durable_selection_without_caller_observ
                 available_base_revision: "changed-after-confirmation".to_owned(),
                 available_head_revision: update.available_head_revision,
             },
-            &CancellationToken::default(),
         )
         .await
     {
@@ -313,12 +315,12 @@ async fn save_current_review(
 ) -> PersistedReviewState {
     let resolved = BranchSelectionResolver
         .resolve(
+            &OperationContext::background(),
             repository_path,
             &BranchSelection {
                 base_ref: "refs/heads/base".to_owned(),
                 head_ref: "refs/heads/topic".to_owned(),
             },
-            &OperationContext::non_cancellable(),
         )
         .await
         .unwrap();

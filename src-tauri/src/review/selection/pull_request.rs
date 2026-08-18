@@ -124,9 +124,9 @@ impl PullRequestSelectionResolver {
     /// 将稳定 Selection identity 解析成当前、精确且已在本地验证的 Snapshot。
     pub async fn resolve(
         &self,
+        operation: &OperationContext,
         repository_path: &Path,
         selection: &PullRequestSelection,
-        operation: &OperationContext,
     ) -> Result<ResolvedPullRequestSelection, PullRequestResolutionError> {
         let cancellation = operation.cancellation();
         if selection.number == 0
@@ -301,6 +301,7 @@ async fn resolve_pull_request_objects(
             .map_err(PullRequestObjectResolutionError::Fetch)?;
     }
     build_comparison(
+        operation,
         repository_path,
         ResolvedRevisions {
             base_ref: base_ref.to_owned(),
@@ -308,14 +309,13 @@ async fn resolve_pull_request_objects(
             base_revision: base_revision.to_owned(),
             head_revision: head_revision.to_owned(),
         },
-        operation,
     )
     .map_err(PullRequestObjectResolutionError::ExactRevision)
 }
 
 /// 在任何外部工作开始前响应已经发生的取消。
 fn require_not_cancelled(
-    cancellation: &crate::core_git::CancellationToken,
+    cancellation: &crate::operation::CancellationSignal,
 ) -> Result<(), PullRequestResolutionError> {
     if cancellation.is_cancelled() {
         Err(cancelled())
@@ -325,7 +325,7 @@ fn require_not_cancelled(
 }
 
 /// 等待共享 cancellation token，供异步 GitHub 请求参与 select。
-async fn wait_for_cancellation(cancellation: &crate::core_git::CancellationToken) {
+async fn wait_for_cancellation(cancellation: &crate::operation::CancellationSignal) {
     while !cancellation.is_cancelled() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }

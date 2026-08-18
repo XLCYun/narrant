@@ -1,4 +1,3 @@
-use crate::core_git;
 use crate::github::GitHubRepository;
 use crate::operation;
 use crate::review;
@@ -236,12 +235,12 @@ pub(crate) async fn compare_local_refs(
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
             .present(
+                &operation,
                 review::PresentReview::Branch {
                     repository_id,
                     base_ref,
                     head_ref,
                 },
-                operation.cancellation(),
             )
             .await
             .map(map_presentation)
@@ -260,7 +259,7 @@ pub(crate) async fn check_branch_review_updates(
 ) -> Result<BranchReviewUpdateResponse, String> {
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
-            .check_update(&review_id, operation.cancellation())
+            .check_update(&operation, &review_id)
             .await
             .map(|update| BranchReviewUpdateResponse {
                 changed: update.update_available,
@@ -286,6 +285,7 @@ pub(crate) async fn refresh_branch_review(
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
             .refresh(
+                &operation,
                 &review_id,
                 review::ConfirmedReviewUpdate {
                     current_base_revision: confirmation.current_base_revision,
@@ -293,7 +293,6 @@ pub(crate) async fn refresh_branch_review(
                     available_base_revision: confirmation.latest_base_revision,
                     available_head_revision: confirmation.latest_head_revision,
                 },
-                operation.cancellation(),
             )
             .await
             .map(map_presentation)
@@ -314,6 +313,7 @@ pub(crate) async fn reopen_and_refresh_branch_review(
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
             .reopen_and_refresh(
+                &operation,
                 &review_id,
                 review::ConfirmedReviewUpdate {
                     current_base_revision: confirmation.current_base_revision,
@@ -321,7 +321,6 @@ pub(crate) async fn reopen_and_refresh_branch_review(
                     available_base_revision: confirmation.latest_base_revision,
                     available_head_revision: confirmation.latest_head_revision,
                 },
-                operation.cancellation(),
             )
             .await
             .map(map_presentation)
@@ -343,11 +342,11 @@ pub(crate) async fn open_pull_request_review(
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
             .present(
+                &operation,
                 review::PresentReview::PullRequest {
                     repository_id,
                     selection: review::PullRequestSelection { repository, number },
                 },
-                operation.cancellation(),
             )
             .await
             .map(map_presentation)
@@ -366,7 +365,7 @@ pub(crate) async fn check_pull_request_review_update(
 ) -> Result<ReviewUpdateResponse, String> {
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
-            .check_update(&review_id, operation.cancellation())
+            .check_update(&operation, &review_id)
             .await
             .map(|update| ReviewUpdateResponse {
                 update_available: update.update_available,
@@ -392,6 +391,7 @@ pub(crate) async fn refresh_pull_request_review(
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
             .refresh(
+                &operation,
                 &review_id,
                 review::ConfirmedReviewUpdate {
                     current_base_revision: confirmation.current_base_revision,
@@ -399,7 +399,6 @@ pub(crate) async fn refresh_pull_request_review(
                     available_base_revision: confirmation.available_base_revision,
                     available_head_revision: confirmation.available_head_revision,
                 },
-                operation.cancellation(),
             )
             .await
             .map(map_presentation)
@@ -420,7 +419,7 @@ pub(crate) async fn read_review_file_change(
 ) -> Result<FileChangeContentResponse, String> {
     run_cancellable_command(&operations, operation_id, |operation| async move {
         lifecycle
-            .read_file_change(&review_id, &snapshot_id, &path, operation.cancellation())
+            .read_file_change(&operation, &review_id, &snapshot_id, &path)
             .await
             .map(map_file_content)
             .map_err(|error| error.to_string())
@@ -448,8 +447,8 @@ pub(crate) async fn reopen_review(
 ) -> Result<ReviewSnapshotResponse, String> {
     lifecycle
         .present(
+            &operation::OperationContext::background(),
             review::PresentReview::Saved { review_id },
-            &core_git::CancellationToken::default(),
         )
         .await
         .map(map_presentation)

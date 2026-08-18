@@ -1,5 +1,6 @@
 use super::RepositoryApplicationError;
-use crate::core_git::{CancellationToken, GitProcessAdapter};
+use crate::core_git::GitProcessAdapter;
+use crate::operation::{CancellationSignal, OperationContext};
 use crate::persistence::RepositoryLocation;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +12,7 @@ pub(crate) fn verify_repository_location(
         RepositoryApplicationError::Unavailable(format!("Repository 路径不存在或不可访问：{error}"))
     })?;
     let adapter = GitProcessAdapter::new(&selected_path);
-    let cancellation = CancellationToken::default();
+    let operation = OperationContext::background();
     let output = adapter
         .run(
             [
@@ -21,7 +22,7 @@ pub(crate) fn verify_repository_location(
                 "--git-common-dir",
                 "--show-object-format",
             ],
-            &cancellation,
+            operation.cancellation(),
         )
         .map_err(|error| {
             RepositoryApplicationError::Operation(format!(
@@ -55,7 +56,7 @@ pub(crate) fn verify_repository_location(
     .map_err(|error| {
         RepositoryApplicationError::Operation(format!("无法解析 Git common directory：{error}"))
     })?;
-    verify_required_git_capabilities(&adapter, &cancellation)?;
+    verify_required_git_capabilities(&adapter, operation.cancellation())?;
     Ok(RepositoryLocation {
         canonical_path,
         git_common_directory,
@@ -65,7 +66,7 @@ pub(crate) fn verify_repository_location(
 /// 只读探测 Repository 页面立即依赖的 refs、remotes 与 worktree 能力。
 fn verify_required_git_capabilities(
     adapter: &GitProcessAdapter,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<(), RepositoryApplicationError> {
     for arguments in [
         vec![

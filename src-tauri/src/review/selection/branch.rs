@@ -1,4 +1,5 @@
-use crate::core_git::{CancellationToken, GitCommandError, GitOutput, GitProcessAdapter};
+use crate::core_git::{GitCommandError, GitOutput, GitProcessAdapter};
+use crate::operation::CancellationSignal;
 use crate::operation::OperationContext;
 use crate::review::{build_comparison, ChangeComparison, ResolvedRevisions};
 use std::path::Path;
@@ -57,9 +58,9 @@ impl BranchSelectionResolver {
     /// 将稳定 Branch Selection 解析为当前且已在本地验证的 Snapshot。
     pub async fn resolve(
         &self,
+        operation: &OperationContext,
         repository_path: &Path,
         selection: &BranchSelection,
-        operation: &OperationContext,
     ) -> Result<ResolvedBranchSelection, BranchSelectionResolutionError> {
         validate_branch_ref(&selection.base_ref).map_err(BranchSelectionResolutionError::Git)?;
         validate_branch_ref(&selection.head_ref).map_err(BranchSelectionResolutionError::Git)?;
@@ -71,6 +72,7 @@ impl BranchSelectionResolver {
         let head_revision = resolve_commit(&adapter, &selection.head_ref, operation.cancellation())
             .map_err(BranchSelectionResolutionError::Git)?;
         let comparison = build_comparison(
+            operation,
             repository_path,
             ResolvedRevisions {
                 base_ref: selection.base_ref.clone(),
@@ -78,7 +80,6 @@ impl BranchSelectionResolver {
                 base_revision,
                 head_revision,
             },
-            operation,
         )
         .map_err(BranchSelectionResolutionError::Git)?;
         Ok(ResolvedBranchSelection { comparison })
@@ -93,8 +94,8 @@ impl BranchRefCatalog {
     /// 返回分支选项及显式默认、当前选择。
     pub async fn list(
         &self,
-        repository_path: &Path,
         operation: &OperationContext,
+        repository_path: &Path,
     ) -> Result<BranchRefs, GitCommandError> {
         let cancellation = operation.cancellation();
         let adapter = GitProcessAdapter::new(repository_path);
@@ -132,7 +133,7 @@ fn validate_branch_ref(reference: &str) -> Result<(), GitCommandError> {
 fn fetch_selected_remotes(
     adapter: &GitProcessAdapter,
     selection: &BranchSelection,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<(), GitCommandError> {
     let mut remotes = [&selection.base_ref, &selection.head_ref]
         .into_iter()
@@ -160,7 +161,7 @@ fn remote_name(reference: &str) -> Option<&str> {
 fn resolve_commit(
     adapter: &GitProcessAdapter,
     reference: &str,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<String, GitCommandError> {
     adapter.run(["check-ref-format", reference], cancellation)?;
     let referenced_object = text_output(
@@ -179,7 +180,7 @@ fn resolve_commit(
 
 fn list_canonical_refs(
     adapter: &GitProcessAdapter,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<Vec<String>, GitCommandError> {
     let output = adapter.run(
         [
@@ -216,7 +217,7 @@ fn default_branch_ref(
     adapter: &GitProcessAdapter,
     refs: &[String],
     current_ref: &str,
-    cancellation: &CancellationToken,
+    cancellation: &CancellationSignal,
 ) -> Result<String, GitCommandError> {
     let output = adapter.run(
         [

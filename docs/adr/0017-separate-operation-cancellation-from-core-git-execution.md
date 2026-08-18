@@ -15,9 +15,16 @@ concurrent output collection, limits, process-tree termination, waiting, and str
 failure reporting. It does not own application-operation IDs or decide when a domain
 workflow stops honoring cancellation.
 
-Review lifecycle makes that policy decision. Preparation observes the caller's operation
-context. Workspace convergence uses an explicit non-cancellable context so it reaches
-activation or rollback once mutation begins.
+`OperationContext` is the strongly typed propagation object for one application call. It
+currently carries only a read-only `CancellationSignal`; it is neither a service locator
+nor an extensions bag. App and Tauri state continue to own application-wide singletons.
+`CancellableOperations` alone holds the private cancellation source, while downstream
+application code receives the context and Core Git receives only its narrow signal.
+
+Review lifecycle makes the policy decision. Preparation observes the caller's operation
+context. Workspace convergence derives `without_cancellation()` from that context so it
+reaches activation or rollback once mutation begins. `background()` instead creates a
+new root context for startup recovery and short non-registry entry points.
 
 ## Consequences
 
@@ -32,7 +39,8 @@ activation or rollback once mutation begins.
 - Core Git remains the sole local Git implementation and receives argument arrays without
   a shell.
 - Pull Request Selection resolution and Review lifecycle keep their existing domain seams;
-  they consume cancellation but do not implement its registry or process mechanics.
+  application interfaces propagate `OperationContext`, while process mechanisms consume
+  only its read-only signal.
 
 The governing requirements are in
 [Cancellable Core Git Operations](../specs/0010-cancellable-core-git-operations.md).

@@ -80,3 +80,22 @@ async fn running_operation_observes_cancellation_and_is_reusable_after_exit() {
         "reused"
     );
 }
+
+#[test]
+fn background_context_starts_uncancelled() {
+    assert!(!OperationContext::background().cancellation().is_cancelled());
+}
+
+#[test]
+fn derived_convergence_context_ignores_parent_cancellation() {
+    let (controller, signal) = test_cancellation_signal();
+    let operation = OperationContext {
+        cancellation: signal,
+    };
+    let convergence = operation.without_cancellation();
+
+    controller.cancel();
+
+    assert!(operation.cancellation().is_cancelled());
+    assert!(!convergence.cancellation().is_cancelled());
+}
