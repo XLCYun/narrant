@@ -7,7 +7,11 @@ use std::sync::Arc;
 
 /// Repository Overview 中显式呈现的 Review Selection。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ReviewSelectionSummary {
     Branch {
         base_ref: String,
@@ -354,3 +358,7 @@ fn unavailable_reason(repository: &RepositorySummary) -> String {
 #[cfg(test)]
 #[path = "application_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/review_selection_serialization.rs"]
+mod review_selection_serialization_tests;
