@@ -20,6 +20,7 @@
     "test:components": "vitest run",
     "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts",
     "tauri": "tauri",
+    "clean:tauri": "cargo clean --manifest-path src-tauri/Cargo.toml",
     "td": "pnpm tauri dev"
   },
   "dependencies": {

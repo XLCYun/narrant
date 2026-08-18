@@ -34,5 +34,7 @@ Single-context layout. See `docs/agents/domain.md`.
 ## 阅读模式(read: {file})
 根据给出的源代码文件 file，读取里面的内容，整理它的 mermaid 类图输出，并逐行添加注释后输出。直接输出 markdown 即可，不要写入到任何文件。
 
-## Subagent Handoff 开发模式
-使用 subagent + worktree + implement skill 的方式开发代码，需要给出详细的 spec 给 subagent。
+## Subagent Handoff 模式
+使用 subagent + worktree + implement skill 的方式开发代码，需要给出详细的 spec 给 subagent。模型优先使用：
+1. luna + max 思考
+2. terra + medium 思考
