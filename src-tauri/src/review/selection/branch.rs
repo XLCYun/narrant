@@ -58,9 +58,9 @@ impl BranchSelectionResolver {
     /// 将稳定 Branch Selection 解析为当前且已在本地验证的 Snapshot。
     pub async fn resolve(
         &self,
+        operation: &OperationContext,
         repository_path: &Path,
         selection: &BranchSelection,
-        operation: &OperationContext,
     ) -> Result<ResolvedBranchSelection, BranchSelectionResolutionError> {
         validate_branch_ref(&selection.base_ref).map_err(BranchSelectionResolutionError::Git)?;
         validate_branch_ref(&selection.head_ref).map_err(BranchSelectionResolutionError::Git)?;
@@ -72,6 +72,7 @@ impl BranchSelectionResolver {
         let head_revision = resolve_commit(&adapter, &selection.head_ref, operation.cancellation())
             .map_err(BranchSelectionResolutionError::Git)?;
         let comparison = build_comparison(
+            operation,
             repository_path,
             ResolvedRevisions {
                 base_ref: selection.base_ref.clone(),
@@ -79,7 +80,6 @@ impl BranchSelectionResolver {
                 base_revision,
                 head_revision,
             },
-            operation,
         )
         .map_err(BranchSelectionResolutionError::Git)?;
         Ok(ResolvedBranchSelection { comparison })
@@ -94,8 +94,8 @@ impl BranchRefCatalog {
     /// 返回分支选项及显式默认、当前选择。
     pub async fn list(
         &self,
-        repository_path: &Path,
         operation: &OperationContext,
+        repository_path: &Path,
     ) -> Result<BranchRefs, GitCommandError> {
         let cancellation = operation.cancellation();
         let adapter = GitProcessAdapter::new(repository_path);

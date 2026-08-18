@@ -1,5 +1,4 @@
 use super::*;
-use crate::operation::OperationContext;
 
 impl GitProcessAdapter {
     /// 在精确受管路径创建 detached linked worktree，并校验其 HEAD。
@@ -8,6 +7,7 @@ impl GitProcessAdapter {
         workspace_path: &Path,
         head_object_id: &str,
         cancellation: &CancellationSignal,
+        convergence_cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         if workspace_path.exists() {
             let actual_head = read_head_object_id(workspace_path, cancellation)?;
@@ -39,7 +39,11 @@ impl GitProcessAdapter {
             let error = error.with_context(
                 "无法创建 Review Workspace。请确认磁盘空间和仓库 worktree 状态后重试",
             );
-            return Err(self.compensate_failed_worktree_creation(workspace_path, error));
+            return Err(self.compensate_failed_worktree_creation(
+                workspace_path,
+                error,
+                convergence_cancellation,
+            ));
         }
         let postcondition = read_head_object_id(workspace_path, cancellation).and_then(|actual| {
             if actual == head_object_id {
@@ -51,21 +55,23 @@ impl GitProcessAdapter {
             }
         });
         if let Err(error) = postcondition {
-            return Err(self.compensate_failed_worktree_creation(workspace_path, error));
+            return Err(self.compensate_failed_worktree_creation(
+                workspace_path,
+                error,
+                convergence_cancellation,
+            ));
         }
         Ok(())
     }
 
-    /// 以不可取消清理补偿失败的 worktree 创建，并保留原始失败类别。
+    /// 使用调用方派生的收敛信号补偿失败创建，并保留原始失败类别。
     fn compensate_failed_worktree_creation(
         &self,
         workspace_path: &Path,
         error: GitCommandError,
+        convergence_cancellation: &CancellationSignal,
     ) -> GitCommandError {
-        match self.remove_worktree(
-            workspace_path,
-            OperationContext::background().cancellation(),
-        ) {
+        match self.remove_worktree(workspace_path, convergence_cancellation) {
             Ok(()) => error,
             Err(cleanup_error) => error.with_context(format!(
                 "自动清理失败：{cleanup_error}。请关闭 Narrant 并检查该仓库的 linked worktrees"
@@ -79,9 +85,15 @@ impl GitProcessAdapter {
         workspace_path: &Path,
         head_object_id: &str,
         cancellation: &CancellationSignal,
+        convergence_cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         self.remove_worktree(workspace_path, cancellation)?;
-        self.create_detached_worktree(workspace_path, head_object_id, cancellation)
+        self.create_detached_worktree(
+            workspace_path,
+            head_object_id,
+            cancellation,
+            convergence_cancellation,
+        )
     }
 
     /// 将 Workspace 切换到新 Snapshot；核心阶段失败时恢复旧 Snapshot HEAD。
@@ -92,16 +104,21 @@ impl GitProcessAdapter {
         previous_head_object_id: &str,
         next_head_object_id: &str,
         cancellation: &CancellationSignal,
+        convergence_cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
         self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
         self.validate_registered_worktree(workspace_path, previous_head_object_id, cancellation)?;
-        if let Err(error) =
-            self.force_restore_detached_worktree(workspace_path, next_head_object_id, cancellation)
-        {
+        if let Err(error) = self.force_restore_detached_worktree(
+            workspace_path,
+            next_head_object_id,
+            cancellation,
+            convergence_cancellation,
+        ) {
             let rollback = self.force_restore_detached_worktree(
                 workspace_path,
                 previous_head_object_id,
-                OperationContext::background().cancellation(),
+                convergence_cancellation,
+                convergence_cancellation,
             );
             return Err(match rollback {
                 Ok(()) => error,

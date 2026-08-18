@@ -124,9 +124,9 @@ impl PullRequestSelectionResolver {
     /// 将稳定 Selection identity 解析成当前、精确且已在本地验证的 Snapshot。
     pub async fn resolve(
         &self,
+        operation: &OperationContext,
         repository_path: &Path,
         selection: &PullRequestSelection,
-        operation: &OperationContext,
     ) -> Result<ResolvedPullRequestSelection, PullRequestResolutionError> {
         let cancellation = operation.cancellation();
         if selection.number == 0
@@ -301,6 +301,7 @@ async fn resolve_pull_request_objects(
             .map_err(PullRequestObjectResolutionError::Fetch)?;
     }
     build_comparison(
+        operation,
         repository_path,
         ResolvedRevisions {
             base_ref: base_ref.to_owned(),
@@ -308,7 +309,6 @@ async fn resolve_pull_request_objects(
             base_revision: base_revision.to_owned(),
             head_revision: head_revision.to_owned(),
         },
-        operation,
     )
     .map_err(PullRequestObjectResolutionError::ExactRevision)
 }

@@ -71,7 +71,7 @@ pub(crate) async fn list_local_refs(
         .map_err(|error| error.to_string())?;
     run_cancellable_command(&operations, operation_id, |operation| async move {
         review::BranchRefCatalog
-            .list(&repository_path, &operation)
+            .list(&operation, &repository_path)
             .await
             .map(|branches| BranchRefsResponse {
                 refs: branches.refs,

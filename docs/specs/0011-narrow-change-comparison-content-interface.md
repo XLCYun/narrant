@@ -47,14 +47,14 @@ comparison construction and content reads pinned to a saved Snapshot.
 ## Interfaces
 
 ```rust
-BranchSelectionResolver::resolve(repository_path, selection, operation)
+BranchSelectionResolver::resolve(operation, repository_path, selection)
     -> ResolvedBranchSelection
 
-BranchRefCatalog::list(repository_path, operation)
+BranchRefCatalog::list(operation, repository_path)
     -> BranchRefs
 
 SnapshotContentReader::restore(repository_path, comparison)
-SnapshotContentReader::read(path, operation)
+SnapshotContentReader::read(operation, path)
     -> FileChangeContent
 ```
 

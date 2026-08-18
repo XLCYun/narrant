@@ -11,6 +11,7 @@ async fn recovery_removes_registration_for_an_unactivated_review_without_a_works
             &workspace,
             &candidate.head_revision,
             OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
         )
         .unwrap();
     std::fs::remove_dir_all(&workspace).unwrap();
@@ -314,12 +315,12 @@ async fn save_current_review(
 ) -> PersistedReviewState {
     let resolved = BranchSelectionResolver
         .resolve(
+            &OperationContext::background(),
             repository_path,
             &BranchSelection {
                 base_ref: "refs/heads/base".to_owned(),
                 head_ref: "refs/heads/topic".to_owned(),
             },
-            &OperationContext::background(),
         )
         .await
         .unwrap();

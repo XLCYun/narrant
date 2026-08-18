@@ -28,9 +28,9 @@ impl ReviewLifecycle {
                     let resolved = self
                         .branch_selections
                         .resolve(
+                            operation,
                             &repository,
                             &BranchSelection { base_ref, head_ref },
-                            operation,
                         )
                         .await
                         .map_err(ReviewLifecycleError::branch)?;
@@ -58,7 +58,7 @@ impl ReviewLifecycle {
                 } else {
                     let resolved = self
                         .pull_requests
-                        .resolve(&repository_path, &selection, operation)
+                        .resolve(operation, &repository_path, &selection)
                         .await
                         .map_err(ReviewLifecycleError::pull_request)?;
                     self.store
@@ -101,7 +101,7 @@ impl ReviewLifecycle {
                 )
             })?;
         let content = review
-            .read(path, operation)
+            .read(operation, path)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(content)
     }
@@ -145,7 +145,12 @@ impl ReviewLifecycle {
                 .map_err(|error| ReviewLifecycleError::WorkspaceTransition(error.to_string()))?;
         }
         adapter
-            .create_detached_worktree(&workspace, &saved.head_revision, convergence.cancellation())
+            .create_detached_worktree(
+                &workspace,
+                &saved.head_revision,
+                convergence.cancellation(),
+                convergence.cancellation(),
+            )
             .map_err(ReviewLifecycleError::git)?;
         if saved.created {
             if let Err(error) = self.store.activate_initial_snapshot(&saved) {

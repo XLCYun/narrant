@@ -29,6 +29,7 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
 
     let resolved = resolver
         .resolve(
+            &operation,
             fixture.checkout.path(),
             &PullRequestSelection {
                 repository: crate::github::GitHubRepository {
@@ -37,7 +38,6 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
                 },
                 number: 42,
             },
-            &operation,
         )
         .await
         .unwrap();
@@ -67,6 +67,7 @@ async fn cancelled_selection_stops_before_github_observation() {
 
     let error = match resolver
         .resolve(
+            &operation,
             Path::new("/definitely/missing/repository"),
             &PullRequestSelection {
                 repository: crate::github::GitHubRepository {
@@ -75,7 +76,6 @@ async fn cancelled_selection_stops_before_github_observation() {
                 },
                 number: 42,
             },
-            &operation,
         )
         .await
     {
@@ -111,6 +111,7 @@ async fn fetched_objects_with_unverifiable_sha_report_exact_revision_failure() {
 
     let error = match resolver
         .resolve(
+            &operation,
             fixture.checkout.path(),
             &PullRequestSelection {
                 repository: crate::github::GitHubRepository {
@@ -119,7 +120,6 @@ async fn fetched_objects_with_unverifiable_sha_report_exact_revision_failure() {
                 },
                 number: 42,
             },
-            &operation,
         )
         .await
     {

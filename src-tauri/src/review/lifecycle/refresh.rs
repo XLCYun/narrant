@@ -16,9 +16,9 @@ impl ReviewLifecycle {
         let available = if let Some(metadata) = current.pull_request.as_ref() {
             self.pull_requests
                 .resolve(
+                    operation,
                     &repository_path,
                     &pull_request_selection(metadata),
-                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?
@@ -26,12 +26,12 @@ impl ReviewLifecycle {
         } else {
             self.branch_selections
                 .resolve(
+                    operation,
                     &repository_path,
                     &BranchSelection {
                         base_ref: current.base_ref.clone(),
                         head_ref: current.head_ref.clone(),
                     },
-                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::branch)?
@@ -120,9 +120,9 @@ impl ReviewLifecycle {
             let available = self
                 .pull_requests
                 .resolve(
+                    operation,
                     &repository_path,
                     &pull_request_selection(metadata),
-                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::pull_request)?;
@@ -143,12 +143,12 @@ impl ReviewLifecycle {
             let available = self
                 .branch_selections
                 .resolve(
+                    operation,
                     &repository_path,
                     &BranchSelection {
                         base_ref: current.base_ref.clone(),
                         head_ref: current.head_ref.clone(),
                     },
-                    operation,
                 )
                 .await
                 .map_err(ReviewLifecycleError::branch)?
@@ -180,6 +180,7 @@ impl ReviewLifecycle {
             &current.head_revision,
             &candidate.head_revision,
             convergence.cancellation(),
+            convergence.cancellation(),
         ) {
             let _ = self.store.abandon_refresh_candidate(&candidate);
             return Err(ReviewLifecycleError::WorkspaceTransition(error.to_string()));
@@ -190,6 +191,7 @@ impl ReviewLifecycle {
                 &entry.git_common_directory,
                 &candidate.head_revision,
                 &current.head_revision,
+                convergence.cancellation(),
                 convergence.cancellation(),
             );
             let _ = self.store.abandon_refresh_candidate(&candidate);

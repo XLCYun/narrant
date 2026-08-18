@@ -10,19 +10,19 @@ async fn restored_snapshot_reader_reads_only_the_pinned_file_change() {
     let operation = OperationContext::background();
     let resolved = BranchSelectionResolver
         .resolve(
+            &operation,
             repository.path(),
             &BranchSelection {
                 base_ref: "refs/heads/base".to_owned(),
                 head_ref: "refs/heads/topic".to_owned(),
             },
-            &operation,
         )
         .await
         .unwrap();
     let reader = SnapshotContentReader::restore(repository.path(), resolved.comparison);
 
-    let change = reader.read("README.md", &operation).unwrap();
-    let error = reader.read("not-in-snapshot.txt", &operation).unwrap_err();
+    let change = reader.read(&operation, "README.md").unwrap();
+    let error = reader.read(&operation, "not-in-snapshot.txt").unwrap_err();
 
     assert_eq!(
         change.before.as_ref().and_then(FileContent::text),

@@ -8,9 +8,10 @@ Narrant keeps source-specific acquisition in Branch Selection and Pull Request S
 resolvers. Local change content receives exact revisions and owns only immutable
 comparison construction plus object reads pinned to one Snapshot.
 
-Every public local Git I/O interface accepts `OperationContext`. Explicitly
-non-cancellable work uses a non-cancellable context at the caller's policy seam rather
-than a second convenience method.
+Every public local Git I/O interface accepts `OperationContext`. Callers without an
+external operation create a root context with `background()`. A convergence phase derives
+`without_cancellation()` from its current context at the caller's policy seam rather than
+starting a new root.
 
 ## Consequences
 

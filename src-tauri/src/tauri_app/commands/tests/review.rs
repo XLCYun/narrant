@@ -40,12 +40,12 @@ async fn snapshot_mapper_preserves_the_existing_ipc_contract() {
     drop(repository);
     let review = review::BranchSelectionResolver
         .resolve(
+            &operation::OperationContext::background(),
             fixture.path(),
             &review::BranchSelection {
                 base_ref: "refs/heads/base".to_owned(),
                 head_ref: "refs/heads/head".to_owned(),
             },
-            &operation::OperationContext::background(),
         )
         .await
         .unwrap();

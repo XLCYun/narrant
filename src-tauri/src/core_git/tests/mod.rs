@@ -235,6 +235,7 @@ fn review_workspace_is_a_detached_linked_worktree_at_the_snapshot_head() {
             &workspace,
             &head,
             OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
         )
         .unwrap();
 
@@ -285,8 +286,10 @@ fn cancelled_workspace_creation_removes_its_partial_worktree() {
         false
     });
 
+    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let convergence = operation.without_cancellation();
     let error = GitProcessAdapter::new(fixture.path())
-        .create_detached_worktree(&workspace, &head, &cancellation)
+        .create_detached_worktree(&workspace, &head, &cancellation, convergence.cancellation())
         .unwrap_err();
 
     assert!(
@@ -310,6 +313,7 @@ fn removal_clears_a_registered_worktree_after_its_directory_disappears() {
         .create_detached_worktree(
             &workspace,
             &head,
+            OperationContext::background().cancellation(),
             OperationContext::background().cancellation(),
         )
         .unwrap();
@@ -336,7 +340,12 @@ fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head()
     let workspace_root = tempfile::TempDir::new().unwrap();
     let workspace = workspace_root.path().join("repo");
     adapter
-        .create_detached_worktree(&workspace, &first_head, &cancellation)
+        .create_detached_worktree(
+            &workspace,
+            &first_head,
+            &cancellation,
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
     std::fs::write(workspace.join("dirty.txt"), "discard me").unwrap();
 
@@ -352,6 +361,7 @@ fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head()
             &first_head,
             &next_head,
             &cancellation,
+            OperationContext::background().cancellation(),
         )
         .unwrap();
 
@@ -384,6 +394,7 @@ fn workspace_transition_rejects_an_unregistered_directory_before_deletion() {
             &head,
             &head,
             OperationContext::background().cancellation(),
+            OperationContext::background().cancellation(),
         )
         .unwrap_err();
 
@@ -407,7 +418,12 @@ fn failed_workspace_transition_restores_the_previous_snapshot_head() {
     let workspace_root = tempfile::TempDir::new().unwrap();
     let workspace = workspace_root.path().join("repo");
     adapter
-        .create_detached_worktree(&workspace, &old_head, &cancellation)
+        .create_detached_worktree(
+            &workspace,
+            &old_head,
+            &cancellation,
+            OperationContext::background().cancellation(),
+        )
         .unwrap();
 
     let error = adapter
@@ -417,6 +433,7 @@ fn failed_workspace_transition_restores_the_previous_snapshot_head() {
             &old_head,
             "0000000000000000000000000000000000000000",
             &cancellation,
+            OperationContext::background().cancellation(),
         )
         .unwrap_err();
 
@@ -440,6 +457,7 @@ fn removes_only_an_exact_registered_owned_worktree_even_when_dirty() {
         .create_detached_worktree(
             &workspace,
             &head,
+            OperationContext::background().cancellation(),
             OperationContext::background().cancellation(),
         )
         .unwrap();

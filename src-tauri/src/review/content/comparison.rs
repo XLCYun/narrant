@@ -23,8 +23,8 @@ impl SnapshotContentReader {
     /// 使用显式操作上下文读取 Snapshot 中一个 File Change 的固定内容。
     pub fn read(
         &self,
-        path: &str,
         operation: &OperationContext,
+        path: &str,
     ) -> Result<FileChangeContent, GitCommandError> {
         let change = self
             .comparison
@@ -92,9 +92,9 @@ pub(crate) struct ResolvedRevisions {
 
 /// 验证已解析 revisions 并构建不可变的 three-dot Change Comparison。
 pub(crate) fn build_comparison(
+    operation: &OperationContext,
     repository_path: &Path,
     revisions: ResolvedRevisions,
-    operation: &OperationContext,
 ) -> Result<ChangeComparison, GitCommandError> {
     let adapter = GitProcessAdapter::new(repository_path);
     let cancellation = operation.cancellation();
