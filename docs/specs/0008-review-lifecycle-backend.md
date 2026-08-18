@@ -158,10 +158,12 @@ transaction. Candidate abandonment must not change the previous current pointer.
 
 ## Cancellation and Concurrency
 
-- The transport cancellation registry maps `operationId` to a cancellation token outside
-  the lifecycle seam.
-- The lifecycle module decides where that token is observed and where convergence uses
-  an internal non-cancellable token.
+- The transport cancellation registry maps `operationId` to a private `CancellationSource`
+  and exposes only a read-only `CancellationSignal` through the call-level
+  `OperationContext` outside the lifecycle seam.
+- The lifecycle module decides where the current context is observed and, at its
+  mutation/convergence policy seam, derives `without_cancellation()` from that context so
+  future call-level metadata remains associated with the convergence work.
 - Operations that mutate one Review are serialized by `reviewId`; future different
   Reviews may execute independently without changing the runtime representation.
 - Duplicate refresh attempts for one Review fail deterministically without replacing an
