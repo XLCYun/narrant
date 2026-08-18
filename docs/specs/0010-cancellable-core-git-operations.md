@@ -70,9 +70,13 @@ or termination policy.
 - Pull Request Selection resolution receives one `OperationContext` across its GitHub and
   Core Git preparation stages.
 - Branch and Pull Request preparation observe that context.
-- Review lifecycle creates an explicit non-cancellable context before Workspace
-  convergence. Activation or rollback therefore completes even if the original operation
-  is cancelled during convergence.
+- Review lifecycle performs one final cancellation check before initial materialization or
+  refresh Workspace convergence, then creates an explicit non-cancellable context.
+  Workspace creation, activation, and rollback therefore complete even if the original
+  operation is cancelled during convergence.
+- A failed or cancelled Core Git worktree creation compensates with a non-cancellable removal.
+  Startup recovery removes managed Workspaces for unactivated Reviews before abandoning their
+  candidate Snapshots, so the persisted ownership evidence remains available during cleanup.
 
 ## Testing Strategy
 
@@ -81,7 +85,10 @@ or termination policy.
 - Test `CoreGitProcess` with real temporary Git repositories: success, cancellation,
   timeout, output-limit classification, and contextual error-kind preservation.
 - Test Review lifecycle only for the domain transition from cancellable preparation to
-  non-cancellable convergence; process mechanics remain Core Git process tests.
+  non-cancellable convergence during initial materialization and refresh.
+- Test Core Git worktree creation cancellation with a real repository and require the partial
+  directory and linked-worktree registration to be gone before the operation returns.
+- Test startup recovery with an unactivated Review that already owns a linked worktree.
 - Test the typed Tauri transport for source-neutral operation IDs and cancellation command.
 
 ## Acceptance Criteria
@@ -101,6 +108,10 @@ or termination policy.
    non-cancellable.
 10. Rust formatting, Clippy, Rust tests, frontend tests, lint, typechecking, and production
     build pass.
+11. Initial materialization cancellation cannot interrupt Workspace creation after convergence
+    starts, and a failed worktree creation removes its partial directory and registration.
+12. Startup recovery cleans Workspaces owned by unactivated Reviews before abandoning their
+    candidate Snapshots.
 
 ## Related Decisions
 

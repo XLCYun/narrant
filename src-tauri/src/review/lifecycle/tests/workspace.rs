@@ -1,4 +1,97 @@
 #[tokio::test]
+async fn recovery_removes_registration_for_an_unactivated_review_without_a_workspace() {
+    let fixture = LifecycleFixture::new();
+    let candidate = fixture.save_current_review().await;
+    let workspace = fixture
+        .store
+        .review_workspace_path(&candidate.review_id)
+        .unwrap();
+    GitProcessAdapter::new(fixture.repository.path())
+        .create_detached_worktree(
+            &workspace,
+            &candidate.head_revision,
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    std::fs::remove_dir_all(&workspace).unwrap();
+    assert!(git_text(
+        fixture.repository.path(),
+        &["worktree", "list", "--porcelain"]
+    )
+    .contains(&workspace.to_string_lossy().to_string()));
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+
+    let report = lifecycle.recover().unwrap();
+
+    assert_eq!(
+        report.abandoned_snapshot_ids,
+        vec![candidate.snapshot_identity()]
+    );
+    assert!(report.cleanup_warnings.is_empty());
+    assert!(!workspace.exists());
+    assert!(!git_text(
+        fixture.repository.path(),
+        &["worktree", "list", "--porcelain"]
+    )
+    .contains(&workspace.to_string_lossy().to_string()));
+}
+
+#[tokio::test]
+async fn cancellation_after_materialization_starts_does_not_interrupt_convergence() {
+    let fixture = LifecycleFixture::new();
+    for index in 0..1_000 {
+        std::fs::write(
+            fixture.repository.path().join(format!("materialize-{index}.txt")),
+            format!("{index}\n"),
+        )
+        .unwrap();
+    }
+    run_git(fixture.repository.path(), &["add", "."]);
+    run_git(
+        fixture.repository.path(),
+        &["commit", "-q", "-m", "large materialization"],
+    );
+    run_git(fixture.repository.path(), &["branch", "-f", "topic", "HEAD"]);
+    let saved = fixture.save_current_review().await;
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
+    let workspace = fixture
+        .store
+        .review_workspace_path(&saved.review_id)
+        .unwrap();
+    let cancellation = CancellationToken::default();
+    let cancellation_request = cancellation.clone();
+    let observed_workspace = workspace.clone();
+    let observer = thread::spawn(move || {
+        for _ in 0..5_000 {
+            if observed_workspace.exists() {
+                cancellation_request.cancel();
+                return true;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        false
+    });
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+
+    let opened = lifecycle
+        .present(
+            PresentReview::Saved {
+                review_id: saved.review_id.clone(),
+            },
+            &cancellation,
+        )
+        .await;
+
+    assert!(observer.join().unwrap(), "未观察到 Review Workspace 开始物化");
+    let opened = opened.unwrap();
+    assert!(cancellation.is_cancelled());
+    assert_eq!(
+        git_text(&workspace, &["rev-parse", "HEAD"]),
+        opened.snapshot.head_revision
+    );
+}
+
+#[tokio::test]
 async fn failed_target_materialization_keeps_current_review_readable() {
     let application_data = tempfile::TempDir::new().unwrap();
     let first_repository = test_repository_with_commit();

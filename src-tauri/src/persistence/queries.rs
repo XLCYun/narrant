@@ -182,7 +182,7 @@ impl ReviewStore {
         Ok(())
     }
 
-    /// 返回所有持久化 Review 的精确 workspace 清理证据。
+    /// 返回所有持久化 Review 的精确 workspace 清理证据，包括尚未激活的 Review。
     pub fn review_workspace_cleanup_targets(
         &self,
     ) -> Result<Vec<ReviewWorkspaceCleanupTarget>, PersistenceError> {
@@ -192,7 +192,6 @@ impl ReviewStore {
                 "SELECT r.id, e.canonical_path, e.git_common_directory
                  FROM reviews r
                  JOIN repositories e ON e.id = r.repository_id
-                 WHERE r.current_snapshot_id IS NOT NULL
                  ORDER BY r.id",
             )
             .map_err(map_sqlite_error)?;

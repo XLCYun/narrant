@@ -23,7 +23,7 @@ impl GitProcessAdapter {
         std::fs::create_dir_all(parent).map_err(|error| {
             GitCommandError::new(format!("无法创建 Review Workspace 目录：{error}"))
         })?;
-        self.run_workspace(
+        let creation = self.run_workspace(
             [
                 OsStr::new("worktree"),
                 OsStr::new("add"),
@@ -33,11 +33,13 @@ impl GitProcessAdapter {
                 OsStr::new(head_object_id),
             ],
             cancellation,
-        )
-        .map_err(|error| {
-            error
-                .with_context("无法创建 Review Workspace。请确认磁盘空间和仓库 worktree 状态后重试")
-        })?;
+        );
+        if let Err(error) = creation {
+            let error = error.with_context(
+                "无法创建 Review Workspace。请确认磁盘空间和仓库 worktree 状态后重试",
+            );
+            return Err(self.compensate_failed_worktree_creation(workspace_path, error));
+        }
         let postcondition = read_head_object_id(workspace_path, cancellation).and_then(|actual| {
             if actual == head_object_id {
                 Ok(())
@@ -48,15 +50,23 @@ impl GitProcessAdapter {
             }
         });
         if let Err(error) = postcondition {
-            let cleanup = self.remove_worktree(workspace_path, &CancellationToken::default());
-            return Err(match cleanup {
-                Ok(()) => error,
-                Err(cleanup_error) => error.with_context(format!(
-                    "自动清理失败：{cleanup_error}。请关闭 Narrant 并检查该仓库的 linked worktrees"
-                )),
-            });
+            return Err(self.compensate_failed_worktree_creation(workspace_path, error));
         }
         Ok(())
+    }
+
+    /// 以不可取消清理补偿失败的 worktree 创建，并保留原始失败类别。
+    fn compensate_failed_worktree_creation(
+        &self,
+        workspace_path: &Path,
+        error: GitCommandError,
+    ) -> GitCommandError {
+        match self.remove_worktree(workspace_path, &CancellationToken::default()) {
+            Ok(()) => error,
+            Err(cleanup_error) => error.with_context(format!(
+                "自动清理失败：{cleanup_error}。请关闭 Narrant 并检查该仓库的 linked worktrees"
+            )),
+        }
     }
 
     /// 强制重建受管 Review Workspace，并将其恢复为指定 detached HEAD。
@@ -131,13 +141,14 @@ impl GitProcessAdapter {
         workspace_path: &Path,
         cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
-        if !workspace_path.exists() {
+        if !workspace_path.exists() && !self.is_registered_worktree(workspace_path, cancellation)? {
             return Ok(());
         }
         self.run_workspace(
             [
                 OsStr::new("worktree"),
                 OsStr::new("remove"),
+                OsStr::new("--force"),
                 OsStr::new("--force"),
                 OsStr::new("--"),
                 workspace_path.as_os_str(),
@@ -157,6 +168,19 @@ impl GitProcessAdapter {
     ) -> Result<(), GitCommandError> {
         self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
         self.remove_worktree(workspace_path, cancellation)
+    }
+
+    /// 恢复阶段仅在路径存在或仍有 Git 注册时验证并移除受管 worktree。
+    pub fn remove_owned_worktree_if_present(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
+        if !workspace_path.exists() && !self.is_registered_worktree(workspace_path, cancellation)? {
+            return Ok(());
+        }
+        self.remove_owned_worktree(workspace_path, expected_common_directory, cancellation)
     }
 
     /// 验证路径确属保存的 common directory，且仍是该仓库精确注册的 linked worktree。
@@ -188,25 +212,54 @@ impl GitProcessAdapter {
                 "Review Workspace 所有权验证失败：Git common directory 不匹配。",
             ));
         }
-        let expected_workspace = std::fs::canonicalize(workspace_path).map_err(|_| {
-            GitCommandError::new("Review Workspace 所有权验证失败：受管路径不存在。")
-        })?;
-        let registered =
-            self.run_workspace(["worktree", "list", "--porcelain", "-z"], cancellation)?;
-        let path_is_registered = registered.stdout.split(|byte| *byte == 0).any(|field| {
-            field
-                .strip_prefix(b"worktree ")
-                .and_then(|path| std::str::from_utf8(path).ok())
-                .and_then(|path| std::fs::canonicalize(path).ok())
-                .is_some_and(|path| path == expected_workspace)
-        });
-        if !path_is_registered {
+        if !self.is_registered_worktree(workspace_path, cancellation)? {
             return Err(GitCommandError::new(
                 "Review Workspace 所有权验证失败：路径不是该仓库注册的 linked worktree。",
             ));
         }
         Ok(())
     }
+
+    /// 通过机器格式 worktree 清单判断精确受管路径是否仍有 Git 注册。
+    fn is_registered_worktree(
+        &self,
+        workspace_path: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<bool, GitCommandError> {
+        let expected_workspace = canonicalize_with_missing_tail(workspace_path)?;
+        let expected_field =
+            format!("worktree {}", expected_workspace.to_string_lossy()).into_bytes();
+        let registered =
+            self.run_workspace(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+        Ok(registered
+            .stdout
+            .split(|byte| *byte == 0)
+            .any(|field| field == expected_field))
+    }
+}
+
+/// 规范化可能已经消失的受管路径，同时保留其不存在的尾部组件。
+fn canonicalize_with_missing_tail(path: &Path) -> Result<PathBuf, GitCommandError> {
+    let mut existing = path;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let name = existing.file_name().ok_or_else(|| {
+            GitCommandError::new("Review Workspace 所有权验证失败：无法规范化受管路径。")
+        })?;
+        missing.push(name.to_os_string());
+        existing = existing.parent().ok_or_else(|| {
+            GitCommandError::new("Review Workspace 所有权验证失败：无法规范化受管路径。")
+        })?;
+    }
+    let mut canonical = std::fs::canonicalize(existing).map_err(|error| {
+        GitCommandError::new(format!(
+            "Review Workspace 所有权验证失败：无法规范化受管路径：{error}"
+        ))
+    })?;
+    for component in missing.into_iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
 }
 
 /// 读取 linked worktree 的精确 HEAD object ID，供创建前后统一校验。

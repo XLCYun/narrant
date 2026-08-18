@@ -27,13 +27,13 @@ impl ReviewLifecycle {
         })
     }
 
-    /// 启动时放弃未激活候选，并逐项清理遗留受管 workspace。
+    /// 启动时先用持久化所有权证据清理 workspace，再放弃未激活候选。
     pub fn recover(&self) -> Result<RecoveryReport, ReviewLifecycleError> {
+        let cleanup_warnings = self.cleanup_workspaces(None)?;
         let abandoned_snapshot_ids = self
             .store
             .abandon_unactivated_candidates()
             .map_err(ReviewLifecycleError::persistence)?;
-        let cleanup_warnings = self.cleanup_workspaces(None)?;
         Ok(RecoveryReport {
             abandoned_snapshot_ids,
             cleanup_warnings,
@@ -82,7 +82,6 @@ impl ReviewLifecycle {
             .into_iter()
             .filter(|target| {
                 !except_review_id.is_some_and(|review_id| review_id == target.review_id)
-                    && target.workspace_path.exists()
             })
             .filter_map(|target| remove_workspace(&target).err())
             .collect())
@@ -92,7 +91,7 @@ impl ReviewLifecycle {
 /// 精确移除已验证归属的受管 workspace。
 fn remove_workspace(target: &ReviewWorkspaceCleanupTarget) -> Result<(), String> {
     GitProcessAdapter::new(&target.repository_path)
-        .remove_owned_worktree(
+        .remove_owned_worktree_if_present(
             &target.workspace_path,
             &target.git_common_directory,
             &CancellationToken::default(),

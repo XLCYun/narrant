@@ -252,6 +252,69 @@ fn review_workspace_is_a_detached_linked_worktree_at_the_snapshot_head() {
 }
 
 #[test]
+fn cancelled_workspace_creation_removes_its_partial_worktree() {
+    let fixture = committed_repository();
+    for index in 0..1_000 {
+        std::fs::write(
+            fixture.path().join(format!("workspace-{index}.txt")),
+            format!("{index}\n"),
+        )
+        .unwrap();
+    }
+    run_git(fixture.path(), ["add", "."]);
+    run_git(fixture.path(), ["commit", "-q", "-m", "large workspace"]);
+    let head = read_git(fixture.path(), ["rev-parse", "HEAD"]);
+    let managed = tempfile::TempDir::new().unwrap();
+    let workspace = managed.path().join("reviews/review-1/repo");
+    let cancellation = CancellationToken::default();
+    let cancellation_request = cancellation.clone();
+    let observed_workspace = workspace.clone();
+    let observer = thread::spawn(move || {
+        for _ in 0..5_000 {
+            if observed_workspace.exists() {
+                cancellation_request.cancel();
+                return true;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        false
+    });
+
+    let error = GitProcessAdapter::new(fixture.path())
+        .create_detached_worktree(&workspace, &head, &cancellation)
+        .unwrap_err();
+
+    assert!(
+        observer.join().unwrap(),
+        "未观察到 Review Workspace 开始创建"
+    );
+    assert!(error.is_cancelled(), "{error}");
+    let worktree_list = read_git(fixture.path(), ["worktree", "list", "--porcelain"]);
+    assert!(!workspace.exists(), "{error}; worktrees: {worktree_list}");
+    assert!(!worktree_list.contains(&workspace.to_string_lossy().to_string()));
+}
+
+#[test]
+fn removal_clears_a_registered_worktree_after_its_directory_disappears() {
+    let fixture = committed_repository();
+    let head = read_git(fixture.path(), ["rev-parse", "HEAD"]);
+    let managed = tempfile::TempDir::new().unwrap();
+    let workspace = managed.path().join("reviews/review-1/repo");
+    let adapter = GitProcessAdapter::new(fixture.path());
+    adapter
+        .create_detached_worktree(&workspace, &head, &CancellationToken::default())
+        .unwrap();
+    std::fs::remove_dir_all(&workspace).unwrap();
+
+    adapter
+        .remove_worktree(&workspace, &CancellationToken::default())
+        .unwrap();
+
+    let worktree_list = read_git(fixture.path(), ["worktree", "list", "--porcelain"]);
+    assert!(!worktree_list.contains(&workspace.to_string_lossy().to_string()));
+}
+
+#[test]
 fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head() {
     let repository = committed_repository();
     let adapter = GitProcessAdapter::new(repository.path());

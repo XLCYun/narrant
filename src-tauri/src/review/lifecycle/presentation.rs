@@ -129,20 +129,33 @@ impl ReviewLifecycle {
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
         let adapter = GitProcessAdapter::new(&repository_path);
+        if cancellation.is_cancelled() {
+            if saved.created {
+                self.store
+                    .abandon_refresh_candidate(&saved)
+                    .map_err(ReviewLifecycleError::persistence)?;
+            }
+            return Err(ReviewLifecycleError::Cancelled("操作已取消。".to_owned()));
+        }
+        let convergence = OperationContext::non_cancellable();
         if workspace.exists() {
             adapter
-                .validate_owned_worktree(&workspace, &entry.git_common_directory, cancellation)
+                .validate_owned_worktree(
+                    &workspace,
+                    &entry.git_common_directory,
+                    convergence.cancellation(),
+                )
                 .map_err(|error| ReviewLifecycleError::WorkspaceTransition(error.to_string()))?;
         }
         adapter
-            .create_detached_worktree(&workspace, &saved.head_revision, cancellation)
+            .create_detached_worktree(&workspace, &saved.head_revision, convergence.cancellation())
             .map_err(ReviewLifecycleError::git)?;
         if saved.created {
             if let Err(error) = self.store.activate_initial_snapshot(&saved) {
                 let cleanup = adapter.remove_owned_worktree(
                     &workspace,
                     &entry.git_common_directory,
-                    &CancellationToken::default(),
+                    convergence.cancellation(),
                 );
                 return Err(ReviewLifecycleError::new(match cleanup {
                     Ok(()) => error.to_string(),
