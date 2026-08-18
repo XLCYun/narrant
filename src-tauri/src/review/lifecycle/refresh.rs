@@ -163,6 +163,7 @@ impl ReviewLifecycle {
                 .stage_branch_refresh_candidate(review_id, &available)
                 .map_err(|error| ReviewLifecycleError::new(error.to_string()))?
         };
+        self.cancel_staged_refresh(operation, &candidate)?;
 
         let workspace = self
             .store
@@ -206,6 +207,21 @@ impl ReviewLifecycle {
             Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),
         );
         Ok(presentation_from_saved(candidate, Vec::new()))
+    }
+
+    /// 在候选已持久化、尚未改变 Workspace 前处理最后一次可取消边界。
+    pub(super) fn cancel_staged_refresh(
+        &self,
+        operation: &OperationContext,
+        candidate: &PersistedReviewState,
+    ) -> Result<(), ReviewLifecycleError> {
+        if !operation.cancellation().is_cancelled() {
+            return Ok(());
+        }
+        self.store
+            .abandon_refresh_candidate(candidate)
+            .map_err(ReviewLifecycleError::persistence)?;
+        Err(ReviewLifecycleError::Cancelled("操作已取消。".to_owned()))
     }
 
     /// 获取同一 Review 的独占刷新权。

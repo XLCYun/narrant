@@ -180,3 +180,54 @@ async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
         current.snapshot.head_revision
     );
 }
+
+#[tokio::test]
+async fn cancellation_after_candidate_staging_abandons_candidate_before_workspace_transition() {
+    let fixture = LifecycleFixture::new();
+    let saved = fixture.save_current_review().await;
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+    let current = lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: saved.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let workspace = fixture
+        .store
+        .review_workspace_path(&saved.review_id)
+        .unwrap();
+    let workspace_head = git_text(&workspace, &["rev-parse", "HEAD"]);
+    let candidate = fixture
+        .store
+        .stage_branch_refresh_candidate(&saved.review_id, &saved.to_change_comparison())
+        .unwrap();
+    let cancellation = crate::operation::TestCancellation::default();
+    cancellation.cancel();
+    let operation = OperationContext::from_test_cancellation(&cancellation);
+
+    let error = lifecycle
+        .cancel_staged_refresh(&operation, &candidate)
+        .unwrap_err();
+
+    assert!(matches!(error, ReviewLifecycleError::Cancelled(_)));
+    assert_eq!(
+        fixture
+            .store
+            .open_review(&saved.review_id)
+            .unwrap()
+            .snapshot_identity(),
+        current.snapshot_id
+    );
+    assert_eq!(git_text(&workspace, &["rev-parse", "HEAD"]), workspace_head);
+    assert_eq!(
+        fixture
+            .store
+            .list_review_snapshot_identities(&saved.review_id)
+            .unwrap(),
+        vec![current.snapshot_id]
+    );
+}
