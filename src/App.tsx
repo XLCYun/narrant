@@ -69,8 +69,13 @@ export function App() {
     () => createTauriGitHubOAuthApplicationAdapter(tauriTransport),
     [],
   );
+  const initialDiffMode: DiffMode = localStorage.getItem(REVIEW_DIFF_MODE_KEY) === "inline" ? "inline" : "side-by-side";
+  const savedTreeWidth = Number(localStorage.getItem(REVIEW_TREE_WIDTH_KEY));
+  const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
+    ? savedTreeWidth
+    : 24;
   const repositoryOverview = useRepositoryOverview(repositoryApplication, { enabled: desktopRuntimeEnabled });
-  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
+  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter, { initialDiffMode, initialTreeWidth });
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
   const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: desktopRuntimeEnabled });
@@ -79,21 +84,17 @@ export function App() {
     repositoryId: selectedRepository?.id,
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
-  const snapshot = reviewLifecycle.reader?.snapshot;
-  const refreshingReview = reviewLifecycle.reader?.transition.kind === "refreshing";
+  const visibleReviewReader = appShell.destination.kind === "review" ? reviewLifecycle.reader : null;
+  const snapshot = visibleReviewReader?.snapshot;
+  const refreshingReview = visibleReviewReader?.transition.kind === "refreshing";
+  const currentReaderDiffMode = reviewLifecycle.reader?.diffMode;
+  const currentReaderTreeWidth = reviewLifecycle.reader?.treeWidth;
   const [repositoryPath, setRepositoryPath] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [error, setError] = useState("");
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
-  const [diffMode, setDiffMode] = useState<DiffMode>(() => (
-    localStorage.getItem(REVIEW_DIFF_MODE_KEY) === "inline" ? "inline" : "side-by-side"
-  ));
   const [narrowReview, setNarrowReview] = useState(() => window.innerWidth < 1200);
-  const savedTreeWidth = Number(localStorage.getItem(REVIEW_TREE_WIDTH_KEY));
-  const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
-    ? savedTreeWidth
-    : 24;
   const repositoryEntries = repositoryOverview.navigation.repositories;
   const recentReviews = repositoryOverview.navigation.recentReviews;
   const repositoryReviews = repositoryOverview.current?.reviews ?? [];
@@ -152,11 +153,11 @@ export function App() {
     return () => window.removeEventListener("resize", updateReviewWidth);
   }, []);
 
-  /** 保存用户明确选择的宽窗口 Diff 模式。 */
-  function selectDiffMode(mode: DiffMode) {
-    setDiffMode(mode);
-    localStorage.setItem(REVIEW_DIFF_MODE_KEY, mode);
-  }
+  useEffect(() => {
+    if (!currentReaderDiffMode || currentReaderTreeWidth === undefined) return;
+    localStorage.setItem(REVIEW_DIFF_MODE_KEY, currentReaderDiffMode);
+    localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(currentReaderTreeWidth));
+  }, [currentReaderDiffMode, currentReaderTreeWidth]);
 
   useEffect(() => {
     if (branchState.kind !== "ready") return;
@@ -426,11 +427,11 @@ export function App() {
       </section>
     </>}
     {visibleError && <ErrorMessage message={visibleError} />}
-    {snapshot && reviewLifecycle.reader && <div className="h-[calc(100vh-4.5rem)]">
+    {snapshot && visibleReviewReader && <div className="h-[calc(100vh-4.5rem)]">
       <ReviewReader
-        key={`${snapshot.reviewId}:${snapshot.snapshotId}`}
+        key={snapshot.reviewId}
         review={{
-          ...reviewLifecycle.reader,
+          ...visibleReviewReader,
           close: async () => {
             if (!selectedRepository) return reviewLifecycle.close();
             await appShell.navigate({ kind: "repository", repositoryId: selectedRepository.id });
@@ -438,12 +439,8 @@ export function App() {
           },
         }}
         appearance={{
-          diffMode,
           narrow: narrowReview,
           editorTheme,
-          initialTreeWidth,
-          onDiffModeChange: selectDiffMode,
-          onTreeWidthChange: (width) => localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(width)),
           onOpenExternal: (url) => void openUrl(url),
         }}
       />

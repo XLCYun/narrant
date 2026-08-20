@@ -21,6 +21,13 @@ export type ReviewOpenTarget =
         | { kind: "refresh"; reviewId: string; confirmation: BranchSelectionUpdate };
     };
 
+/** 提取无需解析即可确定的 durable Review identity，用于 Presented Review 短路。 */
+export function knownReviewId(target: ReviewOpenTarget): string | undefined {
+  if (target.kind === "saved-review") return target.reviewId;
+  if (target.kind === "branch-selection" && target.mode.kind === "continue") return target.mode.reviewId;
+  return undefined;
+}
+
 /** Review Update 检查得到的 moving revision 对照。 */
 export type ReviewUpdate = {
   currentBaseRevision: string;

@@ -1,5 +1,21 @@
 import type { PullRequestMetadata } from "@/lib/review-types";
 
+/** Review Reader 的稳定 peer view。 */
+export type ReviewView = "overview" | "file-changes";
+
+/** Monaco Diff 阅读器支持的持久化展示布局。 */
+export type ReviewDiffMode = "side-by-side" | "inline";
+
+/** Reader 可控滚动容器的进程内导航位置。 */
+export type ReviewReaderScrollPositions = {
+  overview: number;
+  fileTree: number;
+  content: number;
+};
+
+/** Reader 私有实现拥有的 opaque 文件视图状态；domain 不解释其结构。 */
+export type ReviewFileViewState = unknown;
+
 /** File Change 在文件树与内容视图中共享的状态。 */
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
 
@@ -36,4 +52,9 @@ export type ReviewSnapshot = {
 export type ReviewIdentity = {
   reviewId: string;
   snapshotId: string;
+};
+
+/** 一个 immutable Snapshot 内具体 File Change 的 Reader identity。 */
+export type ReviewFileIdentity = ReviewIdentity & {
+  path: string;
 };

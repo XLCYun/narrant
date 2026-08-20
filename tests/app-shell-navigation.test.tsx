@@ -162,7 +162,7 @@ describe("AppShell navigation module", () => {
     expect(repositoryAdapter.open).toHaveBeenLastCalledWith(1);
   });
 
-  it("返回 Home 时统一关闭 Review 并离开 Repository", async () => {
+  it("返回 Home 时只离开当前展示，不关闭 Review runtime", async () => {
     const repositoryAdapter = createRepositoryAdapter();
     const reviewAdapter = createReviewAdapter();
     const closeReview = vi.spyOn(reviewAdapter, "closeReview");
@@ -179,6 +179,96 @@ describe("AppShell navigation module", () => {
 
     expect(result.current.destination).toEqual({ kind: "home" });
     expect(result.current.reader).toBeNull();
-    expect(closeReview).toHaveBeenCalledTimes(1);
+    expect(closeReview).not.toHaveBeenCalled();
+  });
+
+  it("返回 Repository Overview 时只离开当前展示，不关闭 Review runtime", async () => {
+    const repositoryAdapter = createRepositoryAdapter();
+    const reviewAdapter = createReviewAdapter();
+    const closeReview = vi.spyOn(reviewAdapter, "closeReview");
+    const { result } = renderNavigation(repositoryAdapter, reviewAdapter);
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review",
+        repositoryId: 1,
+        target: { kind: "saved-review", reviewId: "review-1" },
+      });
+    });
+    await waitFor(() => expect(result.current.destination.kind).toBe("review"));
+    await act(async () => {
+      await result.current.navigate({ kind: "repository", repositoryId: 1 });
+    });
+
+    expect(result.current.destination).toEqual({ kind: "repository", repositoryId: 1, initialTab: "history" });
+    expect(result.current.reader).toBeNull();
+    expect(closeReview).not.toHaveBeenCalled();
+  });
+
+  it("重复点击当前 Presented Review 不调用 adapter", async () => {
+    const repositoryAdapter = createRepositoryAdapter();
+    const reviewAdapter = createReviewAdapter();
+    const switchReview = vi.spyOn(reviewAdapter, "switchReview");
+    const { result } = renderNavigation(repositoryAdapter, reviewAdapter);
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review",
+        repositoryId: 1,
+        target: { kind: "saved-review", reviewId: "review-1" },
+      });
+    });
+    switchReview.mockClear();
+
+    await act(async () => {
+      expect(await result.current.navigate({
+        kind: "review",
+        repositoryId: 1,
+        target: { kind: "saved-review", reviewId: "review-1" },
+      })).toEqual({ kind: "navigated" });
+    });
+
+    expect(switchReview).not.toHaveBeenCalled();
+  });
+
+  it("真实 A ↔ B presentation 更新 recent 排序并 reload，重复 current 不更新", async () => {
+    const repositoryAdapter = createRepositoryAdapter();
+    const reviewAdapter = createReviewAdapter();
+    const switchReview = vi.spyOn(reviewAdapter, "switchReview");
+    const loadReviews = vi.mocked(repositoryAdapter.loadReviews);
+    const { result } = renderNavigation(repositoryAdapter, reviewAdapter);
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review", repositoryId: 1, target: { kind: "saved-review", reviewId: "review-1" },
+      });
+      await result.current.navigate({
+        kind: "review", repositoryId: 1, target: { kind: "saved-review", reviewId: "review-2" },
+      });
+    });
+    expect(switchReview).toHaveBeenCalledTimes(2);
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-2");
+    expect(result.current.sidebar.reviews.map((recent) => recent.review.reviewId)).toEqual(["review-2", "review-1"]);
+    await waitFor(() => expect(loadReviews).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review", repositoryId: 1, target: { kind: "saved-review", reviewId: "review-1" },
+      });
+    });
+    expect(switchReview).toHaveBeenCalledTimes(3);
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-1");
+    expect(result.current.sidebar.reviews.map((recent) => recent.review.reviewId)).toEqual(["review-1", "review-2"]);
+    await waitFor(() => expect(loadReviews).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review", repositoryId: 1, target: { kind: "saved-review", reviewId: "review-1" },
+      });
+    });
+    expect(switchReview).toHaveBeenCalledTimes(3);
+    expect(loadReviews).toHaveBeenCalledTimes(3);
+    expect(result.current.sidebar.reviews.map((recent) => recent.review.reviewId)).toEqual(["review-1", "review-2"]);
   });
 });

@@ -3,7 +3,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 import type { RepositoryOverview, RepositorySummary } from "@/repository/repository-application";
 import type { RepositoryOverviewBinding } from "@/repository/use-repository-overview";
-import type { ReviewOpenTarget } from "@/review/review-application";
+import { knownReviewId, type ReviewOpenTarget } from "@/review/review-application";
 import type { ReviewLifecycleBinding, ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
 export type RepositoryTab = "pull-requests" | "branches" | "history";
@@ -140,6 +140,14 @@ export function useAppShellNavigation(
   }, [repository, restoreRepository, review]);
 
   const navigate = useCallback(async (intent: AppNavigationIntent): Promise<AppNavigationResult> => {
+    const requestedReviewId = intent.kind === "review" ? knownReviewId(intent.target) : undefined;
+    if (intent.kind === "review"
+      && requestedReviewId
+      && destination.kind === "review"
+      && destination.repositoryId === intent.repositoryId
+      && destination.reviewId === requestedReviewId) {
+      return { kind: "navigated" };
+    }
     if (navigating.current) return { kind: "ignored" };
     navigating.current = true;
     const previousRepositoryId = repository.current?.repository.id;
@@ -151,7 +159,7 @@ export function useAppShellNavigation(
         setDestination({ kind: "home" });
         setTransition({ kind: "stable" });
         setNavigationError(undefined);
-        await review.close();
+        review.unpresent();
         return { kind: "navigated" };
       }
 
@@ -174,7 +182,7 @@ export function useAppShellNavigation(
         const initialTab = destination.kind === "review" && previousRepositoryId === opened.overview.repository.id
           ? "history"
           : "pull-requests";
-        await review.close();
+        review.unpresent();
         setDestination({ kind: "repository", repositoryId: opened.overview.repository.id, initialTab });
         setTransition({ kind: "stable" });
         setNavigationError(undefined);
@@ -225,7 +233,7 @@ export function useAppShellNavigation(
     } finally {
       navigating.current = false;
     }
-  }, [commitReview, destination.kind, repository, review, waitForPaint]);
+  }, [commitReview, destination, repository, review, waitForPaint]);
 
   const registerAndOpen = useCallback(async (path: string) => {
     try {
@@ -252,7 +260,7 @@ export function useAppShellNavigation(
           const initialTab = destination.kind === "review" && pendingPreviousRepositoryId === overview.repository.id
             ? "history"
             : "pull-requests";
-          await review.close();
+          review.unpresent();
           setDestination({ kind: "repository", repositoryId: overview.repository.id, initialTab });
           setNavigationError(undefined);
           return { kind: "navigated" };

@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type {
-  ReviewApplicationAdapter,
-  ReviewOpenTarget,
-  ReviewUpdate,
+import {
+  knownReviewId,
+  type ReviewApplicationAdapter,
+  type ReviewOpenTarget,
+  type ReviewUpdate,
 } from "@/review/review-application";
-import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
+import type {
+  FileChangeContent,
+  ReviewDiffMode,
+  ReviewFileIdentity,
+  ReviewFileViewState,
+  ReviewReaderScrollPositions,
+  ReviewSnapshot,
+  ReviewView,
+} from "@/review/types";
 
 export type { ReviewApplicationAdapter, ReviewOpenTarget, ReviewUpdate } from "@/review/review-application";
 
@@ -15,7 +24,6 @@ export type ReviewFailure = {
   detail: string;
   retryable: boolean;
 };
-
 
 export type ReviewOpenResult =
   | { kind: "opened"; reviewId: string; snapshotId: string; snapshot: ReviewSnapshot }
@@ -44,6 +52,27 @@ export type ReviewUpdateBinding =
   | { kind: "available"; update: ReviewUpdate }
   | { kind: "failed"; failure: ReviewFailure };
 
+export type { ReviewDiffMode, ReviewView } from "@/review/types";
+
+/** 进程内一个 Review 的完整 Reader runtime 状态。 */
+type ReviewRuntimeEntry = {
+  snapshot: ReviewSnapshot;
+  fileChange: FileChangeBinding;
+  update: ReviewUpdateBinding;
+  view: ReviewView;
+  diffMode: ReviewDiffMode;
+  treeWidth: number;
+  collapsedDirectories: string[];
+  scrollPositions: ReviewReaderScrollPositions;
+  fileViewStates: Record<string, ReviewFileViewState>;
+};
+
+/** Review lifecycle 可配置的初始展示偏好。后续修改按 Review 独立保留。 */
+export type ReviewLifecycleOptions = {
+  initialDiffMode?: ReviewDiffMode;
+  initialTreeWidth?: number;
+};
+
 /** Review Reader 可直接消费的状态与用户意图 binding。 */
 export type ReviewReaderBinding = {
   snapshot: ReviewSnapshot;
@@ -54,6 +83,24 @@ export type ReviewReaderBinding = {
     | { kind: "closing" };
   fileChange: FileChangeBinding;
   update: ReviewUpdateBinding;
+  /** 当前 Review 的 peer view，以及用于保留它的 setter。 */
+  view: ReviewView;
+  setView(view: ReviewView): void;
+  /** 当前 Review 的 diff 布局，以及用于保留它的 setter。 */
+  diffMode: ReviewDiffMode;
+  setDiffMode(mode: ReviewDiffMode): void;
+  /** 当前 Review 的文件树宽度，以及用于保留它的 setter。 */
+  treeWidth: number;
+  setTreeWidth(width: number): void;
+  /** 已折叠目录路径，作为 Reader 导航位置的一部分保存。 */
+  collapsedDirectories: string[];
+  toggleDirectory(path: string): void;
+  /** Reader 外层可控滚动容器的位置。 */
+  scrollPositions: ReviewReaderScrollPositions;
+  setScrollPosition(region: keyof ReviewReaderScrollPositions, top: number): void;
+  /** 当前 File Change 的 Reader-owned opaque view state。 */
+  fileViewState: ReviewFileViewState | null;
+  setFileViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
   selectFileChange(path: string): void;
   retryFileChange(): void;
   refresh(): Promise<ReviewRefreshResult>;
@@ -64,6 +111,8 @@ export type ReviewReaderBinding = {
 export type ReviewLifecycleBinding = {
   open(target: ReviewOpenTarget): Promise<ReviewOpenResult>;
   close(): Promise<ReviewCloseResult>;
+  /** 离开 Reader 只取消 Presented 状态，不释放 Open Review runtime。 */
+  unpresent(): void;
   reader: ReviewReaderBinding | null;
   navigation: {
     activeReviewId?: string;
@@ -76,75 +125,186 @@ function operationFailure(reason: unknown): ReviewFailure {
   return { kind: "operation-failed", detail: String(reason), retryable: true };
 }
 
-/** 为一个 composition root 提供唯一当前 Review 的完整生命周期。 */
-export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLifecycleBinding {
-  const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
+/** 按稳定路径选出 Snapshot 的首个 File Change。 */
+function firstFileChangePath(snapshot: ReviewSnapshot): string | undefined {
+  return [...snapshot.fileChanges]
+    .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)[0]?.path;
+}
+
+/** 为一个 composition root 提供进程级 Open Review Set 与 Presented Review。 */
+export function useReviewLifecycle(
+  adapter: ReviewApplicationAdapter,
+  options: ReviewLifecycleOptions = {},
+): ReviewLifecycleBinding {
+  const initialDiffMode = options.initialDiffMode ?? "side-by-side";
+  const initialTreeWidth = options.initialTreeWidth ?? 24;
+  const entries = useRef(new Map<string, ReviewRuntimeEntry>());
+  const activeReviewIdRef = useRef<string>();
+  const [activeReviewId, setActiveReviewId] = useState<string>();
+  const [, invalidateRender] = useState(0);
   const [openingTarget, setOpeningTarget] = useState<ReviewOpenTarget>();
   const [transition, setTransition] = useState<ReviewReaderBinding["transition"]>({ kind: "stable" });
-  const [fileChange, setFileChange] = useState<FileChangeBinding>({ kind: "empty" });
-  const [update, setUpdate] = useState<ReviewUpdateBinding>({ kind: "current" });
-  const snapshotRef = useRef<ReviewSnapshot>();
-  const fileRequest = useRef(0);
-  const fileAbort = useRef<AbortController>();
-  const updateAbort = useRef<AbortController>();
+  const fileRequests = useRef(new Map<string, { request: number; abort: AbortController }>());
+  const updateGeneration = useRef(0);
+  const updateOperation = useRef<{
+    reviewId: string;
+    snapshotId: string;
+    generation: number;
+    previous: ReviewUpdateBinding;
+    abort: AbortController;
+  }>();
   const lifecycleAbort = useRef<AbortController>();
   const refreshOperation = useRef<{
+    reviewId: string;
     abort: AbortController;
     settled: Promise<void>;
     finish: () => void;
   }>();
 
-  /** 读取固定 Snapshot 的 File Change，并保证最后一次选择获胜。 */
-  const selectFileChange = useCallback((path: string) => {
-    const current = snapshotRef.current;
+  /** 修改一个 runtime entry，并立即刷新当前 Presented Review 的投影。 */
+  const updateEntry = useCallback((reviewId: string, change: (entry: ReviewRuntimeEntry) => ReviewRuntimeEntry) => {
+    const current = entries.current.get(reviewId);
     if (!current) return;
-    const request = ++fileRequest.current;
-    fileAbort.current?.abort();
-    const abort = new AbortController();
-    fileAbort.current = abort;
-    const identity = { reviewId: current.reviewId, snapshotId: current.snapshotId };
-    setFileChange({ kind: "loading", path });
-    void adapter.readFileChange(identity, path, abort.signal).then((content) => {
-      const latest = snapshotRef.current;
-      if (abort.signal.aborted || request !== fileRequest.current
-        || latest?.reviewId !== identity.reviewId || latest.snapshotId !== identity.snapshotId) return;
-      setFileChange({ kind: "ready", path, content });
-    }).catch((reason) => {
-      if (abort.signal.aborted || request !== fileRequest.current) return;
-      setFileChange({ kind: "failed", path, failure: operationFailure(reason) });
-    });
-  }, [adapter]);
+    entries.current.set(reviewId, change(current));
+    invalidateRender((value) => value + 1);
+  }, []);
 
-  /** 非阻塞检查当前 Review Selection 是否产生 Review Update。 */
-  const checkForUpdate = useCallback((current: ReviewSnapshot) => {
-    updateAbort.current?.abort();
-    const abort = new AbortController();
-    updateAbort.current = abort;
-    const identity = { reviewId: current.reviewId, snapshotId: current.snapshotId };
-    setUpdate({ kind: "checking" });
-    void adapter.checkReviewUpdate(current, abort.signal).then((available) => {
-      const latest = snapshotRef.current;
-      if (abort.signal.aborted || latest?.reviewId !== identity.reviewId
-        || latest.snapshotId !== identity.snapshotId) return;
-      setUpdate(available ? { kind: "available", update: available } : { kind: "current" });
-    }).catch((reason) => {
-      if (!abort.signal.aborted) setUpdate({ kind: "failed", failure: operationFailure(reason) });
-    });
-  }, [adapter]);
-
-  /** 提交一个可读 Snapshot，并确定性读取其首个 File Change。 */
-  const presentSnapshot = useCallback((next: ReviewSnapshot) => {
-    snapshotRef.current = next;
-    setSnapshot(next);
+  /** 将指定 Review 设为 Presented，并同步 snapshot ref 语义到 React state。 */
+  const presentEntry = useCallback((reviewId: string) => {
+    if (!entries.current.has(reviewId)) return;
+    activeReviewIdRef.current = reviewId;
+    setActiveReviewId(reviewId);
     setTransition({ kind: "stable" });
-    const firstPath = [...next.fileChanges]
-      .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)[0]?.path;
-    if (firstPath) selectFileChange(firstPath); else setFileChange({ kind: "empty" });
-    checkForUpdate(next);
-  }, [checkForUpdate, selectFileChange]);
+  }, []);
 
-  /** 打开或切换 Review；失败时保留当前可读 Review。 */
+  /** 读取固定 Snapshot 的 File Change，并把结果写回对应 Review 的 runtime entry。 */
+  const selectFileChange = useCallback((path: string) => {
+    const reviewId = activeReviewIdRef.current;
+    const entry = reviewId ? entries.current.get(reviewId) : undefined;
+    if (!reviewId || !entry) return;
+    const request = (fileRequests.current.get(reviewId)?.request ?? 0) + 1;
+    fileRequests.current.get(reviewId)?.abort.abort();
+    const abort = new AbortController();
+    fileRequests.current.set(reviewId, { request, abort });
+    const identity = { reviewId, snapshotId: entry.snapshot.snapshotId };
+    updateEntry(reviewId, (current) => ({ ...current, fileChange: { kind: "loading", path } }));
+    void adapter.readFileChange(identity, path, abort.signal).then((content) => {
+      const latest = entries.current.get(reviewId);
+      const latestRequest = fileRequests.current.get(reviewId);
+      if (abort.signal.aborted || latestRequest?.request !== request
+        || latest?.snapshot.reviewId !== identity.reviewId || latest.snapshot.snapshotId !== identity.snapshotId) return;
+      updateEntry(reviewId, (current) => ({ ...current, fileChange: { kind: "ready", path, content } }));
+    }).catch((reason) => {
+      const latestRequest = fileRequests.current.get(reviewId);
+      if (abort.signal.aborted || latestRequest?.request !== request) return;
+      updateEntry(reviewId, (current) => ({ ...current, fileChange: { kind: "failed", path, failure: operationFailure(reason) } }));
+    });
+  }, [adapter, updateEntry]);
+
+  /** 取消 update check，并把被中断的 checking 恢复成此前稳定状态。 */
+  const cancelUpdateCheck = useCallback(() => {
+    const operation = updateOperation.current;
+    if (!operation) return;
+    const entry = entries.current.get(operation.reviewId);
+    const cancelledPending = entry?.snapshot.snapshotId === operation.snapshotId
+      && entry.update.kind === "checking";
+    updateOperation.current = undefined;
+    operation.abort.abort();
+    if (!cancelledPending) return;
+    updateEntry(operation.reviewId, (current) => ({
+      ...current,
+      update: operation.previous.kind === "checking" ? { kind: "current" } : operation.previous,
+    }));
+    return { reviewId: operation.reviewId, snapshotId: operation.snapshotId, generation: operation.generation };
+  }, [updateEntry]);
+
+  /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
+  const checkForUpdate = useCallback((current: ReviewSnapshot) => {
+    cancelUpdateCheck();
+    const abort = new AbortController();
+    const reviewId = current.reviewId;
+    const identity = { reviewId, snapshotId: current.snapshotId };
+    const generation = ++updateGeneration.current;
+    const previous = entries.current.get(reviewId)?.update ?? { kind: "current" };
+    updateOperation.current = { reviewId, snapshotId: current.snapshotId, generation, previous, abort };
+    updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "checking" } }));
+    void adapter.checkReviewUpdate(current, abort.signal).then((available) => {
+      const latest = entries.current.get(reviewId);
+      if (abort.signal.aborted || updateOperation.current?.generation !== generation
+        || activeReviewIdRef.current !== reviewId
+        || latest?.snapshot.reviewId !== identity.reviewId || latest.snapshot.snapshotId !== identity.snapshotId) return;
+      updateOperation.current = undefined;
+      updateEntry(reviewId, (entry) => ({
+        ...entry,
+        update: available ? { kind: "available", update: available } : { kind: "current" },
+      }));
+    }).catch((reason) => {
+      if (abort.signal.aborted || updateOperation.current?.generation !== generation || activeReviewIdRef.current !== reviewId) return;
+      updateOperation.current = undefined;
+      updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "failed", failure: operationFailure(reason) } }));
+    });
+  }, [adapter, cancelUpdateCheck, updateEntry]);
+
+  /** 安装一个新 Snapshot；只重置该 Review 的 Snapshot-scoped Reader state。 */
+  const installSnapshot = useCallback((next: ReviewSnapshot, existing?: ReviewRuntimeEntry) => {
+    const previous = existing && existing.snapshot.snapshotId === next.snapshotId ? existing : undefined;
+    const entry: ReviewRuntimeEntry = previous ?? {
+      snapshot: next,
+      fileChange: { kind: "empty" },
+      update: { kind: "current" },
+      view: existing?.view ?? "overview",
+      diffMode: existing?.diffMode ?? initialDiffMode,
+      treeWidth: existing?.treeWidth ?? initialTreeWidth,
+      collapsedDirectories: [],
+      scrollPositions: { overview: 0, fileTree: 0, content: 0 },
+      fileViewStates: {},
+    };
+    if (previous) {
+      entries.current.set(next.reviewId, { ...previous, snapshot: next });
+      return false;
+    }
+    entries.current.set(next.reviewId, entry);
+    return true;
+  }, [initialDiffMode, initialTreeWidth]);
+
+  /** 新 Snapshot 首次呈现时清空旧内容，并按稳定路径读取首个 File Change。 */
+  const resetSnapshotReader = useCallback((snapshot: ReviewSnapshot) => {
+    updateEntry(snapshot.reviewId, (entry) => ({
+      ...entry,
+      snapshot,
+      fileChange: { kind: "empty" },
+      update: { kind: "current" },
+    }));
+    const firstPath = firstFileChangePath(snapshot);
+    if (firstPath) selectFileChange(firstPath);
+  }, [selectFileChange, updateEntry]);
+
+  /** 关闭一个 Review 的 update/file 操作并移除其 Open Review runtime entry。 */
+  const releaseEntry = useCallback((reviewId: string) => {
+    fileRequests.current.get(reviewId)?.abort.abort();
+    fileRequests.current.delete(reviewId);
+    entries.current.delete(reviewId);
+    if (activeReviewIdRef.current === reviewId) {
+      activeReviewIdRef.current = undefined;
+      setActiveReviewId(undefined);
+      setTransition({ kind: "stable" });
+    }
+    invalidateRender((value) => value + 1);
+  }, []);
+
+  /** 打开或切换 Review；失败时保留当前 Presented Review 与全部已有 runtime。 */
   const open = useCallback(async (target: ReviewOpenTarget): Promise<ReviewOpenResult> => {
+    const requestedReviewId = knownReviewId(target);
+    if (requestedReviewId && requestedReviewId === activeReviewIdRef.current) {
+      const current = entries.current.get(requestedReviewId);
+      if (current) return {
+        kind: "opened",
+        reviewId: current.snapshot.reviewId,
+        snapshotId: current.snapshot.snapshotId,
+        snapshot: current.snapshot,
+      };
+    }
+
     const refreshing = refreshOperation.current;
     if (refreshing) {
       refreshing.abort.abort();
@@ -152,51 +312,68 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
     }
     const abort = new AbortController();
     lifecycleAbort.current = abort;
-    const current = snapshotRef.current;
+    const previousReviewId = activeReviewIdRef.current;
+    const cancelledUpdate = cancelUpdateCheck();
+    const previousEntry = previousReviewId ? entries.current.get(previousReviewId) : undefined;
     setOpeningTarget(target);
-    if (current) setTransition({ kind: "switching", target });
+    if (previousReviewId) setTransition({ kind: "switching", target });
     try {
       const next = await adapter.switchReview(
         target,
-        current ? { reviewId: current.reviewId, snapshotId: current.snapshotId } : null,
+        previousEntry ? { reviewId: previousEntry.snapshot.reviewId, snapshotId: previousEntry.snapshot.snapshotId } : null,
         abort.signal,
       );
-      presentSnapshot(next);
-      return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: next };
+      const existing = entries.current.get(next.reviewId);
+      const reusedSnapshot = Boolean(existing && existing.snapshot.snapshotId === next.snapshotId);
+      installSnapshot(next, existing);
+      presentEntry(next.reviewId);
+      if (!reusedSnapshot) resetSnapshotReader(next);
+      checkForUpdate(next);
+      return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: entries.current.get(next.reviewId)!.snapshot };
     } catch (reason) {
-      if (current) setTransition({ kind: "stable" });
+      if (previousEntry && activeReviewIdRef.current === previousReviewId) {
+        setTransition({ kind: "stable" });
+        if (cancelledUpdate
+          && cancelledUpdate.reviewId === previousReviewId
+          && cancelledUpdate.snapshotId === previousEntry.snapshot.snapshotId
+          && cancelledUpdate.generation === updateGeneration.current) {
+          checkForUpdate(previousEntry.snapshot);
+        }
+      }
       return { kind: "failed", failure: operationFailure(reason), previousReviewPreserved: true };
     } finally {
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
       setOpeningTarget(undefined);
     }
-  }, [adapter, presentSnapshot]);
+  }, [adapter, cancelUpdateCheck, checkForUpdate, installSnapshot, presentEntry, resetSnapshotReader]);
 
-  /** 显式刷新当前 Review，失败时保留旧 Snapshot 与 File Change。 */
+  /** 显式刷新 Presented Review；只替换该 Review 的 Snapshot-scoped state。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
-    const current = snapshotRef.current;
-    const confirmation = update.kind === "available" ? update.update : undefined;
-    if (!current || !confirmation) return { kind: "unchanged" };
+    const reviewId = activeReviewIdRef.current;
+    const currentEntry = reviewId ? entries.current.get(reviewId) : undefined;
+    const confirmation = currentEntry?.update.kind === "available" ? currentEntry.update.update : undefined;
+    if (!reviewId || !currentEntry || !confirmation) return { kind: "unchanged" };
     const abort = new AbortController();
     let finishRefresh: () => void = () => {};
     const settled = new Promise<void>((resolve) => { finishRefresh = resolve; });
-    refreshOperation.current = { abort, settled, finish: finishRefresh };
+    refreshOperation.current = { reviewId, abort, settled, finish: finishRefresh };
     lifecycleAbort.current = abort;
     setTransition({ kind: "refreshing" });
     try {
-      const result = await adapter.refreshReview(
-        current,
-        confirmation,
-        abort.signal,
-      );
+      const result = await adapter.refreshReview(currentEntry.snapshot, confirmation, abort.signal);
       if (result.kind === "unchanged") {
-        setTransition({ kind: "stable" });
+        if (activeReviewIdRef.current === reviewId) setTransition({ kind: "stable" });
         return result;
       }
-      presentSnapshot(result.snapshot);
+      installSnapshot(result.snapshot, currentEntry);
+      if (activeReviewIdRef.current === reviewId) {
+        resetSnapshotReader(result.snapshot);
+        checkForUpdate(result.snapshot);
+        setTransition({ kind: "stable" });
+      }
       return { kind: "refreshed", reviewId: result.snapshot.reviewId, snapshotId: result.snapshot.snapshotId };
     } catch (reason) {
-      setTransition({ kind: "stable" });
+      if (activeReviewIdRef.current === reviewId) setTransition({ kind: "stable" });
       if (abort.signal.aborted) return { kind: "cancelled-by-switch" };
       return { kind: "failed", failure: operationFailure(reason) };
     } finally {
@@ -204,25 +381,24 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
       if (refreshOperation.current?.abort === abort) refreshOperation.current = undefined;
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
     }
-  }, [adapter, presentSnapshot, update]);
+  }, [adapter, checkForUpdate, installSnapshot, resetSnapshotReader]);
 
-  /** 关闭当前 Review；清理失败也不再暴露失效 Reader。 */
+  /** 关闭当前 Presented Review；该内部 primitive 不由普通导航调用。 */
   const close = useCallback(async (): Promise<ReviewCloseResult> => {
-    const current = snapshotRef.current;
+    const reviewId = activeReviewIdRef.current;
+    const current = reviewId ? entries.current.get(reviewId) : undefined;
     const refreshing = refreshOperation.current;
-    fileAbort.current?.abort();
-    updateAbort.current?.abort();
+    if (!reviewId || !current) return { kind: "closed" };
+    cancelUpdateCheck();
     lifecycleAbort.current?.abort();
-    fileRequest.current += 1;
-    snapshotRef.current = undefined;
-    setSnapshot(undefined);
-    setFileChange({ kind: "empty" });
-    setUpdate({ kind: "current" });
-    if (!current) return { kind: "closed" };
+    if (refreshing?.reviewId === reviewId) {
+      refreshing.abort.abort();
+      await refreshing.settled;
+    }
+    releaseEntry(reviewId);
     setTransition({ kind: "closing" });
-    if (refreshing) await refreshing.settled;
     const result = await adapter.closeReview(
-      { reviewId: current.reviewId, snapshotId: current.snapshotId },
+      { reviewId: current.snapshot.reviewId, snapshotId: current.snapshot.snapshotId },
       new AbortController().signal,
     );
     setTransition({ kind: "stable" });
@@ -232,41 +408,124 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
           kind: "closed-with-cleanup-failure",
           failure: { kind: "workspace-cleanup-failed", detail: result.detail, retryable: true },
         };
-  }, [adapter]);
+  }, [adapter, cancelUpdateCheck, releaseEntry]);
 
-  const retryFileChange = useCallback(() => {
-    if (fileChange.kind === "failed") selectFileChange(fileChange.path);
-  }, [fileChange, selectFileChange]);
-
-  useEffect(() => () => {
-    fileAbort.current?.abort();
-    updateAbort.current?.abort();
+  /** 离开 Review Reader，只撤销 Presented Review 和 update 检查，保留全部 runtime。 */
+  const unpresent = useCallback(() => {
+    cancelUpdateCheck();
     lifecycleAbort.current?.abort();
-    const current = snapshotRef.current;
-    if (current) void adapter.closeReview(
-      { reviewId: current.reviewId, snapshotId: current.snapshotId },
-      new AbortController().signal,
-    );
+    refreshOperation.current?.abort.abort();
+    activeReviewIdRef.current = undefined;
+    setActiveReviewId(undefined);
+    setTransition({ kind: "stable" });
+  }, [cancelUpdateCheck]);
+
+  /** 更新当前 Review 的 peer view，而不触碰其 Snapshot 或 reader content。 */
+  const setView = useCallback((view: ReviewView) => {
+    const reviewId = activeReviewIdRef.current;
+    if (reviewId) updateEntry(reviewId, (entry) => ({ ...entry, view }));
+  }, [updateEntry]);
+
+  /** 更新当前 Review 的 diff layout，而不影响其他 Open Review。 */
+  const setDiffMode = useCallback((diffMode: ReviewDiffMode) => {
+    const reviewId = activeReviewIdRef.current;
+    if (reviewId) updateEntry(reviewId, (entry) => ({ ...entry, diffMode }));
+  }, [updateEntry]);
+
+  /** 更新当前 Review 的文件树宽度，并让它随 Review 返回。 */
+  const setTreeWidth = useCallback((treeWidth: number) => {
+    const reviewId = activeReviewIdRef.current;
+    if (reviewId) updateEntry(reviewId, (entry) => ({ ...entry, treeWidth }));
+  }, [updateEntry]);
+
+  /** 切换当前 Review 的目录折叠状态，作为 Reader 导航位置保存。 */
+  const toggleDirectory = useCallback((path: string) => {
+    const reviewId = activeReviewIdRef.current;
+    if (!reviewId) return;
+    updateEntry(reviewId, (entry) => ({
+      ...entry,
+      collapsedDirectories: entry.collapsedDirectories.includes(path)
+        ? entry.collapsedDirectories.filter((candidate) => candidate !== path)
+        : [...entry.collapsedDirectories, path],
+    }));
+  }, [updateEntry]);
+
+  /** 记录当前 Review 外层可控滚动容器的位置；滚动本身无需触发 React render。 */
+  const setScrollPosition = useCallback((region: keyof ReviewReaderScrollPositions, top: number) => {
+    const reviewId = activeReviewIdRef.current;
+    const entry = reviewId ? entries.current.get(reviewId) : undefined;
+    if (!reviewId || !entry || entry.scrollPositions[region] === top) return;
+    entries.current.set(reviewId, {
+      ...entry,
+      scrollPositions: { ...entry.scrollPositions, [region]: top },
+    });
+  }, []);
+
+  /** 保存指定 File Change 的 Reader-owned view state，拒绝过期 Snapshot 与未知路径回写。 */
+  const setFileViewState = useCallback((identity: ReviewFileIdentity, state: ReviewFileViewState) => {
+    const entry = entries.current.get(identity.reviewId);
+    if (!entry || entry.snapshot.snapshotId !== identity.snapshotId
+      || !entry.snapshot.fileChanges.some((change) => change.path === identity.path)) return;
+    entries.current.set(identity.reviewId, {
+      ...entry,
+      fileViewStates: { ...entry.fileViewStates, [identity.path]: state },
+    });
+  }, []);
+
+  /** 重新读取当前 Review 上一次失败的 File Change。 */
+  const retryFileChange = useCallback(() => {
+    const reviewId = activeReviewIdRef.current;
+    const current = reviewId ? entries.current.get(reviewId) : undefined;
+    if (current?.fileChange.kind === "failed") selectFileChange(current.fileChange.path);
+  }, [selectFileChange]);
+
+  /** 应用卸载等正常退出路径释放整个 Open Review Set；历史记录仍由后端保留。 */
+  useEffect(() => () => {
+    updateOperation.current?.abort.abort();
+    lifecycleAbort.current?.abort();
+    for (const [reviewId, entry] of entries.current) {
+      fileRequests.current.get(reviewId)?.abort.abort();
+      void adapter.closeReview(
+        { reviewId, snapshotId: entry.snapshot.snapshotId },
+        new AbortController().signal,
+      );
+    }
+    entries.current.clear();
   }, [adapter]);
 
-  const reader = useMemo<ReviewReaderBinding | null>(() => snapshot ? {
-    snapshot,
+  const activeEntry = activeReviewId ? entries.current.get(activeReviewId) : undefined;
+  const activeFilePath = activeEntry?.fileChange.kind === "empty" ? undefined : activeEntry?.fileChange.path;
+  const reader = useMemo<ReviewReaderBinding | null>(() => activeEntry ? {
+    snapshot: activeEntry.snapshot,
     transition,
-    fileChange,
-    update,
+    fileChange: activeEntry.fileChange,
+    update: activeEntry.update,
+    view: activeEntry.view,
+    setView,
+    diffMode: activeEntry.diffMode,
+    setDiffMode,
+    treeWidth: activeEntry.treeWidth,
+    setTreeWidth,
+    collapsedDirectories: activeEntry.collapsedDirectories,
+    toggleDirectory,
+    scrollPositions: activeEntry.scrollPositions,
+    setScrollPosition,
+    fileViewState: activeFilePath ? activeEntry.fileViewStates[activeFilePath] ?? null : null,
+    setFileViewState,
     selectFileChange,
     retryFileChange,
     refresh,
     close,
-  } : null, [close, fileChange, refresh, retryFileChange, selectFileChange, snapshot, transition, update]);
+  } : null, [activeEntry, activeFilePath, close, refresh, retryFileChange, selectFileChange, setDiffMode, setFileViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
 
   return useMemo(() => ({
     open,
     close,
+    unpresent,
     reader,
     navigation: {
-      activeReviewId: snapshot?.reviewId,
+      activeReviewId,
       openingTarget,
     },
-  }), [close, open, openingTarget, reader, snapshot?.reviewId]);
+  }), [activeReviewId, close, open, openingTarget, reader, unpresent]);
 }
