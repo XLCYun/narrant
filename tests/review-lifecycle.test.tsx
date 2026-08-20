@@ -8,6 +8,7 @@ import {
 } from "@/review/use-review-lifecycle";
 import type {
   FileChangeContent,
+  ReviewDiffViewState,
   ReviewSnapshot,
 } from "@/review/types";
 
@@ -31,6 +32,11 @@ const availableUpdate = {
   availableBaseRevision: "base-1",
   availableHeadRevision: "head-2",
 };
+
+/** 构造无需依赖 Monaco DOM 的可观察 Diff view state。 */
+function diffViewState(marker: string): ReviewDiffViewState {
+  return { original: null, modified: null, modelState: { marker } };
+}
 
 /** 为 Review lifecycle interface 提供可预测结果的内存 adapter。 */
 function createAdapter(): ReviewApplicationAdapter & {
@@ -313,5 +319,96 @@ describe("Review lifecycle module", () => {
     });
 
     expect(switchReview).not.toHaveBeenCalled();
+  });
+
+  it("A → B 的真实切换调用 adapter，只有重复选择当前 B 才短路", async () => {
+    const adapter = createAdapter();
+    const snapshots: Record<string, ReviewSnapshot> = {
+      "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a" },
+      "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" },
+    };
+    const switchReview = vi.spyOn(adapter, "switchReview").mockImplementation(async (target, current) => {
+      const reviewId = target.kind === "saved-review" ? target.reviewId : "review-a";
+      if (reviewId === "review-b") expect(current).toEqual({ reviewId: "review-a", snapshotId: "snapshot-a" });
+      return snapshots[reviewId];
+    });
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    expect(switchReview).toHaveBeenCalledTimes(2);
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-b");
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    expect(switchReview).toHaveBeenCalledTimes(2);
+  });
+
+  it("打开 C 失败后仍保留 A/B runtime，并可分别恢复", async () => {
+    const adapter = createAdapter();
+    const failedTarget = { kind: "saved-review", reviewId: "review-c" } as const;
+    const snapshots: Record<string, ReviewSnapshot> = {
+      "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a" },
+      "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" },
+    };
+    adapter.switchReview = async (target) => {
+      if (target === failedTarget) throw new Error("C materialize failed");
+      return snapshots[target.kind === "saved-review" ? target.reviewId : "review-a"];
+    };
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+    const stateA = diffViewState("a");
+    const stateB = diffViewState("b");
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    act(() => result.current.reader?.setDiffViewState({ reviewId: "review-a", snapshotId: "snapshot-a" }, stateA));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    act(() => result.current.reader?.setDiffViewState({ reviewId: "review-b", snapshotId: "snapshot-b" }, stateB));
+
+    await act(async () => {
+      expect(await result.current.open(failedTarget)).toMatchObject({ kind: "failed", previousReviewPreserved: true });
+    });
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-b");
+    expect(result.current.reader?.diffViewState).toBe(stateB);
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    expect(result.current.reader?.diffViewState).toBe(stateA);
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    expect(result.current.reader?.diffViewState).toBe(stateB);
+  });
+
+  it("refresh 只清目标 Review 的 Snapshot state，不影响其他 Open Review", async () => {
+    const adapter = createAdapter();
+    const snapshots: Record<string, ReviewSnapshot> = {
+      "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a" },
+      "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" },
+    };
+    adapter.switchReview = async (target) => snapshots[target.kind === "saved-review" ? target.reviewId : "review-a"];
+    adapter.checkReviewUpdate = async () => availableUpdate;
+    adapter.refreshReview = async () => ({
+      kind: "refreshed",
+      snapshot: { ...snapshots["review-a"], snapshotId: "snapshot-a-2", headRevision: "head-2" },
+    });
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+    const stateA = diffViewState("a");
+    const stateB = diffViewState("b");
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    act(() => result.current.reader?.setDiffViewState({ reviewId: "review-a", snapshotId: "snapshot-a" }, stateA));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    act(() => {
+      result.current.reader?.setView("file-changes");
+      result.current.reader?.setScrollPosition("fileTree", 72);
+      result.current.reader?.setDiffViewState({ reviewId: "review-b", snapshotId: "snapshot-b" }, stateB);
+    });
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
+
+    await act(async () => { expect((await result.current.reader!.refresh()).kind).toBe("refreshed"); });
+    expect(result.current.reader?.snapshot.snapshotId).toBe("snapshot-a-2");
+    expect(result.current.reader?.diffViewState).toBeNull();
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    expect(result.current.reader?.diffViewState).toBe(stateB);
+    expect(result.current.reader?.view).toBe("file-changes");
+    expect(result.current.reader?.scrollPositions.fileTree).toBe(72);
   });
 });

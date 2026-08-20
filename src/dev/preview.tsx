@@ -228,6 +228,8 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
     toggleDirectory: () => undefined,
     scrollPositions: { overview: 0, fileTree: 0, content: 0 },
     setScrollPosition: () => undefined,
+    diffViewState: null,
+    setDiffViewState: () => undefined,
     selectFileChange: setSelectedPath,
     retryFileChange: () => undefined,
     refresh: async () => ({ kind: "unchanged" }),

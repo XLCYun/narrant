@@ -6,6 +6,26 @@ import { i18n } from "@/lib/i18n";
 import { ReviewReader } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
+const monacoEditors = vi.hoisted(() => [] as Array<{
+  saveViewState: ReturnType<typeof vi.fn>;
+  restoreViewState: ReturnType<typeof vi.fn>;
+}>);
+
+vi.mock("@monaco-editor/react", async () => {
+  const React = await import("react");
+  return {
+    DiffEditor: ({ onMount }: { onMount?: (editor: unknown) => void }) => {
+      const [editor] = React.useState(() => {
+        const next = { saveViewState: vi.fn(), restoreViewState: vi.fn() };
+        monacoEditors.push(next);
+        return next;
+      });
+      React.useLayoutEffect(() => { onMount?.(editor); }, [editor, onMount]);
+      return <div data-testid="mock-diff-editor" />;
+    },
+  };
+});
+
 const snapshot = {
   reviewId: "review-1", snapshotId: "snapshot-1", baseRef: "refs/heads/main", baseRevision: "1111111111111111111111111111111111111111",
   comparisonBase: "0000000000000000000000000000000000000000", headRef: "refs/heads/topic", headRevision: "2222222222222222222222222222222222222222",
@@ -30,6 +50,8 @@ function reviewBinding(overrides: Partial<ReviewReaderBinding> = {}): ReviewRead
     toggleDirectory: vi.fn(),
     scrollPositions: { overview: 0, fileTree: 0, content: 0 },
     setScrollPosition: vi.fn(),
+    diffViewState: null,
+    setDiffViewState: vi.fn(),
     selectFileChange: vi.fn(),
     retryFileChange: vi.fn(),
     refresh: vi.fn(async () => ({ kind: "unchanged" as const })),
@@ -52,7 +74,7 @@ function ReviewReaderHarness({ overrides = {} }: { overrides?: Partial<ReviewRea
 }
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); monacoEditors.length = 0; });
 
 describe("ReviewReader", () => {
   it("默认展示概览，并通过标签切换到文件改动", () => {
@@ -137,5 +159,41 @@ describe("ReviewReader", () => {
     expect(document.querySelector<HTMLElement>('[data-review-scroll-region="content"]')?.scrollTop).toBe(positions.content);
     rerender(<ReviewReader review={binding("review-a", "overview", positions)} appearance={appearance} />);
     expect(document.querySelector<HTMLElement>('[data-review-scroll-region="overview"]')?.scrollTop).toBe(positions.overview);
+  });
+
+  it("切换 Review 时保存 Monaco view state，并在 A → B → A 后恢复 A", () => {
+    const stateA = { original: null, modified: null, modelState: { marker: "a" } };
+    const stateB = { original: null, modified: null, modelState: { marker: "b" } };
+    const saveA = vi.fn();
+    const saveB = vi.fn();
+    const readyFile = {
+      kind: "ready" as const,
+      path: "src/example.ts",
+      content: {
+        ...snapshot.fileChanges[0],
+        contentKind: "text" as const,
+        beforeSize: 3,
+        afterSize: 3,
+        before: "old",
+        after: "new",
+      },
+    };
+    const binding = (reviewId: string, diffViewState: typeof stateA | null, setDiffViewState: typeof saveA) => reviewBinding({
+      snapshot: { ...snapshot, reviewId, snapshotId: `${reviewId}-snapshot` },
+      view: "file-changes",
+      fileChange: readyFile,
+      diffViewState,
+      setDiffViewState,
+    });
+    const { rerender } = render(<ReviewReader review={binding("review-a", null, saveA)} appearance={appearance} />);
+    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateA);
+
+    rerender(<ReviewReader review={binding("review-b", null, saveB)} appearance={appearance} />);
+    expect(saveA).toHaveBeenCalledWith({ reviewId: "review-a", snapshotId: "review-a-snapshot" }, stateA);
+    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateB);
+
+    rerender(<ReviewReader review={binding("review-a", stateA, saveA)} appearance={appearance} />);
+    expect(saveB).toHaveBeenCalledWith({ reviewId: "review-b", snapshotId: "review-b-snapshot" }, stateB);
+    expect(monacoEditors.at(-1)!.restoreViewState).toHaveBeenCalledWith(stateA);
   });
 });
