@@ -179,7 +179,13 @@ export function App() {
   async function registerRepositoryFolder(path: string) {
     setRepositoryPath(path);
     setError("");
-    const result = await appShell.registerAndOpen(path);
+    const operation = appShell.registerAndOpen(path);
+    if (import.meta.env.VITE_WDIO) {
+      // 系统 picker 的 WDIO helper 只等待同一真实导航完成，不绕过 Trust UI。
+      (window as Window & { __NARRANT_E2E_REPOSITORY_FOLDER_OPERATION__?: Promise<unknown> })
+        .__NARRANT_E2E_REPOSITORY_FOLDER_OPERATION__ = operation;
+    }
+    const result = await operation;
     if (result.kind === "failed") setError(repositoryOpenError(result.detail));
     return result;
   }
@@ -287,8 +293,20 @@ export function App() {
     }
   }
 
+  useEffect(() => {
+    if (!import.meta.env.VITE_WDIO) return;
+    const target = window as Window & {
+      __NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__?: () => Promise<void>;
+    };
+    target.__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__ = repositoryOverview.reloadNavigation;
+    return () => {
+      delete target.__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__;
+    };
+  }, [repositoryOverview.reloadNavigation]);
+
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
-  return <AppShell
+  return <>
+  <AppShell
     navigation={{
       ...appShell,
       registerAndOpen: registerRepositoryFolder,
@@ -372,31 +390,6 @@ export function App() {
         reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
       />
     </article>}
-    <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
-      if (!open && !grantingTrust) {
-        appShell.dismissTrust();
-      }
-    }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("trustTitle")}</DialogTitle>
-          <DialogDescription>{t("trustDescription")}</DialogDescription>
-        </DialogHeader>
-        <p className="break-all text-sm text-muted-foreground">{pendingRepository?.canonicalPath}</p>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            disabled={grantingTrust}
-            onClick={appShell.dismissTrust}
-          >
-            {t("cancel")}
-          </Button>
-          <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void appShell.confirmTrust()}>
-            {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
       <DialogContent>
         <DialogHeader>
@@ -446,5 +439,25 @@ export function App() {
       />
     </div>}
     </>}
-  </AppShell>;
+  </AppShell>
+  {pendingRepository && <Dialog open onOpenChange={(open) => {
+    if (!open && !grantingTrust) appShell.dismissTrust();
+  }}>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>{t("trustTitle")}</DialogTitle>
+        <DialogDescription>{t("trustDescription")}</DialogDescription>
+      </DialogHeader>
+      <p className="break-all text-sm text-muted-foreground">{pendingRepository.canonicalPath}</p>
+      <DialogFooter>
+        <Button variant="outline" disabled={grantingTrust} onClick={appShell.dismissTrust}>
+          {t("cancel")}
+        </Button>
+        <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void appShell.confirmTrust()}>
+          {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>}
+  </>;
 }

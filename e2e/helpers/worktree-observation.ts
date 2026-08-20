@@ -1,5 +1,11 @@
-import { readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+/** Git trace2 中与一次子进程启动相关的可验证字段。 */
+export type GitInvocation = {
+  argv: string[];
+  cwd: string;
+};
 
 /** 读取 fixture 仓库当前注册的 linked worktree 绝对路径。 */
 export function linkedWorktrees(repositoryPath: string): string[] {
@@ -14,44 +20,88 @@ export function linkedWorktrees(repositoryPath: string): string[] {
     .map((field) => field.slice("worktree ".length));
 }
 
-/** 返回应用启动后 Git trace 文件的当前字节偏移。 */
-export function gitTraceOffset(tracePath: string): number {
-  try {
-    return statSync(tracePath).size;
-  } catch {
-    return 0;
+/** 等待 trace 文件以完整换行结束并保持静默，避免接受仍在写入的半行。 */
+async function stableTraceBytes(tracePath: string, offset: number, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  let previousSize = -1;
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    // 文件缺失、读取失败或 offset 回退都直接抛错，观测证据不能降级为空结果。
+    const trace = readFileSync(tracePath);
+    if (trace.length < offset) throw new Error(`Git trace 长度 ${trace.length} 小于观测 offset ${offset}`);
+    if (trace.length !== previousSize) {
+      previousSize = trace.length;
+      stableSince = Date.now();
+    }
+    const complete = trace.length === 0 || trace.at(-1) === 0x0a;
+    if (complete && Date.now() - stableSince >= 200) return trace.subarray(offset);
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  throw new Error(`Git trace 在 ${timeout}ms 内没有形成稳定的完整行：${tracePath}`);
 }
 
-/** 读取指定偏移之后由 Git 启动的机器格式命令。 */
-export function gitCommandsSince(tracePath: string, offset: number): string[][] {
-  const trace = (() => {
+/** 严格解析 trace2；start 的工作目录来自同一 session 随后的 def_repo 事件。 */
+function parseInvocations(trace: Buffer): GitInvocation[] {
+  const text = trace.toString("utf8");
+  if (!text) return [];
+  const starts: Array<{ sid: string; argv: string[]; line: number }> = [];
+  const worktrees = new Map<string, string>();
+  text.trimEnd().split("\n").forEach((line, index) => {
+    let event: { event?: unknown; sid?: unknown; argv?: unknown; worktree?: unknown };
     try {
-      return readFileSync(tracePath, "utf8").slice(offset);
-    } catch {
-      return "";
+      event = JSON.parse(line) as typeof event;
+    } catch (reason) {
+      throw new Error(`Git trace 第 ${index + 1} 行不是完整 JSON`, { cause: reason });
     }
-  })();
-  if (!trace) return [];
-  return trace.split("\n").flatMap((line) => {
-    if (!line) return [];
-    try {
-      const event = JSON.parse(line) as { event?: string; argv?: unknown };
-      return event.event === "start" && Array.isArray(event.argv) && event.argv.every((part) => typeof part === "string")
-        ? [event.argv as string[]]
-        : [];
-    } catch {
-      // Git 可能正在追加一行；下一次读取会从同一个稳定偏移重新解析。
-      return [];
+    if (event.event === "start") {
+      if (typeof event.sid !== "string" || !Array.isArray(event.argv) || !event.argv.every((part) => typeof part === "string")) {
+        throw new Error(`Git trace 第 ${index + 1} 行缺少 start sid/argv`);
+      }
+      starts.push({ sid: event.sid, argv: event.argv as string[], line: index + 1 });
+    } else if (event.event === "def_repo") {
+      if (typeof event.sid !== "string" || typeof event.worktree !== "string") {
+        throw new Error(`Git trace 第 ${index + 1} 行缺少 def_repo sid/worktree`);
+      }
+      worktrees.set(event.sid, event.worktree);
     }
+  });
+  return starts.map((start) => {
+    const changeDirectory = start.argv.indexOf("-C");
+    const repositoryHelper = ["git-upload-pack", "git-receive-pack", "git-upload-archive"]
+      .includes(start.argv[0]) ? start.argv.at(-1) : undefined;
+    const cwd = worktrees.get(start.sid)
+      ?? (changeDirectory >= 0 ? start.argv[changeDirectory + 1] : undefined)
+      // Git transport helper 不进入 repository setup；其最后一个参数就是被服务的 Repository。
+      ?? repositoryHelper;
+    if (!cwd) throw new Error(`Git trace 第 ${start.line} 行的 start 缺少同 session def_repo：${JSON.stringify(start.argv)}`);
+    return { argv: start.argv, cwd };
   });
 }
 
-/** 过滤会改变 Workspace 的 Git 命令，避免把只读 worktree list 观察误判成 materialize。 */
-export function workspaceCommands(commands: string[][]): string[][] {
-  return commands.filter((argv) => {
+/** 等待现有 trace 稳定并返回下一段观测的精确字节 offset。 */
+export async function stableGitTraceOffset(tracePath: string): Promise<number> {
+  const trace = await stableTraceBytes(tracePath, 0);
+  parseInvocations(trace);
+  return trace.length;
+}
+
+/** 等待指定 offset 之后的 trace 稳定，再返回所有 Git start invocation。 */
+export async function gitInvocationsSinceStable(tracePath: string, offset: number): Promise<GitInvocation[]> {
+  return parseInvocations(await stableTraceBytes(tracePath, offset));
+}
+
+/** 过滤所有会重建、迁移、释放或重置 Workspace 内容的 Git invocation。 */
+export function workspaceMutationInvocations(invocations: GitInvocation[]): GitInvocation[] {
+  return invocations.filter(({ argv }) => {
     const worktreeIndex = argv.indexOf("worktree");
-    if (worktreeIndex < 0) return false;
-    return ["add", "move", "remove", "prune", "lock", "unlock"].includes(argv[worktreeIndex + 1]);
+    if (worktreeIndex >= 0 && ["add", "move", "remove", "prune", "lock", "unlock"].includes(argv[worktreeIndex + 1])) return true;
+    return argv.some((argument) => ["reset", "checkout", "switch"].includes(argument));
   });
+}
+
+/** 判断一次 Git invocation 是否在指定 Workspace 内执行或把该路径作为参数。 */
+export function invocationTouchesWorkspace(invocation: GitInvocation, workspacePath: string): boolean {
+  return invocation.cwd === workspacePath
+    || invocation.cwd.startsWith(`${workspacePath}/`)
+    || invocation.argv.some((argument) => argument === workspacePath || argument.startsWith(`${workspacePath}/`));
 }

@@ -7,88 +7,31 @@ export async function chooseRepositoryFolder(
     (window as Window & { __NARRANT_E2E_DIRECTORY__?: string }).__NARRANT_E2E_DIRECTORY__ = path;
   }, repositoryPath);
   const openButton = await $("main").$(`button=${buttonName}`);
+  await openButton.waitForDisplayed();
   await openButton.waitForClickable();
-  await browser.execute((name) => {
-    const button = [...document.querySelectorAll("main button")]
-      .find((candidate) => candidate.textContent?.trim() === name);
-    if (!button) throw new Error(`未找到 E2E 目录按钮：${name}`);
-    button.click();
-  }, buttonName);
-}
-
-/** 将当前桌面视图退回 Home，保留 Review lifecycle 的进程内 runtime。 */
-async function returnHome() {
-  // 窄窗口可能把桌面侧边栏收进 offcanvas；重新加载前端投影即可回到 Home，Rust lifecycle 不会因此退出。
-  const homeReady = await $("main [aria-label='最近审核']").isExisting()
-    || await $("main [aria-label='Recent reviews']").isExisting()
-    || await $("button=打开仓库文件夹").isExisting()
-    || await $("button=Open repository folder").isExisting();
-  if (!homeReady) {
-    await browser.setWindowSize(1280, 800);
-    await browser.execute(() => window.location.reload());
-    await browser.waitUntil(async () => (
-      await $("button[aria-label='Narrant'], button[aria-label='纳言']").isExisting()
-      || await $("button=打开仓库文件夹").isExisting()
-      || await $("button=Open repository folder").isExisting()
-    ));
-  }
-}
-
-/** 用真实 Tauri command 准备一个已授权 Repository，避免 E2E 依赖原生系统窗口和不稳定的 Trust Portal。 */
-async function seedTrustedRepository(repositoryPath: string) {
-  const repository = await browser.tauri.execute(
-    ({ core }, path) => core.invoke<{ id: number }>("register_repository", { path }),
-    repositoryPath,
-  );
-  await browser.tauri.execute(
-    ({ core }, repositoryId) => core.invoke("grant_repository_workspace_trust_and_open", { repositoryId }),
-    repository.id,
-  );
-  return repository.id;
-}
-
-/** 刷新前端投影，再从真实侧边栏进入已授权 Repository Overview。 */
-async function openSeededRepository(locale: "zh-CN" | "en") {
-  const repositorySection = locale === "en" ? "Repositories" : "代码仓库";
-  const repositoryAlreadyInNavigation = await $(
-    locale === "en" ? "button[aria-label^='Open repository ']" : "button[aria-label^='打开仓库 ']",
-  ).isExisting();
-  if (!repositoryAlreadyInNavigation) {
-    const recentReview = await $(
-      locale === "en" ? "main [aria-label='Recent reviews'] ul button" : "main [aria-label='最近审核'] ul button",
-    );
-    if (await recentReview.isExisting()) {
-      // 旧测试已留下 Review 时，先通过真实 Recent Review 导航恢复 Repository projection，避免二次 reload 丢失 sidebar 列表。
-      await recentReview.click();
-      await expect($(locale === "en" ? "[aria-label='Review reader']" : "[aria-label='审核阅读器']")).toBeDisplayed();
-      await $(locale === "en" ? "button[aria-label='Exit review']" : "button[aria-label='退出审核']").click();
-      await expect($(`[aria-label='Repository']`)).toBeDisplayed();
-    } else {
-      await browser.execute(() => window.location.reload());
+  await openButton.click();
+  const result = await browser.executeAsync((done) => {
+    const operation = (window as Window & {
+      __NARRANT_E2E_REPOSITORY_FOLDER_OPERATION__?: Promise<{ kind: string }>;
+    }).__NARRANT_E2E_REPOSITORY_FOLDER_OPERATION__;
+    if (!operation) {
+      done(new Error("E2E picker operation is unavailable"));
+      return;
     }
+    void operation.then(done).catch(done);
+  });
+  if (result.kind !== "trust-required" && result.kind !== "navigated") {
+    throw new Error(`系统 picker 导航未完成：${JSON.stringify(result)}`);
   }
-  if (await $(`[aria-label='Repository']`).isExisting()) return;
-  await browser.waitUntil(async () => await $(`button=${repositorySection}`).isExisting());
-  const section = await $(`button=${repositorySection}`);
-  if (await section.getAttribute("aria-expanded") !== "true") await section.click();
-  let openRepository;
-  for (const button of await $$(`button[aria-label]`)) {
-    const label = await button.getAttribute("aria-label");
-    if (label?.startsWith(locale === "en" ? "Open repository " : "打开仓库 ")) {
-      openRepository = button;
-      break;
-    }
+  if (result.kind === "trust-required") {
+    await browser.waitUntil(async () => await $("[role='dialog']").isDisplayed());
+  } else {
+    await browser.waitUntil(async () => await $("[aria-label='Repository']").isDisplayed());
   }
-  if (!openRepository) throw new Error("真实侧边栏没有找到已登记 Repository");
-  await openRepository.click();
-  await expect($(`[aria-label='Repository']`)).toBeDisplayed();
 }
 
 /** 显式切换 E2E 构建的界面语言，不读取执行测试的主机 locale。 */
 export async function setE2ELocale(locale: "zh-CN" | "en") {
-  await browser.execute((nextLocale) => {
-    window.localStorage.setItem("narrant.locale", nextLocale);
-  }, locale);
   await browser.executeAsync((nextLocale, done) => {
     const setter = (window as Window & {
       __NARRANT_E2E_SET_LOCALE__?: (value: string) => Promise<unknown>;
@@ -101,11 +44,105 @@ export async function setE2ELocale(locale: "zh-CN" | "en") {
   }, locale);
 }
 
-/** 从首页选择 fixture 仓库，并在首次打开时确认 Workspace Trust。 */
+/** 通过当前可见的 desktop/offcanvas sidebar 返回 Home。 */
+export async function returnToHome() {
+  const clickVisibleBrand = async () => {
+    for (const brand of await $$("button[aria-label='Narrant'], button[aria-label='纳言']")) {
+      if (!(await brand.isDisplayed())) continue;
+      await brand.waitForClickable();
+      await brand.click();
+      return true;
+    }
+    return false;
+  };
+  if (!(await clickVisibleBrand())) {
+    for (const trigger of await $$('[data-slot="sidebar-trigger"]')) {
+      if (!(await trigger.isDisplayed())) continue;
+      await trigger.waitForClickable();
+      await trigger.click();
+      break;
+    }
+    await browser.waitUntil(clickVisibleBrand);
+  }
+  await browser.waitUntil(async () => (
+    await $("button=打开仓库文件夹").isDisplayed()
+    || await $("button=Open repository folder").isDisplayed()
+  ));
+  await browser.keys("Escape");
+}
+
+/** 通过仅 WDI0 暴露的函数重新投影持久化 Repository navigation。 */
+async function reloadRepositoryNavigation() {
+  await browser.executeAsync((done) => {
+    const reload = (window as Window & {
+      __NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__?: () => Promise<void>;
+    }).__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__;
+    if (!reload) {
+      done(new Error("E2E repository navigation reload seam is unavailable"));
+      return;
+    }
+    void reload().then(() => done()).catch(done);
+  });
+}
+
+/** 点击当前可见且名称精确匹配的 Repository 侧边栏入口。 */
+async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en", expectReady = true) {
+  const name = repositoryPath.split(/[\\/]/).filter(Boolean).at(-1);
+  if (!name) throw new Error(`无法从 fixture 路径读取 Repository 名称：${repositoryPath}`);
+  const label = locale === "en" ? `Open repository ${name}` : `打开仓库 ${name}`;
+  const groupName = locale === "en" ? "Repositories" : "代码仓库";
+  let group: WebdriverIO.Element | undefined;
+  const findVisibleGroup = async () => {
+    for (const candidate of await $$(`button=${groupName}`)) {
+      if (await candidate.isDisplayed()) {
+        group = candidate;
+        return true;
+      }
+    }
+    return false;
+  };
+  let openedSidebar = false;
+  if (!(await findVisibleGroup())) {
+    for (const trigger of await $$('[data-slot="sidebar-trigger"]')) {
+      if (!(await trigger.isDisplayed())) continue;
+      await trigger.waitForClickable();
+      await trigger.click();
+      openedSidebar = true;
+      break;
+    }
+  }
+  await browser.waitUntil(findVisibleGroup);
+  if (!group) throw new Error(`没有可见的 Repository 分组：${groupName}`);
+  if (await group.getAttribute("aria-expanded") === "false") {
+    await group.waitForClickable();
+    await group.click();
+  }
+  await browser.waitUntil(async () => (await $$(`button[aria-label='${label}']`)).length > 0);
+  for (const button of await $$(`button[aria-label='${label}']`)) {
+    const row = button.$("..");
+    await row.waitForDisplayed();
+    await row.moveTo();
+    // 让精确 action 获得键盘焦点，通过产品自身 focus-within 样式呈现按钮。
+    await browser.execute((action) => action.focus(), button);
+    await button.waitForDisplayed();
+    await button.waitForClickable();
+    await button.click();
+    if (expectReady) {
+      await expect($("[aria-label='Repository']")).toBeDisplayed();
+      await expect($("[aria-current='page']")).toHaveText(expect.stringContaining(name));
+    }
+    if (openedSidebar) {
+      // Offcanvas 打开时 trigger 会被遮罩覆盖；Escape 是组件支持的真实关闭交互。
+      await browser.keys("Escape");
+    }
+    return;
+  }
+  throw new Error(`没有找到精确的 Repository 侧边栏入口：${label}`);
+}
+
+/** 从真实侧边栏打开已授权 fixture；目录选择与 Trust UI 由 persistence 专项覆盖。 */
 export async function openFixtureRepository(repositoryPath: string, locale: "zh-CN" | "en" = "zh-CN") {
   await setE2ELocale(locale);
-  // 从 Review 或 Repository Overview 统一回到 Home；这是展示导航，不会释放 Review Workspace。
-  await returnHome();
-  await seedTrustedRepository(repositoryPath);
-  await openSeededRepository(locale);
+  await reloadRepositoryNavigation();
+  await openSeededFixture(repositoryPath, locale);
 }

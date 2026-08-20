@@ -43,6 +43,7 @@ export type RepositoryOverviewBinding = {
   confirmTrust(): Promise<RepositoryOverview | undefined>;
   dismissTrust(): void;
   reloadBranches(repositoryId?: number): Promise<void>;
+  reloadNavigation(): Promise<void>;
   refreshReviews(): Promise<void>;
   recordReviewOpened(review: RecentReviewSummary): void;
   leave(): void;
@@ -90,19 +91,23 @@ export function useRepositoryOverview(
     };
   }, []);
 
-  useEffect(() => {
+  /** 重新读取持久化 Navigation，供启动恢复与真实应用 E2E 使用同一条业务路径。 */
+  const reloadNavigation = useCallback(async (): Promise<void> => {
     if (!options.enabled) return;
     setNavigation((value) => ({ ...value, status: "loading", error: undefined }));
-    void adapter.loadNavigation()
-      .then(({ repositories, recentReviews }) => {
-        if (!mounted.current) return;
-        setNavigation({ repositories: repositories ?? [], recentReviews: recentReviews ?? [], status: "ready" });
-      })
-      .catch((reason) => {
-        if (!mounted.current) return;
-        setNavigation((value) => ({ ...value, status: "failed", error: String(reason) }));
-      });
+    try {
+      const { repositories, recentReviews } = await adapter.loadNavigation();
+      if (!mounted.current) return;
+      setNavigation({ repositories: repositories ?? [], recentReviews: recentReviews ?? [], status: "ready" });
+    } catch (reason) {
+      if (!mounted.current) return;
+      setNavigation((value) => ({ ...value, status: "failed", error: String(reason) }));
+    }
   }, [adapter, options.enabled]);
+
+  useEffect(() => {
+    void reloadNavigation();
+  }, [reloadNavigation]);
 
   const open = useCallback(async (repositoryId: number): Promise<RepositoryOpenResult> => {
     if (currentRef.current?.repository.id === repositoryId) {
@@ -253,11 +258,12 @@ export function useRepositoryOverview(
       open,
       confirmTrust,
       reloadBranches,
+      reloadNavigation,
       recordReviewOpened,
       refreshReviews,
       dismissTrust,
       leave,
     }),
-    [branches, navigation, confirmTrust, current, dismissTrust, leave, open, recordReviewOpened, refreshReviews, register, reloadBranches, transition],
+    [branches, navigation, confirmTrust, current, dismissTrust, leave, open, recordReviewOpened, refreshReviews, register, reloadBranches, reloadNavigation, transition],
   );
 }

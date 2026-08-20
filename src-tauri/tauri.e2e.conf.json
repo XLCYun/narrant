@@ -1,5 +1,18 @@
 {
   "app": {
+    "windows": [
+      {
+        "title": "Narrant",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "visible": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 20, "y": 24 },
+        "hiddenTitle": true
+      }
+    ],
     "security": {
       "capabilities": [
         {

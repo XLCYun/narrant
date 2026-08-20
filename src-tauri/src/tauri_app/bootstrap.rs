@@ -48,6 +48,13 @@ pub fn run() {
             ));
             let repository_application =
                 Arc::new(repository_module::RepositoryApplication::new(store.clone()));
+            #[cfg(feature = "wdio")]
+            if let Ok(repository_path) = std::env::var("NARRANT_E2E_REPOSITORY") {
+                // 非 Trust 专项 E2E 在前端首次加载前获得稳定的已授权 fixture。
+                let repository = repository_application
+                    .register_repository(std::path::Path::new(&repository_path))?;
+                repository_application.grant_trust_and_open(repository.repository.id)?;
+            }
             let lifecycle = review::ReviewLifecycle::with_repository_application(
                 store.clone(),
                 repository_application.clone(),
