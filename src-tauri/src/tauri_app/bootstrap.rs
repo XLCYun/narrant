@@ -110,7 +110,7 @@ pub fn run() {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
             let lifecycle = app.state::<review::ReviewLifecycle>();
-            let _ = lifecycle.shutdown();
+            let _ = tauri::async_runtime::block_on(lifecycle.shutdown());
         }
     });
 }
