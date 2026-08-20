@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, type ComponentProps, type UIEvent } from "react";
-import { DiffEditor, type DiffOnMount, type MonacoDiffEditor } from "@monaco-editor/react";
+import { useEffect, useLayoutEffect, useRef, type UIEvent } from "react";
+import { DiffEditor, type DiffEditorProps, type DiffOnMount, type MonacoDiffEditor } from "@monaco-editor/react";
 import {
   ArrowDown01Icon,
   FileAddIcon,
@@ -23,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
-import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewDiffViewState, ReviewIdentity, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
+import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewFileIdentity, ReviewFileViewState, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
 export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewDiffMode as DiffMode, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
 
 /** 文件树内部使用的目录节点，只表达层级，不承载阅读进度。 */
@@ -43,26 +43,33 @@ type ReviewReaderProps = {
   };
 };
 
-type RetainedDiffEditorProps = Omit<ComponentProps<typeof DiffEditor>, "onMount"> & {
-  identity: ReviewIdentity;
-  viewState: ReviewDiffViewState | null;
-  onSaveViewState(identity: ReviewIdentity, state: ReviewDiffViewState): void;
+/** RetainedDiffEditor 只接收产品实际使用的 Monaco 配置与 Reader-owned 状态 seam。 */
+type RetainedDiffEditorProps = {
+  identity: ReviewFileIdentity;
+  viewState: ReviewFileViewState | null;
+  onSaveViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
+  theme: string;
+  height: string;
+  language: string;
+  original: string;
+  modified: string;
+  options: DiffEditorProps["options"];
 };
 
 /** 用 Monaco 官方 API 在编辑器自身卸载边界保存并恢复 Diff view state。 */
-function RetainedDiffEditor({ identity, viewState, onSaveViewState, ...props }: RetainedDiffEditorProps) {
+function RetainedDiffEditor({ identity, viewState, onSaveViewState, theme, height, language, original, modified, options }: RetainedDiffEditorProps) {
   const editorRef = useRef<MonacoDiffEditor>();
   const mountEditor: DiffOnMount = (editor) => {
     editorRef.current = editor;
-    if (viewState) editor.restoreViewState(viewState);
+    if (viewState) editor.restoreViewState(viewState as NonNullable<ReturnType<MonacoDiffEditor["saveViewState"]>>);
   };
-  const { reviewId, snapshotId } = identity;
+  const { reviewId, snapshotId, path } = identity;
   useLayoutEffect(() => () => {
     const state = editorRef.current?.saveViewState();
-    if (state) onSaveViewState({ reviewId, snapshotId }, state);
+    if (state) onSaveViewState({ reviewId, snapshotId, path }, state);
     editorRef.current = undefined;
-  }, [onSaveViewState, reviewId, snapshotId]);
-  return <DiffEditor {...props} onMount={mountEditor} />;
+  }, [onSaveViewState, path, reviewId, snapshotId]);
+  return <DiffEditor theme={theme} height={height} language={language} original={original} modified={modified} options={options} onMount={mountEditor} />;
 }
 
 /** 以不依赖系统 locale 的代码点顺序稳定排列 File Change 路径。 */
@@ -255,7 +262,7 @@ export function ReviewReader(input: ReviewReaderProps) {
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
-            {props.fileChange.contentKind === "text" && <RetainedDiffEditor key={`${diffReviewId}:${diffSnapshotId}`} identity={{ reviewId: diffReviewId, snapshotId: diffSnapshotId }} viewState={review.diffViewState} onSaveViewState={review.setDiffViewState} theme={props.editorTheme} height="calc(100% - 2.25rem)" language={editorLanguage(props.fileChange.path)} original={props.fileChange.before ?? ""} modified={props.fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: effectiveDiffMode === "side-by-side", ignoreTrimWhitespace: false, fontFamily: "'JetBrains Mono Variable', monospace" }} />}
+            {props.fileChange.contentKind === "text" && <RetainedDiffEditor key={`${diffReviewId}:${diffSnapshotId}:${props.fileChange.path}`} identity={{ reviewId: diffReviewId, snapshotId: diffSnapshotId, path: props.fileChange.path }} viewState={review.fileViewState} onSaveViewState={review.setFileViewState} theme={props.editorTheme} height="calc(100% - 2.25rem)" language={editorLanguage(props.fileChange.path)} original={props.fileChange.before ?? ""} modified={props.fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: effectiveDiffMode === "side-by-side", ignoreTrimWhitespace: false, fontFamily: "'JetBrains Mono Variable', monospace" }} />}
           </section>}
         </div></ResizablePanel>
       </ResizablePanelGroup>}

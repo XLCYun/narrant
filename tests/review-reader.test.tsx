@@ -50,8 +50,8 @@ function reviewBinding(overrides: Partial<ReviewReaderBinding> = {}): ReviewRead
     toggleDirectory: vi.fn(),
     scrollPositions: { overview: 0, fileTree: 0, content: 0 },
     setScrollPosition: vi.fn(),
-    diffViewState: null,
-    setDiffViewState: vi.fn(),
+    fileViewState: null,
+    setFileViewState: vi.fn(),
     selectFileChange: vi.fn(),
     retryFileChange: vi.fn(),
     refresh: vi.fn(async () => ({ kind: "unchanged" as const })),
@@ -161,39 +161,53 @@ describe("ReviewReader", () => {
     expect(document.querySelector<HTMLElement>('[data-review-scroll-region="overview"]')?.scrollTop).toBe(positions.overview);
   });
 
-  it("切换 Review 时保存 Monaco view state，并在 A → B → A 后恢复 A", () => {
-    const stateA = { original: null, modified: null, modelState: { marker: "a" } };
-    const stateB = { original: null, modified: null, modelState: { marker: "b" } };
+  it("按 Review、Snapshot 与 File path 隔离 Monaco view state", () => {
+    const stateFileA = { original: null, modified: null, modelState: { marker: "file-a" } };
+    const stateFileB = { original: null, modified: null, modelState: { marker: "file-b" } };
+    const stateReviewB = { original: null, modified: null, modelState: { marker: "review-b" } };
     const saveA = vi.fn();
     const saveB = vi.fn();
-    const readyFile = {
+    const readyFile = (path: string) => ({
       kind: "ready" as const,
-      path: "src/example.ts",
+      path,
       content: {
-        ...snapshot.fileChanges[0],
+        ...snapshot.fileChanges[0], path,
         contentKind: "text" as const,
         beforeSize: 3,
         afterSize: 3,
         before: "old",
         after: "new",
       },
-    };
-    const binding = (reviewId: string, diffViewState: typeof stateA | null, setDiffViewState: typeof saveA) => reviewBinding({
-      snapshot: { ...snapshot, reviewId, snapshotId: `${reviewId}-snapshot` },
-      view: "file-changes",
-      fileChange: readyFile,
-      diffViewState,
-      setDiffViewState,
     });
-    const { rerender } = render(<ReviewReader review={binding("review-a", null, saveA)} appearance={appearance} />);
-    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateA);
+    const binding = (reviewId: string, path: string, fileViewState: typeof stateFileA | null, setFileViewState: typeof saveA) => reviewBinding({
+      snapshot: { ...snapshot, reviewId, snapshotId: `${reviewId}-snapshot`, fileChanges: [
+        { ...snapshot.fileChanges[0], path: "src/a.ts" },
+        { ...snapshot.fileChanges[0], path: "src/b.ts" },
+      ] },
+      view: "file-changes",
+      fileChange: readyFile(path),
+      fileViewState,
+      setFileViewState,
+    });
+    const { rerender } = render(<ReviewReader review={binding("review-a", "src/a.ts", null, saveA)} appearance={appearance} />);
+    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateFileA);
 
-    rerender(<ReviewReader review={binding("review-b", null, saveB)} appearance={appearance} />);
-    expect(saveA).toHaveBeenCalledWith({ reviewId: "review-a", snapshotId: "review-a-snapshot" }, stateA);
-    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateB);
+    rerender(<ReviewReader review={binding("review-a", "src/b.ts", null, saveA)} appearance={appearance} />);
+    expect(saveA).toHaveBeenCalledWith({ reviewId: "review-a", snapshotId: "review-a-snapshot", path: "src/a.ts" }, stateFileA);
+    expect(monacoEditors.at(-1)!.restoreViewState).not.toHaveBeenCalled();
+    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateFileB);
 
-    rerender(<ReviewReader review={binding("review-a", stateA, saveA)} appearance={appearance} />);
-    expect(saveB).toHaveBeenCalledWith({ reviewId: "review-b", snapshotId: "review-b-snapshot" }, stateB);
-    expect(monacoEditors.at(-1)!.restoreViewState).toHaveBeenCalledWith(stateA);
+    rerender(<ReviewReader review={binding("review-a", "src/a.ts", stateFileA, saveA)} appearance={appearance} />);
+    expect(saveA).toHaveBeenCalledWith({ reviewId: "review-a", snapshotId: "review-a-snapshot", path: "src/b.ts" }, stateFileB);
+    expect(monacoEditors.at(-1)!.restoreViewState).toHaveBeenCalledWith(stateFileA);
+    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateFileA);
+
+    rerender(<ReviewReader review={binding("review-b", "src/a.ts", null, saveB)} appearance={appearance} />);
+    expect(monacoEditors.at(-1)!.restoreViewState).not.toHaveBeenCalled();
+    monacoEditors.at(-1)!.saveViewState.mockReturnValue(stateReviewB);
+
+    rerender(<ReviewReader review={binding("review-a", "src/a.ts", stateFileA, saveA)} appearance={appearance} />);
+    expect(saveB).toHaveBeenCalledWith({ reviewId: "review-b", snapshotId: "review-b-snapshot", path: "src/a.ts" }, stateReviewB);
+    expect(monacoEditors.at(-1)!.restoreViewState).toHaveBeenCalledWith(stateFileA);
   });
 });

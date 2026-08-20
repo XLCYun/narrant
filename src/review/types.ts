@@ -1,5 +1,4 @@
 import type { PullRequestMetadata } from "@/lib/review-types";
-import type { MonacoDiffEditor } from "@monaco-editor/react";
 
 /** Review Reader 的稳定 peer view。 */
 export type ReviewView = "overview" | "file-changes";
@@ -14,8 +13,8 @@ export type ReviewReaderScrollPositions = {
   content: number;
 };
 
-/** Monaco Diff 官方 saveViewState 返回的可恢复视口与光标状态。 */
-export type ReviewDiffViewState = NonNullable<ReturnType<MonacoDiffEditor["saveViewState"]>>;
+/** Reader 私有实现拥有的 opaque 文件视图状态；domain 不解释其结构。 */
+export type ReviewFileViewState = unknown;
 
 /** File Change 在文件树与内容视图中共享的状态。 */
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed";
@@ -53,4 +52,9 @@ export type ReviewSnapshot = {
 export type ReviewIdentity = {
   reviewId: string;
   snapshotId: string;
+};
+
+/** 一个 immutable Snapshot 内具体 File Change 的 Reader identity。 */
+export type ReviewFileIdentity = ReviewIdentity & {
+  path: string;
 };

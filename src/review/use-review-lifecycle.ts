@@ -9,8 +9,8 @@ import {
 import type {
   FileChangeContent,
   ReviewDiffMode,
-  ReviewDiffViewState,
-  ReviewIdentity,
+  ReviewFileIdentity,
+  ReviewFileViewState,
   ReviewReaderScrollPositions,
   ReviewSnapshot,
   ReviewView,
@@ -64,7 +64,7 @@ type ReviewRuntimeEntry = {
   treeWidth: number;
   collapsedDirectories: string[];
   scrollPositions: ReviewReaderScrollPositions;
-  diffViewState: ReviewDiffViewState | null;
+  fileViewStates: Record<string, ReviewFileViewState>;
 };
 
 /** Review lifecycle 可配置的初始展示偏好。后续修改按 Review 独立保留。 */
@@ -98,9 +98,9 @@ export type ReviewReaderBinding = {
   /** Reader 外层可控滚动容器的位置。 */
   scrollPositions: ReviewReaderScrollPositions;
   setScrollPosition(region: keyof ReviewReaderScrollPositions, top: number): void;
-  /** 当前 Snapshot 的 Monaco Diff 视口；identity 防止切换清理写入新 Review。 */
-  diffViewState: ReviewDiffViewState | null;
-  setDiffViewState(identity: ReviewIdentity, state: ReviewDiffViewState): void;
+  /** 当前 File Change 的 Reader-owned opaque view state。 */
+  fileViewState: ReviewFileViewState | null;
+  setFileViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
   selectFileChange(path: string): void;
   retryFileChange(): void;
   refresh(): Promise<ReviewRefreshResult>;
@@ -250,7 +250,7 @@ export function useReviewLifecycle(
       treeWidth: existing?.treeWidth ?? initialTreeWidth,
       collapsedDirectories: [],
       scrollPositions: { overview: 0, fileTree: 0, content: 0 },
-      diffViewState: null,
+      fileViewStates: {},
     };
     if (previous) {
       entries.current.set(next.reviewId, { ...previous, snapshot: next });
@@ -307,10 +307,10 @@ export function useReviewLifecycle(
     lifecycleAbort.current = abort;
     cancelUpdateCheck();
     const previousReviewId = activeReviewIdRef.current;
+    const previousEntry = previousReviewId ? entries.current.get(previousReviewId) : undefined;
     setOpeningTarget(target);
     if (previousReviewId) setTransition({ kind: "switching", target });
     try {
-      const previousEntry = previousReviewId ? entries.current.get(previousReviewId) : undefined;
       const next = await adapter.switchReview(
         target,
         previousEntry ? { reviewId: previousEntry.snapshot.reviewId, snapshotId: previousEntry.snapshot.snapshotId } : null,
@@ -324,7 +324,10 @@ export function useReviewLifecycle(
       checkForUpdate(next);
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: entries.current.get(next.reviewId)!.snapshot };
     } catch (reason) {
-      if (previousReviewId && activeReviewIdRef.current === previousReviewId) setTransition({ kind: "stable" });
+      if (previousEntry && activeReviewIdRef.current === previousReviewId) {
+        setTransition({ kind: "stable" });
+        checkForUpdate(previousEntry.snapshot);
+      }
       return { kind: "failed", failure: operationFailure(reason), previousReviewPreserved: true };
     } finally {
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
@@ -446,11 +449,15 @@ export function useReviewLifecycle(
     });
   }, []);
 
-  /** 保存指定 Review Snapshot 的 Monaco Diff view state，拒绝过期编辑器回写。 */
-  const setDiffViewState = useCallback((identity: ReviewIdentity, state: ReviewDiffViewState) => {
+  /** 保存指定 File Change 的 Reader-owned view state，拒绝过期 Snapshot 与未知路径回写。 */
+  const setFileViewState = useCallback((identity: ReviewFileIdentity, state: ReviewFileViewState) => {
     const entry = entries.current.get(identity.reviewId);
-    if (!entry || entry.snapshot.snapshotId !== identity.snapshotId) return;
-    entries.current.set(identity.reviewId, { ...entry, diffViewState: state });
+    if (!entry || entry.snapshot.snapshotId !== identity.snapshotId
+      || !entry.snapshot.fileChanges.some((change) => change.path === identity.path)) return;
+    entries.current.set(identity.reviewId, {
+      ...entry,
+      fileViewStates: { ...entry.fileViewStates, [identity.path]: state },
+    });
   }, []);
 
   /** 重新读取当前 Review 上一次失败的 File Change。 */
@@ -475,6 +482,7 @@ export function useReviewLifecycle(
   }, [adapter]);
 
   const activeEntry = activeReviewId ? entries.current.get(activeReviewId) : undefined;
+  const activeFilePath = activeEntry?.fileChange.kind === "empty" ? undefined : activeEntry?.fileChange.path;
   const reader = useMemo<ReviewReaderBinding | null>(() => activeEntry ? {
     snapshot: activeEntry.snapshot,
     transition,
@@ -490,13 +498,13 @@ export function useReviewLifecycle(
     toggleDirectory,
     scrollPositions: activeEntry.scrollPositions,
     setScrollPosition,
-    diffViewState: activeEntry.diffViewState,
-    setDiffViewState,
+    fileViewState: activeFilePath ? activeEntry.fileViewStates[activeFilePath] ?? null : null,
+    setFileViewState,
     selectFileChange,
     retryFileChange,
     refresh,
     close,
-  } : null, [activeEntry, close, refresh, retryFileChange, selectFileChange, setDiffMode, setDiffViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
+  } : null, [activeEntry, activeFilePath, close, refresh, retryFileChange, selectFileChange, setDiffMode, setFileViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
 
   return useMemo(() => ({
     open,
