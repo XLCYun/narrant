@@ -145,9 +145,11 @@ export function useReviewLifecycle(
   const [openingTarget, setOpeningTarget] = useState<ReviewOpenTarget>();
   const [transition, setTransition] = useState<ReviewReaderBinding["transition"]>({ kind: "stable" });
   const fileRequests = useRef(new Map<string, { request: number; abort: AbortController }>());
+  const updateGeneration = useRef(0);
   const updateOperation = useRef<{
     reviewId: string;
     snapshotId: string;
+    generation: number;
     previous: ReviewUpdateBinding;
     abort: AbortController;
   }>();
@@ -203,13 +205,17 @@ export function useReviewLifecycle(
   const cancelUpdateCheck = useCallback(() => {
     const operation = updateOperation.current;
     if (!operation) return;
+    const entry = entries.current.get(operation.reviewId);
+    const cancelledPending = entry?.snapshot.snapshotId === operation.snapshotId
+      && entry.update.kind === "checking";
     updateOperation.current = undefined;
     operation.abort.abort();
-    updateEntry(operation.reviewId, (entry) => (
-      entry.snapshot.snapshotId === operation.snapshotId && entry.update.kind === "checking"
-        ? { ...entry, update: operation.previous.kind === "checking" ? { kind: "current" } : operation.previous }
-        : entry
-    ));
+    if (!cancelledPending) return;
+    updateEntry(operation.reviewId, (current) => ({
+      ...current,
+      update: operation.previous.kind === "checking" ? { kind: "current" } : operation.previous,
+    }));
+    return { reviewId: operation.reviewId, snapshotId: operation.snapshotId, generation: operation.generation };
   }, [updateEntry]);
 
   /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
@@ -218,12 +224,13 @@ export function useReviewLifecycle(
     const abort = new AbortController();
     const reviewId = current.reviewId;
     const identity = { reviewId, snapshotId: current.snapshotId };
+    const generation = ++updateGeneration.current;
     const previous = entries.current.get(reviewId)?.update ?? { kind: "current" };
-    updateOperation.current = { reviewId, snapshotId: current.snapshotId, previous, abort };
+    updateOperation.current = { reviewId, snapshotId: current.snapshotId, generation, previous, abort };
     updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "checking" } }));
     void adapter.checkReviewUpdate(current, abort.signal).then((available) => {
       const latest = entries.current.get(reviewId);
-      if (abort.signal.aborted || updateOperation.current?.abort !== abort
+      if (abort.signal.aborted || updateOperation.current?.generation !== generation
         || activeReviewIdRef.current !== reviewId
         || latest?.snapshot.reviewId !== identity.reviewId || latest.snapshot.snapshotId !== identity.snapshotId) return;
       updateOperation.current = undefined;
@@ -232,7 +239,7 @@ export function useReviewLifecycle(
         update: available ? { kind: "available", update: available } : { kind: "current" },
       }));
     }).catch((reason) => {
-      if (abort.signal.aborted || updateOperation.current?.abort !== abort || activeReviewIdRef.current !== reviewId) return;
+      if (abort.signal.aborted || updateOperation.current?.generation !== generation || activeReviewIdRef.current !== reviewId) return;
       updateOperation.current = undefined;
       updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "failed", failure: operationFailure(reason) } }));
     });
@@ -305,8 +312,8 @@ export function useReviewLifecycle(
     }
     const abort = new AbortController();
     lifecycleAbort.current = abort;
-    cancelUpdateCheck();
     const previousReviewId = activeReviewIdRef.current;
+    const cancelledUpdate = cancelUpdateCheck();
     const previousEntry = previousReviewId ? entries.current.get(previousReviewId) : undefined;
     setOpeningTarget(target);
     if (previousReviewId) setTransition({ kind: "switching", target });
@@ -326,7 +333,12 @@ export function useReviewLifecycle(
     } catch (reason) {
       if (previousEntry && activeReviewIdRef.current === previousReviewId) {
         setTransition({ kind: "stable" });
-        checkForUpdate(previousEntry.snapshot);
+        if (cancelledUpdate
+          && cancelledUpdate.reviewId === previousReviewId
+          && cancelledUpdate.snapshotId === previousEntry.snapshot.snapshotId
+          && cancelledUpdate.generation === updateGeneration.current) {
+          checkForUpdate(previousEntry.snapshot);
+        }
       }
       return { kind: "failed", failure: operationFailure(reason), previousReviewPreserved: true };
     } finally {

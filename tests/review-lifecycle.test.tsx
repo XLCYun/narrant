@@ -335,6 +335,35 @@ describe("Review lifecycle module", () => {
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("current"));
   });
 
+  it.each(["current", "available", "failed"] as const)(
+    "打开 C 失败时保留 B 的稳定 %s update 状态且不发起额外检查",
+    async (stableKind) => {
+      const adapter = createAdapter();
+      const snapshotB = { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" };
+      adapter.switchReview = async (target) => {
+        if (target.kind === "saved-review" && target.reviewId === "review-c") throw new Error("C materialize failed");
+        return snapshotB;
+      };
+      const checkReviewUpdate = vi.fn(async () => {
+        if (stableKind === "failed") throw new Error("update check failed");
+        return stableKind === "available" ? availableUpdate : null;
+      });
+      adapter.checkReviewUpdate = checkReviewUpdate;
+      const { result } = renderHook(() => useReviewLifecycle(adapter));
+
+      await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+      await waitFor(() => expect(result.current.reader?.update.kind).toBe(stableKind));
+      checkReviewUpdate.mockClear();
+
+      await act(async () => {
+        expect(await result.current.open({ kind: "saved-review", reviewId: "review-c" })).toMatchObject({ kind: "failed" });
+      });
+      expect(result.current.reader?.snapshot.reviewId).toBe("review-b");
+      expect(result.current.reader?.update.kind).toBe(stableKind);
+      expect(checkReviewUpdate).not.toHaveBeenCalled();
+    },
+  );
+
   it("重复选择 Presented Review 在 adapter 前短路", async () => {
     const adapter = createAdapter();
     const switchReview = vi.spyOn(adapter, "switchReview");
