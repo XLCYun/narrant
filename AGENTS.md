@@ -34,5 +34,5 @@ Single-context layout. See `docs/agents/domain.md`.
 ## 阅读模式(read: {file})
 根据给出的源代码文件 file，读取里面的内容，整理它的 mermaid 类图输出，并逐行添加注释后输出。直接输出 markdown 即可，不要写入到任何文件。
 
-## Swarm Coding
-subagent 使用 luna + max。
+## 蜂群开发配置
+Subagent Handoff 开发时，subagent 使用 luna + max。
