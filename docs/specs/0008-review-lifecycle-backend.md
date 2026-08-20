@@ -21,8 +21,8 @@ adapter and existing frontend command contracts remain stable during this refact
 
 - Introduce a Rust Review lifecycle module that owns opening, switching, update checks,
   refresh, File Change reads, closing, and startup recovery.
-- Keep the runtime representation keyed by durable `reviewId`, even while the first
-  release continues to present only one active Review.
+- Keep every Review opened during the process in a runtime representation keyed by
+  durable `reviewId`, while presenting only one Review.
 - Move Workspace Trust gates, Repository availability checks, Review Selection
   validation, Review Workspace ordering, current-Snapshot activation, rollback, runtime
   reader replacement, and cleanup outcomes behind the lifecycle seam.
@@ -44,7 +44,7 @@ adapter and existing frontend command contracts remain stable during this refact
   to provide a current Pull Request observation during the first migration.
 - Do not add a Core Git, Persistence, clock, filesystem, or runtime-state trait
   without a second real adapter.
-- Do not enable multiple simultaneously presented Reviews yet.
+- Do not enable multiple simultaneously presented Reviews or Review tabs.
 - Do not add analysis tooling, Review deletion, historical Snapshot browsing, or new UI.
 
 ## Lifecycle Interface
@@ -79,9 +79,12 @@ rules are normative:
 2. Resolve or restore the target Review without changing the currently readable Review.
 3. Materialize and validate the target Review Workspace.
 4. Install the target runtime reader only after the target is internally consistent.
-5. Enforce the current single-active-Review presentation policy while retaining the
-   multi-Review runtime representation required by ADR-0015.
+5. Make the target the Presented Review while retaining every other Open Review and its
+   Workspace as required by ADR-0015 and ADR-0021.
 6. A target failure leaves the previously readable Review intact.
+
+Presenting an already open Review reuses its runtime reader and Workspace without Core
+Git materialization or cleanup. Selecting the Presented Review is a complete no-op.
 
 ### Update checks
 
@@ -127,12 +130,14 @@ refer to the same Review Snapshot.
 - Closing a Review prevents new reads while already-held in-process references may
   finish safely.
 
-### Closing
+### Closing and shutdown
 
 - Logical close removes the runtime reader before disposable Workspace cleanup.
 - Review Workspace cleanup failure is a typed deferred-cleanup outcome; it never
   reopens the Review or deletes saved Review history.
 - Close remains idempotent.
+- Normal frontend navigation does not close a Review. Process shutdown closes every
+  retained Review and attempts exact-ownership Workspace cleanup.
 
 ### Startup recovery
 
@@ -218,9 +223,12 @@ command contract.
 8. A failed Review switch preserves the previously readable Review.
 9. Closing remains logically successful when exact Workspace cleanup must be deferred.
 10. Runtime Review state remains keyed by durable `reviewId`.
-11. Lifecycle tests use temporary SQLite and real Core Git through the lifecycle
+11. Switching A → B → A retains both runtime readers and does not recreate or inspect
+    A's Workspace when its current Snapshot is unchanged.
+12. Normal navigation does not close a Review; shutdown releases the full Open Review Set.
+13. Lifecycle tests use temporary SQLite and real Core Git through the lifecycle
     interface; no new single-adapter traits are introduced.
-12. Rust formatting, Clippy, and all Rust tests pass. Relevant frontend transport tests
+14. Rust formatting, Clippy, and all Rust tests pass. Relevant frontend transport tests
     and the production frontend build pass under a supported Node version.
 
 ## Related Decisions
@@ -233,3 +241,4 @@ command contract.
 - [ADR-0013: Unify Reviews on local repositories](../adr/0013-unify-reviews-on-local-repositories.md)
 - [ADR-0014: Use a typed Tauri transport and domain application adapters](../adr/0014-use-a-typed-tauri-transport-and-domain-application-adapters.md)
 - [ADR-0015: Preserve a multi-Review runtime representation](../adr/0015-preserve-multi-review-runtime-representation.md)
+- [ADR-0021: Retain open Reviews for the process lifetime](../adr/0021-retain-open-reviews-for-the-process-lifetime.md)

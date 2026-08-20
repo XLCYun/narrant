@@ -97,8 +97,8 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 59. 作为 Review 阅读者，我希望刷新成功后自动打开新 Snapshot 的第一个 File Change，以便立即进入更新后的内容。
 60. 作为同时处理多个 Review 的用户，我希望点击另一条 Review 时直接切换，以便不被无数据丢失风险的确认框打断。
 61. 作为同时处理多个 Review 的用户，我希望新 Review 打开失败时继续保留当前 Review，以便错误不会让我落入空白页面。
-62. 作为离开 Review 的用户，我希望应用自动释放临时 Review Workspace，以便本地资源得到及时清理。
-63. 作为需要明确结束当前 Review 的用户，我希望在更多菜单中使用“关闭审核”，以便释放 Workspace 而不删除历史。
+62. 作为在多个 Review 间导航的用户，我希望应用保留已经打开的 Review Workspace 和阅读状态，以便切回时不重复创建 Workspace。
+63. 作为退出应用的用户，我希望应用释放本次运行中全部 Review Workspace，以便进程结束后不遗留资源。
 64. 作为仓库文件夹被移动或删除的用户，我希望侧边栏保留 Repository 和历史 Review 名称，以便知道原有记录仍存在。
 65. 作为仓库文件夹不可用的用户，我希望仓库页面展示原路径和不可用原因，以便理解为何不能打开 Review。
 66. 作为执行耗时操作的用户，我希望加载反馈只出现在受影响区域，以便应用其他部分保持可用。
@@ -193,8 +193,8 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Pull Request 描述使用安全 Markdown：跳过原始 HTML、阻止远程图片自动加载，HTTP/HTTPS 链接交给系统浏览器。
 - 打开已有 Review 后后台自动检查 Selection 更新，但不自动刷新 Review Snapshot。
 - 检测到 Pull Request 更新时显示“检测到 PR 分支有更新”，检测到 Branch Selection 更新时显示“检测到所选分支有更新”。“刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间按钮显示 Loading 图标并保留当前 Snapshot 与旧 Diff，同时禁用 Review 切换；成功后原子切换，失败后保留旧 Snapshot。
-- 点击另一条 Review 直接切换；切换失败保留当前 Review。离开或切换成功后释放旧 Review Workspace。
-- 页面导航自动关闭当前 Review 的运行时资源；工具栏直接显示普通尺寸的“退出审核”按钮，执行后返回所属 Repository 的审核历史，不删除 Review 或 Snapshot。从 Review 阅读器点击所属 Repository 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository 直接打开仓库概览时仍默认进入 `Pull Requests`。
+- 点击另一条 Review 直接切换；切换失败保留当前 Review。切换成功后保留旧 Review 的 Workspace、runtime reader 和阅读状态，切回时不得重新创建 Workspace。
+- 页面导航不关闭当前 Review 的运行时资源；工具栏中的“退出审核”仅返回所属 Repository 的审核历史，不删除 Review、Snapshot 或运行时状态。从 Review 阅读器点击所属 Repository 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository 直接打开仓库概览时仍默认进入 `Pull Requests`。
 - 不可用 Repository 继续显示在主侧边栏中，允许展开历史名称；主区域显示原路径和不可用原因。重新定位和删除不在本规格范围。
 - 错误按范围反馈：短暂且无需立即处理的错误使用 shadcn Sonner；输入错误就地展示；阻断内容区域的错误在区域内展示；风险确认和用户选择使用 Dialog。导航失败若没有合适的就地承载区域，使用 Sonner 错误通知，且不改变当前主视图或选中态。
 - 加载按范围反馈：首页和首次列表使用 Skeleton；后台列表刷新保留内容并显示局部进度；Review Snapshot 导航在触发入口显示 Loading 图标；File Change 读取只占用 Diff 区域并同时显示 Loading 图标与 Skeleton；Snapshot 刷新保留旧 Diff。Loading 图标立即出现且不设置人为最短展示时长；可见文案或可访问名称表达正在执行的操作，图标本身不重复朗读。
@@ -216,7 +216,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 最小可用窗口目标为 900×600。1200px 以上同时展示主侧边栏、文件树和双栏 Diff；900–1199px 默认收起主侧边栏并允许 Diff 临时单栏。
 - 第一版不增加产品级键盘快捷键，但所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。
 - 主视图切换不额外编排键盘焦点，沿用按钮和侧边栏组件的标准焦点行为；为显示当前 Review 而自动滚动侧边栏时不主动抢占焦点。
-- 本规格不改变 Review、Review Selection、Review Snapshot、Repository 或 Workspace Trust 的领域关系，也不改变只有一个 Review 同时打开的约束。
+- 应用只呈现一个 Review，但保留本次进程中全部已打开 Review 的运行时状态；详细生命周期由 [Spec 0012](0012-process-lifetime-open-reviews.md) 定义。
 
 ## Testing Decisions
 
@@ -248,7 +248,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Repository、Review 或 Snapshot 删除 UI。
 - Workspace Trust 撤销 UI。
 - 不可用 Repository 的重新定位 UI。
-- 多个同时打开的 Review、标签页式 Review 或保留多个 Review Workspace。
+- 多个同时可见的 Review、标签页式 Review 或跨进程恢复 Review 运行时状态。
 - 文件树搜索、状态筛选、已读或未读状态、隐藏已查看文件。
 - 产品级键盘快捷键和快捷键自定义。
 - 手动语言选择器、独立设置页、繁体中文或简体中文与英文之外的翻译。
@@ -259,7 +259,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 手机或触摸优先布局。
 - 任意 revision expression、tag 或对象 ID 选择。
 - 对 GitHub Files changed 历史比较锚点的精确复刻。
-- 改变现有 Core Git、SQLite、Review Snapshot 或 Review Workspace 的领域与架构决策。
+- 改变 Core Git 与 SQLite 的技术边界；Review Workspace 的进程内保留语义由 Spec 0012 更新。
 
 ## Further Notes
 

@@ -4,6 +4,11 @@ status: accepted
 
 # Treat Review Workspaces as disposable
 
+The process-lifetime retention policy in
+[ADR-0021](0021-retain-open-reviews-for-the-process-lifetime.md) supersedes this
+decision's original single-Workspace and switch-time cleanup rules. Review Workspaces
+remain disposable, Narrant-owned checkouts subject to the safety rules below.
+
 Each open Review owns a Narrant-managed workspace at
 `reviews/<review-id>/repo` whose checkout is derived entirely from the head revision of
 the Review's current snapshot. The workspace is not a place for user-owned data:
@@ -23,12 +28,12 @@ avoids making external tool side effects part of the Review model.
 - LSP indexes and other reusable tool state should live outside `repo/` so rebuilding
   the checkout does not erase them unnecessarily.
 - The UI must not present the Review Workspace as a general-purpose editable checkout.
-- Workspaces are created lazily and removed when the Review closes, the user switches
-  Reviews, or the application exits; SQLite Review history remains.
+- Workspaces are created lazily and retained while their Review belongs to the current
+  process's Open Review Set. Application exit removes them; SQLite Review history remains.
 - Closing a Review releases its runtime reader even when workspace removal fails. The
   cleanup failure remains reportable and recoverable, but does not reopen the Review.
-- The first release keeps at most one Review Workspace active and does not retain an
-  unbounded checkout cache for historical Reviews.
+- A Workspace belongs only to its Review's current Snapshot. Historical Snapshots do
+  not retain separate worktrees.
 - On startup Narrant automatically cleans up worktrees left by an interrupted prior
   run, but only after the database record, Git common directory, registered worktree
   path, and Narrant-managed absolute path all identify the same exact workspace. It
