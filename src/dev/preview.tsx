@@ -208,6 +208,7 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
   ]));
   const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
+  const [view, setView] = useState<"overview" | "file-changes">("overview");
   const review: ReviewReaderBinding = {
     snapshot,
     transition: { kind: "stable" },
@@ -217,6 +218,14 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
     update: update
       ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
       : { kind: "current" },
+    view,
+    setView,
+    diffMode: mode,
+    setDiffMode: setMode,
+    treeWidth: 26,
+    setTreeWidth: () => undefined,
+    collapsedDirectories: [],
+    toggleDirectory: () => undefined,
     selectFileChange: setSelectedPath,
     retryFileChange: () => undefined,
     refresh: async () => ({ kind: "unchanged" }),

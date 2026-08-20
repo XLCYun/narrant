@@ -162,7 +162,7 @@ describe("AppShell navigation module", () => {
     expect(repositoryAdapter.open).toHaveBeenLastCalledWith(1);
   });
 
-  it("返回 Home 时统一关闭 Review 并离开 Repository", async () => {
+  it("返回 Home 时只离开当前展示，不关闭 Review runtime", async () => {
     const repositoryAdapter = createRepositoryAdapter();
     const reviewAdapter = createReviewAdapter();
     const closeReview = vi.spyOn(reviewAdapter, "closeReview");
@@ -179,6 +179,32 @@ describe("AppShell navigation module", () => {
 
     expect(result.current.destination).toEqual({ kind: "home" });
     expect(result.current.reader).toBeNull();
-    expect(closeReview).toHaveBeenCalledTimes(1);
+    expect(closeReview).not.toHaveBeenCalled();
+  });
+
+  it("重复点击当前 Presented Review 不调用 adapter", async () => {
+    const repositoryAdapter = createRepositoryAdapter();
+    const reviewAdapter = createReviewAdapter();
+    const switchReview = vi.spyOn(reviewAdapter, "switchReview");
+    const { result } = renderNavigation(repositoryAdapter, reviewAdapter);
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review",
+        repositoryId: 1,
+        target: { kind: "saved-review", reviewId: "review-1" },
+      });
+    });
+    switchReview.mockClear();
+
+    await act(async () => {
+      expect(await result.current.navigate({
+        kind: "review",
+        repositoryId: 1,
+        target: { kind: "saved-review", reviewId: "review-1" },
+      })).toEqual({ kind: "navigated" });
+    });
+
+    expect(switchReview).not.toHaveBeenCalled();
   });
 });

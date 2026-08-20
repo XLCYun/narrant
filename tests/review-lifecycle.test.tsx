@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   useReviewLifecycle,
@@ -193,5 +193,86 @@ describe("Review lifecycle module", () => {
       await Promise.all([refresh!, closing!]);
     });
     expect(events).toEqual(["refresh-started", "refresh-cancelled", "workspace-closed"]);
+  });
+
+  it("按 reviewId 保留完整 Reader 状态，并在 A → B → A 时复用缓存", async () => {
+    const snapshots: Record<string, ReviewSnapshot> = {
+      "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a", fileChanges: [
+        { path: "a.ts", oldPath: null, status: "modified" },
+        { path: "nested/b.ts", oldPath: null, status: "added" },
+      ] },
+      "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b", fileChanges: [
+        { path: "b.ts", oldPath: null, status: "modified" },
+      ] },
+    };
+    const switchReview = vi.fn(async (target: ReviewOpenTarget) => {
+      const reviewId = target.kind === "saved-review" ? target.reviewId : "review-a";
+      return snapshots[reviewId];
+    });
+    const checkReviewUpdate = vi.fn(async () => null);
+    const readFileChange = vi.fn(async (_identity, path) => ({
+      path,
+      oldPath: null,
+      status: "modified" as const,
+      contentKind: "text" as const,
+      beforeSize: 1,
+      afterSize: 2,
+      before: "old",
+      after: "new",
+    }));
+    const adapter: ReviewApplicationAdapter = {
+      switchReview,
+      checkReviewUpdate,
+      checkBranchSelectionUpdate: async () => ({
+        changed: false,
+        currentBaseRevision: "base",
+        currentHeadRevision: "head",
+        latestBaseRevision: "base",
+        latestHeadRevision: "head",
+      }),
+      refreshReview: async () => ({ kind: "unchanged" }),
+      readFileChange,
+      closeReview: async () => ({ kind: "closed" }),
+    };
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "a.ts" }));
+    act(() => {
+      result.current.reader?.setView("file-changes");
+      result.current.reader?.setDiffMode("inline");
+      result.current.reader?.setTreeWidth(37);
+      result.current.reader?.toggleDirectory("nested");
+      result.current.reader?.selectFileChange("nested/b.ts");
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "nested/b.ts" }));
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    await waitFor(() => expect(result.current.reader?.snapshot.reviewId).toBe("review-b"));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+
+    expect(switchReview).toHaveBeenCalledTimes(3);
+    expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
+    expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "nested/b.ts" });
+    expect(result.current.reader?.view).toBe("file-changes");
+    expect(result.current.reader?.diffMode).toBe("inline");
+    expect(result.current.reader?.treeWidth).toBe(37);
+    expect(result.current.reader?.collapsedDirectories).toEqual(["nested"]);
+  });
+
+  it("重复选择 Presented Review 在 adapter 前短路", async () => {
+    const adapter = createAdapter();
+    const switchReview = vi.spyOn(adapter, "switchReview");
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    switchReview.mockClear();
+
+    await act(async () => {
+      const outcome = await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+      expect(outcome.kind).toBe("opened");
+    });
+
+    expect(switchReview).not.toHaveBeenCalled();
   });
 });

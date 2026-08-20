@@ -22,7 +22,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
+import type { ReviewReaderBinding, ReviewView } from "@/review/use-review-lifecycle";
 import type { ChangeStatus, FileChangeSummary } from "@/review/types";
 export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
 
@@ -117,8 +117,27 @@ export function ReviewReader(input: ReviewReaderProps) {
     onRetryFile: review.retryFileChange,
     onClose: () => void review.close(),
   };
-  const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
-  const [activeView, setActiveView] = useState<"overview" | "file-changes">("overview");
+  const [uncontrolledView, setUncontrolledView] = useState<ReviewView>("overview");
+  const [uncontrolledCollapsedDirectories, setUncontrolledCollapsedDirectories] = useState<Set<string>>(() => new Set());
+  const activeView = review.view ?? uncontrolledView;
+  const collapsedDirectories = new Set(review.collapsedDirectories ?? uncontrolledCollapsedDirectories);
+  /** 兼容独立 Reader 预览与旧调用方，同时把正式状态交回 lifecycle。 */
+  const selectView = (view: ReviewView) => {
+    setUncontrolledView(view);
+    review.setView?.(view);
+  };
+  /** 目录折叠状态随 Review 保存；无 lifecycle setter 时退回组件本地状态。 */
+  const toggleDirectory = (path: string) => {
+    if (review.toggleDirectory) {
+      review.toggleDirectory(path);
+      return;
+    }
+    setUncontrolledCollapsedDirectories((value) => {
+      const next = new Set(value);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  };
   const selectedPath = props.pendingFilePath ?? props.fileChange?.path;
   const effectiveDiffMode: DiffMode = props.narrow ? "inline" : props.diffMode;
   const fileTypeIconTheme = props.editorTheme === "vs-dark" ? "dark" : "light";
@@ -154,11 +173,7 @@ export function ReviewReader(input: ReviewReaderProps) {
         return <li key={path}>
           <button type="button" aria-expanded={!collapsed}
             className="flex h-7 w-full items-center gap-1 rounded-md px-1.5 text-left text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => setCollapsedDirectories((value) => {
-              const next = new Set(value);
-              if (next.has(path)) next.delete(path); else next.add(path);
-              return next;
-            })}>
+            onClick={() => toggleDirectory(path)}>
             <Icon icon={ArrowDown01Icon} className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", collapsed && "-rotate-90")} aria-hidden />
             <FileTypeIcon path={path} kind="directory" expanded={!collapsed} theme={fileTypeIconTheme} testId={`file-type-icon-${child.name}`} />
             <span className="truncate">{child.name}</span>
@@ -181,7 +196,7 @@ export function ReviewReader(input: ReviewReaderProps) {
     </>;
   }
 
-  return <Tabs defaultValue="overview" onValueChange={(value) => setActiveView(value as "overview" | "file-changes")} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
+  return <Tabs value={activeView} onValueChange={(value) => selectView(value as ReviewView)} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
     <div role="toolbar" aria-label={t("review:toolbar")} className="flex min-h-12 shrink-0 items-center gap-2 border-b px-3">
       <TabsList variant="line" aria-label={t("review:reviewViews")} className="h-full shrink-0 p-0">
         <TabsTrigger value="overview" className="px-3">{t("review:overview")}</TabsTrigger>
