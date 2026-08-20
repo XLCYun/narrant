@@ -182,6 +182,29 @@ describe("AppShell navigation module", () => {
     expect(closeReview).not.toHaveBeenCalled();
   });
 
+  it("返回 Repository Overview 时只离开当前展示，不关闭 Review runtime", async () => {
+    const repositoryAdapter = createRepositoryAdapter();
+    const reviewAdapter = createReviewAdapter();
+    const closeReview = vi.spyOn(reviewAdapter, "closeReview");
+    const { result } = renderNavigation(repositoryAdapter, reviewAdapter);
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await result.current.navigate({
+        kind: "review",
+        repositoryId: 1,
+        target: { kind: "saved-review", reviewId: "review-1" },
+      });
+    });
+    await waitFor(() => expect(result.current.destination.kind).toBe("review"));
+    await act(async () => {
+      await result.current.navigate({ kind: "repository", repositoryId: 1 });
+    });
+
+    expect(result.current.destination).toEqual({ kind: "repository", repositoryId: 1, initialTab: "history" });
+    expect(result.current.reader).toBeNull();
+    expect(closeReview).not.toHaveBeenCalled();
+  });
+
   it("重复点击当前 Presented Review 不调用 adapter", async () => {
     const repositoryAdapter = createRepositoryAdapter();
     const reviewAdapter = createReviewAdapter();

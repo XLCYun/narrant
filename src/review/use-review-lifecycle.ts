@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type {
-  ReviewApplicationAdapter,
-  ReviewOpenTarget,
-  ReviewUpdate,
+import {
+  knownReviewId,
+  type ReviewApplicationAdapter,
+  type ReviewOpenTarget,
+  type ReviewUpdate,
 } from "@/review/review-application";
-import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
+import type {
+  FileChangeContent,
+  ReviewDiffMode,
+  ReviewReaderScrollPositions,
+  ReviewSnapshot,
+  ReviewView,
+} from "@/review/types";
 
 export type { ReviewApplicationAdapter, ReviewOpenTarget, ReviewUpdate } from "@/review/review-application";
 
@@ -43,11 +50,7 @@ export type ReviewUpdateBinding =
   | { kind: "available"; update: ReviewUpdate }
   | { kind: "failed"; failure: ReviewFailure };
 
-/** Review Reader 的稳定视图。视图属于 Review，而不是一次组件挂载。 */
-export type ReviewView = "overview" | "file-changes";
-
-/** Monaco diff 的用户选择。该选择随 Review 保留，但不属于 Snapshot。 */
-export type ReviewDiffMode = "side-by-side" | "inline";
+export type { ReviewDiffMode, ReviewView } from "@/review/types";
 
 /** 进程内一个 Review 的完整 Reader runtime 状态。 */
 type ReviewRuntimeEntry = {
@@ -58,6 +61,7 @@ type ReviewRuntimeEntry = {
   diffMode: ReviewDiffMode;
   treeWidth: number;
   collapsedDirectories: string[];
+  scrollPositions: ReviewReaderScrollPositions;
 };
 
 /** Review lifecycle 可配置的初始展示偏好。后续修改按 Review 独立保留。 */
@@ -77,17 +81,20 @@ export type ReviewReaderBinding = {
   fileChange: FileChangeBinding;
   update: ReviewUpdateBinding;
   /** 当前 Review 的 peer view，以及用于保留它的 setter。 */
-  view?: ReviewView;
-  setView?(view: ReviewView): void;
+  view: ReviewView;
+  setView(view: ReviewView): void;
   /** 当前 Review 的 diff 布局，以及用于保留它的 setter。 */
-  diffMode?: ReviewDiffMode;
-  setDiffMode?(mode: ReviewDiffMode): void;
+  diffMode: ReviewDiffMode;
+  setDiffMode(mode: ReviewDiffMode): void;
   /** 当前 Review 的文件树宽度，以及用于保留它的 setter。 */
-  treeWidth?: number;
-  setTreeWidth?(width: number): void;
+  treeWidth: number;
+  setTreeWidth(width: number): void;
   /** 已折叠目录路径，作为 Reader 导航位置的一部分保存。 */
-  collapsedDirectories?: string[];
-  toggleDirectory?(path: string): void;
+  collapsedDirectories: string[];
+  toggleDirectory(path: string): void;
+  /** 外层可控滚动容器的位置；Monaco 内部 viewport 不在此契约内。 */
+  scrollPositions: ReviewReaderScrollPositions;
+  setScrollPosition(region: keyof ReviewReaderScrollPositions, top: number): void;
   selectFileChange(path: string): void;
   retryFileChange(): void;
   refresh(): Promise<ReviewRefreshResult>;
@@ -112,13 +119,6 @@ function operationFailure(reason: unknown): ReviewFailure {
   return { kind: "operation-failed", detail: String(reason), retryable: true };
 }
 
-/** 从打开目标中提取已知的 durable Review identity，用于 Presented Review 短路。 */
-function targetReviewId(target: ReviewOpenTarget): string | undefined {
-  if (target.kind === "saved-review") return target.reviewId;
-  if (target.kind === "branch-selection" && target.mode.kind === "continue") return target.mode.reviewId;
-  return undefined;
-}
-
 /** 按稳定路径选出 Snapshot 的首个 File Change。 */
 function firstFileChangePath(snapshot: ReviewSnapshot): string | undefined {
   return [...snapshot.fileChanges]
@@ -135,11 +135,16 @@ export function useReviewLifecycle(
   const entries = useRef(new Map<string, ReviewRuntimeEntry>());
   const activeReviewIdRef = useRef<string>();
   const [activeReviewId, setActiveReviewId] = useState<string>();
-  const [, setRevision] = useState(0);
+  const [, invalidateRender] = useState(0);
   const [openingTarget, setOpeningTarget] = useState<ReviewOpenTarget>();
   const [transition, setTransition] = useState<ReviewReaderBinding["transition"]>({ kind: "stable" });
   const fileRequests = useRef(new Map<string, { request: number; abort: AbortController }>());
-  const updateAbort = useRef<AbortController>();
+  const updateOperation = useRef<{
+    reviewId: string;
+    snapshotId: string;
+    previous: ReviewUpdateBinding;
+    abort: AbortController;
+  }>();
   const lifecycleAbort = useRef<AbortController>();
   const refreshOperation = useRef<{
     reviewId: string;
@@ -153,7 +158,7 @@ export function useReviewLifecycle(
     const current = entries.current.get(reviewId);
     if (!current) return;
     entries.current.set(reviewId, change(current));
-    setRevision((value) => value + 1);
+    invalidateRender((value) => value + 1);
   }, []);
 
   /** 将指定 Review 设为 Presented，并同步 snapshot ref 语义到 React state。 */
@@ -188,27 +193,44 @@ export function useReviewLifecycle(
     });
   }, [adapter, updateEntry]);
 
+  /** 取消 update check，并把被中断的 checking 恢复成此前稳定状态。 */
+  const cancelUpdateCheck = useCallback(() => {
+    const operation = updateOperation.current;
+    if (!operation) return;
+    updateOperation.current = undefined;
+    operation.abort.abort();
+    updateEntry(operation.reviewId, (entry) => (
+      entry.snapshot.snapshotId === operation.snapshotId && entry.update.kind === "checking"
+        ? { ...entry, update: operation.previous.kind === "checking" ? { kind: "current" } : operation.previous }
+        : entry
+    ));
+  }, [updateEntry]);
+
   /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
   const checkForUpdate = useCallback((current: ReviewSnapshot) => {
-    updateAbort.current?.abort();
+    cancelUpdateCheck();
     const abort = new AbortController();
-    updateAbort.current = abort;
     const reviewId = current.reviewId;
     const identity = { reviewId, snapshotId: current.snapshotId };
+    const previous = entries.current.get(reviewId)?.update ?? { kind: "current" };
+    updateOperation.current = { reviewId, snapshotId: current.snapshotId, previous, abort };
     updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "checking" } }));
     void adapter.checkReviewUpdate(current, abort.signal).then((available) => {
       const latest = entries.current.get(reviewId);
-      if (abort.signal.aborted || activeReviewIdRef.current !== reviewId
+      if (abort.signal.aborted || updateOperation.current?.abort !== abort
+        || activeReviewIdRef.current !== reviewId
         || latest?.snapshot.reviewId !== identity.reviewId || latest.snapshot.snapshotId !== identity.snapshotId) return;
+      updateOperation.current = undefined;
       updateEntry(reviewId, (entry) => ({
         ...entry,
         update: available ? { kind: "available", update: available } : { kind: "current" },
       }));
     }).catch((reason) => {
-      if (abort.signal.aborted || activeReviewIdRef.current !== reviewId) return;
+      if (abort.signal.aborted || updateOperation.current?.abort !== abort || activeReviewIdRef.current !== reviewId) return;
+      updateOperation.current = undefined;
       updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "failed", failure: operationFailure(reason) } }));
     });
-  }, [adapter, updateEntry]);
+  }, [adapter, cancelUpdateCheck, updateEntry]);
 
   /** 安装一个新 Snapshot；只重置该 Review 的 Snapshot-scoped Reader state。 */
   const installSnapshot = useCallback((next: ReviewSnapshot, existing?: ReviewRuntimeEntry) => {
@@ -220,7 +242,8 @@ export function useReviewLifecycle(
       view: existing?.view ?? "overview",
       diffMode: existing?.diffMode ?? initialDiffMode,
       treeWidth: existing?.treeWidth ?? initialTreeWidth,
-      collapsedDirectories: existing?.collapsedDirectories ?? [],
+      collapsedDirectories: [],
+      scrollPositions: { overview: 0, fileTree: 0, content: 0 },
     };
     if (previous) {
       entries.current.set(next.reviewId, { ...previous, snapshot: next });
@@ -246,19 +269,18 @@ export function useReviewLifecycle(
   const releaseEntry = useCallback((reviewId: string) => {
     fileRequests.current.get(reviewId)?.abort.abort();
     fileRequests.current.delete(reviewId);
-    if (activeReviewIdRef.current === reviewId) updateAbort.current?.abort();
     entries.current.delete(reviewId);
     if (activeReviewIdRef.current === reviewId) {
       activeReviewIdRef.current = undefined;
       setActiveReviewId(undefined);
       setTransition({ kind: "stable" });
     }
-    setRevision((value) => value + 1);
+    invalidateRender((value) => value + 1);
   }, []);
 
   /** 打开或切换 Review；失败时保留当前 Presented Review 与全部已有 runtime。 */
   const open = useCallback(async (target: ReviewOpenTarget): Promise<ReviewOpenResult> => {
-    const requestedReviewId = targetReviewId(target);
+    const requestedReviewId = knownReviewId(target);
     if (requestedReviewId && requestedReviewId === activeReviewIdRef.current) {
       const current = entries.current.get(requestedReviewId);
       if (current) return {
@@ -276,7 +298,7 @@ export function useReviewLifecycle(
     }
     const abort = new AbortController();
     lifecycleAbort.current = abort;
-    updateAbort.current?.abort();
+    cancelUpdateCheck();
     const previousReviewId = activeReviewIdRef.current;
     setOpeningTarget(target);
     if (previousReviewId) setTransition({ kind: "switching", target });
@@ -291,10 +313,8 @@ export function useReviewLifecycle(
       const reusedSnapshot = Boolean(existing && existing.snapshot.snapshotId === next.snapshotId);
       installSnapshot(next, existing);
       presentEntry(next.reviewId);
-      if (!reusedSnapshot) {
-        resetSnapshotReader(next);
-        checkForUpdate(next);
-      }
+      if (!reusedSnapshot) resetSnapshotReader(next);
+      checkForUpdate(next);
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: entries.current.get(next.reviewId)!.snapshot };
     } catch (reason) {
       if (previousReviewId && activeReviewIdRef.current === previousReviewId) setTransition({ kind: "stable" });
@@ -303,7 +323,7 @@ export function useReviewLifecycle(
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
       setOpeningTarget(undefined);
     }
-  }, [adapter, checkForUpdate, installSnapshot, presentEntry, resetSnapshotReader]);
+  }, [adapter, cancelUpdateCheck, checkForUpdate, installSnapshot, presentEntry, resetSnapshotReader]);
 
   /** 显式刷新 Presented Review；只替换该 Review 的 Snapshot-scoped state。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
@@ -347,7 +367,7 @@ export function useReviewLifecycle(
     const current = reviewId ? entries.current.get(reviewId) : undefined;
     const refreshing = refreshOperation.current;
     if (!reviewId || !current) return { kind: "closed" };
-    updateAbort.current?.abort();
+    cancelUpdateCheck();
     lifecycleAbort.current?.abort();
     if (refreshing?.reviewId === reviewId) {
       refreshing.abort.abort();
@@ -366,17 +386,17 @@ export function useReviewLifecycle(
           kind: "closed-with-cleanup-failure",
           failure: { kind: "workspace-cleanup-failed", detail: result.detail, retryable: true },
         };
-  }, [adapter, releaseEntry]);
+  }, [adapter, cancelUpdateCheck, releaseEntry]);
 
   /** 离开 Review Reader，只撤销 Presented Review 和 update 检查，保留全部 runtime。 */
   const unpresent = useCallback(() => {
-    updateAbort.current?.abort();
+    cancelUpdateCheck();
     lifecycleAbort.current?.abort();
     refreshOperation.current?.abort.abort();
     activeReviewIdRef.current = undefined;
     setActiveReviewId(undefined);
     setTransition({ kind: "stable" });
-  }, []);
+  }, [cancelUpdateCheck]);
 
   /** 更新当前 Review 的 peer view，而不触碰其 Snapshot 或 reader content。 */
   const setView = useCallback((view: ReviewView) => {
@@ -408,6 +428,17 @@ export function useReviewLifecycle(
     }));
   }, [updateEntry]);
 
+  /** 记录当前 Review 外层可控滚动容器的位置；滚动本身无需触发 React render。 */
+  const setScrollPosition = useCallback((region: keyof ReviewReaderScrollPositions, top: number) => {
+    const reviewId = activeReviewIdRef.current;
+    const entry = reviewId ? entries.current.get(reviewId) : undefined;
+    if (!reviewId || !entry || entry.scrollPositions[region] === top) return;
+    entries.current.set(reviewId, {
+      ...entry,
+      scrollPositions: { ...entry.scrollPositions, [region]: top },
+    });
+  }, []);
+
   /** 重新读取当前 Review 上一次失败的 File Change。 */
   const retryFileChange = useCallback(() => {
     const reviewId = activeReviewIdRef.current;
@@ -417,7 +448,7 @@ export function useReviewLifecycle(
 
   /** 应用卸载等正常退出路径释放整个 Open Review Set；历史记录仍由后端保留。 */
   useEffect(() => () => {
-    updateAbort.current?.abort();
+    updateOperation.current?.abort.abort();
     lifecycleAbort.current?.abort();
     for (const [reviewId, entry] of entries.current) {
       fileRequests.current.get(reviewId)?.abort.abort();
@@ -443,11 +474,13 @@ export function useReviewLifecycle(
     setTreeWidth,
     collapsedDirectories: activeEntry.collapsedDirectories,
     toggleDirectory,
+    scrollPositions: activeEntry.scrollPositions,
+    setScrollPosition,
     selectFileChange,
     retryFileChange,
     refresh,
     close,
-  } : null, [activeEntry, close, refresh, retryFileChange, selectFileChange, setDiffMode, setTreeWidth, setView, toggleDirectory, transition]);
+  } : null, [activeEntry, close, refresh, retryFileChange, selectFileChange, setDiffMode, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
 
   return useMemo(() => ({
     open,

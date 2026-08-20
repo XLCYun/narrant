@@ -226,6 +226,8 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
     setTreeWidth: () => undefined,
     collapsedDirectories: [],
     toggleDirectory: () => undefined,
+    scrollPositions: { overview: 0, fileTree: 0, content: 0 },
+    setScrollPosition: () => undefined,
     selectFileChange: setSelectedPath,
     retryFileChange: () => undefined,
     refresh: async () => ({ kind: "unchanged" }),
@@ -235,12 +237,8 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
     <ReviewReader
       review={review}
       appearance={{
-        diffMode: mode,
         narrow: window.innerWidth < 1200,
         editorTheme: document.documentElement.classList.contains("dark") ? "vs-dark" : "light",
-        initialTreeWidth: 26,
-        onDiffModeChange: setMode,
-        onTreeWidthChange: () => undefined,
         onOpenExternal: () => undefined,
       }}
     />

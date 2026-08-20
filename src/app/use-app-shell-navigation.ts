@@ -3,7 +3,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 import type { RepositoryOverview, RepositorySummary } from "@/repository/repository-application";
 import type { RepositoryOverviewBinding } from "@/repository/use-repository-overview";
-import type { ReviewOpenTarget } from "@/review/review-application";
+import { knownReviewId, type ReviewOpenTarget } from "@/review/review-application";
 import type { ReviewLifecycleBinding, ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
 export type RepositoryTab = "pull-requests" | "branches" | "history";
@@ -61,13 +61,6 @@ function reviewKey(target: ReviewOpenTarget) {
   if (target.kind === "saved-review") return `review:${target.reviewId}`;
   if (target.kind === "branch-selection") return `branch:${target.baseRef}:${target.headRef}`;
   return `${target.owner.toLowerCase()}/${target.repository.toLowerCase()}#${target.number}`;
-}
-
-/** 从导航意图提取已知 Review identity，避免重复选择当前 Presented Review。 */
-function targetReviewId(target: ReviewOpenTarget): string | undefined {
-  if (target.kind === "saved-review") return target.reviewId;
-  if (target.kind === "branch-selection" && target.mode.kind === "continue") return target.mode.reviewId;
-  return undefined;
 }
 
 function recentReviewSummary(overview: RepositoryOverview, snapshot: ReviewReaderBinding["snapshot"]): RecentReviewSummary {
@@ -147,7 +140,7 @@ export function useAppShellNavigation(
   }, [repository, restoreRepository, review]);
 
   const navigate = useCallback(async (intent: AppNavigationIntent): Promise<AppNavigationResult> => {
-    const requestedReviewId = intent.kind === "review" ? targetReviewId(intent.target) : undefined;
+    const requestedReviewId = intent.kind === "review" ? knownReviewId(intent.target) : undefined;
     if (intent.kind === "review"
       && requestedReviewId
       && destination.kind === "review"

@@ -87,6 +87,8 @@ export function App() {
   const visibleReviewReader = appShell.destination.kind === "review" ? reviewLifecycle.reader : null;
   const snapshot = visibleReviewReader?.snapshot;
   const refreshingReview = visibleReviewReader?.transition.kind === "refreshing";
+  const currentReaderDiffMode = reviewLifecycle.reader?.diffMode;
+  const currentReaderTreeWidth = reviewLifecycle.reader?.treeWidth;
   const [repositoryPath, setRepositoryPath] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
@@ -151,11 +153,11 @@ export function App() {
     return () => window.removeEventListener("resize", updateReviewWidth);
   }, []);
 
-  /** 保存用户明确选择的宽窗口 Diff 模式。 */
-  function selectDiffMode(mode: DiffMode) {
-    reviewLifecycle.reader?.setDiffMode?.(mode);
-    localStorage.setItem(REVIEW_DIFF_MODE_KEY, mode);
-  }
+  useEffect(() => {
+    if (!currentReaderDiffMode || currentReaderTreeWidth === undefined) return;
+    localStorage.setItem(REVIEW_DIFF_MODE_KEY, currentReaderDiffMode);
+    localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(currentReaderTreeWidth));
+  }, [currentReaderDiffMode, currentReaderTreeWidth]);
 
   useEffect(() => {
     if (branchState.kind !== "ready") return;
@@ -437,15 +439,8 @@ export function App() {
           },
         }}
         appearance={{
-          diffMode: visibleReviewReader.diffMode ?? initialDiffMode,
           narrow: narrowReview,
           editorTheme,
-          initialTreeWidth: visibleReviewReader.treeWidth ?? initialTreeWidth,
-          onDiffModeChange: selectDiffMode,
-          onTreeWidthChange: (width) => {
-            visibleReviewReader.setTreeWidth?.(width);
-            localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(width));
-          },
           onOpenExternal: (url) => void openUrl(url),
         }}
       />

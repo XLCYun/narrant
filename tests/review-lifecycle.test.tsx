@@ -243,6 +243,9 @@ describe("Review lifecycle module", () => {
       result.current.reader?.setDiffMode("inline");
       result.current.reader?.setTreeWidth(37);
       result.current.reader?.toggleDirectory("nested");
+      result.current.reader?.setScrollPosition("overview", 41);
+      result.current.reader?.setScrollPosition("fileTree", 63);
+      result.current.reader?.setScrollPosition("content", 87);
       result.current.reader?.selectFileChange("nested/b.ts");
     });
     await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "nested/b.ts" }));
@@ -252,13 +255,49 @@ describe("Review lifecycle module", () => {
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
 
     expect(switchReview).toHaveBeenCalledTimes(3);
-    expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
+    expect(checkReviewUpdate).toHaveBeenCalledTimes(3);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
     expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "nested/b.ts" });
     expect(result.current.reader?.view).toBe("file-changes");
     expect(result.current.reader?.diffMode).toBe("inline");
     expect(result.current.reader?.treeWidth).toBe(37);
     expect(result.current.reader?.collapsedDirectories).toEqual(["nested"]);
+    expect(result.current.reader?.scrollPositions).toEqual({ overview: 41, fileTree: 63, content: 87 });
+  });
+
+  it("切换会结束 inactive checking，重新 present 后再次检查更新", async () => {
+    const snapshots: Record<string, ReviewSnapshot> = {
+      "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a" },
+      "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" },
+    };
+    const checks: Array<{
+      reviewId: string;
+      signal: AbortSignal;
+      resolve: (value: null) => void;
+    }> = [];
+    const adapter = createAdapter();
+    adapter.switchReview = async (target) => snapshots[target.kind === "saved-review" ? target.reviewId : "review-a"];
+    adapter.checkReviewUpdate = (current, signal) => new Promise((resolve) => {
+      checks.push({ reviewId: current.reviewId, signal, resolve });
+    });
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    await waitFor(() => expect(checks).toHaveLength(1));
+    expect(result.current.reader?.update.kind).toBe("checking");
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    await waitFor(() => expect(checks).toHaveLength(2));
+    expect(checks[0].signal.aborted).toBe(true);
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    await waitFor(() => expect(checks).toHaveLength(3));
+    expect(checks[1].signal.aborted).toBe(true);
+    expect(checks[2].reviewId).toBe("review-a");
+    expect(result.current.reader?.update.kind).toBe("checking");
+
+    act(() => checks[2].resolve(null));
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("current"));
   });
 
   it("重复选择 Presented Review 在 adapter 前短路", async () => {
