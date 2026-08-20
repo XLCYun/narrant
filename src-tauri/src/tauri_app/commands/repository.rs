@@ -6,6 +6,14 @@ use std::sync::Arc;
 
 use super::review::run_cancellable_command;
 
+/** WDIO 无法操作原生目录选择器；仅测试构建从隔离环境读取选择结果。 */
+#[cfg(feature = "wdio")]
+#[tauri::command]
+pub(crate) fn choose_e2e_repository_directory() -> Result<String, String> {
+    std::env::var("NARRANT_E2E_TRUST_REPOSITORY")
+        .map_err(|reason| format!("缺少 WDIO Repository picker fixture：{reason}"))
+}
+
 /// Repository 本地分支标签所需的 canonical refs 与显式默认选择。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

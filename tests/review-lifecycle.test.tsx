@@ -261,7 +261,7 @@ describe("Review lifecycle module", () => {
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
 
     expect(switchReview).toHaveBeenCalledTimes(3);
-    expect(checkReviewUpdate).toHaveBeenCalledTimes(3);
+    expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
     expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "nested/b.ts" });
     expect(result.current.reader?.view).toBe("file-changes");
@@ -271,7 +271,7 @@ describe("Review lifecycle module", () => {
     expect(result.current.reader?.scrollPositions).toEqual({ overview: 41, fileTree: 63, content: 87 });
   });
 
-  it("切换会结束 inactive checking，重新 present 后再次检查更新", async () => {
+  it("切换会结束 inactive checking，warm present 复用缓存且不重复检查", async () => {
     const snapshots: Record<string, ReviewSnapshot> = {
       "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a" },
       "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" },
@@ -297,13 +297,9 @@ describe("Review lifecycle module", () => {
     expect(checks[0].signal.aborted).toBe(true);
 
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
-    await waitFor(() => expect(checks).toHaveLength(3));
+    expect(checks).toHaveLength(2);
     expect(checks[1].signal.aborted).toBe(true);
-    expect(checks[2].reviewId).toBe("review-a");
-    expect(result.current.reader?.update.kind).toBe("checking");
-
-    act(() => checks[2].resolve(null));
-    await waitFor(() => expect(result.current.reader?.update.kind).toBe("current"));
+    expect(result.current.reader?.update.kind).toBe("current");
   });
 
   it("打开 C 失败后为仍 Presented 的 B 重启 update check，并隔离旧请求", async () => {

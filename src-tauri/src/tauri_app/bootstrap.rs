@@ -67,6 +67,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "wdio")]
+            repository::choose_e2e_repository_directory,
             repository::load_repository_navigation,
             repository::open_repository_overview,
             repository::grant_repository_workspace_trust_and_open,

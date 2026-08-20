@@ -99,6 +99,17 @@ export function workspaceMutationInvocations(invocations: GitInvocation[]): GitI
   });
 }
 
+/** 过滤 Workspace 生命周期或针对已保留 Workspace 的任何读取/检查。 */
+export function workspaceOperationInvocations(invocations: GitInvocation[], workspacePaths: string[]): GitInvocation[] {
+  return invocations.filter((invocation) => {
+    const { argv } = invocation;
+    // worktree list 也属于 Workspace inspection；即使 argv 没有具体路径也必须禁止。
+    if (argv.includes("worktree")) return true;
+    if (argv.some((argument) => ["reset", "checkout", "switch"].includes(argument))) return true;
+    return workspacePaths.some((workspacePath) => invocationTouchesWorkspace(invocation, workspacePath));
+  });
+}
+
 /** 判断一次 Git invocation 是否在指定 Workspace 内执行或把该路径作为参数。 */
 export function invocationTouchesWorkspace(invocation: GitInvocation, workspacePath: string): boolean {
   return invocation.cwd === workspacePath

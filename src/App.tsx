@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
@@ -13,6 +13,7 @@ import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { Spinner } from "@/components/ui/spinner";
+import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import {
   ReviewReader,
@@ -179,13 +180,7 @@ export function App() {
   async function registerRepositoryFolder(path: string) {
     setRepositoryPath(path);
     setError("");
-    const operation = appShell.registerAndOpen(path);
-    if (import.meta.env.VITE_WDIO) {
-      // 系统 picker 的 WDIO helper 只等待同一真实导航完成，不绕过 Trust UI。
-      (window as Window & { __NARRANT_E2E_REPOSITORY_FOLDER_OPERATION__?: Promise<unknown> })
-        .__NARRANT_E2E_REPOSITORY_FOLDER_OPERATION__ = operation;
-    }
-    const result = await operation;
+    const result = await appShell.registerAndOpen(path);
     if (result.kind === "failed") setError(repositoryOpenError(result.detail));
     return result;
   }
@@ -440,24 +435,12 @@ export function App() {
     </div>}
     </>}
   </AppShell>
-  {pendingRepository && <Dialog open onOpenChange={(open) => {
-    if (!open && !grantingTrust) appShell.dismissTrust();
-  }}>
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>{t("trustTitle")}</DialogTitle>
-        <DialogDescription>{t("trustDescription")}</DialogDescription>
-      </DialogHeader>
-      <p className="break-all text-sm text-muted-foreground">{pendingRepository.canonicalPath}</p>
-      <DialogFooter>
-        <Button variant="outline" disabled={grantingTrust} onClick={appShell.dismissTrust}>
-          {t("cancel")}
-        </Button>
-        <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void appShell.confirmTrust()}>
-          {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>}
+  {pendingRepository && <RepositoryTrustDialog
+    open
+    canonicalPath={pendingRepository.canonicalPath}
+    granting={grantingTrust}
+    onCancel={appShell.dismissTrust}
+    onConfirm={() => void appShell.confirmTrust()}
+  />}
   </>;
 }

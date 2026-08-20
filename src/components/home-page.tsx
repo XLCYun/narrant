@@ -29,6 +29,7 @@ import narrantLogo from "../../assets/brand/narrant-logo.svg";
 import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg";
 import type { AppNavigationResult, AppShellNavigationBinding } from "@/app/use-app-shell-navigation";
 import type { RepositorySummary } from "@/repository/repository-application";
+import { tauriTransport } from "@/infrastructure/tauri/transport";
 
 /** 首页侧边栏所需的持久化仓库投影。 */
 export type HomeRepository = RepositorySummary;
@@ -363,11 +364,10 @@ export function AppShell({
     document.addEventListener("mouseup", stop);
   }
 
-  /** 使用系统目录选择器；E2E 构建只替换无法由 WebDriver 操作的系统窗口返回值。 */
+  /** 使用系统目录选择器；WDIO 构建从 Rust 侧读取隔离 fixture，避免跨 WebView 注入。 */
   async function chooseFolder() {
-    const e2ePath = (window as Window & { __NARRANT_E2E_DIRECTORY__?: string }).__NARRANT_E2E_DIRECTORY__;
-    const path = import.meta.env.VITE_WDIO === "true" && e2ePath
-      ? e2ePath
+    const path = import.meta.env.VITE_WDIO === "true"
+      ? await tauriTransport.invoke("choose_e2e_repository_directory", {})
       : await open({ directory: true, multiple: false });
     if (typeof path === "string") void navigation.registerAndOpen(path);
   }

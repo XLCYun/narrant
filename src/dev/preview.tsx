@@ -7,6 +7,7 @@ import { FileChangeLoading } from "@/components/file-change-loading";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { RepositoryOverview } from "@/components/repository-overview";
+import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -26,6 +27,22 @@ type PreviewDefinition = {
   label: string;
   scenarios: Record<string, PreviewScenario>;
 };
+
+/** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
+function RepositoryTrustPreview({ granting = false }: { granting?: boolean }) {
+  const [open, setOpen] = useState(true);
+  return <div className="min-h-[32rem] rounded-xl border bg-card/40 p-6">
+    <h2 className="font-heading text-lg font-semibold">Repository Overview</h2>
+    <p className="mt-2 text-sm text-muted-foreground">选择本地仓库后，需要先确认工作区信任。</p>
+    <RepositoryTrustDialog
+      open={open}
+      canonicalPath="/Users/example/projects/a-repository-with-a-long-readable-name"
+      granting={granting}
+      onCancel={() => setOpen(false)}
+      onConfirm={() => undefined}
+    />
+  </div>;
+}
 
 const defaultRefs = [
   "refs/heads/main",
@@ -267,6 +284,13 @@ function ReviewReaderPreview({
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  "repository-trust": {
+    label: "Repository Trust",
+    scenarios: {
+      default: { label: "等待确认", render: () => <RepositoryTrustPreview /> },
+      granting: { label: "正在授权", render: () => <RepositoryTrustPreview granting /> },
+    },
+  },
   "github-authorization": {
     label: "GitHub 授权",
     scenarios: {

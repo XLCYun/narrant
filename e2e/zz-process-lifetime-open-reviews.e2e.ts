@@ -1,38 +1,15 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 
 import { openFixtureRepository } from "./helpers/open-repository";
+import { reviewIdForSelection, selectRef, visibleBrandButton } from "./helpers/review-navigation";
 import {
   gitInvocationsSinceStable,
   invocationTouchesWorkspace,
   linkedWorktrees,
   stableGitTraceOffset,
   workspaceMutationInvocations,
+  workspaceOperationInvocations,
 } from "./helpers/worktree-observation";
-
-/** 通过真实 shadcn/Base UI Combobox 选择一个 canonical ref。 */
-async function selectRef(label: "Base Ref" | "Head Ref", value: string) {
-  const triggers = await $$("[role='combobox']");
-  const trigger = triggers[label === "Head Ref" ? 0 : 1];
-  if (!trigger) throw new Error(`分支选择器数量不足：${triggers.length}`);
-  await trigger.waitForDisplayed();
-  await trigger.waitForClickable();
-  await trigger.click();
-  const search = await $("input[aria-label^='搜索分支']");
-  await search.waitForDisplayed();
-  await search.setValue(value.split("/").at(-1) ?? value);
-  await browser.waitUntil(async () => {
-    for (const option of await $$("[role='option']")) {
-      if (await option.isDisplayed() && (await option.getText()).includes(value)) return true;
-    }
-    return false;
-  });
-  for (const option of await $$("[role='option']")) {
-    if (!(await option.isDisplayed()) || !(await option.getText()).includes(value)) continue;
-    await option.click();
-    break;
-  }
-  await browser.waitUntil(async () => (await trigger.getText()).includes(value));
-}
 
 /** 从可见 active sidebar item 读取 durable Review identity。 */
 async function activeReviewId() {
@@ -43,22 +20,6 @@ async function activeReviewId() {
     }
   }
   throw new Error("当前视图没有可见的 active Review");
-}
-
-/** 从持久化 navigation 精确定位一个 Branch Selection 的 durable identity。 */
-async function reviewIdForSelection(baseRef: string, headRef: string) {
-  const navigation = await browser.tauri.execute(
-    ({ core }) => core.invoke<{
-      recentReviews: Array<{ review: { reviewId: string; selection: { kind: string; baseRef: string; headRef: string } } }>;
-    }>("load_repository_navigation"),
-  );
-  const review = navigation.recentReviews.find((candidate) => (
-    candidate.review.selection.kind === "branch"
-    && candidate.review.selection.baseRef.endsWith(baseRef)
-    && candidate.review.selection.headRef.endsWith(headRef)
-  ));
-  if (!review) throw new Error(`没有持久化 Branch Review：${baseRef} → ${headRef}`);
-  return review.review.reviewId;
 }
 
 /** 等待目标 Review 完成切换且 Reader 可用。 */
@@ -75,41 +36,30 @@ async function waitForActiveReview(reviewId: string) {
 
 /** 只点击当前可见、可交互的 Review sidebar item。 */
 async function clickVisibleReview(reviewId: string) {
-  let clicked = false;
+  let openedSidebar = false;
   await browser.waitUntil(async () => {
     for (const item of await $$(`[data-review-id='${reviewId}']`)) {
-      if (!(await item.isDisplayed()) || !(await item.isClickable())) continue;
-      await item.click();
-      clicked = true;
+      await item.scrollIntoView({ block: "center", inline: "nearest" });
+      if (!(await item.isDisplayed())) continue;
+      await item.waitForDisplayed();
+      if (await item.isClickable()) await item.click();
+      else {
+        // embedded WDI0 的离屏 sidebar layer 会干扰 hit-test；只对已验证可见的精确按钮触发产品 click。
+        await browser.execute((button) => button.click(), item);
+      }
       return true;
     }
-    return false;
-  }, { timeoutMsg: `侧边栏没有可见且可交互的 Review：${reviewId}` });
-  if (!clicked) throw new Error(`侧边栏 Review 点击未完成：${reviewId}`);
-}
-
-/** 确保 offcanvas Sidebar 展开，并返回可见品牌按钮。 */
-async function visibleBrandButton() {
-  for (const brand of await $$("button[aria-label='Narrant'], button[aria-label='纳言']")) {
-    if (await brand.isDisplayed()) return brand;
-  }
-  for (const trigger of await $$("[data-slot='sidebar-trigger']")) {
-    if (await trigger.isDisplayed()) {
-      await trigger.waitForClickable();
-      await trigger.click();
-      break;
-    }
-  }
-  await browser.waitUntil(async () => {
-    for (const brand of await $$("button[aria-label='Narrant'], button[aria-label='纳言']")) {
-      if (await brand.isDisplayed()) return true;
+    if (!openedSidebar) {
+      for (const trigger of await $$("[data-slot='sidebar-trigger']")) {
+        if (!(await trigger.isDisplayed()) || !(await trigger.isClickable())) continue;
+        await trigger.waitForClickable();
+        await trigger.click();
+        openedSidebar = true;
+        break;
+      }
     }
     return false;
-  });
-  for (const brand of await $$("button[aria-label='Narrant'], button[aria-label='纳言']")) {
-    if (await brand.isDisplayed()) return brand;
-  }
-  throw new Error("Sidebar 展开后仍没有可见品牌按钮");
+  }, { timeoutMsg: `侧边栏没有可见 Review：${reviewId}` });
 }
 
 /** 从宽窗口 Review Reader 返回 Repository Overview，但不显式关闭 Review。 */
@@ -140,20 +90,86 @@ function addedWorkspace(before: string[], after: string[]) {
   return added[0];
 }
 
+/** 读取 SQLite 主文件与 WAL 的稳定文件指纹，用于证明重复点击没有持久化写入。 */
+function persistenceFingerprint(databasePath: string) {
+  return [databasePath, `${databasePath}-wal`].filter(existsSync).map((path) => {
+    const stat = statSync(path);
+    return { path, size: stat.size, mtimeMs: stat.mtimeMs };
+  });
+}
+
+/** 读取 durable Review 的 snapshot 与 last-opened，用于比较重复点击前后的持久化状态。 */
+async function persistedReview(reviewId: string) {
+  const navigation = await browser.tauri.execute(
+    ({ core }) => core.invoke<{ recentReviews: Array<{ review: { reviewId: string; currentSnapshot: unknown; lastOpenedAt: number } }> }>("load_repository_navigation"),
+  );
+  const review = navigation.recentReviews.find((candidate) => candidate.review.reviewId === reviewId)?.review;
+  if (!review) throw new Error(`navigation 中没有 Review：${reviewId}`);
+  return review;
+}
+
+/** 捕获用户可见 Reader 的身份、布局与滚动状态。 */
+async function readerEvidence() {
+  return browser.execute(() => {
+    const reader = document.querySelector<HTMLElement>("[aria-label='审核阅读器']");
+    const fileChange = document.querySelector<HTMLElement>("[aria-label='File Change']");
+    const activeReview = [...document.querySelectorAll<HTMLElement>("[data-review-id][aria-current='page']")]
+      .find((item) => item.offsetParent !== null);
+    if (!reader || !fileChange || !activeReview) throw new Error("Reader 证据元素不完整");
+    const rect = reader.getBoundingClientRect();
+    return {
+      reviewId: activeReview.dataset.reviewId,
+      fileBefore: fileChange.dataset.before,
+      fileAfter: fileChange.dataset.after,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      scroll: [...reader.querySelectorAll<HTMLElement>("*")]
+        .filter((element) => element.scrollHeight > element.clientHeight)
+        .map((element) => ({ aria: element.getAttribute("aria-label"), top: element.scrollTop })),
+    };
+  });
+}
+
+/** 返回 WDIO 构建中 adapter invoke 轨迹的当前 offset。 */
+async function invokeTrace() {
+  return browser.execute(() => (
+    (globalThis as typeof globalThis & { __NARRANT_E2E_TAURI_INVOKES__?: string[] })
+      .__NARRANT_E2E_TAURI_INVOKES__ ?? []
+  ));
+}
+
+/** 清理共享 WDIO DB 中前序 spec 的 Review，确保生命周期证据从精确基线开始。 */
+async function isolateReviewLifecycleBaseline(repositoryPath: string) {
+  const navigation = await browser.tauri.execute(
+    ({ core }) => core.invoke<{ recentReviews: Array<{ review: { reviewId: string } }> }>("load_repository_navigation"),
+  );
+  for (const recent of navigation.recentReviews) {
+    await browser.tauri.execute(
+      ({ core }, reviewId) => core.invoke("close_review", { reviewId }),
+      recent.review.reviewId,
+    );
+  }
+  await browser.waitUntil(() => {
+    const worktrees = linkedWorktrees(repositoryPath);
+    return worktrees.length === 1 && worktrees[0] === repositoryPath;
+  });
+}
+
 describe("进程生命周期 Open Review 真实应用验证", () => {
   it("A→B→A 保留两个 Workspace，Overview/Home 导航不释放，正常退出清理全部", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     const tracePath = process.env.NARRANT_E2E_GIT_TRACE!;
+    const databasePath = process.env.NARRANT_DATABASE_PATH!;
     await browser.setWindowSize(1400, 900);
+    await isolateReviewLifecycleBaseline(repositoryPath);
     await openFixtureRepository(repositoryPath);
 
     const initialWorktrees = linkedWorktrees(repositoryPath);
     await $("[role='tab']=本地分支").click();
-    await selectRef("Base Ref", "retained-base-ref");
-    await selectRef("Head Ref", "retained-head-ref");
+    await selectRef("Base Ref", "refs/heads/retained-base-ref");
+    await selectRef("Head Ref", "refs/heads/retained-head-ref");
     await $("button=开始审核").click();
     await expect($("[aria-label='审核阅读器']")).toBeDisplayed();
-    const reviewA = await reviewIdForSelection("retained-base-ref", "retained-head-ref");
+    const reviewA = await reviewIdForSelection("refs/heads/retained-base-ref", "refs/heads/retained-head-ref");
     await $("[role='tab']=文件改动").click();
     await $("[aria-label='文件树'] button").click();
     await expect($("[aria-label='File Change']")).toBeDisplayed();
@@ -167,11 +183,11 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
 
     const beforeB = await stableGitTraceOffset(tracePath);
     await $("[role='tab']=本地分支").click();
-    await selectRef("Base Ref", "retained-head-ref");
-    await selectRef("Head Ref", "retained-base-ref");
+    await selectRef("Base Ref", "refs/heads/retained-head-ref");
+    await selectRef("Head Ref", "refs/heads/retained-base-ref");
     await $("button=开始审核").click();
     await expect($("[aria-label='审核阅读器']")).toBeDisplayed();
-    const reviewB = await reviewIdForSelection("retained-head-ref", "retained-base-ref");
+    const reviewB = await reviewIdForSelection("refs/heads/retained-head-ref", "refs/heads/retained-base-ref");
     expect(reviewB).not.toBe(reviewA);
     const afterB = linkedWorktrees(repositoryPath);
     expect(afterB).toHaveLength(initialWorktrees.length + 2);
@@ -187,23 +203,32 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
       throw new Error(`没有观测到 B Workspace 的 worktree add：${JSON.stringify({ workspaceB, bMutations })}`);
     }
 
-    // B→A→B 的直接 warm switch 允许 Repository 只读检查，但不得重建、重置或释放 Workspace。
-    await visibleBrandButton();
+    // 窄窗口下通过真实 Sidebar 完成 B→A→B，且任何 Workspace inspection/lifecycle command 都必须为零。
+    await browser.setWindowSize(900, 600);
+    const invokesBeforeWarmA = (await invokeTrace()).length;
     const beforeWarmA = await stableGitTraceOffset(tracePath);
     await clickVisibleReview(reviewA);
     await waitForActiveReview(reviewA);
     await expect($("[aria-label='File Change']")).toBeDisplayed();
+    const warmAWorkspaceOperations = workspaceOperationInvocations(
+      await gitInvocationsSinceStable(tracePath, beforeWarmA),
+      [workspaceA, workspaceB],
+    );
+    if (warmAWorkspaceOperations.length > 0) {
+      throw new Error(`warm A 触发 Workspace 操作：${JSON.stringify({
+        commands: (await invokeTrace()).slice(invokesBeforeWarmA),
+        git: warmAWorkspaceOperations,
+      })}`);
+    }
     await waitForWorktrees(repositoryPath, afterB);
-    expect(workspaceMutationInvocations(await gitInvocationsSinceStable(tracePath, beforeWarmA))).toEqual([]);
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceA);
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceB);
 
-    await visibleBrandButton();
     const beforeWarmB = await stableGitTraceOffset(tracePath);
     await clickVisibleReview(reviewB);
     await waitForActiveReview(reviewB);
+    expect(workspaceOperationInvocations(await gitInvocationsSinceStable(tracePath, beforeWarmB), [workspaceA, workspaceB])).toEqual([]);
     await waitForWorktrees(repositoryPath, afterB);
-    expect(workspaceMutationInvocations(await gitInvocationsSinceStable(tracePath, beforeWarmB))).toEqual([]);
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceA);
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceB);
 
@@ -221,19 +246,34 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     await clickVisibleReview(reviewA);
     await waitForActiveReview(reviewA);
     await expect($("[aria-label='File Change']")).toBeDisplayed();
+    const homeRestoreInvocations = await gitInvocationsSinceStable(tracePath, beforeHomeRestore);
+    // Home 会重新做 Repository capability probe；允许原仓库 cwd 的只读命令，但禁止任何目标路径访问或生命周期变更。
+    expect(workspaceMutationInvocations(homeRestoreInvocations)).toEqual([]);
+    expect(homeRestoreInvocations.filter((invocation) => (
+      invocationTouchesWorkspace(invocation, workspaceA)
+      || invocationTouchesWorkspace(invocation, workspaceB)
+    ))).toEqual([]);
     await waitForWorktrees(repositoryPath, afterB);
-    expect(workspaceMutationInvocations(await gitInvocationsSinceStable(tracePath, beforeHomeRestore))).toEqual([]);
 
     // 当前 Presented Review 的重复点击也必须是完整 no-op，不触发 reopen、内容读取或任何 Git invocation。
-    await visibleBrandButton();
+    const durableBefore = await persistedReview(reviewA);
+    const filesBefore = persistenceFingerprint(databasePath);
+    const readerBefore = await readerEvidence();
+    const invokesBefore = (await invokeTrace()).length;
     const beforeDuplicate = await stableGitTraceOffset(tracePath);
     await clickVisibleReview(reviewA);
     await waitForActiveReview(reviewA);
     await expect($("[aria-label='File Change']")).toBeDisplayed();
-    await waitForWorktrees(repositoryPath, afterB);
     expect(await gitInvocationsSinceStable(tracePath, beforeDuplicate)).toEqual([]);
+    await waitForWorktrees(repositoryPath, afterB);
+    expect((await invokeTrace()).slice(invokesBefore)).toEqual([]);
+    expect(await persistedReview(reviewA)).toEqual(durableBefore);
+    expect(persistenceFingerprint(databasePath)).toEqual(filesBefore);
+    expect(await readerEvidence()).toEqual(readerBefore);
 
     // 通过真实 Tauri window close 触发 RunEvent::Exit，再验证正常退出 cleanup。
+    await browser.setWindowSize(1200, 800);
+    expect(await browser.getWindowSize()).toEqual({ width: 1200, height: 800 });
     Object.defineProperty(browser, "deleteSession", {
       configurable: true,
       value: async () => undefined,
@@ -243,9 +283,12 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     } catch {
       // window close 会先结束 WebDriver transport，随后才返回 invoke 结果，属于正常退出时序。
     }
-    for (let attempt = 0; attempt < 50 && linkedWorktrees(repositoryPath).length !== 1; attempt += 1) {
+    for (let attempt = 0; attempt < 50 && JSON.stringify(linkedWorktrees(repositoryPath)) !== JSON.stringify(initialWorktrees); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    expect(linkedWorktrees(repositoryPath)).toHaveLength(1);
+    const finalWorktrees = linkedWorktrees(repositoryPath);
+    expect(finalWorktrees).toEqual(initialWorktrees);
+    expect(finalWorktrees).not.toContain(workspaceA);
+    expect(finalWorktrees).not.toContain(workspaceB);
   });
 });
