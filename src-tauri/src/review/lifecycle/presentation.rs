@@ -1,5 +1,11 @@
 use super::*;
 
+/// 一次成功 present 的对外投影与内部可恢复 presentation transition。
+pub(super) struct PresentOutcome {
+    pub(super) presentation: ReviewPresentation,
+    pub(super) transition: PresentationTransition,
+}
+
 impl ReviewLifecycle {
     /// 创建、重开或切换到指定 Review，并在成功后发布运行时读取句柄。
     pub async fn present(
@@ -7,6 +13,18 @@ impl ReviewLifecycle {
         operation: &OperationContext,
         request: PresentReview,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
+        let _operation_guard = self.enter_operation().await?;
+        self.present_guarded(operation, request)
+            .await
+            .map(|outcome| outcome.presentation)
+    }
+
+    /// 在 lifecycle operation gate 内执行完整 present，供复合操作保持 shutdown 原子性。
+    pub(super) async fn present_guarded(
+        &self,
+        operation: &OperationContext,
+        request: PresentReview,
+    ) -> Result<PresentOutcome, ReviewLifecycleError> {
         let saved = match request {
             PresentReview::Saved { review_id } => self
                 .store
@@ -85,16 +103,22 @@ impl ReviewLifecycle {
             return Err(ReviewLifecycleError::Cancelled("操作已取消。".to_owned()));
         }
         let snapshot_id = saved.snapshot_identity();
-        if let Some((runtime_snapshot_id, _)) = self.runtime_review(&saved.review_id)? {
-            if runtime_snapshot_id == snapshot_id {
-                if self.is_presented_runtime(&saved.review_id, &snapshot_id)? {
+        if let Some(open_review) = self.open_review_runtime(&saved.review_id)? {
+            if open_review.snapshot_id == snapshot_id {
+                let transition = self.present_open_review(&saved.review_id)?;
+                if !transition.changed {
                     // 当前 Presented Review 的重复 present 必须是完全无副作用的 no-op。
-                    return Ok(presentation_from_saved(saved, Vec::new()));
+                    return Ok(PresentOutcome {
+                        presentation: presentation_from_saved(saved, Vec::new()),
+                        transition,
+                    });
                 }
                 // 已打开 Review 只切换内存中的 Presented 指针，不做 Git 物化或清理。
-                self.present_runtime_review(&saved.review_id)?;
                 let cleanup_warnings = self.mark_review_opened(&saved.review_id);
-                return Ok(presentation_from_saved(saved, cleanup_warnings));
+                return Ok(PresentOutcome {
+                    presentation: presentation_from_saved(saved, cleanup_warnings),
+                    transition,
+                });
             }
         }
         self.materialize(saved, operation)
@@ -115,13 +139,14 @@ impl ReviewLifecycle {
         if current.snapshot_identity() != snapshot_id {
             return Err(ReviewLifecycleError::StaleSnapshot);
         }
-        let (runtime_snapshot_id, review) = self.runtime_review(review_id)?.ok_or_else(|| {
+        let open_review = self.open_review_runtime(review_id)?.ok_or_else(|| {
             ReviewLifecycleError::ReviewUnavailable("Review 已关闭或失效，请重新打开。".to_owned())
         })?;
-        if runtime_snapshot_id != snapshot_id {
+        if open_review.snapshot_id != snapshot_id {
             return Err(ReviewLifecycleError::StaleSnapshot);
         }
-        let content = review
+        let content = open_review
+            .reader
             .read(operation, path)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         Ok(content)
@@ -132,7 +157,7 @@ impl ReviewLifecycle {
         &self,
         saved: PersistedReviewState,
         operation: &OperationContext,
-    ) -> Result<ReviewPresentation, ReviewLifecycleError> {
+    ) -> Result<PresentOutcome, ReviewLifecycleError> {
         let repository_path = self.require_trusted_repository(saved.repository_id)?;
         let entry = self
             .repository_application
@@ -186,9 +211,19 @@ impl ReviewLifecycle {
         }
         let snapshot = saved.to_change_comparison();
         let reader = Arc::new(SnapshotContentReader::restore(&repository_path, snapshot));
-        self.install_runtime_review(saved.review_id.clone(), saved.snapshot_identity(), reader)?;
+        let transition = self
+            .update_open_review_runtime(
+                saved.review_id.clone(),
+                saved.snapshot_identity(),
+                reader,
+                OpenReviewRuntimeUpdate::OpenAndPresent,
+            )?
+            .expect("OpenAndPresent 必须返回 presentation transition");
         let cleanup_warnings = self.mark_review_opened(&saved.review_id);
-        Ok(presentation_from_saved(saved, cleanup_warnings))
+        Ok(PresentOutcome {
+            presentation: presentation_from_saved(saved, cleanup_warnings),
+            transition,
+        })
     }
 
     /// 更新 Review 的最近打开时间；失败只保留为非致命诊断，不能撤销已安装的运行时。

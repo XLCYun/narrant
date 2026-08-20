@@ -1,3 +1,133 @@
+/// 验证 shutdown 等待正在收敛的 refresh 激活完成，再释放目标 Workspace。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_waits_for_refresh_convergence_before_workspace_cleanup() {
+    let fixture = LifecycleFixture::new();
+    run_git(fixture.repository.path(), &["checkout", "-q", "topic"]);
+    std::fs::write(fixture.repository.path().join("old-only.txt"), "old\n").unwrap();
+    run_git(fixture.repository.path(), &["add", "old-only.txt"]);
+    run_git(
+        fixture.repository.path(),
+        &["commit", "-q", "-m", "old shutdown workspace"],
+    );
+    let saved = fixture.save_current_review().await;
+    fixture.store.activate_initial_snapshot(&saved).unwrap();
+    let lifecycle = Arc::new(ReviewLifecycle::new(fixture.store.clone()));
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: saved.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    std::fs::remove_file(fixture.repository.path().join("old-only.txt")).unwrap();
+    for index in 0..1_000 {
+        std::fs::write(
+            fixture
+                .repository
+                .path()
+                .join(format!("shutdown-refresh-{index}.txt")),
+            format!("{index}\n"),
+        )
+        .unwrap();
+    }
+    run_git(fixture.repository.path(), &["add", "."]);
+    run_git(
+        fixture.repository.path(),
+        &["commit", "-q", "-m", "large shutdown refresh"],
+    );
+    let update = lifecycle
+        .check_update(&OperationContext::background(), &saved.review_id)
+        .await
+        .unwrap();
+    let confirmation = ConfirmedReviewUpdate {
+        current_base_revision: update.current_base_revision.clone(),
+        current_head_revision: update.current_head_revision.clone(),
+        available_base_revision: update.available_base_revision.clone(),
+        available_head_revision: update.available_head_revision.clone(),
+    };
+    let rejected_confirmation = ConfirmedReviewUpdate {
+        current_base_revision: update.current_base_revision,
+        current_head_revision: update.current_head_revision,
+        available_base_revision: update.available_base_revision,
+        available_head_revision: update.available_head_revision,
+    };
+    let workspace = fixture
+        .store
+        .review_workspace_path(&saved.review_id)
+        .unwrap();
+    let refresh_completed = Arc::new(AtomicBool::new(false));
+    let old_workspace_file = workspace.join("old-only.txt");
+    let observed_completion = refresh_completed.clone();
+    let observer = thread::spawn(move || {
+        for _ in 0..5_000 {
+            if !old_workspace_file.exists() {
+                return !observed_completion.load(Ordering::Acquire);
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        false
+    });
+    let refresh_lifecycle = lifecycle.clone();
+    let refresh_review_id = saved.review_id.clone();
+    let completion = refresh_completed.clone();
+    let refresh_task = tokio::spawn(async move {
+        let result = refresh_lifecycle
+            .refresh(
+                &OperationContext::background(),
+                &refresh_review_id,
+                confirmation,
+            )
+            .await;
+        completion.store(true, Ordering::Release);
+        result
+    });
+    let observed_before_completion = tokio::task::spawn_blocking(move || observer.join().unwrap())
+        .await
+        .unwrap();
+    assert!(
+        observed_before_completion,
+        "未能在 refresh convergence 完成前启动 shutdown"
+    );
+
+    let shutdown_lifecycle = lifecycle.clone();
+    let shutdown_task = tokio::spawn(async move { shutdown_lifecycle.shutdown().await });
+    while !lifecycle.is_shutting_down() {
+        tokio::task::yield_now().await;
+    }
+    let rejected = match lifecycle
+        .refresh(
+            &OperationContext::background(),
+            &saved.review_id,
+            rejected_confirmation,
+        )
+        .await
+    {
+        Ok(_) => panic!("shutdown 开始后不应接受新的 refresh"),
+        Err(error) => error,
+    };
+    assert!(matches!(rejected, ReviewLifecycleError::ShuttingDown));
+    let refreshed = refresh_task.await.unwrap().unwrap();
+    let warnings = shutdown_task.await.unwrap().unwrap();
+
+    assert!(warnings.is_empty());
+    assert_eq!(
+        fixture
+            .store
+            .open_review(&saved.review_id)
+            .unwrap()
+            .snapshot_identity(),
+        refreshed.snapshot_id
+    );
+    assert!(!workspace.exists());
+    assert!(lifecycle
+        .open_review_runtime(&saved.review_id)
+        .unwrap()
+        .is_none());
+}
+
+/// 验证刷新一个 Open Review 只替换目标 Reader 与 Workspace binding。
 #[tokio::test]
 async fn refreshing_one_open_review_replaces_only_its_runtime_reader_and_workspace() {
     let fixture = LifecycleFixture::new();
@@ -20,10 +150,10 @@ async fn refreshing_one_open_review_replaces_only_its_runtime_reader_and_workspa
             .unwrap();
     }
     let second_reader = lifecycle
-        .runtime_review(&second.review_id)
+        .open_review_runtime(&second.review_id)
         .unwrap()
         .unwrap()
-        .1;
+        .reader;
     let second_workspace = fixture
         .store
         .review_workspace_path(&second.review_id)
@@ -60,13 +190,14 @@ async fn refreshing_one_open_review_replaces_only_its_runtime_reader_and_workspa
         second_workspace_head
     );
     let second_reader_after = lifecycle
-        .runtime_review(&second.review_id)
+        .open_review_runtime(&second.review_id)
         .unwrap()
         .unwrap()
-        .1;
+        .reader;
     assert!(Arc::ptr_eq(&second_reader, &second_reader_after));
 }
 
+/// 验证复合刷新失败后仍保留已物化 Review，并恢复此前展示状态。
 #[tokio::test]
 async fn failed_reopen_and_refresh_retains_materialized_review_runtime() {
     let fixture = LifecycleFixture::new();

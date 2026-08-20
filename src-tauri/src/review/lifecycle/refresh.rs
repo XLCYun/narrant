@@ -12,10 +12,10 @@ impl ReviewLifecycle {
             .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
-        let (runtime_snapshot_id, _) = self.runtime_review(review_id)?.ok_or_else(|| {
+        let open_review = self.open_review_runtime(review_id)?.ok_or_else(|| {
             ReviewLifecycleError::ReviewUnavailable("Review 已关闭或失效，请重新打开。".to_owned())
         })?;
-        if runtime_snapshot_id != current.snapshot_identity() {
+        if open_review.snapshot_id != current.snapshot_identity() {
             return Err(ReviewLifecycleError::StaleSnapshot);
         }
         let repository_path = self.require_available_repository(current.repository_id)?;
@@ -60,6 +60,18 @@ impl ReviewLifecycle {
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
+        let _operation_guard = self.enter_operation().await?;
+        self.refresh_guarded(operation, review_id, confirmation)
+            .await
+    }
+
+    /// 在 lifecycle operation gate 内执行 refresh，供复合操作避免与 shutdown 交错。
+    async fn refresh_guarded(
+        &self,
+        operation: &OperationContext,
+        review_id: &str,
+        confirmation: ConfirmedReviewUpdate,
+    ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         self.begin_refresh(review_id)?;
         let review_lock = self.review_lock(review_id)?;
         let _review_guard = review_lock.lock().await;
@@ -77,18 +89,22 @@ impl ReviewLifecycle {
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
-        let previous_presented = self.presented_review_id()?;
-        self.present(
-            operation,
-            PresentReview::Saved {
-                review_id: review_id.to_owned(),
-            },
-        )
-        .await?;
-        match self.refresh(operation, review_id, confirmation).await {
+        let _operation_guard = self.enter_operation().await?;
+        let present = self
+            .present_guarded(
+                operation,
+                PresentReview::Saved {
+                    review_id: review_id.to_owned(),
+                },
+            )
+            .await?;
+        match self
+            .refresh_guarded(operation, review_id, confirmation)
+            .await
+        {
             Ok(presentation) => Ok(presentation),
             Err(error) => {
-                self.restore_presented_if_current(review_id, previous_presented)?;
+                self.restore_presentation(present.transition)?;
                 Err(error)
             }
         }
@@ -105,6 +121,12 @@ impl ReviewLifecycle {
             .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
+        let open_review = self.open_review_runtime(review_id)?.ok_or_else(|| {
+            ReviewLifecycleError::ReviewUnavailable("Review 已关闭或失效，请重新打开。".to_owned())
+        })?;
+        if open_review.snapshot_id != current.snapshot_identity() {
+            return Err(ReviewLifecycleError::StaleSnapshot);
+        }
         let repository_path = self.require_available_repository(current.repository_id)?;
         let entry = self
             .repository_application
@@ -198,7 +220,12 @@ impl ReviewLifecycle {
         }
         let snapshot = candidate.to_change_comparison();
         let reader = Arc::new(SnapshotContentReader::restore(&repository_path, snapshot));
-        self.replace_runtime_review(review_id.to_owned(), candidate.snapshot_identity(), reader)?;
+        self.update_open_review_runtime(
+            review_id.to_owned(),
+            candidate.snapshot_identity(),
+            reader,
+            OpenReviewRuntimeUpdate::ReplaceSnapshot,
+        )?;
         Ok(presentation_from_saved(candidate, Vec::new()))
     }
 

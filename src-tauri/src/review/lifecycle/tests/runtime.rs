@@ -1,3 +1,4 @@
+/// 验证 A→B→A 保留每个 Open Review 的 Reader 与 Workspace，并让重复 present 无副作用。
 #[tokio::test]
 async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
     let fixture = LifecycleFixture::new();
@@ -19,10 +20,10 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
         .await
         .unwrap();
     let first_reader = lifecycle
-        .runtime_review(&first.review_id)
+        .open_review_runtime(&first.review_id)
         .unwrap()
         .unwrap()
-        .1;
+        .reader;
     lifecycle
         .present(
             &OperationContext::background(),
@@ -33,10 +34,10 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
         .await
         .unwrap();
     let second_reader = lifecycle
-        .runtime_review(&second.review_id)
+        .open_review_runtime(&second.review_id)
         .unwrap()
         .unwrap()
-        .1;
+        .reader;
 
     let first_workspace = fixture
         .store
@@ -92,22 +93,97 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
         .await
         .unwrap();
     let first_reader_again = lifecycle
-        .runtime_review(&first.review_id)
+        .open_review_runtime(&first.review_id)
         .unwrap()
         .unwrap()
-        .1;
+        .reader;
     let second_reader_again = lifecycle
-        .runtime_review(&second.review_id)
+        .open_review_runtime(&second.review_id)
         .unwrap()
         .unwrap()
-        .1;
+        .reader;
     assert!(Arc::ptr_eq(&first_reader, &first_reader_again));
     assert!(Arc::ptr_eq(&second_reader, &second_reader_again));
     let runtime = lifecycle.runtime.lock().unwrap();
-    assert_eq!(runtime.reviews.len(), 2);
+    assert_eq!(runtime.open_reviews.len(), 2);
     assert_eq!(
         runtime.presented_review_id.as_deref(),
         Some(first.review_id.as_str())
+    );
+}
+
+/// 验证过期失败恢复不会覆盖其后完成、最终又指向相同 Review 的 presentation。
+#[tokio::test]
+async fn stale_presentation_restore_cannot_overwrite_newer_successful_presents() {
+    let fixture = LifecycleFixture::new();
+    run_git(
+        fixture.repository.path(),
+        &["branch", "alternate", "refs/heads/topic"],
+    );
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    let third = fixture
+        .save_review_with_refs("refs/heads/base", "refs/heads/alternate")
+        .await;
+    for review in [&first, &second, &third] {
+        fixture.store.activate_initial_snapshot(review).unwrap();
+    }
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+    for review in [&second, &third, &first] {
+        lifecycle
+            .present(
+                &OperationContext::background(),
+                PresentReview::Saved {
+                    review_id: review.review_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let operation_guard = lifecycle.enter_operation().await.unwrap();
+    let stale_transition = lifecycle
+        .present_guarded(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap()
+        .transition;
+    drop(operation_guard);
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: third.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+    lifecycle.restore_presentation(stale_transition).unwrap();
+
+    assert_eq!(
+        lifecycle
+            .runtime
+            .lock()
+            .unwrap()
+            .presented_review_id
+            .as_deref(),
+        Some(second.review_id.as_str())
     );
 }
 

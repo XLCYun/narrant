@@ -3,6 +3,9 @@ use super::*;
 impl ReviewLifecycle {
     /// 先完成逻辑关闭，再尝试清理 workspace；清理失败不会重新打开 Review。
     pub fn close(&self, review_id: &str) -> Result<CloseOutcome, ReviewLifecycleError> {
+        if self.is_shutting_down() {
+            return Err(ReviewLifecycleError::ShuttingDown);
+        }
         if self.is_refreshing(review_id)? {
             return Err(ReviewLifecycleError::Busy);
         }
@@ -41,8 +44,10 @@ impl ReviewLifecycle {
         })
     }
 
-    /// 应用退出时清空运行时句柄，并尽力清理全部 workspace。
-    pub fn shutdown(&self) -> Result<Vec<String>, ReviewLifecycleError> {
+    /// 应用退出时拒绝新操作，等待既有 materialize/refresh 收敛，再清理全部 runtime。
+    pub async fn shutdown(&self) -> Result<Vec<String>, ReviewLifecycleError> {
+        self.shutting_down.store(true, Ordering::Release);
+        let _operation_guard = self.operation_gate.write().await;
         self.clear_runtime()?;
         self.cleanup_workspaces()
     }
