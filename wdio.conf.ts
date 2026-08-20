@@ -15,7 +15,10 @@ export const config = {
   specs: ["./e2e/**/*.e2e.ts"],
   maxInstances: 1,
   waitforTimeout: 15000,
-  services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
+  services: [["@wdio/tauri-service", {
+    appBinaryPath: binary,
+    driverProvider: "embedded",
+  }]],
   capabilities: [{ browserName: "tauri", "tauri:options": { application: binary } }],
   framework: "mocha",
   mochaOpts: { ui: "bdd", timeout: 120000 },
@@ -32,6 +35,10 @@ export const config = {
     process.env.NARRANT_E2E_REPOSITORY = await realpath(repositoryPath);
     process.env.NARRANT_E2E_TRUST_REPOSITORY = await realpath(trustRepositoryPath);
     process.env.NARRANT_DATABASE_PATH = join(localFixtureRoot, "narrant.sqlite3");
+    // Git trace2 由真实应用进程写入；E2E 用它验证 A→B→A 没有重新执行 workspace 命令。
+    const gitTracePath = join(localFixtureRoot, "git-trace2.json");
+    process.env.NARRANT_E2E_GIT_TRACE = gitTracePath;
+    process.env.GIT_TRACE2_EVENT = gitTracePath;
     process.env.NARRANT_GITHUB_API_URL = "http://127.0.0.1:18472";
     githubMock = spawn(process.execPath, ["e2e/fixtures/github-mock-server.mjs"], {
       stdio: "inherit",

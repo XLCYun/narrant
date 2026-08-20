@@ -190,10 +190,25 @@ const readerSnapshot: ReviewReaderSnapshot = {
 };
 
 /** 用代表性长短路径和变更内容预览完整 Review Reader。 */
-function ReviewReaderPreview({ empty = false, merged = false, update = false }: { empty?: boolean; merged?: boolean; update?: boolean }) {
+function ReviewReaderPreview({
+  empty = false,
+  merged = false,
+  update = false,
+  initialView = "overview",
+  shortContent = false,
+}: {
+  empty?: boolean;
+  merged?: boolean;
+  update?: boolean;
+  initialView?: "overview" | "file-changes";
+  shortContent?: boolean;
+}) {
+  const fileChanges = shortContent
+    ? readerSnapshot.fileChanges.slice(0, 2)
+    : readerSnapshot.fileChanges;
   const snapshot = {
     ...readerSnapshot,
-    fileChanges: empty ? [] : readerSnapshot.fileChanges,
+    fileChanges: empty ? [] : fileChanges,
     pullRequest: merged && readerSnapshot.pullRequest
       ? { ...readerSnapshot.pullRequest, state: "merged" as const }
       : readerSnapshot.pullRequest,
@@ -202,13 +217,17 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
     change.path,
     {
       ...change, contentKind: "text", beforeSize: 48, afterSize: 78,
-      before: "export function review() {\n  return 'old reader';\n}\n",
-      after: "export function review() {\n  return 'focused review reader';\n}\n",
+      before: shortContent
+        ? "return 'old';\n"
+        : "export function review() {\n  return 'old reader';\n}\n",
+      after: shortContent
+        ? "return 'new';\n"
+        : "export function review() {\n  return 'focused review reader';\n}\n",
     },
   ]));
   const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
-  const [view, setView] = useState<"overview" | "file-changes">("overview");
+  const [view, setView] = useState<"overview" | "file-changes">(initialView);
   const review: ReviewReaderBinding = {
     snapshot,
     transition: { kind: "stable" },
@@ -333,6 +352,8 @@ const previews: Record<string, PreviewDefinition> = {
     label: "Review 阅读器",
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
+      "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
+      "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
