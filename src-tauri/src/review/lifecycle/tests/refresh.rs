@@ -22,20 +22,10 @@ async fn shutdown_waits_for_refresh_convergence_before_workspace_cleanup() {
         .await
         .unwrap();
     std::fs::remove_file(fixture.repository.path().join("old-only.txt")).unwrap();
-    for index in 0..1_000 {
-        std::fs::write(
-            fixture
-                .repository
-                .path()
-                .join(format!("shutdown-refresh-{index}.txt")),
-            format!("{index}\n"),
-        )
-        .unwrap();
-    }
     run_git(fixture.repository.path(), &["add", "."]);
     run_git(
         fixture.repository.path(),
-        &["commit", "-q", "-m", "large shutdown refresh"],
+        &["commit", "-q", "-m", "shutdown refresh"],
     );
     let update = lifecycle
         .check_update(&OperationContext::background(), &saved.review_id)
@@ -57,45 +47,32 @@ async fn shutdown_waits_for_refresh_convergence_before_workspace_cleanup() {
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    let refresh_completed = Arc::new(AtomicBool::new(false));
-    let old_workspace_file = workspace.join("old-only.txt");
-    let observed_completion = refresh_completed.clone();
-    let observer = thread::spawn(move || {
-        for _ in 0..5_000 {
-            if !old_workspace_file.exists() {
-                return !observed_completion.load(Ordering::Acquire);
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        false
-    });
+    let barrier = Arc::new(LifecycleOperationGateBarrier::new());
+    lifecycle
+        .install_operation_gate_barrier(barrier.clone())
+        .unwrap();
     let refresh_lifecycle = lifecycle.clone();
     let refresh_review_id = saved.review_id.clone();
-    let completion = refresh_completed.clone();
     let refresh_task = tokio::spawn(async move {
-        let result = refresh_lifecycle
+        refresh_lifecycle
             .refresh(
                 &OperationContext::background(),
                 &refresh_review_id,
                 confirmation,
             )
-            .await;
-        completion.store(true, Ordering::Release);
-        result
+            .await
     });
-    let observed_before_completion = tokio::task::spawn_blocking(move || observer.join().unwrap())
-        .await
-        .unwrap();
-    assert!(
-        observed_before_completion,
-        "未能在 refresh convergence 完成前启动 shutdown"
-    );
+    barrier.wait_until_operation_paused().await;
 
     let shutdown_lifecycle = lifecycle.clone();
     let shutdown_task = tokio::spawn(async move { shutdown_lifecycle.shutdown().await });
     while !lifecycle.is_shutting_down() {
         tokio::task::yield_now().await;
     }
+    assert!(
+        !shutdown_task.is_finished(),
+        "refresh 持有 read gate 时 shutdown 不得越过 write gate"
+    );
     let rejected = match lifecycle
         .refresh(
             &OperationContext::background(),
@@ -108,6 +85,7 @@ async fn shutdown_waits_for_refresh_convergence_before_workspace_cleanup() {
         Err(error) => error,
     };
     assert!(matches!(rejected, ReviewLifecycleError::ShuttingDown));
+    barrier.release_operation().await;
     let refreshed = refresh_task.await.unwrap().unwrap();
     let warnings = shutdown_task.await.unwrap().unwrap();
 

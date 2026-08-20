@@ -83,15 +83,20 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
         .last_opened_at_millis;
     assert_eq!(before_duplicate, after_duplicate);
 
-    lifecycle
+    let repository_path = fixture.repository.path().to_path_buf();
+    let unavailable_repository = fixture._application_data.path().join("repository-unavailable");
+    std::fs::rename(&repository_path, &unavailable_repository).unwrap();
+    let warm_present = lifecycle
         .present(
             &OperationContext::background(),
             PresentReview::Saved {
                 review_id: first.review_id.clone(),
             },
         )
-        .await
-        .unwrap();
+        .await;
+    std::fs::rename(&unavailable_repository, &repository_path).unwrap();
+    let warm_present = warm_present.unwrap();
+    assert!(warm_present.cleanup_warnings.is_empty());
     let first_reader_again = lifecycle
         .open_review_runtime(&first.review_id)
         .unwrap()
@@ -104,6 +109,8 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
         .reader;
     assert!(Arc::ptr_eq(&first_reader, &first_reader_again));
     assert!(Arc::ptr_eq(&second_reader, &second_reader_again));
+    assert!(first_workspace.exists());
+    assert!(second_workspace.exists());
     let runtime = lifecycle.runtime.lock().unwrap();
     assert_eq!(runtime.open_reviews.len(), 2);
     assert_eq!(

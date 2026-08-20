@@ -2,72 +2,40 @@
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_waits_for_in_flight_materialization_before_workspace_cleanup() {
     let fixture = LifecycleFixture::new();
-    for index in 0..1_500 {
-        std::fs::write(
-            fixture
-                .repository
-                .path()
-                .join(format!("shutdown-materialize-{index}.txt")),
-            format!("{index}\n"),
-        )
-        .unwrap();
-    }
-    run_git(fixture.repository.path(), &["add", "."]);
-    run_git(
-        fixture.repository.path(),
-        &["commit", "-q", "-m", "large shutdown materialization"],
-    );
-    run_git(
-        fixture.repository.path(),
-        &["branch", "-f", "topic", "HEAD"],
-    );
     let saved = fixture.save_current_review().await;
     fixture.store.activate_initial_snapshot(&saved).unwrap();
     let lifecycle = Arc::new(ReviewLifecycle::new(fixture.store.clone()));
+    let barrier = Arc::new(LifecycleOperationGateBarrier::new());
+    lifecycle
+        .install_operation_gate_barrier(barrier.clone())
+        .unwrap();
     let workspace = fixture
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    let present_completed = Arc::new(AtomicBool::new(false));
-    let observed_workspace = workspace.clone();
-    let observed_completion = present_completed.clone();
-    let observer = thread::spawn(move || {
-        for _ in 0..5_000 {
-            if observed_workspace.exists() {
-                return !observed_completion.load(Ordering::Acquire);
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        false
-    });
     let present_lifecycle = lifecycle.clone();
     let present_review_id = saved.review_id.clone();
-    let completion = present_completed.clone();
     let present_task = tokio::spawn(async move {
-        let result = present_lifecycle
+        present_lifecycle
             .present(
                 &OperationContext::background(),
                 PresentReview::Saved {
                     review_id: present_review_id,
                 },
             )
-            .await;
-        completion.store(true, Ordering::Release);
-        result
+            .await
     });
-    let observed_before_completion = tokio::task::spawn_blocking(move || observer.join().unwrap())
-        .await
-        .unwrap();
-    assert!(
-        observed_before_completion,
-        "未能在 materialization 完成前启动 shutdown"
-    );
+    barrier.wait_until_operation_paused().await;
 
     let shutdown_lifecycle = lifecycle.clone();
     let shutdown_task = tokio::spawn(async move { shutdown_lifecycle.shutdown().await });
     while !lifecycle.is_shutting_down() {
         tokio::task::yield_now().await;
     }
+    assert!(
+        !shutdown_task.is_finished(),
+        "present 持有 read gate 时 shutdown 不得越过 write gate"
+    );
     let rejected = match lifecycle
         .present(
             &OperationContext::background(),
@@ -81,6 +49,7 @@ async fn shutdown_waits_for_in_flight_materialization_before_workspace_cleanup()
         Err(error) => error,
     };
     assert!(matches!(rejected, ReviewLifecycleError::ShuttingDown));
+    barrier.release_operation().await;
     let opened = present_task.await.unwrap().unwrap();
     let warnings = shutdown_task.await.unwrap().unwrap();
 
@@ -91,6 +60,92 @@ async fn shutdown_waits_for_in_flight_materialization_before_workspace_cleanup()
         .open_review_runtime(&saved.review_id)
         .unwrap()
         .is_none());
+}
+
+/// 验证真实 Core Git Workspace 操作阻塞时，全局 Open Review Set 仍可读取。
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn core_git_workspace_block_does_not_hold_open_review_set_lock() {
+    let fixture = LifecycleFixture::new();
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    fixture.store.activate_initial_snapshot(&first).unwrap();
+    fixture.store.activate_initial_snapshot(&second).unwrap();
+    let lifecycle = Arc::new(ReviewLifecycle::new(fixture.store.clone()));
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: first.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let first_reader = lifecycle
+        .open_review_runtime(&first.review_id)
+        .unwrap()
+        .unwrap()
+        .reader;
+    let hook_entered = fixture._application_data.path().join("hook-entered");
+    let hook_released = fixture._application_data.path().join("hook-released");
+    install_blocking_post_checkout_hook(
+        fixture.repository.path(),
+        &hook_entered,
+        &hook_released,
+    );
+
+    let present_lifecycle = lifecycle.clone();
+    let second_review_id = second.review_id.clone();
+    let present_task = tokio::spawn(async move {
+        present_lifecycle
+            .present(
+                &OperationContext::background(),
+                PresentReview::Saved {
+                    review_id: second_review_id,
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !hook_entered.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("post-checkout hook 未进入阻塞状态");
+
+    let access_lifecycle = lifecycle.clone();
+    let first_review_id = first.review_id.clone();
+    let runtime_access = tokio::time::timeout(
+        Duration::from_secs(1),
+        tokio::task::spawn_blocking(move || {
+            access_lifecycle.open_review_runtime(&first_review_id)
+        }),
+    )
+    .await;
+    std::fs::write(&hook_released, "release\n").unwrap();
+    let second_presentation = present_task.await.unwrap().unwrap();
+    let runtime_access = runtime_access
+        .expect("Core Git 阻塞期间全局 Open Review Set 锁不可获取")
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    assert!(Arc::ptr_eq(&first_reader, &runtime_access.reader));
+    assert_eq!(second_presentation.review_id, second.review_id);
+    for review in [&first, &second] {
+        assert!(fixture
+            .store
+            .review_workspace_path(&review.review_id)
+            .unwrap()
+            .exists());
+        assert!(lifecycle
+            .open_review_runtime(&review.review_id)
+            .unwrap()
+            .is_some());
+    }
 }
 
 /// 验证正常退出释放全部 Open Review Reader 与受管 Workspace。
@@ -237,40 +292,63 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
     );
 }
 
+/// 验证 C 物化失败不会改变 Presented B，并保留已打开 A、B 的读取能力。
 #[tokio::test]
-async fn failed_target_materialization_keeps_current_review_readable() {
+async fn failed_target_materialization_preserves_presented_and_open_reviews() {
     let application_data = tempfile::TempDir::new().unwrap();
     let first_repository = test_repository_with_commit();
+    let second_repository = test_repository_with_commit();
     let target_repository = test_repository_with_commit();
     let store = Arc::new(
         ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap(),
     );
-    let first_entry = store.upsert_repository(&verify_repository_location(first_repository.path()).unwrap()).unwrap();
-    let target_entry = store.upsert_repository(&verify_repository_location(target_repository.path()).unwrap()).unwrap();
-    store.insert_workspace_trust(first_entry.id).unwrap();
-    store.insert_workspace_trust(target_entry.id).unwrap();
+    let repository_entries = [
+        store
+            .upsert_repository(&verify_repository_location(first_repository.path()).unwrap())
+            .unwrap(),
+        store
+            .upsert_repository(&verify_repository_location(second_repository.path()).unwrap())
+            .unwrap(),
+        store
+            .upsert_repository(&verify_repository_location(target_repository.path()).unwrap())
+            .unwrap(),
+    ];
+    for entry in &repository_entries {
+        store.insert_workspace_trust(entry.id).unwrap();
+    }
+    let first_entry = &repository_entries[0];
+    let second_entry = &repository_entries[1];
+    let target_entry = &repository_entries[2];
     let first_saved = save_current_review(&store, first_entry.id, first_repository.path()).await;
+    let second_saved =
+        save_current_review(&store, second_entry.id, second_repository.path()).await;
     let target_saved =
         save_current_review(&store, target_entry.id, target_repository.path()).await;
-    store.activate_initial_snapshot(&first_saved).unwrap();
-    store.activate_initial_snapshot(&target_saved).unwrap();
+    for saved in [&first_saved, &second_saved, &target_saved] {
+        store.activate_initial_snapshot(saved).unwrap();
+    }
     let lifecycle = ReviewLifecycle::new(store.clone());
-    let first = lifecycle
-        .present(
-            &OperationContext::background(),
-            PresentReview::Saved {
-                review_id: first_saved.review_id.clone(),
-            },
-        )
-        .await
-        .unwrap();
+    let mut presentations = Vec::new();
+    for saved in [&first_saved, &second_saved] {
+        presentations.push(
+            lifecycle
+                .present(
+                    &OperationContext::background(),
+                    PresentReview::Saved {
+                        review_id: saved.review_id.clone(),
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+    }
     std::fs::remove_dir_all(target_repository.path()).unwrap();
 
     let error = match lifecycle
         .present(
             &OperationContext::background(),
             PresentReview::Saved {
-                review_id: target_saved.review_id,
+                review_id: target_saved.review_id.clone(),
             },
         )
         .await
@@ -283,16 +361,38 @@ async fn failed_target_materialization_keeps_current_review_readable() {
         error,
         ReviewLifecycleError::RepositoryUnavailable(_)
     ));
-    let content = lifecycle
-        .read_file_change(
-            &OperationContext::background(),
-            &first_saved.review_id,
-            &first.snapshot_id,
-            "README.md",
-        )
-        .await
-        .unwrap();
-    assert_eq!(content.path, "README.md");
+    assert_eq!(
+        lifecycle
+            .runtime
+            .lock()
+            .unwrap()
+            .presented_review_id
+            .as_deref(),
+        Some(second_saved.review_id.as_str())
+    );
+    for (saved, presentation) in [&first_saved, &second_saved]
+        .into_iter()
+        .zip(&presentations)
+    {
+        let content = lifecycle
+            .read_file_change(
+                &OperationContext::background(),
+                &saved.review_id,
+                &presentation.snapshot_id,
+                "README.md",
+            )
+            .await
+            .unwrap();
+        assert_eq!(content.path, "README.md");
+        assert!(lifecycle
+            .open_review_runtime(&saved.review_id)
+            .unwrap()
+            .is_some());
+    }
+    assert!(lifecycle
+        .open_review_runtime(&target_saved.review_id)
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

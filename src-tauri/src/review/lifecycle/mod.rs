@@ -13,14 +13,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// 一个进程内 Review 的运行时表示；Reader 与 Snapshot identity 必须一起替换。
+/// 一个进程内 Open Review 的运行时表示；Reader 与 Snapshot identity 必须一起替换。
+#[derive(Clone)]
 pub(super) struct OpenReviewRuntime {
-    pub(super) snapshot_id: String,
-    pub(super) reader: Arc<SnapshotContentReader>,
-}
-
-/// 在全局运行时锁外安全使用的 Open Review 只读快照。
-pub(super) struct OpenReviewRuntimeSnapshot {
     pub(super) snapshot_id: String,
     pub(super) reader: Arc<SnapshotContentReader>,
 }
@@ -229,6 +224,9 @@ pub struct ReviewLifecycle {
     operation_gate: tokio::sync::RwLock<()>,
     /// shutdown 开始后立即拒绝尚未进入 gate 的新操作。
     shutting_down: AtomicBool,
+    /// 测试专用同步点，让操作持有 read gate 后暂停，不进入生产构建。
+    #[cfg(test)]
+    operation_gate_barrier: Mutex<Option<Arc<tests::LifecycleOperationGateBarrier>>>,
     active_refreshes: Mutex<HashSet<String>>,
 }
 
@@ -276,6 +274,8 @@ impl ReviewLifecycle {
             review_locks: Mutex::new(HashMap::new()),
             operation_gate: tokio::sync::RwLock::new(()),
             shutting_down: AtomicBool::new(false),
+            #[cfg(test)]
+            operation_gate_barrier: Mutex::new(None),
             active_refreshes: Mutex::new(HashSet::new()),
         }
     }
@@ -292,7 +292,36 @@ impl ReviewLifecycle {
             drop(guard);
             return Err(ReviewLifecycleError::ShuttingDown);
         }
+        #[cfg(test)]
+        self.pause_after_operation_gate_for_test().await?;
         Ok(guard)
+    }
+
+    /// 安装一次性测试 barrier；下一个进入 read gate 的操作会在其中暂停。
+    #[cfg(test)]
+    fn install_operation_gate_barrier(
+        &self,
+        barrier: Arc<tests::LifecycleOperationGateBarrier>,
+    ) -> Result<(), ReviewLifecycleError> {
+        self.operation_gate_barrier
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .replace(barrier);
+        Ok(())
+    }
+
+    /// 若测试安装了同步点，则在继续生命周期操作前等待测试释放。
+    #[cfg(test)]
+    async fn pause_after_operation_gate_for_test(&self) -> Result<(), ReviewLifecycleError> {
+        let barrier = self
+            .operation_gate_barrier
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .take();
+        if let Some(barrier) = barrier {
+            barrier.pause_operation().await;
+        }
+        Ok(())
     }
 
     /// 查询 shutdown 是否已开始，供同步 close 与并发测试拒绝新工作。
@@ -315,22 +344,16 @@ impl ReviewLifecycle {
             .clone())
     }
 
-    /// 读取某个 Open Review 的具名快照；锁在返回后立即释放，避免跨越 Git 读操作。
+    /// 克隆某个 Open Review runtime；锁在返回后立即释放，避免跨越 Git 读操作。
     pub(super) fn open_review_runtime(
         &self,
         review_id: &str,
-    ) -> Result<Option<OpenReviewRuntimeSnapshot>, ReviewLifecycleError> {
+    ) -> Result<Option<OpenReviewRuntime>, ReviewLifecycleError> {
         let runtime = self
             .runtime
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
-        Ok(runtime
-            .open_reviews
-            .get(review_id)
-            .map(|review| OpenReviewRuntimeSnapshot {
-                snapshot_id: review.snapshot_id.clone(),
-                reader: review.reader.clone(),
-            }))
+        Ok(runtime.open_reviews.get(review_id).cloned())
     }
 
     /// 在一个短临界区中安装或替换 Open Review runtime，并按策略更新展示状态。
