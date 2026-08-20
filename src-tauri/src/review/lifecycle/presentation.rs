@@ -17,7 +17,6 @@ impl ReviewLifecycle {
                 base_ref,
                 head_ref,
             } => {
-                let repository = self.require_trusted_repository(repository_id)?;
                 if let Some(saved) = self
                     .store
                     .find_branch_review(repository_id, &base_ref, &head_ref)
@@ -25,6 +24,7 @@ impl ReviewLifecycle {
                 {
                     saved
                 } else {
+                    let repository = self.require_trusted_repository(repository_id)?;
                     let resolved = self
                         .branch_selections
                         .resolve(
@@ -43,7 +43,6 @@ impl ReviewLifecycle {
                 repository_id,
                 selection,
             } => {
-                let repository_path = self.require_trusted_repository(repository_id)?;
                 if let Some(saved) = self
                     .store
                     .find_pull_request_review(
@@ -56,6 +55,7 @@ impl ReviewLifecycle {
                 {
                     saved
                 } else {
+                    let repository_path = self.require_trusted_repository(repository_id)?;
                     let resolved = self
                         .pull_requests
                         .resolve(operation, &repository_path, &selection)
@@ -71,6 +71,32 @@ impl ReviewLifecycle {
                 }
             }
         };
+        let review_lock = self.review_lock(&saved.review_id)?;
+        let _review_guard = review_lock.lock().await;
+        // 解析分支或 PR 期间可能发生一次刷新；拿到 Review 锁后重新读取 current。
+        let saved = if saved.created {
+            saved
+        } else {
+            self.store
+                .open_review(&saved.review_id)
+                .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?
+        };
+        if operation.cancellation().is_cancelled() {
+            return Err(ReviewLifecycleError::Cancelled("操作已取消。".to_owned()));
+        }
+        let snapshot_id = saved.snapshot_identity();
+        if let Some((runtime_snapshot_id, _)) = self.runtime_review(&saved.review_id)? {
+            if runtime_snapshot_id == snapshot_id {
+                if self.is_presented_runtime(&saved.review_id, &snapshot_id)? {
+                    // 当前 Presented Review 的重复 present 必须是完全无副作用的 no-op。
+                    return Ok(presentation_from_saved(saved, Vec::new()));
+                }
+                // 已打开 Review 只切换内存中的 Presented 指针，不做 Git 物化或清理。
+                self.present_runtime_review(&saved.review_id)?;
+                let cleanup_warnings = self.mark_review_opened(&saved.review_id);
+                return Ok(presentation_from_saved(saved, cleanup_warnings));
+            }
+        }
         self.materialize(saved, operation)
     }
 
@@ -89,17 +115,12 @@ impl ReviewLifecycle {
         if current.snapshot_identity() != snapshot_id {
             return Err(ReviewLifecycleError::StaleSnapshot);
         }
-        let review = self
-            .reviews
-            .lock()
-            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
-            .get(review_id)
-            .cloned()
-            .ok_or_else(|| {
-                ReviewLifecycleError::ReviewUnavailable(
-                    "Review 已关闭或失效，请重新打开。".to_owned(),
-                )
-            })?;
+        let (runtime_snapshot_id, review) = self.runtime_review(review_id)?.ok_or_else(|| {
+            ReviewLifecycleError::ReviewUnavailable("Review 已关闭或失效，请重新打开。".to_owned())
+        })?;
+        if runtime_snapshot_id != snapshot_id {
+            return Err(ReviewLifecycleError::StaleSnapshot);
+        }
         let content = review
             .read(operation, path)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
@@ -121,10 +142,6 @@ impl ReviewLifecycle {
             .store
             .review_workspace_path(&saved.review_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
-        let mut reviews = self
-            .reviews
-            .lock()
-            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
         let adapter = GitProcessAdapter::new(&repository_path);
         if operation.cancellation().is_cancelled() {
             if saved.created {
@@ -168,18 +185,19 @@ impl ReviewLifecycle {
             }
         }
         let snapshot = saved.to_change_comparison();
-        reviews.insert(
-            saved.review_id.clone(),
-            Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),
-        );
-        reviews.retain(|review_id, _| review_id == &saved.review_id);
-        drop(reviews);
-        let mut cleanup_warnings = Vec::new();
-        if let Err(error) = self.store.mark_review_opened(&saved.review_id) {
-            cleanup_warnings.push(error.to_string());
-        }
-        cleanup_warnings.extend(self.cleanup_workspaces(Some(&saved.review_id))?);
+        let reader = Arc::new(SnapshotContentReader::restore(&repository_path, snapshot));
+        self.install_runtime_review(saved.review_id.clone(), saved.snapshot_identity(), reader)?;
+        let cleanup_warnings = self.mark_review_opened(&saved.review_id);
         Ok(presentation_from_saved(saved, cleanup_warnings))
+    }
+
+    /// 更新 Review 的最近打开时间；失败只保留为非致命诊断，不能撤销已安装的运行时。
+    fn mark_review_opened(&self, review_id: &str) -> Vec<String> {
+        self.store
+            .mark_review_opened(review_id)
+            .err()
+            .map(|error| vec![error.to_string()])
+            .unwrap_or_default()
     }
 
     /// 返回可用 Repository 的当前 canonical path。

@@ -1,4 +1,117 @@
 #[tokio::test]
+async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
+    let fixture = LifecycleFixture::new();
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    fixture.store.activate_initial_snapshot(&first).unwrap();
+    fixture.store.activate_initial_snapshot(&second).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: first.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let first_reader = lifecycle
+        .runtime_review(&first.review_id)
+        .unwrap()
+        .unwrap()
+        .1;
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let second_reader = lifecycle
+        .runtime_review(&second.review_id)
+        .unwrap()
+        .unwrap()
+        .1;
+
+    let first_workspace = fixture
+        .store
+        .review_workspace_path(&first.review_id)
+        .unwrap();
+    let second_workspace = fixture
+        .store
+        .review_workspace_path(&second.review_id)
+        .unwrap();
+    assert!(first_workspace.exists());
+    assert!(second_workspace.exists());
+    let worktree_list = git_text(
+        fixture.repository.path(),
+        &["worktree", "list", "--porcelain"],
+    );
+    assert!(worktree_list.contains(&first_workspace.to_string_lossy().to_string()));
+    assert!(worktree_list.contains(&second_workspace.to_string_lossy().to_string()));
+
+    let before_duplicate = fixture
+        .store
+        .list_reviews(None)
+        .unwrap()
+        .into_iter()
+        .find(|review| review.review_id == second.review_id)
+        .unwrap()
+        .last_opened_at_millis;
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let after_duplicate = fixture
+        .store
+        .list_reviews(None)
+        .unwrap()
+        .into_iter()
+        .find(|review| review.review_id == second.review_id)
+        .unwrap()
+        .last_opened_at_millis;
+    assert_eq!(before_duplicate, after_duplicate);
+
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: first.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let first_reader_again = lifecycle
+        .runtime_review(&first.review_id)
+        .unwrap()
+        .unwrap()
+        .1;
+    let second_reader_again = lifecycle
+        .runtime_review(&second.review_id)
+        .unwrap()
+        .unwrap()
+        .1;
+    assert!(Arc::ptr_eq(&first_reader, &first_reader_again));
+    assert!(Arc::ptr_eq(&second_reader, &second_reader_again));
+    let runtime = lifecycle.runtime.lock().unwrap();
+    assert_eq!(runtime.reviews.len(), 2);
+    assert_eq!(
+        runtime.presented_review_id.as_deref(),
+        Some(first.review_id.as_str())
+    );
+}
+
+#[tokio::test]
 async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     let fixture = LifecycleFixture::new();
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());

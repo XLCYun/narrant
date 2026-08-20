@@ -1,5 +1,74 @@
 #[tokio::test]
-async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
+async fn refreshing_one_open_review_replaces_only_its_runtime_reader_and_workspace() {
+    let fixture = LifecycleFixture::new();
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    fixture.store.activate_initial_snapshot(&first).unwrap();
+    fixture.store.activate_initial_snapshot(&second).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+    for review in [&first, &second] {
+        lifecycle
+            .present(
+                &OperationContext::background(),
+                PresentReview::Saved {
+                    review_id: review.review_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let second_reader = lifecycle
+        .runtime_review(&second.review_id)
+        .unwrap()
+        .unwrap()
+        .1;
+    let second_workspace = fixture
+        .store
+        .review_workspace_path(&second.review_id)
+        .unwrap();
+    let second_workspace_head = git_text(&second_workspace, &["rev-parse", "HEAD"]);
+
+    run_git(fixture.repository.path(), &["checkout", "-q", "topic"]);
+    std::fs::write(fixture.repository.path().join("README.md"), "refreshed\n").unwrap();
+    run_git(
+        fixture.repository.path(),
+        &["commit", "-q", "-am", "refresh first review"],
+    );
+    let update = lifecycle
+        .check_update(&OperationContext::background(), &first.review_id)
+        .await
+        .unwrap();
+    let refreshed = lifecycle
+        .refresh(
+            &OperationContext::background(),
+            &first.review_id,
+            ConfirmedReviewUpdate {
+                current_base_revision: update.current_base_revision,
+                current_head_revision: update.current_head_revision,
+                available_base_revision: update.available_base_revision,
+                available_head_revision: update.available_head_revision,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(refreshed.snapshot_id, first.snapshot_identity());
+    assert_eq!(
+        git_text(&second_workspace, &["rev-parse", "HEAD"]),
+        second_workspace_head
+    );
+    let second_reader_after = lifecycle
+        .runtime_review(&second.review_id)
+        .unwrap()
+        .unwrap()
+        .1;
+    assert!(Arc::ptr_eq(&second_reader, &second_reader_after));
+}
+
+#[tokio::test]
+async fn failed_reopen_and_refresh_retains_materialized_review_runtime() {
     let fixture = LifecycleFixture::new();
     let saved = fixture.save_current_review().await;
     fixture.store.activate_initial_snapshot(&saved).unwrap();
@@ -27,8 +96,8 @@ async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    assert!(!workspace.exists());
-    let read_error = lifecycle
+    assert!(workspace.exists());
+    let content = lifecycle
         .read_file_change(
             &OperationContext::background(),
             &saved.review_id,
@@ -36,11 +105,14 @@ async fn failed_reopen_and_refresh_cleans_newly_materialized_review() {
             "README.md",
         )
         .await
-        .unwrap_err();
-    assert!(matches!(
-        read_error,
-        ReviewLifecycleError::ReviewUnavailable(_)
-    ));
+        .unwrap();
+    assert_eq!(content.path, "README.md");
+    assert!(lifecycle
+        .runtime
+        .lock()
+        .unwrap()
+        .presented_review_id
+        .is_none());
 }
 #[tokio::test]
 async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() {

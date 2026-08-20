@@ -1,4 +1,49 @@
 #[tokio::test]
+async fn shutdown_releases_all_retained_review_workspaces_and_readers() {
+    let fixture = LifecycleFixture::new();
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    fixture.store.activate_initial_snapshot(&first).unwrap();
+    fixture.store.activate_initial_snapshot(&second).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+    for review in [&first, &second] {
+        lifecycle
+            .present(
+                &OperationContext::background(),
+                PresentReview::Saved {
+                    review_id: review.review_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let warnings = lifecycle.shutdown().unwrap();
+
+    assert!(warnings.is_empty());
+    for review in [&first, &second] {
+        let workspace = fixture
+            .store
+            .review_workspace_path(&review.review_id)
+            .unwrap();
+        assert!(!workspace.exists());
+        assert!(lifecycle.runtime_review(&review.review_id).unwrap().is_none());
+        let error = lifecycle
+            .read_file_change(
+                &OperationContext::background(),
+                &review.review_id,
+                &review.snapshot_identity(),
+                "README.md",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ReviewLifecycleError::ReviewUnavailable(_)));
+    }
+}
+
+#[tokio::test]
 async fn recovery_removes_registration_for_an_unactivated_review_without_a_workspace() {
     let fixture = LifecycleFixture::new();
     let candidate = fixture.save_current_review().await;
@@ -251,10 +296,28 @@ impl LifecycleFixture {
 
     /// 保存当前分支相对其父提交的测试 Review。
     async fn save_current_review(&self) -> PersistedReviewState {
-        save_current_review(
+        save_review_with_refs(
             &self.store,
             self.repository_id,
             self.repository.path(),
+            "refs/heads/base",
+            "refs/heads/topic",
+        )
+        .await
+    }
+
+    /// 保存指定 branch pair 的测试 Review，供多 Review 生命周期断言复用。
+    async fn save_review_with_refs(
+        &self,
+        base_ref: &str,
+        head_ref: &str,
+    ) -> PersistedReviewState {
+        save_review_with_refs(
+            &self.store,
+            self.repository_id,
+            self.repository.path(),
+            base_ref,
+            head_ref,
         )
         .await
     }
@@ -313,13 +376,31 @@ async fn save_current_review(
     repository_id: i64,
     repository_path: &Path,
 ) -> PersistedReviewState {
+    save_review_with_refs(
+        store,
+        repository_id,
+        repository_path,
+        "refs/heads/base",
+        "refs/heads/topic",
+    )
+    .await
+}
+
+/// 保存指定 canonical branch pair 组成的测试 Review。
+async fn save_review_with_refs(
+    store: &ReviewStore,
+    repository_id: i64,
+    repository_path: &Path,
+    base_ref: &str,
+    head_ref: &str,
+) -> PersistedReviewState {
     let resolved = BranchSelectionResolver
         .resolve(
             &OperationContext::background(),
             repository_path,
             &BranchSelection {
-                base_ref: "refs/heads/base".to_owned(),
-                head_ref: "refs/heads/topic".to_owned(),
+                base_ref: base_ref.to_owned(),
+                head_ref: head_ref.to_owned(),
             },
         )
         .await

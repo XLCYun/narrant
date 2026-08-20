@@ -12,6 +12,12 @@ impl ReviewLifecycle {
             .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
+        let (runtime_snapshot_id, _) = self.runtime_review(review_id)?.ok_or_else(|| {
+            ReviewLifecycleError::ReviewUnavailable("Review 已关闭或失效，请重新打开。".to_owned())
+        })?;
+        if runtime_snapshot_id != current.snapshot_identity() {
+            return Err(ReviewLifecycleError::StaleSnapshot);
+        }
         let repository_path = self.require_available_repository(current.repository_id)?;
         let available = if let Some(metadata) = current.pull_request.as_ref() {
             self.pull_requests
@@ -55,6 +61,8 @@ impl ReviewLifecycle {
         confirmation: ConfirmedReviewUpdate,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
         self.begin_refresh(review_id)?;
+        let review_lock = self.review_lock(review_id)?;
+        let _review_guard = review_lock.lock().await;
         let result = self
             .refresh_exclusive(operation, review_id, confirmation)
             .await;
@@ -62,13 +70,14 @@ impl ReviewLifecycle {
         result
     }
 
-    /// 物化 durable Review 后刷新；刷新失败时关闭刚物化的运行时与 Workspace。
+    /// 物化 durable Review 后刷新；刷新失败时保留运行时并恢复此前 Presented Review。
     pub async fn reopen_and_refresh(
         &self,
         operation: &OperationContext,
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
+        let previous_presented = self.presented_review_id()?;
         self.present(
             operation,
             PresentReview::Saved {
@@ -79,18 +88,8 @@ impl ReviewLifecycle {
         match self.refresh(operation, review_id, confirmation).await {
             Ok(presentation) => Ok(presentation),
             Err(error) => {
-                let cleanup = self.close(review_id);
-                match cleanup {
-                    Ok(CloseOutcome {
-                        workspace_cleanup: WorkspaceCleanup::Deferred(cleanup_error),
-                    }) => Err(ReviewLifecycleError::new(format!(
-                        "{error}；Review 已关闭，但 Workspace 清理已延后：{cleanup_error}"
-                    ))),
-                    Err(cleanup_error) => Err(ReviewLifecycleError::new(format!(
-                        "{error}；关闭失败：{cleanup_error}"
-                    ))),
-                    Ok(_) => Err(error),
-                }
+                self.restore_presented_if_current(review_id, previous_presented)?;
+                Err(error)
             }
         }
     }
@@ -169,10 +168,6 @@ impl ReviewLifecycle {
             .store
             .review_workspace_path(review_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
-        let mut reviews = self
-            .reviews
-            .lock()
-            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
         let convergence = operation.without_cancellation();
         let adapter = GitProcessAdapter::new(&repository_path);
         if let Err(error) = adapter.transition_detached_worktree(
@@ -202,10 +197,8 @@ impl ReviewLifecycle {
             });
         }
         let snapshot = candidate.to_change_comparison();
-        reviews.insert(
-            review_id.to_owned(),
-            Arc::new(SnapshotContentReader::restore(&repository_path, snapshot)),
-        );
+        let reader = Arc::new(SnapshotContentReader::restore(&repository_path, snapshot));
+        self.replace_runtime_review(review_id.to_owned(), candidate.snapshot_identity(), reader)?;
         Ok(presentation_from_saved(candidate, Vec::new()))
     }
 
