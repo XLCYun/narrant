@@ -42,6 +42,10 @@ const CODEX_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_THREAD_SOURCE: &str = "feature:narrant-babysit";
 /// 连接握手时发送的固定客户端身份，不包含用户路径或模型信息。
 const CODEX_CLIENT_NAME: &str = "narrant_babysit";
+/// Babysit 当前固定使用的快速 Codex 模型，仅作用于隔离 thread。
+pub(super) const BABYSIT_CODEX_MODEL: &str = "gpt-5.3-codex-spark";
+/// 逐行解释属于低复杂度任务，使用最低 reasoning effort 缩短等待时间。
+pub(super) const BABYSIT_REASONING_EFFORT: &str = "low";
 
 /// 生产 Codex 启动命令与测试 fake JSONL fixture 共用的进程描述。
 #[derive(Clone, Debug)]
