@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBabysitZoneRows } from "@/components/babysit-diff-editor";
+import { buildBabysitZoneRows, setBabysitExpansion } from "@/components/babysit-diff-editor";
 
 /** 构造 Monaco change shape，覆盖 add/delete/unequal 的配对规则。 */
 function change(originalStart: number, originalEnd: number, modifiedStart: number, modifiedEnd: number) {
@@ -8,6 +8,16 @@ function change(originalStart: number, originalEnd: number, modifiedStart: numbe
 }
 
 describe("Babysit Monaco zone pairing", () => {
+  it("同一次 click 的 desired state 被重复处理也保持幂等", () => {
+    let expanded = new Set<string>();
+    expanded = setBabysitExpansion(expanded, "before:2", true);
+    expanded = setBabysitExpansion(expanded, "before:2", true);
+    expect([...expanded]).toEqual(["before:2"]);
+    expanded = setBabysitExpansion(expanded, "before:2", false);
+    expanded = setBabysitExpansion(expanded, "before:2", false);
+    expect(expanded).toHaveLength(0);
+  });
+
   it("为 add-only 的 before 侧创建配对 spacer", () => {
     const rows = buildBabysitZoneRows([], [[2, "新增一"], [3, "新增二"]], [change(0, 0, 2, 3)]);
     expect(rows).toHaveLength(2);

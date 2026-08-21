@@ -16,7 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { FileChangeLoading } from "@/components/file-change-loading";
-import { BabysitDiffEditor, type BabysitExplanationFilter } from "@/components/babysit-diff-editor";
+import { BabysitDiffEditor, setBabysitExpansion, type BabysitExplanationFilter } from "@/components/babysit-diff-editor";
 import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Button } from "@/components/ui/button";
@@ -208,12 +208,8 @@ export function ReviewReader(input: ReviewReaderProps) {
     : t("review:babysitMissingContent");
 
   /** 更新 Monaco view-zone 的单行展开集合，并为外部原生 DOM listener 提供稳定引用。 */
-  const toggleBabysitExpanded = useCallback((key: string) => {
-    setExpandedBabysitKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
+  const setBabysitExpanded = useCallback((key: string, expanded: boolean) => {
+    setExpandedBabysitKeys((current) => setBabysitExpansion(current, key, expanded));
   }, []);
 
   /** 宝宝模式保持在当前 Review Reader 内；换文件时对新文件自动开始一次完整分析。 */
@@ -385,7 +381,7 @@ export function ReviewReader(input: ReviewReaderProps) {
                 explanations={babysitVisible && babysitState?.kind === "completed" ? babysitState.explanations : undefined}
                 filter={babysitFilter}
                 expandedKeys={expandedBabysitKeys}
-                onToggleExpanded={toggleBabysitExpanded}
+                onSetExpanded={setBabysitExpanded}
                 labels={{
                   before: t("review:babysitBefore"), after: t("review:babysitAfter"),
                   expand: t("review:babysitExpand"), collapse: t("review:babysitCollapse"), explanation: t("review:babysitExplanations"),

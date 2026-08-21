@@ -18,6 +18,17 @@ export type BabysitZoneRow = {
   afterAnchor: number;
 };
 
+/** 幂等设置一个解释 key，重复处理同一次原生 click 也不会反转结果。 */
+export function setBabysitExpansion(
+  current: ReadonlySet<string>,
+  key: string,
+  expanded: boolean,
+): Set<string> {
+  const next = new Set(current);
+  if (expanded) next.add(key); else next.delete(key);
+  return next;
+}
+
 type BabysitDiffEditorProps = {
   original: string;
   modified: string;
@@ -28,7 +39,7 @@ type BabysitDiffEditorProps = {
   explanations?: BabysitFileExplanations;
   filter: BabysitExplanationFilter;
   expandedKeys: ReadonlySet<string>;
-  onToggleExpanded: (key: string) => void;
+  onSetExpanded: (key: string, expanded: boolean) => void;
   labels: {
     before: string;
     after: string;
@@ -190,7 +201,7 @@ export function BabysitDiffEditor({
   explanations,
   filter,
   expandedKeys,
-  onToggleExpanded,
+  onSetExpanded,
   labels,
 }: BabysitDiffEditorProps) {
   const [mountedEditor, setMountedEditor] = useState<MonacoDiffEditor>();
@@ -208,13 +219,15 @@ export function BabysitDiffEditor({
         : null;
       const key = target?.dataset.babysitToggle;
       if (!key) return;
+      const desiredExpanded = target.getAttribute("aria-expanded") !== "true";
       event.preventDefault();
       event.stopPropagation();
-      flushSync(() => onToggleExpanded(key));
+      // set 语义保持幂等；即使 StrictMode/HMR 遗留 handler 重复收到同一事件也不会反向抵消。
+      flushSync(() => onSetExpanded(key, desiredExpanded));
     };
     document.addEventListener("click", handleToggle, true);
     return () => document.removeEventListener("click", handleToggle, true);
-  }, [onToggleExpanded]);
+  }, [onSetExpanded]);
 
   /** 清理两侧编辑器遗留的 view zones，避免切换 File Change 后解释串到下一份 Diff。 */
   const clearZones = useCallback(() => {
@@ -300,7 +313,7 @@ export function BabysitDiffEditor({
     });
     zoneIds.current = nextIds;
     return clearZones;
-  }, [clearZones, expandedKeys, explanations, labels, lineChanges, mountedEditor, onToggleExpanded, renderSideBySide, selectedEntries]);
+  }, [clearZones, expandedKeys, explanations, labels, lineChanges, mountedEditor, renderSideBySide, selectedEntries]);
 
   return <DiffEditor
     theme={theme}
