@@ -512,6 +512,16 @@ impl BabysitApplication {
         eligibility(path, content, detected_language)
     }
 
+    /// 在启动 discovery/provider 前复用 Babysit 的唯一后端 eligibility gate。
+    pub fn validate_file_eligibility(
+        &self,
+        path: &str,
+        content: &FileChangeContent,
+        detected_language: Option<&str>,
+    ) -> Result<(), BabysitError> {
+        ensure_eligible(path, content, detected_language)
+    }
+
     /// 以一个完整 File Change 为单位生成并缓存 before/after Line Explanations。
     pub async fn explain_file<F>(
         &self,

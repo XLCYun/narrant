@@ -8,6 +8,18 @@ use std::future::Future;
 use std::path::PathBuf;
 use tauri::ipc::Channel;
 
+/// Explain command 的后端 eligibility gate；通过前不得触碰 runtime/discovery。
+fn validate_explain_input(
+    babysit: &BabysitApplication,
+    path: &str,
+    content: &review::FileChangeContent,
+    detected_language: Option<&str>,
+) -> Result<(), BabysitErrorPayload> {
+    babysit
+        .validate_file_eligibility(path, content, detected_language)
+        .map_err(BabysitErrorPayload::from)
+}
+
 /// 运行 Babysit 专属 cancellable command，并保留结构化错误 payload。
 async fn run_babysit_command<T, F, Fut>(
     operations: &operation::CancellableOperations,
@@ -66,6 +78,8 @@ pub(crate) async fn explain_review_file_change(
             .read_file_change(&operation, &review_id, &snapshot_id, &path)
             .await
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
+        // 先通过后端权威 eligibility gate；不支持的文件不能触发 settings/PATH/Codex I/O。
+        validate_explain_input(&babysit, &path, &content, detected_language.as_deref())?;
         let workspace_path = lifecycle
             .workspace_path(&review_id, &snapshot_id)
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
@@ -111,3 +125,7 @@ pub(crate) async fn select_babysit_codex_executable(
         .await
         .map_err(BabysitErrorPayload::from)
 }
+
+#[cfg(test)]
+#[path = "tests/babysit.rs"]
+mod tests;

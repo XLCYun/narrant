@@ -95,7 +95,7 @@ impl CodexRuntime {
     }
 
     /// 并发调用只执行一次探测；后续重试会开启新的 flight。
-    pub(crate) async fn ensure_ready(&self, _workspace_path: &Path) -> Result<(), BabysitError> {
+    pub(crate) async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         loop {
             let waiter = {
                 let mut flight = self.flight.lock().await;
@@ -123,7 +123,7 @@ impl CodexRuntime {
                 return status_error(self.status());
             }
 
-            let result = self.probe_once().await;
+            let result = self.probe_once(workspace_path).await;
             if let Ok(mut status) = self.status.lock() {
                 *status = result
                     .as_ref()
@@ -149,14 +149,14 @@ impl CodexRuntime {
         Ok(())
     }
 
-    /// Resolve the persisted/PATH candidate, configure #74, and complete its handshake.
-    async fn probe_once(&self) -> Result<(), BabysitError> {
+    /// 解析持久化/PATH 候选，配置 #74，并在同一工作区完成握手与能力探针。
+    async fn probe_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         let resolved = self
             .discovery
             .resolve(self.settings.load().as_deref())
             .await?;
         self.provider.configure_executable(resolved.path)?;
-        self.provider.prepare_process().await
+        self.provider.prepare_process(workspace_path).await
     }
 }
 

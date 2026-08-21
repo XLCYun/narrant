@@ -14,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -174,6 +174,10 @@ enum RpcFailure {
     InvalidJson,
     Protocol,
     Remote,
+    MethodNotFound,
+    InvalidParams,
+    EntityNotFound,
+    AlreadyComplete,
     SignedOut,
     Incompatible,
     Initialization,
@@ -190,6 +194,10 @@ impl RpcFailure {
             Self::InvalidJson => "Codex App Server 返回了无效 JSONL。",
             Self::Protocol => "Codex App Server 协议响应无效。",
             Self::Remote => "Codex App Server 拒绝了请求。",
+            Self::MethodNotFound => "Codex App Server 不支持所需方法。",
+            Self::InvalidParams => "Codex App Server 不接受所需字段。",
+            Self::EntityNotFound => "Codex App Server 找不到探测实体。",
+            Self::AlreadyComplete => "Codex App Server 探测 turn 已结束。",
             Self::SignedOut => "Codex 登录状态不可用。",
             Self::Incompatible => "Codex App Server 缺少宝宝模式所需能力。",
             Self::Initialization => "Codex App Server 初始化失败。",
@@ -279,9 +287,16 @@ impl CodexAppServerProvider {
         Ok(())
     }
 
-    /// Runtime 已完成 executable discovery 后，复用 #74 的 initialize/cleanup handshake。
-    pub async fn prepare_process(&self) -> Result<(), BabysitError> {
-        let _process = self.process().await?;
+    /// Runtime 已完成 executable discovery 后，复用同一连接完成 capability probe。
+    pub async fn prepare_process(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        let mut process_guard = self.process().await?;
+        let process = process_guard
+            .as_mut()
+            .ok_or_else(|| provider_error("Codex App Server 进程不可用。"))?;
+        if let Err(error) = process.probe_capabilities(workspace_path).await {
+            self.mark_failed(error);
+            return Err(codex_error(error));
+        }
         Ok(())
     }
 
@@ -338,6 +353,8 @@ impl CodexAppServerProvider {
                 | RpcFailure::InvalidJson
                 | RpcFailure::Protocol
                 | RpcFailure::Timeout
+                | RpcFailure::MethodNotFound
+                | RpcFailure::InvalidParams
                 | RpcFailure::SignedOut
                 | RpcFailure::Incompatible
                 | RpcFailure::Initialization
@@ -683,6 +700,25 @@ fn restricted_config() -> Value {
         "include_apps_instructions": false,
         "include_collaboration_mode_instructions": false,
         "personality": "none"
+    })
+}
+
+/// 生成 Babysit 生产与 capability probe 共用的严格结构化输出 schema。
+fn structured_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "before": {
+                "type": "object",
+                "additionalProperties": {"type": "string", "maxLength": 240}
+            },
+            "after": {
+                "type": "object",
+                "additionalProperties": {"type": "string", "maxLength": 240}
+            }
+        },
+        "required": ["before", "after"],
+        "additionalProperties": false
     })
 }
 

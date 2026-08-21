@@ -146,6 +146,112 @@ async fn app_server_auth_failure_returns_login_recovery_category() {
 }
 
 #[tokio::test]
+async fn malformed_initialize_response_returns_retry_recovery_category() {
+    let (provider, _temp, _events) = provider("init-no-agent", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexInitializationFailed));
+    let payload = crate::babysit::BabysitErrorPayload::from(error);
+    assert_eq!(
+        payload.recovery,
+        Some(crate::babysit::BabysitRecoveryAction::Retry)
+    );
+}
+
+#[tokio::test]
+async fn capability_probe_accepts_restricted_structured_output_and_cleanup() {
+    let (provider, _temp, events) = provider("complete", CODEX_ANALYSIS_TIMEOUT);
+
+    provider
+        .prepare_process(Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "thread/start:restricted"));
+    assert!(events.lines().any(|line| line == "turn/start"));
+    assert!(events.lines().any(|line| line == "turn/interrupt"));
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+    assert!(!events.lines().any(|line| line == "source-in-input"));
+}
+
+#[tokio::test]
+async fn capability_probe_ignores_unknown_notifications() {
+    let (provider, _temp, events) = provider("unknown-notification", CODEX_ANALYSIS_TIMEOUT);
+
+    provider
+        .prepare_process(Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+}
+
+#[tokio::test]
+async fn missing_interrupt_is_incompatible_but_probe_thread_is_deleted() {
+    let (provider, _temp, events) = provider("missing-interrupt", CODEX_ANALYSIS_TIMEOUT);
+
+    let error = provider
+        .prepare_process(Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexIncompatible));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+}
+
+#[tokio::test]
+async fn missing_delete_is_incompatible_after_the_probe_turn() {
+    let (provider, _temp, events) = provider("missing-delete", CODEX_ANALYSIS_TIMEOUT);
+
+    let error = provider
+        .prepare_process(Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexIncompatible));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "turn/interrupt"));
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+}
+
+#[tokio::test]
+async fn rejected_output_schema_is_incompatible_without_source_call() {
+    let (provider, _temp, events) = provider("rejected-output-schema", CODEX_ANALYSIS_TIMEOUT);
+
+    let error = provider
+        .prepare_process(Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexIncompatible));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+    assert!(!events.lines().any(|line| line == "source-in-input"));
+}
+
+#[tokio::test]
+async fn rejected_permission_profile_is_incompatible_before_turn() {
+    let (provider, _temp, events) = provider("rejected-permission", CODEX_ANALYSIS_TIMEOUT);
+
+    let error = provider
+        .prepare_process(Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexIncompatible));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(!events.lines().any(|line| line == "turn/start"));
+}
+
+#[tokio::test]
 async fn restricted_policy_probe_returns_upgrade_recovery_category() {
     let (provider, _temp, _events) = provider("insecure-policy", CODEX_ANALYSIS_TIMEOUT);
     let cancellation = OperationContext::background().cancellation().clone();
@@ -323,6 +429,8 @@ async fn dropping_the_generate_future_cleans_up_the_active_thread() {
         worker_provider.generate(request(), &cancellation).await
     });
     wait_for_event(&events, "turn/start").await;
+    // 事件文件先于客户端收到响应；让 start_turn 完成后再取消，避免测试本身抢占清理 guard。
+    tokio::time::sleep(Duration::from_millis(50)).await;
     worker.abort();
     let _ = worker.await;
 
