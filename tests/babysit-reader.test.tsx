@@ -115,8 +115,9 @@ describe("Babysit Review Reader presentation", () => {
     });
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
-    expect(screen.getByRole("button", { name: "宝宝模式" }).querySelector("img"))
-      .toHaveAttribute("src", "/icons/babysit-baby.svg");
+    const babyIcon = screen.getByRole("button", { name: "宝宝模式" }).querySelector("img");
+    expect(babyIcon).toHaveAttribute("src", "/icons/babysit-baby.svg");
+    expect(babyIcon).toHaveClass("-translate-y-px");
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
 
     expect(review.babysit?.explain).not.toHaveBeenCalled();

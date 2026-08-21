@@ -175,7 +175,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
           setVisible(true);
         }}
       />}>
-        <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 object-contain" data-icon="inline-start" aria-hidden />
+        <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 -translate-y-px object-contain" data-icon="inline-start" aria-hidden />
         <span className="hidden sm:inline">{visible ? t("review:babysitDisable") : t("review:babysit")}</span>
       </TooltipTrigger>
       <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
