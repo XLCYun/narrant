@@ -1,0 +1,180 @@
+import { useEffect } from "react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { i18n } from "@/lib/i18n";
+import { ReviewReader } from "@/components/review-reader";
+import type { BabysitBinding } from "@/babysit/types";
+import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
+
+const fakeZones = {
+  original: new Map<string, HTMLElement>(),
+  modified: new Map<string, HTMLElement>(),
+};
+let nextZoneId = 0;
+
+/** 在 jsdom 中模拟 Monaco view-zone API，让测试验证可见行和展开行为。 */
+  vi.mock("@monaco-editor/react", () => ({
+  DiffEditor: (props: { onMount?: (editor: unknown, monaco: unknown) => void; options?: { renderSideBySide?: boolean } }) => {
+    const { onMount, options } = props;
+    useEffect(() => {
+      const createEditor = (side: "original" | "modified") => ({
+        changeViewZones(callback: (accessor: { addZone(zone: { domNode: HTMLElement }): string; removeZone(id: string): void }) => void) {
+          callback({
+            addZone(zone) {
+              const id = `${side}-${++nextZoneId}`;
+              fakeZones[side].set(id, zone.domNode);
+              return id;
+            },
+            removeZone(id) { fakeZones[side].delete(id); },
+          });
+        },
+      });
+      const fakeEditor = {
+        getLineChanges: () => [
+          { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
+        ],
+        onDidUpdateDiff: () => ({ dispose: () => undefined }),
+        getOriginalEditor: () => createEditor("original"),
+        getModifiedEditor: () => createEditor("modified"),
+      };
+      onMount?.(fakeEditor, {});
+    }, [onMount]);
+    return <div data-testid="mock-diff-editor" data-layout={options?.renderSideBySide ? "side-by-side" : "inline"} />;
+  },
+}));
+
+const snapshot = {
+  reviewId: "review-1", snapshotId: "snapshot-1", baseRef: "main", baseRevision: "base", comparisonBase: "merge-base", headRef: "topic", headRevision: "head",
+  fileChanges: [{ path: "src/example.ts", oldPath: null, status: "modified" as const }],
+};
+
+const content = {
+  path: "src/example.ts", oldPath: null, status: "modified" as const, contentKind: "text" as const,
+  beforeSize: 28, afterSize: 31, before: "const oldValue = 1;\nreturn oldValue;\n", after: "const newValue = 2;\nreturn newValue;\n",
+};
+
+/** 创建带指定 Babysit 状态的 Review Reader binding。 */
+function makeReview(state: BabysitBinding["state"], overrides: Partial<BabysitBinding> = {}): ReviewReaderBinding {
+  const babysit: BabysitBinding = {
+    enabled: true,
+    state,
+    explain: vi.fn(),
+    cancel: vi.fn(),
+    retry: vi.fn(),
+    ...overrides,
+  };
+  return {
+    snapshot,
+    transition: { kind: "stable" },
+    fileChange: { kind: "ready", path: content.path, content },
+    babysit,
+    update: { kind: "current" },
+    selectFileChange: vi.fn(),
+    retryFileChange: vi.fn(),
+    refresh: vi.fn(async () => ({ kind: "unchanged" as const })),
+    close: vi.fn(async () => ({ kind: "closed" as const })),
+  };
+}
+
+const appearance = {
+  diffMode: "side-by-side" as const,
+  narrow: false,
+  editorTheme: "vs",
+  initialTreeWidth: 25,
+  onDiffModeChange: vi.fn(),
+  onTreeWidthChange: vi.fn(),
+  onOpenExternal: vi.fn(),
+};
+
+beforeEach(async () => {
+  await i18n.changeLanguage("zh-CN");
+  fakeZones.original.clear();
+  fakeZones.modified.clear();
+  nextZoneId = 0;
+});
+afterEach(() => cleanup());
+
+describe("Babysit Review Reader presentation", () => {
+  it("默认只显示改变行，并可切换到全部非空行而不重新请求", () => {
+    const review = makeReview({
+      kind: "completed",
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      explanations: {
+        before: { "1": "声明旧值。", "2": "返回旧值。" },
+        after: { "1": "声明新值。", "2": "返回新值。" },
+      },
+    });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+
+    expect(review.babysit?.explain).not.toHaveBeenCalled();
+    expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
+    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
+    expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine)).toEqual(["1", "2"]);
+    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["1", "2"]);
+  });
+
+  it("在生成、修复和失败状态显示文件级 sticky footer 操作", () => {
+    const runningReview = makeReview({
+      kind: "repairing",
+      attempt: 2,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+    });
+    render(<ReviewReader review={runningReview} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    expect(screen.getByTestId("babysit-footer")).toHaveTextContent("正在修复逐行解释（第 2 次）");
+    fireEvent.click(screen.getByRole("button", { name: "取消宝宝模式" }));
+    expect(runningReview.babysit?.cancel).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    const failedReview = makeReview({
+      kind: "failed",
+      retryable: true,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      error: { code: "repair_exhausted", detail: "三轮修复后仍缺少第 2 行" },
+    });
+    render(<ReviewReader review={failedReview} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    const footer = screen.getByTestId("babysit-footer");
+    expect(footer).toHaveTextContent("逐行解释失败");
+    fireEvent.click(within(footer).getByRole("button", { name: "重试" }));
+    expect(failedReview.babysit?.retry).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(footer).getByRole("button", { name: "复制诊断" }));
+    expect(within(footer).getByRole("button", { name: "已复制诊断" })).toBeInTheDocument();
+  });
+
+  it("禁用不支持的文件并在 Tooltip 触发器上保留具体原因", () => {
+    const unsupported = { ...content, path: "pnpm-lock.yaml" };
+    const review = makeReview({ kind: "idle" }, { enabled: true });
+    review.fileChange = { kind: "ready", path: unsupported.path, content: unsupported };
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    const button = screen.getByRole("button", { name: "宝宝模式" });
+    expect(button).toBeDisabled();
+    expect(button.parentElement).toHaveAttribute("data-slot", "tooltip-trigger");
+  });
+
+  it("长解释默认截断，并能在 view zone 内展开", () => {
+    const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(3);
+    const review = makeReview({
+      kind: "completed",
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      explanations: { before: { "2": longExplanation }, after: { "2": longExplanation } },
+    });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    const original = [...fakeZones.original.values()][0];
+    const expand = within(original).getByRole("button", { name: "展开" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(expand);
+    const expanded = [...fakeZones.original.values()][0];
+    expect(within(expanded).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
+  });
+});
