@@ -19,6 +19,7 @@ import {
   type DiffMode,
 } from "@/components/review-reader";
 import type { DiscoveredPullRequest, PullRequestGroup, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
+import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
@@ -61,6 +62,10 @@ export function App() {
     () => createTauriReviewApplicationAdapter(tauriTransport),
     [],
   );
+  const babysitApplicationAdapter = useMemo(
+    () => createTauriBabysitApplicationAdapter(tauriTransport),
+    [],
+  );
   const repositoryApplication = useMemo(
     () => createTauriRepositoryApplicationAdapter(tauriTransport),
     [],
@@ -70,7 +75,7 @@ export function App() {
     [],
   );
   const repositoryOverview = useRepositoryOverview(repositoryApplication, { enabled: desktopRuntimeEnabled });
-  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter);
+  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter, babysitApplicationAdapter);
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
   const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: desktopRuntimeEnabled });

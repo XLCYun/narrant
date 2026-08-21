@@ -3,7 +3,7 @@ import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oaut
 import type { PullRequestGroup } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchSelectionUpdate } from "@/review/review-application";
-import type { BabysitFileExplanations, BabysitProgress } from "@/babysit/types";
+import type { BabysitError, BabysitFileExplanations, BabysitProgress } from "@/babysit/types";
 import type { Channel } from "@tauri-apps/api/core";
 import type {
   BranchRefs,
@@ -40,7 +40,7 @@ export type TauriCommandContract = {
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
-  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations };
+  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
   discover_github_pull_requests: { args: { repositoryId: number }; result: PullRequestGroup[] };
   github_auth_status: { args: EmptyArgs; result: GitHubAuthStatus };
@@ -71,6 +71,8 @@ export type CancellableTauriCommandName =
 export type PlainTauriCommandName = Exclude<TauriCommandName, CancellableTauriCommandName>;
 export type CommandArgs<K extends TauriCommandName> = TauriCommandContract[K]["args"];
 export type CommandResult<K extends TauriCommandName> = TauriCommandContract[K]["result"];
+/** 读取 command contract 中声明的结构化失败 payload。 */
+export type CommandError<K extends TauriCommandName> = TauriCommandContract[K] extends { error: infer Error } ? Error : unknown;
 export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit<CommandArgs<K>, "operationId">;
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */

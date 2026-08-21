@@ -22,13 +22,23 @@ fn text_change(path: &str, before: Option<&str>, after: Option<&str>) -> FileCha
 
 /// 构造一个固定 Review identity，证明 reviewId 与 snapshotId 都参与缓存隔离。
 fn request(review_id: &str, snapshot_id: &str, path: &str) -> BabysitFileRequest {
+    request_with_locale(review_id, snapshot_id, path, "zh-CN")
+}
+
+/// 构造指定 locale 的 analysis request，用于验证缓存不会复用另一种语言。
+fn request_with_locale(
+    review_id: &str,
+    snapshot_id: &str,
+    path: &str,
+    locale: &str,
+) -> BabysitFileRequest {
     BabysitFileRequest {
         identity: ReviewIdentity {
             review_id: review_id.to_owned(),
             snapshot_id: snapshot_id.to_owned(),
         },
         path: path.to_owned(),
-        locale: "zh-CN".to_owned(),
+        locale: locale.to_owned(),
     }
 }
 
@@ -109,6 +119,41 @@ async fn cache_reuses_only_the_exact_review_snapshot_identity() {
         .unwrap();
 
     assert_eq!(provider.generate_calls(), 2);
+}
+
+#[tokio::test]
+async fn cache_does_not_reuse_an_explanation_from_another_locale() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let application = BabysitApplication::new(provider.clone());
+    let cancellation = OperationContext::background().cancellation().clone();
+    let content = text_change(
+        "src/example.ts",
+        Some("const value = 1;"),
+        Some("const value = 2;"),
+    );
+
+    let chinese = application
+        .explain_file(
+            request_with_locale("review-1", "snapshot-1", "src/example.ts", "zh-CN"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    let english = application
+        .explain_file(
+            request_with_locale("review-1", "snapshot-1", "src/example.ts", "en"),
+            content,
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(provider.generate_calls(), 2);
+    assert_ne!(chinese.after.get("1"), english.after.get("1"));
+    assert!(english.after["1"].starts_with("Explains"));
 }
 
 #[tokio::test]
@@ -257,6 +302,25 @@ fn provider_json_parser_rejects_duplicate_keys() {
         parse_provider_response(duplicate_side),
         Err(BabysitError::InvalidProviderOutput { .. })
     ));
+    assert!(matches!(
+        parse_provider_response("{}"),
+        Err(BabysitError::InvalidProviderOutput { .. })
+    ));
+}
+
+#[test]
+fn error_payload_serializes_a_stable_code_and_detail_shape() {
+    let payload = BabysitErrorPayload::from(BabysitError::UnsupportedFile {
+        reason: "lock file".to_owned(),
+    });
+
+    assert_eq!(
+        serde_json::to_value(payload).unwrap(),
+        serde_json::json!({
+            "code": "unsupported_file",
+            "detail": "此文件不支持宝宝模式：lock file"
+        })
+    );
 }
 
 #[test]

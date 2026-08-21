@@ -1,7 +1,8 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { BabysitFileExplanations } from "@/babysit/types";
+import type { BabysitApplicationAdapter, BabysitError, BabysitFileExplanations } from "@/babysit/types";
+import { i18n } from "@/lib/i18n";
 import { useReviewLifecycle, type ReviewApplicationAdapter } from "@/review/use-review-lifecycle";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 
@@ -30,8 +31,8 @@ const content: FileChangeContent = {
 /** 构造最小 Review lifecycle adapter，并保留一次 Babysit 请求的控制权。 */
 function createAdapter() {
   let resolveExplanation!: (value: BabysitFileExplanations) => void;
-  let requested: { request: Parameters<NonNullable<ReviewApplicationAdapter["explainFileChange"]>>[0]; signal: AbortSignal } | undefined;
-  const adapter: ReviewApplicationAdapter = {
+  let requested: { request: Parameters<BabysitApplicationAdapter["explainFile"]>[0]; signal: AbortSignal } | undefined;
+  const reviewAdapter: ReviewApplicationAdapter = {
     async switchReview() { return snapshot; },
     async checkReviewUpdate() { return null; },
     async checkBranchSelectionUpdate() {
@@ -40,25 +41,31 @@ function createAdapter() {
     async refreshReview() { return { kind: "unchanged" }; },
     async readFileChange() { return content; },
     async closeReview() { return { kind: "closed" }; },
-    explainFileChange(request, onProgress, signal) {
+  };
+  const babysitAdapter: BabysitApplicationAdapter = {
+    explainFile(request, onProgress, signal) {
       requested = { request, signal };
       onProgress({ phase: "generating" });
       return new Promise((resolve) => { resolveExplanation = resolve; });
     },
   };
   return {
-    adapter,
+    reviewAdapter,
+    babysitAdapter,
     resolve(value: BabysitFileExplanations) { resolveExplanation(value); },
     requested: () => requested,
   };
 }
 
-afterEach(() => cleanup());
+afterEach(async () => {
+  cleanup();
+  await i18n.changeLanguage("zh-CN");
+});
 
 describe("Babysit contract spine", () => {
   it("selects a File Change, emits generating, and renders a complete validated result binding", async () => {
     const provider = createAdapter();
-    const { result } = renderHook(() => useReviewLifecycle(provider.adapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -80,7 +87,7 @@ describe("Babysit contract spine", () => {
 
   it("取消或切换 File Change 后丢弃迟到的 provider result", async () => {
     const provider = createAdapter();
-    const { result } = renderHook(() => useReviewLifecycle(provider.adapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
@@ -96,5 +103,41 @@ describe("Babysit contract spine", () => {
       provider.resolve({ before: { "1": "迟到" }, after: { "1": "迟到" } });
     });
     expect(result.current.reader?.babysit?.state).toEqual({ kind: "idle" });
+  });
+
+  it("uses the current UI locale in the typed analysis request", async () => {
+    await i18n.changeLanguage("en");
+    const provider = createAdapter();
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    act(() => result.current.reader?.babysit?.explain());
+
+    expect(provider.requested()?.request.locale).toBe("en");
+  });
+
+  it("keeps structured provider errors in the lifecycle failure state", async () => {
+    const error: BabysitError = { code: "repair_exhausted", detail: "three repairs" };
+    const provider = createAdapter();
+    const babysitAdapter: BabysitApplicationAdapter = {
+      async explainFile() {
+        throw error;
+      },
+    };
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    act(() => result.current.reader?.babysit?.explain());
+
+    await waitFor(() => expect(result.current.reader?.babysit?.state).toMatchObject({
+      kind: "failed",
+      error,
+    }));
   });
 });

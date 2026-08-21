@@ -1,5 +1,4 @@
-import { createTauriChannel, tauriTransport, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
-import type { BabysitProgress } from "@/babysit/types";
+import { tauriTransport, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
 import type {
   ReviewApplicationAdapter,
   ReviewOpenTarget,
@@ -103,18 +102,6 @@ export function createTauriReviewApplicationAdapter(
         reviewId: current.reviewId,
         snapshotId: current.snapshotId,
         path,
-      }, signal);
-    },
-
-    /** 将一次完整 File Change analysis 映射为带 progress channel 的 cancellable command。 */
-    explainFileChange(request, onProgress, signal) {
-      const progress = createTauriChannel<BabysitProgress>(onProgress);
-      return transport.invokeCancellable("explain_review_file_change", {
-        reviewId: request.reviewId,
-        snapshotId: request.snapshotId,
-        path: request.path,
-        locale: request.locale,
-        progress,
       }, signal);
     },
 

@@ -1,4 +1,4 @@
-use crate::operation::CancellationSignal;
+use crate::operation::{CancellationSignal, OperationError};
 use crate::review::{FileChangeContent, FileContentKind};
 use async_trait::async_trait;
 use serde::de::{self, MapAccess, Visitor};
@@ -108,10 +108,9 @@ impl<'de> Visitor<'de> for ExplanationsVisitor {
                 _ => return Err(de::Error::custom(format!("未知字段 {key}"))),
             }
         }
-        Ok(BabysitFileExplanations {
-            before: before.unwrap_or_default(),
-            after: after.unwrap_or_default(),
-        })
+        let before = before.ok_or_else(|| de::Error::missing_field("before"))?;
+        let after = after.ok_or_else(|| de::Error::missing_field("after"))?;
+        Ok(BabysitFileExplanations { before, after })
     }
 }
 
@@ -205,6 +204,74 @@ pub enum BabysitError {
     CacheUnavailable,
 }
 
+/// Babysit command 对前端暴露的稳定错误 code；detail 只承载当前失败的可读诊断。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BabysitErrorCode {
+    UnsupportedFile,
+    InvalidProviderOutput,
+    RepairExhausted,
+    Cancelled,
+    Provider,
+    ProgressClosed,
+    CacheUnavailable,
+    InputUnavailable,
+    InvalidRequest,
+    OperationConflict,
+    OperationUnavailable,
+}
+
+/// Tauri command 失败时保持 code/detail 结构，避免把 BabysitError 压扁为字符串。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BabysitErrorPayload {
+    pub code: BabysitErrorCode,
+    pub detail: String,
+}
+
+impl BabysitErrorPayload {
+    /// 将 immutable Review 读取失败映射为不依赖 provider 的输入错误。
+    pub fn input_unavailable(detail: impl Into<String>) -> Self {
+        Self {
+            code: BabysitErrorCode::InputUnavailable,
+            detail: detail.into(),
+        }
+    }
+
+    /// 将 cancellable operation registry 的错误映射到稳定 Babysit error code。
+    pub fn from_operation(error: OperationError) -> Self {
+        let code = match &error {
+            OperationError::InvalidOperationId => BabysitErrorCode::InvalidRequest,
+            OperationError::DuplicateOperation => BabysitErrorCode::OperationConflict,
+            OperationError::Cancelled => BabysitErrorCode::Cancelled,
+            OperationError::RegistryUnavailable => BabysitErrorCode::OperationUnavailable,
+        };
+        Self {
+            code,
+            detail: error.to_string(),
+        }
+    }
+}
+
+impl From<BabysitError> for BabysitErrorPayload {
+    /// 将领域错误投影为 provider-independent 的 Tauri payload。
+    fn from(error: BabysitError) -> Self {
+        let code = match &error {
+            BabysitError::UnsupportedFile { .. } => BabysitErrorCode::UnsupportedFile,
+            BabysitError::InvalidProviderOutput { .. } => BabysitErrorCode::InvalidProviderOutput,
+            BabysitError::RepairExhausted { .. } => BabysitErrorCode::RepairExhausted,
+            BabysitError::Cancelled => BabysitErrorCode::Cancelled,
+            BabysitError::Provider { .. } => BabysitErrorCode::Provider,
+            BabysitError::ProgressClosed => BabysitErrorCode::ProgressClosed,
+            BabysitError::CacheUnavailable => BabysitErrorCode::CacheUnavailable,
+        };
+        Self {
+            code,
+            detail: error.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for BabysitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -267,6 +334,7 @@ struct CacheKey {
     review_id: String,
     snapshot_id: String,
     path: String,
+    locale: String,
     provider_id: String,
     process_generation: String,
     contract_version: String,
@@ -309,6 +377,7 @@ impl BabysitApplication {
             review_id: request.identity.review_id.clone(),
             snapshot_id: request.identity.snapshot_id.clone(),
             path: request.path.clone(),
+            locale: request.locale.clone(),
             provider_id: self.provider.provider_id().to_owned(),
             process_generation: self.provider.process_generation().to_owned(),
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
@@ -598,6 +667,7 @@ pub struct FakeBabysitProvider {
 }
 
 impl Default for FakeBabysitProvider {
+    /// 创建默认返回完整解释的 deterministic fake provider。
     fn default() -> Self {
         Self::new(FakeProviderMode::Complete)
     }
@@ -688,14 +758,17 @@ impl FakeBabysitProvider {
 
 #[async_trait]
 impl BabysitAgentProvider for FakeBabysitProvider {
+    /// 返回 fake provider 的稳定缓存 identity。
     fn provider_id(&self) -> &str {
         "fake"
     }
 
+    /// 返回 fake 进程 generation，测试中保持固定以便验证缓存行为。
     fn process_generation(&self) -> &str {
         "fake-process-v1"
     }
 
+    /// 一次生成完整 File Change 的所有解释，不拆分逐行调用。
     async fn generate(
         &self,
         request: BabysitProviderRequest,
@@ -714,6 +787,7 @@ impl BabysitAgentProvider for FakeBabysitProvider {
         Ok(output)
     }
 
+    /// 按脚本修复上一轮完整响应，模拟同一 provider thread 的 repair。
     async fn repair(
         &self,
         request: BabysitProviderRequest,

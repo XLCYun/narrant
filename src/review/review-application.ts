@@ -1,5 +1,4 @@
 import type { FileChangeContent, ReviewIdentity, ReviewSnapshot } from "@/review/types";
-import type { BabysitApplicationAdapter } from "@/babysit/types";
 
 /** Workspace Trust 已由 Repository context 确认的 Review 打开目标。 */
 export type ReviewOpenTarget =
@@ -57,8 +56,6 @@ export interface ReviewApplicationAdapter {
     path: string,
     signal: AbortSignal,
   ): Promise<FileChangeContent>;
-  /** 可选的 Babysit provider-independent adapter；未配置时 Review Reader 保持原样。 */
-  explainFileChange?: BabysitApplicationAdapter["explainFile"];
   closeReview(
     current: ReviewIdentity,
     signal: AbortSignal,
