@@ -133,7 +133,6 @@ export function useAppShellNavigation(
       return { kind: "failed", detail, previousDestinationPreserved: true };
     }
     repository.recordReviewOpened(recentReviewSummary(overview, result.snapshot));
-    void repository.refreshReviews().catch(() => undefined);
     setDestination({ kind: "review", repositoryId: overview.repository.id, reviewId: result.reviewId });
     setNavigationError(undefined);
     return { kind: "navigated" };

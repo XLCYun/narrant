@@ -327,8 +327,10 @@ export function useReviewLifecycle(
       const reusedSnapshot = Boolean(existing && existing.snapshot.snapshotId === next.snapshotId);
       installSnapshot(next, existing);
       presentEntry(next.reviewId);
-      if (!reusedSnapshot) resetSnapshotReader(next);
-      checkForUpdate(next);
+      if (!reusedSnapshot) {
+        resetSnapshotReader(next);
+        checkForUpdate(next);
+      }
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: entries.current.get(next.reviewId)!.snapshot };
     } catch (reason) {
       if (previousEntry && activeReviewIdRef.current === previousReviewId) {

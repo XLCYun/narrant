@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
@@ -13,6 +13,7 @@ import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { Spinner } from "@/components/ui/spinner";
+import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import {
   ReviewReader,
@@ -78,9 +79,11 @@ export function App() {
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter, { initialDiffMode, initialTreeWidth });
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
+  const repositoryOverviewPresented = appShell.destination.kind === "repository"
+    && appShell.destination.repositoryId === selectedRepository?.id;
   const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: desktopRuntimeEnabled });
   const pullRequestDiscoveryLifecycle = usePullRequestDiscoveryLifecycle(pullRequestDiscovery, {
-    enabled: Boolean(selectedRepository),
+    enabled: repositoryOverviewPresented,
     repositoryId: selectedRepository?.id,
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
@@ -128,7 +131,9 @@ export function App() {
   const branchContinuation = useBranchSelectionContinuation(reviewApplicationAdapter, {
     repositoryId: snapshot
       ? undefined
-      : selectedRepository?.id ?? (testHarnessEnabled ? 0 : undefined),
+      : repositoryOverviewPresented
+        ? selectedRepository?.id
+        : testHarnessEnabled ? 0 : undefined,
     baseRef,
     headRef,
     reviews: repositoryReviews,
@@ -186,12 +191,12 @@ export function App() {
 
   /** Repository Overview 提交后启动独立的页面数据读取。 */
   useEffect(() => {
-    if (!selectedRepository) return;
+    if (!selectedRepository || !repositoryOverviewPresented) return;
     setRepositoryPath(selectedRepository.canonicalPath);
     if (!testHarnessEnabled) void repositoryOverview.reloadBranches();
     // 页面数据只在已提交的 Repository identity 改变后重新读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRepository?.id]);
+  }, [repositoryOverviewPresented, selectedRepository?.id]);
 
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
   async function openSavedReview(review: RepositoryReviewSummary) {
@@ -287,8 +292,20 @@ export function App() {
     }
   }
 
+  useEffect(() => {
+    if (!import.meta.env.VITE_WDIO) return;
+    const target = window as Window & {
+      __NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__?: () => Promise<void>;
+    };
+    target.__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__ = repositoryOverview.reloadNavigation;
+    return () => {
+      delete target.__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__;
+    };
+  }, [repositoryOverview.reloadNavigation]);
+
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
-  return <AppShell
+  return <>
+  <AppShell
     navigation={{
       ...appShell,
       registerAndOpen: registerRepositoryFolder,
@@ -339,7 +356,7 @@ export function App() {
           </li>)}</ul>}
       </section>
     </article>}
-    {selectedRepository && !snapshot && <article aria-label="Repository">
+    {selectedRepository && repositoryOverviewPresented && !snapshot && <article aria-label="Repository">
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
@@ -372,31 +389,6 @@ export function App() {
         reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
       />
     </article>}
-    <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
-      if (!open && !grantingTrust) {
-        appShell.dismissTrust();
-      }
-    }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("trustTitle")}</DialogTitle>
-          <DialogDescription>{t("trustDescription")}</DialogDescription>
-        </DialogHeader>
-        <p className="break-all text-sm text-muted-foreground">{pendingRepository?.canonicalPath}</p>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            disabled={grantingTrust}
-            onClick={appShell.dismissTrust}
-          >
-            {t("cancel")}
-          </Button>
-          <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void appShell.confirmTrust()}>
-            {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
       <DialogContent>
         <DialogHeader>
@@ -446,5 +438,13 @@ export function App() {
       />
     </div>}
     </>}
-  </AppShell>;
+  </AppShell>
+  {pendingRepository && <RepositoryTrustDialog
+    open
+    canonicalPath={pendingRepository.canonicalPath}
+    granting={grantingTrust}
+    onCancel={appShell.dismissTrust}
+    onConfirm={() => void appShell.confirmTrust()}
+  />}
+  </>;
 }

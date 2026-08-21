@@ -7,7 +7,7 @@ import { createTauriTransport } from "@/infrastructure/tauri/transport";
 describe("Typed Tauri transport", () => {
   it("覆盖 Rust invoke handler 注册的全部 command", () => {
     const backend = readFileSync("src-tauri/src/tauri_app/bootstrap.rs", "utf8");
-    const registered = backend.match(/generate_handler!\[([\s\S]*?)\]/)?.[1]
+    const registered = backend.match(/generate_handler!\[([\s\S]*?)\]\)/)?.[1]
       .split(",")
       .map((name) => name.trim().split("::").at(-1))
       .filter(Boolean)

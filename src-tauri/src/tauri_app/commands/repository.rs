@@ -3,8 +3,60 @@ use crate::repository;
 use crate::review;
 use serde::Serialize;
 use std::sync::Arc;
+#[cfg(feature = "wdio")]
+use std::sync::Mutex;
 
 use super::review::run_cancellable_command;
+
+/** 保存 WDIO 为下一次原生目录选择预置且已经校验过的单次结果。 */
+#[cfg(feature = "wdio")]
+#[derive(Default)]
+pub(crate) struct E2eRepositoryPicker(Mutex<Option<std::path::PathBuf>>);
+
+/** WDIO 无法操作原生目录选择器；显式校验测试请求路径与隔离 fixture 一致。 */
+#[cfg(feature = "wdio")]
+#[tauri::command]
+pub(crate) fn set_e2e_repository_directory(
+    picker: tauri::State<'_, E2eRepositoryPicker>,
+    path: String,
+) -> Result<(), String> {
+    let requested = std::path::PathBuf::from(path)
+        .canonicalize()
+        .map_err(|reason| format!("WDIO Repository picker 请求路径无效：{reason}"))?;
+    let fixture = std::env::var("NARRANT_E2E_TRUST_REPOSITORY")
+        .map_err(|reason| format!("缺少 WDIO Repository picker fixture：{reason}"))?;
+    let allowed = std::path::PathBuf::from(fixture)
+        .canonicalize()
+        .map_err(|reason| format!("WDIO Repository picker fixture 无效：{reason}"))?;
+    if requested != allowed {
+        return Err(format!(
+            "WDIO Repository picker 拒绝非 fixture 路径：{}",
+            requested.display()
+        ));
+    }
+    *picker
+        .0
+        .lock()
+        .map_err(|_| "WDIO Repository picker 状态已损坏".to_owned())? = Some(requested);
+    Ok(())
+}
+
+/** WDIO 无法操作原生目录选择器；仅测试构建消费一次经校验的选择结果。 */
+#[cfg(feature = "wdio")]
+#[tauri::command]
+pub(crate) fn choose_e2e_repository_directory(
+    picker: tauri::State<'_, E2eRepositoryPicker>,
+) -> Result<String, String> {
+    picker
+        .0
+        .lock()
+        .map_err(|_| "WDIO Repository picker 状态已损坏".to_owned())?
+        .take()
+        .ok_or_else(|| "WDIO Repository picker 尚未预置测试路径".to_owned())?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "WDIO Repository picker 路径不是有效 UTF-8".to_owned())
+}
 
 /// Repository 本地分支标签所需的 canonical refs 与显式默认选择。
 #[derive(Serialize)]
