@@ -6,7 +6,7 @@
 use super::{
     parse_provider_response, validate_response, BabysitAgentProvider, BabysitError,
     BabysitFileExplanations, BabysitProviderRequest, CancellationSignal, FileSide, LineTarget,
-    ValidationFailure, MAX_REPAIR_ATTEMPTS,
+    ValidationFailure, MAX_EXPLANATION_CHARS, MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -551,6 +551,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             .start_turn(
                 &thread_id,
                 Self::generation_prompt(&request),
+                &request,
                 deadline,
                 cancellation,
             )
@@ -640,6 +641,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             .start_turn(
                 &run.thread_id,
                 Self::repair_prompt(&failure),
+                &request,
                 run.deadline,
                 cancellation,
             )
@@ -811,18 +813,35 @@ fn restricted_config() -> Value {
 }
 
 /// 生成 Babysit 生产与 capability probe 共用的严格结构化输出 schema。
-fn structured_output_schema() -> Value {
+pub(super) fn structured_output_schema(request: &BabysitProviderRequest) -> Value {
+    let side_schema = |side| {
+        let required = request
+            .targets
+            .iter()
+            .filter(|target| target.side == side)
+            .map(|target| target.line_number.to_string())
+            .collect::<Vec<_>>();
+        let properties = required
+            .iter()
+            .map(|line| {
+                (
+                    line.clone(),
+                    json!({"type": "string", "maxLength": MAX_EXPLANATION_CHARS}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false
+        })
+    };
     json!({
         "type": "object",
         "properties": {
-            "before": {
-                "type": "object",
-                "additionalProperties": {"type": "string", "maxLength": 240}
-            },
-            "after": {
-                "type": "object",
-                "additionalProperties": {"type": "string", "maxLength": 240}
-            }
+            "before": side_schema(FileSide::Before),
+            "after": side_schema(FileSide::After)
         },
         "required": ["before", "after"],
         "additionalProperties": false

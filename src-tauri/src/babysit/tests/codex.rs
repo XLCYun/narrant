@@ -30,6 +30,25 @@ fn request() -> BabysitProviderRequest {
     }
 }
 
+/// 严格输出 schema 应枚举本次请求的目标行，避免 Codex 拒绝开放对象结构。
+#[test]
+fn structured_output_schema_requires_exact_target_lines() {
+    let schema = crate::babysit::codex::structured_output_schema(&request());
+
+    assert_eq!(schema["required"], serde_json::json!(["before", "after"]));
+    for side in ["before", "after"] {
+        assert_eq!(
+            schema["properties"][side]["required"],
+            serde_json::json!(["1"])
+        );
+        assert_eq!(schema["properties"][side]["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"][side]["properties"]["1"]["maxLength"],
+            MAX_EXPLANATION_CHARS
+        );
+    }
+}
+
 /// 启动确定性 shell JSONL fixture，并将事件写入临时文件供断言读取。
 fn provider(mode: &str, timeout: Duration) -> (CodexAppServerProvider, TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();

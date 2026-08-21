@@ -117,7 +117,7 @@ impl AppServerProcess {
             .start_thread(&request, deadline, &cancellation)
             .await
             .map_err(classify_capability_probe_error)?;
-        let probe_result = self.probe_turn_capabilities(deadline).await;
+        let probe_result = self.probe_turn_capabilities(&request, deadline).await;
         // 真实 restricted thread 只验证 policy 与 delete；永远不在它上面启动 turn。
         let delete_result = self.delete_probe_thread(&thread_id).await;
         match (probe_result, delete_result) {
@@ -128,14 +128,18 @@ impl AppServerProcess {
     }
 
     /// 对不存在的 sentinel thread/turn 解析 turn 与 schema、interrupt 能力，不调用模型。
-    async fn probe_turn_capabilities(&mut self, deadline: Instant) -> Result<(), RpcFailure> {
+    async fn probe_turn_capabilities(
+        &mut self,
+        request: &BabysitProviderRequest,
+        deadline: Instant,
+    ) -> Result<(), RpcFailure> {
         match self
             .request(
                 "turn/start",
                 json!({
                     "threadId": CAPABILITY_SENTINEL_THREAD_ID,
                     "input": [],
-                    "outputSchema": super::structured_output_schema()
+                    "outputSchema": super::structured_output_schema(request)
                 }),
                 deadline,
                 None,
@@ -270,6 +274,7 @@ impl AppServerProcess {
         &mut self,
         thread_id: &str,
         prompt: String,
+        request: &BabysitProviderRequest,
         deadline: Instant,
         cancellation: &CancellationSignal,
     ) -> Result<String, RpcFailure> {
@@ -279,7 +284,7 @@ impl AppServerProcess {
                 json!({
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": prompt}],
-                    "outputSchema": super::structured_output_schema()
+                    "outputSchema": super::structured_output_schema(request)
                 }),
                 deadline,
                 Some(cancellation),
