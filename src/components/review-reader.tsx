@@ -106,6 +106,7 @@ function babysitEligibilityLabel(reason: BabysitEligibilityReason | undefined, l
   return reason ? labels[reason] : undefined;
 }
 
+/** Babysit sticky footer 的状态、动作与本地化文本输入。 */
 type BabysitFooterProps = {
   state: BabysitState | undefined;
   onCancel: () => void;

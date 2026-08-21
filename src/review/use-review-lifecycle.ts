@@ -11,6 +11,7 @@ import {
   type BabysitProgress,
   type BabysitState,
 } from "@/babysit/types";
+import { detectBabysitLanguage } from "@/babysit/detected-language";
 import { normalizeLocale } from "@/lib/i18n";
 import type {
   ReviewApplicationAdapter,
@@ -174,7 +175,7 @@ export function useReviewLifecycle(
       reviewId: current.reviewId,
       snapshotId: current.snapshotId,
       path: fileChange.path,
-    }, undefined, abort.signal).then((result) => {
+    }, detectBabysitLanguage(fileChange.path, fileChange.content), abort.signal).then((result) => {
       if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
         setBabysitEligibility({ kind: "resolved", result });
       }
@@ -198,6 +199,7 @@ export function useReviewLifecycle(
       snapshotId: current.snapshotId,
       path: selected.path,
       locale,
+      detectedLanguage: detectBabysitLanguage(selected.path, selected.content),
     };
     invalidateBabysit(false);
     const abort = new AbortController();

@@ -29,6 +29,7 @@ export function setBabysitExpansion(
   return next;
 }
 
+/** Babysit Diff Editor 的受控输入；解释状态由 Review Reader 持有。 */
 type BabysitDiffEditorProps = {
   original: string;
   modified: string;
@@ -123,6 +124,7 @@ export function buildBabysitZoneRows(
   return rows;
 }
 
+/** 单个 React-owned Line Explanation 卡片的稳定渲染参数。 */
 type ExplanationCardProps = {
   side: ExplanationSide;
   line: number;
@@ -161,6 +163,7 @@ function ExplanationCard({ side, line, explanation, expanded, zoneHeight, labels
   </div>;
 }
 
+/** Monaco zone 容器与主 React tree portal 之间的所有权记录。 */
 type ExplanationPortalHost = {
   key: string;
   node: HTMLElement;

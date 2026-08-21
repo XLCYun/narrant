@@ -29,21 +29,27 @@ const content: FileChangeContent = {
 };
 
 /** 构造最小 Review lifecycle adapter，并保留一次 Babysit 请求的控制权。 */
-function createAdapter() {
+function createAdapter(reviewSnapshot = snapshot, fileContent = content) {
   let resolveExplanation!: (value: BabysitFileExplanations) => void;
   let requested: { request: Parameters<BabysitApplicationAdapter["explainFile"]>[0]; signal: AbortSignal } | undefined;
+  let eligibilityLanguage: string | undefined;
   const reviewAdapter: ReviewApplicationAdapter = {
-    async switchReview() { return snapshot; },
+    async switchReview() { return reviewSnapshot; },
     async checkReviewUpdate() { return null; },
     async checkBranchSelectionUpdate() {
       return { changed: false, currentBaseRevision: "base-1", currentHeadRevision: "head-1", latestBaseRevision: "base-1", latestHeadRevision: "head-1" };
     },
     async refreshReview() { return { kind: "unchanged" }; },
-    async readFileChange() { return content; },
+    async readFileChange() { return fileContent; },
     async closeReview() { return { kind: "closed" }; },
   };
   const babysitAdapter: BabysitApplicationAdapter = {
-    async checkEligibility() { return { eligible: true, reason: null }; },
+    async checkEligibility(_request, detectedLanguage) {
+      eligibilityLanguage = detectedLanguage;
+      return detectedLanguage
+        ? { eligible: true, reason: null }
+        : { eligible: false, reason: "unsupported_language" };
+    },
     explainFile(request, onProgress, signal) {
       requested = { request, signal };
       onProgress({ phase: "generating" });
@@ -55,6 +61,7 @@ function createAdapter() {
     babysitAdapter,
     resolve(value: BabysitFileExplanations) { resolveExplanation(value); },
     requested: () => requested,
+    eligibilityLanguage: () => eligibilityLanguage,
   };
 }
 
@@ -123,6 +130,35 @@ describe("Babysit contract spine", () => {
     act(() => result.current.reader?.babysit?.explain());
 
     expect(provider.requested()?.request.locale).toBe("en");
+  });
+
+  it("extensionless Python shebang 对 eligibility 与 explain 使用同一 detectedLanguage", async () => {
+    const scriptSnapshot = { ...snapshot, fileChanges: [{ path: "bin/tool", oldPath: null, status: "added" as const }] };
+    const scriptContent: FileChangeContent = {
+      path: "bin/tool", oldPath: null, status: "added", contentKind: "text",
+      beforeSize: null, afterSize: 38, before: null, after: "#!/usr/bin/env python3\nprint('hello')\n",
+    };
+    const provider = createAdapter(scriptSnapshot, scriptContent);
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await waitFor(() => expect(result.current.reader?.babysit?.eligibility).toMatchObject({ kind: "resolved", result: { eligible: true } }));
+    expect(provider.eligibilityLanguage()).toBe("python");
+    act(() => result.current.reader?.babysit?.explain());
+    expect(provider.requested()?.request.detectedLanguage).toBe("python");
+  });
+
+  it("未知 extensionless 内容保持 disabled 且不发起 explain", async () => {
+    const unknownSnapshot = { ...snapshot, fileChanges: [{ path: "bin/tool", oldPath: null, status: "added" as const }] };
+    const unknownContent: FileChangeContent = {
+      path: "bin/tool", oldPath: null, status: "added", contentKind: "text",
+      beforeSize: null, afterSize: 10, before: null, after: "echo maybe\n",
+    };
+    const provider = createAdapter(unknownSnapshot, unknownContent);
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await waitFor(() => expect(result.current.reader?.babysit?.eligibility).toMatchObject({ kind: "resolved", result: { eligible: false } }));
+    act(() => result.current.reader?.babysit?.explain());
+    expect(provider.requested()).toBeUndefined();
   });
 
   it("keeps structured provider errors in the lifecycle failure state", async () => {
