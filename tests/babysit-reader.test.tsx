@@ -57,7 +57,7 @@ const content = {
 /** 创建带指定 Babysit 状态的 Review Reader binding。 */
 function makeReview(state: BabysitBinding["state"], overrides: Partial<BabysitBinding> = {}): ReviewReaderBinding {
   const babysit: BabysitBinding = {
-    enabled: true,
+    eligibility: { kind: "resolved", result: { eligible: true, reason: null } },
     state,
     explain: vi.fn(),
     cancel: vi.fn(),
@@ -114,11 +114,13 @@ describe("Babysit Review Reader presentation", () => {
     expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
 
     fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
-    expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine)).toEqual(["1", "2"]);
-    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["1", "2"]);
+    expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
+    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
   });
 
   it("在生成、修复和失败状态显示文件级 sticky footer 操作", () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const runningReview = makeReview({
       kind: "repairing",
       attempt: 2,
@@ -147,21 +149,24 @@ describe("Babysit Review Reader presentation", () => {
     expect(failedReview.babysit?.retry).toHaveBeenCalledTimes(1);
     fireEvent.click(within(footer).getByRole("button", { name: "复制诊断" }));
     expect(within(footer).getByRole("button", { name: "已复制诊断" })).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledWith('{"category":"babysit","code":"repair_exhausted"}');
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("三轮修复");
   });
 
   it("禁用不支持的文件并在 Tooltip 触发器上保留具体原因", () => {
     const unsupported = { ...content, path: "pnpm-lock.yaml" };
-    const review = makeReview({ kind: "idle" }, { enabled: true });
+    const review = makeReview({ kind: "idle" }, { eligibility: { kind: "resolved", result: { eligible: false, reason: "lock_minified_or_snapshot" } } });
     review.fileChange = { kind: "ready", path: unsupported.path, content: unsupported };
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     const button = screen.getByRole("button", { name: "宝宝模式" });
-    expect(button).toBeDisabled();
-    expect(button.parentElement).toHaveAttribute("data-slot", "tooltip-trigger");
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveAttribute("tabindex", "0");
+    expect(button).toHaveAttribute("aria-describedby");
   });
 
   it("长解释默认截断，并能在 view zone 内展开", () => {
-    const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(3);
+    const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(8).slice(0, 240);
     const review = makeReview({
       kind: "completed",
       request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
@@ -176,5 +181,23 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(expand);
     const expanded = [...fakeZones.original.values()][0];
     expect(within(expanded).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
+    expect(expanded.style.minHeight).toBe("220px");
+  });
+
+  it("同一 Review 切换文件时保留 changed/all 过滤选择", () => {
+    const state: BabysitBinding["state"] = {
+      kind: "completed",
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      explanations: { before: { "2": "旧" }, after: { "2": "新" } },
+    };
+    const review = makeReview(state);
+    const rendered = render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
+
+    const nextContent = { ...content, path: "src/next.ts" };
+    rendered.rerender(<ReviewReader review={{ ...review, fileChange: { kind: "ready", path: nextContent.path, content: nextContent } }} appearance={appearance} />);
+    expect(screen.getByRole("button", { name: "全部非空行" })).toHaveAttribute("aria-pressed", "true");
   });
 });

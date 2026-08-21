@@ -7,6 +7,15 @@ export function createTauriBabysitApplicationAdapter(
   createChannel: typeof createTauriChannel = createTauriChannel,
 ): BabysitApplicationAdapter {
   return {
+    /** 通过独立 command 读取后端唯一维护的文件 eligibility。 */
+    checkEligibility(request, detectedLanguage, signal) {
+      return transport.invokeCancellable("check_babysit_file_eligibility", {
+        reviewId: request.reviewId,
+        snapshotId: request.snapshotId,
+        path: request.path,
+        detectedLanguage,
+      }, signal);
+    },
     /** 将完整 File Change analysis 映射为带 progress channel 的 cancellable command。 */
     explainFile(request, onProgress, signal) {
       const progress = createChannel<BabysitProgress>(onProgress);
@@ -15,6 +24,7 @@ export function createTauriBabysitApplicationAdapter(
         snapshotId: request.snapshotId,
         path: request.path,
         locale: request.locale,
+        detectedLanguage: request.detectedLanguage,
         progress,
       }, signal);
     },

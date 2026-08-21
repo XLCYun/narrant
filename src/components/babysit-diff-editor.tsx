@@ -9,6 +9,14 @@ export type BabysitExplanationFilter = "changed" | "all";
 type ExplanationSide = keyof BabysitFileExplanations;
 type LineChange = NonNullable<ReturnType<MonacoDiffEditor["getLineChanges"]>>[number];
 
+/** 一对垂直对齐的 before/after 解释槽；缺失侧仍创建等高 spacer。 */
+export type BabysitZoneRow = {
+  before?: [number, string];
+  after?: [number, string];
+  beforeAnchor: number;
+  afterAnchor: number;
+};
+
 type BabysitDiffEditorProps = {
   original: string;
   modified: string;
@@ -57,16 +65,50 @@ export function selectBabysitExplanations(
 
 /** 根据文本长度估算一个共享 view-zone 高度，让 before/after 编辑器保持垂直节奏。 */
 function explanationZoneHeight(
-  entries: ReadonlyArray<[number, string]>,
+  entries: ReadonlyArray<[number, string] | undefined>,
   expandedKeys: ReadonlySet<string>,
   side: ExplanationSide,
 ): number {
-  const heights = entries.map(([line, text]) => {
+  const heights = entries.filter((entry): entry is [number, string] => Boolean(entry)).map(([line, text]) => {
     const expanded = expandedKeys.has(`${side}:${line}`);
-    const lines = expanded ? Math.min(6, Math.max(2, Math.ceil(text.length / 62))) : 2;
+    const lines = expanded ? Math.max(2, Math.ceil(text.length / 20)) : 2;
     return 28 + lines * 16;
   });
   return Math.max(42, ...heights);
+}
+
+/** 按 diff hunk 配对两侧解释，保证新增、删除和不等长修改拥有相同 zone 数量。 */
+export function buildBabysitZoneRows(
+  before: ReadonlyArray<[number, string]>,
+  after: ReadonlyArray<[number, string]>,
+  changes: readonly LineChange[],
+): BabysitZoneRow[] {
+  const usedBefore = new Set<number>();
+  const usedAfter = new Set<number>();
+  const rows: BabysitZoneRow[] = [];
+  const append = (left: ReadonlyArray<[number, string]>, right: ReadonlyArray<[number, string]>, beforeAnchor: number, afterAnchor: number) => {
+    for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+      const beforeEntry = left[index];
+      const afterEntry = right[index];
+      if (beforeEntry) usedBefore.add(beforeEntry[0]);
+      if (afterEntry) usedAfter.add(afterEntry[0]);
+      rows.push({
+        before: beforeEntry,
+        after: afterEntry,
+        beforeAnchor: beforeEntry?.[0] ?? beforeAnchor,
+        afterAnchor: afterEntry?.[0] ?? afterAnchor,
+      });
+    }
+  };
+  for (const change of changes) {
+    const left = before.filter(([line]) => line >= change.originalStartLineNumber && line <= change.originalEndLineNumber);
+    const right = after.filter(([line]) => line >= change.modifiedStartLineNumber && line <= change.modifiedEndLineNumber);
+    append(left, right, Math.max(1, change.originalStartLineNumber), Math.max(1, change.modifiedStartLineNumber));
+  }
+  const remainingBefore = before.filter(([line]) => !usedBefore.has(line));
+  const remainingAfter = after.filter(([line]) => !usedAfter.has(line));
+  append(remainingBefore, remainingAfter, remainingBefore[0]?.[0] ?? 1, remainingAfter[0]?.[0] ?? 1);
+  return rows;
 }
 
 /** 创建插入 Monaco 行上方的解释卡片，并保持可键盘操作的展开按钮。 */
@@ -94,11 +136,13 @@ function createExplanationNode(input: {
   marker.textContent = `${side === "before" ? labels.before : labels.after} · ${line}`;
 
   const text = document.createElement("span");
-  text.className = "min-w-0 flex-1 overflow-hidden break-words text-muted-foreground";
+  text.className = `min-w-0 flex-1 break-words text-muted-foreground${expanded ? " overflow-visible" : " overflow-hidden"}`;
   text.textContent = explanation;
-  text.style.display = "-webkit-box";
-  text.style.webkitBoxOrient = "vertical";
-  text.style.webkitLineClamp = expanded ? "unset" : "2";
+  text.style.display = expanded ? "block" : "-webkit-box";
+  if (!expanded) {
+    text.style.webkitBoxOrient = "vertical";
+    text.style.webkitLineClamp = "2";
+  }
 
   node.append(marker, text);
   if (explanation.length > 120) {
@@ -110,6 +154,24 @@ function createExplanationNode(input: {
     toggle.addEventListener("click", () => onToggleExpanded(key));
     node.append(toggle);
   }
+  return node;
+}
+
+/** 为缺失侧创建不可见内容的等高 spacer，维持两侧后续代码垂直对齐。 */
+function createSpacerNode(zoneHeight: number) {
+  const node = document.createElement("div");
+  node.dataset.babysitSpacer = "true";
+  node.style.height = `${zoneHeight}px`;
+  return node;
+}
+
+/** inline Diff 只在 modified editor 创建合并区，避免两个 Monaco pane 占据同一可视位置。 */
+function createInlineNode(nodes: HTMLElement[], zoneHeight: number) {
+  const node = document.createElement("div");
+  node.dataset.babysitZone = "inline";
+  node.className = "flex h-full min-w-0 flex-col";
+  node.style.height = `${zoneHeight}px`;
+  nodes.forEach((child) => node.append(child));
   return node;
 }
 
@@ -174,36 +236,51 @@ export function BabysitDiffEditor({
     if (!explanations) return;
     const originalEditor = mountedEditor.getOriginalEditor();
     const modifiedEditor = mountedEditor.getModifiedEditor();
-    const originalHeight = explanationZoneHeight(selectedEntries.before, expandedKeys, "before");
-    const modifiedHeight = explanationZoneHeight(selectedEntries.after, expandedKeys, "after");
-    const sharedHeight = Math.max(originalHeight, modifiedHeight);
+    const rows = buildBabysitZoneRows(selectedEntries.before, selectedEntries.after, lineChanges);
     const nextIds = { original: [] as string[], modified: [] as string[] };
 
+    if (!renderSideBySide) {
+      modifiedEditor.changeViewZones((accessor) => {
+        for (const row of rows) {
+          const beforeHeight = explanationZoneHeight([row.before], expandedKeys, "before");
+          const afterHeight = explanationZoneHeight([row.after], expandedKeys, "after");
+          const height = (row.before ? beforeHeight : 0) + (row.after ? afterHeight : 0);
+          const nodes = (["before", "after"] as const).flatMap((side) => {
+            const entry = row[side];
+            if (!entry) return [];
+            return [createExplanationNode({ side, line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`${side}:${entry[0]}`), zoneHeight: side === "before" ? beforeHeight : afterHeight, labels, onToggleExpanded })];
+          });
+          nextIds.modified.push(accessor.addZone({ afterLineNumber: Math.max(0, row.afterAnchor - 1), heightInPx: height, domNode: createInlineNode(nodes, height) }));
+        }
+      });
+      zoneIds.current = nextIds;
+      return clearZones;
+    }
     originalEditor.changeViewZones((accessor) => {
-      for (const [line, explanation] of selectedEntries.before) {
+      for (const row of rows) {
+        const sharedHeight = Math.max(explanationZoneHeight([row.before], expandedKeys, "before"), explanationZoneHeight([row.after], expandedKeys, "after"));
+        const entry = row.before;
         nextIds.original.push(accessor.addZone({
-          afterLineNumber: Math.max(0, line - 1),
+          afterLineNumber: Math.max(0, row.beforeAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: createExplanationNode({
-            side: "before", line, explanation, expanded: expandedKeys.has(`before:${line}`), zoneHeight: sharedHeight, labels, onToggleExpanded,
-          }),
+          domNode: entry ? createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels, onToggleExpanded }) : createSpacerNode(sharedHeight),
         }));
       }
     });
     modifiedEditor.changeViewZones((accessor) => {
-      for (const [line, explanation] of selectedEntries.after) {
+      for (const row of rows) {
+        const sharedHeight = Math.max(explanationZoneHeight([row.before], expandedKeys, "before"), explanationZoneHeight([row.after], expandedKeys, "after"));
+        const entry = row.after;
         nextIds.modified.push(accessor.addZone({
-          afterLineNumber: Math.max(0, line - 1),
+          afterLineNumber: Math.max(0, row.afterAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: createExplanationNode({
-            side: "after", line, explanation, expanded: expandedKeys.has(`after:${line}`), zoneHeight: sharedHeight, labels, onToggleExpanded,
-          }),
+          domNode: entry ? createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels, onToggleExpanded }) : createSpacerNode(sharedHeight),
         }));
       }
     });
     zoneIds.current = nextIds;
     return clearZones;
-  }, [clearZones, expandedKeys, explanations, labels, lineChanges, mountedEditor, onToggleExpanded, selectedEntries]);
+  }, [clearZones, expandedKeys, explanations, labels, lineChanges, mountedEditor, onToggleExpanded, renderSideBySide, selectedEntries]);
 
   return <DiffEditor
     theme={theme}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   AiBrain01Icon,
   ArrowDown01Icon,
@@ -25,10 +25,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { getBabysitEligibility, type BabysitEligibilityReason } from "@/babysit/eligibility";
 import { isBabysitRunning } from "@/babysit/types";
-import type { BabysitState } from "@/babysit/types";
+import type { BabysitEligibilityReason, BabysitState } from "@/babysit/types";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { ChangeStatus, FileChangeSummary } from "@/review/types";
 export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
@@ -135,10 +135,10 @@ function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps)
       ? labels.repairing(state.attempt)
       : labels.failed;
   const diagnostics = state.kind === "failed"
-    ? JSON.stringify({ code: state.error.code, detail: state.error.detail })
+    ? JSON.stringify({ category: "babysit", code: state.error.code })
     : "";
 
-  /** 复制只包含稳定错误 code/detail 的脱敏诊断，不复制源代码或解释文本。 */
+  /** 复制只包含稳定错误类别与 code 的脱敏诊断，不复制路径或 provider detail。 */
   function copyDiagnostics() {
     if (!diagnostics) return;
     setCopied(true);
@@ -147,7 +147,6 @@ function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps)
 
   return <footer data-testid="babysit-footer" className="sticky bottom-0 z-10 flex min-h-10 flex-wrap items-center gap-2 border-t bg-background/95 px-3 py-1.5 text-xs shadow-[0_-4px_12px_color-mix(in_oklab,var(--background),transparent_20%)] backdrop-blur" role="status" aria-live="polite">
     <span className={cn("min-w-0 flex-1 truncate", state.kind === "failed" && "text-destructive")}>{status}</span>
-    {!running && state.kind === "failed" && <span className="max-w-[45%] truncate text-muted-foreground" title={state.error.detail}>{state.error.detail}</span>}
     {running
       ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
       : <>
@@ -195,20 +194,18 @@ export function ReviewReader(input: ReviewReaderProps) {
   const [babysitFilter, setBabysitFilter] = useState<BabysitExplanationFilter>("changed");
   const [expandedBabysitKeys, setExpandedBabysitKeys] = useState<Set<string>>(() => new Set());
   const explainedIdentity = useRef<string>();
-  const eligibility = props.fileChange ? getBabysitEligibility(props.fileChange.path, props.fileChange) : { eligible: false as const, reason: "missing-content" as const };
-  const babysitEnabled = Boolean(babysit?.enabled && eligibility.eligible);
+  const babysitReasonId = useId();
+  const eligibility = babysit?.eligibility;
+  const babysitEnabled = eligibility?.kind === "resolved" && Boolean(eligibility.result?.eligible);
   const eligibilityLabels: Record<BabysitEligibilityReason, string> = {
-    "missing-content": t("review:babysitMissingContent"),
-    binary: t("review:babysitUnsupportedBinary"),
-    submodule: t("review:babysitUnsupportedSubmodule"),
-    symlink: t("review:babysitUnsupportedSymlink"),
-    generated: t("review:babysitUnsupportedGenerated"),
-    dependency: t("review:babysitUnsupportedDependency"),
-    lock: t("review:babysitUnsupportedLock"),
-    minified: t("review:babysitUnsupportedMinified"),
-    snapshot: t("review:babysitUnsupportedSnapshot"),
-    "unsupported-extension": t("review:babysitUnsupportedExtension"),
+    non_text: t("review:babysitUnsupportedBinary"),
+    generated_or_vendored: t("review:babysitUnsupportedGenerated"),
+    lock_minified_or_snapshot: t("review:babysitUnsupportedLock"),
+    unsupported_language: t("review:babysitUnsupportedExtension"),
   };
+  const eligibilityReason = eligibility?.kind === "resolved" && eligibility.result && !eligibility.result.eligible
+    ? babysitEligibilityLabel(eligibility.result.reason, eligibilityLabels)
+    : t("review:babysitMissingContent");
 
   /** 宝宝模式保持在当前 Review Reader 内；换文件时对新文件自动开始一次完整分析。 */
   useEffect(() => {
@@ -231,9 +228,8 @@ export function ReviewReader(input: ReviewReaderProps) {
     }
   }, [babysitVisible]);
 
-  /** 切换文件后从紧凑的 changed-only 视图开始，避免把上一个文件的行状态带过来。 */
+  /** 切换文件只清掉行级展开状态；changed/all 过滤在同一 Review 内保持。 */
   useEffect(() => {
-    setBabysitFilter("changed");
     setExpandedBabysitKeys(new Set());
   }, [selectedPath]);
 
@@ -341,44 +337,30 @@ export function ReviewReader(input: ReviewReaderProps) {
           {props.fileChange && !props.fileChangeLoading && <section className="flex h-full min-w-0 flex-col" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
             <header className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-1"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3>{babysit && <div className="ml-auto flex min-w-0 items-center gap-1.5">
               <Tooltip>
-                <TooltipTrigger render={<span className="inline-flex" />}>
-                  <Button
-                    variant={babysitVisible ? "default" : "outline"}
-                    size="sm"
-                    aria-label={babysitVisible ? t("review:babysitDisable") : t("review:babysit")}
-                    aria-pressed={babysitVisible}
-                    disabled={!babysitEnabled}
-                    aria-busy={babysitRunning || undefined}
-                    onClick={() => {
-                      if (!babysitEnabled) return;
-                      if (babysitVisible && babysitRunning) babysit.cancel();
-                      setBabysitVisible((visible) => !visible);
-                    }}
-                  >
-                    <Icon icon={AiBrain01Icon} data-icon="inline-start" aria-hidden />
-                    <span className="hidden sm:inline">{babysitVisible ? t("review:babysitDisable") : t("review:babysit")}</span>
-                  </Button>
+                <TooltipTrigger render={<Button
+                  variant={babysitVisible ? "default" : "outline"}
+                  size="sm"
+                  aria-label={babysitVisible ? t("review:babysitDisable") : t("review:babysit")}
+                  aria-pressed={babysitVisible}
+                  aria-disabled={!babysitEnabled}
+                  aria-describedby={!babysitEnabled ? babysitReasonId : undefined}
+                  aria-busy={babysitRunning || undefined}
+                  onClick={() => {
+                    if (!babysitEnabled) return;
+                    if (babysitVisible && babysitRunning) babysit.cancel();
+                    setBabysitVisible((visible) => !visible);
+                  }}
+                />}>
+                  <Icon icon={AiBrain01Icon} data-icon="inline-start" aria-hidden />
+                  <span className="hidden sm:inline">{babysitVisible ? t("review:babysitDisable") : t("review:babysit")}</span>
                 </TooltipTrigger>
-                <TooltipContent>{babysitEnabled ? (babysitVisible ? t("review:babysitDisable") : t("review:babysit")) : babysitEligibilityLabel(eligibility.reason, eligibilityLabels)}</TooltipContent>
+                <TooltipContent>{babysitEnabled ? (babysitVisible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
               </Tooltip>
-              {babysitVisible && babysitState?.kind === "completed" && <div role="group" aria-label={t("review:babysitFilter")} className="flex items-center rounded-4xl border p-0.5">
-                <Tooltip>
-                  <TooltipTrigger render={<span className="inline-flex" />}>
-                    <Button variant={babysitFilter === "changed" ? "secondary" : "ghost"} size="xs" aria-label={t("review:babysitChanged")} aria-pressed={babysitFilter === "changed"} onClick={() => setBabysitFilter("changed")}>
-                      <Icon icon={GitCompareIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitChanged")}</span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{t("review:babysitChanged")}</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger render={<span className="inline-flex" />}>
-                    <Button variant={babysitFilter === "all" ? "secondary" : "ghost"} size="xs" aria-label={t("review:babysitAll")} aria-pressed={babysitFilter === "all"} onClick={() => setBabysitFilter("all")}>
-                      <Icon icon={ListViewIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitAll")}</span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{t("review:babysitAll")}</TooltipContent>
-                </Tooltip>
-              </div>}
+              {!babysitEnabled && <span id={babysitReasonId} className="sr-only">{eligibilityReason}</span>}
+              {babysitVisible && babysitState?.kind === "completed" && <ToggleGroup value={[babysitFilter]} onValueChange={(value) => value[0] && setBabysitFilter(value[0] as BabysitExplanationFilter)} aria-label={t("review:babysitFilter")} variant="outline" size="sm">
+                <ToggleGroupItem value="changed" aria-label={t("review:babysitChanged")}><Icon icon={GitCompareIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitChanged")}</span></ToggleGroupItem>
+                <ToggleGroupItem value="all" aria-label={t("review:babysitAll")}><Icon icon={ListViewIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitAll")}</span></ToggleGroupItem>
+              </ToggleGroup>}
             </div>}</header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}

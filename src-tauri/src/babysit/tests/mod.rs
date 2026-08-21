@@ -39,6 +39,7 @@ fn request_with_locale(
         },
         path: path.to_owned(),
         locale: locale.to_owned(),
+        detected_language: None,
     }
 }
 
@@ -327,12 +328,12 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 fn eligibility_rejects_non_code_and_generated_files() {
     let text = text_change("README.md", Some("# docs"), Some("# docs"));
     assert!(matches!(
-        ensure_eligible("README.md", &text),
+        ensure_eligible("README.md", &text, None),
         Err(BabysitError::UnsupportedFile { .. })
     ));
     let lock = text_change("Cargo.lock", Some("version = 3"), Some("version = 4"));
     assert!(matches!(
-        ensure_eligible("Cargo.lock", &lock),
+        ensure_eligible("Cargo.lock", &lock, None),
         Err(BabysitError::UnsupportedFile { .. })
     ));
     let vendored = text_change(
@@ -341,7 +342,23 @@ fn eligibility_rejects_non_code_and_generated_files() {
         Some("export const x = 2;"),
     );
     assert!(matches!(
-        ensure_eligible("vendor/helper.ts", &vendored),
+        ensure_eligible("vendor/helper.ts", &vendored, None),
         Err(BabysitError::UnsupportedFile { .. })
     ));
+}
+
+#[test]
+fn backend_eligibility_accepts_extensionless_detected_language() {
+    let content = text_change("bin/tool", Some("print('ok')"), Some("print('ok')"));
+    assert_eq!(
+        eligibility("bin/tool", &content, Some("python")),
+        BabysitEligibility {
+            eligible: true,
+            reason: None
+        }
+    );
+    assert_eq!(
+        eligibility("bin/tool", &content, None).reason,
+        Some(BabysitEligibilityReason::UnsupportedLanguage)
+    );
 }

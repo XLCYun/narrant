@@ -43,6 +43,7 @@ function createAdapter() {
     async closeReview() { return { kind: "closed" }; },
   };
   const babysitAdapter: BabysitApplicationAdapter = {
+    async checkEligibility() { return { eligible: true, reason: null }; },
     explainFile(request, onProgress, signal) {
       requested = { request, signal };
       onProgress({ phase: "generating" });
@@ -128,6 +129,7 @@ describe("Babysit contract spine", () => {
     const error: BabysitError = { code: "repair_exhausted", detail: "three repairs" };
     const provider = createAdapter();
     const babysitAdapter: BabysitApplicationAdapter = {
+      async checkEligibility() { return { eligible: true, reason: null }; },
       async explainFile() {
         throw error;
       },
