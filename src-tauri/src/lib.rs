@@ -1,3 +1,4 @@
+mod babysit;
 mod core_git;
 mod github;
 mod operation;

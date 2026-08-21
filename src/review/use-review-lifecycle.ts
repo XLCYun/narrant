@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  BabysitBinding,
+  BabysitFileRequest,
+  BabysitProgress,
+  BabysitState,
+} from "@/babysit/types";
+import { normalizeLocale } from "@/lib/i18n";
+import type {
   ReviewApplicationAdapter,
   ReviewOpenTarget,
   ReviewUpdate,
@@ -53,6 +60,8 @@ export type ReviewReaderBinding = {
     | { kind: "refreshing" }
     | { kind: "closing" };
   fileChange: FileChangeBinding;
+  /** 当前 File Change 的最小 Babysit 运行 binding；完整 UI 由 Review Reader 消费。 */
+  babysit?: BabysitBinding;
   update: ReviewUpdateBinding;
   selectFileChange(path: string): void;
   retryFileChange(): void;
@@ -86,6 +95,9 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
   const snapshotRef = useRef<ReviewSnapshot>();
   const fileRequest = useRef(0);
   const fileAbort = useRef<AbortController>();
+  const babysitAbort = useRef<AbortController>();
+  const babysitRequest = useRef(0);
+  const [babysitState, setBabysitState] = useState<BabysitState>({ kind: "idle" });
   const updateAbort = useRef<AbortController>();
   const lifecycleAbort = useRef<AbortController>();
   const refreshOperation = useRef<{
@@ -100,6 +112,9 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
     if (!current) return;
     const request = ++fileRequest.current;
     fileAbort.current?.abort();
+    babysitAbort.current?.abort();
+    babysitRequest.current += 1;
+    setBabysitState({ kind: "idle" });
     const abort = new AbortController();
     fileAbort.current = abort;
     const identity = { reviewId: current.reviewId, snapshotId: current.snapshotId };
@@ -114,6 +129,60 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
       setFileChange({ kind: "failed", path, failure: operationFailure(reason) });
     });
   }, [adapter]);
+
+  /** 对当前 immutable File Change 发起一次完整文件分析，并丢弃 stale response。 */
+  const explainBabysit = useCallback(() => {
+    const current = snapshotRef.current;
+    const selected = fileChange;
+    const explain = adapter.explainFileChange;
+    if (!current || selected.kind !== "ready" || !explain) return;
+    if (selected.content?.contentKind !== "text") return;
+    const request: BabysitFileRequest = {
+      reviewId: current.reviewId,
+      snapshotId: current.snapshotId,
+      path: selected.path,
+      locale: normalizeLocale(),
+    };
+    babysitAbort.current?.abort();
+    const abort = new AbortController();
+    const requestId = ++babysitRequest.current;
+    babysitAbort.current = abort;
+    setBabysitState({ kind: "generating", request });
+    void explain(request, (progress: BabysitProgress) => {
+      if (abort.signal.aborted || requestId !== babysitRequest.current) return;
+      if (progress.phase === "repairing") {
+        setBabysitState({ kind: "repairing", request, attempt: progress.attempt });
+      } else if (progress.phase === "generating") {
+        setBabysitState({ kind: "generating", request });
+      }
+    }, abort.signal).then((explanations) => {
+      if (abort.signal.aborted || requestId !== babysitRequest.current) return;
+      setBabysitState({ kind: "completed", request, explanations });
+    }).catch((reason) => {
+      if (abort.signal.aborted || requestId !== babysitRequest.current) return;
+      setBabysitState({ kind: "failed", request, detail: String(reason), retryable: true });
+    });
+  }, [adapter, fileChange]);
+
+  /** 取消当前 Babysit 请求，并清除任何未完成的部分结果。 */
+  const cancelBabysit = useCallback(() => {
+    babysitAbort.current?.abort();
+    babysitRequest.current += 1;
+    setBabysitState({ kind: "idle" });
+  }, []);
+
+  /** 只允许对最后一次失败的同一 File Change 重新发起分析。 */
+  const retryBabysit = useCallback(() => {
+    if (babysitState.kind === "failed") explainBabysit();
+  }, [babysitState.kind, explainBabysit]);
+
+  const babysit = useMemo<BabysitBinding>(() => ({
+    state: babysitState,
+    enabled: Boolean(adapter.explainFileChange && fileChange.kind === "ready" && fileChange.content?.contentKind === "text"),
+    explain: explainBabysit,
+    cancel: cancelBabysit,
+    retry: retryBabysit,
+  }), [adapter.explainFileChange, babysitState, cancelBabysit, explainBabysit, fileChange, retryBabysit]);
 
   /** 非阻塞检查当前 Review Selection 是否产生 Review Update。 */
   const checkForUpdate = useCallback((current: ReviewSnapshot) => {
@@ -211,12 +280,15 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
     const current = snapshotRef.current;
     const refreshing = refreshOperation.current;
     fileAbort.current?.abort();
+    babysitAbort.current?.abort();
+    babysitRequest.current += 1;
     updateAbort.current?.abort();
     lifecycleAbort.current?.abort();
     fileRequest.current += 1;
     snapshotRef.current = undefined;
     setSnapshot(undefined);
     setFileChange({ kind: "empty" });
+    setBabysitState({ kind: "idle" });
     setUpdate({ kind: "current" });
     if (!current) return { kind: "closed" };
     setTransition({ kind: "closing" });
@@ -240,6 +312,7 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
 
   useEffect(() => () => {
     fileAbort.current?.abort();
+    babysitAbort.current?.abort();
     updateAbort.current?.abort();
     lifecycleAbort.current?.abort();
     const current = snapshotRef.current;
@@ -253,12 +326,13 @@ export function useReviewLifecycle(adapter: ReviewApplicationAdapter): ReviewLif
     snapshot,
     transition,
     fileChange,
+    babysit,
     update,
     selectFileChange,
     retryFileChange,
     refresh,
     close,
-  } : null, [close, fileChange, refresh, retryFileChange, selectFileChange, snapshot, transition, update]);
+  } : null, [babysit, close, fileChange, refresh, retryFileChange, selectFileChange, snapshot, transition, update]);
 
   return useMemo(() => ({
     open,

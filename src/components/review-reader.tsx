@@ -122,6 +122,7 @@ export function ReviewReader(input: ReviewReaderProps) {
   const selectedPath = props.pendingFilePath ?? props.fileChange?.path;
   const effectiveDiffMode: DiffMode = props.narrow ? "inline" : props.diffMode;
   const fileTypeIconTheme = props.editorTheme === "vs-dark" ? "dark" : "light";
+  const babysitState = review.babysit?.state;
 
   /** 使用图标、颜色与本地化名称共同表达 File Change 状态。 */
   function renderChangeStatus(status: ChangeStatus) {
@@ -225,11 +226,19 @@ export function ReviewReader(input: ReviewReaderProps) {
           {props.fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
           {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={props.onRetryFile}>{t("common:retry")}</Button>}</div>}
           {props.fileChange && !props.fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
-            <header className="flex h-9 items-center border-b px-3"><h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3></header>
+            <header className="flex h-9 items-center gap-2 border-b px-3"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3>{review.babysit && <Button variant="outline" size="sm" aria-label={t("review:babysit")} disabled={!review.babysit.enabled} aria-busy={review.babysit.state.kind === "generating" || review.babysit.state.kind === "repairing"} onClick={() => {
+              if (review.babysit?.state.kind === "generating" || review.babysit?.state.kind === "repairing") review.babysit.cancel();
+              else if (review.babysit?.state.kind === "failed") review.babysit.retry();
+              else review.babysit?.explain();
+            }}>{review.babysit.state.kind === "generating" || review.babysit.state.kind === "repairing" ? t("review:babysitCancel") : review.babysit.state.kind === "failed" ? t("common:retry") : t("review:babysit")}</Button>}</header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "text" && <DiffEditor theme={props.editorTheme} height="calc(100% - 2.25rem)" language={editorLanguage(props.fileChange.path)} original={props.fileChange.before ?? ""} modified={props.fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: effectiveDiffMode === "side-by-side", ignoreTrimWhitespace: false, fontFamily: "'JetBrains Mono Variable', monospace" }} />}
+            {babysitState?.kind === "completed" && <aside aria-label={t("review:babysitExplanations")} data-testid="babysit-explanations" className="max-h-48 overflow-auto border-t bg-muted/20 px-3 py-2 text-xs">
+              <h4 className="font-semibold">{t("review:babysitExplanations")}</h4>
+              {(["before", "after"] as const).map((side) => <div key={side} className="mt-1"><span className="font-medium">{t(`review:babysit${side === "before" ? "Before" : "After"}`)}</span><ul className="ml-4 list-disc">{Object.entries(babysitState.explanations[side]).map(([line, explanation]) => <li key={`${side}-${line}`}><span className="font-mono">{line}</span>{`: ${explanation}`}</li>)}</ul></div>)}
+            </aside>}
           </section>}
         </ResizablePanel>
       </ResizablePanelGroup>}

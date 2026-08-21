@@ -9,6 +9,7 @@ import { GitHubAuthorizationControls } from "@/components/github-authorization-c
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
+import type { BabysitBinding } from "@/babysit/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
 import type { RepositoryReviewSummary } from "@/lib/review-types";
@@ -214,6 +215,19 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
     fileChange: selectedPath
       ? { kind: "ready", path: selectedPath, content: contents[selectedPath] }
       : { kind: "empty" },
+    babysit: {
+      enabled: Boolean(selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")),
+      state: selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")
+        ? {
+            kind: "completed",
+            request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" },
+            explanations: { before: { "1": "声明 Review Reader 入口函数。" }, after: { "1": "声明新的 Review Reader 入口函数。" } },
+          }
+        : { kind: "idle" },
+      explain: () => undefined,
+      cancel: () => undefined,
+      retry: () => undefined,
+    } satisfies BabysitBinding,
     update: update
       ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
       : { kind: "current" },
