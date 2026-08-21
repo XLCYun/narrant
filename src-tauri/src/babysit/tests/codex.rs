@@ -83,6 +83,18 @@ async fn app_server_generates_structured_output_and_deletes_thread() {
 }
 
 #[tokio::test]
+async fn shutdown_releases_the_owned_app_server_after_a_completed_run() {
+    let (provider, _temp, _events) = provider("complete", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    provider.generate(request(), &cancellation).await.unwrap();
+
+    provider.shutdown().await;
+
+    assert!(provider.process.lock().await.is_none());
+    assert!(provider.active_threads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn thread_list_capability_probe_returns_upgrade_recovery_category() {
     let (provider, _temp, _events) = provider("thread-list-no-data", CODEX_ANALYSIS_TIMEOUT);
     let cancellation = OperationContext::background().cancellation().clone();

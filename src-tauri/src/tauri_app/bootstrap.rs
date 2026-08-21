@@ -90,6 +90,8 @@ pub fn run() {
             babysit_commands::explain_review_file_change,
             babysit_commands::check_babysit_file_eligibility,
             babysit_commands::select_babysit_codex_executable,
+            babysit_commands::clear_babysit_snapshot_cache,
+            babysit_commands::clear_babysit_review_cache,
             review_commands::close_review
         ])
         .plugin(tauri_plugin_opener::init())
@@ -119,6 +121,8 @@ pub fn run() {
         ) {
             let lifecycle = app.state::<review::ReviewLifecycle>();
             let _ = lifecycle.shutdown();
+            let babysit = app.state::<babysit::BabysitApplication>();
+            let _ = tauri::async_runtime::block_on(babysit.shutdown());
         }
     });
 }

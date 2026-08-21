@@ -28,6 +28,17 @@ export function createTauriBabysitApplicationAdapter(
         progress,
       }, signal);
     },
+    /** Snapshot 更新后清理旧 identity；清理失败不携带源文本或路径诊断。 */
+    clearSnapshot(identity) {
+      return transport.invoke("clear_babysit_snapshot_cache", {
+        reviewId: identity.reviewId,
+        snapshotId: identity.snapshotId,
+      });
+    },
+    /** Review 关闭或离开时清理该 Review 的进程内结果。 */
+    clearReview(reviewId) {
+      return transport.invoke("clear_babysit_review_cache", { reviewId });
+    },
     /** 将 native picker 选择交给后端验证并持久化，不把路径写入诊断。 */
     selectCodexExecutable(path) {
       return transport.invoke("select_babysit_codex_executable", { executable: path });

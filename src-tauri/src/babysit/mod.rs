@@ -280,10 +280,11 @@ pub struct BabysitErrorPayload {
 
 impl BabysitErrorPayload {
     /// 将 immutable Review 读取失败映射为不依赖 provider 的输入错误。
-    pub fn input_unavailable(detail: impl Into<String>) -> Self {
+    pub fn input_unavailable(_detail: impl Into<String>) -> Self {
         Self {
             code: BabysitErrorCode::InputUnavailable,
-            detail: detail.into(),
+            // 下层 Review/Git 诊断可能含绝对路径；IPC detail 只保留稳定错误类别。
+            detail: "Review File Change 内容不可用。".to_owned(),
             recovery: None,
         }
     }
@@ -392,6 +393,8 @@ pub trait BabysitAgentProvider: Send + Sync {
     ) -> Result<BabysitFileExplanations, BabysitError>;
     /// 上层在 repair 之间提前退出时，释放 provider 私有的 thread/run 状态。
     async fn abandon(&self, _request: &BabysitProviderRequest) {}
+    /// 应用退出时释放 provider 私有的线程与 App Server；fake provider 无需额外动作。
+    async fn shutdown(&self) {}
 }
 
 /// 缓存中不可变的 Review identity；不把 review 与 snapshot 合并成单一 ID。
@@ -618,6 +621,35 @@ impl BabysitApplication {
             .clear();
         Ok(())
     }
+
+    /// 删除一个旧 Snapshot 的全部解释，避免 refresh 后残留旧 revision 的结果。
+    pub fn clear_snapshot(&self, review_id: &str, snapshot_id: &str) -> Result<(), BabysitError> {
+        self.cache
+            .lock()
+            .map_err(|_| BabysitError::CacheUnavailable)?
+            .retain(|key, _| !(key.review_id == review_id && key.snapshot_id == snapshot_id));
+        Ok(())
+    }
+
+    /// 删除一个 Review 的全部解释；切换或关闭 Review 时不保留跨 Review 缓存。
+    pub fn clear_review(&self, review_id: &str) -> Result<(), BabysitError> {
+        self.cache
+            .lock()
+            .map_err(|_| BabysitError::CacheUnavailable)?
+            .retain(|key, _| key.review_id != review_id);
+        Ok(())
+    }
+
+    /// 应用退出时清空缓存并交给 provider 释放进程/线程资源。
+    pub async fn shutdown(&self) -> Result<(), BabysitError> {
+        let clear_result = self.clear();
+        if let Some(runtime) = &self.codex_runtime {
+            runtime.shutdown().await;
+        } else {
+            self.provider.shutdown().await;
+        }
+        clear_result
+    }
 }
 
 /// 检查可取消操作是否已被前端取消。
@@ -666,7 +698,7 @@ fn eligibility(
     if components.iter().any(|component| {
         matches!(
             *component,
-            "node_modules" | "vendor" | "dist" | "build" | "target"
+            "node_modules" | "vendor" | "dist" | "build" | "target" | "generated" | "__snapshots__"
         )
     }) {
         return rejected(BabysitEligibilityReason::GeneratedOrVendored);
@@ -685,6 +717,8 @@ fn eligibility(
         || basename.ends_with(".min.ts")
         || basename.ends_with(".snap")
         || basename.ends_with(".snapshot")
+        || basename.contains(".generated.")
+        || basename.ends_with("_generated.rs")
     {
         return rejected(BabysitEligibilityReason::LockMinifiedOrSnapshot);
     }
@@ -866,6 +900,7 @@ pub struct FakeBabysitProvider {
     invalid_rounds_remaining: AtomicU8,
     generate_calls: AtomicUsize,
     repair_calls: AtomicUsize,
+    shutdown_calls: AtomicUsize,
 }
 
 impl Default for FakeBabysitProvider {
@@ -889,6 +924,7 @@ impl FakeBabysitProvider {
             ),
             generate_calls: AtomicUsize::new(0),
             repair_calls: AtomicUsize::new(0),
+            shutdown_calls: AtomicUsize::new(0),
         }
     }
 
@@ -899,6 +935,7 @@ impl FakeBabysitProvider {
             invalid_rounds_remaining: AtomicU8::new(rounds),
             generate_calls: AtomicUsize::new(0),
             repair_calls: AtomicUsize::new(0),
+            shutdown_calls: AtomicUsize::new(0),
         }
     }
 
@@ -910,6 +947,11 @@ impl FakeBabysitProvider {
     /// 返回 repair 次数，测试用来证明 repair budget 的边界。
     pub fn repair_calls(&self) -> usize {
         self.repair_calls.load(Ordering::Acquire)
+    }
+
+    /// 返回 shutdown 次数，用于验证应用退出只释放一次 provider 资源。
+    pub fn shutdown_calls(&self) -> usize {
+        self.shutdown_calls.load(Ordering::Acquire)
     }
 
     /// 按请求 targets 构造稳定解释，故意不复述 source，避免 fake 测试输出污染日志。
@@ -1004,6 +1046,11 @@ impl BabysitAgentProvider for FakeBabysitProvider {
             self.invalid_rounds_remaining.fetch_sub(1, Ordering::AcqRel);
         }
         Ok(output)
+    }
+
+    /// Fake provider 没有子进程，但记录 shutdown 以覆盖应用生命周期 seam。
+    async fn shutdown(&self) {
+        self.shutdown_calls.fetch_add(1, Ordering::AcqRel);
     }
 }
 

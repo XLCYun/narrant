@@ -668,6 +668,33 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             }
         }
     }
+
+    /// 应用退出时中断并删除所有仍归 Narrant 所有的 thread，再终止 App Server。
+    async fn shutdown(&self) {
+        let runs = self
+            .active_threads
+            .lock()
+            .map(|mut active| active.drain().map(|(_, run)| run).collect::<Vec<_>>())
+            .unwrap_or_default();
+        // 运行中的 turn 会持有同一 stream 锁；退出事件不能等待模型 deadline，
+        // 让 AppServerProcess 的 Drop 在应用退出时负责 kill，下一次启动再清 orphan。
+        let mut process_guard = match self.process.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.failed.store(true, Ordering::Release);
+                return;
+            }
+        };
+        if let Some(process) = process_guard.as_mut() {
+            for run in runs {
+                let key = String::new();
+                let _ = self.delete_active_thread(process, &key, &run, true).await;
+            }
+            process.shutdown().await;
+        }
+        *process_guard = None;
+        self.failed.store(false, Ordering::Release);
+    }
 }
 
 fn restricted_config() -> Value {

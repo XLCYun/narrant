@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isBabysitError, type BabysitApplicationAdapter, type BabysitError, type BabysitFileExplanations } from "@/babysit/types";
 import { i18n } from "@/lib/i18n";
@@ -119,6 +119,80 @@ describe("Babysit contract spine", () => {
     expect(result.current.reader?.babysit?.state).toEqual({ kind: "idle" });
   });
 
+  it("生成中切换文件只取消旧请求，并允许新文件再次分析", async () => {
+    const twoFileSnapshot: ReviewSnapshot = {
+      ...snapshot,
+      fileChanges: [
+        { path: "src/example.ts", oldPath: null, status: "modified" },
+        { path: "src/next.ts", oldPath: null, status: "modified" },
+      ],
+    };
+    const provider = createAdapter(twoFileSnapshot);
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "src/example.ts" }));
+    act(() => result.current.reader?.babysit?.explain());
+    const oldSignal = provider.requested()!.signal;
+
+    act(() => result.current.reader?.selectFileChange("src/next.ts"));
+    expect(oldSignal.aborted).toBe(true);
+    await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "src/next.ts" }));
+    expect(provider.requested()?.request.path).toBe("src/example.ts");
+
+    act(() => result.current.reader?.babysit?.explain());
+    expect(provider.requested()?.request.path).toBe("src/next.ts");
+  });
+
+  it("snapshot refresh 后清除旧缓存 seam，并让新 Snapshot 使用新请求 identity", async () => {
+    const refreshedSnapshot = { ...snapshot, snapshotId: "snapshot-2", headRevision: "head-2" };
+    const provider = createAdapter(snapshot);
+    provider.reviewAdapter.checkReviewUpdate = async () => ({
+      currentBaseRevision: "base-1",
+      currentHeadRevision: "head-1",
+      availableBaseRevision: "base-1",
+      availableHeadRevision: "head-2",
+    });
+    provider.reviewAdapter.refreshReview = async () => ({ kind: "refreshed", snapshot: refreshedSnapshot });
+    const clearSnapshot = vi.fn(async () => undefined);
+    const babysitAdapter: BabysitApplicationAdapter = {
+      ...provider.babysitAdapter,
+      clearSnapshot,
+    };
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    await act(async () => {
+      await result.current.reader?.refresh();
+    });
+
+    expect(clearSnapshot).toHaveBeenCalledWith({ reviewId: "review-1", snapshotId: "snapshot-1" });
+    expect(result.current.reader?.snapshot.snapshotId).toBe("snapshot-2");
+  });
+
+  it("关闭 Review 后清除 Review 缓存 seam", async () => {
+    const provider = createAdapter();
+    const clearReview = vi.fn(async () => undefined);
+    const babysitAdapter: BabysitApplicationAdapter = { ...provider.babysitAdapter, clearReview };
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    await act(async () => {
+      await result.current.close();
+    });
+
+    expect(clearReview).toHaveBeenCalledWith("review-1");
+    expect(result.current.reader).toBeNull();
+  });
+
   it("uses the current UI locale in the typed analysis request", async () => {
     await i18n.changeLanguage("en");
     const provider = createAdapter();
@@ -163,7 +237,10 @@ describe("Babysit contract spine", () => {
   });
 
   it("keeps structured provider errors in the lifecycle failure state", async () => {
-    const error: BabysitError = { code: "repair_exhausted", detail: "three repairs" };
+    const error: BabysitError = {
+      code: "repair_exhausted",
+      detail: "/Users/alice/repo/src/example.ts source=const secret='token'; stderr=raw provider output",
+    };
     const provider = createAdapter();
     const babysitAdapter: BabysitApplicationAdapter = {
       async checkEligibility() { return { eligible: true, reason: null }; },

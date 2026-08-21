@@ -126,6 +126,29 @@ pub(crate) async fn select_babysit_codex_executable(
         .map_err(BabysitErrorPayload::from)
 }
 
+/// 刷新 Snapshot 后删除旧 identity 的所有进程内解释缓存。
+#[tauri::command]
+pub(crate) fn clear_babysit_snapshot_cache(
+    babysit: tauri::State<'_, BabysitApplication>,
+    review_id: String,
+    snapshot_id: String,
+) -> Result<(), BabysitErrorPayload> {
+    babysit
+        .clear_snapshot(&review_id, &snapshot_id)
+        .map_err(BabysitErrorPayload::from)
+}
+
+/// 关闭或切换 Review 后删除该 Review 的所有进程内解释缓存。
+#[tauri::command]
+pub(crate) fn clear_babysit_review_cache(
+    babysit: tauri::State<'_, BabysitApplication>,
+    review_id: String,
+) -> Result<(), BabysitErrorPayload> {
+    babysit
+        .clear_review(&review_id)
+        .map_err(BabysitErrorPayload::from)
+}
+
 #[cfg(test)]
 #[path = "tests/babysit.rs"]
 mod tests;
