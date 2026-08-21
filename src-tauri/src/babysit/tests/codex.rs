@@ -62,6 +62,36 @@ async fn wait_for_event(path: &Path, expected: &str) {
     panic!("fixture did not record {expected}");
 }
 
+/// 等待 fixture 记录同一事件多次，覆盖 generate 后进入 repair 的活动状态。
+async fn wait_for_event_count(path: &Path, expected: &str, count: usize) {
+    for _ in 0..1000 {
+        let observed = std::fs::read_to_string(path)
+            .map(|events| events.lines().filter(|line| *line == expected).count())
+            .unwrap_or_default();
+        if observed >= count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("fixture did not record {expected} {count} times");
+}
+
+/// 等待客户端完成 active thread 登记，避免 fixture 写日志早于 provider ownership。
+async fn wait_for_active_thread(provider: &CodexAppServerProvider) {
+    for _ in 0..1000 {
+        if provider
+            .active_threads
+            .lock()
+            .map(|active| !active.is_empty())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("provider did not register an active thread");
+}
+
 #[tokio::test]
 async fn app_server_generates_structured_output_and_deletes_thread() {
     let (provider, _temp, events) = provider("complete", CODEX_ANALYSIS_TIMEOUT);
@@ -90,6 +120,84 @@ async fn shutdown_releases_the_owned_app_server_after_a_completed_run() {
 
     provider.shutdown().await;
 
+    assert!(provider.process.lock().await.is_none());
+    assert!(provider.active_threads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn shutdown_cancels_active_generate_before_interrupt_delete_and_child_shutdown() {
+    let (provider, _temp, events) = provider("hang", CODEX_ANALYSIS_TIMEOUT);
+    let provider = Arc::new(provider);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let worker_provider = provider.clone();
+    let worker =
+        tokio::spawn(async move { worker_provider.generate(request(), &cancellation).await });
+
+    wait_for_event(&events, "turn/start:real").await;
+    wait_for_active_thread(&provider).await;
+    provider.shutdown().await;
+
+    let error = worker.await.unwrap().unwrap_err();
+    assert!(matches!(error, BabysitError::Cancelled));
+    let events = std::fs::read_to_string(&events).unwrap();
+    let interrupted = events
+        .lines()
+        .position(|line| line == "emit:turn/completed:interrupted")
+        .unwrap();
+    let deleted = events
+        .lines()
+        .position(|line| line == "thread/delete:thread-1")
+        .unwrap();
+    assert!(interrupted < deleted);
+    assert!(provider.process.lock().await.is_none());
+    assert!(provider.active_threads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn shutdown_cancels_active_repair_before_interrupt_delete_and_child_shutdown() {
+    let (provider, _temp, events) = provider("repair-hang", CODEX_ANALYSIS_TIMEOUT);
+    let provider = Arc::new(provider);
+    let cancellation = TestCancellation::default();
+    let first = provider
+        .generate(request(), &cancellation)
+        .await
+        .expect("first scripted response should be invalid but transport-successful");
+    assert!(validate_response(&request(), &first).is_err());
+
+    let worker_provider = provider.clone();
+    let worker_cancellation = cancellation.clone();
+    let worker = tokio::spawn(async move {
+        worker_provider
+            .repair(
+                request(),
+                first,
+                ValidationFailure::MissingLine {
+                    side: FileSide::Before,
+                    line_number: 1,
+                },
+                &worker_cancellation,
+            )
+            .await
+    });
+    wait_for_event_count(&events, "turn/start:real", 2).await;
+    wait_for_active_thread(&provider).await;
+    provider.shutdown().await;
+
+    let error = worker.await.unwrap().unwrap_err();
+    assert!(matches!(error, BabysitError::Cancelled));
+    let events = std::fs::read_to_string(&events).unwrap();
+    let interrupted = events
+        .lines()
+        .position(|line| line == "emit:turn/completed:interrupted")
+        .unwrap();
+    let deleted = events
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| *line == "thread/delete:thread-1")
+        .map(|(index, _)| index)
+        .last()
+        .unwrap();
+    assert!(interrupted < deleted);
     assert!(provider.process.lock().await.is_none());
     assert!(provider.active_threads.lock().unwrap().is_empty());
 }
@@ -506,6 +614,7 @@ fn dropping_cleanup_guard_without_runtime_removes_ownership_and_poisons_generati
         turn_id: "turn-1".to_owned(),
         repair_attempts: 0,
         deadline: std::time::Instant::now() + Duration::from_secs(1),
+        cancellation: CancellationSignal::default(),
     };
     active.lock().unwrap().insert("key".to_owned(), run.clone());
 
