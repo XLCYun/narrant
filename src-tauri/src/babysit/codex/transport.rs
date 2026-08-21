@@ -3,7 +3,7 @@
 use super::{
     ensure_isolated_config, ensure_safe_requirements, restricted_config, validate_thread_policy,
     AppServerCommand, AppServerProcess, IsolatedCodexHome, RpcFailure, CODEX_CLEANUP_TIMEOUT,
-    CODEX_CLIENT_NAME, CODEX_THREAD_SOURCE,
+    CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
 use serde_json::{json, Value};
@@ -14,8 +14,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 /// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
-const CAPABILITY_SENTINEL_THREAD_ID: &str = "__narrant_babysit_missing_thread__";
-const CAPABILITY_SENTINEL_TURN_ID: &str = "__narrant_babysit_missing_turn__";
+const CAPABILITY_SENTINEL_THREAD_ID: &str = "00000000-0000-0000-0000-000000000001";
+const CAPABILITY_SENTINEL_TURN_ID: &str = "00000000-0000-0000-0000-000000000002";
 
 impl AppServerProcess {
     /// poison restart 前同步完成 child reap 与 generation-owned home 删除。
@@ -75,7 +75,7 @@ impl AppServerProcess {
             pending_notifications: VecDeque::new(),
             isolated_home: Some(isolated_home),
         };
-        let deadline = Instant::now() + CODEX_CLEANUP_TIMEOUT;
+        let deadline = Instant::now() + CODEX_INITIALIZATION_TIMEOUT;
         let initialize = process
             .request(
                 "initialize",
@@ -112,7 +112,7 @@ impl AppServerProcess {
             after: String::new(),
             targets: Vec::new(),
         };
-        let deadline = Instant::now() + CODEX_CLEANUP_TIMEOUT;
+        let deadline = Instant::now() + CODEX_INITIALIZATION_TIMEOUT;
         let thread_id = self
             .start_thread(&request, deadline, &cancellation)
             .await

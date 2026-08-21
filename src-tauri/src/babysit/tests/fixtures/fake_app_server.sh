@@ -148,7 +148,7 @@ while IFS= read -r line; do
       ;;
     turn/start)
       turn_thread_id=$(printf '%s' "$line" | sed -n 's/.*"threadId":"\([^"]*\)".*/\1/p')
-      if [ "$turn_thread_id" = "__narrant_babysit_missing_thread__" ]; then
+      if [ "$turn_thread_id" = "00000000-0000-0000-0000-000000000001" ]; then
         record "turn/start:sentinel"
         if [ "$mode" = "rejected-output-schema" ]; then
           printf '{"id":%s,"error":{"code":-32602,"message":"invalid field outputSchema"}}\n' "$request_id"
@@ -192,7 +192,7 @@ while IFS= read -r line; do
       ;;
     turn/interrupt)
       interrupt_thread_id=$(printf '%s' "$line" | sed -n 's/.*"threadId":"\([^"]*\)".*/\1/p')
-      if [ "$interrupt_thread_id" = "__narrant_babysit_missing_thread__" ]; then
+      if [ "$interrupt_thread_id" = "00000000-0000-0000-0000-000000000001" ]; then
         record "turn/interrupt:sentinel"
         if [ "$mode" = "missing-interrupt" ]; then
           printf '{"id":%s,"error":{"code":-32601,"message":"method not found"}}\n' "$request_id"

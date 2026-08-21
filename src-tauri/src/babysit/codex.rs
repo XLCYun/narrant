@@ -36,6 +36,8 @@ use isolation::IsolatedCodexHome;
 pub const CODEX_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// 线程删除与 interrupt 使用的短清理截止时间，不应拖住前端取消反馈。
 const CODEX_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 首次启动与 capability probe 可能读取远程元数据，不复用短清理上限。
+const CODEX_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// 用于 Codex thread source 的稳定内部标记，不包含 Review 或源代码信息。
 const CODEX_THREAD_SOURCE: &str = "feature:narrant-babysit";
 /// 连接握手时发送的固定客户端身份，不包含用户路径或模型信息。
