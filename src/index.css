@@ -16,6 +16,9 @@ body { margin: 0; background: Canvas; color: CanvasText; }
 .monaco-editor .view-zones > div:has([data-babysit-zone]),
 .monaco-editor [data-babysit-zone] {
   pointer-events: auto !important;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 @media (min-width: 1200px) {

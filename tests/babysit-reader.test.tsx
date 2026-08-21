@@ -188,8 +188,12 @@ describe("Babysit Review Reader presentation", () => {
     const original = [...fakeZones.original.values()][0];
     const expand = within(original).getByRole("button", { name: "展开" });
     expect(original.style.pointerEvents).toBe("auto");
+    expect(original).toHaveStyle({ width: "100%", maxWidth: "100%", overflow: "hidden" });
     expect(expand.style.pointerEvents).toBe("auto");
     expect(expand).toHaveClass("cursor-pointer", "pointer-events-auto");
+    const card = within(original).getByRole("note");
+    expect(card).toHaveClass("w-full", "max-w-full", "overflow-hidden");
+    expect(expand.previousElementSibling).toHaveTextContent("变更前 · 2");
     expect(expand).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(expand);
     expect(removedZoneNodes.length).toBeGreaterThan(0);
