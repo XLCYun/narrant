@@ -149,6 +149,34 @@ open **Review**. It contains no user-owned state, may be forcibly rebuilt when t
 review advances to another snapshot, and is removed when the review closes.
 _Avoid_: Repository, user worktree
 
+**Babysit Mode**:
+An optional Review Reader presentation that helps a reviewer understand a Review
+Snapshot by showing AI-generated Line Explanations. It explains code without judging
+its quality, reporting findings, or proposing review decisions.
+_Avoid_: AI Review, review agent, beginner mode
+
+**Line Explanation**:
+An AI-generated explanation that helps a reviewer understand one non-empty code line
+on either side of a File Change in one Review Snapshot. Babysit Mode may filter which
+Line Explanations are visible without changing their meaning or source identity.
+It is derived review data and never modifies the File Change or Review Workspace source text.
+_Avoid_: Source comment, Review Comment, AI Finding
+
+**Babysit Agent Provider**:
+A source of Line Explanations that fulfills Narrant's provider-independent analysis
+contract. It is either an Installed Coding Agent Provider or a Built-in Agent Provider.
+_Avoid_: Model, AI backend
+
+**Installed Coding Agent Provider**:
+A Babysit Agent Provider that delegates analysis to a supported coding-agent runtime
+already installed and authenticated by the reviewer.
+_Avoid_: Attached agent, external model
+
+**Built-in Agent Provider**:
+A Babysit Agent Provider whose agent loop and read-only tools are owned by Narrant and
+whose configured model service supplies inference.
+_Avoid_: Installed agent, native model
+
 ## Relationships
 
 - A **Pull Request** selects the base and head revisions for one repository-local
@@ -215,6 +243,11 @@ _Avoid_: Repository, user worktree
   **Review** rather than creating a duplicate
 - An open **Review** owns one disposable **Review Workspace** whose repository checkout
   presents the head revision of its current **Review Snapshot**
+- **Babysit Mode** presents **Line Explanations** derived from one exact Review Snapshot
+- A **Line Explanation** does not modify the source text presented by its File Change
+- Every **Babysit Agent Provider** produces the same provider-independent Line Explanation contract
+- An **Installed Coding Agent Provider** reuses a reviewer-installed agent runtime and its authentication
+- A **Built-in Agent Provider** never grants its model service direct access to the Review Workspace
 - An open **Review** presents exactly one **Review Snapshot** at a time
 - Ref movement makes a newer snapshot available but never changes the snapshot being
   reviewed silently
