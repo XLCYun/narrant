@@ -198,6 +198,7 @@ describe("Babysit Review Reader presentation", () => {
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button).toHaveAttribute("tabindex", "0");
     expect(button).toHaveAttribute("aria-describedby");
+    expect(button).toHaveClass("cursor-not-allowed", "opacity-50");
   });
 
   it("Codex 缺失时显示 typed 选择器恢复动作且不渲染路径", () => {

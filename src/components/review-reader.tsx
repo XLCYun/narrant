@@ -367,6 +367,7 @@ export function ReviewReader(input: ReviewReaderProps) {
                   aria-disabled={!babysitEnabled}
                   aria-describedby={!babysitEnabled ? babysitReasonId : undefined}
                   aria-busy={babysitRunning || undefined}
+                  className={!babysitEnabled ? "cursor-not-allowed opacity-50" : undefined}
                   onClick={() => {
                     if (!babysitEnabled) return;
                     if (babysitVisible && babysitRunning) babysit.cancel();
