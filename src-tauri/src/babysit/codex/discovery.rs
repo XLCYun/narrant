@@ -91,6 +91,18 @@ impl CodexExecutableDiscovery {
         selected: bool,
         timeout: Duration,
     ) -> Result<ResolvedExecutable, BabysitError> {
+        self.validate_with_timeout_observed(path, selected, timeout)
+            .await
+            .0
+    }
+
+    /// 执行版本探测并返回直接子进程是否已经完成 wait；测试用它验证回收契约。
+    async fn validate_with_timeout_observed(
+        &self,
+        path: PathBuf,
+        selected: bool,
+        timeout: Duration,
+    ) -> (Result<ResolvedExecutable, BabysitError>, bool) {
         let child = Command::new(&path)
             .arg("--version")
             .stdin(std::process::Stdio::null())
@@ -99,84 +111,90 @@ impl CodexExecutableDiscovery {
             .kill_on_drop(true)
             .spawn();
         let Ok(mut child) = child else {
-            return Err(if selected {
-                BabysitError::CodexExecutableInvalid
-            } else {
-                BabysitError::CodexNotFound
-            });
-        };
-        let Some(stdout) = child.stdout.take() else {
-            terminate_version_child(&mut child, None, None).await;
-            return Err(if selected {
-                BabysitError::CodexExecutableInvalid
-            } else {
-                BabysitError::CodexNotFound
-            });
-        };
-        let Some(stderr) = child.stderr.take() else {
-            terminate_version_child(&mut child, None, None).await;
-            return Err(if selected {
-                BabysitError::CodexExecutableInvalid
-            } else {
-                BabysitError::CodexNotFound
-            });
-        };
-
-        let mut stdout_task = tokio::spawn(read_capped(stdout));
-        let mut stderr_task = tokio::spawn(read_capped(stderr));
-        let probe = tokio::time::timeout(timeout, async {
-            let stdout = (&mut stdout_task)
-                .await
-                .map_err(|_| VersionProbeFailure::Reader)?
-                .map_err(|_| VersionProbeFailure::Reader)?;
-            let stderr = (&mut stderr_task)
-                .await
-                .map_err(|_| VersionProbeFailure::Reader)?
-                .map_err(|_| VersionProbeFailure::Reader)?;
-            let status = child
-                .wait()
-                .await
-                .map_err(|_| VersionProbeFailure::Process)?;
-            Ok::<_, VersionProbeFailure>((status, stdout, stderr))
-        })
-        .await;
-
-        let (status, stdout, stderr) = match probe {
-            Ok(Ok(output)) => output,
-            Ok(Err(_)) | Err(_) => {
-                terminate_version_child(&mut child, Some(&mut stdout_task), Some(&mut stderr_task))
-                    .await;
-                return Err(if selected {
+            return (
+                Err(if selected {
                     BabysitError::CodexExecutableInvalid
                 } else {
                     BabysitError::CodexNotFound
-                });
+                }),
+                true,
+            );
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let reaped = kill_and_reap_child(&mut child).await;
+            return (
+                Err(if selected {
+                    BabysitError::CodexExecutableInvalid
+                } else {
+                    BabysitError::CodexNotFound
+                }),
+                reaped,
+            );
+        };
+        let Some(stderr) = child.stderr.take() else {
+            let reaped = kill_and_reap_child(&mut child).await;
+            return (
+                Err(if selected {
+                    BabysitError::CodexExecutableInvalid
+                } else {
+                    BabysitError::CodexNotFound
+                }),
+                reaped,
+            );
+        };
+
+        let mut probe = VersionProbeChild::new(child, stdout, stderr);
+        let result = tokio::time::timeout(timeout, probe.collect()).await;
+        let (status, stdout, stderr) = match result {
+            Ok(Ok(output)) => output,
+            Ok(Err(_)) | Err(_) => {
+                probe.stop_and_reap().await;
+                let reaped = probe.reaped;
+                return (
+                    Err(if selected {
+                        BabysitError::CodexExecutableInvalid
+                    } else {
+                        BabysitError::CodexNotFound
+                    }),
+                    reaped,
+                );
             }
         };
         if !status.success() {
-            return Err(if selected {
-                BabysitError::CodexExecutableInvalid
-            } else {
-                BabysitError::CodexNotFound
-            });
+            return (
+                Err(if selected {
+                    BabysitError::CodexExecutableInvalid
+                } else {
+                    BabysitError::CodexNotFound
+                }),
+                probe.reaped,
+            );
         }
         let version = stdout
             .iter()
             .chain(stderr.iter())
             .copied()
             .collect::<Vec<_>>();
-        let version = String::from_utf8_lossy(&version)
+        let version = match String::from_utf8_lossy(&version)
             .lines()
             .next()
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .map(str::to_owned)
-            .ok_or(if selected {
-                BabysitError::CodexExecutableInvalid
-            } else {
-                BabysitError::CodexNotFound
-            })?;
-        Ok(ResolvedExecutable { path, version })
+        {
+            Some(version) => version,
+            None => {
+                return (
+                    Err(if selected {
+                        BabysitError::CodexExecutableInvalid
+                    } else {
+                        BabysitError::CodexNotFound
+                    }),
+                    probe.reaped,
+                )
+            }
+        };
+        (Ok(ResolvedExecutable { path, version }), probe.reaped)
     }
 
     /// Search PATH first, followed by platform-supported installation locations.
@@ -218,26 +236,89 @@ where
     }
 }
 
-/// 版本读取任一路径失败后，取消管道读取并显式 kill/wait 子进程。
-async fn terminate_version_child(
-    child: &mut Child,
-    stdout_task: Option<&mut JoinHandle<Result<Vec<u8>, VersionProbeFailure>>>,
-    stderr_task: Option<&mut JoinHandle<Result<Vec<u8>, VersionProbeFailure>>>,
-) {
-    if let Some(task) = stdout_task {
-        task.abort();
-        if !task.is_finished() {
-            let _ = task.await;
+/// 保持直接 Child、两个有界 reader 和 wait 状态的单一拥有者。
+struct VersionProbeChild {
+    child: Child,
+    stdout_task: JoinHandle<Result<Vec<u8>, VersionProbeFailure>>,
+    stderr_task: JoinHandle<Result<Vec<u8>, VersionProbeFailure>>,
+    stdout_joined: bool,
+    stderr_joined: bool,
+    reaped: bool,
+}
+
+impl VersionProbeChild {
+    /// 启动两个独立有界 reader，并把 Child 的回收责任集中到本对象。
+    fn new(
+        child: Child,
+        stdout: tokio::process::ChildStdout,
+        stderr: tokio::process::ChildStderr,
+    ) -> Self {
+        Self {
+            child,
+            stdout_task: tokio::spawn(read_capped(stdout)),
+            stderr_task: tokio::spawn(read_capped(stderr)),
+            stdout_joined: false,
+            stderr_joined: false,
+            reaped: false,
         }
     }
-    if let Some(task) = stderr_task {
-        task.abort();
-        if !task.is_finished() {
-            let _ = task.await;
+
+    /// 按顺序 join 两个 reader 后再等待直接 Child 退出。
+    async fn collect(
+        &mut self,
+    ) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>), VersionProbeFailure> {
+        let stdout = self.join_stdout().await?;
+        let stderr = self.join_stderr().await?;
+        let status = self
+            .child
+            .wait()
+            .await
+            .map_err(|_| VersionProbeFailure::Process)?;
+        self.reaped = true;
+        Ok((status, stdout, stderr))
+    }
+
+    /// 终止未完成 reader，逐个 join 后再显式 kill/wait 直接 Child。
+    async fn stop_and_reap(&mut self) {
+        if !self.stdout_joined {
+            self.stdout_task.abort();
+            let _ = (&mut self.stdout_task).await;
+            self.stdout_joined = true;
+        }
+        if !self.stderr_joined {
+            self.stderr_task.abort();
+            let _ = (&mut self.stderr_task).await;
+            self.stderr_joined = true;
+        }
+        let _ = self.child.start_kill();
+        if self.child.wait().await.is_ok() {
+            self.reaped = true;
         }
     }
+
+    /// join stdout reader；标记只在 future 真正完成后更新，timeout 不会丢失所有权。
+    async fn join_stdout(&mut self) -> Result<Vec<u8>, VersionProbeFailure> {
+        let result = (&mut self.stdout_task).await;
+        self.stdout_joined = true;
+        result
+            .map_err(|_| VersionProbeFailure::Reader)?
+            .map_err(|_| VersionProbeFailure::Reader)
+    }
+
+    /// join stderr reader；与 stdout 使用相同的生命周期规则。
+    async fn join_stderr(&mut self) -> Result<Vec<u8>, VersionProbeFailure> {
+        let result = (&mut self.stderr_task).await;
+        self.stderr_joined = true;
+        result
+            .map_err(|_| VersionProbeFailure::Reader)?
+            .map_err(|_| VersionProbeFailure::Reader)
+    }
+}
+
+/// 没有 reader pipe 时仍由调用方显式 kill/wait 直接 Child。
+async fn kill_and_reap_child(child: &mut Child) -> bool {
     let _ = child.start_kill();
-    let _ = child.wait().await;
+    child.wait().await.is_ok()
 }
 
 /// 版本探测失败只在内部区分原因，永远不携带原始路径或输出。

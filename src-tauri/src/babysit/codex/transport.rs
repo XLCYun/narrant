@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
+/// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
+const CAPABILITY_SENTINEL_THREAD_ID: &str = "__narrant_babysit_missing_thread__";
+const CAPABILITY_SENTINEL_TURN_ID: &str = "__narrant_babysit_missing_turn__";
+
 impl AppServerProcess {
     /// poison restart 前同步完成 child reap 与 generation-owned home 删除。
     pub(super) async fn shutdown(&mut self) {
@@ -113,8 +117,8 @@ impl AppServerProcess {
             .start_thread(&request, deadline, &cancellation)
             .await
             .map_err(classify_capability_probe_error)?;
-        let probe_result = self.probe_structured_turn(&thread_id, deadline).await;
-        // 无论 turn/schema probe 成功与否，都尝试删除刚创建的 marked probe thread。
+        let probe_result = self.probe_turn_capabilities(deadline).await;
+        // 真实 restricted thread 只验证 policy 与 delete；永远不在它上面启动 turn。
         let delete_result = self.delete_probe_thread(&thread_id).await;
         match (probe_result, delete_result) {
             (Err(error), _) => Err(error),
@@ -123,34 +127,32 @@ impl AppServerProcess {
         }
     }
 
-    /// 发送无源码的最小结构化 turn，并立即调用 interrupt 验证方法存在性。
-    async fn probe_structured_turn(
-        &mut self,
-        thread_id: &str,
-        deadline: Instant,
-    ) -> Result<(), RpcFailure> {
-        let result = self
+    /// 对不存在的 sentinel thread/turn 解析 turn 与 schema、interrupt 能力，不调用模型。
+    async fn probe_turn_capabilities(&mut self, deadline: Instant) -> Result<(), RpcFailure> {
+        match self
             .request(
                 "turn/start",
                 json!({
-                    "threadId": thread_id,
-                    "input": [{"type": "text", "text": "Return an empty object for this capability probe."}],
+                    "threadId": CAPABILITY_SENTINEL_THREAD_ID,
+                    "input": [],
                     "outputSchema": super::structured_output_schema()
                 }),
                 deadline,
                 None,
             )
             .await
-            .map_err(classify_capability_probe_error)?;
-        let turn_id = result
-            .get("turn")
-            .and_then(|turn| turn.get("id"))
-            .and_then(Value::as_str)
-            .ok_or(RpcFailure::Incompatible)?;
+        {
+            Ok(_) | Err(RpcFailure::EntityNotFound | RpcFailure::AlreadyComplete) => {}
+            Err(RpcFailure::SignedOut) => return Err(RpcFailure::SignedOut),
+            Err(error) => return Err(classify_capability_probe_error(error)),
+        }
         match self
             .request(
                 "turn/interrupt",
-                json!({"threadId": thread_id, "turnId": turn_id}),
+                json!({
+                    "threadId": CAPABILITY_SENTINEL_THREAD_ID,
+                    "turnId": CAPABILITY_SENTINEL_TURN_ID
+                }),
                 deadline,
                 None,
             )

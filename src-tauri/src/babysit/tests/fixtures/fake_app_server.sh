@@ -147,6 +147,18 @@ while IFS= read -r line; do
       fi
       ;;
     turn/start)
+      turn_thread_id=$(printf '%s' "$line" | sed -n 's/.*"threadId":"\([^"]*\)".*/\1/p')
+      if [ "$turn_thread_id" = "__narrant_babysit_missing_thread__" ]; then
+        record "turn/start:sentinel"
+        if [ "$mode" = "rejected-output-schema" ]; then
+          printf '{"id":%s,"error":{"code":-32602,"message":"invalid field outputSchema"}}\n' "$request_id"
+        else
+          printf '{"id":%s,"error":{"code":-32004,"message":"thread not found"}}\n' "$request_id"
+        fi
+        continue
+      fi
+      record "turn/start:real"
+      record "agent-message"
       turn_count=$((turn_count + 1))
       if [ "$mode" = "rejected-output-schema" ]; then
         printf '{"id":%s,"error":{"code":-32602,"message":"invalid field outputSchema"}}\n' "$request_id"
@@ -174,6 +186,16 @@ while IFS= read -r line; do
       printf '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-%s","status":"completed","items":[]}}}\n' "$turn_count"
       ;;
     turn/interrupt)
+      interrupt_thread_id=$(printf '%s' "$line" | sed -n 's/.*"threadId":"\([^"]*\)".*/\1/p')
+      if [ "$interrupt_thread_id" = "__narrant_babysit_missing_thread__" ]; then
+        record "turn/interrupt:sentinel"
+        if [ "$mode" = "missing-interrupt" ]; then
+          printf '{"id":%s,"error":{"code":-32601,"message":"method not found"}}\n' "$request_id"
+        else
+          printf '{"id":%s,"error":{"code":-32004,"message":"thread not found"}}\n' "$request_id"
+        fi
+        continue
+      fi
       if [ "$mode" = "missing-interrupt" ]; then
         printf '{"id":%s,"error":{"code":-32601,"message":"method not found"}}\n' "$request_id"
         continue

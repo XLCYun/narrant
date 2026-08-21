@@ -174,10 +174,12 @@ async fn capability_probe_accepts_restricted_structured_output_and_cleanup() {
 
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/start:restricted"));
-    assert!(events.lines().any(|line| line == "turn/start"));
-    assert!(events.lines().any(|line| line == "turn/interrupt"));
+    assert!(events.lines().any(|line| line == "turn/start:sentinel"));
+    assert!(events.lines().any(|line| line == "turn/interrupt:sentinel"));
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
     assert!(!events.lines().any(|line| line == "source-in-input"));
+    assert!(!events.lines().any(|line| line == "turn/start:real"));
+    assert!(!events.lines().any(|line| line == "agent-message"));
 }
 
 #[tokio::test]
@@ -191,6 +193,8 @@ async fn capability_probe_ignores_unknown_notifications() {
 
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+    assert!(!events.lines().any(|line| line == "turn/start:real"));
+    assert!(!events.lines().any(|line| line == "agent-message"));
 }
 
 #[tokio::test]
@@ -205,6 +209,9 @@ async fn missing_interrupt_is_incompatible_but_probe_thread_is_deleted() {
     assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+    assert!(events.lines().any(|line| line == "turn/interrupt:sentinel"));
+    assert!(!events.lines().any(|line| line == "turn/start:real"));
+    assert!(!events.lines().any(|line| line == "agent-message"));
 }
 
 #[tokio::test]
@@ -218,8 +225,11 @@ async fn missing_delete_is_incompatible_after_the_probe_turn() {
 
     assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
-    assert!(events.lines().any(|line| line == "turn/interrupt"));
+    assert!(events.lines().any(|line| line == "turn/start:sentinel"));
+    assert!(events.lines().any(|line| line == "turn/interrupt:sentinel"));
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+    assert!(!events.lines().any(|line| line == "turn/start:real"));
+    assert!(!events.lines().any(|line| line == "agent-message"));
 }
 
 #[tokio::test]
@@ -234,6 +244,9 @@ async fn rejected_output_schema_is_incompatible_without_source_call() {
     assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+    assert!(events.lines().any(|line| line == "turn/start:sentinel"));
+    assert!(!events.lines().any(|line| line == "turn/start:real"));
+    assert!(!events.lines().any(|line| line == "agent-message"));
     assert!(!events.lines().any(|line| line == "source-in-input"));
 }
 
@@ -248,7 +261,9 @@ async fn rejected_permission_profile_is_incompatible_before_turn() {
 
     assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
-    assert!(!events.lines().any(|line| line == "turn/start"));
+    assert!(!events.lines().any(|line| line == "turn/start:sentinel"));
+    assert!(!events.lines().any(|line| line == "turn/start:real"));
+    assert!(!events.lines().any(|line| line == "agent-message"));
 }
 
 #[tokio::test]

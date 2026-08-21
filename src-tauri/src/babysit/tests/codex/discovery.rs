@@ -2,7 +2,7 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-/// 写入一个自带 PID marker 的 shell executable，供 kill/reap 行为测试使用。
+/// 写入一个带启动 marker 的 shell executable，供直接子进程回收测试使用。
 fn process_fixture(directory: &Path, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let executable = directory.join("codex-process");
     let marker = directory.join("codex-process.pid");
@@ -16,24 +16,6 @@ fn process_fixture(directory: &Path, body: &str) -> (std::path::PathBuf, std::pa
     permissions.set_mode(0o700);
     std::fs::set_permissions(&executable, permissions).unwrap();
     (executable, marker)
-}
-
-/// 等待版本探测失败后被显式 reap 的 PID 消失，避免只断言错误类别。
-async fn assert_process_reaped(marker: &Path) {
-    for _ in 0..100 {
-        if let Ok(pid) = std::fs::read_to_string(marker)
-            .and_then(|value| value.parse::<libc::pid_t>().map_err(std::io::Error::other))
-        {
-            // `kill(pid, 0)` 只探测存在性，不给 fixture 进程发送信号。
-            if unsafe { libc::kill(pid, 0) } == -1
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-            {
-                return;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    panic!("version probe child was not reaped");
 }
 
 /// 构造返回固定版本的可执行文件，不触碰真实 Codex 安装。
@@ -99,28 +81,27 @@ async fn invalid_selected_executable_returns_reselection_error_without_raw_outpu
 #[tokio::test]
 async fn oversized_version_output_is_bounded_and_child_is_reaped() {
     let directory = tempfile::tempdir().unwrap();
-    let (executable, marker) = process_fixture(
-        directory.path(),
-        "i=0\nwhile [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done\nwhile :; do :; done",
-    );
-    let error = CodexExecutableDiscovery
-        .validate_with_timeout(executable, true, std::time::Duration::from_secs(1))
-        .await
-        .unwrap_err();
+    let output = "x".repeat(5000);
+    let body = format!("printf '%s' '{}'\nwhile :; do :; done", output);
+    let (executable, marker) = process_fixture(directory.path(), &body);
+    let (result, reaped) = CodexExecutableDiscovery
+        .validate_with_timeout_observed(executable, true, std::time::Duration::from_secs(5))
+        .await;
 
-    assert!(matches!(error, BabysitError::CodexExecutableInvalid));
-    assert_process_reaped(&marker).await;
+    assert!(matches!(result, Err(BabysitError::CodexExecutableInvalid)));
+    assert!(marker.exists(), "version fixture did not start");
+    assert!(reaped, "direct version child was not reaped");
 }
 
 #[tokio::test]
 async fn hanging_version_process_is_killed_and_reaped_on_timeout() {
     let directory = tempfile::tempdir().unwrap();
     let (executable, marker) = process_fixture(directory.path(), "while :; do :; done");
-    let error = CodexExecutableDiscovery
-        .validate_with_timeout(executable, true, std::time::Duration::from_secs(3))
-        .await
-        .unwrap_err();
+    let (result, reaped) = CodexExecutableDiscovery
+        .validate_with_timeout_observed(executable, true, std::time::Duration::from_secs(3))
+        .await;
 
-    assert!(matches!(error, BabysitError::CodexExecutableInvalid));
-    assert_process_reaped(&marker).await;
+    assert!(matches!(result, Err(BabysitError::CodexExecutableInvalid)));
+    assert!(marker.exists(), "version fixture did not start");
+    assert!(reaped, "direct version child was not reaped");
 }
