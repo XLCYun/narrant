@@ -74,6 +74,7 @@ describe("Babysit contract spine", () => {
   it("rejects unknown provider-specific error codes at the runtime boundary", () => {
     expect(isBabysitError({ code: "provider_timeout", detail: "timeout" })).toBe(false);
     expect(isBabysitError({ code: "provider", detail: "provider failed" })).toBe(true);
+    expect(isBabysitError({ code: "codex_not_found", detail: "missing", recovery: "open_shell" })).toBe(false);
   });
 
   it("selects a File Change, emits generating, and renders a complete validated result binding", async () => {

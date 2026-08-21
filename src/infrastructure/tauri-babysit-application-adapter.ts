@@ -28,5 +28,9 @@ export function createTauriBabysitApplicationAdapter(
         progress,
       }, signal);
     },
+    /** 将 native picker 选择交给后端验证并持久化，不把路径写入诊断。 */
+    selectCodexExecutable(path) {
+      return transport.invoke("select_babysit_codex_executable", { executable: path });
+    },
   };
 }

@@ -8,9 +8,14 @@ use super::{
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
+
+/// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
+const CAPABILITY_SENTINEL_THREAD_ID: &str = "__narrant_babysit_missing_thread__";
+const CAPABILITY_SENTINEL_TURN_ID: &str = "__narrant_babysit_missing_turn__";
 
 impl AppServerProcess {
     /// poison restart 前同步完成 child reap 与 generation-owned home 删除。
@@ -71,7 +76,7 @@ impl AppServerProcess {
             isolated_home: Some(isolated_home),
         };
         let deadline = Instant::now() + CODEX_CLEANUP_TIMEOUT;
-        process
+        let initialize = process
             .request(
                 "initialize",
                 json!({
@@ -85,12 +90,91 @@ impl AppServerProcess {
                 deadline,
                 None,
             )
-            .await?;
+            .await
+            .map_err(classify_initialize_error)?;
+        validate_initialize_response(&initialize).map_err(classify_initialize_error)?;
         process
             .notification("initialized", json!({}), deadline, None)
-            .await?;
-        process.cleanup_marked_threads().await;
+            .await
+            .map_err(|_| RpcFailure::Initialization)?;
+        process.cleanup_marked_threads().await?;
         Ok(process)
+    }
+
+    /// 在同一 App Server 连接上验证受限 thread、结构化输出、interrupt 和 delete 能力。
+    pub(super) async fn probe_capabilities(&mut self, workspace: &Path) -> Result<(), RpcFailure> {
+        let cancellation = CancellationSignal::default();
+        let request = BabysitProviderRequest {
+            path: "__narrant_babysit_capability_probe__".to_owned(),
+            locale: "en".to_owned(),
+            workspace_path: workspace.to_string_lossy().into_owned(),
+            before: String::new(),
+            after: String::new(),
+            targets: Vec::new(),
+        };
+        let deadline = Instant::now() + CODEX_CLEANUP_TIMEOUT;
+        let thread_id = self
+            .start_thread(&request, deadline, &cancellation)
+            .await
+            .map_err(classify_capability_probe_error)?;
+        let probe_result = self.probe_turn_capabilities(deadline).await;
+        // 真实 restricted thread 只验证 policy 与 delete；永远不在它上面启动 turn。
+        let delete_result = self.delete_probe_thread(&thread_id).await;
+        match (probe_result, delete_result) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(error)) => Err(error),
+        }
+    }
+
+    /// 对不存在的 sentinel thread/turn 解析 turn 与 schema、interrupt 能力，不调用模型。
+    async fn probe_turn_capabilities(&mut self, deadline: Instant) -> Result<(), RpcFailure> {
+        match self
+            .request(
+                "turn/start",
+                json!({
+                    "threadId": CAPABILITY_SENTINEL_THREAD_ID,
+                    "input": [],
+                    "outputSchema": super::structured_output_schema()
+                }),
+                deadline,
+                None,
+            )
+            .await
+        {
+            Ok(_) | Err(RpcFailure::EntityNotFound | RpcFailure::AlreadyComplete) => {}
+            Err(RpcFailure::SignedOut) => return Err(RpcFailure::SignedOut),
+            Err(error) => return Err(classify_capability_probe_error(error)),
+        }
+        match self
+            .request(
+                "turn/interrupt",
+                json!({
+                    "threadId": CAPABILITY_SENTINEL_THREAD_ID,
+                    "turnId": CAPABILITY_SENTINEL_TURN_ID
+                }),
+                deadline,
+                None,
+            )
+            .await
+        {
+            Ok(_) | Err(RpcFailure::EntityNotFound | RpcFailure::AlreadyComplete) => Ok(()),
+            Err(RpcFailure::SignedOut) => Err(RpcFailure::SignedOut),
+            Err(error) => Err(classify_capability_probe_error(error)),
+        }
+    }
+
+    /// 删除 probe thread；缺少 delete 或字段不被接受必须归类为 incompatible。
+    async fn delete_probe_thread(&mut self, thread_id: &str) -> Result<(), RpcFailure> {
+        self.request(
+            "thread/delete",
+            json!({"threadId": thread_id}),
+            Instant::now() + CODEX_CLEANUP_TIMEOUT,
+            None,
+        )
+        .await
+        .map(|_| ())
+        .map_err(classify_capability_probe_error)
     }
 
     /// 创建一个只读、带 Narrant 标记的 fresh thread。
@@ -107,8 +191,9 @@ impl AppServerProcess {
                 deadline,
                 Some(cancellation),
             )
-            .await?;
-        ensure_isolated_config(&effective)?;
+            .await
+            .map_err(classify_start_error)?;
+        ensure_isolated_config(&effective).map_err(|_| RpcFailure::Incompatible)?;
         let requirements = self
             .request(
                 "configRequirements/read",
@@ -116,8 +201,9 @@ impl AppServerProcess {
                 deadline,
                 Some(cancellation),
             )
-            .await?;
-        ensure_safe_requirements(&requirements)?;
+            .await
+            .map_err(classify_start_error)?;
+        ensure_safe_requirements(&requirements).map_err(|_| RpcFailure::Incompatible)?;
         let config = restricted_config();
         let result = self
             .request(
@@ -135,7 +221,8 @@ impl AppServerProcess {
                 deadline,
                 None,
             )
-            .await?;
+            .await
+            .map_err(classify_start_error)?;
         if validate_thread_policy(&result, &request.workspace_path).is_err() {
             if let Some(thread_id) = result
                 .get("thread")
@@ -151,7 +238,7 @@ impl AppServerProcess {
                     )
                     .await;
             }
-            return Err(RpcFailure::Protocol);
+            return Err(RpcFailure::Incompatible);
         }
         if cancellation.is_cancelled() {
             if let Some(thread_id) = result
@@ -175,7 +262,7 @@ impl AppServerProcess {
             .and_then(|thread| thread.get("id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .ok_or(RpcFailure::Protocol)
+            .ok_or(RpcFailure::Incompatible)
     }
 
     /// 提交 turn/start；outputSchema 要求 map 形状但不把动态行号伪装成固定 schema。
@@ -186,39 +273,25 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: &CancellationSignal,
     ) -> Result<String, RpcFailure> {
-        let output_schema = json!({
-            "type": "object",
-            "properties": {
-                "before": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string", "maxLength": 240}
-                },
-                "after": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string", "maxLength": 240}
-                }
-            },
-            "required": ["before", "after"],
-            "additionalProperties": false
-        });
         let result = self
             .request(
                 "turn/start",
                 json!({
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": prompt}],
-                    "outputSchema": output_schema
+                    "outputSchema": super::structured_output_schema()
                 }),
                 deadline,
                 Some(cancellation),
             )
-            .await?;
+            .await
+            .map_err(classify_start_error)?;
         result
             .get("turn")
             .and_then(|turn| turn.get("id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .ok_or(RpcFailure::Protocol)
+            .ok_or(RpcFailure::Incompatible)
     }
 
     /// 读取 turn/completed，并只保留最终 agent message 文本，不传播其它事件。
@@ -266,7 +339,17 @@ impl AppServerProcess {
                             return Ok(final_text);
                         }
                         Some("interrupted") => return Err(RpcFailure::Cancelled),
-                        Some("failed") => return Err(RpcFailure::Remote),
+                        Some("failed") => {
+                            let failure = turn
+                                .get("error")
+                                .map(classify_remote_error)
+                                .unwrap_or(RpcFailure::Remote);
+                            return Err(if failure == RpcFailure::SignedOut {
+                                RpcFailure::SignedOut
+                            } else {
+                                RpcFailure::Remote
+                            });
+                        }
                         _ => return Err(RpcFailure::Protocol),
                     }
                 } else if message.get("id").is_some() {
@@ -280,7 +363,7 @@ impl AppServerProcess {
     }
 
     /// 启动后删除上次异常退出遗留、且明确带 Narrant feature marker 的 thread。
-    async fn cleanup_marked_threads(&mut self) {
+    async fn cleanup_marked_threads(&mut self) -> Result<(), RpcFailure> {
         for archived in [false, true] {
             let mut cursor: Option<String> = None;
             loop {
@@ -298,12 +381,10 @@ impl AppServerProcess {
                         Instant::now() + CODEX_CLEANUP_TIMEOUT,
                         None,
                     )
-                    .await;
-                let Ok(result) = result else {
-                    break;
-                };
+                    .await
+                    .map_err(classify_capability_probe_error)?;
                 let Some(threads) = result.get("data").and_then(Value::as_array) else {
-                    break;
+                    return Err(RpcFailure::Incompatible);
                 };
                 let ids = threads
                     .iter()
@@ -315,14 +396,14 @@ impl AppServerProcess {
                     .map(ToOwned::to_owned)
                     .collect::<Vec<_>>();
                 for thread_id in ids {
-                    let _ = self
-                        .request(
-                            "thread/delete",
-                            json!({"threadId": thread_id}),
-                            Instant::now() + CODEX_CLEANUP_TIMEOUT,
-                            None,
-                        )
-                        .await;
+                    self.request(
+                        "thread/delete",
+                        json!({"threadId": thread_id}),
+                        Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                        None,
+                    )
+                    .await
+                    .map_err(classify_capability_probe_error)?;
                 }
                 let next_cursor = result
                     .get("nextCursor")
@@ -334,6 +415,7 @@ impl AppServerProcess {
                 cursor = next_cursor;
             }
         }
+        Ok(())
     }
 
     /// 发送一条 JSON-RPC notification；协议线不写入 `jsonrpc` 字段。
@@ -379,8 +461,8 @@ impl AppServerProcess {
             let message = self.read_message(deadline, cancellation).await?;
             if message.get("id").and_then(Value::as_u64) == Some(request_id) {
                 self.pending_notifications.append(&mut deferred);
-                if message.get("error").is_some() {
-                    return Err(RpcFailure::Remote);
+                if let Some(error) = message.get("error") {
+                    return Err(classify_remote_error(error));
                 }
                 return message.get("result").cloned().ok_or(RpcFailure::Protocol);
             }
@@ -501,6 +583,101 @@ fn reap_child(mut child: Child) {
         handle.spawn(async move {
             let _ = child.wait().await;
         });
+    }
+}
+
+/// 只识别有限的认证关键词，并丢弃 server 原始错误消息。
+fn classify_remote_error(error: &Value) -> RpcFailure {
+    let serialized = serde_json::to_string(error)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if [
+        "unauthorized",
+        "unauthenticated",
+        "not logged",
+        "logged out",
+        "login required",
+        "requires login",
+        "authentication",
+        "auth_required",
+    ]
+    .iter()
+    .any(|marker| serialized.contains(marker))
+    {
+        RpcFailure::SignedOut
+    } else if error.get("code").and_then(Value::as_i64) == Some(-32601)
+        || serialized.contains("method not found")
+        || serialized.contains("unsupported method")
+    {
+        RpcFailure::MethodNotFound
+    } else if error.get("code").and_then(Value::as_i64) == Some(-32602)
+        || serialized.contains("invalid params")
+        || serialized.contains("invalid field")
+        || serialized.contains("unknown field")
+    {
+        RpcFailure::InvalidParams
+    } else if serialized.contains("already complete")
+        || serialized.contains("already completed")
+        || serialized.contains("turn is complete")
+    {
+        RpcFailure::AlreadyComplete
+    } else if serialized.contains("entity not found")
+        || serialized.contains("thread not found")
+        || serialized.contains("turn not found")
+    {
+        RpcFailure::EntityNotFound
+    } else {
+        RpcFailure::Remote
+    }
+}
+
+/// Initialize 响应异常属于握手失败；只有明确的登录拒绝保留 signed-out 类别。
+fn classify_initialize_error(error: RpcFailure) -> RpcFailure {
+    match error {
+        RpcFailure::SignedOut => RpcFailure::SignedOut,
+        _ => RpcFailure::Initialization,
+    }
+}
+
+/// 校验 initialize 的稳定元数据；字段缺失属于握手损坏，不猜测运行时兼容性。
+fn validate_initialize_response(value: &Value) -> Result<(), RpcFailure> {
+    let has_user_agent = value
+        .get("userAgent")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_codex_home = value
+        .get("codexHome")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    (has_user_agent && has_codex_home)
+        .then_some(())
+        .ok_or(RpcFailure::Protocol)
+}
+
+/// 生产请求保留普通传输/截止时间失败；协议字段缺失仍归类为兼容性问题。
+fn classify_start_error(error: RpcFailure) -> RpcFailure {
+    match error {
+        RpcFailure::SignedOut => RpcFailure::SignedOut,
+        RpcFailure::Remote
+        | RpcFailure::Protocol
+        | RpcFailure::MethodNotFound
+        | RpcFailure::InvalidParams => RpcFailure::Incompatible,
+        other => other,
+    }
+}
+
+/// 初始化后的能力探测只把认证拒绝与协议缺失区分出来，其余归为 init_failed。
+fn classify_capability_probe_error(error: RpcFailure) -> RpcFailure {
+    match error {
+        RpcFailure::SignedOut => RpcFailure::SignedOut,
+        RpcFailure::Remote
+        | RpcFailure::Protocol
+        | RpcFailure::MethodNotFound
+        | RpcFailure::InvalidParams
+        | RpcFailure::EntityNotFound
+        | RpcFailure::AlreadyComplete
+        | RpcFailure::Incompatible => RpcFailure::Incompatible,
+        _ => RpcFailure::Initialization,
     }
 }
 

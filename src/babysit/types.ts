@@ -19,12 +19,25 @@ export type BabysitErrorCode =
   | "input_unavailable"
   | "invalid_request"
   | "operation_conflict"
-  | "operation_unavailable";
+  | "operation_unavailable"
+  | "codex_not_found"
+  | "codex_executable_invalid"
+  | "codex_signed_out"
+  | "codex_incompatible"
+  | "codex_initialization_failed";
+
+/** Codex setup failure 可执行的恢复动作，不包含路径或原始进程输出。 */
+export type BabysitRecoveryAction =
+  | "login_codex"
+  | "upgrade_codex"
+  | "select_codex_executable"
+  | "retry";
 
 /** Babysit command 失败的结构化 payload；detail 不参与业务分支。 */
 export type BabysitError = {
   code: BabysitErrorCode;
   detail: string;
+  recovery?: BabysitRecoveryAction;
 };
 
 /** 运行时校验使用的公开 Babysit error code 白名单。 */
@@ -40,6 +53,17 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
   "invalid_request",
   "operation_conflict",
   "operation_unavailable",
+  "codex_not_found",
+  "codex_executable_invalid",
+  "codex_signed_out",
+  "codex_incompatible",
+  "codex_initialization_failed",
+]);
+const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
+  "login_codex",
+  "upgrade_codex",
+  "select_codex_executable",
+  "retry",
 ]);
 
 /** 判断 Tauri reject 值是否符合 provider-independent Babysit error shape。 */
@@ -48,7 +72,10 @@ export function isBabysitError(value: unknown): value is BabysitError {
   const candidate = value as Partial<BabysitError>;
   return typeof candidate.code === "string"
     && babysitErrorCodes.has(candidate.code as BabysitErrorCode)
-    && typeof candidate.detail === "string";
+    && typeof candidate.detail === "string"
+    && (candidate.recovery === undefined
+      || (typeof candidate.recovery === "string"
+        && babysitRecoveryActions.has(candidate.recovery as BabysitRecoveryAction)));
 }
 
 /** 一次 File Change 的完整 before/after Line Explanation 结果。 */
@@ -111,6 +138,8 @@ export interface BabysitApplicationAdapter {
     onProgress: (progress: BabysitProgress) => void,
     signal: AbortSignal,
   ): Promise<BabysitFileExplanations>;
+  /** 由 native picker 选择并验证 Codex executable；未安装 provider 可不实现。 */
+  selectCodexExecutable?(path: string): Promise<void>;
 }
 
 /** Review Reader 消费的最小 Babysit action binding。 */
@@ -125,4 +154,6 @@ export type BabysitBinding = {
   cancel(): void;
   /** 重试最后一次失败的分析。 */
   retry(): void;
+  /** 执行 typed executable recovery action；取消选择不改变失败状态。 */
+  selectExecutable?(): void;
 };

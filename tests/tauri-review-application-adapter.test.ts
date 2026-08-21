@@ -245,4 +245,18 @@ describe("Tauri Babysit application adapter", () => {
       expect.any(AbortSignal),
     );
   });
+
+  it("把 native picker 的 executable 交给 typed setup command", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke,
+      invokeCancellable: vi.fn(),
+    } as unknown as TypedTauriTransport);
+
+    await adapter.selectCodexExecutable?.("/opt/homebrew/bin/codex");
+
+    expect(invoke).toHaveBeenCalledWith("select_babysit_codex_executable", {
+      executable: "/opt/homebrew/bin/codex",
+    });
+  });
 });

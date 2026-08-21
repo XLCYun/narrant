@@ -192,7 +192,7 @@ const readerSnapshot: ReviewReaderSnapshot = {
 };
 
 /** 用代表性长短路径和变更内容预览完整 Review Reader。 */
-function ReviewReaderPreview({ empty = false, merged = false, update = false, babysitKind }: { empty?: boolean; merged?: boolean; update?: boolean; babysitKind?: "completed" | "generating" | "repairing" | "failed" }) {
+function ReviewReaderPreview({ empty = false, merged = false, update = false, babysitKind }: { empty?: boolean; merged?: boolean; update?: boolean; babysitKind?: "completed" | "generating" | "repairing" | "failed" | "missing" }) {
   const snapshot = {
     ...readerSnapshot,
     fileChanges: empty ? [] : readerSnapshot.fileChanges,
@@ -222,6 +222,8 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false, ba
       ? { kind: "repairing", request: previewRequest!, attempt: 2 }
       : babysitKind === "failed"
         ? { kind: "failed", request: previewRequest!, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
+        : babysitKind === "missing"
+          ? { kind: "failed", request: previewRequest!, retryable: true, error: { code: "codex_not_found", detail: "", recovery: "select_codex_executable" } }
         : { kind: "generating", request: previewRequest! };
   const review: ReviewReaderBinding = {
     snapshot,
@@ -239,6 +241,7 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false, ba
       explain: () => undefined,
       cancel: () => undefined,
       retry: () => undefined,
+      selectExecutable: () => undefined,
     } satisfies BabysitBinding,
     update: update
       ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
@@ -354,6 +357,7 @@ const previews: Record<string, PreviewDefinition> = {
       "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview babysitKind="generating" /> },
       "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview babysitKind="repairing" /> },
       "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview babysitKind="failed" /> },
+      "babysit-missing": { label: "Codex 缺失恢复", render: () => <ReviewReaderPreview babysitKind="missing" /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },

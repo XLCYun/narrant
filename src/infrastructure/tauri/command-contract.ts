@@ -42,6 +42,7 @@ export type TauriCommandContract = {
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
+  select_babysit_codex_executable: { args: { executable: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
   discover_github_pull_requests: { args: { repositoryId: number }; result: PullRequestGroup[] };
   github_auth_status: { args: EmptyArgs; result: GitHubAuthStatus };
@@ -70,6 +71,7 @@ export type CancellableTauriCommandName =
   | "read_review_file_change"
   | "explain_review_file_change"
   | "check_babysit_file_eligibility";
+  // Setup recovery is initiated by the native picker and does not hold an analysis operation.
 export type PlainTauriCommandName = Exclude<TauriCommandName, CancellableTauriCommandName>;
 export type CommandArgs<K extends TauriCommandName> = TauriCommandContract[K]["args"];
 export type CommandResult<K extends TauriCommandName> = TauriCommandContract[K]["result"];
@@ -103,5 +105,6 @@ export const TAURI_COMMAND_NAMES = [
   "read_review_file_change",
   "explain_review_file_change",
   "check_babysit_file_eligibility",
+  "select_babysit_codex_executable",
   "close_review",
 ] as const satisfies readonly TauriCommandName[];

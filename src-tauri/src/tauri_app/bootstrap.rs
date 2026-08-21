@@ -59,7 +59,9 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
-            app.manage(babysit::BabysitApplication::with_codex_provider());
+            app.manage(babysit::BabysitApplication::with_codex_provider_at(
+                application_data.join("babysit-settings.json"),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -87,6 +89,7 @@ pub fn run() {
             review_commands::read_review_file_change,
             babysit_commands::explain_review_file_change,
             babysit_commands::check_babysit_file_eligibility,
+            babysit_commands::select_babysit_codex_executable,
             review_commands::close_review
         ])
         .plugin(tauri_plugin_opener::init())
