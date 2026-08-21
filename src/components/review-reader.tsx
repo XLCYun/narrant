@@ -177,7 +177,7 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
 
 /** 呈现满高、自由浏览且无审核进度语义的 Review Reader。 */
 export function ReviewReader(input: ReviewReaderProps) {
-  const { t } = useTranslation(["common", "review"]);
+  const { t, i18n } = useTranslation(["common", "review"]);
   const { review, appearance } = input;
   const refreshing = review.transition.kind === "refreshing";
   const props = {
@@ -213,6 +213,7 @@ export function ReviewReader(input: ReviewReaderProps) {
   const babysitReasonId = useId();
   const eligibility = babysit?.eligibility;
   const babysitEnabled = eligibility?.kind === "resolved" && Boolean(eligibility.result?.eligible);
+  const babysitLocale = i18n.resolvedLanguage ?? i18n.language;
   const eligibilityLabels: Record<BabysitEligibilityReason, string> = {
     non_text: t("review:babysitUnsupportedBinary"),
     generated_or_vendored: t("review:babysitUnsupportedGenerated"),
@@ -235,11 +236,11 @@ export function ReviewReader(input: ReviewReaderProps) {
       return;
     }
     if (!babysit || !babysitEnabled || !selectedPath || babysitState?.kind !== "idle") return;
-    const identity = `${review.snapshot.reviewId}:${review.snapshot.snapshotId}:${selectedPath}`;
+    const identity = `${review.snapshot.reviewId}:${review.snapshot.snapshotId}:${selectedPath}:${babysitLocale}`;
     if (explainedIdentity.current === identity) return;
     explainedIdentity.current = identity;
     babysit.explain();
-  }, [babysit, babysitEnabled, babysitState?.kind, babysitVisible, review.snapshot.reviewId, review.snapshot.snapshotId, selectedPath]);
+  }, [babysit, babysitEnabled, babysitLocale, babysitState?.kind, babysitVisible, review.snapshot.reviewId, review.snapshot.snapshotId, selectedPath]);
 
   /** 关闭当前解释展示时清掉 UI 展开状态，但不影响后端已完成的内存缓存。 */
   useEffect(() => {

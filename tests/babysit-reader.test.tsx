@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { i18n } from "@/lib/i18n";
@@ -137,6 +137,19 @@ describe("Babysit Review Reader presentation", () => {
     expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
   });
 
+  it("宝宝模式保持打开时，locale 变化会重新 arm 当前文件分析", async () => {
+    const review = makeReview({ kind: "idle" });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    expect(review.babysit?.explain).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    expect(review.babysit?.explain).toHaveBeenCalledTimes(2);
+  });
+
   it("在生成、修复和失败状态显示文件级 sticky footer 操作", () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -157,7 +170,7 @@ describe("Babysit Review Reader presentation", () => {
       kind: "failed",
       retryable: true,
       request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
-      error: { code: "repair_exhausted", detail: "三轮修复后仍缺少第 2 行" },
+      error: { code: "repair_exhausted", detail: "/Users/alice/repo/src/example.ts source=const secret='token'; stderr=raw provider output" },
     });
     render(<ReviewReader review={failedReview} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
@@ -169,7 +182,10 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(within(footer).getByRole("button", { name: "复制诊断" }));
     expect(within(footer).getByRole("button", { name: "已复制诊断" })).toBeInTheDocument();
     expect(writeText).toHaveBeenCalledWith('{"category":"babysit","code":"repair_exhausted"}');
-    expect(writeText.mock.calls[0]?.[0]).not.toContain("三轮修复");
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("/Users/alice");
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("secret");
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("token");
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("raw provider output");
   });
 
   it("禁用不支持的文件并在 Tooltip 触发器上保留具体原因", () => {

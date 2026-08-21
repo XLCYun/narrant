@@ -25,7 +25,7 @@ impl OperationId {
 }
 
 /// 应用操作可只读观察的取消信号，不能触发上层操作取消。
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CancellationSignal(Arc<AtomicBool>);
 
 impl CancellationSignal {
@@ -37,6 +37,11 @@ impl CancellationSignal {
     /// 返回调用方是否已经请求取消。
     pub(crate) fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
+    }
+
+    /// 由拥有应用生命周期的内部清理 seam 请求当前操作尽快退出。
+    pub(crate) fn cancel(&self) {
+        self.mark_cancelled();
     }
 }
 

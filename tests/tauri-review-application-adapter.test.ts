@@ -259,4 +259,23 @@ describe("Tauri Babysit application adapter", () => {
       executable: "/opt/homebrew/bin/codex",
     });
   });
+
+  it("把 Snapshot/Review 生命周期清理映射到 typed cache commands", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke,
+      invokeCancellable: vi.fn(),
+    } as unknown as TypedTauriTransport);
+
+    await adapter.clearSnapshot?.({ reviewId: "review-1", snapshotId: "snapshot-1" });
+    await adapter.clearReview?.("review-1");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "clear_babysit_snapshot_cache", {
+      reviewId: "review-1",
+      snapshotId: "snapshot-1",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "clear_babysit_review_cache", {
+      reviewId: "review-1",
+    });
+  });
 });

@@ -159,6 +159,98 @@ async fn cache_does_not_reuse_an_explanation_from_another_locale() {
 }
 
 #[tokio::test]
+async fn clearing_snapshot_and_review_cache_forces_only_the_requested_regeneration() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let application = BabysitApplication::new(provider.clone());
+    let cancellation = OperationContext::background().cancellation().clone();
+    let content = text_change(
+        "src/example.ts",
+        Some("const value = 1;"),
+        Some("const value = 2;"),
+    );
+
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    application
+        .explain_file(
+            request("review-1", "snapshot-2", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    application
+        .clear_snapshot("review-1", "snapshot-1")
+        .unwrap();
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.generate_calls(), 3);
+
+    application.clear_review("review-1").unwrap();
+    application
+        .explain_file(
+            request("review-1", "snapshot-2", "src/example.ts"),
+            content,
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.generate_calls(), 4);
+}
+
+#[tokio::test]
+async fn shutdown_clears_cache_and_notifies_the_provider_once() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let application = BabysitApplication::new(provider.clone());
+    let cancellation = OperationContext::background().cancellation().clone();
+    let content = text_change(
+        "src/example.ts",
+        Some("const value = 1;"),
+        Some("const value = 2;"),
+    );
+
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    application.shutdown().await.unwrap();
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content,
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(provider.generate_calls(), 2);
+    assert_eq!(provider.shutdown_calls(), 1);
+}
+
+#[tokio::test]
 async fn invalid_output_is_repaired_in_the_same_analysis_run() {
     let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(1));
     let application = BabysitApplication::new(provider.clone());
@@ -327,6 +419,19 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 }
 
 #[test]
+fn input_error_payload_redacts_paths_source_tokens_and_process_output() {
+    let payload = BabysitErrorPayload::input_unavailable(
+        "/Users/alice/repo/src/example.ts source=const secret='token'; stderr=raw output",
+    );
+    let serialized = serde_json::to_string(&payload).unwrap();
+    assert!(!serialized.contains("/Users/alice"));
+    assert!(!serialized.contains("secret"));
+    assert!(!serialized.contains("token"));
+    assert!(!serialized.contains("raw output"));
+    assert_eq!(payload.code, BabysitErrorCode::InputUnavailable);
+}
+
+#[test]
 fn eligibility_rejects_non_code_and_generated_files() {
     let text = text_change("README.md", Some("# docs"), Some("# docs"));
     assert!(matches!(
@@ -345,6 +450,68 @@ fn eligibility_rejects_non_code_and_generated_files() {
     );
     assert!(matches!(
         ensure_eligible("vendor/helper.ts", &vendored, None),
+        Err(BabysitError::UnsupportedFile { .. })
+    ));
+
+    for path in [
+        "dist/generated.ts",
+        "src/bundle.min.js",
+        "tests/example.snap",
+        "src/data.json",
+    ] {
+        let content = text_change(path, Some("const value = 1;"), Some("const value = 2;"));
+        assert!(
+            matches!(
+                ensure_eligible(path, &content, None),
+                Err(BabysitError::UnsupportedFile { .. })
+            ),
+            "expected {path} to be ineligible"
+        );
+    }
+
+    let binary = FileChangeContent {
+        path: "src/image.ts".to_owned(),
+        old_path: None,
+        status: FileChangeStatus::Modified,
+        before: Some(FileContent::Binary { size: 1 }),
+        after: Some(FileContent::Binary { size: 2 }),
+    };
+    assert!(matches!(
+        ensure_eligible("src/image.ts", &binary, Some("typescript")),
+        Err(BabysitError::UnsupportedFile { .. })
+    ));
+
+    let symlink = FileChangeContent {
+        path: "src/link.ts".to_owned(),
+        old_path: None,
+        status: FileChangeStatus::Modified,
+        before: Some(FileContent::Symlink {
+            size: 1,
+            target: "target.ts".to_owned(),
+        }),
+        after: Some(FileContent::Symlink {
+            size: 1,
+            target: "target.ts".to_owned(),
+        }),
+    };
+    assert!(matches!(
+        ensure_eligible("src/link.ts", &symlink, Some("typescript")),
+        Err(BabysitError::UnsupportedFile { .. })
+    ));
+
+    let submodule = FileChangeContent {
+        path: "src/module.ts".to_owned(),
+        old_path: None,
+        status: FileChangeStatus::Modified,
+        before: Some(FileContent::Submodule {
+            commit_id: "old".to_owned(),
+        }),
+        after: Some(FileContent::Submodule {
+            commit_id: "new".to_owned(),
+        }),
+    };
+    assert!(matches!(
+        ensure_eligible("src/module.ts", &submodule, Some("typescript")),
         Err(BabysitError::UnsupportedFile { .. })
     ));
 }

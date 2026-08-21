@@ -138,6 +138,10 @@ export interface BabysitApplicationAdapter {
     onProgress: (progress: BabysitProgress) => void,
     signal: AbortSignal,
   ): Promise<BabysitFileExplanations>;
+  /** Snapshot 变化后删除旧结果；失败不应阻塞新的 Review Snapshot 展示。 */
+  clearSnapshot?(identity: ReviewIdentity): Promise<void>;
+  /** Review 关闭或切换后删除该 Review 的进程内结果。 */
+  clearReview?(reviewId: string): Promise<void>;
   /** 由 native picker 选择并验证 Codex executable；未安装 provider 可不实现。 */
   selectCodexExecutable?(path: string): Promise<void>;
 }

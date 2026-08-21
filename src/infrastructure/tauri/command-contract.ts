@@ -43,6 +43,8 @@ export type TauriCommandContract = {
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
   select_babysit_codex_executable: { args: { executable: string }; result: void; error: BabysitError };
+  clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
+  clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
   discover_github_pull_requests: { args: { repositoryId: number }; result: PullRequestGroup[] };
   github_auth_status: { args: EmptyArgs; result: GitHubAuthStatus };
@@ -106,5 +108,7 @@ export const TAURI_COMMAND_NAMES = [
   "explain_review_file_change",
   "check_babysit_file_eligibility",
   "select_babysit_codex_executable",
+  "clear_babysit_snapshot_cache",
+  "clear_babysit_review_cache",
   "close_review",
 ] as const satisfies readonly TauriCommandName[];

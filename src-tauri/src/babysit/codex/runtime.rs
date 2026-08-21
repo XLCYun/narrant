@@ -5,7 +5,7 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
-use crate::babysit::BabysitError;
+use crate::babysit::{BabysitAgentProvider, BabysitError};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -147,6 +147,17 @@ impl CodexRuntime {
             *status = CodexRuntimeStatus::Unknown;
         }
         Ok(())
+    }
+
+    /// 应用退出时释放 provider 进程，并让下一次显式启用重新完成 discovery。
+    pub(crate) async fn shutdown(&self) {
+        self.provider.shutdown().await;
+        if let Ok(mut status) = self.status.lock() {
+            *status = CodexRuntimeStatus::Unknown;
+        }
+        if let Some(waiter) = self.flight.lock().await.take() {
+            waiter.notify_waiters();
+        }
     }
 
     /// 解析持久化/PATH 候选，配置 #74，并在同一工作区完成握手与能力探针。

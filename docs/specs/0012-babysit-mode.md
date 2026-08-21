@@ -242,6 +242,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   results, and thread deletion.
 - Provider contract tests are reusable by future Installed Coding Agent adapters.
 - A real installed Codex is exercised only by an explicit local smoke test.
+- The repeatable local smoke procedure is documented in
+  [babysit-smoke.md](../agents/babysit-smoke.md); it never records source or raw
+  App Server output.
 - React behavior tests and the Preview Harness cover generating, repairing, failure,
   changed-only and all-line filtering, single- and side-by-side Diff, narrow layout,
   line-above view zones, the sticky Diff footer, and before-and-after alignment.

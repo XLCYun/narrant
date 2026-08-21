@@ -65,6 +65,7 @@ struct ActiveThread {
     turn_id: String,
     repair_attempts: u8,
     deadline: Instant,
+    cancellation: CancellationSignal,
 }
 
 /// 等待 turn 的 future 被直接丢弃时，异步中断并删除其 Narrant-owned thread。
@@ -129,9 +130,6 @@ impl Drop for RunCleanupGuard {
             return;
         };
         handle.spawn(async move {
-            if let Ok(mut active) = active_threads.lock() {
-                active.remove(&key);
-            }
             let mut process = process.lock().await;
             if let Some(process) = process.as_mut() {
                 if !terminal_completed {
@@ -151,7 +149,7 @@ impl Drop for RunCleanupGuard {
                         )
                         .await;
                 }
-                let _ = process
+                let deleted = process
                     .request(
                         "thread/delete",
                         json!({"threadId": run.thread_id}),
@@ -159,6 +157,19 @@ impl Drop for RunCleanupGuard {
                         None,
                     )
                     .await;
+                if deleted.is_ok() {
+                    if let Ok(mut active) = active_threads.lock() {
+                        active.remove(&key);
+                    }
+                } else {
+                    failed.store(true, Ordering::Release);
+                }
+            } else {
+                // 进程已经被销毁，thread 不再可能被复用；此时才释放最后的 ownership。
+                if let Ok(mut active) = active_threads.lock() {
+                    active.remove(&key);
+                }
+                failed.store(true, Ordering::Release);
             }
         });
     }
@@ -396,8 +407,13 @@ impl CodexAppServerProvider {
                 None,
             )
             .await;
-        if let Ok(mut active) = self.active_threads.lock() {
-            active.remove(key);
+        if deleted.is_ok() {
+            if let Ok(mut active) = self.active_threads.lock() {
+                active.remove(key);
+            }
+        } else {
+            // 删除未被确认前保留 active ownership，防止关闭流程误以为 thread 已释放。
+            self.failed.store(true, Ordering::Release);
         }
         deleted.is_ok()
     }
@@ -546,6 +562,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                         turn_id: String::new(),
                         repair_attempts: 0,
                         deadline,
+                        cancellation: cancellation.clone(),
                     };
                     let _ = self.delete_active_thread(process, &key, &run, false).await;
                 } else {
@@ -566,6 +583,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             turn_id,
             repair_attempts: 0,
             deadline,
+            cancellation: cancellation.clone(),
         };
         let active_inserted = self
             .active_threads
@@ -658,7 +676,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             .active_threads
             .lock()
             .ok()
-            .and_then(|mut active| active.remove(&key));
+            .and_then(|active| active.get(&key).cloned());
         let Some(run) = run else {
             return;
         };
@@ -667,6 +685,93 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                 let _ = self.delete_active_thread(process, &key, &run, true).await;
             }
         }
+    }
+
+    /// 应用退出时中断并删除所有仍归 Narrant 所有的 thread，再终止 App Server。
+    async fn shutdown(&self) {
+        // 先只发取消信号，不要从 active map 移除 ownership；拥有 process lock 的
+        // generate/repair future 会沿 RunCleanupGuard 正常执行 interrupt/delete。
+        if let Ok(active) = self.active_threads.lock() {
+            for run in active.values() {
+                run.cancellation.cancel();
+            }
+        }
+
+        // 给正在等待 turn 的 future 一个有界清理窗口。删除得到服务端确认前，
+        // active map 保持非空，避免退出流程抢走同一个 thread 的所有权。
+        let cleanup_finished = tokio::time::timeout(CODEX_CLEANUP_TIMEOUT, async {
+            loop {
+                let empty = self
+                    .active_threads
+                    .lock()
+                    .map(|active| active.is_empty())
+                    .unwrap_or(true);
+                if empty {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok();
+
+        // 正常 future 已释放 stream lock 后再接管 process；若仍有残留 ownership，
+        // 这里用同一连接重试 interrupt/delete，确认后才从 active map 移除。
+        let mut process_guard =
+            match tokio::time::timeout(CODEX_CLEANUP_TIMEOUT, self.process.lock()).await {
+                Ok(guard) => guard,
+                Err(_) => {
+                    // 取消已发出但旧 future 仍占用 stream，标记 generation 失效；进程
+                    // 由后台 cleanup 接管 process lock 后负责最终 kill 与 isolated home
+                    // 清理；在此之前不丢 active ownership，下一代会清 orphan。
+                    self.failed.store(true, Ordering::Release);
+                    let process = self.process.clone();
+                    let active_threads = self.active_threads.clone();
+                    tokio::spawn(async move {
+                        let mut process_guard = process.lock().await;
+                        if let Some(process) = process_guard.as_mut() {
+                            process.shutdown().await;
+                        }
+                        *process_guard = None;
+                        if let Ok(mut active) = active_threads.lock() {
+                            active.clear();
+                        }
+                    });
+                    return;
+                }
+            };
+        let mut cleanup_confirmed = cleanup_finished;
+        if let Some(process) = process_guard.as_mut() {
+            let runs = self
+                .active_threads
+                .lock()
+                .map(|active| {
+                    active
+                        .iter()
+                        .map(|(key, run)| (key.clone(), run.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for (key, run) in runs {
+                if !self.delete_active_thread(process, &key, &run, true).await {
+                    cleanup_confirmed = false;
+                }
+            }
+            let no_active_threads = self
+                .active_threads
+                .lock()
+                .map(|active| active.is_empty())
+                .unwrap_or(false);
+            cleanup_confirmed &= no_active_threads;
+            process.shutdown().await;
+        }
+        // Child 已经 shutdown 后才丢弃残留 ownership；此时不会再有可复用的 server
+        // thread。删除失败仍 poison generation，防止下一次请求复用不确定状态。
+        *process_guard = None;
+        if let Ok(mut active) = self.active_threads.lock() {
+            active.clear();
+        }
+        self.failed.store(!cleanup_confirmed, Ordering::Release);
     }
 }
 

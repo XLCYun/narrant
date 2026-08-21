@@ -1,6 +1,14 @@
 use super::*;
 
 impl ReviewLifecycle {
+    /// 返回 durable Review 当前 Snapshot identity，供跨模块缓存清理绑定旧 revision。
+    pub fn snapshot_id(&self, review_id: &str) -> Result<String, ReviewLifecycleError> {
+        self.store
+            .open_review(review_id)
+            .map(|saved| saved.snapshot_identity())
+            .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))
+    }
+
     /// 返回已激活且与 Snapshot identity 一致的受管 Review Workspace 路径。
     pub fn workspace_path(
         &self,

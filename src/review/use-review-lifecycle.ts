@@ -326,6 +326,8 @@ export function useReviewLifecycle(
     const abort = new AbortController();
     lifecycleAbort.current = abort;
     const current = snapshotRef.current;
+    // 切换 Review 时只取消当前文件的分析；共享 Codex App Server 继续服务后续文件。
+    invalidateBabysit();
     setOpeningTarget(target);
     if (current) setTransition({ kind: "switching", target });
     try {
@@ -334,6 +336,13 @@ export function useReviewLifecycle(
         current ? { reviewId: current.reviewId, snapshotId: current.snapshotId } : null,
         abort.signal,
       );
+      if (current && current.reviewId !== next.reviewId) {
+        // 旧 Review 已离开当前 Reader，删除其进程内解释，避免跨 Review 残留。
+        await babysitAdapter?.clearReview?.(current.reviewId).catch(() => undefined);
+      } else if (current && current.snapshotId !== next.snapshotId) {
+        // 重新打开/承接 refresh 也可能换 Snapshot，不能只依赖显式 Reader refresh。
+        await babysitAdapter?.clearSnapshot?.(current).catch(() => undefined);
+      }
       presentSnapshot(next);
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: next };
     } catch (reason) {
@@ -343,7 +352,7 @@ export function useReviewLifecycle(
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
       setOpeningTarget(undefined);
     }
-  }, [adapter, presentSnapshot]);
+  }, [adapter, babysitAdapter, invalidateBabysit, presentSnapshot]);
 
   /** 显式刷新当前 Review，失败时保留旧 Snapshot 与 File Change。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
@@ -355,6 +364,8 @@ export function useReviewLifecycle(
     const settled = new Promise<void>((resolve) => { finishRefresh = resolve; });
     refreshOperation.current = { abort, settled, finish: finishRefresh };
     lifecycleAbort.current = abort;
+    // Snapshot 更新开始即使旧分析失效，避免刷新期间继续接收旧文件的 progress。
+    invalidateBabysit();
     setTransition({ kind: "refreshing" });
     try {
       const result = await adapter.refreshReview(
@@ -366,6 +377,10 @@ export function useReviewLifecycle(
         setTransition({ kind: "stable" });
         return result;
       }
+      await babysitAdapter?.clearSnapshot?.({
+        reviewId: current.reviewId,
+        snapshotId: current.snapshotId,
+      }).catch(() => undefined);
       presentSnapshot(result.snapshot);
       return { kind: "refreshed", reviewId: result.snapshot.reviewId, snapshotId: result.snapshot.snapshotId };
     } catch (reason) {
@@ -377,7 +392,7 @@ export function useReviewLifecycle(
       if (refreshOperation.current?.abort === abort) refreshOperation.current = undefined;
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
     }
-  }, [adapter, presentSnapshot, update]);
+  }, [adapter, babysitAdapter, invalidateBabysit, presentSnapshot, update]);
 
   /** 关闭当前 Review；清理失败也不再暴露失效 Reader。 */
   const close = useCallback(async (): Promise<ReviewCloseResult> => {
@@ -400,6 +415,8 @@ export function useReviewLifecycle(
       { reviewId: current.reviewId, snapshotId: current.snapshotId },
       new AbortController().signal,
     );
+    // clearReview 不影响 workspace cleanup result；它只是清理当前进程内的解释。
+    await babysitAdapter?.clearReview?.(current.reviewId).catch(() => undefined);
     setTransition({ kind: "stable" });
     return result.kind === "closed"
       ? result
@@ -407,7 +424,7 @@ export function useReviewLifecycle(
           kind: "closed-with-cleanup-failure",
           failure: { kind: "workspace-cleanup-failed", detail: result.detail, retryable: true },
         };
-  }, [adapter, invalidateBabysit]);
+  }, [adapter, babysitAdapter, invalidateBabysit]);
 
   const retryFileChange = useCallback(() => {
     if (fileChange.kind === "failed") selectFileChange(fileChange.path);
@@ -423,7 +440,8 @@ export function useReviewLifecycle(
       { reviewId: current.reviewId, snapshotId: current.snapshotId },
       new AbortController().signal,
     );
-  }, [adapter, invalidateBabysit]);
+    if (current) void babysitAdapter?.clearReview?.(current.reviewId);
+  }, [adapter, babysitAdapter, invalidateBabysit]);
 
   const reader = useMemo<ReviewReaderBinding | null>(() => snapshot ? {
     snapshot,

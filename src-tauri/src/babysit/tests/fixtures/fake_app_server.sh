@@ -160,19 +160,24 @@ while IFS= read -r line; do
       record "turn/start:real"
       record "agent-message"
       turn_count=$((turn_count + 1))
+      if [ "$turn_count" -gt 1 ]; then
+        record "turn/start:repair"
+      fi
       if [ "$mode" = "rejected-output-schema" ]; then
         printf '{"id":%s,"error":{"code":-32602,"message":"invalid field outputSchema"}}\n' "$request_id"
         continue
       fi
       printf '{"id":%s,"result":{"turn":{"id":"turn-%s","status":"inProgress"}}}\n' "$request_id" "$turn_count"
-      if [ "$mode" = "hang" ] || [ "$mode" = "delayed-thread-start" ] || [ "$mode" = "block-writer" ]; then
+      if [ "$mode" = "hang" ] || [ "$mode" = "delayed-thread-start" ] || [ "$mode" = "block-writer" ] || {
+        [ "$mode" = "repair-hang" ] && [ "$turn_count" -ge 2 ];
+      }; then
         continue
       fi
       if [ "$mode" = "process-fail" ]; then
         exit 23
       fi
       if [ "$mode" = "repair-fail" ] || {
-        [ "$mode" = "repair" ] && [ "$turn_count" -eq 1 ];
+        { [ "$mode" = "repair" ] || [ "$mode" = "repair-hang" ]; } && [ "$turn_count" -eq 1 ];
       }; then
         text='"{}"'
       else
