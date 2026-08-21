@@ -1,19 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-
-import {
-  isBabysitError,
-  type BabysitApplicationAdapter,
-  type BabysitBinding,
-  type BabysitError,
-  type BabysitEligibilityState,
-  type BabysitFileRequest,
-  type BabysitProgress,
-  type BabysitState,
-} from "@/babysit/types";
-import { detectBabysitLanguage } from "@/babysit/detected-language";
-import { normalizeLocale } from "@/lib/i18n";
+import type { BabysitApplicationAdapter, BabysitBinding } from "@/babysit/types";
+import { useBabysitLifecycle } from "@/babysit/use-babysit-lifecycle";
 import type {
   ReviewApplicationAdapter,
   ReviewOpenTarget,
@@ -92,20 +79,11 @@ function operationFailure(reason: unknown): ReviewFailure {
   return { kind: "operation-failed", detail: String(reason), retryable: true };
 }
 
-/** 将未知 reject 值收敛为 Babysit contract 的 typed error，兼容未来 provider。 */
-function babysitFailure(reason: unknown): BabysitError {
-  return isBabysitError(reason)
-    ? reason
-    : { code: "provider", detail: "Babysit provider failed." };
-}
-
 /** 为一个 composition root 提供唯一当前 Review 的完整生命周期。 */
 export function useReviewLifecycle(
   adapter: ReviewApplicationAdapter,
   babysitAdapter?: BabysitApplicationAdapter,
 ): ReviewLifecycleBinding {
-  const { i18n } = useTranslation();
-  const locale = normalizeLocale(i18n.resolvedLanguage);
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>();
   const [openingTarget, setOpeningTarget] = useState<ReviewOpenTarget>();
   const [transition, setTransition] = useState<ReviewReaderBinding["transition"]>({ kind: "stable" });
@@ -114,12 +92,6 @@ export function useReviewLifecycle(
   const snapshotRef = useRef<ReviewSnapshot>();
   const fileRequest = useRef(0);
   const fileAbort = useRef<AbortController>();
-  const babysitAbort = useRef<AbortController>();
-  const eligibilityAbort = useRef<AbortController>();
-  const eligibilityRequest = useRef(0);
-  const [babysitEligibility, setBabysitEligibility] = useState<BabysitEligibilityState>({ kind: "unavailable" });
-  const babysitRequest = useRef(0);
-  const [babysitState, setBabysitState] = useState<BabysitState>({ kind: "idle" });
   const updateAbort = useRef<AbortController>();
   const lifecycleAbort = useRef<AbortController>();
   const refreshOperation = useRef<{
@@ -128,12 +100,12 @@ export function useReviewLifecycle(
     finish: () => void;
   }>();
 
-  /** 取消并使当前 Babysit response 失效；reset=false 供卸载清理使用。 */
-  const invalidateBabysit = useCallback((reset = true) => {
-    babysitAbort.current?.abort();
-    babysitRequest.current += 1;
-    if (reset) setBabysitState({ kind: "idle" });
-  }, []);
+  const {
+    binding: babysit,
+    invalidateSelection: invalidateBabysitSelection,
+    clearSnapshot: clearBabysitSnapshot,
+    clearReview: clearBabysitReview,
+  } = useBabysitLifecycle({ adapter: babysitAdapter, snapshot, fileChange });
 
   /** 读取固定 Snapshot 的 File Change，并保证最后一次选择获胜。 */
   const selectFileChange = useCallback((path: string) => {
@@ -141,10 +113,7 @@ export function useReviewLifecycle(
     if (!current) return;
     const request = ++fileRequest.current;
     fileAbort.current?.abort();
-    invalidateBabysit();
-    eligibilityAbort.current?.abort();
-    eligibilityRequest.current += 1;
-    setBabysitEligibility({ kind: "checking" });
+    invalidateBabysitSelection();
     const abort = new AbortController();
     fileAbort.current = abort;
     const identity = { reviewId: current.reviewId, snapshotId: current.snapshotId };
@@ -158,149 +127,7 @@ export function useReviewLifecycle(
       if (abort.signal.aborted || request !== fileRequest.current) return;
       setFileChange({ kind: "failed", path, failure: operationFailure(reason) });
     });
-  }, [adapter, invalidateBabysit]);
-
-  /** File Change 就绪后查询后端唯一 eligibility，并拒绝过期文件的返回。 */
-  useEffect(() => {
-    const current = snapshotRef.current;
-    if (!current || fileChange.kind !== "ready" || !babysitAdapter) {
-      setBabysitEligibility({ kind: "unavailable" });
-      return;
-    }
-    const requestId = ++eligibilityRequest.current;
-    eligibilityAbort.current?.abort();
-    const abort = new AbortController();
-    eligibilityAbort.current = abort;
-    setBabysitEligibility({ kind: "checking" });
-    const detectedLanguage = detectBabysitLanguage(fileChange.path, fileChange.content);
-    const identity = {
-      reviewId: current.reviewId,
-      snapshotId: current.snapshotId,
-      path: fileChange.path,
-    };
-    void babysitAdapter.checkEligibility(identity, detectedLanguage, abort.signal).then((result) => {
-      if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
-        setBabysitEligibility({ kind: "resolved", result });
-      }
-    }).catch((reason) => {
-      if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
-        // 已识别为代码文件时，IPC 失败不能把按钮变成无响应的假“不支持”。
-        // 显示可重试失败；真正 explain command 仍会经过后端 eligibility gate。
-        if (detectedLanguage) {
-          setBabysitEligibility({ kind: "resolved", result: { eligible: true, reason: null } });
-          setBabysitState({
-            kind: "failed",
-            request: { ...identity, locale, detectedLanguage },
-            error: babysitFailure(reason),
-            retryable: true,
-          });
-        } else {
-          setBabysitEligibility({ kind: "unavailable" });
-        }
-      }
-    });
-    return () => abort.abort();
-  }, [babysitAdapter, fileChange, locale]);
-
-  /** 对当前 immutable File Change 发起一次完整文件分析，并丢弃 stale response。 */
-  const explainBabysit = useCallback(() => {
-    const current = snapshotRef.current;
-    const selected = fileChange;
-    const explain = babysitAdapter?.explainFile;
-    if (!current || selected.kind !== "ready" || !explain) return;
-    if (babysitEligibility.kind !== "resolved" || !babysitEligibility.result.eligible) return;
-    const request: BabysitFileRequest = {
-      reviewId: current.reviewId,
-      snapshotId: current.snapshotId,
-      path: selected.path,
-      locale,
-      detectedLanguage: detectBabysitLanguage(selected.path, selected.content),
-    };
-    invalidateBabysit(false);
-    const abort = new AbortController();
-    const requestId = babysitRequest.current;
-    babysitAbort.current = abort;
-    setBabysitState({ kind: "generating", request });
-    void explain(request, (progress: BabysitProgress) => {
-      if (abort.signal.aborted || requestId !== babysitRequest.current) return;
-      if (progress.phase === "repairing") {
-        setBabysitState({ kind: "repairing", request, attempt: progress.attempt });
-      } else if (progress.phase === "generating") {
-        setBabysitState({ kind: "generating", request });
-      }
-    }, abort.signal).then((explanations) => {
-      if (abort.signal.aborted || requestId !== babysitRequest.current) return;
-      setBabysitState({ kind: "completed", request, explanations });
-    }).catch((reason) => {
-      if (abort.signal.aborted || requestId !== babysitRequest.current) return;
-      setBabysitState({ kind: "failed", request, error: babysitFailure(reason), retryable: true });
-    });
-  }, [babysitAdapter, babysitEligibility, fileChange, invalidateBabysit, locale]);
-
-  /** 取消当前 Babysit 请求，并清除任何未完成的部分结果。 */
-  const cancelBabysit = useCallback(() => {
-    invalidateBabysit();
-  }, [invalidateBabysit]);
-
-  /** 只允许对最后一次失败的同一 File Change 重新发起分析。 */
-  const retryBabysit = useCallback(() => {
-    if (babysitState.kind === "failed") explainBabysit();
-  }, [babysitState.kind, explainBabysit]);
-
-  /** 仅在 typed recovery action 要求时打开 native picker；取消不改变当前失败状态。 */
-  const selectBabysitExecutable = useCallback(async () => {
-    const select = babysitAdapter?.selectCodexExecutable;
-    const failed = babysitState.kind === "failed" ? babysitState : undefined;
-    if (!select || !failed) return;
-    const requestId = babysitRequest.current;
-    let selected: string | string[] | null;
-    try {
-      selected = await openDialog({ multiple: false, directory: false });
-    } catch {
-      setBabysitState({
-        kind: "failed",
-        request: failed.request,
-        error: { code: "provider", detail: "Codex executable picker unavailable." },
-        retryable: true,
-      });
-      return;
-    }
-    if (typeof selected !== "string" || selected.length === 0) return;
-    if (requestId !== babysitRequest.current) return;
-    try {
-      await select(selected);
-      if (requestId !== babysitRequest.current) return;
-      invalidateBabysit();
-      explainBabysit();
-    } catch (reason) {
-      if (requestId !== babysitRequest.current) return;
-      setBabysitState({
-        kind: "failed",
-        request: failed.request,
-        error: babysitFailure(reason),
-        retryable: true,
-      });
-    }
-  }, [babysitAdapter, babysitState, explainBabysit, invalidateBabysit]);
-
-  const babysit = useMemo<BabysitBinding | undefined>(() => {
-    if (!babysitAdapter) return undefined;
-    return {
-      state: babysitState,
-      eligibility: babysitEligibility,
-      explain: explainBabysit,
-      cancel: cancelBabysit,
-      retry: retryBabysit,
-      selectExecutable: selectBabysitExecutable,
-    };
-  }, [babysitAdapter, babysitEligibility, babysitState, cancelBabysit, explainBabysit, retryBabysit, selectBabysitExecutable]);
-
-  /** UI locale 改变后清掉旧语言结果，下一次点击会使用新的 cache identity。 */
-  useEffect(() => {
-    if (babysitState.kind !== "idle" && babysitState.request.locale !== locale) {
-      invalidateBabysit();
-    }
-  }, [babysitState, invalidateBabysit, locale]);
+  }, [adapter, invalidateBabysitSelection]);
 
   /** 非阻塞检查当前 Review Selection 是否产生 Review Update。 */
   const checkForUpdate = useCallback((current: ReviewSnapshot) => {
@@ -341,7 +168,7 @@ export function useReviewLifecycle(
     lifecycleAbort.current = abort;
     const current = snapshotRef.current;
     // 切换 Review 时只取消当前文件的分析；共享 Codex App Server 继续服务后续文件。
-    invalidateBabysit();
+    invalidateBabysitSelection();
     setOpeningTarget(target);
     if (current) setTransition({ kind: "switching", target });
     try {
@@ -352,10 +179,10 @@ export function useReviewLifecycle(
       );
       if (current && current.reviewId !== next.reviewId) {
         // 旧 Review 已离开当前 Reader，删除其进程内解释，避免跨 Review 残留。
-        await babysitAdapter?.clearReview?.(current.reviewId).catch(() => undefined);
+        await clearBabysitReview(current.reviewId);
       } else if (current && current.snapshotId !== next.snapshotId) {
         // 重新打开/承接 refresh 也可能换 Snapshot，不能只依赖显式 Reader refresh。
-        await babysitAdapter?.clearSnapshot?.(current).catch(() => undefined);
+        await clearBabysitSnapshot(current);
       }
       presentSnapshot(next);
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: next };
@@ -366,7 +193,7 @@ export function useReviewLifecycle(
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
       setOpeningTarget(undefined);
     }
-  }, [adapter, babysitAdapter, invalidateBabysit, presentSnapshot]);
+  }, [adapter, clearBabysitReview, clearBabysitSnapshot, invalidateBabysitSelection, presentSnapshot]);
 
   /** 显式刷新当前 Review，失败时保留旧 Snapshot 与 File Change。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
@@ -379,7 +206,7 @@ export function useReviewLifecycle(
     refreshOperation.current = { abort, settled, finish: finishRefresh };
     lifecycleAbort.current = abort;
     // Snapshot 更新开始即使旧分析失效，避免刷新期间继续接收旧文件的 progress。
-    invalidateBabysit();
+    invalidateBabysitSelection();
     setTransition({ kind: "refreshing" });
     try {
       const result = await adapter.refreshReview(
@@ -391,10 +218,10 @@ export function useReviewLifecycle(
         setTransition({ kind: "stable" });
         return result;
       }
-      await babysitAdapter?.clearSnapshot?.({
+      await clearBabysitSnapshot({
         reviewId: current.reviewId,
         snapshotId: current.snapshotId,
-      }).catch(() => undefined);
+      });
       presentSnapshot(result.snapshot);
       return { kind: "refreshed", reviewId: result.snapshot.reviewId, snapshotId: result.snapshot.snapshotId };
     } catch (reason) {
@@ -406,15 +233,14 @@ export function useReviewLifecycle(
       if (refreshOperation.current?.abort === abort) refreshOperation.current = undefined;
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
     }
-  }, [adapter, babysitAdapter, invalidateBabysit, presentSnapshot, update]);
+  }, [adapter, clearBabysitSnapshot, invalidateBabysitSelection, presentSnapshot, update]);
 
   /** 关闭当前 Review；清理失败也不再暴露失效 Reader。 */
   const close = useCallback(async (): Promise<ReviewCloseResult> => {
     const current = snapshotRef.current;
     const refreshing = refreshOperation.current;
     fileAbort.current?.abort();
-    eligibilityAbort.current?.abort();
-    invalidateBabysit();
+    invalidateBabysitSelection();
     updateAbort.current?.abort();
     lifecycleAbort.current?.abort();
     fileRequest.current += 1;
@@ -430,7 +256,7 @@ export function useReviewLifecycle(
       new AbortController().signal,
     );
     // clearReview 不影响 workspace cleanup result；它只是清理当前进程内的解释。
-    await babysitAdapter?.clearReview?.(current.reviewId).catch(() => undefined);
+    await clearBabysitReview(current.reviewId);
     setTransition({ kind: "stable" });
     return result.kind === "closed"
       ? result
@@ -438,7 +264,7 @@ export function useReviewLifecycle(
           kind: "closed-with-cleanup-failure",
           failure: { kind: "workspace-cleanup-failed", detail: result.detail, retryable: true },
         };
-  }, [adapter, babysitAdapter, invalidateBabysit]);
+  }, [adapter, clearBabysitReview, invalidateBabysitSelection]);
 
   const retryFileChange = useCallback(() => {
     if (fileChange.kind === "failed") selectFileChange(fileChange.path);
@@ -446,7 +272,6 @@ export function useReviewLifecycle(
 
   useEffect(() => () => {
     fileAbort.current?.abort();
-    invalidateBabysit(false);
     updateAbort.current?.abort();
     lifecycleAbort.current?.abort();
     const current = snapshotRef.current;
@@ -454,8 +279,8 @@ export function useReviewLifecycle(
       { reviewId: current.reviewId, snapshotId: current.snapshotId },
       new AbortController().signal,
     );
-    if (current) void babysitAdapter?.clearReview?.(current.reviewId);
-  }, [adapter, babysitAdapter, invalidateBabysit]);
+    if (current) void clearBabysitReview(current.reviewId);
+  }, [adapter, clearBabysitReview]);
 
   const reader = useMemo<ReviewReaderBinding | null>(() => snapshot ? {
     snapshot,
