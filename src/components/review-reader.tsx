@@ -229,18 +229,23 @@ export function ReviewReader(input: ReviewReaderProps) {
     setExpandedBabysitKeys((current) => setBabysitExpansion(current, key, expanded));
   }, []);
 
-  /** 宝宝模式保持在当前 Review Reader 内；换文件时对新文件自动开始一次完整分析。 */
-  useEffect(() => {
-    if (!babysitVisible) {
-      explainedIdentity.current = undefined;
-      return;
-    }
+  /** 对当前文件只启动一次分析，首次点击与后续换文件共用同一入口。 */
+  const startBabysit = useCallback(() => {
     if (!babysit || !babysitEnabled || !selectedPath || babysitState?.kind !== "idle") return;
     const identity = `${review.snapshot.reviewId}:${review.snapshot.snapshotId}:${selectedPath}:${babysitLocale}`;
     if (explainedIdentity.current === identity) return;
     explainedIdentity.current = identity;
     babysit.explain();
-  }, [babysit, babysitEnabled, babysitLocale, babysitState?.kind, babysitVisible, review.snapshot.reviewId, review.snapshot.snapshotId, selectedPath]);
+  }, [babysit, babysitEnabled, babysitLocale, babysitState?.kind, review.snapshot.reviewId, review.snapshot.snapshotId, selectedPath]);
+
+  /** 宝宝模式保持打开时，换文件或语言后自动开始新的完整分析。 */
+  useEffect(() => {
+    if (!babysitVisible) {
+      explainedIdentity.current = undefined;
+      return;
+    }
+    startBabysit();
+  }, [babysitVisible, startBabysit]);
 
   /** 关闭当前解释展示时清掉 UI 展开状态，但不影响后端已完成的内存缓存。 */
   useEffect(() => {
@@ -370,8 +375,14 @@ export function ReviewReader(input: ReviewReaderProps) {
                   className={!babysitEnabled ? "cursor-not-allowed opacity-50" : undefined}
                   onClick={() => {
                     if (!babysitEnabled) return;
-                    if (babysitVisible && babysitRunning) babysit.cancel();
-                    setBabysitVisible((visible) => !visible);
+                    if (babysitVisible) {
+                      if (babysitRunning) babysit.cancel();
+                      setBabysitVisible(false);
+                      return;
+                    }
+                    // 首次启动不依赖下一轮 effect；点击返回前 lifecycle 已进入 generating。
+                    startBabysit();
+                    setBabysitVisible(true);
                   }}
                 />}>
                   <Icon icon={AiBrain01Icon} data-icon="inline-start" aria-hidden />

@@ -150,6 +150,17 @@ describe("Babysit Review Reader presentation", () => {
     expect(review.babysit?.explain).toHaveBeenCalledTimes(2);
   });
 
+  it("首次打开在点击事件内立即启动当前文件分析", () => {
+    const review = makeReview({ kind: "idle" });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+
+    expect(review.babysit?.explain).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "关闭宝宝模式" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("在生成、修复和失败状态显示文件级 sticky footer 操作", () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
