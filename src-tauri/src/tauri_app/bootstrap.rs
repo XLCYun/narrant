@@ -1,5 +1,7 @@
-use super::commands::{github as github_commands, repository, review as review_commands};
-use crate::{github, operation, persistence, repository as repository_module, review};
+use super::commands::{
+    babysit as babysit_commands, github as github_commands, repository, review as review_commands,
+};
+use crate::{babysit, github, operation, persistence, repository as repository_module, review};
 use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
@@ -57,6 +59,7 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
+            app.manage(babysit::BabysitApplication::with_fake_provider());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -82,6 +85,7 @@ pub fn run() {
             github_commands::complete_github_authorization,
             github_commands::sign_out_github,
             review_commands::read_review_file_change,
+            babysit_commands::explain_review_file_change,
             review_commands::close_review
         ])
         .plugin(tauri_plugin_opener::init())

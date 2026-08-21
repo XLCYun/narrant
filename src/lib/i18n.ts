@@ -96,6 +96,7 @@ export const resources = {
       moreActions: "更多操作", close: "关闭审核", exit: "退出审核", refresh: "刷新审核", refreshing: "正在刷新审核…", latest: "当前已是最新版本",
       currentAvailable: "当前 {{current}} · 可用 {{available}}", pullRequestBranchesUpdated: "检测到 PR 分支有更新", selectedBranchesUpdated: "检测到所选分支有更新", pullRequestUpdate: "Pull Request 更新", branchUpdate: "Branch Review 更新",
       switchToInline: "切换为单栏", switchToSideBySide: "切换为双栏", narrowInlineOnly: "当前窗口宽度仅支持单栏",
+      babysit: "宝宝模式", babysitCancel: "取消宝宝模式", babysitExplanations: "逐行解释", babysitBefore: "变更前", babysitAfter: "变更后",
       fileChangeError: "无法读取 File Change", closeDialog: "关闭",
     },
     github: {
@@ -158,6 +159,7 @@ export const resources = {
       moreActions: "More actions", close: "Close review", exit: "Exit review", refresh: "Refresh review", refreshing: "Refreshing review…", latest: "Already up to date",
       currentAvailable: "Current {{current}} · available {{available}}", pullRequestBranchesUpdated: "PR branches have updates", selectedBranchesUpdated: "Selected branches have updates", pullRequestUpdate: "Pull Request update", branchUpdate: "Branch review update",
       switchToInline: "Switch to inline", switchToSideBySide: "Switch to side by side", narrowInlineOnly: "Only inline layout is available at this window width",
+      babysit: "Babysit", babysitCancel: "Cancel Babysit", babysitExplanations: "Line explanations", babysitBefore: "Before", babysitAfter: "After",
       fileChangeError: "Could not load File Change", closeDialog: "Close",
     },
     github: {

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
-import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
+import { createTauriChannel, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
+import type { BabysitError } from "@/babysit/types";
 import type { ReviewSnapshot } from "@/review/types";
 
 const snapshot: ReviewSnapshot = {
@@ -193,5 +195,41 @@ describe("Tauri Review application adapter", () => {
       kind: "closed-with-cleanup-failure",
       detail: "Error: worktree cleanup failed",
     });
+  });
+});
+
+describe("Tauri Babysit application adapter", () => {
+  it("保留后端结构化 Babysit error code/detail，不压扁为字符串", async () => {
+    const error: BabysitError = {
+      code: "unsupported_file",
+      detail: "lock file",
+    };
+    const invokeCancellable = vi.fn().mockRejectedValue(error);
+    const createChannel = vi.fn(() => ({})) as unknown as typeof createTauriChannel;
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke: vi.fn(),
+      invokeCancellable,
+    } as unknown as TypedTauriTransport, createChannel);
+
+    await expect(adapter.explainFile(
+      {
+        reviewId: "review-1",
+        snapshotId: "snapshot-1",
+        path: "Cargo.lock",
+        locale: "zh-CN",
+      },
+      vi.fn(),
+      new AbortController().signal,
+    )).rejects.toEqual(error);
+    expect(invokeCancellable).toHaveBeenCalledWith(
+      "explain_review_file_change",
+      expect.objectContaining({
+        reviewId: "review-1",
+        snapshotId: "snapshot-1",
+        path: "Cargo.lock",
+        locale: "zh-CN",
+      }),
+      expect.any(AbortSignal),
+    );
   });
 });
