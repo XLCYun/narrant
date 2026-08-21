@@ -231,7 +231,7 @@ describe("AppShell navigation module", () => {
     expect(switchReview).not.toHaveBeenCalled();
   });
 
-  it("真实 A ↔ B presentation 更新 recent 排序并 reload，重复 current 不更新", async () => {
+  it("真实 A ↔ B presentation 只更新内存 recent 排序，重复 current 不更新", async () => {
     const repositoryAdapter = createRepositoryAdapter();
     const reviewAdapter = createReviewAdapter();
     const switchReview = vi.spyOn(reviewAdapter, "switchReview");
@@ -250,7 +250,7 @@ describe("AppShell navigation module", () => {
     expect(switchReview).toHaveBeenCalledTimes(2);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-2");
     expect(result.current.sidebar.reviews.map((recent) => recent.review.reviewId)).toEqual(["review-2", "review-1"]);
-    await waitFor(() => expect(loadReviews).toHaveBeenCalledTimes(2));
+    expect(loadReviews).not.toHaveBeenCalled();
 
     await act(async () => {
       await result.current.navigate({
@@ -260,7 +260,7 @@ describe("AppShell navigation module", () => {
     expect(switchReview).toHaveBeenCalledTimes(3);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-1");
     expect(result.current.sidebar.reviews.map((recent) => recent.review.reviewId)).toEqual(["review-1", "review-2"]);
-    await waitFor(() => expect(loadReviews).toHaveBeenCalledTimes(3));
+    expect(loadReviews).not.toHaveBeenCalled();
 
     await act(async () => {
       await result.current.navigate({
@@ -268,7 +268,7 @@ describe("AppShell navigation module", () => {
       });
     });
     expect(switchReview).toHaveBeenCalledTimes(3);
-    expect(loadReviews).toHaveBeenCalledTimes(3);
+    expect(loadReviews).not.toHaveBeenCalled();
     expect(result.current.sidebar.reviews.map((recent) => recent.review.reviewId)).toEqual(["review-1", "review-2"]);
   });
 });

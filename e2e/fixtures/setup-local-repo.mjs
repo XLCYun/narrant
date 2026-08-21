@@ -30,6 +30,9 @@ git("checkout", "-q", "-b", "head-ref");
 await writeFile(resolve(target, "welcome.txt"), "你好,新内容\n", "utf8");
 git("commit", "-q", "-am", "head");
 const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim();
+// 为进程生命周期 E2E 提供一组不会与其他场景复用的 Review Selection。
+git("branch", "retained-head-ref");
+git("branch", "retained-base-ref", "base-ref");
 git("update-ref", "refs/pull/42/head", headSha);
 git("remote", "add", "origin", "https://github.com/octo-org/octo-repo.git");
 git("config", `url.file://${target}/.insteadOf`, "https://github.com/octo-org/octo-repo.git");

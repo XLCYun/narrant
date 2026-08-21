@@ -240,6 +240,7 @@ describe("最近审核首页", () => {
     expect(screen.getAllByLabelText("将 Head 分支 topic-1 合入 Base 分支 main")).toHaveLength(3);
     expect(screen.getAllByLabelText("将 Head 分支 topic-2 合入 Base 分支 main")).toHaveLength(3);
     expect(repositoryButtons[0]).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "打开仓库 older" })).toHaveClass("pointer-events-auto", "opacity-100");
     const reviewList = repositoryButtons[0].closest("li")?.querySelector("ul");
     expect(reviewList).toHaveClass("ml-5", "w-auto", "pl-2");
     expect(reviewList).not.toHaveClass("border-l");
