@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { BabyIcon, Copy01Icon, GitCompareIcon, ListViewIcon } from "@hugeicons/core-free-icons";
+import { Copy01Icon, GitCompareIcon, ListViewIcon } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
 import type { BabysitExplanationFilter } from "@/components/babysit-diff-editor";
@@ -175,7 +175,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
           setVisible(true);
         }}
       />}>
-        <Icon icon={BabyIcon} data-icon="inline-start" aria-hidden />
+        <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 object-contain" data-icon="inline-start" aria-hidden />
         <span className="hidden sm:inline">{visible ? t("review:babysitDisable") : t("review:babysit")}</span>
       </TooltipTrigger>
       <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
