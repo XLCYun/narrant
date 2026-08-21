@@ -23,10 +23,16 @@ let nextZoneId = 0;
           callback({
             addZone(zone) {
               const id = `${side}-${++nextZoneId}`;
-              fakeZones[side].set(id, zone.domNode);
+              // 真实 Monaco 会重新托管（部分版本会克隆）zone DOM；测试保留该边界。
+              const hostedNode = zone.domNode.cloneNode(true) as HTMLElement;
+              document.body.append(hostedNode);
+              fakeZones[side].set(id, hostedNode);
               return id;
             },
-            removeZone(id) { fakeZones[side].delete(id); },
+            removeZone(id) {
+              fakeZones[side].get(id)?.remove();
+              fakeZones[side].delete(id);
+            },
           });
         },
       });

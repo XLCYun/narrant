@@ -120,9 +120,8 @@ function createExplanationNode(input: {
   expanded: boolean;
   zoneHeight: number;
   labels: BabysitDiffEditorProps["labels"];
-  onToggleExpanded: (key: string) => void;
 }) {
-  const { side, line, explanation, expanded, zoneHeight, labels, onToggleExpanded } = input;
+  const { side, line, explanation, expanded, zoneHeight, labels } = input;
   const key = `${side}:${line}`;
   const node = document.createElement("div");
   node.dataset.babysitZone = side;
@@ -152,13 +151,8 @@ function createExplanationNode(input: {
     toggle.className = "shrink-0 rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
     toggle.textContent = expanded ? labels.collapse : labels.expand;
     toggle.setAttribute("aria-expanded", String(expanded));
-    toggle.addEventListener("click", (event) => {
-      // Monaco 会在 view zone 的原生事件边界内同步处理布局；先阻止编辑器接管，
-      // 再同步提交 React 展开状态，保证旧 zone 被 Monaco 回收前新高度已经生效。
-      event.preventDefault();
-      event.stopPropagation();
-      flushSync(() => onToggleExpanded(key));
-    });
+    // Monaco 可能克隆或重新托管 view-zone DOM；dataset 会保留，而节点 listener 不可靠。
+    toggle.dataset.babysitToggle = key;
     node.append(toggle);
   }
   return node;
@@ -202,6 +196,22 @@ export function BabysitDiffEditor({
 
   /** 记录 Monaco 实例并让后续 diff 更新重新计算 changed-only 过滤。 */
   const onMount = useCallback<DiffOnMount>((nextEditor) => setMountedEditor(nextEditor), []);
+
+  /** 在 document capture 阶段委托 view-zone toggle，兼容 Monaco 克隆/重托管 DOM。 */
+  useEffect(() => {
+    const handleToggle = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>("button[data-babysit-toggle]")
+        : null;
+      const key = target?.dataset.babysitToggle;
+      if (!key) return;
+      event.preventDefault();
+      event.stopPropagation();
+      flushSync(() => onToggleExpanded(key));
+    };
+    document.addEventListener("click", handleToggle, true);
+    return () => document.removeEventListener("click", handleToggle, true);
+  }, [onToggleExpanded]);
 
   /** 清理两侧编辑器遗留的 view zones，避免切换 File Change 后解释串到下一份 Diff。 */
   const clearZones = useCallback(() => {
@@ -255,7 +265,7 @@ export function BabysitDiffEditor({
           const nodes = (["before", "after"] as const).flatMap((side) => {
             const entry = row[side];
             if (!entry) return [];
-            return [createExplanationNode({ side, line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`${side}:${entry[0]}`), zoneHeight: side === "before" ? beforeHeight : afterHeight, labels, onToggleExpanded })];
+            return [createExplanationNode({ side, line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`${side}:${entry[0]}`), zoneHeight: side === "before" ? beforeHeight : afterHeight, labels })];
           });
           nextIds.modified.push(accessor.addZone({ afterLineNumber: Math.max(0, row.afterAnchor - 1), heightInPx: height, domNode: createInlineNode(nodes, height) }));
         }
@@ -270,7 +280,7 @@ export function BabysitDiffEditor({
         nextIds.original.push(accessor.addZone({
           afterLineNumber: Math.max(0, row.beforeAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: entry ? createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels, onToggleExpanded }) : createSpacerNode(sharedHeight),
+          domNode: entry ? createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels }) : createSpacerNode(sharedHeight),
         }));
       }
     });
@@ -281,7 +291,7 @@ export function BabysitDiffEditor({
         nextIds.modified.push(accessor.addZone({
           afterLineNumber: Math.max(0, row.afterAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: entry ? createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels, onToggleExpanded }) : createSpacerNode(sharedHeight),
+          domNode: entry ? createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels }) : createSpacerNode(sharedHeight),
         }));
       }
     });
