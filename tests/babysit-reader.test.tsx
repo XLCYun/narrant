@@ -193,7 +193,8 @@ describe("Babysit Review Reader presentation", () => {
     expect(expand).toHaveClass("cursor-pointer", "pointer-events-auto");
     const card = within(original).getByRole("note");
     expect(card).toHaveClass("w-full", "max-w-full", "overflow-hidden");
-    expect(expand.previousElementSibling).toHaveTextContent("变更前 · 2");
+    expect(expand.nextElementSibling).toHaveTextContent("变更前 · 2");
+    expect(card.firstElementChild).toBe(expand);
     expect(expand).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(expand);
     expect(removedZoneNodes.length).toBeGreaterThan(0);

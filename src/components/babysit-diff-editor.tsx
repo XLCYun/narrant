@@ -144,9 +144,6 @@ function ExplanationCard({ side, line, explanation, expanded, zoneHeight, labels
     role="note"
     aria-label={`${labels.explanation} ${line}`}
   >
-    <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
-      {side === "before" ? labels.before : labels.after} · {line}
-    </span>
     {explanation.length > 120 && <button
       type="button"
       className="pointer-events-auto shrink-0 cursor-pointer rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -154,6 +151,9 @@ function ExplanationCard({ side, line, explanation, expanded, zoneHeight, labels
       aria-expanded={expanded}
       onClick={() => onSetExpanded(key, !expanded)}
     >{expanded ? labels.collapse : labels.expand}</button>}
+    <span className="min-w-0 shrink truncate rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+      {side === "before" ? labels.before : labels.after} · {line}
+    </span>
     <span
       className={`min-w-0 flex-1 break-words text-muted-foreground${expanded ? " overflow-visible" : " overflow-hidden"}`}
       style={expanded ? { display: "block" } : { display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2 }}
