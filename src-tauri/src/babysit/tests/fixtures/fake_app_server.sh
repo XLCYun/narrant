@@ -47,7 +47,10 @@ while IFS= read -r line; do
       if [ "$mode" = "personal-model-instructions" ]; then
         printf '{"id":%s,"result":{"config":{"model_instructions_file":"/tmp/personal.md","mcp_servers":{}},"origins":{},"layers":null}}\n' "$request_id"
       else
-        printf '{"id":%s,"result":{"config":{"mcp_servers":{"dangerous":{"command":"dangerous-mcp"}},"instructions":"personal","developer_instructions":"personal"},"origins":{},"layers":null}}\n' "$request_id"
+        if [ -n "$CODEX_HOME" ] && [ -f "$CODEX_HOME/config.toml" ] && ! grep -q 'mcp_servers' "$CODEX_HOME/config.toml"; then
+          record "codex-home:isolated"
+        fi
+        printf '{"id":%s,"result":{"config":{"mcp_servers":{}},"origins":{},"layers":null}}\n' "$request_id"
       fi
       ;;
     configRequirements/read)
@@ -63,7 +66,7 @@ while IFS= read -r line; do
       else
         record "thread/list:unfiltered"
       fi
-      if [ "$mode" = "orphan" ] && contains '"archived":false'; then
+      if { [ "$mode" = "orphan" ] || { [ "$mode" = "lost-thread-response" ] && grep -q '^thread/start:lost$' "$events"; }; } && contains '"archived":false'; then
         printf '{"id":%s,"result":{"data":[{"id":"orphan-thread","source":"vscode","threadSource":"feature:narrant-babysit"},{"id":"other-thread","source":"appServer","threadSource":"feature:another-client"}],"nextCursor":null}}\n' "$request_id"
       else
         printf '{"id":%s,"result":{"data":[],"nextCursor":null}}\n' "$request_id"
@@ -75,7 +78,7 @@ while IFS= read -r line; do
         '"permissions":"narrant-babysit-restricted-v1"' \
         '"runtimeWorkspaceRoots":["/tmp/narrant-review-workspace"]' \
         '"default_permissions":"narrant-babysit-restricted-v1"' \
-        '"mcp_servers":{"dangerous":{"enabled":false}}' \
+        '"mcp_servers":{}' \
         '":root":"deny"' \
         '":workspace_roots":{".":"read"}' \
         '"network":{"enabled":false}' \
@@ -99,6 +102,10 @@ while IFS= read -r line; do
       if [ "$mode" = "start-fail" ]; then
         printf '{"id":%s,"error":{"code":-32602,"message":"invalid"}}\n' "$request_id"
         continue
+      fi
+      if [ "$mode" = "lost-thread-response" ] && ! grep -q '^thread/start:lost$' "$events"; then
+        record "thread/start:lost"
+        exit 29
       fi
       if [ "$mode" = "delayed-thread-start" ]; then
         sleep 0.2
@@ -139,6 +146,9 @@ while IFS= read -r line; do
     thread/delete)
       thread_id=$(printf '%s' "$line" | sed -n 's/.*"threadId":"\([^"]*\)".*/\1/p')
       record "thread/delete:$thread_id"
+      if [ "$mode" = "delayed-delete" ]; then
+        sleep 0.2
+      fi
       printf '{"id":%s,"result":{}}\n' "$request_id"
       ;;
     *)

@@ -74,6 +74,7 @@ async fn app_server_generates_structured_output_and_deletes_thread() {
     assert!(events.lines().any(|line| line == "initialize"));
     assert!(events.lines().any(|line| line == "initialize:experimental"));
     assert!(events.lines().any(|line| line == "config/read"));
+    assert!(events.lines().any(|line| line == "codex-home:isolated"));
     assert!(events.lines().any(|line| line == "configRequirements/read"));
     assert!(events.lines().any(|line| line == "thread/start:restricted"));
     assert!(events.lines().any(|line| line == "thread/start"));
@@ -255,6 +256,36 @@ async fn dropping_the_generate_future_cleans_up_the_active_thread() {
 }
 
 #[tokio::test]
+async fn dropping_during_delete_keeps_cleanup_guard_armed_until_confirmation() {
+    let (provider, _temp, events) = provider("delayed-delete", CODEX_ANALYSIS_TIMEOUT);
+    let provider = Arc::new(provider);
+    let worker_provider = provider.clone();
+    let worker = tokio::spawn(async move {
+        let cancellation = OperationContext::background().cancellation().clone();
+        worker_provider.generate(request(), &cancellation).await
+    });
+    wait_for_event(&events, "thread/delete:thread-1").await;
+    worker.abort();
+    let _ = worker.await;
+
+    for _ in 0..1000 {
+        let count = std::fs::read_to_string(&events)
+            .map(|value| {
+                value
+                    .lines()
+                    .filter(|line| *line == "thread/delete:thread-1")
+                    .count()
+            })
+            .unwrap_or_default();
+        if count >= 2 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("cleanup guard did not retry an unconfirmed delete");
+}
+
+#[tokio::test]
 async fn total_deadline_fails_and_cleans_up_without_partial_output() {
     let (provider, _temp, events) = provider("hang", Duration::from_secs(2));
     let cancellation = OperationContext::background().cancellation().clone();
@@ -357,6 +388,32 @@ async fn cancellation_after_thread_start_response_still_deletes_the_thread() {
     assert!(matches!(error, BabysitError::Cancelled));
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+}
+
+#[tokio::test]
+async fn lost_thread_start_response_restarts_and_cleans_marker_orphan_before_reuse() {
+    let (provider, _temp, events) = provider("lost-thread-response", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let first = provider.generate(request(), &cancellation).await;
+    assert!(matches!(first, Err(BabysitError::Provider { .. })));
+
+    let output = provider.generate(request(), &cancellation).await.unwrap();
+    assert_eq!(output.after["1"], "after explanation");
+    let events = std::fs::read_to_string(events).unwrap();
+    assert_eq!(
+        events.lines().filter(|line| *line == "initialize").count(),
+        2
+    );
+    let orphan_deleted = events
+        .lines()
+        .position(|line| line == "thread/delete:orphan-thread")
+        .unwrap();
+    let lines = events.lines().collect::<Vec<_>>();
+    let second_turn = lines
+        .iter()
+        .rposition(|line| *line == "turn/start")
+        .unwrap();
+    assert!(orphan_deleted < second_turn);
 }
 
 #[tokio::test]
