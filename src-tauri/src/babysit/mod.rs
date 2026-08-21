@@ -325,6 +325,8 @@ pub trait BabysitAgentProvider: Send + Sync {
         failure: ValidationFailure,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError>;
+    /// 上层在 repair 之间提前退出时，释放 provider 私有的 thread/run 状态。
+    async fn abandon(&self, _request: &BabysitProviderRequest) {}
 }
 
 /// 缓存中不可变的 Review identity；不把 review 与 snapshot 合并成单一 ID。
@@ -427,13 +429,20 @@ impl BabysitApplication {
         let mut attempt = 0;
         while let Some(current_failure) = failure.take() {
             if attempt >= MAX_REPAIR_ATTEMPTS {
+                self.provider.abandon(&provider_request).await;
                 return Err(BabysitError::RepairExhausted {
                     detail: current_failure.to_string(),
                 });
             }
             attempt += 1;
-            ensure_not_cancelled(cancellation)?;
-            notify(BabysitProgress::Repairing { attempt })?;
+            if let Err(error) = ensure_not_cancelled(cancellation) {
+                self.provider.abandon(&provider_request).await;
+                return Err(error);
+            }
+            if let Err(error) = notify(BabysitProgress::Repairing { attempt }) {
+                self.provider.abandon(&provider_request).await;
+                return Err(error);
+            }
             output = self
                 .provider
                 .repair(

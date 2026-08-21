@@ -50,7 +50,7 @@ fn provider(mode: &str, timeout: Duration) -> (CodexAppServerProvider, TempDir, 
 
 /// 等待 fixture 记录目标 RPC，避免并行测试在 provider 启动前就取消请求。
 async fn wait_for_event(path: &Path, expected: &str) {
-    for _ in 0..200 {
+    for _ in 0..1000 {
         if std::fs::read_to_string(path)
             .map(|events| events.lines().any(|line| line == expected))
             .unwrap_or(false)
@@ -72,6 +72,10 @@ async fn app_server_generates_structured_output_and_deletes_thread() {
     assert_eq!(output.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "initialize"));
+    assert!(events.lines().any(|line| line == "initialize:experimental"));
+    assert!(events.lines().any(|line| line == "config/read"));
+    assert!(events.lines().any(|line| line == "configRequirements/read"));
+    assert!(events.lines().any(|line| line == "thread/start:restricted"));
     assert!(events.lines().any(|line| line == "thread/start"));
     assert!(events.lines().any(|line| line == "turn/start"));
     assert!(events.lines().any(|line| line == "thread/delete"));
@@ -124,6 +128,24 @@ async fn malformed_structured_output_can_be_repaired_on_the_same_thread() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn abandoning_an_invalid_run_interrupts_and_deletes_its_thread() {
+    let (provider, _temp, events) = provider("repair", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let request = request();
+    let first = provider
+        .generate(request.clone(), &cancellation)
+        .await
+        .unwrap();
+    assert!(validate_response(&request, &first).is_err());
+
+    provider.abandon(&request).await;
+
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "turn/interrupt"));
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
 }
 
 #[tokio::test]
@@ -203,6 +225,33 @@ async fn cancellation_interrupts_and_deletes_the_active_thread() {
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "turn/interrupt"));
     assert!(events.lines().any(|line| line == "thread/delete"));
+    let interrupted = events
+        .lines()
+        .position(|line| line == "emit:turn/completed:interrupted")
+        .unwrap();
+    let deleted = events
+        .lines()
+        .position(|line| line == "thread/delete:thread-1")
+        .unwrap();
+    assert!(interrupted < deleted);
+}
+
+#[tokio::test]
+async fn dropping_the_generate_future_cleans_up_the_active_thread() {
+    let (provider, _temp, events) = provider("hang", CODEX_ANALYSIS_TIMEOUT);
+    let provider = Arc::new(provider);
+    let worker_provider = provider.clone();
+    let worker = tokio::spawn(async move {
+        let cancellation = OperationContext::background().cancellation().clone();
+        worker_provider.generate(request(), &cancellation).await
+    });
+    wait_for_event(&events, "turn/start").await;
+    worker.abort();
+    let _ = worker.await;
+
+    wait_for_event(&events, "thread/delete:thread-1").await;
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "turn/interrupt"));
 }
 
 #[tokio::test]
@@ -224,6 +273,105 @@ async fn startup_removes_only_marked_orphan_threads() {
     let cancellation = OperationContext::background().cancellation().clone();
     let _ = provider.generate(request(), &cancellation).await.unwrap();
     let events = std::fs::read_to_string(events).unwrap();
-    assert!(events.lines().any(|line| line == "thread/list"));
-    assert!(events.lines().any(|line| line == "thread/delete"));
+    assert!(events.lines().any(|line| line == "thread/list:unfiltered"));
+    assert!(!events
+        .lines()
+        .any(|line| line == "thread/list:source-filtered"));
+    assert!(events
+        .lines()
+        .any(|line| line == "thread/delete:orphan-thread"));
+    assert!(!events
+        .lines()
+        .any(|line| line == "thread/delete:other-thread"));
+}
+
+#[tokio::test]
+async fn insecure_thread_policy_fails_closed_before_starting_a_turn() {
+    let (provider, _temp, events) = provider("insecure-policy", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::Provider { .. }));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(!events.lines().any(|line| line == "turn/start"));
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+}
+
+#[tokio::test]
+async fn personal_model_instruction_file_fails_closed_before_thread_start() {
+    let (provider, _temp, events) = provider("personal-model-instructions", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::Provider { .. }));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(!events.lines().any(|line| line == "thread/start"));
+}
+
+#[tokio::test]
+async fn managed_instruction_requirement_fails_closed_before_thread_start() {
+    let (provider, _temp, events) = provider("managed-instructions", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::Provider { .. }));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(!events.lines().any(|line| line == "thread/start"));
+}
+
+#[tokio::test]
+async fn stale_item_and_nested_turn_notifications_are_ignored() {
+    let (provider, _temp, _events) = provider("stale", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let output = provider.generate(request(), &cancellation).await.unwrap();
+
+    assert_eq!(output.before["1"], "before explanation");
+    assert_eq!(output.after["1"], "after explanation");
+}
+
+#[tokio::test]
+async fn cancellation_after_thread_start_response_still_deletes_the_thread() {
+    let (provider, _temp, events) = provider("delayed-thread-start", CODEX_ANALYSIS_TIMEOUT);
+    let provider = Arc::new(provider);
+    let cancellation = TestCancellation::default();
+    let worker_cancellation = cancellation.clone();
+    let worker_provider = provider.clone();
+    let worker = tokio::spawn(async move {
+        worker_provider
+            .generate(request(), &worker_cancellation)
+            .await
+    });
+    wait_for_event(&events, "thread/start").await;
+    cancellation.cancel();
+
+    let error = worker.await.unwrap().unwrap_err();
+    assert!(matches!(error, BabysitError::Cancelled));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
+}
+
+#[tokio::test]
+async fn blocked_stdin_writer_obeys_the_analysis_deadline() {
+    let (provider, _temp, events) = provider("block-writer", Duration::from_secs(2));
+    let cancellation = OperationContext::background().cancellation().clone();
+    let mut request = request();
+    request.before = "x".repeat(2 * 1024 * 1024);
+    request.after = "y".repeat(2 * 1024 * 1024);
+    let started = std::time::Instant::now();
+
+    let error = provider.generate(request, &cancellation).await.unwrap_err();
+
+    assert!(matches!(error, BabysitError::Provider { .. }));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "thread/start"));
 }
