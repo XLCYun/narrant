@@ -259,7 +259,7 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
     for (const side of ["original", "modified"] as const) {
       const injected = fakeDecorations[side][0]?.options.after;
-      expect(injected).toEqual({ content: `${longExplanation.slice(0, 31)}…`, inlineClassName: "babysit-inline-explanation" });
+      expect(injected).toEqual({ content: longExplanation, inlineClassName: "babysit-inline-explanation" });
       expect(fakeDecorations[side][0]?.options.hoverMessage?.value).toBe(longExplanation);
       expect(injected?.content).not.toContain("变更前");
       expect(injected?.content).not.toContain("变更后");

@@ -66,11 +66,6 @@ export function selectBabysitExplanations(
     .sort(([left], [right]) => left - right);
 }
 
-/** 将完整解释压缩为适合双栏行尾展示的 tag 文本，完整内容仍通过 hover 提供。 */
-export function inlineExplanationText(explanation: string, limit = 32): string {
-  return explanation.length > limit ? `${explanation.slice(0, limit - 1)}…` : explanation;
-}
-
 /** 按 diff hunk 配对两侧解释；渲染时只为实际存在的解释创建 zone。 */
 export function buildBabysitZoneRows(
   before: ReadonlyArray<[number, string]>,
@@ -103,6 +98,42 @@ export function buildBabysitZoneRows(
   const remainingAfter = after.filter(([line]) => !usedAfter.has(line));
   append(remainingBefore, remainingAfter, remainingBefore[0]?.[0] ?? 1, remainingAfter[0]?.[0] ?? 1);
   return rows;
+}
+
+/** 把 original 行号按 diff 顺序映射到 Monaco 单栏模式生成的红色删除行。 */
+export function syncInlineDeletedExplanations(
+  root: HTMLElement,
+  entries: ReadonlyArray<[number, string]>,
+  changes: readonly LineChange[],
+): void {
+  const explanations = new Map(entries);
+  const originalLines = changes.flatMap((change) => {
+    if (change.originalStartLineNumber <= 0 || change.originalEndLineNumber < change.originalStartLineNumber) return [];
+    return Array.from(
+      { length: change.originalEndLineNumber - change.originalStartLineNumber + 1 },
+      (_, index) => change.originalStartLineNumber + index,
+    );
+  });
+  const deletedRows = root.querySelectorAll<HTMLElement>(".view-zones .line-delete .view-line");
+  deletedRows.forEach((row, index) => {
+    const explanation = explanations.get(originalLines[index] ?? -1);
+    const existing = row.querySelector<HTMLElement>("[data-babysit-inline-deleted]");
+    if (!explanation) {
+      existing?.remove();
+      return;
+    }
+    if (existing) {
+      if (existing.textContent !== explanation) existing.textContent = explanation;
+      existing.title = explanation;
+      return;
+    }
+    const tag = document.createElement("span");
+    tag.className = "babysit-inline-explanation";
+    tag.dataset.babysitInlineDeleted = "true";
+    tag.textContent = explanation;
+    tag.title = explanation;
+    row.firstElementChild?.append(tag);
+  });
 }
 
 /** 将 AI Line Explanations 作为行尾 injected text 渲染，不修改 Review Snapshot 源文本。 */
@@ -155,7 +186,7 @@ export function BabysitDiffEditor({
             options: {
               description: `Babysit ${side} line ${line}`,
               hoverMessage: { value: explanation },
-              after: { content: inlineExplanationText(explanation, renderSideBySide ? 32 : 18), inlineClassName: "babysit-inline-explanation" },
+              after: { content: explanation, inlineClassName: "babysit-inline-explanation" },
             },
           };
         });
@@ -166,6 +197,21 @@ export function BabysitDiffEditor({
     const after = apply("after", selectedEntries.after);
     return () => { before.clear(); after.clear(); };
   }, [mounted, renderSideBySide, selectedEntries]);
+
+  /** Monaco 单栏把删除行复制进 modified view-zone；同步 original 解释到这些红色虚拟行。 */
+  useEffect(() => {
+    if (!mounted || renderSideBySide) return;
+    const root = mounted.editor.getModifiedEditor().getDomNode();
+    if (!root) return;
+    const sync = () => syncInlineDeletedExplanations(root, selectedEntries.before, lineChanges);
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      root.querySelectorAll("[data-babysit-inline-deleted]").forEach((node) => node.remove());
+    };
+  }, [lineChanges, mounted, renderSideBySide, selectedEntries.before]);
 
   return <>
     <DiffEditor
