@@ -119,7 +119,7 @@ export function ReviewReader(input: ReviewReaderProps) {
     onClose: () => void review.close(),
   };
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(() => new Set());
-  const [activeView, setActiveView] = useState<"overview" | "file-changes">("overview");
+  const [activeView, setActiveView] = useState<"overview" | "file-changes">("file-changes");
   const selectedPath = props.pendingFilePath ?? props.fileChange?.path;
   const effectiveDiffMode: DiffMode = props.narrow ? "inline" : props.diffMode;
   const fileTypeIconTheme = props.editorTheme === "vs-dark" ? "dark" : "light";
@@ -188,7 +188,7 @@ export function ReviewReader(input: ReviewReaderProps) {
     </>;
   }
 
-  return <Tabs defaultValue="overview" onValueChange={(value) => setActiveView(value as "overview" | "file-changes")} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
+  return <Tabs defaultValue="file-changes" onValueChange={(value) => setActiveView(value as "overview" | "file-changes")} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
     <div role="toolbar" aria-label={t("review:toolbar")} className="flex min-h-12 shrink-0 items-center gap-2 border-b px-3">
       <TabsList variant="line" aria-label={t("review:reviewViews")} className="h-full shrink-0 p-0">
         <TabsTrigger value="overview" className="px-3">{t("review:overview")}</TabsTrigger>
