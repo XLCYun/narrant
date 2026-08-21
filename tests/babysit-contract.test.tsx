@@ -222,6 +222,31 @@ describe("Babysit contract spine", () => {
     expect(provider.requested()?.request.detectedLanguage).toBe("python");
   });
 
+  it("eligibility IPC 失败时保留可打开、可重试的失败状态", async () => {
+    const provider = createAdapter();
+    const babysitAdapter: BabysitApplicationAdapter = {
+      async checkEligibility() {
+        throw { code: "input_unavailable", detail: "eligibility command failed" } satisfies BabysitError;
+      },
+      async explainFile() {
+        throw new Error("not reached before retry");
+      },
+    };
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.babysit).toMatchObject({
+      eligibility: { kind: "resolved", result: { eligible: true } },
+      state: {
+        kind: "failed",
+        error: { code: "input_unavailable" },
+        retryable: true,
+      },
+    }));
+  });
+
   it("未知 extensionless 内容保持 disabled 且不发起 explain", async () => {
     const unknownSnapshot = { ...snapshot, fileChanges: [{ path: "bin/tool", oldPath: null, status: "added" as const }] };
     const unknownContent: FileChangeContent = {

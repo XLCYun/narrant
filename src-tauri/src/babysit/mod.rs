@@ -6,10 +6,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicU8, AtomicUsize, Ordering},
-    Arc, Mutex,
-};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 mod codex;
 
@@ -454,23 +453,14 @@ pub struct BabysitApplication {
 }
 
 impl BabysitApplication {
-    /// 注入一个 provider，生产与测试都从这个 seam 进入 Babysit。
+    /// 注入一个 provider，供模块测试验证 provider-independent 编排。
+    #[cfg(test)]
     pub fn new(provider: Arc<dyn BabysitAgentProvider>) -> Self {
         Self {
             provider,
             codex_runtime: None,
             cache: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// 构造当前 vertical slice 使用的 deterministic fake provider。
-    pub fn with_fake_provider() -> Self {
-        Self::new(Arc::new(FakeBabysitProvider::default()))
-    }
-
-    /// 构造首个生产 Installed Coding Agent provider；进程仍在首次分析时懒启动。
-    pub fn with_codex_provider() -> Self {
-        Self::with_codex_provider_at(std::path::PathBuf::from("babysit-settings.json"))
     }
 
     /// 构造带有 application settings 路径的生产 Codex provider；发现仍保持懒加载。
@@ -887,6 +877,7 @@ fn validate_side(
 }
 
 /// Fake provider 的可预测错误脚本；用于契约和 repair loop 测试。
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FakeProviderMode {
     #[default]
@@ -895,6 +886,7 @@ pub enum FakeProviderMode {
 }
 
 /// 不依赖网络、登录或模型的 deterministic provider。
+#[cfg(test)]
 pub struct FakeBabysitProvider {
     mode: FakeProviderMode,
     invalid_rounds_remaining: AtomicU8,
@@ -903,6 +895,7 @@ pub struct FakeBabysitProvider {
     shutdown_calls: AtomicUsize,
 }
 
+#[cfg(test)]
 impl Default for FakeBabysitProvider {
     /// 创建默认返回完整解释的 deterministic fake provider。
     fn default() -> Self {
@@ -910,6 +903,7 @@ impl Default for FakeBabysitProvider {
     }
 }
 
+#[cfg(test)]
 impl FakeBabysitProvider {
     /// 构造一个指定输出脚本的 fake provider。
     pub fn new(mode: FakeProviderMode) -> Self {
@@ -1001,6 +995,7 @@ impl FakeBabysitProvider {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl BabysitAgentProvider for FakeBabysitProvider {
     /// 返回 fake provider 的稳定缓存 identity。
     fn provider_id(&self) -> &str {

@@ -172,21 +172,35 @@ export function useReviewLifecycle(
     const abort = new AbortController();
     eligibilityAbort.current = abort;
     setBabysitEligibility({ kind: "checking" });
-    void babysitAdapter.checkEligibility({
+    const detectedLanguage = detectBabysitLanguage(fileChange.path, fileChange.content);
+    const identity = {
       reviewId: current.reviewId,
       snapshotId: current.snapshotId,
       path: fileChange.path,
-    }, detectBabysitLanguage(fileChange.path, fileChange.content), abort.signal).then((result) => {
+    };
+    void babysitAdapter.checkEligibility(identity, detectedLanguage, abort.signal).then((result) => {
       if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
         setBabysitEligibility({ kind: "resolved", result });
       }
-    }).catch(() => {
+    }).catch((reason) => {
       if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
-        setBabysitEligibility({ kind: "unavailable" });
+        // 已识别为代码文件时，IPC 失败不能把按钮变成无响应的假“不支持”。
+        // 显示可重试失败；真正 explain command 仍会经过后端 eligibility gate。
+        if (detectedLanguage) {
+          setBabysitEligibility({ kind: "resolved", result: { eligible: true, reason: null } });
+          setBabysitState({
+            kind: "failed",
+            request: { ...identity, locale, detectedLanguage },
+            error: babysitFailure(reason),
+            retryable: true,
+          });
+        } else {
+          setBabysitEligibility({ kind: "unavailable" });
+        }
       }
     });
     return () => abort.abort();
-  }, [babysitAdapter, fileChange]);
+  }, [babysitAdapter, fileChange, locale]);
 
   /** 对当前 immutable File Change 发起一次完整文件分析，并丢弃 stale response。 */
   const explainBabysit = useCallback(() => {
