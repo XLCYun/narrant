@@ -14,11 +14,15 @@ fn load_local_github_app_configuration() {
     const GITHUB_APP_ENVIRONMENTS: [&str; 2] =
         ["NARRANT_GITHUB_CLIENT_ID", "NARRANT_GITHUB_APP_SLUG"];
 
-    println!("cargo:rerun-if-changed={LOCAL_ENV_PATH}");
+    // Cargo 会把不存在的 `rerun-if-changed` 路径永久视为 Dirty。只有文件实际
+    // 存在时才监听它，避免每条 check/test 命令都重新编译整个应用 crate。
+    if Path::new(LOCAL_ENV_PATH).is_file() {
+        println!("cargo:rerun-if-changed={LOCAL_ENV_PATH}");
+    }
     for name in GITHUB_APP_ENVIRONMENTS {
         println!("cargo:rerun-if-env-changed={name}");
     }
-    if !Path::new(LOCAL_ENV_PATH).exists() {
+    if !Path::new(LOCAL_ENV_PATH).is_file() {
         return;
     }
 
