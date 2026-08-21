@@ -717,8 +717,10 @@ fn eligibility(
         extension,
         Some(
             "ts" | "tsx"
+                | "mts"
                 | "js"
                 | "jsx"
+                | "mjs"
                 | "rs"
                 | "py"
                 | "go"

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
-  AiBrain01Icon,
+  BabyIcon,
   ArrowDown01Icon,
   Copy01Icon,
   FileAddIcon,
@@ -25,7 +25,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { isBabysitRunning } from "@/babysit/types";
 import type { BabysitEligibilityReason, BabysitState } from "@/babysit/types";
@@ -92,7 +91,7 @@ function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
 function editorLanguage(path: string) {
   const extension = path.split(".").at(-1)?.toLowerCase();
   const languages: Record<string, string> = {
-    js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
+    js: "javascript", jsx: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", mts: "typescript",
     md: "markdown", json: "json", css: "css", html: "html", rs: "rust",
     py: "python", go: "go", java: "java", yml: "yaml", yaml: "yaml",
     c: "c", cpp: "cpp", h: "cpp", cs: "csharp", sh: "shell",
@@ -385,16 +384,21 @@ export function ReviewReader(input: ReviewReaderProps) {
                     setBabysitVisible(true);
                   }}
                 />}>
-                  <Icon icon={AiBrain01Icon} data-icon="inline-start" aria-hidden />
+                  <Icon icon={BabyIcon} data-icon="inline-start" aria-hidden />
                   <span className="hidden sm:inline">{babysitVisible ? t("review:babysitDisable") : t("review:babysit")}</span>
                 </TooltipTrigger>
                 <TooltipContent>{babysitEnabled ? (babysitVisible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
               </Tooltip>
               {!babysitEnabled && <span id={babysitReasonId} className="sr-only">{eligibilityReason}</span>}
-              {babysitVisible && babysitState?.kind === "completed" && <ToggleGroup value={[babysitFilter]} onValueChange={(value) => value[0] && setBabysitFilter(value[0] as BabysitExplanationFilter)} aria-label={t("review:babysitFilter")} variant="outline" size="sm">
-                <ToggleGroupItem value="changed" aria-label={t("review:babysitChanged")}><Icon icon={GitCompareIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitChanged")}</span></ToggleGroupItem>
-                <ToggleGroupItem value="all" aria-label={t("review:babysitAll")}><Icon icon={ListViewIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitAll")}</span></ToggleGroupItem>
-              </ToggleGroup>}
+              {babysitVisible && babysitState?.kind === "completed" && <Button
+                variant="outline"
+                size="sm"
+                aria-label={babysitFilter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}
+                onClick={() => setBabysitFilter((current) => current === "changed" ? "all" : "changed")}
+              >
+                <Icon icon={babysitFilter === "changed" ? ListViewIcon : GitCompareIcon} aria-hidden />
+                <span className="hidden sm:inline">{babysitFilter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}</span>
+              </Button>}
             </div>}</header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}

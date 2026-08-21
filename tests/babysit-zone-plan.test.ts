@@ -18,14 +18,14 @@ describe("Babysit Monaco zone pairing", () => {
     expect(expanded).toHaveLength(0);
   });
 
-  it("为 add-only 的 before 侧创建配对 spacer", () => {
+  it("为 add-only 的 before 侧保留空配对信息", () => {
     const rows = buildBabysitZoneRows([], [[2, "新增一"], [3, "新增二"]], [change(0, 0, 2, 3)]);
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.before)).toEqual([undefined, undefined]);
     expect(rows.map((row) => row.afterAnchor)).toEqual([2, 3]);
   });
 
-  it("为 delete-only 的 after 侧创建配对 spacer", () => {
+  it("为 delete-only 的 after 侧保留空配对信息", () => {
     const rows = buildBabysitZoneRows([[2, "删除一"], [3, "删除二"]], [], [change(2, 3, 0, 0)]);
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.after)).toEqual([undefined, undefined]);

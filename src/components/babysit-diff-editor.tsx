@@ -10,7 +10,7 @@ export type BabysitExplanationFilter = "changed" | "all";
 type ExplanationSide = keyof BabysitFileExplanations;
 type LineChange = NonNullable<ReturnType<MonacoDiffEditor["getLineChanges"]>>[number];
 
-/** 一对垂直对齐的 before/after 解释槽；缺失侧仍创建等高 spacer。 */
+/** 同一 diff hunk 内的一对 before/after 解释槽；缺失侧只保留语义配对信息。 */
 export type BabysitZoneRow = {
   before?: [number, string];
   after?: [number, string];
@@ -76,7 +76,7 @@ export function selectBabysitExplanations(
     .sort(([left], [right]) => left - right);
 }
 
-/** 根据文本长度估算一个共享 view-zone 高度，让 before/after 编辑器保持垂直节奏。 */
+/** 根据实际展示行数估算紧凑 view-zone 高度，短解释不再预留两行空白。 */
 function explanationZoneHeight(
   entries: ReadonlyArray<[number, string] | undefined>,
   expandedKeys: ReadonlySet<string>,
@@ -84,13 +84,13 @@ function explanationZoneHeight(
 ): number {
   const heights = entries.filter((entry): entry is [number, string] => Boolean(entry)).map(([line, text]) => {
     const expanded = expandedKeys.has(`${side}:${line}`);
-    const lines = expanded ? Math.max(2, Math.ceil(text.length / 20)) : 2;
-    return 28 + lines * 16;
+    const lines = expanded ? Math.max(1, Math.ceil(text.length / 32)) : text.length > 120 ? 2 : 1;
+    return 12 + lines * 16;
   });
-  return Math.max(42, ...heights);
+  return Math.max(28, ...heights);
 }
 
-/** 按 diff hunk 配对两侧解释，保证新增、删除和不等长修改拥有相同 zone 数量。 */
+/** 按 diff hunk 配对两侧解释；渲染时只为实际存在的解释创建 zone。 */
 export function buildBabysitZoneRows(
   before: ReadonlyArray<[number, string]>,
   after: ReadonlyArray<[number, string]>,
@@ -182,14 +182,6 @@ function createExplanationNode(input: ExplanationCardProps, key: string): Explan
   node.style.overflow = "hidden";
   node.style.boxSizing = "border-box";
   return { key, node, props: input };
-}
-
-/** 为缺失侧创建不可见内容的等高 spacer，维持两侧后续代码垂直对齐。 */
-function createSpacerNode(zoneHeight: number) {
-  const node = document.createElement("div");
-  node.dataset.babysitSpacer = "true";
-  node.style.height = `${zoneHeight}px`;
-  return node;
 }
 
 /** inline Diff 只在 modified editor 创建合并区，避免两个 Monaco pane 占据同一可视位置。 */
@@ -298,12 +290,13 @@ export function BabysitDiffEditor({
       for (const row of rows) {
         const sharedHeight = Math.max(explanationZoneHeight([row.before], expandedKeys, "before"), explanationZoneHeight([row.after], expandedKeys, "after"));
         const entry = row.before;
-        const mounted = entry ? createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels, onSetExpanded }, `${generation}:before:${entry[0]}`) : undefined;
-        if (mounted) nextHosts.push(mounted);
+        if (!entry) continue;
+        const mounted = createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels, onSetExpanded }, `${generation}:before:${entry[0]}`);
+        nextHosts.push(mounted);
         nextIds.original.push(accessor.addZone({
           afterLineNumber: Math.max(0, row.beforeAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: mounted?.node ?? createSpacerNode(sharedHeight),
+          domNode: mounted.node,
         }));
       }
     });
@@ -311,12 +304,13 @@ export function BabysitDiffEditor({
       for (const row of rows) {
         const sharedHeight = Math.max(explanationZoneHeight([row.before], expandedKeys, "before"), explanationZoneHeight([row.after], expandedKeys, "after"));
         const entry = row.after;
-        const mounted = entry ? createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels, onSetExpanded }, `${generation}:after:${entry[0]}`) : undefined;
-        if (mounted) nextHosts.push(mounted);
+        if (!entry) continue;
+        const mounted = createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels, onSetExpanded }, `${generation}:after:${entry[0]}`);
+        nextHosts.push(mounted);
         nextIds.modified.push(accessor.addZone({
           afterLineNumber: Math.max(0, row.afterAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: mounted?.node ?? createSpacerNode(sharedHeight),
+          domNode: mounted.node,
         }));
       }
     });

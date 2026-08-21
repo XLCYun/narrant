@@ -4,7 +4,7 @@ import type { FileChangeContent } from "@/review/types";
 export type BabysitDetectedLanguage = "typescript" | "javascript" | "rust" | "python" | "go" | "java" | "c" | "cpp";
 
 const extensionLanguages: Readonly<Record<string, BabysitDetectedLanguage>> = {
-  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+  ts: "typescript", tsx: "typescript", mts: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript",
   rs: "rust", py: "python", go: "go", java: "java", c: "c",
   cc: "cpp", cpp: "cpp", cxx: "cpp", h: "cpp", hpp: "cpp",
 };

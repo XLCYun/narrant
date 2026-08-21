@@ -531,3 +531,19 @@ fn backend_eligibility_accepts_extensionless_detected_language() {
         Some(BabysitEligibilityReason::UnsupportedLanguage)
     );
 }
+
+/// Node 与 TypeScript 的模块扩展名应与普通 JS/TS 文件使用相同 eligibility。
+#[test]
+fn backend_eligibility_accepts_mjs_and_mts() {
+    for path in ["src/module.mjs", "src/module.mts"] {
+        let content = text_change(
+            path,
+            Some("export const old = 1;"),
+            Some("export const next = 2;"),
+        );
+        assert!(
+            eligibility(path, &content, None).eligible,
+            "expected {path} to be eligible"
+        );
+    }
+}

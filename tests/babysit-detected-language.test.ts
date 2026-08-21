@@ -11,6 +11,8 @@ function text(path: string, source: string): FileChangeContent {
 describe("Babysit detected language", () => {
   it("识别白名单扩展名和可靠的 extensionless shebang", () => {
     expect(detectBabysitLanguage("src/app.tsx", text("src/app.tsx", "export {}"))).toBe("typescript");
+    expect(detectBabysitLanguage("src/app.mts", text("src/app.mts", "export {}"))).toBe("typescript");
+    expect(detectBabysitLanguage("src/app.mjs", text("src/app.mjs", "export {}"))).toBe("javascript");
     expect(detectBabysitLanguage("bin/tool", text("bin/tool", "#!/usr/bin/env python3\nprint('ok')"))).toBe("python");
     expect(detectBabysitLanguage("bin/task", text("bin/task", "#!/usr/bin/env node\nconsole.log('ok')"))).toBe("javascript");
   });

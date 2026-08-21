@@ -13,6 +13,9 @@ const fakeZones = {
 };
 let nextZoneId = 0;
 const removedZoneNodes: HTMLElement[] = [];
+let fakeLineChanges = [
+  { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
+];
 
 /** 在 jsdom 中模拟 Monaco view-zone API，让测试验证可见行和展开行为。 */
   vi.mock("@monaco-editor/react", () => ({
@@ -40,9 +43,7 @@ const removedZoneNodes: HTMLElement[] = [];
         },
       });
       const fakeEditor = {
-        getLineChanges: () => [
-          { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
-        ],
+        getLineChanges: () => fakeLineChanges,
         onDidUpdateDiff: () => ({ dispose: () => undefined }),
         getOriginalEditor: () => createEditor("original"),
         getModifiedEditor: () => createEditor("modified"),
@@ -103,6 +104,9 @@ beforeEach(async () => {
   fakeZones.modified.clear();
   nextZoneId = 0;
   removedZoneNodes.length = 0;
+  fakeLineChanges = [
+    { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
+  ];
 });
 afterEach(() => cleanup());
 
@@ -129,12 +133,37 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
 
     expect(review.babysit?.explain).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "仅改变行" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部非空行" })).toBeInTheDocument();
     expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
     expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
 
     fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
+    expect(screen.queryByRole("button", { name: "全部非空行" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "仅改变行" })).toBeInTheDocument();
     expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
     expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
+  });
+
+  it("added file 双栏不在空的 before pane 重复插入补偿区", () => {
+    fakeLineChanges = [
+      { originalStartLineNumber: 0, originalEndLineNumber: 0, modifiedStartLineNumber: 1, modifiedEndLineNumber: 2 },
+    ];
+    const added = { ...content, status: "added" as const, before: null, beforeSize: null };
+    const review = makeReview({
+      kind: "completed",
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: added.path, locale: "zh-CN" },
+      explanations: { before: {}, after: { "1": "声明新值。", "2": "返回新值。" } },
+    });
+    review.fileChange = { kind: "ready", path: added.path, content: added };
+
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+
+    expect(fakeZones.original.size).toBe(0);
+    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["1", "2"]);
+    expect([...fakeZones.modified.values()].map((node) => node.style.minHeight)).toEqual(["28px", "28px"]);
   });
 
   it("宝宝模式保持打开时，locale 变化会重新 arm 当前文件分析", async () => {
@@ -260,7 +289,7 @@ describe("Babysit Review Reader presentation", () => {
     expect(removedZoneNodes.every((node) => !node.isConnected && node.childElementCount === 0)).toBe(true);
     const expanded = [...fakeZones.original.values()][0];
     expect(within(expanded).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
-    expect(expanded.style.minHeight).toBe("220px");
+    expect(expanded.style.minHeight).toBe("140px");
     const expandedText = [...expanded.querySelectorAll("span")].find((node) => node.textContent === longExplanation);
     expect(expandedText).toHaveStyle({ display: "block" });
     expect(expandedText).toHaveClass("overflow-visible");
@@ -269,7 +298,7 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(within(expanded).getByRole("button", { name: "收起" }));
     const collapsedAgain = [...fakeZones.original.values()][0];
     expect(within(collapsedAgain).getByRole("button", { name: "展开" })).toHaveAttribute("aria-expanded", "false");
-    expect(collapsedAgain.style.minHeight).toBe("60px");
+    expect(collapsedAgain.style.minHeight).toBe("44px");
     const collapsedText = [...collapsedAgain.querySelectorAll("span")].find((node) => node.textContent === longExplanation);
     expect(collapsedText).toHaveStyle({ display: "-webkit-box" });
     expect(collapsedText).toHaveClass("overflow-hidden");
@@ -289,6 +318,6 @@ describe("Babysit Review Reader presentation", () => {
 
     const nextContent = { ...content, path: "src/next.ts" };
     rendered.rerender(<ReviewReader review={{ ...review, fileChange: { kind: "ready", path: nextContent.path, content: nextContent } }} appearance={appearance} />);
-    expect(screen.getByRole("button", { name: "全部非空行" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "仅改变行" })).toBeInTheDocument();
   });
 });
