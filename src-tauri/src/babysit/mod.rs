@@ -10,6 +10,10 @@ use std::sync::{
     Arc, Mutex,
 };
 
+mod codex;
+
+pub use codex::CodexAppServerProvider;
+
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
 /// 对单个解释允许的最大 Unicode 字符数。
@@ -49,6 +53,8 @@ pub struct LineTarget {
 pub struct BabysitProviderRequest {
     pub path: String,
     pub locale: String,
+    /// 当前 Review Workspace 的绝对路径；provider 只能把它作为只读 cwd 使用。
+    pub workspace_path: String,
     pub before: String,
     pub after: String,
     pub targets: Vec<LineTarget>,
@@ -334,6 +340,8 @@ pub struct BabysitFileRequest {
     pub identity: ReviewIdentity,
     pub path: String,
     pub locale: String,
+    /// 当前 Review Workspace 的绝对路径，不进入前端 identity 或缓存 key。
+    pub workspace_path: String,
 }
 
 /// 仅在进程内存在的完整结果缓存 key。
@@ -366,6 +374,11 @@ impl BabysitApplication {
     /// 构造当前 vertical slice 使用的 deterministic fake provider。
     pub fn with_fake_provider() -> Self {
         Self::new(Arc::new(FakeBabysitProvider::default()))
+    }
+
+    /// 构造首个生产 Installed Coding Agent provider；进程仍在首次分析时懒启动。
+    pub fn with_codex_provider() -> Self {
+        Self::new(Arc::new(CodexAppServerProvider::new("codex")))
     }
 
     /// 以一个完整 File Change 为单位生成并缓存 before/after Line Explanations。
@@ -548,6 +561,7 @@ fn build_provider_request(
     Ok(BabysitProviderRequest {
         path: request.path.clone(),
         locale: request.locale.clone(),
+        workspace_path: request.workspace_path.clone(),
         before: before.to_owned(),
         after: after.to_owned(),
         targets,

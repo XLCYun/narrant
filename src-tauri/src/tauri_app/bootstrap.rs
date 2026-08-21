@@ -59,7 +59,7 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
-            app.manage(babysit::BabysitApplication::with_fake_provider());
+            app.manage(babysit::BabysitApplication::with_codex_provider());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -35,7 +35,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-wdio = { version = "1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util", "process"] }
 tauri-plugin-dialog = "2.7.2"
 
 [dev-dependencies]

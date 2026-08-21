@@ -39,6 +39,7 @@ fn request_with_locale(
         },
         path: path.to_owned(),
         locale: locale.to_owned(),
+        workspace_path: "/tmp/narrant-test-workspace".to_owned(),
     }
 }
 
@@ -244,6 +245,7 @@ fn response_validation_rejects_extra_missing_and_unsafe_lines() {
     let request = BabysitProviderRequest {
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
+        workspace_path: "/tmp/narrant-test-workspace".to_owned(),
         before: "const value = 1;".to_owned(),
         after: "const value = 2;".to_owned(),
         targets: vec![
