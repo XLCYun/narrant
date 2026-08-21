@@ -9,7 +9,7 @@ import { GitHubAuthorizationControls } from "@/components/github-authorization-c
 import { RepositoryOverview } from "@/components/repository-overview";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
-import type { BabysitBinding } from "@/babysit/types";
+import type { BabysitBinding, BabysitFileExplanations } from "@/babysit/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
 import type { RepositoryReviewSummary } from "@/lib/review-types";
@@ -176,6 +176,7 @@ const readerSnapshot: ReviewReaderSnapshot = {
     { path: "docs/review-reader.md", oldPath: null, status: "added" },
     { path: "fixtures/unknown.fixture", oldPath: null, status: "modified" },
     { path: "src/components/review-reader.tsx", oldPath: null, status: "modified" },
+    { path: "src/components/new-reader.ts", oldPath: null, status: "added" },
     { path: "src/components/legacy-reader.tsx", oldPath: null, status: "deleted" },
     { path: "src/lib/review-navigation.ts", oldPath: "src/lib/diff-navigation.ts", status: "renamed" },
     { path: "tests/review-reader.test.tsx", oldPath: null, status: "modified" },
@@ -191,7 +192,7 @@ const readerSnapshot: ReviewReaderSnapshot = {
 };
 
 /** 用代表性长短路径和变更内容预览完整 Review Reader。 */
-function ReviewReaderPreview({ empty = false, merged = false, update = false }: { empty?: boolean; merged?: boolean; update?: boolean }) {
+function ReviewReaderPreview({ empty = false, merged = false, update = false, babysitKind }: { empty?: boolean; merged?: boolean; update?: boolean; babysitKind?: "completed" | "generating" | "repairing" | "failed" }) {
   const snapshot = {
     ...readerSnapshot,
     fileChanges: empty ? [] : readerSnapshot.fileChanges,
@@ -199,16 +200,29 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
       ? { ...readerSnapshot.pullRequest, state: "merged" as const }
       : readerSnapshot.pullRequest,
   };
-  const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => [
-    change.path,
-    {
-      ...change, contentKind: "text", beforeSize: 48, afterSize: 78,
-      before: "export function review() {\n  return 'old reader';\n}\n",
-      after: "export function review() {\n  return 'focused review reader';\n}\n",
-    },
-  ]));
-  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
+  const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => {
+    const before = change.status === "added" ? null : "export function review() {\n  return 'old reader';\n}\n";
+    const after = change.status === "deleted" ? null : change.status === "modified"
+      ? "export function review() {\n  const context = prepareContext();\n  return renderFocusedReview(context);\n  logReview(context);\n}\n"
+      : "export function review() {\n  return 'focused review reader';\n}\n";
+    return [change.path, { ...change, contentKind: "text", beforeSize: before?.length ?? null, afterSize: after?.length ?? null, before, after }];
+  }));
+  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges.find((change) => change.path.endsWith(".tsx"))?.path ?? snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
+  const explanationText = "说明这一行如何把当前输入转换为 Review Reader 可以安全展示的结果，并保留前后文件之间的上下文关系。".repeat(8).slice(0, 240);
+  const previewRequest = selectedPath ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" as const } : undefined;
+  const selectedContent = selectedPath ? contents[selectedPath] : undefined;
+  const previewExplanations: BabysitFileExplanations = {
+    before: selectedContent?.before ? { "1": explanationText, "2": explanationText, "3": explanationText } : {},
+    after: selectedContent?.after ? { "1": explanationText, "2": explanationText, "3": explanationText, "4": explanationText, "5": explanationText } : {},
+  };
+  const previewBabysitState: BabysitBinding["state"] = babysitKind === "completed"
+    ? { kind: "completed", request: previewRequest!, explanations: previewExplanations }
+    : babysitKind === "repairing"
+      ? { kind: "repairing", request: previewRequest!, attempt: 2 }
+      : babysitKind === "failed"
+        ? { kind: "failed", request: previewRequest!, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
+        : { kind: "generating", request: previewRequest! };
   const review: ReviewReaderBinding = {
     snapshot,
     transition: { kind: "stable" },
@@ -216,13 +230,11 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false }: 
       ? { kind: "ready", path: selectedPath, content: contents[selectedPath] }
       : { kind: "empty" },
     babysit: {
-      enabled: Boolean(selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")),
+      eligibility: selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")
+        ? { kind: "resolved", result: { eligible: true, reason: null } }
+        : { kind: "resolved", result: { eligible: false, reason: "unsupported_language" } },
       state: selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")
-        ? {
-            kind: "completed",
-            request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" },
-            explanations: { before: { "1": "声明 Review Reader 入口函数。" }, after: { "1": "声明新的 Review Reader 入口函数。" } },
-          }
+        ? (babysitKind ? previewBabysitState : { kind: "idle" })
         : { kind: "idle" },
       explain: () => undefined,
       cancel: () => undefined,
@@ -338,6 +350,10 @@ const previews: Record<string, PreviewDefinition> = {
     label: "Review 阅读器",
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
+      babysit: { label: "宝宝模式完成", render: () => <ReviewReaderPreview babysitKind="completed" /> },
+      "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview babysitKind="generating" /> },
+      "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview babysitKind="repairing" /> },
+      "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview babysitKind="failed" /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },

@@ -61,7 +61,26 @@ export type BabysitFileExplanations = {
 export type BabysitFileRequest = ReviewIdentity & {
   path: string;
   locale: SupportedLocale;
+  detectedLanguage?: string;
 };
+
+/** 后端唯一判定的文件 eligibility reason；UI 只负责本地化。 */
+export type BabysitEligibilityReason =
+  | "non_text"
+  | "generated_or_vendored"
+  | "lock_minified_or_snapshot"
+  | "unsupported_language";
+
+/** 后端返回的 provider-independent eligibility 结论。 */
+export type BabysitEligibility =
+  | { eligible: true; reason: null }
+  | { eligible: false; reason: BabysitEligibilityReason };
+
+/** 当前文件 eligibility 的异步读取状态。 */
+export type BabysitEligibilityState =
+  | { kind: "checking" }
+  | { kind: "resolved"; result: BabysitEligibility }
+  | { kind: "unavailable" };
 
 /** 当前 Review Reader 选中文件的稳定 Babysit 运行投影。 */
 export type BabysitState =
@@ -80,6 +99,12 @@ export function isBabysitRunning(
 
 /** 前端 lifecycle 与任意 Installed/Built-in provider adapter 之间的单一 seam。 */
 export interface BabysitApplicationAdapter {
+  /** 由后端读取固定 Snapshot 并给出唯一 eligibility 结论。 */
+  checkEligibility(
+    request: Omit<BabysitFileRequest, "locale">,
+    detectedLanguage: string | undefined,
+    signal: AbortSignal,
+  ): Promise<BabysitEligibility>;
   /** 按完整 File Change 发起一次分析；失败时 reject 结构化 BabysitError。 */
   explainFile(
     request: BabysitFileRequest,
@@ -93,7 +118,7 @@ export type BabysitBinding = {
   /** 当前分析阶段或已完成/失败结果。 */
   state: BabysitState;
   /** 当前选中文件是否满足 adapter 与文本 eligibility 的最小前置条件。 */
-  enabled: boolean;
+  eligibility: BabysitEligibilityState;
   /** 启动当前 File Change 的完整分析。 */
   explain(): void;
   /** 取消当前分析并丢弃未完成结果。 */

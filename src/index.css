@@ -10,7 +10,22 @@
 body { margin: 0; background: Canvas; color: CanvasText; }
 .narrant-app { min-width: 0; min-height: 100vh; padding: 1rem; }
 .narrant-app > header { display: flex; align-items: baseline; gap: 1rem; }
-[aria-label="File Change"] { display: block; }
+[aria-label="File Change"] { display: flex; }
+
+/* 只在 Babysit zone 存在时把该命中层抬到 view-lines 上方；空白区域仍由 Monaco 接收选择。 */
+.monaco-editor .view-zones:has([data-babysit-zone]) {
+  z-index: 10 !important;
+}
+
+.monaco-editor .view-zones > div:has([data-babysit-zone]),
+.monaco-editor [data-babysit-zone] {
+  position: relative;
+  z-index: 10;
+  pointer-events: auto !important;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow: hidden;
+}
 
 @media (min-width: 1200px) {
   .narrant-app { padding: 2rem; }

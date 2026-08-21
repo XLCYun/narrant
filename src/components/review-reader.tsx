@@ -1,18 +1,22 @@
-import { useState } from "react";
-import { DiffEditor } from "@monaco-editor/react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
+  AiBrain01Icon,
   ArrowDown01Icon,
+  Copy01Icon,
   FileAddIcon,
   FileEditIcon,
   FileRemoveIcon,
   FileSyncIcon,
+  GitCompareIcon,
   LayoutTwoColumnIcon,
+  ListViewIcon,
   Logout02Icon,
   ViewAgendaIcon,
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
 import { FileChangeLoading } from "@/components/file-change-loading";
+import { BabysitDiffEditor, setBabysitExpansion, type BabysitExplanationFilter } from "@/components/babysit-diff-editor";
 import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Button } from "@/components/ui/button";
@@ -21,8 +25,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { isBabysitRunning } from "@/babysit/types";
+import type { BabysitEligibilityReason, BabysitState } from "@/babysit/types";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { ChangeStatus, FileChangeSummary } from "@/review/types";
 export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
@@ -95,6 +101,65 @@ function editorLanguage(path: string) {
   return extension ? languages[extension] ?? "plaintext" : "plaintext";
 }
 
+/** 将前端 eligibility 原因映射为可读 Tooltip，避免把后端错误细节暴露到按钮之外。 */
+function babysitEligibilityLabel(reason: BabysitEligibilityReason | undefined, labels: Record<BabysitEligibilityReason, string>) {
+  return reason ? labels[reason] : undefined;
+}
+
+/** Babysit sticky footer 的状态、动作与本地化文本输入。 */
+type BabysitFooterProps = {
+  state: BabysitState | undefined;
+  onCancel: () => void;
+  onRetry: () => void;
+  labels: {
+    generating: string;
+    repairing: (attempt: number) => string;
+    failed: string;
+    cancel: string;
+    retry: string;
+    copyDiagnostics: string;
+    copiedDiagnostics: string;
+  };
+};
+
+/** 在 Diff 底部呈现文件级 Babysit 状态和恢复操作，不打断普通代码阅读。 */
+function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps) {
+  const [copied, setCopied] = useState(false);
+  const errorCode = state?.kind === "failed" ? state.error.code : undefined;
+  useEffect(() => setCopied(false), [state?.kind, errorCode]);
+  if (!state || (state.kind !== "generating" && state.kind !== "repairing" && state.kind !== "failed")) return null;
+
+  const running = state.kind === "generating" || state.kind === "repairing";
+  const status = state.kind === "generating"
+    ? labels.generating
+    : state.kind === "repairing"
+      ? labels.repairing(state.attempt)
+      : labels.failed;
+  const diagnostics = state.kind === "failed"
+    ? JSON.stringify({ category: "babysit", code: state.error.code })
+    : "";
+
+  /** 复制只包含稳定错误类别与 code 的脱敏诊断，不复制路径或 provider detail。 */
+  function copyDiagnostics() {
+    if (!diagnostics) return;
+    setCopied(true);
+    void navigator.clipboard?.writeText(diagnostics).catch(() => undefined);
+  }
+
+  return <footer data-testid="babysit-footer" className="sticky bottom-0 z-10 flex min-h-10 flex-wrap items-center gap-2 border-t bg-background/95 px-3 py-1.5 text-xs shadow-[0_-4px_12px_color-mix(in_oklab,var(--background),transparent_20%)] backdrop-blur" role="status" aria-live="polite">
+    <span className={cn("min-w-0 flex-1 truncate", state.kind === "failed" && "text-destructive")}>{status}</span>
+    {running
+      ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
+      : <>
+        <Button variant="outline" size="xs" onClick={onRetry}>{labels.retry}</Button>
+        <Button variant="ghost" size="xs" onClick={copyDiagnostics} aria-label={copied ? labels.copiedDiagnostics : labels.copyDiagnostics}>
+          <Icon icon={Copy01Icon} aria-hidden />
+          <span className="hidden sm:inline">{copied ? labels.copiedDiagnostics : labels.copyDiagnostics}</span>
+        </Button>
+      </>}
+  </footer>;
+}
+
 /** 呈现满高、自由浏览且无审核进度语义的 Review Reader。 */
 export function ReviewReader(input: ReviewReaderProps) {
   const { t } = useTranslation(["common", "review"]);
@@ -126,12 +191,53 @@ export function ReviewReader(input: ReviewReaderProps) {
   const babysit = review.babysit;
   const babysitState = babysit?.state;
   const babysitRunning = babysitState ? isBabysitRunning(babysitState) : false;
-  const babysitAction = babysitRunning ? "cancel" : babysitState?.kind === "failed" ? "retry" : "explain";
-  const babysitLabel = babysitAction === "cancel"
-    ? t("review:babysitCancel")
-    : babysitAction === "retry"
-      ? t("common:retry")
-      : t("review:babysit");
+  const [babysitVisible, setBabysitVisible] = useState(false);
+  const [babysitFilter, setBabysitFilter] = useState<BabysitExplanationFilter>("changed");
+  const [expandedBabysitKeys, setExpandedBabysitKeys] = useState<Set<string>>(() => new Set());
+  const explainedIdentity = useRef<string>();
+  const babysitReasonId = useId();
+  const eligibility = babysit?.eligibility;
+  const babysitEnabled = eligibility?.kind === "resolved" && Boolean(eligibility.result?.eligible);
+  const eligibilityLabels: Record<BabysitEligibilityReason, string> = {
+    non_text: t("review:babysitUnsupportedBinary"),
+    generated_or_vendored: t("review:babysitUnsupportedGenerated"),
+    lock_minified_or_snapshot: t("review:babysitUnsupportedLock"),
+    unsupported_language: t("review:babysitUnsupportedExtension"),
+  };
+  const eligibilityReason = eligibility?.kind === "resolved" && eligibility.result && !eligibility.result.eligible
+    ? babysitEligibilityLabel(eligibility.result.reason, eligibilityLabels)
+    : t("review:babysitMissingContent");
+
+  /** 更新 Monaco view-zone 的单行展开集合，并为外部原生 DOM listener 提供稳定引用。 */
+  const setBabysitExpanded = useCallback((key: string, expanded: boolean) => {
+    setExpandedBabysitKeys((current) => setBabysitExpansion(current, key, expanded));
+  }, []);
+
+  /** 宝宝模式保持在当前 Review Reader 内；换文件时对新文件自动开始一次完整分析。 */
+  useEffect(() => {
+    if (!babysitVisible) {
+      explainedIdentity.current = undefined;
+      return;
+    }
+    if (!babysit || !babysitEnabled || !selectedPath || babysitState?.kind !== "idle") return;
+    const identity = `${review.snapshot.reviewId}:${review.snapshot.snapshotId}:${selectedPath}`;
+    if (explainedIdentity.current === identity) return;
+    explainedIdentity.current = identity;
+    babysit.explain();
+  }, [babysit, babysitEnabled, babysitState?.kind, babysitVisible, review.snapshot.reviewId, review.snapshot.snapshotId, selectedPath]);
+
+  /** 关闭当前解释展示时清掉 UI 展开状态，但不影响后端已完成的内存缓存。 */
+  useEffect(() => {
+    if (!babysitVisible) {
+      setBabysitFilter("changed");
+      setExpandedBabysitKeys(new Set());
+    }
+  }, [babysitVisible]);
+
+  /** 切换文件只清掉行级展开状态；changed/all 过滤在同一 Review 内保持。 */
+  useEffect(() => {
+    setExpandedBabysitKeys(new Set());
+  }, [selectedPath]);
 
   /** 使用图标、颜色与本地化名称共同表达 File Change 状态。 */
   function renderChangeStatus(status: ChangeStatus) {
@@ -231,23 +337,72 @@ export function ReviewReader(input: ReviewReaderProps) {
           </nav>
         </ResizablePanel>
         <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
-        <ResizablePanel id="review-diff" minSize="45%">
+        <ResizablePanel id="review-diff" minSize="45%" className="flex h-full min-h-0 flex-col">
           {props.fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
           {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={props.onRetryFile}>{t("common:retry")}</Button>}</div>}
-          {props.fileChange && !props.fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
-            <header className="flex h-9 items-center gap-2 border-b px-3"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3>{babysit && <Button variant="outline" size="sm" aria-label={babysitLabel} disabled={!babysit.enabled} aria-busy={babysitRunning} onClick={() => {
-              if (babysitAction === "cancel") babysit.cancel();
-              else if (babysitAction === "retry") babysit.retry();
-              else babysit.explain();
-            }}>{babysitLabel}</Button>}</header>
+          {props.fileChange && !props.fileChangeLoading && <section className="flex h-full min-w-0 flex-col" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
+            <header className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-1"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3>{babysit && <div className="ml-auto flex min-w-0 items-center gap-1.5">
+              <Tooltip>
+                <TooltipTrigger render={<Button
+                  variant={babysitVisible ? "default" : "outline"}
+                  size="sm"
+                  aria-label={babysitVisible ? t("review:babysitDisable") : t("review:babysit")}
+                  aria-pressed={babysitVisible}
+                  aria-disabled={!babysitEnabled}
+                  aria-describedby={!babysitEnabled ? babysitReasonId : undefined}
+                  aria-busy={babysitRunning || undefined}
+                  onClick={() => {
+                    if (!babysitEnabled) return;
+                    if (babysitVisible && babysitRunning) babysit.cancel();
+                    setBabysitVisible((visible) => !visible);
+                  }}
+                />}>
+                  <Icon icon={AiBrain01Icon} data-icon="inline-start" aria-hidden />
+                  <span className="hidden sm:inline">{babysitVisible ? t("review:babysitDisable") : t("review:babysit")}</span>
+                </TooltipTrigger>
+                <TooltipContent>{babysitEnabled ? (babysitVisible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
+              </Tooltip>
+              {!babysitEnabled && <span id={babysitReasonId} className="sr-only">{eligibilityReason}</span>}
+              {babysitVisible && babysitState?.kind === "completed" && <ToggleGroup value={[babysitFilter]} onValueChange={(value) => value[0] && setBabysitFilter(value[0] as BabysitExplanationFilter)} aria-label={t("review:babysitFilter")} variant="outline" size="sm">
+                <ToggleGroupItem value="changed" aria-label={t("review:babysitChanged")}><Icon icon={GitCompareIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitChanged")}</span></ToggleGroupItem>
+                <ToggleGroupItem value="all" aria-label={t("review:babysitAll")}><Icon icon={ListViewIcon} aria-hidden /><span className="hidden sm:inline">{t("review:babysitAll")}</span></ToggleGroupItem>
+              </ToggleGroup>}
+            </div>}</header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
-            {props.fileChange.contentKind === "text" && <DiffEditor theme={props.editorTheme} height="calc(100% - 2.25rem)" language={editorLanguage(props.fileChange.path)} original={props.fileChange.before ?? ""} modified={props.fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: effectiveDiffMode === "side-by-side", ignoreTrimWhitespace: false, fontFamily: "'JetBrains Mono Variable', monospace" }} />}
-            {babysitState?.kind === "completed" && <aside aria-label={t("review:babysitExplanations")} data-testid="babysit-explanations" className="max-h-48 overflow-auto border-t bg-muted/20 px-3 py-2 text-xs">
-              <h4 className="font-semibold">{t("review:babysitExplanations")}</h4>
-              {(["before", "after"] as const).map((side) => <div key={side} className="mt-1"><span className="font-medium">{t(`review:babysit${side === "before" ? "Before" : "After"}`)}</span><ul className="ml-4 list-disc">{Object.entries(babysitState.explanations[side]).map(([line, explanation]) => <li key={`${side}-${line}`}><span className="font-mono">{line}</span>{`: ${explanation}`}</li>)}</ul></div>)}
-            </aside>}
+            {props.fileChange.contentKind === "text" && <div className="min-h-0 flex-1" data-testid="babysit-diff-editor">
+              <BabysitDiffEditor
+                theme={props.editorTheme}
+                height="100%"
+                language={editorLanguage(props.fileChange.path)}
+                original={props.fileChange.before ?? ""}
+                modified={props.fileChange.after ?? ""}
+                renderSideBySide={effectiveDiffMode === "side-by-side"}
+                explanations={babysitVisible && babysitState?.kind === "completed" ? babysitState.explanations : undefined}
+                filter={babysitFilter}
+                expandedKeys={expandedBabysitKeys}
+                onSetExpanded={setBabysitExpanded}
+                labels={{
+                  before: t("review:babysitBefore"), after: t("review:babysitAfter"),
+                  expand: t("review:babysitExpand"), collapse: t("review:babysitCollapse"), explanation: t("review:babysitExplanations"),
+                }}
+              />
+            </div>}
+            <BabysitFooter
+              state={babysitVisible ? babysitState : undefined}
+              onCancel={() => babysit?.cancel()}
+              onRetry={() => babysit?.retry()}
+              labels={{
+                generating: t("review:babysitGenerating"),
+                repairing: (attempt) => t("review:babysitRepairing", { attempt }),
+                failed: t("review:babysitFailed"),
+                cancel: t("review:babysitCancel"),
+                retry: t("common:retry"),
+                copyDiagnostics: t("review:babysitCopyDiagnostics"),
+                copiedDiagnostics: t("review:babysitCopiedDiagnostics"),
+              }}
+            />
           </section>}
         </ResizablePanel>
       </ResizablePanelGroup>}

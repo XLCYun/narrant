@@ -6,10 +6,12 @@ import {
   type BabysitApplicationAdapter,
   type BabysitBinding,
   type BabysitError,
+  type BabysitEligibilityState,
   type BabysitFileRequest,
   type BabysitProgress,
   type BabysitState,
 } from "@/babysit/types";
+import { detectBabysitLanguage } from "@/babysit/detected-language";
 import { normalizeLocale } from "@/lib/i18n";
 import type {
   ReviewApplicationAdapter,
@@ -112,6 +114,9 @@ export function useReviewLifecycle(
   const fileRequest = useRef(0);
   const fileAbort = useRef<AbortController>();
   const babysitAbort = useRef<AbortController>();
+  const eligibilityAbort = useRef<AbortController>();
+  const eligibilityRequest = useRef(0);
+  const [babysitEligibility, setBabysitEligibility] = useState<BabysitEligibilityState>({ kind: "unavailable" });
   const babysitRequest = useRef(0);
   const [babysitState, setBabysitState] = useState<BabysitState>({ kind: "idle" });
   const updateAbort = useRef<AbortController>();
@@ -136,6 +141,9 @@ export function useReviewLifecycle(
     const request = ++fileRequest.current;
     fileAbort.current?.abort();
     invalidateBabysit();
+    eligibilityAbort.current?.abort();
+    eligibilityRequest.current += 1;
+    setBabysitEligibility({ kind: "checking" });
     const abort = new AbortController();
     fileAbort.current = abort;
     const identity = { reviewId: current.reviewId, snapshotId: current.snapshotId };
@@ -151,18 +159,47 @@ export function useReviewLifecycle(
     });
   }, [adapter, invalidateBabysit]);
 
+  /** File Change 就绪后查询后端唯一 eligibility，并拒绝过期文件的返回。 */
+  useEffect(() => {
+    const current = snapshotRef.current;
+    if (!current || fileChange.kind !== "ready" || !babysitAdapter) {
+      setBabysitEligibility({ kind: "unavailable" });
+      return;
+    }
+    const requestId = ++eligibilityRequest.current;
+    eligibilityAbort.current?.abort();
+    const abort = new AbortController();
+    eligibilityAbort.current = abort;
+    setBabysitEligibility({ kind: "checking" });
+    void babysitAdapter.checkEligibility({
+      reviewId: current.reviewId,
+      snapshotId: current.snapshotId,
+      path: fileChange.path,
+    }, detectBabysitLanguage(fileChange.path, fileChange.content), abort.signal).then((result) => {
+      if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
+        setBabysitEligibility({ kind: "resolved", result });
+      }
+    }).catch(() => {
+      if (!abort.signal.aborted && requestId === eligibilityRequest.current) {
+        setBabysitEligibility({ kind: "unavailable" });
+      }
+    });
+    return () => abort.abort();
+  }, [babysitAdapter, fileChange]);
+
   /** 对当前 immutable File Change 发起一次完整文件分析，并丢弃 stale response。 */
   const explainBabysit = useCallback(() => {
     const current = snapshotRef.current;
     const selected = fileChange;
     const explain = babysitAdapter?.explainFile;
     if (!current || selected.kind !== "ready" || !explain) return;
-    if (selected.content?.contentKind !== "text") return;
+    if (babysitEligibility.kind !== "resolved" || !babysitEligibility.result.eligible) return;
     const request: BabysitFileRequest = {
       reviewId: current.reviewId,
       snapshotId: current.snapshotId,
       path: selected.path,
       locale,
+      detectedLanguage: detectBabysitLanguage(selected.path, selected.content),
     };
     invalidateBabysit(false);
     const abort = new AbortController();
@@ -183,7 +220,7 @@ export function useReviewLifecycle(
       if (abort.signal.aborted || requestId !== babysitRequest.current) return;
       setBabysitState({ kind: "failed", request, error: babysitFailure(reason), retryable: true });
     });
-  }, [babysitAdapter, fileChange, invalidateBabysit, locale]);
+  }, [babysitAdapter, babysitEligibility, fileChange, invalidateBabysit, locale]);
 
   /** 取消当前 Babysit 请求，并清除任何未完成的部分结果。 */
   const cancelBabysit = useCallback(() => {
@@ -199,12 +236,12 @@ export function useReviewLifecycle(
     if (!babysitAdapter) return undefined;
     return {
       state: babysitState,
-      enabled: Boolean(fileChange.kind === "ready" && fileChange.content?.contentKind === "text"),
+      eligibility: babysitEligibility,
       explain: explainBabysit,
       cancel: cancelBabysit,
       retry: retryBabysit,
     };
-  }, [babysitAdapter, babysitState, cancelBabysit, explainBabysit, fileChange, retryBabysit]);
+  }, [babysitAdapter, babysitEligibility, babysitState, cancelBabysit, explainBabysit, retryBabysit]);
 
   /** UI locale 改变后清掉旧语言结果，下一次点击会使用新的 cache identity。 */
   useEffect(() => {
@@ -309,6 +346,7 @@ export function useReviewLifecycle(
     const current = snapshotRef.current;
     const refreshing = refreshOperation.current;
     fileAbort.current?.abort();
+    eligibilityAbort.current?.abort();
     invalidateBabysit();
     updateAbort.current?.abort();
     lifecycleAbort.current?.abort();

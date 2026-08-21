@@ -86,6 +86,7 @@ pub fn run() {
             github_commands::sign_out_github,
             review_commands::read_review_file_change,
             babysit_commands::explain_review_file_change,
+            babysit_commands::check_babysit_file_eligibility,
             review_commands::close_review
         ])
         .plugin(tauri_plugin_opener::init())
