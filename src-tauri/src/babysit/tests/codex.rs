@@ -285,6 +285,32 @@ async fn dropping_during_delete_keeps_cleanup_guard_armed_until_confirmation() {
     panic!("cleanup guard did not retry an unconfirmed delete");
 }
 
+#[test]
+fn dropping_cleanup_guard_without_runtime_removes_ownership_and_poisons_generation() {
+    let process = Arc::new(tokio::sync::Mutex::new(None));
+    let active = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let run = ActiveThread {
+        thread_id: "thread-1".to_owned(),
+        turn_id: "turn-1".to_owned(),
+        repair_attempts: 0,
+        deadline: std::time::Instant::now() + Duration::from_secs(1),
+    };
+    active.lock().unwrap().insert("key".to_owned(), run.clone());
+
+    let guard = RunCleanupGuard::new(
+        process,
+        active.clone(),
+        failed.clone(),
+        "key".to_owned(),
+        run,
+    );
+    drop(guard);
+
+    assert!(!active.lock().unwrap().contains_key("key"));
+    assert!(failed.load(std::sync::atomic::Ordering::Acquire));
+}
+
 #[tokio::test]
 async fn total_deadline_fails_and_cleans_up_without_partial_output() {
     let (provider, _temp, events) = provider("hang", Duration::from_secs(2));
@@ -404,6 +430,9 @@ async fn lost_thread_start_response_restarts_and_cleans_marker_orphan_before_reu
         events.lines().filter(|line| *line == "initialize").count(),
         2
     );
+    assert!(events
+        .lines()
+        .any(|line| line == "lost-generation-home:removed"));
     let orphan_deleted = events
         .lines()
         .position(|line| line == "thread/delete:orphan-thread")

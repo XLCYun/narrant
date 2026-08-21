@@ -13,6 +13,15 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 impl AppServerProcess {
+    /// poison restart 前同步完成 child reap 与 generation-owned home 删除。
+    pub(super) async fn shutdown(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+        }
+        drop(self.isolated_home.take());
+    }
+
     /// interrupt 后等待精确匹配的 terminal notification，再允许删除 thread。
     pub(super) async fn wait_for_terminal(
         &mut self,

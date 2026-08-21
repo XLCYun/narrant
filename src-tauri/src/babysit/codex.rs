@@ -67,6 +67,7 @@ struct ActiveThread {
 struct RunCleanupGuard {
     process: Arc<AsyncMutex<Option<AppServerProcess>>>,
     active_threads: Arc<Mutex<HashMap<String, ActiveThread>>>,
+    failed: Arc<AtomicBool>,
     key: String,
     run: Option<ActiveThread>,
     terminal_completed: bool,
@@ -77,12 +78,14 @@ impl RunCleanupGuard {
     fn new(
         process: Arc<AsyncMutex<Option<AppServerProcess>>>,
         active_threads: Arc<Mutex<HashMap<String, ActiveThread>>>,
+        failed: Arc<AtomicBool>,
         key: String,
         run: ActiveThread,
     ) -> Self {
         Self {
             process,
             active_threads,
+            failed,
             key,
             run: Some(run),
             terminal_completed: false,
@@ -108,9 +111,17 @@ impl Drop for RunCleanupGuard {
         };
         let process = self.process.clone();
         let active_threads = self.active_threads.clone();
+        let failed = self.failed.clone();
         let key = self.key.clone();
         let terminal_completed = self.terminal_completed;
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            if let Ok(mut active) = active_threads.lock() {
+                active.remove(&key);
+            }
+            failed.store(true, Ordering::Release);
+            if let Ok(mut process) = process.try_lock() {
+                *process = None;
+            }
             return;
         };
         handle.spawn(async move {
@@ -210,7 +221,7 @@ pub struct CodexAppServerProvider {
     command: AppServerCommand,
     process: Arc<AsyncMutex<Option<AppServerProcess>>>,
     active_threads: Arc<Mutex<HashMap<String, ActiveThread>>>,
-    failed: AtomicBool,
+    failed: Arc<AtomicBool>,
     generation: String,
     timeout: Duration,
 }
@@ -231,7 +242,7 @@ impl CodexAppServerProvider {
             command: AppServerCommand { program, args },
             process: Arc::new(AsyncMutex::new(None)),
             active_threads: Arc::new(Mutex::new(HashMap::new())),
-            failed: AtomicBool::new(false),
+            failed: Arc::new(AtomicBool::new(false)),
             generation: process_generation(),
             timeout,
         }
@@ -260,7 +271,9 @@ impl CodexAppServerProvider {
         let mut process = self.process.lock().await;
         if self.failed.swap(false, Ordering::AcqRel) {
             // response-loss 后销毁整代进程；新进程 initialize 时先清理 marker orphan。
-            *process = None;
+            if let Some(mut poisoned) = process.take() {
+                poisoned.shutdown().await;
+            }
         }
         if process.is_none() {
             let command = self.command.clone();
@@ -374,6 +387,7 @@ impl CodexAppServerProvider {
         let mut cleanup_guard = RunCleanupGuard::new(
             self.process.clone(),
             self.active_threads.clone(),
+            self.failed.clone(),
             key.to_owned(),
             run.clone(),
         );

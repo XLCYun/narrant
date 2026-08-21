@@ -30,6 +30,13 @@ while IFS= read -r line; do
 
   case "$method" in
     initialize)
+      if [ "$mode" = "lost-thread-response" ] && [ -n "$events" ] && grep -q '^thread/start:lost$' "$events"; then
+        old_home=$(cat "${events}.home" 2>/dev/null)
+        if [ -n "$old_home" ] && [ ! -e "$old_home" ]; then
+          record "lost-generation-home:removed"
+        fi
+        rm -f "${events}.home"
+      fi
       if contains '"experimentalApi":true'; then
         record "initialize:experimental"
       else
@@ -104,6 +111,8 @@ while IFS= read -r line; do
         continue
       fi
       if [ "$mode" = "lost-thread-response" ] && ! grep -q '^thread/start:lost$' "$events"; then
+        touch "$CODEX_HOME/narrant-lost-generation-marker"
+        printf '%s' "$CODEX_HOME" > "${events}.home"
         record "thread/start:lost"
         exit 29
       fi
