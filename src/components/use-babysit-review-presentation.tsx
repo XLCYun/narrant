@@ -145,6 +145,15 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   }, [visible]);
 
   const headerActions = babysit ? <div className="ml-auto flex min-w-0 items-center gap-1.5">
+    {visible && state?.kind === "completed" && <Button
+      variant="outline"
+      size="sm"
+      aria-label={filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}
+      onClick={() => setFilter((current) => current === "changed" ? "all" : "changed")}
+    >
+      <Icon icon={filter === "changed" ? ListViewIcon : GitCompareIcon} aria-hidden />
+      <span className="hidden sm:inline">{filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}</span>
+    </Button>}
     <Tooltip>
       <TooltipTrigger render={<Button
         variant={visible ? "default" : "outline"}
@@ -172,15 +181,6 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
       <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
     </Tooltip>
     {!enabled && <span id={reasonId} className="sr-only">{eligibilityReason}</span>}
-    {visible && state?.kind === "completed" && <Button
-      variant="outline"
-      size="sm"
-      aria-label={filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}
-      onClick={() => setFilter((current) => current === "changed" ? "all" : "changed")}
-    >
-      <Icon icon={filter === "changed" ? ListViewIcon : GitCompareIcon} aria-hidden />
-      <span className="hidden sm:inline">{filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}</span>
-    </Button>}
   </div> : null;
 
   const footer = <BabysitFooter

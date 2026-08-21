@@ -119,7 +119,9 @@ describe("Babysit Review Reader presentation", () => {
 
     expect(review.babysit?.explain).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "仅改变行" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "全部非空行" })).toBeInTheDocument();
+    const allLinesButton = screen.getByRole("button", { name: "全部非空行" });
+    const disableButton = screen.getByRole("button", { name: "关闭宝宝模式" });
+    expect(allLinesButton.compareDocumentPosition(disableButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(fakeDecorations.original.map((item) => item.range.startLineNumber)).toEqual([2]);
     expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([2]);
 

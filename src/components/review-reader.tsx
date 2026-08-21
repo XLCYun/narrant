@@ -178,7 +178,7 @@ export function ReviewReader(input: ReviewReaderProps) {
           aria-current={selectedPath === change.path ? "true" : undefined}
           aria-busy={props.pendingFilePath === change.path || undefined}
           disabled={props.navigationBusy}
-          className={cn("h-7 w-full justify-start gap-1.5 rounded-md px-1.5 text-xs font-normal", selectedPath === change.path && "bg-primary/10 text-foreground hover:bg-primary/15")}
+          className={cn("h-7 w-full justify-start gap-1.5 rounded-md px-1.5 text-xs font-normal", selectedPath === change.path && "bg-primary/15 text-foreground shadow-[inset_2px_0_0_var(--primary)] hover:bg-primary/20 dark:bg-primary/25 dark:hover:bg-primary/30")}
           onClick={() => props.onSelectFile(change.path)}>
           <FileTypeIcon path={change.path} kind="file" theme={fileTypeIconTheme} testId={`file-type-icon-${change.path.split("/").at(-1)}`} />
           <span className="min-w-0 flex-1 truncate text-left">{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span>
