@@ -27,11 +27,28 @@ export type BabysitError = {
   detail: string;
 };
 
+/** 运行时校验使用的公开 Babysit error code 白名单。 */
+const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
+  "unsupported_file",
+  "invalid_provider_output",
+  "repair_exhausted",
+  "cancelled",
+  "provider",
+  "progress_closed",
+  "cache_unavailable",
+  "input_unavailable",
+  "invalid_request",
+  "operation_conflict",
+  "operation_unavailable",
+]);
+
 /** 判断 Tauri reject 值是否符合 provider-independent Babysit error shape。 */
 export function isBabysitError(value: unknown): value is BabysitError {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<BabysitError>;
-  return typeof candidate.code === "string" && typeof candidate.detail === "string";
+  return typeof candidate.code === "string"
+    && babysitErrorCodes.has(candidate.code as BabysitErrorCode)
+    && typeof candidate.detail === "string";
 }
 
 /** 一次 File Change 的完整 before/after Line Explanation 结果。 */

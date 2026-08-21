@@ -164,9 +164,9 @@ export function useReviewLifecycle(
       path: selected.path,
       locale,
     };
-    babysitAbort.current?.abort();
+    invalidateBabysit(false);
     const abort = new AbortController();
-    const requestId = ++babysitRequest.current;
+    const requestId = babysitRequest.current;
     babysitAbort.current = abort;
     setBabysitState({ kind: "generating", request });
     void explain(request, (progress: BabysitProgress) => {
@@ -183,7 +183,7 @@ export function useReviewLifecycle(
       if (abort.signal.aborted || requestId !== babysitRequest.current) return;
       setBabysitState({ kind: "failed", request, error: babysitFailure(reason), retryable: true });
     });
-  }, [babysitAdapter, fileChange, locale]);
+  }, [babysitAdapter, fileChange, invalidateBabysit, locale]);
 
   /** 取消当前 Babysit 请求，并清除任何未完成的部分结果。 */
   const cancelBabysit = useCallback(() => {

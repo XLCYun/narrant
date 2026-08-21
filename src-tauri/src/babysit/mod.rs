@@ -76,6 +76,7 @@ pub fn parse_provider_response(json: &str) -> Result<BabysitFileExplanations, Ba
 }
 
 impl<'de> Deserialize<'de> for BabysitFileExplanations {
+    /// 从 provider JSON 反序列化完整 before/after map，并交给严格 visitor 校验。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -90,10 +91,12 @@ struct ExplanationsVisitor;
 impl<'de> Visitor<'de> for ExplanationsVisitor {
     type Value = BabysitFileExplanations;
 
+    /// 声明顶层响应必须是包含 before 和 after 的解释对象。
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("包含 before 和 after 的解释对象")
     }
 
+    /// 读取两个文件侧，同时拒绝未知字段、重复字段和缺失字段。
     fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
     where
         M: MapAccess<'de>,
@@ -118,6 +121,7 @@ impl<'de> Visitor<'de> for ExplanationsVisitor {
 struct UniqueLineMap(BTreeMap<String, String>);
 
 impl<'de> Deserialize<'de> for UniqueLineMap {
+    /// 从 JSON 行号 map 反序列化，并保留重复 key 的检测能力。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -132,10 +136,12 @@ struct UniqueLineMapVisitor;
 impl<'de> Visitor<'de> for UniqueLineMapVisitor {
     type Value = UniqueLineMap;
 
+    /// 声明 map 的 value 必须是行号到解释文本的映射。
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("行号到解释文本的对象")
     }
 
+    /// 读取每个行号解释，拒绝重复行号 key。
     fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
     where
         M: MapAccess<'de>,
@@ -165,6 +171,7 @@ pub enum ValidationFailure {
 }
 
 impl fmt::Display for ValidationFailure {
+    /// 将校验失败转换为不含源代码的 repair 诊断。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateTarget { side, line_number } => {
@@ -273,6 +280,7 @@ impl From<BabysitError> for BabysitErrorPayload {
 }
 
 impl fmt::Display for BabysitError {
+    /// 将领域错误转换为可读诊断；稳定分支由 BabysitErrorCode 承担。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedFile { reason } => write!(formatter, "此文件不支持宝宝模式：{reason}"),

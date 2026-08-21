@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { BabysitApplicationAdapter, BabysitError, BabysitFileExplanations } from "@/babysit/types";
+import { isBabysitError, type BabysitApplicationAdapter, type BabysitError, type BabysitFileExplanations } from "@/babysit/types";
 import { i18n } from "@/lib/i18n";
 import { useReviewLifecycle, type ReviewApplicationAdapter } from "@/review/use-review-lifecycle";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
@@ -63,6 +63,11 @@ afterEach(async () => {
 });
 
 describe("Babysit contract spine", () => {
+  it("rejects unknown provider-specific error codes at the runtime boundary", () => {
+    expect(isBabysitError({ code: "provider_timeout", detail: "timeout" })).toBe(false);
+    expect(isBabysitError({ code: "provider", detail: "provider failed" })).toBe(true);
+  });
+
   it("selects a File Change, emits generating, and renders a complete validated result binding", async () => {
     const provider = createAdapter();
     const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
