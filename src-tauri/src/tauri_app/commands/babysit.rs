@@ -65,6 +65,9 @@ pub(crate) async fn explain_review_file_change(
             .read_file_change(&operation, &review_id, &snapshot_id, &path)
             .await
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
+        let workspace_path = lifecycle
+            .workspace_path(&review_id, &snapshot_id)
+            .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
         babysit
             .explain_file(
                 BabysitFileRequest {
@@ -74,6 +77,7 @@ pub(crate) async fn explain_review_file_change(
                     },
                     path,
                     locale,
+                    workspace_path: workspace_path.to_string_lossy().into_owned(),
                     detected_language,
                 },
                 content,

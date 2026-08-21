@@ -10,6 +10,10 @@ use std::sync::{
     Arc, Mutex,
 };
 
+mod codex;
+
+pub use codex::CodexAppServerProvider;
+
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
 /// 对单个解释允许的最大 Unicode 字符数。
@@ -49,6 +53,8 @@ pub struct LineTarget {
 pub struct BabysitProviderRequest {
     pub path: String,
     pub locale: String,
+    /// 当前 Review Workspace 的绝对路径；provider 只能把它作为只读 cwd 使用。
+    pub workspace_path: String,
     pub before: String,
     pub after: String,
     pub targets: Vec<LineTarget>,
@@ -319,6 +325,8 @@ pub trait BabysitAgentProvider: Send + Sync {
         failure: ValidationFailure,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError>;
+    /// 上层在 repair 之间提前退出时，释放 provider 私有的 thread/run 状态。
+    async fn abandon(&self, _request: &BabysitProviderRequest) {}
 }
 
 /// 缓存中不可变的 Review identity；不把 review 与 snapshot 合并成单一 ID。
@@ -334,6 +342,8 @@ pub struct BabysitFileRequest {
     pub identity: ReviewIdentity,
     pub path: String,
     pub locale: String,
+    /// 当前 Review Workspace 的绝对路径，不进入前端 identity 或缓存 key。
+    pub workspace_path: String,
     pub detected_language: Option<String>,
 }
 
@@ -386,6 +396,11 @@ impl BabysitApplication {
     /// 构造当前 vertical slice 使用的 deterministic fake provider。
     pub fn with_fake_provider() -> Self {
         Self::new(Arc::new(FakeBabysitProvider::default()))
+    }
+
+    /// 构造首个生产 Installed Coding Agent provider；进程仍在首次分析时懒启动。
+    pub fn with_codex_provider() -> Self {
+        Self::new(Arc::new(CodexAppServerProvider::new("codex")))
     }
 
     /// 用后端规则判断 eligibility；detected_language 允许无扩展名和特殊文件名表达已识别语言。
@@ -449,13 +464,20 @@ impl BabysitApplication {
         let mut attempt = 0;
         while let Some(current_failure) = failure.take() {
             if attempt >= MAX_REPAIR_ATTEMPTS {
+                self.provider.abandon(&provider_request).await;
                 return Err(BabysitError::RepairExhausted {
                     detail: current_failure.to_string(),
                 });
             }
             attempt += 1;
-            ensure_not_cancelled(cancellation)?;
-            notify(BabysitProgress::Repairing { attempt })?;
+            if let Err(error) = ensure_not_cancelled(cancellation) {
+                self.provider.abandon(&provider_request).await;
+                return Err(error);
+            }
+            if let Err(error) = notify(BabysitProgress::Repairing { attempt }) {
+                self.provider.abandon(&provider_request).await;
+                return Err(error);
+            }
             output = self
                 .provider
                 .repair(
@@ -610,6 +632,7 @@ fn build_provider_request(
     Ok(BabysitProviderRequest {
         path: request.path.clone(),
         locale: request.locale.clone(),
+        workspace_path: request.workspace_path.clone(),
         before: before.to_owned(),
         after: after.to_owned(),
         targets,

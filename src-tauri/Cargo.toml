@@ -28,6 +28,7 @@ octocrab = { version = "0.54.1", default-features = false, features = ["default-
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 secrecy = "0.10"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["protocol-asset"] }
@@ -35,10 +36,11 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-wdio = { version = "1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util", "process"] }
+tempfile = "3"
+zeroize = "1"
 tauri-plugin-dialog = "2.7.2"
 
 [dev-dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 httpmock = "0.7"
-tempfile = "3"
