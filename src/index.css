@@ -14,8 +14,7 @@ body { margin: 0; background: Canvas; color: CanvasText; }
 
 /* Monaco 默认让 view-zone 命中层穿透到编辑器；Babysit 卡片需要恢复真实鼠标与键盘交互。 */
 .monaco-editor .view-zones > div:has([data-babysit-zone]),
-.monaco-editor [data-babysit-zone],
-.monaco-editor [data-babysit-toggle] {
+.monaco-editor [data-babysit-zone] {
   pointer-events: auto !important;
 }
 

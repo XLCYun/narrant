@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal } from "react-dom";
 import { DiffEditor, type DiffOnMount, type MonacoDiffEditor } from "@monaco-editor/react";
 
 import type { BabysitFileExplanations } from "@/babysit/types";
@@ -123,52 +123,58 @@ export function buildBabysitZoneRows(
   return rows;
 }
 
-/** 创建插入 Monaco 行上方的解释卡片，并保持可键盘操作的展开按钮。 */
-function createExplanationNode(input: {
+type ExplanationCardProps = {
   side: ExplanationSide;
   line: number;
   explanation: string;
   expanded: boolean;
   zoneHeight: number;
   labels: BabysitDiffEditorProps["labels"];
-}) {
-  const { side, line, explanation, expanded, zoneHeight, labels } = input;
+  onSetExpanded: (key: string, expanded: boolean) => void;
+};
+
+/** 由 React 拥有的交互解释卡片，避免 Monaco 原生 view-zone listener 丢失。 */
+function ExplanationCard({ side, line, explanation, expanded, zoneHeight, labels, onSetExpanded }: ExplanationCardProps) {
   const key = `${side}:${line}`;
+  return <div
+    data-babysit-zone={side}
+    data-babysit-line={line}
+    className="flex h-full min-w-0 items-start gap-2 border-y border-primary/15 bg-primary/5 px-3 py-1 text-xs leading-4 text-foreground"
+    style={{ minHeight: zoneHeight, pointerEvents: "auto" }}
+    role="note"
+    aria-label={`${labels.explanation} ${line}`}
+  >
+    <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+      {side === "before" ? labels.before : labels.after} · {line}
+    </span>
+    <span
+      className={`min-w-0 flex-1 break-words text-muted-foreground${expanded ? " overflow-visible" : " overflow-hidden"}`}
+      style={expanded ? { display: "block" } : { display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2 }}
+    >{explanation}</span>
+    {explanation.length > 120 && <button
+      type="button"
+      className="pointer-events-auto shrink-0 cursor-pointer rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      style={{ pointerEvents: "auto" }}
+      aria-expanded={expanded}
+      onClick={() => onSetExpanded(key, !expanded)}
+    >{expanded ? labels.collapse : labels.expand}</button>}
+  </div>;
+}
+
+type ExplanationPortalHost = {
+  key: string;
+  node: HTMLElement;
+  props: ExplanationCardProps;
+};
+
+/** 建立稳定 zone 容器；交互卡片由主 React tree 通过 portal 挂载。 */
+function createExplanationNode(input: ExplanationCardProps, key: string): ExplanationPortalHost {
   const node = document.createElement("div");
-  node.dataset.babysitZone = side;
-  node.dataset.babysitLine = String(line);
-  node.className = "flex h-full min-w-0 items-start gap-2 border-y border-primary/15 bg-primary/5 px-3 py-1 text-xs leading-4 text-foreground";
-  node.style.minHeight = `${zoneHeight}px`;
+  node.dataset.babysitZone = input.side;
+  node.dataset.babysitLine = String(input.line);
+  node.style.minHeight = `${input.zoneHeight}px`;
   node.style.pointerEvents = "auto";
-  node.setAttribute("role", "note");
-  node.setAttribute("aria-label", `${labels.explanation} ${line}`);
-
-  const marker = document.createElement("span");
-  marker.className = "shrink-0 rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary";
-  marker.textContent = `${side === "before" ? labels.before : labels.after} · ${line}`;
-
-  const text = document.createElement("span");
-  text.className = `min-w-0 flex-1 break-words text-muted-foreground${expanded ? " overflow-visible" : " overflow-hidden"}`;
-  text.textContent = explanation;
-  text.style.display = expanded ? "block" : "-webkit-box";
-  if (!expanded) {
-    text.style.webkitBoxOrient = "vertical";
-    text.style.webkitLineClamp = "2";
-  }
-
-  node.append(marker, text);
-  if (explanation.length > 120) {
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "pointer-events-auto shrink-0 cursor-pointer rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-    toggle.style.pointerEvents = "auto";
-    toggle.textContent = expanded ? labels.collapse : labels.expand;
-    toggle.setAttribute("aria-expanded", String(expanded));
-    // Monaco 可能克隆或重新托管 view-zone DOM；dataset 会保留，而节点 listener 不可靠。
-    toggle.dataset.babysitToggle = key;
-    node.append(toggle);
-  }
-  return node;
+  return { key, node, props: input };
 }
 
 /** 为缺失侧创建不可见内容的等高 spacer，维持两侧后续代码垂直对齐。 */
@@ -206,28 +212,12 @@ export function BabysitDiffEditor({
 }: BabysitDiffEditorProps) {
   const [mountedEditor, setMountedEditor] = useState<MonacoDiffEditor>();
   const [lineChanges, setLineChanges] = useState<readonly LineChange[]>([]);
+  const [portalHosts, setPortalHosts] = useState<ExplanationPortalHost[]>([]);
   const zoneIds = useRef<{ original: string[]; modified: string[] }>({ original: [], modified: [] });
+  const zoneGeneration = useRef(0);
 
   /** 记录 Monaco 实例并让后续 diff 更新重新计算 changed-only 过滤。 */
   const onMount = useCallback<DiffOnMount>((nextEditor) => setMountedEditor(nextEditor), []);
-
-  /** 在 document capture 阶段委托 view-zone toggle，兼容 Monaco 克隆/重托管 DOM。 */
-  useEffect(() => {
-    const handleToggle = (event: MouseEvent) => {
-      const target = event.target instanceof Element
-        ? event.target.closest<HTMLButtonElement>("button[data-babysit-toggle]")
-        : null;
-      const key = target?.dataset.babysitToggle;
-      if (!key) return;
-      const desiredExpanded = target.getAttribute("aria-expanded") !== "true";
-      event.preventDefault();
-      event.stopPropagation();
-      // set 语义保持幂等；即使 StrictMode/HMR 遗留 handler 重复收到同一事件也不会反向抵消。
-      flushSync(() => onSetExpanded(key, desiredExpanded));
-    };
-    document.addEventListener("click", handleToggle, true);
-    return () => document.removeEventListener("click", handleToggle, true);
-  }, [onSetExpanded]);
 
   /** 清理两侧编辑器遗留的 view zones，避免切换 File Change 后解释串到下一份 Diff。 */
   const clearZones = useCallback(() => {
@@ -266,11 +256,16 @@ export function BabysitDiffEditor({
   useEffect(() => {
     if (!mountedEditor) return;
     clearZones();
-    if (!explanations) return;
+    if (!explanations) {
+      setPortalHosts([]);
+      return;
+    }
     const originalEditor = mountedEditor.getOriginalEditor();
     const modifiedEditor = mountedEditor.getModifiedEditor();
     const rows = buildBabysitZoneRows(selectedEntries.before, selectedEntries.after, lineChanges);
     const nextIds = { original: [] as string[], modified: [] as string[] };
+    const nextHosts: ExplanationPortalHost[] = [];
+    const generation = ++zoneGeneration.current;
 
     if (!renderSideBySide) {
       modifiedEditor.changeViewZones((accessor) => {
@@ -281,22 +276,27 @@ export function BabysitDiffEditor({
           const nodes = (["before", "after"] as const).flatMap((side) => {
             const entry = row[side];
             if (!entry) return [];
-            return [createExplanationNode({ side, line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`${side}:${entry[0]}`), zoneHeight: side === "before" ? beforeHeight : afterHeight, labels })];
+            const mounted = createExplanationNode({ side, line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`${side}:${entry[0]}`), zoneHeight: side === "before" ? beforeHeight : afterHeight, labels, onSetExpanded }, `${generation}:${side}:${entry[0]}`);
+            nextHosts.push(mounted);
+            return [mounted.node];
           });
           nextIds.modified.push(accessor.addZone({ afterLineNumber: Math.max(0, row.afterAnchor - 1), heightInPx: height, domNode: createInlineNode(nodes, height) }));
         }
       });
       zoneIds.current = nextIds;
+      setPortalHosts(nextHosts);
       return clearZones;
     }
     originalEditor.changeViewZones((accessor) => {
       for (const row of rows) {
         const sharedHeight = Math.max(explanationZoneHeight([row.before], expandedKeys, "before"), explanationZoneHeight([row.after], expandedKeys, "after"));
         const entry = row.before;
+        const mounted = entry ? createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels, onSetExpanded }, `${generation}:before:${entry[0]}`) : undefined;
+        if (mounted) nextHosts.push(mounted);
         nextIds.original.push(accessor.addZone({
           afterLineNumber: Math.max(0, row.beforeAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: entry ? createExplanationNode({ side: "before", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`before:${entry[0]}`), zoneHeight: sharedHeight, labels }) : createSpacerNode(sharedHeight),
+          domNode: mounted?.node ?? createSpacerNode(sharedHeight),
         }));
       }
     });
@@ -304,18 +304,22 @@ export function BabysitDiffEditor({
       for (const row of rows) {
         const sharedHeight = Math.max(explanationZoneHeight([row.before], expandedKeys, "before"), explanationZoneHeight([row.after], expandedKeys, "after"));
         const entry = row.after;
+        const mounted = entry ? createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels, onSetExpanded }, `${generation}:after:${entry[0]}`) : undefined;
+        if (mounted) nextHosts.push(mounted);
         nextIds.modified.push(accessor.addZone({
           afterLineNumber: Math.max(0, row.afterAnchor - 1),
           heightInPx: sharedHeight,
-          domNode: entry ? createExplanationNode({ side: "after", line: entry[0], explanation: entry[1], expanded: expandedKeys.has(`after:${entry[0]}`), zoneHeight: sharedHeight, labels }) : createSpacerNode(sharedHeight),
+          domNode: mounted?.node ?? createSpacerNode(sharedHeight),
         }));
       }
     });
     zoneIds.current = nextIds;
+    setPortalHosts(nextHosts);
     return clearZones;
-  }, [clearZones, expandedKeys, explanations, labels, lineChanges, mountedEditor, renderSideBySide, selectedEntries]);
+  }, [clearZones, expandedKeys, explanations, labels, lineChanges, mountedEditor, onSetExpanded, renderSideBySide, selectedEntries]);
 
-  return <DiffEditor
+  return <>
+    <DiffEditor
     theme={theme}
     height={height}
     language={language}
@@ -329,5 +333,7 @@ export function BabysitDiffEditor({
       fontFamily: "'JetBrains Mono Variable', monospace",
       padding: { top: 4 },
     }}
-  />;
+    />
+    {portalHosts.map((host) => createPortal(<ExplanationCard {...host.props} />, host.node, host.key))}
+  </>;
 }

@@ -12,6 +12,7 @@ const fakeZones = {
   modified: new Map<string, HTMLElement>(),
 };
 let nextZoneId = 0;
+const removedZoneNodes: HTMLElement[] = [];
 
 /** 在 jsdom 中模拟 Monaco view-zone API，让测试验证可见行和展开行为。 */
   vi.mock("@monaco-editor/react", () => ({
@@ -23,14 +24,16 @@ let nextZoneId = 0;
           callback({
             addZone(zone) {
               const id = `${side}-${++nextZoneId}`;
-              // 真实 Monaco 会重新托管（部分版本会克隆）zone DOM；测试保留该边界。
-              const hostedNode = zone.domNode.cloneNode(true) as HTMLElement;
+              // React root 必须拥有 Monaco 接收的同一个稳定容器。
+              const hostedNode = zone.domNode;
               document.body.append(hostedNode);
               fakeZones[side].set(id, hostedNode);
               return id;
             },
             removeZone(id) {
-              fakeZones[side].get(id)?.remove();
+              const node = fakeZones[side].get(id);
+              if (node) removedZoneNodes.push(node);
+              node?.remove();
               fakeZones[side].delete(id);
             },
           });
@@ -98,6 +101,7 @@ beforeEach(async () => {
   fakeZones.original.clear();
   fakeZones.modified.clear();
   nextZoneId = 0;
+  removedZoneNodes.length = 0;
 });
 afterEach(() => cleanup());
 
@@ -188,6 +192,8 @@ describe("Babysit Review Reader presentation", () => {
     expect(expand).toHaveClass("cursor-pointer", "pointer-events-auto");
     expect(expand).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(expand);
+    expect(removedZoneNodes.length).toBeGreaterThan(0);
+    expect(removedZoneNodes.every((node) => !node.isConnected && node.childElementCount === 0)).toBe(true);
     const expanded = [...fakeZones.original.values()][0];
     expect(within(expanded).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
     expect(expanded.style.minHeight).toBe("220px");
