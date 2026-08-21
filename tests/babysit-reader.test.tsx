@@ -16,7 +16,7 @@ const removedZoneNodes: HTMLElement[] = [];
 
 /** 在 jsdom 中模拟 Monaco view-zone API，让测试验证可见行和展开行为。 */
   vi.mock("@monaco-editor/react", () => ({
-  DiffEditor: (props: { onMount?: (editor: unknown, monaco: unknown) => void; options?: { renderSideBySide?: boolean } }) => {
+  DiffEditor: (props: { onMount?: (editor: unknown, monaco: unknown) => void; options?: { renderSideBySide?: boolean; renderSideBySideInlineBreakpoint?: number } }) => {
     const { onMount, options } = props;
     useEffect(() => {
       const createEditor = (side: "original" | "modified") => ({
@@ -49,7 +49,7 @@ const removedZoneNodes: HTMLElement[] = [];
       };
       onMount?.(fakeEditor, {});
     }, [onMount]);
-    return <div data-testid="mock-diff-editor" data-layout={options?.renderSideBySide ? "side-by-side" : "inline"} />;
+    return <div data-testid="mock-diff-editor" data-layout={options?.renderSideBySide ? "side-by-side" : "inline"} data-inline-breakpoint={options?.renderSideBySideInlineBreakpoint} />;
   },
 }));
 
@@ -106,6 +106,14 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("Babysit Review Reader presentation", () => {
+  it("中等宽度 side-by-side 禁用 Monaco 自动 inline 回退", () => {
+    const review = makeReview({ kind: "idle" });
+    render(<ReviewReader review={review} appearance={{ ...appearance, narrow: false, diffMode: "side-by-side" }} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute("data-layout", "side-by-side");
+    expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute("data-inline-breakpoint", "0");
+  });
+
   it("默认只显示改变行，并可切换到全部非空行而不重新请求", () => {
     const review = makeReview({
       kind: "completed",

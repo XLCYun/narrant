@@ -333,6 +333,9 @@ export function BabysitDiffEditor({
     options={{
       readOnly: true,
       renderSideBySide,
+      // 产品层已经根据窗口决定 side-by-side/inline；禁用 Monaco 约 900px 的自动回退，
+      // 避免 UI 仍创建双 pane zones 时 original pane 实际只剩 gutter。
+      renderSideBySideInlineBreakpoint: 0,
       ignoreTrimWhitespace: false,
       fontFamily: "'JetBrains Mono Variable', monospace",
       padding: { top: 4 },
