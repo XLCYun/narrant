@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBabysitZoneRows, setBabysitExpansion } from "@/components/babysit-diff-editor";
+import { buildBabysitZoneRows, setBabysitExpansion, syncInlineDeletedExplanations } from "@/components/babysit-diff-editor";
 
 /** 构造 Monaco change shape，覆盖 add/delete/unequal 的配对规则。 */
 function change(originalStart: number, originalEnd: number, modifiedStart: number, modifiedEnd: number) {
@@ -37,5 +37,17 @@ describe("Babysit Monaco zone pairing", () => {
     expect(rows).toHaveLength(3);
     expect(rows[0]).toMatchObject({ beforeAnchor: 2, afterAnchor: 2 });
     expect(rows.slice(1).every((row) => row.before === undefined)).toBe(true);
+  });
+
+  it("把 original 解释精确挂到单栏红色删除行", () => {
+    const root = document.createElement("div");
+    root.innerHTML = '<div class="view-zones"><div class="line-delete"><div class="view-line"><span>旧行二</span></div><div class="view-line"><span>旧行三</span></div></div></div>';
+
+    syncInlineDeletedExplanations(root, [[3, "解释被删除的第三行。"]], [change(2, 3, 2, 3)]);
+
+    const rows = root.querySelectorAll(".view-line");
+    expect(rows[0]?.querySelector("[data-babysit-inline-deleted]")).toBeNull();
+    expect(rows[1]?.querySelector("[data-babysit-inline-deleted]")).toHaveTextContent("解释被删除的第三行。");
+    expect(rows[1]).not.toHaveTextContent("变更前 · 3");
   });
 });

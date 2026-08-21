@@ -7,12 +7,8 @@ import { ReviewReader } from "@/components/review-reader";
 import type { BabysitBinding } from "@/babysit/types";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
-const fakeZones = {
-  original: new Map<string, HTMLElement>(),
-  modified: new Map<string, HTMLElement>(),
-};
-let nextZoneId = 0;
-const removedZoneNodes: HTMLElement[] = [];
+type FakeDecoration = { range: { startLineNumber: number }; options: { hoverMessage?: { value: string }; after?: { content: string; inlineClassName: string } } };
+const fakeDecorations: Record<"original" | "modified", FakeDecoration[]> = { original: [], modified: [] };
 let fakeLineChanges = [
   { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
 ];
@@ -23,23 +19,10 @@ let fakeLineChanges = [
     const { onMount, options } = props;
     useEffect(() => {
       const createEditor = (side: "original" | "modified") => ({
-        changeViewZones(callback: (accessor: { addZone(zone: { domNode: HTMLElement }): string; removeZone(id: string): void }) => void) {
-          callback({
-            addZone(zone) {
-              const id = `${side}-${++nextZoneId}`;
-              // React root 必须拥有 Monaco 接收的同一个稳定容器。
-              const hostedNode = zone.domNode;
-              document.body.append(hostedNode);
-              fakeZones[side].set(id, hostedNode);
-              return id;
-            },
-            removeZone(id) {
-              const node = fakeZones[side].get(id);
-              if (node) removedZoneNodes.push(node);
-              node?.remove();
-              fakeZones[side].delete(id);
-            },
-          });
+        getModel: () => ({ getLineCount: () => 100, getLineMaxColumn: () => 20 }),
+        createDecorationsCollection(decorations: FakeDecoration[]) {
+          fakeDecorations[side] = decorations;
+          return { clear: () => { if (fakeDecorations[side] === decorations) fakeDecorations[side] = []; } };
         },
       });
       const fakeEditor = {
@@ -48,7 +31,11 @@ let fakeLineChanges = [
         getOriginalEditor: () => createEditor("original"),
         getModifiedEditor: () => createEditor("modified"),
       };
-      onMount?.(fakeEditor, {});
+      class Range {
+        startLineNumber: number;
+        constructor(startLineNumber: number) { this.startLineNumber = startLineNumber; }
+      }
+      onMount?.(fakeEditor, { Range });
     }, [onMount]);
     return <div data-testid="mock-diff-editor" data-layout={options?.renderSideBySide ? "side-by-side" : "inline"} data-inline-breakpoint={options?.renderSideBySideInlineBreakpoint} />;
   },
@@ -100,10 +87,8 @@ const appearance = {
 
 beforeEach(async () => {
   await i18n.changeLanguage("zh-CN");
-  fakeZones.original.clear();
-  fakeZones.modified.clear();
-  nextZoneId = 0;
-  removedZoneNodes.length = 0;
+  fakeDecorations.original = [];
+  fakeDecorations.modified = [];
   fakeLineChanges = [
     { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
   ];
@@ -135,14 +120,14 @@ describe("Babysit Review Reader presentation", () => {
     expect(review.babysit?.explain).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "仅改变行" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部非空行" })).toBeInTheDocument();
-    expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
-    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["2"]);
+    expect(fakeDecorations.original.map((item) => item.range.startLineNumber)).toEqual([2]);
+    expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([2]);
 
     fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
     expect(screen.queryByRole("button", { name: "全部非空行" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "仅改变行" })).toBeInTheDocument();
-    expect([...fakeZones.original.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
-    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine).sort()).toEqual(["1", "2"]);
+    expect(fakeDecorations.original.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
+    expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
   });
 
   it("added file 双栏不在空的 before pane 重复插入补偿区", () => {
@@ -161,9 +146,8 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
 
-    expect(fakeZones.original.size).toBe(0);
-    expect([...fakeZones.modified.values()].map((node) => node.dataset.babysitLine)).toEqual(["1", "2"]);
-    expect([...fakeZones.modified.values()].map((node) => node.style.minHeight)).toEqual(["28px", "28px"]);
+    expect(fakeDecorations.original).toEqual([]);
+    expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
   });
 
   it("宝宝模式保持打开时，locale 变化会重新 arm 当前文件分析", async () => {
@@ -263,7 +247,7 @@ describe("Babysit Review Reader presentation", () => {
     expect(selectExecutable).toHaveBeenCalledTimes(1);
   });
 
-  it("长解释默认截断，并能在 view zone 内展开", () => {
+  it("把解释直接注入代码行尾且不包含变更前后行号标签", () => {
     const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(8).slice(0, 240);
     const review = makeReview({
       kind: "completed",
@@ -273,35 +257,14 @@ describe("Babysit Review Reader presentation", () => {
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
-    const original = [...fakeZones.original.values()][0];
-    const expand = within(original).getByRole("button", { name: "展开" });
-    expect(original.style.pointerEvents).toBe("auto");
-    expect(original).toHaveStyle({ width: "100%", maxWidth: "100%", overflow: "hidden" });
-    expect(expand.style.pointerEvents).toBe("auto");
-    expect(expand).toHaveClass("cursor-pointer", "pointer-events-auto");
-    const card = within(original).getByRole("note");
-    expect(card).toHaveClass("w-full", "max-w-full", "overflow-hidden");
-    expect(expand.nextElementSibling).toHaveTextContent("变更前 · 2");
-    expect(card.firstElementChild).toBe(expand);
-    expect(expand).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(expand);
-    expect(removedZoneNodes.length).toBeGreaterThan(0);
-    expect(removedZoneNodes.every((node) => !node.isConnected && node.childElementCount === 0)).toBe(true);
-    const expanded = [...fakeZones.original.values()][0];
-    expect(within(expanded).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
-    expect(expanded.style.minHeight).toBe("140px");
-    const expandedText = [...expanded.querySelectorAll("span")].find((node) => node.textContent === longExplanation);
-    expect(expandedText).toHaveStyle({ display: "block" });
-    expect(expandedText).toHaveClass("overflow-visible");
-    expect(expandedText).toHaveTextContent(longExplanation);
-
-    fireEvent.click(within(expanded).getByRole("button", { name: "收起" }));
-    const collapsedAgain = [...fakeZones.original.values()][0];
-    expect(within(collapsedAgain).getByRole("button", { name: "展开" })).toHaveAttribute("aria-expanded", "false");
-    expect(collapsedAgain.style.minHeight).toBe("44px");
-    const collapsedText = [...collapsedAgain.querySelectorAll("span")].find((node) => node.textContent === longExplanation);
-    expect(collapsedText).toHaveStyle({ display: "-webkit-box" });
-    expect(collapsedText).toHaveClass("overflow-hidden");
+    for (const side of ["original", "modified"] as const) {
+      const injected = fakeDecorations[side][0]?.options.after;
+      expect(injected).toEqual({ content: longExplanation, inlineClassName: "babysit-inline-explanation" });
+      expect(fakeDecorations[side][0]?.options.hoverMessage?.value).toBe(longExplanation);
+      expect(injected?.content).not.toContain("变更前");
+      expect(injected?.content).not.toContain("变更后");
+      expect(injected?.content).not.toContain("· 2");
+    }
   });
 
   it("同一 Review 切换文件时保留 changed/all 过滤选择", () => {
