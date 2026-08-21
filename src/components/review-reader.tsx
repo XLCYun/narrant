@@ -345,10 +345,10 @@ export function ReviewReader(input: ReviewReaderProps) {
     </div>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}
     <TabsContent value="overview" className="min-h-0 overflow-y-auto"><ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} /></TabsContent>
-    <TabsContent value="file-changes" className="min-h-0 overflow-hidden">
+    <TabsContent value="file-changes" className="flex min-h-0 flex-col overflow-hidden">
     {props.snapshot.fileChanges.length === 0
       ? <div className="grid min-h-0 flex-1 place-content-center px-6 text-center"><h3 className="font-medium">{t("review:emptyTitle")}</h3><p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p></div>
-      : <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1"
+      : <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1"
         defaultLayout={{ "review-file-tree": props.initialTreeWidth, "review-diff": 100 - props.initialTreeWidth }}
         onLayoutChanged={(layout, meta) => { if (meta.isUserInteraction) props.onTreeWidthChange(layout["review-file-tree"]); }}>
         <ResizablePanel id="review-file-tree" minSize="15%" maxSize="45%" defaultSize={`${props.initialTreeWidth}%`}>

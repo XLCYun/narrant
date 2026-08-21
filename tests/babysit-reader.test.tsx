@@ -173,6 +173,9 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
     expect(screen.getByTestId("babysit-footer")).toHaveTextContent("正在修复逐行解释（第 2 次）");
+    const fileChangesPanel = screen.getByRole("tabpanel", { name: "文件改动" });
+    expect(fileChangesPanel).toHaveClass("flex", "min-h-0", "flex-col");
+    expect(fileChangesPanel.querySelector("[data-slot='resizable-panel-group']")).toHaveClass("h-auto!", "min-h-0", "flex-1");
     fireEvent.click(screen.getByRole("button", { name: "取消宝宝模式" }));
     expect(runningReview.babysit?.cancel).toHaveBeenCalledTimes(1);
 
