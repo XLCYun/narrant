@@ -16,7 +16,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { FileChangeLoading } from "@/components/file-change-loading";
-import { BabysitDiffEditor, setBabysitExpansion, type BabysitExplanationFilter } from "@/components/babysit-diff-editor";
+import { BabysitDiffEditor, type BabysitExplanationFilter } from "@/components/babysit-diff-editor";
 import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Button } from "@/components/ui/button";
@@ -207,7 +207,6 @@ export function ReviewReader(input: ReviewReaderProps) {
   const babysitRunning = babysitState ? isBabysitRunning(babysitState) : false;
   const [babysitVisible, setBabysitVisible] = useState(false);
   const [babysitFilter, setBabysitFilter] = useState<BabysitExplanationFilter>("changed");
-  const [expandedBabysitKeys, setExpandedBabysitKeys] = useState<Set<string>>(() => new Set());
   const explainedIdentity = useRef<string>();
   const babysitReasonId = useId();
   const eligibility = babysit?.eligibility;
@@ -222,11 +221,6 @@ export function ReviewReader(input: ReviewReaderProps) {
   const eligibilityReason = eligibility?.kind === "resolved" && eligibility.result && !eligibility.result.eligible
     ? babysitEligibilityLabel(eligibility.result.reason, eligibilityLabels)
     : t("review:babysitMissingContent");
-
-  /** 更新 Monaco view-zone 的单行展开集合，并为外部原生 DOM listener 提供稳定引用。 */
-  const setBabysitExpanded = useCallback((key: string, expanded: boolean) => {
-    setExpandedBabysitKeys((current) => setBabysitExpansion(current, key, expanded));
-  }, []);
 
   /** 对当前文件只启动一次分析，首次点击与后续换文件共用同一入口。 */
   const startBabysit = useCallback(() => {
@@ -246,18 +240,12 @@ export function ReviewReader(input: ReviewReaderProps) {
     startBabysit();
   }, [babysitVisible, startBabysit]);
 
-  /** 关闭当前解释展示时清掉 UI 展开状态，但不影响后端已完成的内存缓存。 */
+  /** 关闭当前解释展示时恢复 changed-only，不影响后端已完成的内存缓存。 */
   useEffect(() => {
     if (!babysitVisible) {
       setBabysitFilter("changed");
-      setExpandedBabysitKeys(new Set());
     }
   }, [babysitVisible]);
-
-  /** 切换文件只清掉行级展开状态；changed/all 过滤在同一 Review 内保持。 */
-  useEffect(() => {
-    setExpandedBabysitKeys(new Set());
-  }, [selectedPath]);
 
   /** 使用图标、颜色与本地化名称共同表达 File Change 状态。 */
   function renderChangeStatus(status: ChangeStatus) {
@@ -413,12 +401,6 @@ export function ReviewReader(input: ReviewReaderProps) {
                 renderSideBySide={effectiveDiffMode === "side-by-side"}
                 explanations={babysitVisible && babysitState?.kind === "completed" ? babysitState.explanations : undefined}
                 filter={babysitFilter}
-                expandedKeys={expandedBabysitKeys}
-                onSetExpanded={setBabysitExpanded}
-                labels={{
-                  before: t("review:babysitBefore"), after: t("review:babysitAfter"),
-                  expand: t("review:babysitExpand"), collapse: t("review:babysitCollapse"), explanation: t("review:babysitExplanations"),
-                }}
               />
             </div>}
             <BabysitFooter
