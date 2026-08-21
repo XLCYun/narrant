@@ -5,6 +5,7 @@ use crate::babysit::{
 use crate::operation::{self, OperationContext, OperationId};
 use crate::review;
 use std::future::Future;
+use std::path::PathBuf;
 use tauri::ipc::Channel;
 
 /// 运行 Babysit 专属 cancellable command，并保留结构化错误 payload。
@@ -68,6 +69,11 @@ pub(crate) async fn explain_review_file_change(
         let workspace_path = lifecycle
             .workspace_path(&review_id, &snapshot_id)
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
+        // 只有用户已经点击宝宝模式并真正请求解释时，才进行 Codex discovery/initialize。
+        babysit
+            .prepare_runtime(&workspace_path)
+            .await
+            .map_err(BabysitErrorPayload::from)?;
         babysit
             .explain_file(
                 BabysitFileRequest {
@@ -92,4 +98,16 @@ pub(crate) async fn explain_review_file_change(
             .map_err(BabysitErrorPayload::from)
     })
     .await
+}
+
+/// 接收 native executable picker 的结果，先验证 `--version` 再持久化。
+#[tauri::command]
+pub(crate) async fn select_babysit_codex_executable(
+    babysit: tauri::State<'_, BabysitApplication>,
+    executable: String,
+) -> Result<(), BabysitErrorPayload> {
+    babysit
+        .select_codex_executable(&PathBuf::from(executable))
+        .await
+        .map_err(BabysitErrorPayload::from)
 }

@@ -111,19 +111,25 @@ type BabysitFooterProps = {
   state: BabysitState | undefined;
   onCancel: () => void;
   onRetry: () => void;
+  onSelectExecutable?: () => void;
   labels: {
     generating: string;
     repairing: (attempt: number) => string;
     failed: string;
+    codexMissing: string;
+    codexSignedOut: string;
+    codexIncompatible: string;
+    codexInitializationFailed: string;
     cancel: string;
     retry: string;
+    selectExecutable: string;
     copyDiagnostics: string;
     copiedDiagnostics: string;
   };
 };
 
 /** 在 Diff 底部呈现文件级 Babysit 状态和恢复操作，不打断普通代码阅读。 */
-function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps) {
+function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }: BabysitFooterProps) {
   const [copied, setCopied] = useState(false);
   const errorCode = state?.kind === "failed" ? state.error.code : undefined;
   useEffect(() => setCopied(false), [state?.kind, errorCode]);
@@ -134,7 +140,15 @@ function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps)
     ? labels.generating
     : state.kind === "repairing"
       ? labels.repairing(state.attempt)
-      : labels.failed;
+      : state.error.code === "codex_not_found" || state.error.code === "codex_executable_invalid"
+        ? labels.codexMissing
+        : state.error.code === "codex_signed_out"
+          ? labels.codexSignedOut
+          : state.error.code === "codex_incompatible"
+            ? labels.codexIncompatible
+            : state.error.code === "codex_initialization_failed"
+              ? labels.codexInitializationFailed
+              : labels.failed;
   const diagnostics = state.kind === "failed"
     ? JSON.stringify({ category: "babysit", code: state.error.code })
     : "";
@@ -151,6 +165,7 @@ function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps)
     {running
       ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
       : <>
+        {state.kind === "failed" && state.error.recovery === "select_codex_executable" && onSelectExecutable && <Button variant="outline" size="xs" onClick={onSelectExecutable}>{labels.selectExecutable}</Button>}
         <Button variant="outline" size="xs" onClick={onRetry}>{labels.retry}</Button>
         <Button variant="ghost" size="xs" onClick={copyDiagnostics} aria-label={copied ? labels.copiedDiagnostics : labels.copyDiagnostics}>
           <Icon icon={Copy01Icon} aria-hidden />
@@ -393,11 +408,17 @@ export function ReviewReader(input: ReviewReaderProps) {
               state={babysitVisible ? babysitState : undefined}
               onCancel={() => babysit?.cancel()}
               onRetry={() => babysit?.retry()}
+              onSelectExecutable={() => void babysit?.selectExecutable?.()}
               labels={{
                 generating: t("review:babysitGenerating"),
                 repairing: (attempt) => t("review:babysitRepairing", { attempt }),
                 failed: t("review:babysitFailed"),
+                codexMissing: t("review:babysitCodexMissing"),
+                codexSignedOut: t("review:babysitCodexSignedOut"),
+                codexIncompatible: t("review:babysitCodexIncompatible"),
+                codexInitializationFailed: t("review:babysitCodexInitializationFailed"),
                 cancel: t("review:babysitCancel"),
+                selectExecutable: t("review:babysitSelectCodex"),
                 retry: t("common:retry"),
                 copyDiagnostics: t("review:babysitCopyDiagnostics"),
                 copiedDiagnostics: t("review:babysitCopiedDiagnostics"),

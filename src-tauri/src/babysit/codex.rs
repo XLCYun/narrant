@@ -22,8 +22,12 @@ use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex as AsyncMutex;
 
+#[path = "codex/discovery.rs"]
+mod discovery;
 #[path = "codex/isolation.rs"]
 mod isolation;
+#[path = "codex/runtime.rs"]
+pub(super) mod runtime;
 #[path = "codex/transport.rs"]
 mod transport;
 use isolation::IsolatedCodexHome;
@@ -170,6 +174,9 @@ enum RpcFailure {
     InvalidJson,
     Protocol,
     Remote,
+    SignedOut,
+    Incompatible,
+    Initialization,
 }
 
 impl RpcFailure {
@@ -183,6 +190,9 @@ impl RpcFailure {
             Self::InvalidJson => "Codex App Server 返回了无效 JSONL。",
             Self::Protocol => "Codex App Server 协议响应无效。",
             Self::Remote => "Codex App Server 拒绝了请求。",
+            Self::SignedOut => "Codex 登录状态不可用。",
+            Self::Incompatible => "Codex App Server 缺少宝宝模式所需能力。",
+            Self::Initialization => "Codex App Server 初始化失败。",
         }
     }
 }
@@ -218,7 +228,7 @@ impl Drop for AppServerProcess {
 
 /// 首个 Installed Coding Agent provider：懒启动一个 Narrant-owned Codex App Server。
 pub struct CodexAppServerProvider {
-    command: AppServerCommand,
+    command: Mutex<AppServerCommand>,
     process: Arc<AsyncMutex<Option<AppServerProcess>>>,
     active_threads: Arc<Mutex<HashMap<String, ActiveThread>>>,
     failed: Arc<AtomicBool>,
@@ -239,13 +249,40 @@ impl CodexAppServerProvider {
     /// 为确定性 JSONL fixture 注入完整命令；生产 discovery issue 可复用此 seam。
     fn with_command_parts(program: PathBuf, args: Vec<OsString>, timeout: Duration) -> Self {
         Self {
-            command: AppServerCommand { program, args },
+            command: Mutex::new(AppServerCommand { program, args }),
             process: Arc::new(AsyncMutex::new(None)),
             active_threads: Arc::new(Mutex::new(HashMap::new())),
             failed: Arc::new(AtomicBool::new(false)),
             generation: process_generation(),
             timeout,
         }
+    }
+
+    /// 设置 runtime 已解析的 executable；provider 本身不做 discovery 或持久化。
+    pub fn configure_executable(&self, path: PathBuf) -> Result<(), BabysitError> {
+        let mut process = self
+            .process
+            .try_lock()
+            .map_err(|_| BabysitError::CodexInitializationFailed)?;
+        let reset_failed_process = self.failed.load(Ordering::Acquire);
+        if process.is_some() && !reset_failed_process {
+            return Err(BabysitError::CodexInitializationFailed);
+        }
+        if reset_failed_process {
+            *process = None;
+        }
+        drop(process);
+        self.command
+            .lock()
+            .map_err(|_| BabysitError::CodexInitializationFailed)?
+            .program = path;
+        Ok(())
+    }
+
+    /// Runtime 已完成 executable discovery 后，复用 #74 的 initialize/cleanup handshake。
+    pub async fn prepare_process(&self) -> Result<(), BabysitError> {
+        let _process = self.process().await?;
+        Ok(())
     }
 
     /// 返回 process-local identity，用于隔离 provider cache 与 Codex 进程生命周期。
@@ -276,12 +313,16 @@ impl CodexAppServerProvider {
             }
         }
         if process.is_none() {
-            let command = self.command.clone();
+            let command = self
+                .command
+                .lock()
+                .map_err(|_| BabysitError::CodexInitializationFailed)?
+                .clone();
             match AppServerProcess::spawn(command).await {
                 Ok(started) => *process = Some(started),
                 Err(error) => {
                     self.failed.store(true, Ordering::Release);
-                    return Err(provider_error(error.detail()));
+                    return Err(codex_initialization_error(error));
                 }
             }
         }
@@ -297,6 +338,9 @@ impl CodexAppServerProvider {
                 | RpcFailure::InvalidJson
                 | RpcFailure::Protocol
                 | RpcFailure::Timeout
+                | RpcFailure::SignedOut
+                | RpcFailure::Incompatible
+                | RpcFailure::Initialization
         ) {
             self.failed.store(true, Ordering::Release);
         }
@@ -404,7 +448,7 @@ impl CodexAppServerProvider {
                 return if error == RpcFailure::Cancelled {
                     Err(BabysitError::Cancelled)
                 } else {
-                    Err(provider_error(error.detail()))
+                    Err(codex_error(error))
                 };
             }
         };
@@ -464,7 +508,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                 return if error == RpcFailure::Cancelled {
                     Err(BabysitError::Cancelled)
                 } else {
-                    Err(provider_error(error.detail()))
+                    Err(codex_error(error))
                 };
             }
         };
@@ -496,7 +540,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                 return if error == RpcFailure::Cancelled {
                     Err(BabysitError::Cancelled)
                 } else {
-                    Err(provider_error(error.detail()))
+                    Err(codex_error(error))
                 };
             }
         };
@@ -571,7 +615,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                 return if error == RpcFailure::Cancelled {
                     Err(BabysitError::Cancelled)
                 } else {
-                    Err(provider_error(error.detail()))
+                    Err(codex_error(error))
                 };
             }
         };
@@ -718,6 +762,25 @@ fn format_target(target: &LineTarget) -> String {
 fn provider_error(detail: impl Into<String>) -> BabysitError {
     BabysitError::Provider {
         detail: detail.into(),
+    }
+}
+
+/// 将 Codex 协议失败映射成前端可恢复的稳定类别；不携带路径或原始进程输出。
+fn codex_error(error: RpcFailure) -> BabysitError {
+    match error {
+        RpcFailure::SignedOut => BabysitError::CodexSignedOut,
+        RpcFailure::Incompatible => BabysitError::CodexIncompatible,
+        RpcFailure::Initialization => BabysitError::CodexInitializationFailed,
+        other => provider_error(other.detail()),
+    }
+}
+
+/// 将进程启动与 initialize 阶段的异常归为 init_failed，保留认证和能力分类。
+fn codex_initialization_error(error: RpcFailure) -> BabysitError {
+    match error {
+        RpcFailure::SignedOut => BabysitError::CodexSignedOut,
+        RpcFailure::Incompatible => BabysitError::CodexIncompatible,
+        _ => BabysitError::CodexInitializationFailed,
     }
 }
 

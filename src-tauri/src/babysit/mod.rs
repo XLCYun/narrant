@@ -5,6 +5,7 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::path::Path;
 use std::sync::{
     atomic::{AtomicU8, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -208,13 +209,31 @@ impl fmt::Display for ValidationFailure {
 /// Babysit 对外暴露的稳定失败类别。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BabysitError {
-    UnsupportedFile { reason: String },
-    InvalidProviderOutput { detail: String },
-    RepairExhausted { detail: String },
+    UnsupportedFile {
+        reason: String,
+    },
+    InvalidProviderOutput {
+        detail: String,
+    },
+    RepairExhausted {
+        detail: String,
+    },
     Cancelled,
-    Provider { detail: String },
+    Provider {
+        detail: String,
+    },
     ProgressClosed,
     CacheUnavailable,
+    /// 未找到可用的 Codex 可执行文件，需要安装或重新选择。
+    CodexNotFound,
+    /// 用户选择的 Codex 路径无法通过 `codex --version` 验证。
+    CodexExecutableInvalid,
+    /// Codex App Server 要求登录，但 Narrant 不会代替用户执行登录。
+    CodexSignedOut,
+    /// App Server 缺少 Babysit 所需的稳定能力。
+    CodexIncompatible,
+    /// App Server 初始化或握手失败。
+    CodexInitializationFailed,
 }
 
 /// Babysit command 对前端暴露的稳定错误 code；detail 只承载当前失败的可读诊断。
@@ -232,6 +251,21 @@ pub enum BabysitErrorCode {
     InvalidRequest,
     OperationConflict,
     OperationUnavailable,
+    CodexNotFound,
+    CodexExecutableInvalid,
+    CodexSignedOut,
+    CodexIncompatible,
+    CodexInitializationFailed,
+}
+
+/// 前端可以直接执行的最小恢复动作；不携带可执行路径或进程原文。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BabysitRecoveryAction {
+    LoginCodex,
+    UpgradeCodex,
+    SelectCodexExecutable,
+    Retry,
 }
 
 /// Tauri command 失败时保持 code/detail 结构，避免把 BabysitError 压扁为字符串。
@@ -240,6 +274,8 @@ pub enum BabysitErrorCode {
 pub struct BabysitErrorPayload {
     pub code: BabysitErrorCode,
     pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<BabysitRecoveryAction>,
 }
 
 impl BabysitErrorPayload {
@@ -248,6 +284,7 @@ impl BabysitErrorPayload {
         Self {
             code: BabysitErrorCode::InputUnavailable,
             detail: detail.into(),
+            recovery: None,
         }
     }
 
@@ -262,6 +299,7 @@ impl BabysitErrorPayload {
         Self {
             code,
             detail: error.to_string(),
+            recovery: None,
         }
     }
 }
@@ -277,10 +315,32 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::Provider { .. } => BabysitErrorCode::Provider,
             BabysitError::ProgressClosed => BabysitErrorCode::ProgressClosed,
             BabysitError::CacheUnavailable => BabysitErrorCode::CacheUnavailable,
+            BabysitError::CodexNotFound => BabysitErrorCode::CodexNotFound,
+            BabysitError::CodexExecutableInvalid => BabysitErrorCode::CodexExecutableInvalid,
+            BabysitError::CodexSignedOut => BabysitErrorCode::CodexSignedOut,
+            BabysitError::CodexIncompatible => BabysitErrorCode::CodexIncompatible,
+            BabysitError::CodexInitializationFailed => BabysitErrorCode::CodexInitializationFailed,
+        };
+        let recovery = match &error {
+            BabysitError::CodexNotFound => Some(BabysitRecoveryAction::SelectCodexExecutable),
+            BabysitError::CodexExecutableInvalid => {
+                Some(BabysitRecoveryAction::SelectCodexExecutable)
+            }
+            BabysitError::CodexSignedOut => Some(BabysitRecoveryAction::LoginCodex),
+            BabysitError::CodexIncompatible => Some(BabysitRecoveryAction::UpgradeCodex),
+            BabysitError::CodexInitializationFailed => Some(BabysitRecoveryAction::Retry),
+            BabysitError::RepairExhausted { .. }
+            | BabysitError::Provider { .. }
+            | BabysitError::InvalidProviderOutput { .. }
+            | BabysitError::Cancelled
+            | BabysitError::ProgressClosed
+            | BabysitError::CacheUnavailable
+            | BabysitError::UnsupportedFile { .. } => None,
         };
         Self {
             code,
             detail: error.to_string(),
+            recovery,
         }
     }
 }
@@ -298,6 +358,11 @@ impl fmt::Display for BabysitError {
             Self::Provider { detail } => write!(formatter, "宝宝模式 provider 失败：{detail}"),
             Self::ProgressClosed => formatter.write_str("宝宝模式进度通道已关闭"),
             Self::CacheUnavailable => formatter.write_str("宝宝模式缓存不可用"),
+            Self::CodexNotFound => formatter.write_str("未找到 Codex 可执行文件"),
+            Self::CodexExecutableInvalid => formatter.write_str("选择的 Codex 可执行文件不可用"),
+            Self::CodexSignedOut => formatter.write_str("Codex 尚未登录"),
+            Self::CodexIncompatible => formatter.write_str("Codex App Server 缺少宝宝模式所需能力"),
+            Self::CodexInitializationFailed => formatter.write_str("Codex App Server 初始化失败"),
         }
     }
 }
@@ -381,6 +446,7 @@ struct CacheKey {
 /// 负责 eligibility、provider orchestration、校验和 process-local cache 的深模块。
 pub struct BabysitApplication {
     provider: Arc<dyn BabysitAgentProvider>,
+    codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
     cache: Mutex<HashMap<CacheKey, BabysitFileExplanations>>,
 }
 
@@ -389,6 +455,7 @@ impl BabysitApplication {
     pub fn new(provider: Arc<dyn BabysitAgentProvider>) -> Self {
         Self {
             provider,
+            codex_runtime: None,
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -400,7 +467,39 @@ impl BabysitApplication {
 
     /// 构造首个生产 Installed Coding Agent provider；进程仍在首次分析时懒启动。
     pub fn with_codex_provider() -> Self {
-        Self::new(Arc::new(CodexAppServerProvider::new("codex")))
+        Self::with_codex_provider_at(std::path::PathBuf::from("babysit-settings.json"))
+    }
+
+    /// 构造带有 application settings 路径的生产 Codex provider；发现仍保持懒加载。
+    pub fn with_codex_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
+        let provider = Arc::new(CodexAppServerProvider::new("codex"));
+        let runtime = Arc::new(codex::runtime::CodexRuntime::new(
+            provider.clone(),
+            settings_path.into(),
+        ));
+        Self {
+            provider,
+            codex_runtime: Some(runtime),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 将首次 provider 发现和 App Server 握手保持在 Babysit 点击后的最高 seam。
+    pub async fn prepare_runtime(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        if let Some(runtime) = &self.codex_runtime {
+            runtime.ensure_ready(workspace_path).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 由 native picker 选择并验证 Codex executable，再写入 durable application setting。
+    pub async fn select_codex_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        self.codex_runtime
+            .as_ref()
+            .ok_or(BabysitError::CodexNotFound)?
+            .select_executable(path)
+            .await
     }
 
     /// 用后端规则判断 eligibility；detected_language 允许无扩展名和特殊文件名表达已识别语言。

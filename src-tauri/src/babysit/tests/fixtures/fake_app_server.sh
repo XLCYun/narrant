@@ -46,11 +46,19 @@ while IFS= read -r line; do
         printf '{"id":%s,"error":{"code":-32601,"message":"unsupported"}}\n' "$request_id"
         exit 17
       fi
-      printf '{"id":%s,"result":{"userAgent":"fake"}}\n' "$request_id"
+      if [ "$mode" = "init-no-agent" ]; then
+        printf '{"id":%s,"result":{"codexHome":"/tmp/fake-codex"}}\n' "$request_id"
+      else
+        printf '{"id":%s,"result":{"userAgent":"fake"}}\n' "$request_id"
+      fi
       ;;
     initialized)
       ;;
     config/read)
+      if [ "$mode" = "auth-fail" ]; then
+        printf '{"id":%s,"error":{"code":401,"message":"not logged in"}}\n' "$request_id"
+        continue
+      fi
       if [ "$mode" = "personal-model-instructions" ]; then
         printf '{"id":%s,"result":{"config":{"model_instructions_file":"/tmp/personal.md","mcp_servers":{}},"origins":{},"layers":null}}\n' "$request_id"
       else
@@ -72,6 +80,10 @@ while IFS= read -r line; do
         record "thread/list:source-filtered"
       else
         record "thread/list:unfiltered"
+      fi
+      if [ "$mode" = "thread-list-no-data" ]; then
+        printf '{"id":%s,"result":{"nextCursor":null}}\n' "$request_id"
+        continue
       fi
       if { [ "$mode" = "orphan" ] || { [ "$mode" = "lost-thread-response" ] && grep -q '^thread/start:lost$' "$events"; }; } && contains '"archived":false'; then
         printf '{"id":%s,"result":{"data":[{"id":"orphan-thread","source":"vscode","threadSource":"feature:narrant-babysit"},{"id":"other-thread","source":"appServer","threadSource":"feature:another-client"}],"nextCursor":null}}\n' "$request_id"

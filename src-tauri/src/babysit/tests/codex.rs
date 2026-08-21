@@ -83,6 +83,82 @@ async fn app_server_generates_structured_output_and_deletes_thread() {
 }
 
 #[tokio::test]
+async fn thread_list_capability_probe_returns_upgrade_recovery_category() {
+    let (provider, _temp, _events) = provider("thread-list-no-data", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexIncompatible));
+    let payload = crate::babysit::BabysitErrorPayload::from(error);
+    assert_eq!(
+        payload.code,
+        crate::babysit::BabysitErrorCode::CodexIncompatible
+    );
+    assert_eq!(
+        payload.recovery,
+        Some(crate::babysit::BabysitRecoveryAction::UpgradeCodex)
+    );
+    assert!(!payload.detail.contains("/tmp"));
+}
+
+#[tokio::test]
+async fn initialize_transport_failure_returns_retry_recovery_category() {
+    let (provider, _temp, _events) = provider("init-fail", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexInitializationFailed));
+    let payload = crate::babysit::BabysitErrorPayload::from(error);
+    assert_eq!(
+        payload.recovery,
+        Some(crate::babysit::BabysitRecoveryAction::Retry)
+    );
+}
+
+#[tokio::test]
+async fn app_server_auth_failure_returns_login_recovery_category() {
+    let (provider, _temp, _events) = provider("auth-fail", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexSignedOut));
+    let payload = crate::babysit::BabysitErrorPayload::from(error);
+    assert_eq!(
+        payload.code,
+        crate::babysit::BabysitErrorCode::CodexSignedOut
+    );
+    assert_eq!(
+        payload.recovery,
+        Some(crate::babysit::BabysitRecoveryAction::LoginCodex)
+    );
+}
+
+#[tokio::test]
+async fn restricted_policy_probe_returns_upgrade_recovery_category() {
+    let (provider, _temp, _events) = provider("insecure-policy", CODEX_ANALYSIS_TIMEOUT);
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let error = provider
+        .generate(request(), &cancellation)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BabysitError::CodexIncompatible));
+}
+
+#[tokio::test]
 async fn malformed_structured_output_can_be_repaired_on_the_same_thread() {
     let (provider, _temp, events) = provider("repair", CODEX_ANALYSIS_TIMEOUT);
     let cancellation = OperationContext::background().cancellation().clone();
@@ -351,7 +427,7 @@ async fn insecure_thread_policy_fails_closed_before_starting_a_turn() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::Provider { .. }));
+    assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
     assert!(!events.lines().any(|line| line == "turn/start"));
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
@@ -366,7 +442,7 @@ async fn personal_model_instruction_file_fails_closed_before_thread_start() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::Provider { .. }));
+    assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
     assert!(!events.lines().any(|line| line == "thread/start"));
 }
@@ -380,7 +456,7 @@ async fn managed_instruction_requirement_fails_closed_before_thread_start() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::Provider { .. }));
+    assert!(matches!(error, BabysitError::CodexIncompatible));
     let events = std::fs::read_to_string(events).unwrap();
     assert!(!events.lines().any(|line| line == "thread/start"));
 }

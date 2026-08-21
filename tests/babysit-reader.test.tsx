@@ -71,6 +71,7 @@ function makeReview(state: BabysitBinding["state"], overrides: Partial<BabysitBi
     explain: vi.fn(),
     cancel: vi.fn(),
     retry: vi.fn(),
+    selectExecutable: vi.fn(),
     ...overrides,
   };
   return {
@@ -181,6 +182,25 @@ describe("Babysit Review Reader presentation", () => {
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button).toHaveAttribute("tabindex", "0");
     expect(button).toHaveAttribute("aria-describedby");
+  });
+
+  it("Codex 缺失时显示 typed 选择器恢复动作且不渲染路径", () => {
+    const selectExecutable = vi.fn();
+    const review = makeReview({
+      kind: "failed",
+      retryable: true,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      error: { code: "codex_not_found", detail: "/Users/alice/.local/bin/codex", recovery: "select_codex_executable" },
+    }, { selectExecutable });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    const footer = screen.getByTestId("babysit-footer");
+    expect(footer).toHaveTextContent("未找到可用的 Codex，请选择可执行文件");
+    expect(within(footer).getByRole("button", { name: "选择 Codex 可执行文件" })).toBeInTheDocument();
+    expect(footer).not.toHaveTextContent("/Users/alice");
+    fireEvent.click(within(footer).getByRole("button", { name: "选择 Codex 可执行文件" }));
+    expect(selectExecutable).toHaveBeenCalledTimes(1);
   });
 
   it("长解释默认截断，并能在 view zone 内展开", () => {

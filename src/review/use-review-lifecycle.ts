@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import {
   isBabysitError,
@@ -95,7 +96,7 @@ function operationFailure(reason: unknown): ReviewFailure {
 function babysitFailure(reason: unknown): BabysitError {
   return isBabysitError(reason)
     ? reason
-    : { code: "provider", detail: String(reason) };
+    : { code: "provider", detail: "Babysit provider failed." };
 }
 
 /** 为一个 composition root 提供唯一当前 Review 的完整生命周期。 */
@@ -232,6 +233,42 @@ export function useReviewLifecycle(
     if (babysitState.kind === "failed") explainBabysit();
   }, [babysitState.kind, explainBabysit]);
 
+  /** 仅在 typed recovery action 要求时打开 native picker；取消不改变当前失败状态。 */
+  const selectBabysitExecutable = useCallback(async () => {
+    const select = babysitAdapter?.selectCodexExecutable;
+    const failed = babysitState.kind === "failed" ? babysitState : undefined;
+    if (!select || !failed) return;
+    const requestId = babysitRequest.current;
+    let selected: string | string[] | null;
+    try {
+      selected = await openDialog({ multiple: false, directory: false });
+    } catch {
+      setBabysitState({
+        kind: "failed",
+        request: failed.request,
+        error: { code: "provider", detail: "Codex executable picker unavailable." },
+        retryable: true,
+      });
+      return;
+    }
+    if (typeof selected !== "string" || selected.length === 0) return;
+    if (requestId !== babysitRequest.current) return;
+    try {
+      await select(selected);
+      if (requestId !== babysitRequest.current) return;
+      invalidateBabysit();
+      explainBabysit();
+    } catch (reason) {
+      if (requestId !== babysitRequest.current) return;
+      setBabysitState({
+        kind: "failed",
+        request: failed.request,
+        error: babysitFailure(reason),
+        retryable: true,
+      });
+    }
+  }, [babysitAdapter, babysitState, explainBabysit, invalidateBabysit]);
+
   const babysit = useMemo<BabysitBinding | undefined>(() => {
     if (!babysitAdapter) return undefined;
     return {
@@ -240,8 +277,9 @@ export function useReviewLifecycle(
       explain: explainBabysit,
       cancel: cancelBabysit,
       retry: retryBabysit,
+      selectExecutable: selectBabysitExecutable,
     };
-  }, [babysitAdapter, babysitEligibility, babysitState, cancelBabysit, explainBabysit, retryBabysit]);
+  }, [babysitAdapter, babysitEligibility, babysitState, cancelBabysit, explainBabysit, retryBabysit, selectBabysitExecutable]);
 
   /** UI locale 改变后清掉旧语言结果，下一次点击会使用新的 cache identity。 */
   useEffect(() => {
