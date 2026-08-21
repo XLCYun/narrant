@@ -12,6 +12,13 @@ body { margin: 0; background: Canvas; color: CanvasText; }
 .narrant-app > header { display: flex; align-items: baseline; gap: 1rem; }
 [aria-label="File Change"] { display: flex; }
 
+/* Monaco 默认让 view-zone 命中层穿透到编辑器；Babysit 卡片需要恢复真实鼠标与键盘交互。 */
+.monaco-editor .view-zones > div:has([data-babysit-zone]),
+.monaco-editor [data-babysit-zone],
+.monaco-editor [data-babysit-toggle] {
+  pointer-events: auto !important;
+}
+
 @media (min-width: 1200px) {
   .narrant-app { padding: 2rem; }
 }

@@ -128,6 +128,7 @@ function createExplanationNode(input: {
   node.dataset.babysitLine = String(line);
   node.className = "flex h-full min-w-0 items-start gap-2 border-y border-primary/15 bg-primary/5 px-3 py-1 text-xs leading-4 text-foreground";
   node.style.minHeight = `${zoneHeight}px`;
+  node.style.pointerEvents = "auto";
   node.setAttribute("role", "note");
   node.setAttribute("aria-label", `${labels.explanation} ${line}`);
 
@@ -148,7 +149,8 @@ function createExplanationNode(input: {
   if (explanation.length > 120) {
     const toggle = document.createElement("button");
     toggle.type = "button";
-    toggle.className = "shrink-0 rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    toggle.className = "pointer-events-auto shrink-0 cursor-pointer rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    toggle.style.pointerEvents = "auto";
     toggle.textContent = expanded ? labels.collapse : labels.expand;
     toggle.setAttribute("aria-expanded", String(expanded));
     // Monaco 可能克隆或重新托管 view-zone DOM；dataset 会保留，而节点 listener 不可靠。
@@ -172,6 +174,7 @@ function createInlineNode(nodes: HTMLElement[], zoneHeight: number) {
   node.dataset.babysitZone = "inline";
   node.className = "flex h-full min-w-0 flex-col";
   node.style.height = `${zoneHeight}px`;
+  node.style.pointerEvents = "auto";
   nodes.forEach((child) => node.append(child));
   return node;
 }

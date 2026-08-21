@@ -183,6 +183,9 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
     const original = [...fakeZones.original.values()][0];
     const expand = within(original).getByRole("button", { name: "展开" });
+    expect(original.style.pointerEvents).toBe("auto");
+    expect(expand.style.pointerEvents).toBe("auto");
+    expect(expand).toHaveClass("cursor-pointer", "pointer-events-auto");
     expect(expand).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(expand);
     const expanded = [...fakeZones.original.values()][0];
