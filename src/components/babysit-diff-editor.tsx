@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { DiffEditor, type DiffOnMount, type MonacoDiffEditor } from "@monaco-editor/react";
 
 import type { BabysitFileExplanations } from "@/babysit/types";
@@ -151,7 +152,13 @@ function createExplanationNode(input: {
     toggle.className = "shrink-0 rounded px-1.5 py-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
     toggle.textContent = expanded ? labels.collapse : labels.expand;
     toggle.setAttribute("aria-expanded", String(expanded));
-    toggle.addEventListener("click", () => onToggleExpanded(key));
+    toggle.addEventListener("click", (event) => {
+      // Monaco 会在 view zone 的原生事件边界内同步处理布局；先阻止编辑器接管，
+      // 再同步提交 React 展开状态，保证旧 zone 被 Monaco 回收前新高度已经生效。
+      event.preventDefault();
+      event.stopPropagation();
+      flushSync(() => onToggleExpanded(key));
+    });
     node.append(toggle);
   }
   return node;

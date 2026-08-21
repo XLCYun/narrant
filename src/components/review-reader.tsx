@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   AiBrain01Icon,
   ArrowDown01Icon,
@@ -207,6 +207,15 @@ export function ReviewReader(input: ReviewReaderProps) {
     ? babysitEligibilityLabel(eligibility.result.reason, eligibilityLabels)
     : t("review:babysitMissingContent");
 
+  /** 更新 Monaco view-zone 的单行展开集合，并为外部原生 DOM listener 提供稳定引用。 */
+  const toggleBabysitExpanded = useCallback((key: string) => {
+    setExpandedBabysitKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
   /** 宝宝模式保持在当前 Review Reader 内；换文件时对新文件自动开始一次完整分析。 */
   useEffect(() => {
     if (!babysitVisible) {
@@ -376,11 +385,7 @@ export function ReviewReader(input: ReviewReaderProps) {
                 explanations={babysitVisible && babysitState?.kind === "completed" ? babysitState.explanations : undefined}
                 filter={babysitFilter}
                 expandedKeys={expandedBabysitKeys}
-                onToggleExpanded={(key) => setExpandedBabysitKeys((current) => {
-                  const next = new Set(current);
-                  if (next.has(key)) next.delete(key); else next.add(key);
-                  return next;
-                })}
+                onToggleExpanded={toggleBabysitExpanded}
                 labels={{
                   before: t("review:babysitBefore"), after: t("review:babysitAfter"),
                   expand: t("review:babysitExpand"), collapse: t("review:babysitCollapse"), explanation: t("review:babysitExplanations"),

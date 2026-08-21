@@ -182,6 +182,18 @@ describe("Babysit Review Reader presentation", () => {
     const expanded = [...fakeZones.original.values()][0];
     expect(within(expanded).getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
     expect(expanded.style.minHeight).toBe("220px");
+    const expandedText = [...expanded.querySelectorAll("span")].find((node) => node.textContent === longExplanation);
+    expect(expandedText).toHaveStyle({ display: "block" });
+    expect(expandedText).toHaveClass("overflow-visible");
+    expect(expandedText).toHaveTextContent(longExplanation);
+
+    fireEvent.click(within(expanded).getByRole("button", { name: "收起" }));
+    const collapsedAgain = [...fakeZones.original.values()][0];
+    expect(within(collapsedAgain).getByRole("button", { name: "展开" })).toHaveAttribute("aria-expanded", "false");
+    expect(collapsedAgain.style.minHeight).toBe("60px");
+    const collapsedText = [...collapsedAgain.querySelectorAll("span")].find((node) => node.textContent === longExplanation);
+    expect(collapsedText).toHaveStyle({ display: "-webkit-box" });
+    expect(collapsedText).toHaveClass("overflow-hidden");
   });
 
   it("同一 Review 切换文件时保留 changed/all 过滤选择", () => {
