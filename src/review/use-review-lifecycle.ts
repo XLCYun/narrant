@@ -329,9 +329,8 @@ export function useReviewLifecycle(
       presentEntry(next.reviewId);
       if (!reusedSnapshot) {
         resetSnapshotReader(next);
+        checkForUpdate(next);
       }
-      // Open Review 间的直接切换复用既有 update 状态；从 Home/Repository 恢复时仍重新检查 Selection。
-      if (!reusedSnapshot || !previousReviewId) checkForUpdate(next);
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: entries.current.get(next.reviewId)!.snapshot };
     } catch (reason) {
       if (previousEntry && activeReviewIdRef.current === previousReviewId) {

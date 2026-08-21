@@ -2,9 +2,13 @@ import { navigateHome, visibleBrandButton } from "./review-navigation";
 
 /** 让系统目录选择器在 E2E 中返回 fixture 路径，同时保留真实 Tauri IPC 后端。 */
 export async function chooseRepositoryFolder(
-  _repositoryPath: string,
+  repositoryPath: string,
   buttonName = "打开仓库文件夹",
 ) {
+  await browser.tauri.execute(
+    ({ core }, path) => core.invoke("set_e2e_repository_directory", { path }),
+    repositoryPath,
+  );
   const openButton = await $("main").$(`button=${buttonName}`);
   await openButton.waitForDisplayed();
   await openButton.waitForClickable();
@@ -81,25 +85,22 @@ async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en",
   let opened = false;
   await browser.waitUntil(async () => {
     for (const button of await $$(`button[aria-label='${label}']`)) {
-      const row = button.$("..");
+      const row = await button.$("..");
       if (!(await row.isDisplayed())) continue;
       if (!(await button.isDisplayed()) || !(await button.isClickable())) {
-        const repositoryButton = row.$("button");
+        const repositoryButton = await row.$("button");
         if (!(await repositoryButton.isDisplayed()) || !(await repositoryButton.isClickable())) continue;
-        // 真实点击 Repository 行会建立 focus-within，并按产品交互展开 Review 列表、显示精确 open action。
-        await repositoryButton.click();
+        // 展开真实 Repository 行；展开态会持续呈现精确 open action，兼顾键盘与触屏。
+        if (await repositoryButton.getAttribute("aria-expanded") === "false") await repositoryButton.click();
+        await browser.waitUntil(async () => await button.isDisplayed() && await button.isClickable(), {
+          timeout: 1000,
+          timeoutMsg: `Repository action 展开后未进入可交互态：${label}`,
+        });
       }
-      if (await button.isDisplayed() && await button.isClickable()) await button.click();
-      else {
-        const visiblyPresented = await browser.execute((action) => {
-          const style = getComputedStyle(action);
-          const rect = action.getBoundingClientRect();
-          return style.opacity === "1" && style.pointerEvents !== "none" && rect.width > 0 && rect.height > 0;
-        }, button);
-        if (!visiblyPresented) continue;
-        // embedded WDI0 会被离屏 sidebar layer 干扰 hit-test；仅对实际呈现的精确 action 触发产品 click。
-        await browser.execute((action) => action.click(), button);
-      }
+      if (!(await button.isDisplayed()) || !(await button.isClickable())) continue;
+      await button.waitForDisplayed();
+      await button.waitForClickable();
+      await button.click();
       opened = true;
       return true;
     }

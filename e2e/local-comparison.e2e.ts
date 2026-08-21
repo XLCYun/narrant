@@ -1,20 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { openFixtureRepository } from "./helpers/open-repository";
 import { linkedWorktrees } from "./helpers/worktree-observation";
-import { navigateHome, reviewIdForSelection, selectRef } from "./helpers/review-navigation";
+import { activeReviewId, navigateHome, reviewIdForSelection, selectRef } from "./helpers/review-navigation";
 
 /** 返回 fixture 仓库当前注册的 worktree 数量，不依赖本地化输出。 */
 function worktreeCount(repositoryPath: string) {
   return linkedWorktrees(repositoryPath).length;
-}
-
-/** 读取当前呈现的 durable Review identity。 */
-async function activeReviewId() {
-  for (const item of await $$("[data-review-id][aria-current='page']")) {
-    const reviewId = await item.getAttribute("data-review-id");
-    if (reviewId) return reviewId;
-  }
-  throw new Error("当前视图没有 active Review identity");
 }
 
 /** 退出当前 Reader 后，通过真实 lifecycle command 显式关闭 durable Review。 */
@@ -140,6 +131,12 @@ describe("本地分支比较", () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     execFileSync("git", ["commit", "--allow-empty", "-m", "e2e update"], { cwd: repositoryPath });
     await browser.setWindowSize(1200, 800);
+    const existingReviewId = await reviewIdForSelection("refs/heads/main", "refs/heads/head-ref");
+    // 前一场景显式关闭了 Review；先按进程生命周期语义恢复 runtime，再验证 Selection 的显式更新。
+    await browser.tauri.execute(
+      ({ core }, reviewId) => core.invoke("reopen_review", { reviewId }),
+      existingReviewId,
+    );
     await openFixtureRepository(repositoryPath, "en");
     await $("[role='tab']=Local branches").click();
     const branchSelectors = await $$("[role='combobox']");
@@ -147,22 +144,13 @@ describe("本地分支比较", () => {
     await expect(branchSelectors[0]).toBeDisplayed();
     await selectRef("Base Ref", "refs/heads/main");
     await selectRef("Head Ref", "refs/heads/head-ref");
-    await browser.waitUntil(async () => (
-      await $("button=Update and continue review").isExisting()
-      || await $("button=Continue existing review").isExisting()
-    ));
+    const updateAndContinue = await $("button=Update and continue review");
+    await updateAndContinue.waitForDisplayed();
     await browser.setWindowSize(900, 600);
     await expect(branchSelectors[1]).toBeDisplayed();
     await expect(branchSelectors[0]).toBeDisplayed();
-    const updateAndContinue = await $("button=Update and continue review");
-    const refreshedDuringOpen = await updateAndContinue.isExisting();
-    await clickVisibleAction(refreshedDuringOpen ? "Update and continue review" : "Continue existing review");
+    await clickVisibleAction("Update and continue review");
     await expect($("[aria-label='Review reader']")).toBeDisplayed();
-    if (!refreshedDuringOpen) {
-      const refreshReview = await $("button[aria-label='Refresh review']");
-      await expect(refreshReview).toBeDisplayed();
-      await refreshReview.click();
-    }
     await expect($("button[aria-label='Refresh review']")).not.toExist();
     const reviewId = await reviewIdForSelection("refs/heads/main", "refs/heads/head-ref");
     await $("[role='tab']=File Changes").click();

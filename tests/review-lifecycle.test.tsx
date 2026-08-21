@@ -300,6 +300,13 @@ describe("Review lifecycle module", () => {
     expect(checks).toHaveLength(2);
     expect(checks[1].signal.aborted).toBe(true);
     expect(result.current.reader?.update.kind).toBe("current");
+
+    act(() => result.current.unpresent());
+    expect(result.current.reader).toBeNull();
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    expect(checks).toHaveLength(2);
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
+    expect(result.current.reader?.update.kind).toBe("current");
   });
 
   it("打开 C 失败后为仍 Presented 的 B 重启 update check，并隔离旧请求", async () => {

@@ -13,8 +13,10 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let builder = tauri::Builder::default()
-        .manage(operation::CancellableOperations::default())
+    let builder = tauri::Builder::default().manage(operation::CancellableOperations::default());
+    #[cfg(feature = "wdio")]
+    let builder = builder.manage(repository::E2eRepositoryPicker::default());
+    let builder = builder
         .setup(move |app| {
             let application_data = app.path().app_data_dir()?;
             #[cfg(feature = "wdio")]
@@ -67,6 +69,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "wdio")]
+            repository::set_e2e_repository_directory,
             #[cfg(feature = "wdio")]
             repository::choose_e2e_repository_directory,
             repository::load_repository_navigation,

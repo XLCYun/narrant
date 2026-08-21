@@ -28,6 +28,7 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
+  set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
   compare_local_refs: { args: { operationId: string; repositoryId: number; baseRef: string; headRef: string }; result: ReviewSnapshot };
@@ -72,6 +73,7 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust invoke handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
   "register_repository",
   "load_repository_navigation",

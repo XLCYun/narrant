@@ -79,9 +79,11 @@ export function App() {
   const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter, { initialDiffMode, initialTreeWidth });
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
+  const repositoryOverviewPresented = appShell.destination.kind === "repository"
+    && appShell.destination.repositoryId === selectedRepository?.id;
   const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: desktopRuntimeEnabled });
   const pullRequestDiscoveryLifecycle = usePullRequestDiscoveryLifecycle(pullRequestDiscovery, {
-    enabled: Boolean(selectedRepository),
+    enabled: repositoryOverviewPresented,
     repositoryId: selectedRepository?.id,
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
@@ -129,7 +131,9 @@ export function App() {
   const branchContinuation = useBranchSelectionContinuation(reviewApplicationAdapter, {
     repositoryId: snapshot
       ? undefined
-      : selectedRepository?.id ?? (testHarnessEnabled ? 0 : undefined),
+      : repositoryOverviewPresented
+        ? selectedRepository?.id
+        : testHarnessEnabled ? 0 : undefined,
     baseRef,
     headRef,
     reviews: repositoryReviews,
@@ -187,12 +191,12 @@ export function App() {
 
   /** Repository Overview 提交后启动独立的页面数据读取。 */
   useEffect(() => {
-    if (!selectedRepository) return;
+    if (!selectedRepository || !repositoryOverviewPresented) return;
     setRepositoryPath(selectedRepository.canonicalPath);
     if (!testHarnessEnabled) void repositoryOverview.reloadBranches();
     // 页面数据只在已提交的 Repository identity 改变后重新读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRepository?.id]);
+  }, [repositoryOverviewPresented, selectedRepository?.id]);
 
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
   async function openSavedReview(review: RepositoryReviewSummary) {
@@ -352,7 +356,7 @@ export function App() {
           </li>)}</ul>}
       </section>
     </article>}
-    {selectedRepository && !snapshot && <article aria-label="Repository">
+    {selectedRepository && repositoryOverviewPresented && !snapshot && <article aria-label="Repository">
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}

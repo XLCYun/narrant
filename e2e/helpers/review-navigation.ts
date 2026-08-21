@@ -3,6 +3,16 @@ function shortBranchName(ref: string) {
   return ref.replace(/^refs\/(heads|remotes\/[^/]+)\//, "");
 }
 
+/** 从当前可见 active sidebar item 读取 durable Review identity。 */
+export async function activeReviewId() {
+  for (const item of await $$("[data-review-id][aria-current='page']")) {
+    if (!(await item.isDisplayed())) continue;
+    const reviewId = await item.getAttribute("data-review-id");
+    if (reviewId) return reviewId;
+  }
+  throw new Error("当前视图没有可见的 active Review identity");
+}
+
 /** 通过真实 shadcn/Base UI Combobox 精确选择 canonical ref。 */
 export async function selectRef(label: "Base Ref" | "Head Ref", canonicalRef: string) {
   const triggers = await $$("[role='combobox']");

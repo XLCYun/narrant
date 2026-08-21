@@ -529,7 +529,10 @@ export function AppShell({
                     <Button
                       variant="outline"
                       size="icon-xs"
-                      className="pointer-events-none absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar opacity-0 shadow-xs transition-opacity hover:bg-sidebar-accent active:translate-y-0! group-hover/repository:pointer-events-auto group-hover/repository:opacity-100 group-focus-within/repository:pointer-events-auto group-focus-within/repository:opacity-100"
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 right-1 z-10 my-auto rounded-md border-sidebar-border bg-sidebar opacity-0 shadow-xs transition-opacity hover:bg-sidebar-accent active:translate-y-0! group-hover/repository:pointer-events-auto group-hover/repository:opacity-100 group-focus-within/repository:pointer-events-auto group-focus-within/repository:opacity-100",
+                        expanded && "pointer-events-auto opacity-100",
+                      )}
                       aria-label={t(pending ? "openingRepository" : "openRepository", { name: repositoryName(repository.canonicalPath) })}
                       disabled={pending}
                       aria-busy={pending || undefined}

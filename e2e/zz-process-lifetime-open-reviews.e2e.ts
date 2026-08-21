@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 
 import { openFixtureRepository } from "./helpers/open-repository";
-import { reviewIdForSelection, selectRef, visibleBrandButton } from "./helpers/review-navigation";
+import { activeReviewId, reviewIdForSelection, selectRef, visibleBrandButton } from "./helpers/review-navigation";
 import {
   gitInvocationsSinceStable,
   invocationTouchesWorkspace,
@@ -11,27 +11,26 @@ import {
   workspaceOperationInvocations,
 } from "./helpers/worktree-observation";
 
-/** 从可见 active sidebar item 读取 durable Review identity。 */
-async function activeReviewId() {
-  for (const item of await $$("[data-review-id][aria-current='page']")) {
-    if (await item.isDisplayed()) {
-      const reviewId = await item.getAttribute("data-review-id");
-      if (reviewId) return reviewId;
-    }
-  }
-  throw new Error("当前视图没有可见的 active Review");
-}
-
 /** 等待目标 Review 完成切换且 Reader 可用。 */
 async function waitForActiveReview(reviewId: string) {
-  await browser.waitUntil(async () => {
-    if (!(await $("[aria-label='审核阅读器']").isDisplayed())) return false;
-    try {
-      return await activeReviewId() === reviewId;
-    } catch {
-      return false;
-    }
-  });
+  try {
+    await browser.waitUntil(async () => {
+      if (!(await $("[aria-label='审核阅读器']").isDisplayed())) return false;
+      try {
+        return await activeReviewId() === reviewId;
+      } catch {
+        return false;
+      }
+    });
+  } catch (reason) {
+    const state = await browser.execute(() => ({
+      reader: Boolean(document.querySelector("[aria-label='审核阅读器']")),
+      active: [...document.querySelectorAll<HTMLElement>("[data-review-id][aria-current='page']")]
+        .map((item) => ({ id: item.dataset.reviewId, visible: item.offsetParent !== null })),
+      alerts: [...document.querySelectorAll<HTMLElement>("[role='alert']")].map((item) => item.textContent?.trim()),
+    }));
+    throw new Error(`${String(reason)}；active Review state：${JSON.stringify(state)}`, { cause: reason });
+  }
 }
 
 /** 只点击当前可见、可交互的 Review sidebar item。 */
@@ -113,14 +112,43 @@ async function readerEvidence() {
   return browser.execute(() => {
     const reader = document.querySelector<HTMLElement>("[aria-label='审核阅读器']");
     const fileChange = document.querySelector<HTMLElement>("[aria-label='File Change']");
+    const fileTree = reader?.querySelector<HTMLElement>("nav[aria-label='文件树'], nav[aria-label='File tree']");
     const activeReview = [...document.querySelectorAll<HTMLElement>("[data-review-id][aria-current='page']")]
       .find((item) => item.offsetParent !== null);
-    if (!reader || !fileChange || !activeReview) throw new Error("Reader 证据元素不完整");
+    const activeTab = reader?.querySelector<HTMLElement>("[role='tab'][aria-selected='true']");
+    const selectedFile = fileTree?.querySelector<HTMLElement>("button[aria-current='true']");
+    const recentHeading = [...document.querySelectorAll<HTMLButtonElement>("[data-sidebar='group'] > button")]
+      .find((button) => ["最近审核", "Recent reviews"].includes(button.textContent?.trim() ?? "") && button.offsetParent !== null);
+    const recentGroup = recentHeading?.closest<HTMLElement>("[data-sidebar='group']");
+    if (!reader || !fileChange || !fileTree || !activeReview || !activeTab || !selectedFile || !recentGroup) {
+      throw new Error("Reader 可访问状态证据不完整");
+    }
     const rect = reader.getBoundingClientRect();
+    const treeRect = fileTree.getBoundingClientRect();
     return {
       reviewId: activeReview.dataset.reviewId,
       fileBefore: fileChange.dataset.before,
       fileAfter: fileChange.dataset.after,
+      selectedPath: selectedFile.textContent?.trim(),
+      activeView: {
+        text: activeTab.textContent?.trim(),
+        controls: activeTab.getAttribute("aria-controls"),
+      },
+      diffLayout: [...reader.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].map((button) => ({
+        label: button.getAttribute("aria-label"),
+        pressed: button.getAttribute("aria-pressed"),
+        disabled: button.disabled,
+      })),
+      treeWidth: treeRect.width,
+      expandedState: [...reader.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].map((button) => ({
+        text: button.textContent?.trim(),
+        expanded: button.getAttribute("aria-expanded"),
+      })),
+      sidebarGroups: [...document.querySelectorAll<HTMLButtonElement>("[data-sidebar='group'] > button[aria-expanded]")]
+        .filter((button) => button.offsetParent !== null)
+        .map((button) => ({ text: button.textContent?.trim(), expanded: button.getAttribute("aria-expanded") })),
+      recentReviewOrder: [...recentGroup.querySelectorAll<HTMLElement>("[data-review-id]")]
+        .map((item) => item.dataset.reviewId),
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       scroll: [...reader.querySelectorAll<HTMLElement>("*")]
         .filter((element) => element.scrollHeight > element.clientHeight)
@@ -232,9 +260,25 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceA);
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceB);
 
-    // Repository Overview 与 Home 都只是 presentation navigation，两个 linked worktree 必须原样保留。
+    // Repository Overview 恢复 retained A 只改变 presentation，不检查 update、不读取或检查 Workspace。
+    const invokesBeforeOverview = (await invokeTrace()).length;
     await leaveToRepositoryOverview();
     await waitForWorktrees(repositoryPath, afterB);
+    await browser.waitUntil(async () => (
+      (await invokeTrace()).slice(invokesBeforeOverview).includes("check_branch_review_updates")
+    ), { timeoutMsg: "Repository 自身的 Branch Selection 检查没有启动" });
+    await stableGitTraceOffset(tracePath);
+    const invokesBeforeRepositoryRestore = (await invokeTrace()).length;
+    const beforeRepositoryRestore = await stableGitTraceOffset(tracePath);
+    await clickVisibleReview(reviewA);
+    await waitForActiveReview(reviewA);
+    await expect($("[aria-label='File Change']")).toBeDisplayed();
+    expect(await gitInvocationsSinceStable(tracePath, beforeRepositoryRestore)).toEqual([]);
+    expect((await invokeTrace()).slice(invokesBeforeRepositoryRestore)).toEqual(["reopen_review"]);
+    await waitForWorktrees(repositoryPath, afterB);
+
+    // Home 导航同样不释放 retained Workspace；恢复时只允许 Repository Overview 的通用只读 probe。
+    await leaveToRepositoryOverview();
     const brand = await visibleBrandButton();
     await brand.waitForClickable();
     await brand.click();
@@ -242,11 +286,20 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     await waitForWorktrees(repositoryPath, afterB);
 
     // 从 Home 恢复允许重新读取 Repository Overview，但不得物化、重置或释放任何 Workspace。
+    const invokesBeforeHomeRestore = (await invokeTrace()).length;
     const beforeHomeRestore = await stableGitTraceOffset(tracePath);
     await clickVisibleReview(reviewA);
     await waitForActiveReview(reviewA);
     await expect($("[aria-label='File Change']")).toBeDisplayed();
     const homeRestoreInvocations = await gitInvocationsSinceStable(tracePath, beforeHomeRestore);
+    const homeRestoreCommands = (await invokeTrace()).slice(invokesBeforeHomeRestore);
+    expect(homeRestoreCommands).toContain("open_repository_overview");
+    expect(homeRestoreCommands).toContain("reopen_review");
+    expect(homeRestoreCommands).not.toContain("check_branch_review_updates");
+    expect(homeRestoreCommands).not.toContain("check_pull_request_review_update");
+    expect(homeRestoreInvocations.filter(({ argv }) => argv.some((argument) => (
+      argument === "fetch" || argument === "merge-base" || argument === "diff"
+    )))).toEqual([]);
     // Home 会重新做 Repository capability probe；允许原仓库 cwd 的只读命令，但禁止任何目标路径访问或生命周期变更。
     expect(workspaceMutationInvocations(homeRestoreInvocations)).toEqual([]);
     expect(homeRestoreInvocations.filter((invocation) => (
