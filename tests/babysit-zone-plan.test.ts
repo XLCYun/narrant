@@ -1,0 +1,41 @@
+import { describe, expect, it } from "vitest";
+
+import { buildBabysitZoneRows, setBabysitExpansion } from "@/components/babysit-diff-editor";
+
+/** 构造 Monaco change shape，覆盖 add/delete/unequal 的配对规则。 */
+function change(originalStart: number, originalEnd: number, modifiedStart: number, modifiedEnd: number) {
+  return { originalStartLineNumber: originalStart, originalEndLineNumber: originalEnd, modifiedStartLineNumber: modifiedStart, modifiedEndLineNumber: modifiedEnd };
+}
+
+describe("Babysit Monaco zone pairing", () => {
+  it("同一次 click 的 desired state 被重复处理也保持幂等", () => {
+    let expanded = new Set<string>();
+    expanded = setBabysitExpansion(expanded, "before:2", true);
+    expanded = setBabysitExpansion(expanded, "before:2", true);
+    expect([...expanded]).toEqual(["before:2"]);
+    expanded = setBabysitExpansion(expanded, "before:2", false);
+    expanded = setBabysitExpansion(expanded, "before:2", false);
+    expect(expanded).toHaveLength(0);
+  });
+
+  it("为 add-only 的 before 侧创建配对 spacer", () => {
+    const rows = buildBabysitZoneRows([], [[2, "新增一"], [3, "新增二"]], [change(0, 0, 2, 3)]);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.before)).toEqual([undefined, undefined]);
+    expect(rows.map((row) => row.afterAnchor)).toEqual([2, 3]);
+  });
+
+  it("为 delete-only 的 after 侧创建配对 spacer", () => {
+    const rows = buildBabysitZoneRows([[2, "删除一"], [3, "删除二"]], [], [change(2, 3, 0, 0)]);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.after)).toEqual([undefined, undefined]);
+    expect(rows.map((row) => row.beforeAnchor)).toEqual([2, 3]);
+  });
+
+  it("不等长修改取较大侧行数且每行保持 paired anchors", () => {
+    const rows = buildBabysitZoneRows([[2, "旧"]], [[2, "新一"], [3, "新二"], [4, "新三"]], [change(2, 2, 2, 4)]);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ beforeAnchor: 2, afterAnchor: 2 });
+    expect(rows.slice(1).every((row) => row.before === undefined)).toBe(true);
+  });
+});

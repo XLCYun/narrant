@@ -344,6 +344,25 @@ pub struct BabysitFileRequest {
     pub locale: String,
     /// 当前 Review Workspace 的绝对路径，不进入前端 identity 或缓存 key。
     pub workspace_path: String,
+    pub detected_language: Option<String>,
+}
+
+/// UI 查询文件是否可进入 Babysit 的 provider-independent 结果。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BabysitEligibility {
+    pub eligible: bool,
+    pub reason: Option<BabysitEligibilityReason>,
+}
+
+/// 后端唯一维护的 Babysit 不可用原因；前端只负责本地化展示。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BabysitEligibilityReason {
+    NonText,
+    GeneratedOrVendored,
+    LockMinifiedOrSnapshot,
+    UnsupportedLanguage,
 }
 
 /// 仅在进程内存在的完整结果缓存 key。
@@ -353,6 +372,7 @@ struct CacheKey {
     snapshot_id: String,
     path: String,
     locale: String,
+    detected_language: Option<String>,
     provider_id: String,
     process_generation: String,
     contract_version: String,
@@ -383,6 +403,16 @@ impl BabysitApplication {
         Self::new(Arc::new(CodexAppServerProvider::new("codex")))
     }
 
+    /// 用后端规则判断 eligibility；detected_language 允许无扩展名和特殊文件名表达已识别语言。
+    pub fn eligibility(
+        &self,
+        path: &str,
+        content: &FileChangeContent,
+        detected_language: Option<&str>,
+    ) -> BabysitEligibility {
+        eligibility(path, content, detected_language)
+    }
+
     /// 以一个完整 File Change 为单位生成并缓存 before/after Line Explanations。
     pub async fn explain_file<F>(
         &self,
@@ -395,12 +425,17 @@ impl BabysitApplication {
         F: FnMut(BabysitProgress) -> Result<(), BabysitError>,
     {
         ensure_not_cancelled(cancellation)?;
-        ensure_eligible(&request.path, &content)?;
+        ensure_eligible(
+            &request.path,
+            &content,
+            request.detected_language.as_deref(),
+        )?;
         let key = CacheKey {
             review_id: request.identity.review_id.clone(),
             snapshot_id: request.identity.snapshot_id.clone(),
             path: request.path.clone(),
             locale: request.locale.clone(),
+            detected_language: request.detected_language.clone(),
             provider_id: self.provider.provider_id().to_owned(),
             process_generation: self.provider.process_generation().to_owned(),
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
@@ -485,11 +520,37 @@ fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), Babysit
 }
 
 /// 第一版显式代码文件 eligibility；内容类别先由 Review Reader 的 immutable 结果决定。
-fn ensure_eligible(path: &str, content: &FileChangeContent) -> Result<(), BabysitError> {
+fn ensure_eligible(
+    path: &str,
+    content: &FileChangeContent,
+    detected_language: Option<&str>,
+) -> Result<(), BabysitError> {
+    let result = eligibility(path, content, detected_language);
+    if result.eligible {
+        return Ok(());
+    }
+    Err(BabysitError::UnsupportedFile {
+        reason: format!(
+            "{:?}",
+            result
+                .reason
+                .unwrap_or(BabysitEligibilityReason::UnsupportedLanguage)
+        ),
+    })
+}
+
+/// 计算稳定 eligibility code，避免 UI 与 provider 各自维护文件白名单。
+fn eligibility(
+    path: &str,
+    content: &FileChangeContent,
+    detected_language: Option<&str>,
+) -> BabysitEligibility {
+    let rejected = |reason| BabysitEligibility {
+        eligible: false,
+        reason: Some(reason),
+    };
     if content.content_kind() != FileContentKind::Text {
-        return Err(BabysitError::UnsupportedFile {
-            reason: "仅支持文本代码文件".to_owned(),
-        });
+        return rejected(BabysitEligibilityReason::NonText);
     }
     let normalized = path.replace('\\', "/");
     let components = normalized.split('/').collect::<Vec<_>>();
@@ -499,9 +560,7 @@ fn ensure_eligible(path: &str, content: &FileChangeContent) -> Result<(), Babysi
             "node_modules" | "vendor" | "dist" | "build" | "target"
         )
     }) {
-        return Err(BabysitError::UnsupportedFile {
-            reason: "不分析依赖、构建产物或 vendored 文件".to_owned(),
-        });
+        return rejected(BabysitEligibilityReason::GeneratedOrVendored);
     }
     let basename = components
         .last()
@@ -518,9 +577,7 @@ fn ensure_eligible(path: &str, content: &FileChangeContent) -> Result<(), Babysi
         || basename.ends_with(".snap")
         || basename.ends_with(".snapshot")
     {
-        return Err(BabysitError::UnsupportedFile {
-            reason: "不分析 lock、minified 或 snapshot 文件".to_owned(),
-        });
+        return rejected(BabysitEligibilityReason::LockMinifiedOrSnapshot);
     }
     let extension = basename.rsplit_once('.').map(|(_, extension)| extension);
     let allowed = matches!(
@@ -541,12 +598,17 @@ fn ensure_eligible(path: &str, content: &FileChangeContent) -> Result<(), Babysi
                 | "hpp"
         )
     );
-    if !allowed {
-        return Err(BabysitError::UnsupportedFile {
-            reason: "文件扩展名不在首批代码语言白名单中".to_owned(),
-        });
+    let detected_allowed = matches!(
+        detected_language.map(str::to_ascii_lowercase).as_deref(),
+        Some("typescript" | "javascript" | "rust" | "python" | "go" | "java" | "c" | "cpp")
+    );
+    if !allowed && !detected_allowed {
+        return rejected(BabysitEligibilityReason::UnsupportedLanguage);
     }
-    Ok(())
+    BabysitEligibility {
+        eligible: true,
+        reason: None,
+    }
 }
 
 /// 将 Review 读取结果转换为 provider 需要的单次完整请求。
