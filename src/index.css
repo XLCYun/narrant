@@ -10,7 +10,55 @@
 body { margin: 0; background: Canvas; color: CanvasText; }
 .narrant-app { min-width: 0; min-height: 100vh; padding: 1rem; }
 .narrant-app > header { display: flex; align-items: baseline; gap: 1rem; }
-[aria-label="File Change"] { display: block; }
+[aria-label="File Change"] { display: flex; }
+
+/* 只在 Babysit zone 存在时把该命中层抬到 view-lines 上方；空白区域仍由 Monaco 接收选择。 */
+.monaco-editor .view-zones:has([data-babysit-zone]) {
+  z-index: 10 !important;
+}
+
+.monaco-editor .view-zones > div:has([data-babysit-zone]),
+.monaco-editor [data-babysit-zone] {
+  position: relative;
+  z-index: 10;
+  pointer-events: auto !important;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* 行尾解释使用琥珀色高对比 tag，在红色删除行和绿色新增行上都保持可读。 */
+.monaco-editor .babysit-inline-explanation {
+  display: inline-block;
+  margin-left: 0.75rem;
+  border: 1px solid #fde68a;
+  border-radius: 0.3rem;
+  padding: 0 0.4rem;
+  background: #fbbf24;
+  color: #1c1917;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: -2px;
+  white-space: nowrap;
+}
+
+/* Monaco 会把长 injected text 拆成相邻 span；中间片段不重复绘制 tag 边界。 */
+.monaco-editor .babysit-inline-explanation:has(+ .babysit-inline-explanation) {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 0;
+}
+
+.monaco-editor .babysit-inline-explanation + .babysit-inline-explanation {
+  margin-left: 0;
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding-left: 0;
+}
 
 @media (min-width: 1200px) {
   .narrant-app { padding: 2rem; }

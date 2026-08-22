@@ -7,6 +7,42 @@ pub(super) struct PresentOutcome {
 }
 
 impl ReviewLifecycle {
+    /// 返回 durable Review 当前 Snapshot identity，供跨模块缓存清理绑定旧 revision。
+    pub fn snapshot_id(&self, review_id: &str) -> Result<String, ReviewLifecycleError> {
+        self.store
+            .open_review(review_id)
+            .map(|saved| saved.snapshot_identity())
+            .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))
+    }
+
+    /// 返回已激活且与 Snapshot identity 一致的受管 Review Workspace 路径。
+    pub fn workspace_path(
+        &self,
+        review_id: &str,
+        snapshot_id: &str,
+    ) -> Result<PathBuf, ReviewLifecycleError> {
+        let current = self
+            .store
+            .open_review(review_id)
+            .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))?;
+        if current.snapshot_identity() != snapshot_id {
+            return Err(ReviewLifecycleError::StaleSnapshot);
+        }
+        self.runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .open_reviews
+            .get(review_id)
+            .ok_or_else(|| {
+                ReviewLifecycleError::ReviewUnavailable(
+                    "Review 已关闭或失效，请重新打开。".to_owned(),
+                )
+            })?;
+        self.store
+            .review_workspace_path(review_id)
+            .map_err(|error| ReviewLifecycleError::ReviewUnavailable(error.to_string()))
+    }
+
     /// 创建、重开或切换到指定 Review，并在成功后发布运行时读取句柄。
     pub async fn present(
         &self,

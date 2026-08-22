@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { BabysitApplicationAdapter, BabysitBinding } from "@/babysit/types";
+import { useBabysitLifecycle } from "@/babysit/use-babysit-lifecycle";
+
 import {
   knownReviewId,
   type ReviewApplicationAdapter,
@@ -46,6 +49,8 @@ export type FileChangeBinding =
   | { kind: "ready"; path: string; content: FileChangeContent }
   | { kind: "failed"; path: string; failure: ReviewFailure };
 
+const EMPTY_FILE_CHANGE: FileChangeBinding = { kind: "empty" };
+
 export type ReviewUpdateBinding =
   | { kind: "checking" }
   | { kind: "current" }
@@ -83,6 +88,8 @@ export type ReviewReaderBinding = {
     | { kind: "closing" };
   fileChange: FileChangeBinding;
   update: ReviewUpdateBinding;
+  /** 当前文件的宝宝模式状态与动作。 */
+  babysit?: BabysitBinding;
   /** 当前 Review 的 peer view，以及用于保留它的 setter。 */
   view: ReviewView;
   setView(view: ReviewView): void;
@@ -135,6 +142,7 @@ function firstFileChangePath(snapshot: ReviewSnapshot): string | undefined {
 export function useReviewLifecycle(
   adapter: ReviewApplicationAdapter,
   options: ReviewLifecycleOptions = {},
+  babysitAdapter?: BabysitApplicationAdapter,
 ): ReviewLifecycleBinding {
   const initialDiffMode = options.initialDiffMode ?? "side-by-side";
   const initialTreeWidth = options.initialTreeWidth ?? 24;
@@ -160,6 +168,17 @@ export function useReviewLifecycle(
     settled: Promise<void>;
     finish: () => void;
   }>();
+  const babysitEntry = activeReviewId ? entries.current.get(activeReviewId) : undefined;
+  const {
+    binding: babysit,
+    invalidateSelection: invalidateBabysitSelection,
+    clearSnapshot: clearBabysitSnapshot,
+    clearReview: clearBabysitReview,
+  } = useBabysitLifecycle({
+    adapter: babysitAdapter,
+    snapshot: babysitEntry?.snapshot,
+    fileChange: babysitEntry?.fileChange ?? EMPTY_FILE_CHANGE,
+  });
 
   /** 修改一个 runtime entry，并立即刷新当前 Presented Review 的投影。 */
   const updateEntry = useCallback((reviewId: string, change: (entry: ReviewRuntimeEntry) => ReviewRuntimeEntry) => {
@@ -182,6 +201,7 @@ export function useReviewLifecycle(
     const reviewId = activeReviewIdRef.current;
     const entry = reviewId ? entries.current.get(reviewId) : undefined;
     if (!reviewId || !entry) return;
+    invalidateBabysitSelection();
     const request = (fileRequests.current.get(reviewId)?.request ?? 0) + 1;
     fileRequests.current.get(reviewId)?.abort.abort();
     const abort = new AbortController();
@@ -199,7 +219,7 @@ export function useReviewLifecycle(
       if (abort.signal.aborted || latestRequest?.request !== request) return;
       updateEntry(reviewId, (current) => ({ ...current, fileChange: { kind: "failed", path, failure: operationFailure(reason) } }));
     });
-  }, [adapter, updateEntry]);
+  }, [adapter, invalidateBabysitSelection, updateEntry]);
 
   /** 取消 update check，并把被中断的 checking 恢复成此前稳定状态。 */
   const cancelUpdateCheck = useCallback(() => {
@@ -252,7 +272,7 @@ export function useReviewLifecycle(
       snapshot: next,
       fileChange: { kind: "empty" },
       update: { kind: "current" },
-      view: existing?.view ?? "overview",
+      view: existing?.view ?? "file-changes",
       diffMode: existing?.diffMode ?? initialDiffMode,
       treeWidth: existing?.treeWidth ?? initialTreeWidth,
       collapsedDirectories: [],
@@ -310,6 +330,7 @@ export function useReviewLifecycle(
       refreshing.abort.abort();
       await refreshing.settled;
     }
+    invalidateBabysitSelection();
     const abort = new AbortController();
     lifecycleAbort.current = abort;
     const previousReviewId = activeReviewIdRef.current;
@@ -326,6 +347,9 @@ export function useReviewLifecycle(
       const existing = entries.current.get(next.reviewId);
       const reusedSnapshot = Boolean(existing && existing.snapshot.snapshotId === next.snapshotId);
       installSnapshot(next, existing);
+      if (existing && existing.snapshot.snapshotId !== next.snapshotId) {
+        await clearBabysitSnapshot({ reviewId: existing.snapshot.reviewId, snapshotId: existing.snapshot.snapshotId });
+      }
       presentEntry(next.reviewId);
       if (!reusedSnapshot) {
         resetSnapshotReader(next);
@@ -347,7 +371,7 @@ export function useReviewLifecycle(
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
       setOpeningTarget(undefined);
     }
-  }, [adapter, cancelUpdateCheck, checkForUpdate, installSnapshot, presentEntry, resetSnapshotReader]);
+  }, [adapter, cancelUpdateCheck, checkForUpdate, clearBabysitSnapshot, installSnapshot, invalidateBabysitSelection, presentEntry, resetSnapshotReader]);
 
   /** 显式刷新 Presented Review；只替换该 Review 的 Snapshot-scoped state。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
@@ -355,6 +379,7 @@ export function useReviewLifecycle(
     const currentEntry = reviewId ? entries.current.get(reviewId) : undefined;
     const confirmation = currentEntry?.update.kind === "available" ? currentEntry.update.update : undefined;
     if (!reviewId || !currentEntry || !confirmation) return { kind: "unchanged" };
+    invalidateBabysitSelection();
     const abort = new AbortController();
     let finishRefresh: () => void = () => {};
     const settled = new Promise<void>((resolve) => { finishRefresh = resolve; });
@@ -367,6 +392,7 @@ export function useReviewLifecycle(
         if (activeReviewIdRef.current === reviewId) setTransition({ kind: "stable" });
         return result;
       }
+      await clearBabysitSnapshot({ reviewId: currentEntry.snapshot.reviewId, snapshotId: currentEntry.snapshot.snapshotId });
       installSnapshot(result.snapshot, currentEntry);
       if (activeReviewIdRef.current === reviewId) {
         resetSnapshotReader(result.snapshot);
@@ -383,7 +409,7 @@ export function useReviewLifecycle(
       if (refreshOperation.current?.abort === abort) refreshOperation.current = undefined;
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
     }
-  }, [adapter, checkForUpdate, installSnapshot, resetSnapshotReader]);
+  }, [adapter, checkForUpdate, clearBabysitSnapshot, installSnapshot, invalidateBabysitSelection, resetSnapshotReader]);
 
   /** 关闭当前 Presented Review；该内部 primitive 不由普通导航调用。 */
   const close = useCallback(async (): Promise<ReviewCloseResult> => {
@@ -391,6 +417,7 @@ export function useReviewLifecycle(
     const current = reviewId ? entries.current.get(reviewId) : undefined;
     const refreshing = refreshOperation.current;
     if (!reviewId || !current) return { kind: "closed" };
+    invalidateBabysitSelection();
     cancelUpdateCheck();
     lifecycleAbort.current?.abort();
     if (refreshing?.reviewId === reviewId) {
@@ -403,6 +430,7 @@ export function useReviewLifecycle(
       { reviewId: current.snapshot.reviewId, snapshotId: current.snapshot.snapshotId },
       new AbortController().signal,
     );
+    await clearBabysitReview(reviewId);
     setTransition({ kind: "stable" });
     return result.kind === "closed"
       ? result
@@ -410,17 +438,18 @@ export function useReviewLifecycle(
           kind: "closed-with-cleanup-failure",
           failure: { kind: "workspace-cleanup-failed", detail: result.detail, retryable: true },
         };
-  }, [adapter, cancelUpdateCheck, releaseEntry]);
+  }, [adapter, cancelUpdateCheck, clearBabysitReview, invalidateBabysitSelection, releaseEntry]);
 
   /** 离开 Review Reader，只撤销 Presented Review 和 update 检查，保留全部 runtime。 */
   const unpresent = useCallback(() => {
+    invalidateBabysitSelection();
     cancelUpdateCheck();
     lifecycleAbort.current?.abort();
     refreshOperation.current?.abort.abort();
     activeReviewIdRef.current = undefined;
     setActiveReviewId(undefined);
     setTransition({ kind: "stable" });
-  }, [cancelUpdateCheck]);
+  }, [cancelUpdateCheck, invalidateBabysitSelection]);
 
   /** 更新当前 Review 的 peer view，而不触碰其 Snapshot 或 reader content。 */
   const setView = useCallback((view: ReviewView) => {
@@ -502,6 +531,7 @@ export function useReviewLifecycle(
     transition,
     fileChange: activeEntry.fileChange,
     update: activeEntry.update,
+    babysit,
     view: activeEntry.view,
     setView,
     diffMode: activeEntry.diffMode,
@@ -518,7 +548,7 @@ export function useReviewLifecycle(
     retryFileChange,
     refresh,
     close,
-  } : null, [activeEntry, activeFilePath, close, refresh, retryFileChange, selectFileChange, setDiffMode, setFileViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
+  } : null, [activeEntry, activeFilePath, babysit, close, refresh, retryFileChange, selectFileChange, setDiffMode, setFileViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
 
   return useMemo(() => ({
     open,

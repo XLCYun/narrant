@@ -1,3 +1,4 @@
+use crate::babysit::BabysitApplication;
 use crate::github::GitHubRepository;
 use crate::operation;
 use crate::review;
@@ -277,13 +278,17 @@ pub(crate) async fn check_branch_review_updates(
 #[tauri::command]
 pub(crate) async fn refresh_branch_review(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
+    babysit: tauri::State<'_, BabysitApplication>,
     operations: tauri::State<'_, operation::CancellableOperations>,
     operation_id: String,
     review_id: String,
     confirmation: ConfirmedBranchUpdate,
 ) -> Result<ReviewSnapshotResponse, String> {
     run_cancellable_command(&operations, operation_id, |operation| async move {
-        lifecycle
+        let previous_snapshot_id = lifecycle
+            .snapshot_id(&review_id)
+            .map_err(|error| error.to_string())?;
+        let presentation = lifecycle
             .refresh(
                 &operation,
                 &review_id,
@@ -295,8 +300,10 @@ pub(crate) async fn refresh_branch_review(
                 },
             )
             .await
-            .map(map_presentation)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        // Snapshot 已成功推进后删除旧 revision 的解释；清理失败不回滚已完成的 Review refresh。
+        let _ = babysit.clear_snapshot(&review_id, &previous_snapshot_id);
+        Ok(map_presentation(presentation))
     })
     .await
 }
@@ -305,13 +312,17 @@ pub(crate) async fn refresh_branch_review(
 #[tauri::command]
 pub(crate) async fn reopen_and_refresh_branch_review(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
+    babysit: tauri::State<'_, BabysitApplication>,
     operations: tauri::State<'_, operation::CancellableOperations>,
     operation_id: String,
     review_id: String,
     confirmation: ConfirmedBranchUpdate,
 ) -> Result<ReviewSnapshotResponse, String> {
     run_cancellable_command(&operations, operation_id, |operation| async move {
-        lifecycle
+        let previous_snapshot_id = lifecycle
+            .snapshot_id(&review_id)
+            .map_err(|error| error.to_string())?;
+        let presentation = lifecycle
             .reopen_and_refresh(
                 &operation,
                 &review_id,
@@ -323,8 +334,9 @@ pub(crate) async fn reopen_and_refresh_branch_review(
                 },
             )
             .await
-            .map(map_presentation)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        let _ = babysit.clear_snapshot(&review_id, &previous_snapshot_id);
+        Ok(map_presentation(presentation))
     })
     .await
 }
@@ -383,13 +395,17 @@ pub(crate) async fn check_pull_request_review_update(
 #[tauri::command]
 pub(crate) async fn refresh_pull_request_review(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
+    babysit: tauri::State<'_, BabysitApplication>,
     operations: tauri::State<'_, operation::CancellableOperations>,
     operation_id: String,
     review_id: String,
     confirmation: ConfirmedPullRequestUpdate,
 ) -> Result<ReviewSnapshotResponse, String> {
     run_cancellable_command(&operations, operation_id, |operation| async move {
-        lifecycle
+        let previous_snapshot_id = lifecycle
+            .snapshot_id(&review_id)
+            .map_err(|error| error.to_string())?;
+        let presentation = lifecycle
             .refresh(
                 &operation,
                 &review_id,
@@ -401,8 +417,9 @@ pub(crate) async fn refresh_pull_request_review(
                 },
             )
             .await
-            .map(map_presentation)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        let _ = babysit.clear_snapshot(&review_id, &previous_snapshot_id);
+        Ok(map_presentation(presentation))
     })
     .await
 }
@@ -431,11 +448,15 @@ pub(crate) async fn read_review_file_change(
 #[tauri::command]
 pub(crate) fn close_review(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
+    babysit: tauri::State<'_, BabysitApplication>,
     review_id: String,
 ) -> Result<(), String> {
     lifecycle
         .close(&review_id)
-        .map(|_| ())
+        .map(|_| {
+            // 逻辑关闭已完成后释放 Review 缓存；workspace 清理结果仍由既有错误契约负责。
+            let _ = babysit.clear_review(&review_id);
+        })
         .map_err(|error| error.to_string())
 }
 

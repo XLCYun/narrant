@@ -79,9 +79,14 @@ function mockSystemTheme(initialDark: boolean) {
   };
 }
 
-/** 从默认审核概览显式切换到文件改动。 */
+/** 确保当前显示文件改动；重复点击当前标签不会改变测试语义。 */
 async function openFileChanges() {
   fireEvent.click(await screen.findByRole("tab", { name: "文件改动" }));
+}
+
+/** 切换到审核概览以检查 Snapshot 元数据。 */
+async function openOverview() {
+  fireEvent.click(await screen.findByRole("tab", { name: "审核概览" }));
 }
 
 describe("App", () => {
@@ -369,7 +374,9 @@ describe("App", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_pull_request_review", {
       operationId: expect.any(String), repositoryId: 25, repository, number: 42,
     }));
-    expect(await screen.findByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
+    await screen.findByLabelText("审核阅读器");
+    await openOverview();
+    expect(screen.getByRole("heading", { name: "Local PR Review" })).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).toHaveTextContent("草稿");
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/草稿.*#42.*octocat/s);
   });
@@ -432,6 +439,7 @@ describe("App", () => {
         availableHeadRevision: "head-2",
       },
     }));
+    await openOverview();
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent("head-2");
   });
 
@@ -630,6 +638,7 @@ describe("App", () => {
       reviewId: "review-42",
       confirmation: update,
     }));
+    await openOverview();
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/head-2.*base-2/s);
   });
 
@@ -722,6 +731,7 @@ describe("App", () => {
 
     const reader = await screen.findByLabelText("审核阅读器");
     expect(screen.queryByRole("navigation", { name: "切换审核" })).not.toBeInTheDocument();
+    await openOverview();
     expect(reader).toHaveTextContent("base-re");
     expect(reader).toHaveTextContent("head-re");
   });

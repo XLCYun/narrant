@@ -81,6 +81,39 @@ async fn running_operation_observes_cancellation_and_is_reusable_after_exit() {
     );
 }
 
+#[tokio::test]
+async fn cancel_all_notifies_every_running_operation() {
+    let operations = CancellableOperations::default();
+    let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut workers = Vec::new();
+    for index in 0..2 {
+        let worker_operations = operations.clone();
+        let worker_started = started.clone();
+        workers.push(tokio::spawn(async move {
+            worker_operations
+                .run(
+                    OperationId::new(format!("operation-{index}")).unwrap(),
+                    move |context| async move {
+                        worker_started.fetch_add(1, Ordering::AcqRel);
+                        while !context.cancellation().is_cancelled() {
+                            tokio::task::yield_now().await;
+                        }
+                    },
+                )
+                .await
+        }));
+    }
+    while started.load(Ordering::Acquire) != 2 {
+        tokio::task::yield_now().await;
+    }
+
+    operations.cancel_all().unwrap();
+
+    for worker in workers {
+        worker.await.unwrap().unwrap();
+    }
+}
+
 #[test]
 fn background_context_starts_uncancelled() {
     assert!(!OperationContext::background().cancellation().is_cancelled());

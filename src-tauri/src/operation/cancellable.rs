@@ -25,7 +25,7 @@ impl OperationId {
 }
 
 /// 应用操作可只读观察的取消信号，不能触发上层操作取消。
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CancellationSignal(Arc<AtomicBool>);
 
 impl CancellationSignal {
@@ -255,6 +255,20 @@ impl CancellableOperations {
                         requested_at: Instant::now(),
                     },
                 );
+            }
+        }
+        Ok(())
+    }
+
+    /// 应用退出时通知当前已注册的全部运行操作，不创建新的提前取消记录。
+    pub fn cancel_all(&self) -> Result<(), OperationError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| OperationError::RegistryUnavailable)?;
+        for entry in state.entries.values() {
+            if let OperationEntry::Running { source, .. } = entry {
+                source.cancel();
             }
         }
         Ok(())

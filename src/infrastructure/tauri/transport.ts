@@ -1,4 +1,4 @@
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 import type {
   CancellableCommandArgs,
@@ -61,3 +61,8 @@ export function createTauriTransport(rawInvoke: RawTauriInvoke = tauriInvoke): T
 }
 
 export const tauriTransport = createTauriTransport();
+
+/** 在唯一允许直接依赖 Tauri core 的 typed transport 层创建 IPC progress channel。 */
+export function createTauriChannel<T>(onmessage: (message: T) => void): Channel<T> {
+  return new Channel<T>(onmessage);
+}

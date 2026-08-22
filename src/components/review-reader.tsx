@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type UIEvent } from "react";
-import { DiffEditor, type DiffEditorProps, type DiffOnMount, type MonacoDiffEditor } from "@monaco-editor/react";
+import { useEffect, useRef, type UIEvent } from "react";
 import {
   ArrowDown01Icon,
   FileAddIcon,
@@ -13,6 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { FileChangeLoading } from "@/components/file-change-loading";
+import { BabysitDiffEditor } from "@/components/babysit-diff-editor";
 import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Button } from "@/components/ui/button";
@@ -21,9 +21,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useBabysitReviewPresentation } from "@/components/use-babysit-review-presentation";
 import { cn } from "@/lib/utils";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
-import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewFileIdentity, ReviewFileViewState, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
+import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
 export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewDiffMode as DiffMode, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
 
 /** 文件树内部使用的目录节点，只表达层级，不承载阅读进度。 */
@@ -42,35 +43,6 @@ type ReviewReaderProps = {
     onOpenExternal: (url: string) => void;
   };
 };
-
-/** RetainedDiffEditor 只接收产品实际使用的 Monaco 配置与 Reader-owned 状态 seam。 */
-type RetainedDiffEditorProps = {
-  identity: ReviewFileIdentity;
-  viewState: ReviewFileViewState | null;
-  onSaveViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
-  theme: string;
-  height: string;
-  language: string;
-  original: string;
-  modified: string;
-  options: DiffEditorProps["options"];
-};
-
-/** 用 Monaco 官方 API 在编辑器自身卸载边界保存并恢复 Diff view state。 */
-function RetainedDiffEditor({ identity, viewState, onSaveViewState, theme, height, language, original, modified, options }: RetainedDiffEditorProps) {
-  const editorRef = useRef<MonacoDiffEditor>();
-  const mountEditor: DiffOnMount = (editor) => {
-    editorRef.current = editor;
-    if (viewState) editor.restoreViewState(viewState as NonNullable<ReturnType<MonacoDiffEditor["saveViewState"]>>);
-  };
-  const { reviewId, snapshotId, path } = identity;
-  useLayoutEffect(() => () => {
-    const state = editorRef.current?.saveViewState();
-    if (state) onSaveViewState({ reviewId, snapshotId, path }, state);
-    editorRef.current = undefined;
-  }, [onSaveViewState, path, reviewId, snapshotId]);
-  return <DiffEditor theme={theme} height={height} language={language} original={original} modified={modified} options={options} onMount={mountEditor} />;
-}
 
 /** 以不依赖系统 locale 的代码点顺序稳定排列 File Change 路径。 */
 function comparePaths(left: string, right: string) {
@@ -107,7 +79,7 @@ function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
 function editorLanguage(path: string) {
   const extension = path.split(".").at(-1)?.toLowerCase();
   const languages: Record<string, string> = {
-    js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
+    js: "javascript", jsx: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", mts: "typescript",
     md: "markdown", json: "json", css: "css", html: "html", rs: "rust",
     py: "python", go: "go", java: "java", yml: "yaml", yaml: "yaml",
     c: "c", cpp: "cpp", h: "cpp", cs: "csharp", sh: "shell",
@@ -149,6 +121,12 @@ export function ReviewReader(input: ReviewReaderProps) {
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const diffReviewId = review.snapshot.reviewId;
   const diffSnapshotId = review.snapshot.snapshotId;
+  const babysitPresentation = useBabysitReviewPresentation({
+    babysit: review.babysit,
+    reviewId: diffReviewId,
+    snapshotId: diffSnapshotId,
+    selectedPath,
+  });
   /** 当 Review 或 peer view 再次呈现时，把 lifecycle 保存的位置写回真实 DOM。 */
   useEffect(() => {
     if (overviewScrollRef.current) overviewScrollRef.current.scrollTop = review.scrollPositions.overview;
@@ -204,7 +182,7 @@ export function ReviewReader(input: ReviewReaderProps) {
           aria-current={selectedPath === change.path ? "true" : undefined}
           aria-busy={props.pendingFilePath === change.path || undefined}
           disabled={props.navigationBusy}
-          className={cn("h-7 w-full justify-start gap-1.5 rounded-md px-1.5 text-xs font-normal", selectedPath === change.path && "bg-primary/10 text-foreground hover:bg-primary/15")}
+          className={cn("h-7 w-full justify-start gap-1.5 rounded-md px-1.5 text-xs font-normal", selectedPath === change.path && "bg-primary/15 text-foreground shadow-[inset_2px_0_0_var(--primary)] hover:bg-primary/20 dark:bg-primary/25 dark:hover:bg-primary/30")}
           onClick={() => props.onSelectFile(change.path)}>
           <FileTypeIcon path={change.path} kind="file" theme={fileTypeIconTheme} testId={`file-type-icon-${change.path.split("/").at(-1)}`} />
           <span className="min-w-0 flex-1 truncate text-left">{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path.split("/").at(-1)}</span>
@@ -241,10 +219,10 @@ export function ReviewReader(input: ReviewReaderProps) {
     </div>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}
     <TabsContent value="overview" className="min-h-0 overflow-hidden"><div ref={overviewScrollRef} onScroll={saveScroll("overview")} data-review-scroll-region="overview" className="h-full overflow-y-auto"><ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} /></div></TabsContent>
-    <TabsContent value="file-changes" className="min-h-0 overflow-hidden">
+    <TabsContent value="file-changes" className="flex min-h-0 flex-col overflow-hidden">
     {props.snapshot.fileChanges.length === 0
       ? <div className="grid min-h-0 flex-1 place-content-center px-6 text-center"><h3 className="font-medium">{t("review:emptyTitle")}</h3><p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p></div>
-      : <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1"
+      : <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1"
         defaultLayout={{ "review-file-tree": review.treeWidth, "review-diff": 100 - review.treeWidth }}
         onLayoutChanged={(layout, meta) => { if (meta.isUserInteraction) review.setTreeWidth(layout["review-file-tree"]); }}>
         <ResizablePanel id="review-file-tree" minSize="15%" maxSize="45%" defaultSize={`${review.treeWidth}%`}>
@@ -254,15 +232,16 @@ export function ReviewReader(input: ReviewReaderProps) {
           </nav>
         </ResizablePanel>
         <ResizableHandle withHandle aria-label={t("review:resizeFileTree")} />
-        <ResizablePanel id="review-diff" minSize="45%"><div ref={contentScrollRef} onScroll={saveScroll("content")} data-review-scroll-region="content" className="h-full overflow-auto">
+        <ResizablePanel id="review-diff" minSize="45%"><div ref={contentScrollRef} onScroll={saveScroll("content")} data-review-scroll-region="content" className="flex h-full min-h-0 flex-col overflow-auto">
           {props.fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
           {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={props.onRetryFile}>{t("common:retry")}</Button>}</div>}
-          {props.fileChange && !props.fileChangeLoading && <section className="h-full min-w-0" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
-            <header className="flex h-9 items-center border-b px-3"><h3 className="flex items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3></header>
+          {props.fileChange && !props.fileChangeLoading && <section className="flex h-full min-w-0 flex-col" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
+            <header className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-1"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3>{babysitPresentation.headerActions}</header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
-            {props.fileChange.contentKind === "text" && <RetainedDiffEditor key={`${diffReviewId}:${diffSnapshotId}:${props.fileChange.path}`} identity={{ reviewId: diffReviewId, snapshotId: diffSnapshotId, path: props.fileChange.path }} viewState={review.fileViewState} onSaveViewState={review.setFileViewState} theme={props.editorTheme} height="calc(100% - 2.25rem)" language={editorLanguage(props.fileChange.path)} original={props.fileChange.before ?? ""} modified={props.fileChange.after ?? ""} options={{ readOnly: true, renderSideBySide: effectiveDiffMode === "side-by-side", ignoreTrimWhitespace: false, fontFamily: "'JetBrains Mono Variable', monospace" }} />}
+            {props.fileChange.contentKind === "text" && <div className="min-h-0 flex-1" data-testid="babysit-diff-editor"><BabysitDiffEditor key={`${diffReviewId}:${diffSnapshotId}:${props.fileChange.path}`} identity={{ reviewId: diffReviewId, snapshotId: diffSnapshotId, path: props.fileChange.path }} viewState={review.fileViewState} onSaveViewState={review.setFileViewState} theme={props.editorTheme} height="100%" language={editorLanguage(props.fileChange.path)} original={props.fileChange.before ?? ""} modified={props.fileChange.after ?? ""} renderSideBySide={effectiveDiffMode === "side-by-side"} explanations={babysitPresentation.explanations} filter={babysitPresentation.filter} /></div>}
+            {babysitPresentation.footer}
           </section>}
         </div></ResizablePanel>
       </ResizablePanelGroup>}

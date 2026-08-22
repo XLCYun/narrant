@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
-import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
+import { createTauriChannel, type TypedTauriTransport } from "@/infrastructure/tauri/transport";
+import type { BabysitError } from "@/babysit/types";
 import type { ReviewSnapshot } from "@/review/types";
 
 const snapshot: ReviewSnapshot = {
@@ -192,6 +194,92 @@ describe("Tauri Review application adapter", () => {
     )).resolves.toEqual({
       kind: "closed-with-cleanup-failure",
       detail: "Error: worktree cleanup failed",
+    });
+  });
+});
+
+describe("Tauri Babysit application adapter", () => {
+  it("通过 typed command 读取后端 eligibility 结论", async () => {
+    const invokeCancellable = vi.fn().mockResolvedValue({ eligible: false, reason: "unsupported_language" });
+    const adapter = createTauriBabysitApplicationAdapter({ invoke: vi.fn(), invokeCancellable } as unknown as TypedTauriTransport);
+    await expect(adapter.checkEligibility(
+      { reviewId: "review-1", snapshotId: "snapshot-1", path: "README" },
+      "markdown",
+      new AbortController().signal,
+    )).resolves.toEqual({ eligible: false, reason: "unsupported_language" });
+    expect(invokeCancellable).toHaveBeenCalledWith("check_babysit_file_eligibility", {
+      reviewId: "review-1", snapshotId: "snapshot-1", path: "README", detectedLanguage: "markdown",
+    }, expect.any(AbortSignal));
+  });
+
+  it("保留后端结构化 Babysit error code/detail，不压扁为字符串", async () => {
+    const error: BabysitError = {
+      code: "unsupported_file",
+      detail: "lock file",
+    };
+    const invokeCancellable = vi.fn().mockRejectedValue(error);
+    const createChannel = vi.fn(() => ({})) as unknown as typeof createTauriChannel;
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke: vi.fn(),
+      invokeCancellable,
+    } as unknown as TypedTauriTransport, createChannel);
+
+    await expect(adapter.explainFile(
+      {
+        file: {
+          reviewId: "review-1",
+          snapshotId: "snapshot-1",
+          path: "Cargo.lock",
+          locale: "zh-CN",
+        },
+        generationPolicy: "reuse_cached",
+      },
+      vi.fn(),
+      new AbortController().signal,
+    )).rejects.toEqual(error);
+    expect(invokeCancellable).toHaveBeenCalledWith(
+      "explain_review_file_change",
+      expect.objectContaining({
+        reviewId: "review-1",
+        snapshotId: "snapshot-1",
+        path: "Cargo.lock",
+        locale: "zh-CN",
+        generationPolicy: "reuse_cached",
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("把 native picker 的 executable 交给 typed setup command", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke,
+      invokeCancellable: vi.fn(),
+    } as unknown as TypedTauriTransport);
+
+    await adapter.selectCodexExecutable?.("/opt/homebrew/bin/codex");
+
+    expect(invoke).toHaveBeenCalledWith("select_babysit_codex_executable", {
+      executable: "/opt/homebrew/bin/codex",
+    });
+  });
+
+  it("把 Snapshot/Review 生命周期清理映射到 typed cache commands", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke,
+      invokeCancellable: vi.fn(),
+    } as unknown as TypedTauriTransport);
+
+    await adapter.clearSnapshot?.({ reviewId: "review-1", snapshotId: "snapshot-1" });
+    await adapter.clearReview?.("review-1");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "clear_babysit_snapshot_cache", {
+      reviewId: "review-1",
+      snapshotId: "snapshot-1",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "clear_babysit_review_cache", {
+      reviewId: "review-1",
     });
   });
 });

@@ -226,6 +226,11 @@ _Avoid_: Repository, user worktree
   **Review** rather than creating a duplicate
 - An open **Review** owns one disposable **Review Workspace** whose repository checkout
   presents the head revision of its current **Review Snapshot**
+- **Babysit Mode** presents **Line Explanations** derived from one exact Review Snapshot
+- A **Line Explanation** does not modify the source text presented by its File Change
+- Every **Babysit Agent Provider** produces the same provider-independent Line Explanation contract
+- An **Installed Coding Agent Provider** reuses a reviewer-installed agent runtime and its authentication
+- A **Built-in Agent Provider** never grants its model service direct access to the Review Workspace
 - Narrant may keep multiple **Reviews** open while presenting exactly one **Presented Review**
 - Switching the **Presented Review** does not close or release the previously presented Review
 - Navigating from the Review Reader to a Repository Overview or Home does not remove

@@ -10,6 +10,7 @@ import { RepositoryOverview } from "@/components/repository-overview";
 import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
+import type { BabysitBinding, BabysitFileExplanations } from "@/babysit/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { i18n } from "@/lib/i18n";
 import type { RepositoryReviewSummary } from "@/lib/review-types";
@@ -213,12 +214,14 @@ function ReviewReaderPreview({
   update = false,
   initialView = "overview",
   shortContent = false,
+  babysitKind,
 }: {
   empty?: boolean;
   merged?: boolean;
   update?: boolean;
   initialView?: "overview" | "file-changes";
   shortContent?: boolean;
+  babysitKind?: "completed" | "generating" | "repairing" | "failed";
 }) {
   const fileChanges = shortContent
     ? readerSnapshot.fileChanges.slice(0, 2)
@@ -245,6 +248,23 @@ function ReviewReaderPreview({
   const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
   const [view, setView] = useState<"overview" | "file-changes">(initialView);
+  const selectedContent = selectedPath ? contents[selectedPath] : undefined;
+  const babysitRequest = selectedPath
+    ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" as const, detectedLanguage: "typescript" }
+    : undefined;
+  const babysitExplanations: BabysitFileExplanations = {
+    before: selectedContent?.before ? { "1": "定义当前文件的旧实现入口。", "2": "返回修改前的阅读器结果。" } : {},
+    after: selectedContent?.after ? { "1": "定义当前文件的新实现入口。", "2": "返回聚焦后的阅读器结果。" } : {},
+  };
+  const babysitState: BabysitBinding["state"] = !babysitKind || !babysitRequest
+    ? { kind: "idle" }
+    : babysitKind === "completed"
+      ? { kind: "completed", request: babysitRequest, explanations: babysitExplanations }
+      : babysitKind === "repairing"
+        ? { kind: "repairing", request: babysitRequest, attempt: 2 }
+        : babysitKind === "failed"
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
+          : { kind: "generating", request: babysitRequest };
   const review: ReviewReaderBinding = {
     snapshot,
     transition: { kind: "stable" },
@@ -254,6 +274,15 @@ function ReviewReaderPreview({
     update: update
       ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
       : { kind: "current" },
+    babysit: {
+      eligibility: { kind: "resolved", result: { eligible: true, reason: null } },
+      state: babysitState,
+      explain: () => undefined,
+      regenerate: () => undefined,
+      cancel: () => undefined,
+      retry: () => undefined,
+      selectExecutable: () => undefined,
+    },
     view,
     setView,
     diffMode: mode,
@@ -378,6 +407,10 @@ const previews: Record<string, PreviewDefinition> = {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
       "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
       "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },
+      babysit: { label: "宝宝模式完成", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="completed" /> },
+      "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="generating" /> },
+      "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="repairing" /> },
+      "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="failed" /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },

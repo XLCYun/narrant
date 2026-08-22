@@ -20,7 +20,8 @@ git("config", "user.name", "Narrant test");
 
 // 共同祖先:welcome.txt 为旧内容。
 await writeFile(resolve(target, "welcome.txt"), "你好,旧内容\n", "utf8");
-git("add", "welcome.txt");
+await writeFile(resolve(target, "z-explain.ts"), "export const value = 1;\n", "utf8");
+git("add", "welcome.txt", "z-explain.ts");
 git("commit", "-q", "-m", "base");
 git("branch", "base-ref");
 const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim();
@@ -28,6 +29,7 @@ const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encodi
 // head 分支:welcome.txt 改为新内容。
 git("checkout", "-q", "-b", "head-ref");
 await writeFile(resolve(target, "welcome.txt"), "你好,新内容\n", "utf8");
+await writeFile(resolve(target, "z-explain.ts"), "export const value = 2;\n", "utf8");
 git("commit", "-q", "-am", "head");
 const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim();
 // 为进程生命周期 E2E 提供一组不会与其他场景复用的 Review Selection。

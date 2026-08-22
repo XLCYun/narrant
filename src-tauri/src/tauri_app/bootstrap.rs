@@ -1,5 +1,7 @@
-use super::commands::{github as github_commands, repository, review as review_commands};
-use crate::{github, operation, persistence, repository as repository_module, review};
+use super::commands::{
+    babysit as babysit_commands, github as github_commands, repository, review as review_commands,
+};
+use crate::{babysit, github, operation, persistence, repository as repository_module, review};
 use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
@@ -66,6 +68,9 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
+            app.manage(babysit::BabysitApplication::with_codex_provider_at(
+                application_data.join("babysit-settings.json"),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -95,6 +100,11 @@ pub fn run() {
             github_commands::complete_github_authorization,
             github_commands::sign_out_github,
             review_commands::read_review_file_change,
+            babysit_commands::explain_review_file_change,
+            babysit_commands::check_babysit_file_eligibility,
+            babysit_commands::select_babysit_codex_executable,
+            babysit_commands::clear_babysit_snapshot_cache,
+            babysit_commands::clear_babysit_review_cache,
             review_commands::close_review
         ])
         .plugin(tauri_plugin_opener::init())
@@ -122,6 +132,10 @@ pub fn run() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
+            let operations = app.state::<operation::CancellableOperations>();
+            let _ = operations.cancel_all();
+            let babysit = app.state::<babysit::BabysitApplication>();
+            let _ = tauri::async_runtime::block_on(babysit.shutdown());
             let lifecycle = app.state::<review::ReviewLifecycle>();
             let _ = tauri::async_runtime::block_on(lifecycle.shutdown());
         }

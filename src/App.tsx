@@ -21,6 +21,7 @@ import {
 } from "@/components/review-reader";
 import type { DiscoveredPullRequest, PullRequestGroup, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
+import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
 import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastructure/tauri-pull-request-discovery-application-adapter";
@@ -62,6 +63,10 @@ export function App() {
     () => createTauriReviewApplicationAdapter(tauriTransport),
     [],
   );
+  const babysitApplicationAdapter = useMemo(
+    () => createTauriBabysitApplicationAdapter(tauriTransport),
+    [],
+  );
   const repositoryApplication = useMemo(
     () => createTauriRepositoryApplicationAdapter(tauriTransport),
     [],
@@ -76,7 +81,11 @@ export function App() {
     ? savedTreeWidth
     : 24;
   const repositoryOverview = useRepositoryOverview(repositoryApplication, { enabled: desktopRuntimeEnabled });
-  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter, { initialDiffMode, initialTreeWidth });
+  const reviewLifecycle = useReviewLifecycle(
+    reviewApplicationAdapter,
+    { initialDiffMode, initialTreeWidth },
+    babysitApplicationAdapter,
+  );
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
   const repositoryOverviewPresented = appShell.destination.kind === "repository"

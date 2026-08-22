@@ -3,6 +3,8 @@ import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oaut
 import type { PullRequestGroup } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchSelectionUpdate } from "@/review/review-application";
+import type { BabysitEligibility, BabysitError, BabysitFileExplanations, BabysitGenerationPolicy, BabysitProgress } from "@/babysit/types";
+import type { Channel } from "@tauri-apps/api/core";
 import type {
   BranchRefs,
   OpenRepositoryResult,
@@ -40,6 +42,11 @@ export type TauriCommandContract = {
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
+  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
+  check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
+  select_babysit_codex_executable: { args: { executable: string }; result: void; error: BabysitError };
+  clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
+  clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
   discover_github_pull_requests: { args: { repositoryId: number }; result: PullRequestGroup[] };
   github_auth_status: { args: EmptyArgs; result: GitHubAuthStatus };
@@ -65,13 +72,18 @@ export type CancellableTauriCommandName =
   | "check_pull_request_review_update"
   | "refresh_pull_request_review"
   | "list_local_refs"
-  | "read_review_file_change";
+  | "read_review_file_change"
+  | "explain_review_file_change"
+  | "check_babysit_file_eligibility";
+  // Setup recovery is initiated by the native picker and does not hold an analysis operation.
 export type PlainTauriCommandName = Exclude<TauriCommandName, CancellableTauriCommandName>;
 export type CommandArgs<K extends TauriCommandName> = TauriCommandContract[K]["args"];
 export type CommandResult<K extends TauriCommandName> = TauriCommandContract[K]["result"];
+/** 读取 command contract 中声明的结构化失败 payload。 */
+export type CommandError<K extends TauriCommandName> = TauriCommandContract[K] extends { error: infer Error } ? Error : unknown;
 export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit<CommandArgs<K>, "operationId">;
 
-/** 与 Rust invoke handler 对齐的完整 command inventory。 */
+/** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
   "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
@@ -97,5 +109,10 @@ export const TAURI_COMMAND_NAMES = [
   "complete_github_authorization",
   "sign_out_github",
   "read_review_file_change",
+  "explain_review_file_change",
+  "check_babysit_file_eligibility",
+  "select_babysit_codex_executable",
+  "clear_babysit_snapshot_cache",
+  "clear_babysit_review_cache",
   "close_review",
 ] as const satisfies readonly TauriCommandName[];
