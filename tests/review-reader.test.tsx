@@ -87,6 +87,15 @@ describe("ReviewReader", () => {
     expect(screen.getByRole("navigation", { name: "文件树" })).toBeVisible();
   });
 
+  it("没有变更时展示带图标和顶部留白的中文空状态", () => {
+    const emptySnapshot = { ...snapshot, fileChanges: [] };
+    const { container } = render(<ReviewReader review={reviewBinding({ snapshot: emptySnapshot, view: "file-changes" })} appearance={appearance} />);
+    expect(screen.getByRole("heading", { name: "没有文件改动" })).toBeVisible();
+    const emptyState = container.querySelector("[data-empty-state]");
+    expect(emptyState).toHaveClass("pt-14", "sm:pt-20");
+    expect(emptyState?.querySelector("svg[aria-hidden='true']")).toBeInTheDocument();
+  });
+
   it("只用一条审核工具栏承载视图标签和右侧操作", () => {
     render(<ReviewReaderHarness overrides={{ update: { kind: "available", update: { currentBaseRevision: "base-1", currentHeadRevision: "head-1", availableBaseRevision: "base-2", availableHeadRevision: "head-2" } } }} />);
 

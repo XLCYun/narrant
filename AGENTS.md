@@ -34,8 +34,10 @@ Single-context layout. See `docs/agents/domain.md`.
 ## 阅读模式(read: {file})
 根据给出的源代码文件 file，读取里面的内容，整理它的 mermaid 类图输出，并逐行添加注释后输出。直接输出 markdown 即可，不要写入到任何文件。
 
-## 蜂群开发配置
-Subagent Handoff 开发时，subagent 使用 luna + max。
+## Swarm Coding 配置
+1. Queen 使用 Sol Low
+2. Drone 使用 Sol Low
+3. Worker 使用 Luna Max
 
 ## Cargo 验证节奏
 1. Agent 在多个 worktree 中运行 Cargo 时，统一通过 `scripts/cargo-agent.sh` 获取仓库级全局锁；不要并发启动多个冷 Rust 编译。

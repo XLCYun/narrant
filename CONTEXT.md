@@ -260,6 +260,8 @@ _Avoid_: Repository, user worktree
 - Presenting a different open Review updates its last-opened activity time; selecting
   the already Presented Review is a no-op and does not update activity time
 - Deleting a Repository releases every open Review and Review Workspace it owns
+- A **Review** remains closed when cleanup of its **Review Workspace** fails; the
+  leftover workspace is retained only for a later safe recovery attempt
 - A recent-review list is an aggregate view of **Reviews** across **Repositories**;
   each entry identifies both the Review and its owning Repository
 

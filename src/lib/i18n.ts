@@ -81,7 +81,7 @@ export const resources = {
       continueExistingReview: "继续现有审核",
     },
     review: {
-      reader: "审核阅读器", diffLayout: "Diff 布局", inline: "单栏", sideBySide: "双栏", emptyTitle: "没有 File Change",
+      reader: "审核阅读器", diffLayout: "Diff 布局", inline: "单栏", sideBySide: "双栏", emptyTitle: "没有文件改动",
       emptyDescription: "Base 与 Head 比较成功，但内容没有差异。", fileChanges: "文件改动", changeCount: "{{count}} 个变更",
       fileTree: "文件树", resizeFileTree: "调整文件树宽度", fileChange: "File Change", loadingFileChange: "正在读取 File Change",
       binary: "二进制文件（变更前：{{before}}；变更后：{{after}}）", none: "无", bytes: "{{count}} 字节",

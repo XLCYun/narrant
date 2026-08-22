@@ -3,6 +3,7 @@ import {
   ArrowDown01Icon,
   FileAddIcon,
   FileEditIcon,
+  FileEmpty02Icon,
   FileRemoveIcon,
   FileSyncIcon,
   LayoutTwoColumnIcon,
@@ -193,10 +194,10 @@ export function ReviewReader(input: ReviewReaderProps) {
   }
 
   return <Tabs value={activeView} onValueChange={(value) => review.setView(value as ReviewView)} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
-    <div role="toolbar" aria-label={t("review:toolbar")} className="flex min-h-12 shrink-0 items-center gap-2 border-b px-3">
-      <TabsList variant="line" aria-label={t("review:reviewViews")} className="h-full shrink-0 p-0">
-        <TabsTrigger value="overview" className="px-3">{t("review:overview")}</TabsTrigger>
-        <TabsTrigger value="file-changes" className="px-3">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
+    <div role="toolbar" aria-label={t("review:toolbar")} className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+      <TabsList variant="line" aria-label={t("review:reviewViews")} className="!h-full shrink-0 p-0">
+        <TabsTrigger value="overview" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("review:overview")}</TabsTrigger>
+        <TabsTrigger value="file-changes" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
       </TabsList>
       <div className="ml-auto flex min-w-0 shrink-0 items-center justify-end gap-2">
         {props.updateAction}
@@ -221,7 +222,13 @@ export function ReviewReader(input: ReviewReaderProps) {
     <TabsContent value="overview" className="min-h-0 overflow-hidden"><div ref={overviewScrollRef} onScroll={saveScroll("overview")} data-review-scroll-region="overview" className="h-full overflow-y-auto"><ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} /></div></TabsContent>
     <TabsContent value="file-changes" className="flex min-h-0 flex-col overflow-hidden">
     {props.snapshot.fileChanges.length === 0
-      ? <div className="grid min-h-0 flex-1 place-content-center px-6 text-center"><h3 className="font-medium">{t("review:emptyTitle")}</h3><p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p></div>
+      ? <div data-empty-state className="flex min-h-0 flex-1 flex-col items-center px-6 pt-14 text-center sm:pt-20">
+        <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <Icon icon={FileEmpty02Icon} className="size-6" aria-hidden />
+        </div>
+        <h3 className="font-medium">{t("review:emptyTitle")}</h3>
+        <p className="mt-1 text-sm text-muted-foreground">{t("review:emptyDescription")}</p>
+      </div>
       : <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1"
         defaultLayout={{ "review-file-tree": review.treeWidth, "review-diff": 100 - review.treeWidth }}
         onLayoutChanged={(layout, meta) => { if (meta.isUserInteraction) review.setTreeWidth(layout["review-file-tree"]); }}>

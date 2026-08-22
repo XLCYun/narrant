@@ -131,7 +131,7 @@ describe("App", () => {
       headRevision: "head-sha", fileChanges: [],
     });
     await openFileChanges();
-    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
+    expect(await screen.findByText("没有文件改动")).toBeInTheDocument();
     animationFrame.mockRestore();
   });
 
@@ -248,7 +248,7 @@ describe("App", () => {
       reviewId: "review-31",
     }));
     await openFileChanges();
-    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
+    expect(await screen.findByText("没有文件改动")).toBeInTheDocument();
   });
 
   it("从首页最近列表和 Repository 重新打开持久化 Review", async () => {
@@ -278,7 +278,7 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /将 Head 分支 topic 合入 Base 分支 main/ }));
     await openFileChanges();
-    expect(await screen.findByText("没有 File Change")).toBeInTheDocument();
+    expect(await screen.findByText("没有文件改动")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("reopen_review", { reviewId: "review-23" });
 
     fireEvent.click(screen.getByRole("button", { name: "退出审核" }));

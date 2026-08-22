@@ -111,7 +111,7 @@ describe("本地分支比较", () => {
 
     await expect($("[aria-label*='Head 分支 base-ref'][aria-label*='Base 分支 head-ref']")).toBeDisplayed();
     await $("[role='tab']=文件改动").click();
-    await expect($("h3=没有 File Change")).toBeDisplayed();
+    await expect($("h3=没有文件改动")).toBeDisplayed();
     await browser.waitUntil(() => worktreeCount(repositoryPath) === retainedCount);
     expect(worktreeCount(repositoryPath)).toBe(retainedCount);
 
