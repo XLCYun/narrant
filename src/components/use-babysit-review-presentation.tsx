@@ -164,7 +164,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
           aria-disabled={!enabled}
           aria-describedby={!enabled ? reasonId : undefined}
           aria-busy={running || undefined}
-          className={cn(!enabled && "cursor-not-allowed opacity-50", visible && "rounded-r-none pr-1.5")}
+          className={cn(!enabled && "cursor-not-allowed opacity-50", visible && "rounded-r-none pr-0.5")}
           onClick={() => {
             if (!enabled) return;
             if (visible) {
@@ -185,7 +185,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
         <TooltipTrigger render={<Button
           variant="default"
           size="icon-sm"
-          className="rounded-l-none pl-0"
+          className="w-7 rounded-l-none px-0"
           aria-label={t("review:babysitRegenerate")}
           disabled={state?.kind !== "completed"}
           aria-busy={running || undefined}
