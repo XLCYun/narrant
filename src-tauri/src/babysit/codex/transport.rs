@@ -6,13 +6,16 @@ use super::{
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 use std::path::Path;
 use std::time::Instant;
 
 #[path = "transport/jsonl_connection.rs"]
 mod jsonl_connection;
 pub(super) use jsonl_connection::JsonlConnection;
+#[path = "transport/rpc_session.rs"]
+mod rpc_session;
+pub(super) use rpc_session::RpcSession;
+use rpc_session::{RpcSessionError, ServerRequest};
 
 /// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
 const CAPABILITY_SENTINEL_THREAD_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -32,10 +35,7 @@ impl AppServerProcess {
         deadline: Instant,
     ) -> Result<(), RpcFailure> {
         loop {
-            let message = match self.pending_notifications.pop_front() {
-                Some(message) => message,
-                None => self.read_message(deadline, None).await?,
-            };
+            let message = self.next_notification(deadline, None).await?;
             if message.get("method").and_then(Value::as_str) == Some("turn/completed")
                 && same_turn(&message, thread_id, turn_id)
             {
@@ -49,8 +49,7 @@ impl AppServerProcess {
         let connection = JsonlConnection::spawn(&command).await?;
         let mut process = Self {
             connection,
-            next_request_id: 1,
-            pending_notifications: VecDeque::new(),
+            rpc_session: RpcSession::new(),
         };
         let deadline = Instant::now() + CODEX_INITIALIZATION_TIMEOUT;
         let initialize = process
@@ -280,10 +279,7 @@ impl AppServerProcess {
         let mut streamed_text = String::new();
         let mut completed_text = None;
         loop {
-            let message = match self.pending_notifications.pop_front() {
-                Some(message) => message,
-                None => self.read_message(deadline, Some(cancellation)).await?,
-            };
+            let message = self.next_notification(deadline, Some(cancellation)).await?;
             if let Some(method) = message.get("method").and_then(Value::as_str) {
                 if method == "item/agentMessage/delta" && same_turn(&message, thread_id, turn_id) {
                     if let Some(delta) = message
@@ -327,12 +323,7 @@ impl AppServerProcess {
                         }
                         _ => return Err(RpcFailure::Protocol),
                     }
-                } else if message.get("id").is_some() {
-                    self.reject_server_request(&message, deadline, Some(cancellation))
-                        .await?;
                 }
-            } else if message.get("id").is_some() {
-                // Ignore a response belonging to no active request; no concurrent requests are issued.
             }
         }
     }
@@ -401,15 +392,28 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<(), RpcFailure> {
-        self.write_message(
-            json!({"method": method, "params": params}),
-            deadline,
-            cancellation,
-        )
-        .await
+        self.rpc_session
+            .notification(&mut self.connection, method, params, deadline, cancellation)
+            .await
+            .map_err(map_session_error)
     }
 
-    /// 发送一个 JSON-RPC request，并等待匹配 id；未知 notification 会被安全忽略。
+    /// 读取一条 notification，并保持 Codex facade 的拒绝 server-request 策略。
+    async fn next_notification(
+        &mut self,
+        deadline: Instant,
+        cancellation: Option<&CancellationSignal>,
+    ) -> Result<Value, RpcFailure> {
+        self.rpc_session
+            .next_notification(&mut self.connection, deadline, cancellation, |request| {
+                Ok(reject_server_request(request))
+            })
+            .await
+            .map(|notification| notification.into_value())
+            .map_err(map_session_error)
+    }
+
+    /// 发送一个 JSON-RPC request，并等待 session correlation 的匹配 id。
     pub(super) async fn request(
         &mut self,
         method: &str,
@@ -417,81 +421,37 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<Value, RpcFailure> {
-        if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-            return Err(RpcFailure::Cancelled);
-        }
-        let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id.saturating_add(1);
-        self.write_message(
-            json!({"id": request_id, "method": method, "params": params}),
-            deadline,
-            cancellation,
-        )
-        .await?;
-        let mut deferred = VecDeque::new();
-        loop {
-            if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-                return Err(RpcFailure::Cancelled);
-            }
-            let message = self.read_message(deadline, cancellation).await?;
-            if message.get("id").and_then(Value::as_u64) == Some(request_id) {
-                self.pending_notifications.append(&mut deferred);
-                if let Some(error) = message.get("error") {
-                    return Err(classify_remote_error(error));
-                }
-                return message.get("result").cloned().ok_or(RpcFailure::Protocol);
-            }
-            if message.get("id").is_some() && message.get("method").is_some() {
-                self.reject_server_request(&message, deadline, cancellation)
-                    .await?;
-            } else if message.get("method").is_some() {
-                deferred.push_back(message);
-            }
-        }
-    }
-
-    /// 轮询 stdout，100ms 一次检查取消状态，确保 cancellation 不需等待模型完成。
-    async fn read_message(
-        &mut self,
-        deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
-    ) -> Result<Value, RpcFailure> {
-        self.connection.read_message(deadline, cancellation).await
-    }
-
-    /// 拒绝 Codex 可能发起的 command/approval 或其它 server request，保持只读边界。
-    async fn reject_server_request(
-        &mut self,
-        message: &Value,
-        deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
-    ) -> Result<(), RpcFailure> {
-        let id = message.get("id").cloned().ok_or(RpcFailure::Protocol)?;
-        self.write_message(
-            json!({
-                "id": id,
-                "error": {
-                    "code": -32601,
-                    "message": "Narrant Babysit does not accept server requests"
-                }
-            }),
-            deadline,
-            cancellation,
-        )
-        .await
-    }
-
-    /// 写入单行 JSON；stderr 从进程层直接丢弃，避免原始输出进入 diagnostics。
-    async fn write_message(
-        &mut self,
-        value: Value,
-        deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
-    ) -> Result<(), RpcFailure> {
-        self.connection
-            .write_message(value, deadline, cancellation)
+        self.rpc_session
+            .request(
+                &mut self.connection,
+                method,
+                params,
+                deadline,
+                cancellation,
+                |request| Ok(reject_server_request(request)),
+            )
             .await
+            .map_err(map_session_error)
     }
+}
+
+/// 将 session 机制错误转换回当前 Codex facade 使用的内部类别。
+fn map_session_error(error: RpcSessionError) -> RpcFailure {
+    match error {
+        RpcSessionError::Failure(error) => error,
+        RpcSessionError::Remote(error) => classify_remote_error(error.as_value()),
+    }
+}
+
+/// Codex facade 当前拒绝所有 server request，保持只读边界和既有 -32601 policy。
+fn reject_server_request(request: &ServerRequest) -> Value {
+    json!({
+        "id": request.id_value(),
+        "error": {
+            "code": -32601,
+            "message": "Narrant Babysit does not accept server requests"
+        }
+    })
 }
 
 /// 仅在 App Server 明确要求 OpenAI 认证且没有任何 account 时判定未登录。

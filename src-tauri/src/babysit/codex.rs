@@ -11,7 +11,7 @@ use super::{
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -52,8 +52,7 @@ struct AppServerCommand {
 /// Narrant 拥有的单个 App Server 连接；所有请求串行经过同一个 JSONL stream。
 struct AppServerProcess {
     connection: transport::JsonlConnection,
-    next_request_id: u64,
-    pending_notifications: VecDeque<Value>,
+    rpc_session: transport::RpcSession,
 }
 
 /// 同一 File Change 的 Codex thread 状态，repair 必须复用 thread。
