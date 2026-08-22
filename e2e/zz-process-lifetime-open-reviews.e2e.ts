@@ -260,7 +260,7 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceA);
     expect(linkedWorktrees(repositoryPath)).toContain(workspaceB);
 
-    // Repository Overview 恢复 retained A 只改变 presentation，不检查 update、不读取或检查 Workspace。
+    // Repository Overview 恢复 retained A 不检查 update、不读取 Workspace；允许 Babysit 对固定文件重新确认 eligibility。
     const invokesBeforeOverview = (await invokeTrace()).length;
     await leaveToRepositoryOverview();
     await waitForWorktrees(repositoryPath, afterB);
@@ -273,8 +273,22 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     await clickVisibleReview(reviewA);
     await waitForActiveReview(reviewA);
     await expect($("[aria-label='File Change']")).toBeDisplayed();
-    expect(await gitInvocationsSinceStable(tracePath, beforeRepositoryRestore)).toEqual([]);
-    expect((await invokeTrace()).slice(invokesBeforeRepositoryRestore)).toEqual(["reopen_review"]);
+    const repositoryRestoreInvocations = await gitInvocationsSinceStable(tracePath, beforeRepositoryRestore);
+    const repositoryRestoreCommands = (await invokeTrace()).slice(invokesBeforeRepositoryRestore);
+    expect(repositoryRestoreCommands).toContain("reopen_review");
+    expect(repositoryRestoreCommands.filter((command) => (
+      command !== "reopen_review" && command !== "check_babysit_file_eligibility"
+    ))).toEqual([]);
+    expect(repositoryRestoreInvocations.every(({ argv, cwd }) => (
+      cwd === repositoryPath
+      && argv.includes("cat-file")
+      && (argv.includes("-s") || argv.includes("blob"))
+    ))).toBe(true);
+    expect(workspaceMutationInvocations(repositoryRestoreInvocations)).toEqual([]);
+    expect(repositoryRestoreInvocations.filter((invocation) => (
+      invocationTouchesWorkspace(invocation, workspaceA)
+      || invocationTouchesWorkspace(invocation, workspaceB)
+    ))).toEqual([]);
     await waitForWorktrees(repositoryPath, afterB);
 
     // Home 导航同样不释放 retained Workspace；恢复时只允许 Repository Overview 的通用只读 probe。

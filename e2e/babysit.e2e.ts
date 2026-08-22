@@ -15,6 +15,9 @@ describe("宝宝模式", () => {
     await expect($("[aria-label='File Change'] h3")).toHaveText(expect.stringContaining("z-explain.ts"));
 
     const toggle = await $("button=宝宝模式");
+    await browser.waitUntil(async () => await toggle.getAttribute("aria-disabled") === "false", {
+      timeoutMsg: "宝宝模式资格检查没有确认当前文件可分析",
+    });
     await toggle.waitForClickable();
     await toggle.click();
     await expect($("button=关闭宝宝模式")).toBeDisplayed();

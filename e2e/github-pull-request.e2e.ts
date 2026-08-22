@@ -14,8 +14,8 @@ describe("公开 GitHub Pull Request", () => {
     if (await $("[role='alert']").isExisting()) {
       throw new Error(await $("[role='alert']").getText());
     }
-    await expect($("h2*=真实 Tauri 审核")).toBeDisplayed();
     await $("[role='tab']=审核概览").click();
+    await expect($("h2*=真实 Tauri 审核")).toBeDisplayed();
     await expect($("article")).toHaveText(expect.stringContaining("安全描述"));
     await expect($("article img")).not.toExist();
     await $("[role='tab']=文件改动").click();
