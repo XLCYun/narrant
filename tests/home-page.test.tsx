@@ -82,9 +82,10 @@ describe("最近审核首页", () => {
     const { container } = render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
     expect(screen.getByRole("img", { name: "纳言" })).toBeVisible();
     const darkLogo = container.querySelector<HTMLSourceElement>('source[media="(prefers-color-scheme: dark)"]');
-    expect(darkLogo?.getAttribute("srcset")).toContain("%23F9FAFB");
-    expect(screen.getAllByText("审好代码，睡安稳觉")).toHaveLength(2);
-    expect(screen.getByRole("heading", { name: "纳言：审好代码，睡安稳觉" })).toBeVisible();
+    expect(darkLogo?.getAttribute("srcset")).toContain("narrant-logo-dark.svg");
+    expect(darkLogo?.getAttribute("srcset")).not.toMatch(/^data:/);
+    expect(screen.getAllByText("好工程，纳良言")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "纳言：好工程，纳良言" })).toBeVisible();
     expect(screen.getByRole("button", { name: "打开仓库文件夹" })).toBeVisible();
   });
 
@@ -378,7 +379,7 @@ describe("最近审核首页", () => {
     render(<HomePage reviews={[]} loading onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
     expect(screen.getByRole("status", { name: "正在加载最近审核" })).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "纳言：审好代码，睡安稳觉" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "纳言：好工程，纳良言" })).not.toBeInTheDocument();
   });
 
   it("最近审核首页仍提供文件夹入口并显示本地化仓库错误", async () => {

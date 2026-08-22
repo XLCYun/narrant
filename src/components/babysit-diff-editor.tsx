@@ -2,7 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { DiffEditor, type DiffOnMount, type Monaco, type MonacoDiffEditor } from "@monaco-editor/react";
 
 import type { BabysitFileExplanations } from "@/babysit/types";
+import { configureLocalMonaco } from "@/infrastructure/local-monaco";
 import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
+
+configureLocalMonaco();
 
 /** 控制当前 File Change 显示改变行还是完整解释集合。 */
 export type BabysitExplanationFilter = "changed" | "all";

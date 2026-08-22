@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@monaco-editor/react", () => ({
+  loader: { config: () => undefined, init: () => Promise.resolve({}) },
   DiffEditor: ({ theme, options }: { theme?: string; options?: { renderSideBySide?: boolean; fontFamily?: string } }) => (
     <div
       data-testid="diff-editor"

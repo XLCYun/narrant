@@ -25,8 +25,8 @@ import { formatAbsoluteTime, formatRelativeTime, normalizeLocale } from "@/lib/i
 import type { RecentReviewSummary } from "@/lib/review-types";
 import { cn } from "@/lib/utils";
 import { Icon } from "@/components/ui/icon";
-import narrantLogo from "../../assets/brand/narrant-logo.svg";
-import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg";
+import narrantLogo from "../../assets/brand/narrant-logo.svg?no-inline";
+import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg?no-inline";
 import type { AppNavigationResult, AppShellNavigationBinding } from "@/app/use-app-shell-navigation";
 import type { RepositorySummary } from "@/repository/repository-application";
 import { tauriTransport } from "@/infrastructure/tauri/transport";

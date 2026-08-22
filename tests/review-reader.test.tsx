@@ -14,6 +14,7 @@ const monacoEditors = vi.hoisted(() => [] as Array<{
 vi.mock("@monaco-editor/react", async () => {
   const React = await import("react");
   return {
+    loader: { config: () => undefined, init: () => Promise.resolve({}) },
     DiffEditor: ({ onMount }: { onMount?: (editor: unknown) => void }) => {
       const [editor] = React.useState(() => {
         const next = { saveViewState: vi.fn(), restoreViewState: vi.fn() };

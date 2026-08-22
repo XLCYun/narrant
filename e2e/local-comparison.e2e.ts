@@ -65,6 +65,14 @@ describe("本地分支比较", () => {
     });
   });
 
+  it("在真实 Tauri CSP 下加载品牌 Logo", async () => {
+    const logo = await $("button[aria-label='纳言'] img");
+    await logo.waitForDisplayed();
+    await browser.waitUntil(async () => await logo.getProperty("naturalWidth") > 0, {
+      timeoutMsg: "品牌 Logo 在真实 Tauri CSP 下没有成功加载",
+    });
+  });
+
   it("通过真实 Tauri IPC 显示只读 File Change", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     await openFixtureRepository(repositoryPath);
@@ -82,6 +90,9 @@ describe("本地分支比较", () => {
     await expect($("[aria-label='File Change'] h3")).toHaveText(expect.stringContaining("welcome.txt"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-before", expect.stringContaining("旧内容"));
     await expect($("[aria-label='File Change']")).toHaveAttribute("data-after", expect.stringContaining("新内容"));
+    await browser.waitUntil(async () => await browser.execute(() => (
+      Boolean(document.querySelector("[aria-label='File Change'] .monaco-diff-editor"))
+    )), { timeoutMsg: "Monaco Diff Editor 没有完成本地加载" });
   });
 
   it("关闭后从最近列表重开 current Snapshot，并覆盖反向 refs 与空比较", async () => {

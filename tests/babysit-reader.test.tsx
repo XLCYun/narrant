@@ -15,6 +15,7 @@ let fakeLineChanges = [
 
 /** 在 jsdom 中模拟 Monaco view-zone API，让测试验证可见行和展开行为。 */
   vi.mock("@monaco-editor/react", () => ({
+  loader: { config: () => undefined, init: () => Promise.resolve({}) },
   DiffEditor: (props: { onMount?: (editor: unknown, monaco: unknown) => void; options?: { renderSideBySide?: boolean; renderSideBySideInlineBreakpoint?: number } }) => {
     const { onMount, options } = props;
     useEffect(() => {
