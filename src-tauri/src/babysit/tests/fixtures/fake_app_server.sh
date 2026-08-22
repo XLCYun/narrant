@@ -102,7 +102,7 @@ while IFS= read -r line; do
       for expected in \
         '"permissions":"narrant-babysit-restricted-v1"' \
         '"runtimeWorkspaceRoots":["/tmp/narrant-review-workspace"]' \
-        '"model":"gpt-5.3-codex-spark"' \
+        '"model":"gpt-5.6-luna"' \
         '"reasoningEffort":"low"' \
         '"allowProviderModelFallback":false' \
         '"default_permissions":"narrant-babysit-restricted-v1"' \
