@@ -75,9 +75,18 @@ pub(crate) struct CodexRuntime {
 impl CodexRuntime {
     /// 构造 idle runtime；此处不执行设置、PATH 或进程 I/O。
     pub(crate) fn new(provider: Arc<CodexAppServerProvider>, settings_path: PathBuf) -> Self {
+        Self::new_with_discovery(provider, settings_path, CodexExecutableDiscovery::default())
+    }
+
+    /// 使用显式 discovery 构造 runtime，协议测试通过它替换 executable 候选。
+    fn new_with_discovery(
+        provider: Arc<CodexAppServerProvider>,
+        settings_path: PathBuf,
+        discovery: CodexExecutableDiscovery,
+    ) -> Self {
         Self {
             provider,
-            discovery: CodexExecutableDiscovery,
+            discovery,
             settings: FileCodexSettings {
                 path: settings_path,
             },
@@ -162,12 +171,20 @@ impl CodexRuntime {
 
     /// 解析持久化/PATH 候选，配置 #74，并在同一工作区完成握手与能力探针。
     async fn probe_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        let resolved = self
+        let candidates = self
             .discovery
-            .resolve(self.settings.load().as_deref())
+            .resolve_all(self.settings.load().as_deref())
             .await?;
-        self.provider.configure_executable(resolved.path)?;
-        self.provider.prepare_process(workspace_path).await
+        let mut last_error = BabysitError::CodexNotFound;
+        for candidate in candidates {
+            self.provider.configure_executable(candidate.path)?;
+            match self.provider.prepare_process(workspace_path).await {
+                Ok(()) => return Ok(()),
+                Err(error @ BabysitError::CodexSignedOut) => return Err(error),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
     }
 }
 

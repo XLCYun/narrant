@@ -1,9 +1,10 @@
 # Babysit 本地 smoke test
 
 CI 使用 fake JSONL App Server，不需要 Codex 登录或网络。发布前可在本机用已安装的
-Codex 做一次真实 smoke；该流程不指定模型，也不会把代码解释写回 Review Workspace。
+Codex 做一次真实 smoke；该流程当前固定使用 `gpt-5.6-luna` 与 `low` reasoning，且不会把
+代码解释写回 Review Workspace。
 
-1. 确认 `codex --version` 可执行，并在 Codex CLI 中完成登录。
+1. 确认 `codex --version` 可执行，并已通过 Codex 支持的任一账户类型完成认证。
 2. 启动 Narrant，打开一个已授予 Workspace Trust 的 Review。
 3. 进入一个 `.ts`、`.tsx`、`.js`、`.jsx`、`.rs`、`.py`、`.go`、`.java`、`.c` 或
    `.cpp` File Change，点击宝宝模式。

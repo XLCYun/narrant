@@ -3003,7 +3003,6 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3013,7 +3012,6 @@ dependencies = [
  "tauri-plugin-window-state",
  "tempfile",
  "tokio",
- "zeroize",
 ]
 
 [[package]]

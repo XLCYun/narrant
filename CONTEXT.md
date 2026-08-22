@@ -178,6 +178,12 @@ A Babysit Agent Provider that delegates analysis to a supported coding-agent run
 already installed and authenticated by the reviewer.
 _Avoid_: Attached agent, external model
 
+**Codex Environment Reuse**:
+The Installed Coding Agent behavior in which Narrant asks the current executable
+environment for Codex before falling back to a reviewer-selected executable, and lets
+the resulting App Server use that reviewer-owned configuration and authentication state.
+_Avoid_: Credential Bridging, Isolated Codex Home
+
 **Built-in Agent Provider**:
 A Babysit Agent Provider whose agent loop and read-only tools are owned by Narrant and
 whose configured model service supplies inference.

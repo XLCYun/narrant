@@ -37,7 +37,7 @@ fn version_fixture(directory: &std::path::Path, success: bool) -> std::path::Pat
 async fn selected_executable_is_version_checked_without_persisting_from_discovery() {
     let directory = tempfile::tempdir().unwrap();
     let executable = version_fixture(directory.path(), true);
-    let discovery = CodexExecutableDiscovery;
+    let discovery = CodexExecutableDiscovery::default();
 
     let resolved = discovery
         .validate_selected(executable.clone())
@@ -52,24 +52,44 @@ async fn selected_executable_is_version_checked_without_persisting_from_discover
 async fn persisted_invalid_path_falls_back_to_process_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let executable = version_fixture(directory.path(), true);
-    let discovery = CodexExecutableDiscovery;
+    let discovery = CodexExecutableDiscovery::with_candidates(vec![executable.clone()]);
 
     let resolved = discovery
-        .resolve_candidates(
-            Some(&directory.path().join("missing-codex")),
-            [executable.clone()],
-        )
+        .resolve_all(Some(&directory.path().join("missing-codex")))
         .await;
 
-    let resolved = resolved.unwrap();
+    let resolved = resolved.unwrap().remove(0);
     assert_eq!(resolved.path, executable.canonicalize().unwrap());
+}
+
+#[tokio::test]
+async fn process_environment_candidate_precedes_a_valid_persisted_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let environment = version_fixture(directory.path(), true);
+    let persisted_directory = tempfile::tempdir().unwrap();
+    let persisted = version_fixture(persisted_directory.path(), true);
+
+    let resolved = CodexExecutableDiscovery::with_candidates(vec![environment.clone()])
+        .resolve_all(Some(&persisted))
+        .await
+        .unwrap()
+        .remove(0);
+
+    assert_eq!(resolved.path, environment.canonicalize().unwrap());
+}
+
+#[test]
+fn bare_codex_command_is_the_first_environment_candidate() {
+    let candidates = CodexExecutableDiscovery::default().candidates();
+
+    assert_eq!(candidates.first(), Some(&std::path::PathBuf::from("codex")));
 }
 
 #[tokio::test]
 async fn invalid_selected_executable_returns_reselection_error_without_raw_output() {
     let directory = tempfile::tempdir().unwrap();
     let executable = version_fixture(directory.path(), false);
-    let error = CodexExecutableDiscovery
+    let error = CodexExecutableDiscovery::default()
         .validate_selected(executable)
         .await
         .unwrap_err();
@@ -82,9 +102,9 @@ async fn invalid_selected_executable_returns_reselection_error_without_raw_outpu
 async fn oversized_version_output_is_bounded_and_child_is_reaped() {
     let directory = tempfile::tempdir().unwrap();
     let output = "x".repeat(5000);
-    let body = format!("printf '%s' '{}'\nwhile :; do :; done", output);
+    let body = format!("printf '%s' '{}'\nsleep 30", output);
     let (executable, marker) = process_fixture(directory.path(), &body);
-    let (result, reaped) = CodexExecutableDiscovery
+    let (result, reaped) = CodexExecutableDiscovery::default()
         .validate_with_timeout_observed(executable, true, std::time::Duration::from_secs(5))
         .await;
 
@@ -96,8 +116,8 @@ async fn oversized_version_output_is_bounded_and_child_is_reaped() {
 #[tokio::test]
 async fn hanging_version_process_is_killed_and_reaped_on_timeout() {
     let directory = tempfile::tempdir().unwrap();
-    let (executable, marker) = process_fixture(directory.path(), "while :; do :; done");
-    let (result, reaped) = CodexExecutableDiscovery
+    let (executable, marker) = process_fixture(directory.path(), "sleep 30");
+    let (result, reaped) = CodexExecutableDiscovery::default()
         .validate_with_timeout_observed(executable, true, std::time::Duration::from_secs(3))
         .await;
 

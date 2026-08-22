@@ -20,7 +20,12 @@ thread_start_response() {
     printf '{"id":%s,"result":{"thread":{"id":"thread-1"},"cwd":"/tmp/narrant-review-workspace","sandbox":{"type":"readOnly","networkAccess":false}}}\n' "$request_id"
     return
   fi
-  printf '{"id":%s,"result":{"thread":{"id":"thread-1"},"cwd":"/tmp/narrant-review-workspace","runtimeWorkspaceRoots":["/tmp/narrant-review-workspace"],"activePermissionProfile":{"id":"narrant-babysit-restricted-v1","extends":null},"sandbox":{"type":"readOnly","networkAccess":false},"instructionSources":[]}}\n' "$request_id"
+  if [ "$mode" = "personal-model-instructions" ]; then
+    instructions='["/tmp/personal.md"]'
+  else
+    instructions='[]'
+  fi
+  printf '{"id":%s,"result":{"thread":{"id":"thread-1"},"cwd":"/tmp/narrant-review-workspace","runtimeWorkspaceRoots":["/tmp/narrant-review-workspace"],"activePermissionProfile":{"id":"narrant-babysit-restricted-v1","extends":null},"sandbox":{"type":"readOnly","networkAccess":false},"instructionSources":%s}}\n' "$request_id" "$instructions"
 }
 
 while IFS= read -r line; do
@@ -33,13 +38,6 @@ while IFS= read -r line; do
 
   case "$method" in
     initialize)
-      if [ "$mode" = "lost-thread-response" ] && [ -n "$events" ] && grep -q '^thread/start:lost$' "$events"; then
-        old_home=$(cat "${events}.home" 2>/dev/null)
-        if [ -n "$old_home" ] && [ ! -e "$old_home" ]; then
-          record "lost-generation-home:removed"
-        fi
-        rm -f "${events}.home"
-      fi
       if contains '"experimentalApi":true'; then
         record "initialize:experimental"
       else
@@ -57,28 +55,11 @@ while IFS= read -r line; do
       ;;
     initialized)
       ;;
-    config/read)
+    account/read)
       if [ "$mode" = "auth-fail" ]; then
-        printf '{"id":%s,"error":{"code":401,"message":"not logged in"}}\n' "$request_id"
-        continue
-      fi
-      if [ "$mode" = "unknown-notification" ]; then
-        printf '{"method":"future/notification","params":{"opaque":true}}\n'
-      fi
-      if [ "$mode" = "personal-model-instructions" ]; then
-        printf '{"id":%s,"result":{"config":{"model_instructions_file":"/tmp/personal.md","mcp_servers":{}},"origins":{},"layers":null}}\n' "$request_id"
+        printf '{"id":%s,"result":{"account":null,"requiresOpenaiAuth":true}}\n' "$request_id"
       else
-        if [ -n "$CODEX_HOME" ] && [ -f "$CODEX_HOME/config.toml" ] && ! grep -q 'mcp_servers' "$CODEX_HOME/config.toml"; then
-          record "codex-home:isolated"
-        fi
-        printf '{"id":%s,"result":{"config":{"mcp_servers":{}},"origins":{},"layers":null}}\n' "$request_id"
-      fi
-      ;;
-    configRequirements/read)
-      if [ "$mode" = "managed-instructions" ]; then
-        printf '{"id":%s,"result":{"requirements":{"additionalDeveloperInstructions":"managed"}}}\n' "$request_id"
-      else
-        printf '{"id":%s,"result":{"requirements":null}}\n' "$request_id"
+        printf '{"id":%s,"result":{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}}\n' "$request_id"
       fi
       ;;
     thread/list)
@@ -106,17 +87,9 @@ while IFS= read -r line; do
         '"reasoningEffort":"low"' \
         '"allowProviderModelFallback":false' \
         '"default_permissions":"narrant-babysit-restricted-v1"' \
-        '"mcp_servers":{}' \
         '":root":"deny"' \
         '":workspace_roots":{".":"read"}' \
-        '"network":{"enabled":false}' \
-        '"project_doc_max_bytes":0' \
-        '"include_instructions":false' \
-        '"mcp":{"enabled":false}' \
-        '"apps":false' \
-        '"hooks":false' \
-        '"plugins":false' \
-        '"personality":"none"'
+        '"network":{"enabled":false}'
       do
         if ! contains "$expected"; then
           policy_ok=false
@@ -136,8 +109,6 @@ while IFS= read -r line; do
         continue
       fi
       if [ "$mode" = "lost-thread-response" ] && ! grep -q '^thread/start:lost$' "$events"; then
-        touch "$CODEX_HOME/narrant-lost-generation-marker"
-        printf '%s' "$CODEX_HOME" > "${events}.home"
         record "thread/start:lost"
         exit 29
       fi

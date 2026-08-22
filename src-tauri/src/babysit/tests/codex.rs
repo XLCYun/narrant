@@ -120,11 +120,9 @@ async fn app_server_generates_structured_output_and_deletes_thread() {
     assert_eq!(output.before["1"], "before explanation");
     assert_eq!(output.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "account/read"));
     assert!(events.lines().any(|line| line == "initialize"));
     assert!(events.lines().any(|line| line == "initialize:experimental"));
-    assert!(events.lines().any(|line| line == "config/read"));
-    assert!(events.lines().any(|line| line == "codex-home:isolated"));
-    assert!(events.lines().any(|line| line == "configRequirements/read"));
     assert!(events.lines().any(|line| line == "thread/start:restricted"));
     assert!(events.lines().any(|line| line == "thread/start"));
     assert!(events.lines().any(|line| line == "turn/start"));
@@ -697,31 +695,25 @@ async fn insecure_thread_policy_fails_closed_before_starting_a_turn() {
 }
 
 #[tokio::test]
-async fn personal_model_instruction_file_fails_closed_before_thread_start() {
+async fn personal_model_instruction_file_is_allowed_by_environment_reuse() {
     let (provider, _temp, events) = provider("personal-model-instructions", CODEX_ANALYSIS_TIMEOUT);
     let cancellation = OperationContext::background().cancellation().clone();
-    let error = provider
-        .generate(request(), &cancellation)
-        .await
-        .unwrap_err();
+    let output = provider.generate(request(), &cancellation).await.unwrap();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_eq!(output.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
-    assert!(!events.lines().any(|line| line == "thread/start"));
+    assert!(events.lines().any(|line| line == "thread/start"));
 }
 
 #[tokio::test]
-async fn managed_instruction_requirement_fails_closed_before_thread_start() {
+async fn managed_instruction_requirement_is_allowed_by_environment_reuse() {
     let (provider, _temp, events) = provider("managed-instructions", CODEX_ANALYSIS_TIMEOUT);
     let cancellation = OperationContext::background().cancellation().clone();
-    let error = provider
-        .generate(request(), &cancellation)
-        .await
-        .unwrap_err();
+    let output = provider.generate(request(), &cancellation).await.unwrap();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_eq!(output.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
-    assert!(!events.lines().any(|line| line == "thread/start"));
+    assert!(events.lines().any(|line| line == "thread/start"));
 }
 
 #[tokio::test]
@@ -769,9 +761,6 @@ async fn lost_thread_start_response_restarts_and_cleans_marker_orphan_before_reu
         events.lines().filter(|line| *line == "initialize").count(),
         2
     );
-    assert!(events
-        .lines()
-        .any(|line| line == "lost-generation-home:removed"));
     let orphan_deleted = events
         .lines()
         .position(|line| line == "thread/delete:orphan-thread")

@@ -1,11 +1,10 @@
 //! Codex 可执行文件发现。
 //!
 //! 发现 seam 只负责解析和校验可执行文件。持久化设置由 `runtime.rs` 单独拥有，
-//! App Server 协议和进程隔离仍由 provider 负责，避免路径进入 Review 状态和诊断。
+//! App Server 协议和进程生命周期仍由 provider 负责，避免路径进入 Review 状态和诊断。
 
 use crate::babysit::BabysitError;
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -28,41 +27,58 @@ pub(super) struct ResolvedExecutable {
 }
 
 /// 纯候选搜索与有界直接进程校验。
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct CodexExecutableDiscovery;
+#[derive(Clone, Debug, Default)]
+pub(super) struct CodexExecutableDiscovery {
+    candidate_override: Option<Vec<PathBuf>>,
+}
 
 impl CodexExecutableDiscovery {
-    /// 先搜索持久化路径，再搜索当前进程 PATH 和已知安装位置。
-    pub(super) async fn resolve(
+    /// 返回所有通过版本校验的候选，供 runtime 继续执行完整 capability probe。
+    pub(super) async fn resolve_all(
         &self,
         persisted: Option<&Path>,
-    ) -> Result<ResolvedExecutable, BabysitError> {
-        self.resolve_candidates(persisted, self.candidates()).await
-    }
-
-    /// 按既定优先级校验候选；测试可注入候选而不改变当前进程 PATH。
-    async fn resolve_candidates<I>(
-        &self,
-        persisted: Option<&Path>,
-        candidates: I,
-    ) -> Result<ResolvedExecutable, BabysitError>
-    where
-        I: IntoIterator<Item = PathBuf>,
-    {
-        if let Some(path) = persisted.and_then(canonical_executable) {
-            if let Ok(executable) = self.validate(path, true).await {
-                return Ok(executable);
-            }
-        }
-
-        for candidate in candidates {
-            if let Some(candidate) = canonical_executable(&candidate) {
+    ) -> Result<Vec<ResolvedExecutable>, BabysitError> {
+        let candidates = self.ordered_candidates(persisted);
+        let mut resolved = Vec::new();
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            let candidate = if index == 0 && candidate == Path::new("codex") {
+                Some(candidate)
+            } else {
+                canonical_executable(&candidate)
+            };
+            if let Some(candidate) = candidate {
                 if let Ok(executable) = self.validate(candidate, false).await {
-                    return Ok(executable);
+                    resolved.push(executable);
                 }
             }
         }
-        Err(BabysitError::CodexNotFound)
+        if resolved.is_empty() {
+            Err(BabysitError::CodexNotFound)
+        } else {
+            Ok(resolved)
+        }
+    }
+
+    /// 生产按 bare、持久化、平台位置排序；测试可替换环境与平台候选。
+    fn ordered_candidates(&self, persisted: Option<&Path>) -> Vec<PathBuf> {
+        let mut candidates = self
+            .candidate_override
+            .clone()
+            .unwrap_or_else(|| self.candidates());
+        if let Some(persisted) = persisted {
+            candidates.insert(1.min(candidates.len()), persisted.to_path_buf());
+        }
+        let mut seen = HashSet::new();
+        candidates.retain(|candidate| seen.insert(candidate.clone()));
+        candidates
+    }
+
+    /// 注入测试候选，不修改进程 PATH 或用户设置。
+    #[cfg(test)]
+    pub(super) fn with_candidates(candidates: Vec<PathBuf>) -> Self {
+        Self {
+            candidate_override: Some(candidates),
+        }
     }
 
     /// 校验用户选择的绝对路径，但不在发现模块内持久化。
@@ -197,16 +213,9 @@ impl CodexExecutableDiscovery {
         (Ok(ResolvedExecutable { path, version }), probe.reaped)
     }
 
-    /// Search PATH first, followed by platform-supported installation locations.
+    /// 先让操作系统通过 PATH 解析 bare command，再列出平台安装位置。
     fn candidates(&self) -> Vec<PathBuf> {
-        let mut candidates = Vec::new();
-        if let Some(path) = std::env::var_os("PATH") {
-            candidates.extend(std::env::split_paths(&path).flat_map(|directory| {
-                executable_names()
-                    .into_iter()
-                    .map(move |name| directory.join(name))
-            }));
-        }
+        let mut candidates = vec![PathBuf::from("codex")];
         candidates.extend(known_install_locations());
         let mut seen = HashSet::new();
         candidates.retain(|candidate| seen.insert(candidate.clone()));
@@ -346,18 +355,14 @@ fn canonical_executable(path: &Path) -> Option<PathBuf> {
     Some(canonical)
 }
 
-/// 可执行名称覆盖 Windows 原生 shim，同时不启动 shell。
-fn executable_names() -> Vec<OsString> {
-    if cfg!(windows) {
-        vec![OsString::from("codex.exe"), OsString::from("codex.cmd")]
-    } else {
-        vec![OsString::from("codex")]
-    }
-}
-
 /// 已知位置覆盖桌面启动时 PATH 不完整的场景。
 fn known_install_locations() -> Vec<PathBuf> {
     let mut locations = Vec::new();
+    #[cfg(target_os = "macos")]
+    locations.extend([
+        PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
+        PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"),
+    ]);
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         locations.extend([
             home.join(".local/bin/codex"),
@@ -372,8 +377,6 @@ fn known_install_locations() -> Vec<PathBuf> {
     locations.extend([
         PathBuf::from("/usr/local/bin/codex"),
         PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
-        PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"),
     ]);
     #[cfg(target_os = "linux")]
     locations.extend([

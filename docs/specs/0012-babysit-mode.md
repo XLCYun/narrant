@@ -57,7 +57,7 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 19. As a reviewer, I want unsupported files identified before analysis starts, so that
     lock files, generated content, and non-text changes do not waste Agent work.
 20. As a reviewer with Codex already installed, I want Narrant to reuse my Codex
-    authentication and defaults, so that I do not configure another model account.
+    environment and authentication, so that I do not configure another model account.
 21. As a reviewer, I want Codex discovered only when I enable Babysit Mode, so that the
     feature adds no startup process or latency when unused.
 22. As a reviewer whose Codex executable is outside the application PATH, I want to
@@ -140,18 +140,18 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - The first vertical slice requires an installed Codex executable and launches a
   Narrant-owned `codex app-server` child process. It reuses the user's Codex
   authentication but does not attach to an arbitrary running Codex UI or terminal.
-- Narrant omits model and reasoning-effort overrides when starting Babysit turns, uses
-  the installed Codex runtime's effective defaults, and does not expose model details
-  in the Babysit Mode UI.
+- Narrant currently starts Babysit turns with `gpt-5.6-luna` and `low` reasoning effort
+  and does not expose model details in the Babysit Mode UI. User-facing model and
+  reasoning configuration may replace this fixed choice later.
 - A future Claude Code adapter may launch the installed Claude Code runtime and fulfill
   the same contract.
 - A future Built-in Agent Provider is tracked separately. Rig is the initial candidate,
   but it is not part of the first vertical slice.
-- Installed runtimes reuse authentication only. Narrant disables network access, MCP,
-  plugins, hooks, write tools, personal prompts, and personality overrides. Narrant
-  supplies no model override and allows Codex to use its effective default model.
-  Repository instruction files are untrusted context and cannot weaken the analysis
-  contract or read-only sandbox.
+- Installed Codex reuses the reviewer's Codex home, authentication, and configuration.
+  User MCP servers, plugins, hooks, skills, personal instructions, notifications, and
+  history may participate normally. Each Babysit thread still uses a Narrant-owned
+  read-only workspace permission profile with network access and approval escalation
+  denied; inherited configuration cannot weaken that operation boundary.
 
 ### Runtime and Cache Decisions
 
@@ -165,14 +165,18 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   enables Babysit Mode for an eligible File Change. It then discovers and lazily starts
   one Codex App Server child process. Every File Change analysis uses a fresh Codex
   thread, and all repair turns stay in that thread.
-- Discovery searches the process environment and known install locations, then offers
-  a native executable picker. A selected executable path is a durable application
-  setting, is validated with `codex --version`, and is never sent to the Agent or
-  included in diagnostics. Narrant does not invoke a login shell for discovery.
+- Discovery first executes the bare `codex` command from the Narrant process PATH. It
+  then tries a previously selected executable, bundled desktop locations, other known
+  install locations, and finally offers a native executable picker. A selected path is
+  a durable fallback setting, is validated with `codex --version`, and is never sent
+  to the Agent or included in diagnostics. Narrant does not invoke a login shell.
 - App Server compatibility is capability-based. After `initialize`, Narrant requires
-  the stable structured-output, restricted read-only sandbox, turn interruption, and
-  thread-deletion behavior used by Babysit Mode. Missing capabilities disable the mode
-  and request a Codex upgrade; otherwise the installed version is accepted. The UI does
+  an authenticated account state plus the stable structured-output, restricted
+  read-only sandbox, turn interruption, and thread-deletion behavior used by Babysit
+  Mode. A candidate that cannot satisfy these capabilities does not shadow later
+  executable candidates. Missing capabilities across all candidates disable the mode
+  and request a Codex upgrade; otherwise the installed version is accepted. API-key,
+  managed ChatGPT, and other App Server-supported account types are valid. The UI does
   not display a minimum tested version, and the protocol client ignores unknown
   notifications.
 - Completed, failed, and cancelled analysis threads are permanently deleted from Codex
@@ -267,3 +271,5 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 
 Provider separation and the provider-independent contract are recorded in
 [ADR-0021](../adr/0021-separate-babysit-agent-providers-behind-one-contract.md).
+Codex environment reuse and the set-aside isolation design are recorded in
+[ADR-0022](../adr/0022-reuse-the-reviewers-codex-environment.md).

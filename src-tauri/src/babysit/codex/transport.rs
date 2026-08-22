@@ -1,9 +1,8 @@
 //! Codex App Server JSONL transport 与进程协议。
 
 use super::{
-    ensure_isolated_config, ensure_safe_requirements, restricted_config, validate_thread_policy,
-    AppServerCommand, AppServerProcess, IsolatedCodexHome, RpcFailure, CODEX_CLEANUP_TIMEOUT,
-    CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
+    restricted_config, validate_thread_policy, AppServerCommand, AppServerProcess, RpcFailure,
+    CODEX_CLEANUP_TIMEOUT, CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
 use serde_json::{json, Value};
@@ -18,13 +17,12 @@ const CAPABILITY_SENTINEL_THREAD_ID: &str = "00000000-0000-0000-0000-00000000000
 const CAPABILITY_SENTINEL_TURN_ID: &str = "00000000-0000-0000-0000-000000000002";
 
 impl AppServerProcess {
-    /// poison restart 前同步完成 child reap 与 generation-owned home 删除。
+    /// poison restart 前同步完成 child reap。
     pub(super) async fn shutdown(&mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
             let _ = child.wait().await;
         }
-        drop(self.isolated_home.take());
     }
 
     /// interrupt 后等待精确匹配的 terminal notification，再允许删除 thread。
@@ -49,11 +47,8 @@ impl AppServerProcess {
 
     /// 启动 stdio App Server，并完成 initialize/initialized handshake。
     pub(super) async fn spawn(command: AppServerCommand) -> Result<Self, RpcFailure> {
-        let isolated_home = IsolatedCodexHome::create().map_err(|_| RpcFailure::Io)?;
         let mut child = Command::new(&command.program)
             .args(&command.args)
-            .env("CODEX_HOME", isolated_home.path())
-            .env("CODEX_SQLITE_HOME", isolated_home.path())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -73,7 +68,6 @@ impl AppServerProcess {
             stdout: BufReader::new(stdout),
             next_request_id: 1,
             pending_notifications: VecDeque::new(),
-            isolated_home: Some(isolated_home),
         };
         let deadline = Instant::now() + CODEX_INITIALIZATION_TIMEOUT;
         let initialize = process
@@ -97,6 +91,16 @@ impl AppServerProcess {
             .notification("initialized", json!({}), deadline, None)
             .await
             .map_err(|_| RpcFailure::Initialization)?;
+        let account = process
+            .request(
+                "account/read",
+                json!({"refreshToken": false}),
+                deadline,
+                None,
+            )
+            .await
+            .map_err(classify_initialize_error)?;
+        validate_account_state(&account).map_err(classify_initialize_error)?;
         process.cleanup_marked_threads().await?;
         Ok(process)
     }
@@ -188,26 +192,6 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: &CancellationSignal,
     ) -> Result<String, RpcFailure> {
-        let effective = self
-            .request(
-                "config/read",
-                json!({"cwd": request.workspace_path}),
-                deadline,
-                Some(cancellation),
-            )
-            .await
-            .map_err(classify_start_error)?;
-        ensure_isolated_config(&effective).map_err(|_| RpcFailure::Incompatible)?;
-        let requirements = self
-            .request(
-                "configRequirements/read",
-                json!({}),
-                deadline,
-                Some(cancellation),
-            )
-            .await
-            .map_err(classify_start_error)?;
-        ensure_safe_requirements(&requirements).map_err(|_| RpcFailure::Incompatible)?;
         let config = restricted_config();
         let result = self
             .request(
@@ -568,6 +552,18 @@ impl AppServerProcess {
             }
         }
     }
+}
+
+/// 仅在 App Server 明确要求 OpenAI 认证且没有任何 account 时判定未登录。
+fn validate_account_state(value: &Value) -> Result<(), RpcFailure> {
+    let requires_openai_auth = value
+        .get("requiresOpenaiAuth")
+        .and_then(Value::as_bool)
+        .ok_or(RpcFailure::Protocol)?;
+    if requires_openai_auth && value.get("account").is_none_or(Value::is_null) {
+        return Err(RpcFailure::SignedOut);
+    }
+    Ok(())
 }
 
 /// 检查一次 stdin 写入是否仍在调用方的取消与总截止时间内。
