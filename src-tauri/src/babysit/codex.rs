@@ -277,16 +277,16 @@ impl CodexAppServerProvider {
     }
 
     /// 设置 runtime 已解析的 executable；provider 本身不做 discovery 或持久化。
-    pub fn configure_executable(&self, path: PathBuf) -> Result<(), BabysitError> {
-        let mut process = self
-            .process
-            .try_lock()
-            .map_err(|_| BabysitError::CodexInitializationFailed)?;
+    pub async fn configure_executable(&self, path: PathBuf) -> Result<(), BabysitError> {
+        let mut process = self.process.lock().await;
         let reset_failed_process = self.failed.load(Ordering::Acquire);
         if process.is_some() && !reset_failed_process {
             return Err(BabysitError::CodexInitializationFailed);
         }
         if reset_failed_process {
+            if let Some(process) = process.as_mut() {
+                process.shutdown().await;
+            }
             *process = None;
         }
         drop(process);

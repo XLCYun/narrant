@@ -35,6 +35,27 @@ fn app_server_candidate(
     path
 }
 
+/// 读取 fixture 记录的子进程 pid，供候选切换的回收断言使用。
+fn fixture_pid(events: &std::path::Path) -> u32 {
+    std::fs::read_to_string(events)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("process-pid:"))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// 查询进程是否仍存在；已 wait 的候选必须返回 false。
+fn process_exists(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 #[test]
 fn file_settings_round_trip_only_the_executable_path() {
     let directory = tempfile::tempdir().unwrap();
@@ -140,10 +161,50 @@ async fn incompatible_environment_candidate_falls_back_to_the_next_executable() 
         .await
         .unwrap();
 
-    assert!(std::fs::read_to_string(rejected_events)
+    assert!(std::fs::read_to_string(&rejected_events)
         .unwrap()
         .lines()
         .any(|line| line == "turn/start:sentinel"));
+    assert!(!process_exists(fixture_pid(&rejected_events)));
+    assert!(std::fs::read_to_string(&accepted_events)
+        .unwrap()
+        .lines()
+        .any(|line| line == "thread/delete"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn signed_out_environment_candidate_does_not_shadow_an_authenticated_candidate() {
+    let directory = tempfile::tempdir().unwrap();
+    let signed_out_events = directory.path().join("signed-out.log");
+    let accepted_events = directory.path().join("accepted.log");
+    let signed_out = app_server_candidate(
+        directory.path(),
+        "codex-signed-out",
+        "auth-fail",
+        &signed_out_events,
+    );
+    let accepted = app_server_candidate(
+        directory.path(),
+        "codex-authenticated",
+        "complete",
+        &accepted_events,
+    );
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        directory.path().join("babysit-settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![signed_out, accepted]),
+    );
+
+    runtime
+        .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    assert!(std::fs::read_to_string(signed_out_events)
+        .unwrap()
+        .lines()
+        .any(|line| line == "account/read"));
     assert!(std::fs::read_to_string(accepted_events)
         .unwrap()
         .lines()

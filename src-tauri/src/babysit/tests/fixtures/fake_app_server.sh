@@ -5,11 +5,19 @@ mode=${1:-complete}
 events=${2:-}
 turn_count=0
 
+record_pid() {
+  if [ -n "$events" ]; then
+    printf 'process-pid:%s\n' "$$" >> "$events"
+  fi
+}
+
 record() {
   if [ -n "$events" ]; then
     printf '%s\n' "$1" >> "$events"
   fi
 }
+
+record_pid
 
 contains() {
   printf '%s' "$line" | grep -F "$1" >/dev/null 2>&1

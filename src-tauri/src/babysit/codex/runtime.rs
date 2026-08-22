@@ -151,7 +151,7 @@ impl CodexRuntime {
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
         let resolved = self.discovery.validate_selected(path.to_path_buf()).await?;
         self.settings.save(resolved.path.clone())?;
-        self.provider.configure_executable(resolved.path)?;
+        self.provider.configure_executable(resolved.path).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
         }
@@ -176,15 +176,20 @@ impl CodexRuntime {
             .resolve_all(self.settings.load().as_deref())
             .await?;
         let mut last_error = BabysitError::CodexNotFound;
+        let mut found_signed_out = false;
         for candidate in candidates {
-            self.provider.configure_executable(candidate.path)?;
+            self.provider.configure_executable(candidate.path).await?;
             match self.provider.prepare_process(workspace_path).await {
                 Ok(()) => return Ok(()),
-                Err(error @ BabysitError::CodexSignedOut) => return Err(error),
+                Err(BabysitError::CodexSignedOut) => found_signed_out = true,
                 Err(error) => last_error = error,
             }
         }
-        Err(last_error)
+        if found_signed_out {
+            Err(BabysitError::CodexSignedOut)
+        } else {
+            Err(last_error)
+        }
     }
 }
 
