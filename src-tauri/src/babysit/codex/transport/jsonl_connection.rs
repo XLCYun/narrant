@@ -87,25 +87,8 @@ impl JsonlConnection {
 impl Drop for JsonlConnection {
     /// 丢弃连接时立即请求 kill，并把 wait 交给 runtime 或短时同步 reaper。
     fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        let _ = child.start_kill();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = child.wait().await;
-            });
-        } else {
-            std::thread::spawn(move || {
-                for _ in 0..50 {
-                    if child.try_wait().ok().flatten().is_some() {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                let _ = child.start_kill();
-                let _ = child.try_wait();
-            });
+        if let Some(child) = self.child.take() {
+            reap_child(child);
         }
     }
 }

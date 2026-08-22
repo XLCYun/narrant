@@ -55,6 +55,57 @@ async fn observes_cancellation_while_stdout_is_blocked() {
 }
 
 #[tokio::test]
+async fn observes_cancellation_while_stdin_is_blocked() {
+    let (mut writer, _reader) = tokio::io::duplex(1);
+    let cancellation = TestCancellation::default();
+    let worker_cancellation = cancellation.clone();
+    let writer_task = tokio::spawn(async move {
+        write_json_line(
+            &mut writer,
+            &[b'x'; 4096],
+            Instant::now() + Duration::from_secs(1),
+            Some(&worker_cancellation),
+        )
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    cancellation.cancel();
+
+    assert_eq!(
+        writer_task.await.expect("writer task should finish"),
+        Err(RpcFailure::Cancelled)
+    );
+}
+
+#[tokio::test]
+async fn bounded_stdin_write_observes_its_deadline() {
+    let (mut writer, _reader) = tokio::io::duplex(1);
+
+    let result = write_json_line(
+        &mut writer,
+        &[b'x'; 4096],
+        Instant::now() + Duration::from_millis(20),
+        None,
+    )
+    .await;
+
+    assert_eq!(result, Err(RpcFailure::Timeout));
+}
+
+#[tokio::test]
+async fn explicit_shutdown_takes_and_reaps_the_child_handle() {
+    let mut connection = JsonlConnection::spawn(&command("sleep 2"))
+        .await
+        .expect("shell child should start");
+    assert!(connection.child.is_some());
+
+    connection.shutdown().await;
+
+    assert!(connection.child.is_none());
+}
+
+#[tokio::test]
 async fn rejects_a_line_that_exceeds_the_framing_bound() {
     let mut bytes = vec![b' '; MAX_JSONL_LINE_BYTES + 1];
     bytes.push(b'\n');
