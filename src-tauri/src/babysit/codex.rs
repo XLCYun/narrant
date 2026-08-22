@@ -24,7 +24,7 @@ use tokio::sync::Mutex as AsyncMutex;
 mod discovery;
 #[path = "codex/runtime.rs"]
 pub(super) mod runtime;
-#[path = "codex/transport.rs"]
+#[path = "codex/transport/mod.rs"]
 mod transport;
 
 /// Babysit 一次完整分析（包括 repair）的总截止时间。
@@ -785,27 +785,6 @@ pub(super) fn structured_output_schema(request: &BabysitProviderRequest) -> Valu
         "required": ["before", "after"],
         "additionalProperties": false
     })
-}
-
-/// 校验 App Server 实际应用的 workspace、权限 profile 与只读 sandbox。
-fn validate_thread_policy(result: &Value, workspace: &str) -> Result<(), RpcFailure> {
-    let roots = result
-        .get("runtimeWorkspaceRoots")
-        .and_then(Value::as_array)
-        .ok_or(RpcFailure::Protocol)?;
-    let exact_root = roots.len() == 1 && roots[0].as_str() == Some(workspace);
-    let exact_cwd = result.get("cwd").and_then(Value::as_str) == Some(workspace);
-    let profile = result
-        .get("activePermissionProfile")
-        .and_then(|value| value.get("id"))
-        .and_then(Value::as_str)
-        == Some("narrant-babysit-restricted-v1");
-    let sandbox = result.get("sandbox").unwrap_or(&Value::Null);
-    let read_only = sandbox.get("type").and_then(Value::as_str) == Some("readOnly")
-        && sandbox.get("networkAccess").and_then(Value::as_bool) == Some(false);
-    (exact_root && exact_cwd && profile && read_only)
-        .then_some(())
-        .ok_or(RpcFailure::Protocol)
 }
 
 /// 将 target 格式化为 prompt 中的元数据；单行 source 只发送给 Codex，不进入诊断。
