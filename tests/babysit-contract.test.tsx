@@ -50,7 +50,7 @@ function createAdapter(reviewSnapshot = snapshot, fileContent = content) {
         ? { eligible: true, reason: null }
         : { eligible: false, reason: "unsupported_language" };
     },
-    explainFile(request, _generationPolicy, onProgress, signal) {
+    explainFile({ file: request }, onProgress, signal) {
       requested = { request, signal };
       onProgress({ phase: "generating" });
       return new Promise((resolve) => { resolveExplanation = resolve; });
@@ -117,7 +117,9 @@ describe("Babysit contract spine", () => {
 
     expect(result.current.reader?.babysit?.state.kind).toBe("generating");
     expect(explainFile).toHaveBeenCalledTimes(2);
-    expect(explainFile.mock.calls[1]?.[1]).toBe("regenerate");
+    expect(explainFile.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      generationPolicy: "regenerate",
+    }));
   });
 
   it("取消或切换 File Change 后丢弃迟到的 provider result", async () => {

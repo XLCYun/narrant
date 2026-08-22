@@ -94,6 +94,12 @@ export type BabysitFileRequest = ReviewIdentity & {
   detectedLanguage?: string;
 };
 
+/** 一次 Babysit 分析调用，组合固定文件 identity 与本次生成策略。 */
+export type BabysitAnalysisRequest = {
+  file: BabysitFileRequest;
+  generationPolicy: BabysitGenerationPolicy;
+};
+
 /** 后端唯一判定的文件 eligibility reason；UI 只负责本地化。 */
 export type BabysitEligibilityReason =
   | "non_text"
@@ -137,8 +143,7 @@ export interface BabysitApplicationAdapter {
   ): Promise<BabysitEligibility>;
   /** 按完整 File Change 发起一次分析；失败时 reject 结构化 BabysitError。 */
   explainFile(
-    request: BabysitFileRequest,
-    generationPolicy: BabysitGenerationPolicy,
+    request: BabysitAnalysisRequest,
     onProgress: (progress: BabysitProgress) => void,
     signal: AbortSignal,
   ): Promise<BabysitFileExplanations>;

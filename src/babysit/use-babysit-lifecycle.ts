@@ -120,7 +120,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     const requestId = explanationRequest.current;
     explanationAbort.current = abort;
     setState({ kind: "generating", request });
-    void adapter.explainFile(request, generationPolicy, (progress: BabysitProgress) => {
+    void adapter.explainFile({ file: request, generationPolicy }, (progress: BabysitProgress) => {
       if (abort.signal.aborted || requestId !== explanationRequest.current) return;
       setState(progress.phase === "repairing"
         ? { kind: "repairing", request, attempt: progress.attempt }

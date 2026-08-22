@@ -17,14 +17,14 @@ export function createTauriBabysitApplicationAdapter(
       }, signal);
     },
     /** 将完整 File Change analysis 映射为带 progress channel 的 cancellable command。 */
-    explainFile(request, generationPolicy, onProgress, signal) {
+    explainFile({ file, generationPolicy }, onProgress, signal) {
       const progress = createChannel<BabysitProgress>(onProgress);
       return transport.invokeCancellable("explain_review_file_change", {
-        reviewId: request.reviewId,
-        snapshotId: request.snapshotId,
-        path: request.path,
-        locale: request.locale,
-        detectedLanguage: request.detectedLanguage,
+        reviewId: file.reviewId,
+        snapshotId: file.snapshotId,
+        path: file.path,
+        locale: file.locale,
+        detectedLanguage: file.detectedLanguage,
         generationPolicy,
         progress,
       }, signal);

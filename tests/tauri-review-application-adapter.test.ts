@@ -226,12 +226,14 @@ describe("Tauri Babysit application adapter", () => {
 
     await expect(adapter.explainFile(
       {
-        reviewId: "review-1",
-        snapshotId: "snapshot-1",
-        path: "Cargo.lock",
-        locale: "zh-CN",
+        file: {
+          reviewId: "review-1",
+          snapshotId: "snapshot-1",
+          path: "Cargo.lock",
+          locale: "zh-CN",
+        },
+        generationPolicy: "reuse_cached",
       },
-      "reuse_cached",
       vi.fn(),
       new AbortController().signal,
     )).rejects.toEqual(error);

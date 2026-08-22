@@ -71,7 +71,7 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 26. As a reviewer, I want to regenerate completed Line Explanations for the current
     File Change, so that I can request a fresh analysis without closing Babysit Mode
     or discarding cached explanations for other files.
-26. As a maintainer, I want CI to use a deterministic fake App Server, so that tests do
+27. As a maintainer, I want CI to use a deterministic fake App Server, so that tests do
     not require a personal login, network access, or paid model request.
 
 ## Scope
