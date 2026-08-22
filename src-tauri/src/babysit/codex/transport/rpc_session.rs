@@ -134,21 +134,6 @@ impl Notification {
         Ok(Self(value))
     }
 
-    /// 返回 notification 方法名。
-    pub(super) fn method(&self) -> &str {
-        self.0["method"].as_str().unwrap_or_default()
-    }
-
-    /// 返回缺省为 null 的 params。
-    pub(super) fn params(&self) -> &Value {
-        self.0.get("params").unwrap_or(&Value::Null)
-    }
-
-    /// 返回完整 payload，保留未知字段。
-    pub(super) fn as_value(&self) -> &Value {
-        &self.0
-    }
-
     /// 转移完整 payload 给需要动态字段的 facade。
     pub(super) fn into_value(self) -> Value {
         self.0
@@ -173,16 +158,6 @@ impl ServerRequest {
     /// 返回 server request id，供 facade 构造同 id 回复。
     pub(super) fn id_value(&self) -> Value {
         self.0["id"].clone()
-    }
-
-    /// 返回 server request 方法名。
-    pub(super) fn method(&self) -> &str {
-        self.0["method"].as_str().unwrap_or_default()
-    }
-
-    /// 返回缺省为 null 的 params。
-    pub(super) fn params(&self) -> &Value {
-        self.0.get("params").unwrap_or(&Value::Null)
     }
 }
 

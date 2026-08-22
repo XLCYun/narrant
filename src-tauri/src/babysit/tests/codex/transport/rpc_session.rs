@@ -100,9 +100,9 @@ done
     assert_eq!(first, json!({"requestId": 1}));
 
     let notification = session.pop_notification().unwrap();
-    assert_eq!(notification.method(), "future/event");
-    assert_eq!(notification.params()["opaque"], true);
-    assert_eq!(notification.as_value()["params"]["id"], 1);
+    assert_eq!(notification.0["method"], "future/event");
+    assert_eq!(notification.0["params"]["opaque"], true);
+    assert_eq!(notification.0["params"]["id"], 1);
 
     let second = session
         .request(&mut connection, "second", json!({}), deadline, None, |_| {
@@ -144,8 +144,8 @@ done
             move |request| {
                 *observed_by_handler.lock().unwrap() = Some((
                     request.id_value(),
-                    request.method().to_owned(),
-                    request.params().clone(),
+                    request.0["method"].clone(),
+                    request.0["params"].clone(),
                 ));
                 Ok(json!({
                     "id": request.id_value(),
@@ -160,7 +160,7 @@ done
         observed.lock().unwrap().clone(),
         Some((
             json!(99),
-            "server/approval".to_owned(),
+            json!("server/approval"),
             json!({"question": "read"})
         ))
     );
