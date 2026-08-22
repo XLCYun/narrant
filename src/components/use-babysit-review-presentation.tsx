@@ -185,7 +185,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
         <TooltipTrigger render={<Button
           variant="default"
           size="icon-sm"
-          className="w-8 rounded-l-none pl-0 pr-1"
+          className="w-8 justify-start rounded-l-none pl-0.5 pr-0"
           aria-label={t("review:babysitRegenerate")}
           disabled={state?.kind !== "completed"}
           aria-busy={running || undefined}
