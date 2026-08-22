@@ -1,28 +1,255 @@
-//! Codex App Server JSONL transport 与进程协议。
+//! Codex App Server 协议门面。
 
 use super::{
-    restricted_config, validate_thread_policy, AppServerCommand, AppServerProcess, RpcFailure,
-    CODEX_CLEANUP_TIMEOUT, CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
+    restricted_config, AppServerCommand, AppServerProcess, RpcFailure, CODEX_CLEANUP_TIMEOUT,
+    CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
+use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 use std::path::Path;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use std::time::Instant;
+
+mod jsonl_connection;
+pub(super) use jsonl_connection::JsonlConnection;
+mod rpc_session;
+pub(super) use rpc_session::RpcSession;
+use rpc_session::{RpcSessionError, ServerRequest};
 
 /// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
 const CAPABILITY_SENTINEL_THREAD_ID: &str = "00000000-0000-0000-0000-000000000001";
 const CAPABILITY_SENTINEL_TURN_ID: &str = "00000000-0000-0000-0000-000000000002";
 
+/// initialize 端点当前稳定且必须存在的响应字段。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeResponse {
+    user_agent: String,
+    codex_home: String,
+}
+
+impl InitializeResponse {
+    /// 解码并校验握手所需的非空元数据，额外字段由 serde 自动忽略。
+    fn decode(value: Value) -> Result<Self, RpcFailure> {
+        let response: Self = serde_json::from_value(value).map_err(|_| RpcFailure::Protocol)?;
+        if response.user_agent.trim().is_empty() || response.codex_home.trim().is_empty() {
+            return Err(RpcFailure::Protocol);
+        }
+        Ok(response)
+    }
+}
+
+/// account/read 只建模认证判断依赖的字段，账户详情保持不透明。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountReadResponse {
+    requires_openai_auth: bool,
+    account: Option<Value>,
+}
+
+impl AccountReadResponse {
+    /// 解码账户状态，同时容忍服务端新增字段或扩展账户对象。
+    fn decode(value: Value) -> Result<Self, RpcFailure> {
+        serde_json::from_value(value).map_err(|_| RpcFailure::Protocol)
+    }
+
+    /// 仅在服务端要求 OpenAI 认证但没有账户时报告未登录。
+    fn validate(self) -> Result<(), RpcFailure> {
+        if self.requires_openai_auth && self.account.is_none_or(|value| value.is_null()) {
+            return Err(RpcFailure::SignedOut);
+        }
+        Ok(())
+    }
+}
+
+/// thread/start 返回中 Babysit 必须持有的稳定 thread 标识。
+#[derive(Debug, Deserialize)]
+struct ThreadStartResponse {
+    thread: EndpointId,
+    #[serde(skip)]
+    opaque: Value,
+}
+
+impl ThreadStartResponse {
+    /// 解码 thread 标识，并显式保留策略校验所需的演进载荷。
+    fn decode(value: Value) -> Result<Self, RpcFailure> {
+        let mut response: Self =
+            serde_json::from_value(value.clone()).map_err(|_| RpcFailure::Protocol)?;
+        response.opaque = value;
+        Ok(response)
+    }
+
+    /// 返回已校验存在的 thread 标识。
+    fn thread_id(&self) -> &str {
+        &self.thread.id
+    }
+}
+
+/// turn/start 返回中 Babysit 必须持有的稳定 turn 标识。
+#[derive(Debug, Deserialize)]
+struct TurnStartResponse {
+    turn: EndpointId,
+}
+
+impl TurnStartResponse {
+    /// 解码 turn 标识，未建模字段继续允许服务端演进。
+    fn decode(value: Value) -> Result<Self, RpcFailure> {
+        serde_json::from_value(value).map_err(|_| RpcFailure::Protocol)
+    }
+
+    /// 返回已校验存在的 turn 标识。
+    fn turn_id(&self) -> &str {
+        &self.turn.id
+    }
+}
+
+/// Codex thread 与 turn 端点共用的稳定标识对象。
+#[derive(Debug, Deserialize)]
+struct EndpointId {
+    id: String,
+}
+
+/// thread/list 当前清理策略依赖的最小 thread 摘要。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadSummary {
+    id: Option<String>,
+    thread_source: Option<String>,
+}
+
+/// thread/list 分页响应，只建模孤儿清理所需的字段。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadListResponse {
+    data: Vec<ThreadSummary>,
+    next_cursor: Option<String>,
+}
+
+impl ThreadListResponse {
+    /// 解码分页响应；缺少 data 属于协议错误，未知字段保持兼容。
+    fn decode(value: Value) -> Result<Self, RpcFailure> {
+        serde_json::from_value(value).map_err(|_| RpcFailure::Protocol)
+    }
+
+    /// 提取明确属于 Narrant 的 thread，避免删除其它来源的会话。
+    fn marked_thread_ids(&self) -> Vec<&str> {
+        self.data
+            .iter()
+            .filter(|thread| thread.thread_source.as_deref() == Some(CODEX_THREAD_SOURCE))
+            .filter_map(|thread| thread.id.as_deref())
+            .collect()
+    }
+
+    /// 返回下一页 cursor；缺失表示分页结束。
+    fn next_cursor(&self) -> Option<&str> {
+        self.next_cursor.as_deref()
+    }
+}
+
+/// facade 识别的通知语义；未知 method 明确保留为可忽略分支。
+#[derive(Debug)]
+enum Notification {
+    AgentMessageDelta {
+        thread_id: String,
+        turn_id: String,
+        delta: String,
+    },
+    ItemCompleted {
+        thread_id: String,
+        turn_id: String,
+        item: Value,
+    },
+    TurnCompleted {
+        thread_id: String,
+        turn: CompletedTurn,
+    },
+    Unknown,
+}
+
+impl Notification {
+    /// 按 method 选择局部 DTO；未知通知不解析 params，因此可向前兼容。
+    fn decode(value: Value) -> Result<Self, RpcFailure> {
+        let envelope: NotificationEnvelope =
+            serde_json::from_value(value).map_err(|_| RpcFailure::Protocol)?;
+        match envelope.method.as_str() {
+            "item/agentMessage/delta" => {
+                let params: AgentMessageDeltaParams =
+                    serde_json::from_value(envelope.params).map_err(|_| RpcFailure::Protocol)?;
+                Ok(Self::AgentMessageDelta {
+                    thread_id: params.thread_id,
+                    turn_id: params.turn_id,
+                    delta: params.delta,
+                })
+            }
+            "item/completed" => {
+                let params: ItemCompletedParams =
+                    serde_json::from_value(envelope.params).map_err(|_| RpcFailure::Protocol)?;
+                Ok(Self::ItemCompleted {
+                    thread_id: params.thread_id,
+                    turn_id: params.turn_id,
+                    item: params.item,
+                })
+            }
+            "turn/completed" => {
+                let params: TurnCompletedParams =
+                    serde_json::from_value(envelope.params).map_err(|_| RpcFailure::Protocol)?;
+                Ok(Self::TurnCompleted {
+                    thread_id: params.thread_id,
+                    turn: params.turn,
+                })
+            }
+            _ => Ok(Self::Unknown),
+        }
+    }
+}
+
+/// 从 RpcSession 取得的通知 envelope，params 作为显式演进载荷交给端点 DTO。
+#[derive(Debug, Deserialize)]
+struct NotificationEnvelope {
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+/// agent message 流式增量的稳定字段。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentMessageDeltaParams {
+    thread_id: String,
+    turn_id: String,
+    delta: String,
+}
+
+/// item/completed 中用于筛选目标 turn 和读取最终 item 的字段。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemCompletedParams {
+    thread_id: String,
+    turn_id: String,
+    item: Value,
+}
+
+/// turn/completed 中用于筛选目标 thread 的字段。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TurnCompletedParams {
+    thread_id: String,
+    turn: CompletedTurn,
+}
+
+/// 已完成 turn 的稳定状态字段；items 与 error 保持不透明以兼容服务端演进。
+#[derive(Debug, Deserialize)]
+struct CompletedTurn {
+    id: String,
+    status: String,
+    error: Option<Value>,
+    items: Option<Value>,
+}
+
 impl AppServerProcess {
     /// poison restart 前同步完成 child reap。
     pub(super) async fn shutdown(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-        }
+        self.connection.shutdown().await;
     }
 
     /// interrupt 后等待精确匹配的 terminal notification，再允许删除 thread。
@@ -33,13 +260,14 @@ impl AppServerProcess {
         deadline: Instant,
     ) -> Result<(), RpcFailure> {
         loop {
-            let message = match self.pending_notifications.pop_front() {
-                Some(message) => message,
-                None => self.read_message(deadline, None).await?,
-            };
-            if message.get("method").and_then(Value::as_str) == Some("turn/completed")
-                && same_turn(&message, thread_id, turn_id)
-            {
+            let message = self.next_notification(deadline, None).await?;
+            if matches!(
+                message,
+                Notification::TurnCompleted {
+                    thread_id: ref message_thread_id,
+                    ref turn,
+                } if message_thread_id == thread_id && turn.id == turn_id
+            ) {
                 return Ok(());
             }
         }
@@ -47,27 +275,10 @@ impl AppServerProcess {
 
     /// 启动 stdio App Server，并完成 initialize/initialized handshake。
     pub(super) async fn spawn(command: AppServerCommand) -> Result<Self, RpcFailure> {
-        let mut child = Command::new(&command.program)
-            .args(&command.args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| RpcFailure::Io)?;
-        let Some(stdin) = child.stdin.take() else {
-            reap_child(child);
-            return Err(RpcFailure::Io);
-        };
-        let Some(stdout) = child.stdout.take() else {
-            reap_child(child);
-            return Err(RpcFailure::Io);
-        };
+        let connection = JsonlConnection::spawn(&command).await?;
         let mut process = Self {
-            child: Some(child),
-            stdin,
-            stdout: BufReader::new(stdout),
-            next_request_id: 1,
-            pending_notifications: VecDeque::new(),
+            connection,
+            rpc_session: RpcSession::new(),
         };
         let deadline = Instant::now() + CODEX_INITIALIZATION_TIMEOUT;
         let initialize = process
@@ -86,7 +297,7 @@ impl AppServerProcess {
             )
             .await
             .map_err(classify_initialize_error)?;
-        validate_initialize_response(&initialize).map_err(classify_initialize_error)?;
+        InitializeResponse::decode(initialize).map_err(classify_initialize_error)?;
         process
             .notification("initialized", json!({}), deadline, None)
             .await
@@ -100,7 +311,9 @@ impl AppServerProcess {
             )
             .await
             .map_err(classify_initialize_error)?;
-        validate_account_state(&account).map_err(classify_initialize_error)?;
+        AccountReadResponse::decode(account)
+            .and_then(AccountReadResponse::validate)
+            .map_err(classify_initialize_error)?;
         process.cleanup_marked_threads().await?;
         Ok(process)
     }
@@ -214,16 +427,13 @@ impl AppServerProcess {
             )
             .await
             .map_err(classify_start_error)?;
-        if validate_thread_policy(&result, &request.workspace_path).is_err() {
-            if let Some(thread_id) = result
-                .get("thread")
-                .and_then(|thread| thread.get("id"))
-                .and_then(Value::as_str)
-            {
+        let response = ThreadStartResponse::decode(result).map_err(classify_start_error)?;
+        if validate_thread_policy(&response.opaque, &request.workspace_path).is_err() {
+            if !response.thread_id().is_empty() {
                 let _ = self
                     .request(
                         "thread/delete",
-                        json!({"threadId": thread_id}),
+                        json!({"threadId": response.thread_id()}),
                         Instant::now() + CODEX_CLEANUP_TIMEOUT,
                         None,
                     )
@@ -232,15 +442,11 @@ impl AppServerProcess {
             return Err(RpcFailure::Incompatible);
         }
         if cancellation.is_cancelled() {
-            if let Some(thread_id) = result
-                .get("thread")
-                .and_then(|thread| thread.get("id"))
-                .and_then(Value::as_str)
-            {
+            if !response.thread_id().is_empty() {
                 let _ = self
                     .request(
                         "thread/delete",
-                        json!({"threadId": thread_id}),
+                        json!({"threadId": response.thread_id()}),
                         Instant::now() + CODEX_CLEANUP_TIMEOUT,
                         None,
                     )
@@ -248,12 +454,7 @@ impl AppServerProcess {
             }
             return Err(RpcFailure::Cancelled);
         }
-        result
-            .get("thread")
-            .and_then(|thread| thread.get("id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or(RpcFailure::Incompatible)
+        Ok(response.thread_id().to_owned())
     }
 
     /// 提交 turn/start；outputSchema 要求 map 形状但不把动态行号伪装成固定 schema。
@@ -278,12 +479,9 @@ impl AppServerProcess {
             )
             .await
             .map_err(classify_start_error)?;
-        result
-            .get("turn")
-            .and_then(|turn| turn.get("id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or(RpcFailure::Incompatible)
+        TurnStartResponse::decode(result)
+            .map(|response| response.turn_id().to_owned())
+            .map_err(classify_start_error)
     }
 
     /// 读取 turn/completed，并只保留最终 agent message 文本，不传播其它事件。
@@ -297,43 +495,40 @@ impl AppServerProcess {
         let mut streamed_text = String::new();
         let mut completed_text = None;
         loop {
-            let message = match self.pending_notifications.pop_front() {
-                Some(message) => message,
-                None => self.read_message(deadline, Some(cancellation)).await?,
-            };
-            if let Some(method) = message.get("method").and_then(Value::as_str) {
-                if method == "item/agentMessage/delta" && same_turn(&message, thread_id, turn_id) {
-                    if let Some(delta) = message
-                        .get("params")
-                        .and_then(|params| params.get("delta"))
-                        .and_then(Value::as_str)
-                    {
-                        streamed_text.push_str(delta);
-                    }
-                } else if method == "item/completed" && same_turn(&message, thread_id, turn_id) {
-                    if let Some(text) = message
-                        .get("params")
-                        .and_then(|params| params.get("item"))
-                        .and_then(agent_message_text)
-                    {
+            let message = self.next_notification(deadline, Some(cancellation)).await?;
+            match message {
+                Notification::AgentMessageDelta {
+                    thread_id: message_thread_id,
+                    turn_id: message_turn_id,
+                    delta,
+                } if message_thread_id == thread_id && message_turn_id == turn_id => {
+                    streamed_text.push_str(&delta);
+                }
+                Notification::ItemCompleted {
+                    thread_id: message_thread_id,
+                    turn_id: message_turn_id,
+                    item,
+                } if message_thread_id == thread_id && message_turn_id == turn_id => {
+                    if let Some(text) = agent_message_text(&item) {
                         completed_text = Some(text);
                     }
-                } else if method == "turn/completed" && same_turn(&message, thread_id, turn_id) {
-                    let turn = message
-                        .get("params")
-                        .and_then(|params| params.get("turn"))
-                        .ok_or(RpcFailure::Protocol)?;
-                    match turn.get("status").and_then(Value::as_str) {
-                        Some("completed") => {
+                }
+                Notification::TurnCompleted {
+                    thread_id: message_thread_id,
+                    turn,
+                } if message_thread_id == thread_id && turn.id == turn_id => {
+                    match turn.status.as_str() {
+                        "completed" => {
                             let final_text = completed_text
-                                .or_else(|| turn.get("items").and_then(agent_message_text))
+                                .or_else(|| turn.items.as_ref().and_then(agent_message_text))
                                 .or_else(|| (!streamed_text.is_empty()).then_some(streamed_text));
                             return Ok(final_text);
                         }
-                        Some("interrupted") => return Err(RpcFailure::Cancelled),
-                        Some("failed") => {
+                        "interrupted" => return Err(RpcFailure::Cancelled),
+                        "failed" => {
                             let failure = turn
-                                .get("error")
+                                .error
+                                .as_ref()
                                 .map(classify_remote_error)
                                 .unwrap_or(RpcFailure::Remote);
                             return Err(if failure == RpcFailure::SignedOut {
@@ -344,12 +539,8 @@ impl AppServerProcess {
                         }
                         _ => return Err(RpcFailure::Protocol),
                     }
-                } else if message.get("id").is_some() {
-                    self.reject_server_request(&message, deadline, Some(cancellation))
-                        .await?;
                 }
-            } else if message.get("id").is_some() {
-                // Ignore a response belonging to no active request; no concurrent requests are issued.
+                _ => {}
             }
         }
     }
@@ -375,16 +566,11 @@ impl AppServerProcess {
                     )
                     .await
                     .map_err(classify_capability_probe_error)?;
-                let Some(threads) = result.get("data").and_then(Value::as_array) else {
-                    return Err(RpcFailure::Incompatible);
-                };
-                let ids = threads
-                    .iter()
-                    .filter(|thread| {
-                        thread.get("threadSource").and_then(Value::as_str)
-                            == Some(CODEX_THREAD_SOURCE)
-                    })
-                    .filter_map(|thread| thread.get("id").and_then(Value::as_str))
+                let page =
+                    ThreadListResponse::decode(result).map_err(classify_capability_probe_error)?;
+                let ids = page
+                    .marked_thread_ids()
+                    .into_iter()
                     .map(ToOwned::to_owned)
                     .collect::<Vec<_>>();
                 for thread_id in ids {
@@ -397,10 +583,7 @@ impl AppServerProcess {
                     .await
                     .map_err(classify_capability_probe_error)?;
                 }
-                let next_cursor = result
-                    .get("nextCursor")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned);
+                let next_cursor = page.next_cursor().map(ToOwned::to_owned);
                 if next_cursor.is_none() || next_cursor == cursor {
                     break;
                 }
@@ -418,15 +601,29 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<(), RpcFailure> {
-        self.write_message(
-            json!({"method": method, "params": params}),
-            deadline,
-            cancellation,
-        )
-        .await
+        self.rpc_session
+            .notification(&mut self.connection, method, params, deadline, cancellation)
+            .await
+            .map_err(map_session_error)
     }
 
-    /// 发送一个 JSON-RPC request，并等待匹配 id；未知 notification 会被安全忽略。
+    /// 读取一条 notification，并保持 Codex facade 的拒绝 server-request 策略。
+    async fn next_notification(
+        &mut self,
+        deadline: Instant,
+        cancellation: Option<&CancellationSignal>,
+    ) -> Result<Notification, RpcFailure> {
+        self.rpc_session
+            .next_notification(&mut self.connection, deadline, cancellation, |request| {
+                Ok(reject_server_request(request))
+            })
+            .await
+            .map(|notification| notification.into_value())
+            .map_err(map_session_error)
+            .and_then(Notification::decode)
+    }
+
+    /// 发送一个 JSON-RPC request，并等待 session correlation 的匹配 id。
     pub(super) async fn request(
         &mut self,
         method: &str,
@@ -434,160 +631,37 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<Value, RpcFailure> {
-        if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-            return Err(RpcFailure::Cancelled);
-        }
-        let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id.saturating_add(1);
-        self.write_message(
-            json!({"id": request_id, "method": method, "params": params}),
-            deadline,
-            cancellation,
-        )
-        .await?;
-        let mut deferred = VecDeque::new();
-        loop {
-            if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-                return Err(RpcFailure::Cancelled);
-            }
-            let message = self.read_message(deadline, cancellation).await?;
-            if message.get("id").and_then(Value::as_u64) == Some(request_id) {
-                self.pending_notifications.append(&mut deferred);
-                if let Some(error) = message.get("error") {
-                    return Err(classify_remote_error(error));
-                }
-                return message.get("result").cloned().ok_or(RpcFailure::Protocol);
-            }
-            if message.get("id").is_some() && message.get("method").is_some() {
-                self.reject_server_request(&message, deadline, cancellation)
-                    .await?;
-            } else if message.get("method").is_some() {
-                deferred.push_back(message);
-            }
-        }
-    }
-
-    /// 轮询 stdout，100ms 一次检查取消状态，确保 cancellation 不需等待模型完成。
-    async fn read_message(
-        &mut self,
-        deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
-    ) -> Result<Value, RpcFailure> {
-        let mut line = String::new();
-        loop {
-            if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-                return Err(RpcFailure::Cancelled);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(RpcFailure::Timeout);
-            }
-            let wait = remaining.min(Duration::from_millis(100));
-            match tokio::time::timeout(wait, self.stdout.read_line(&mut line)).await {
-                Ok(Ok(0)) => return Err(RpcFailure::ProcessExited),
-                Ok(Ok(_)) => {
-                    let value = serde_json::from_str::<Value>(line.trim())
-                        .map_err(|_| RpcFailure::InvalidJson)?;
-                    return Ok(value);
-                }
-                Ok(Err(_)) => return Err(RpcFailure::Io),
-                Err(_) => continue,
-            }
-        }
-    }
-
-    /// 拒绝 Codex 可能发起的 command/approval 或其它 server request，保持只读边界。
-    async fn reject_server_request(
-        &mut self,
-        message: &Value,
-        deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
-    ) -> Result<(), RpcFailure> {
-        let id = message.get("id").cloned().ok_or(RpcFailure::Protocol)?;
-        self.write_message(
-            json!({
-                "id": id,
-                "error": {
-                    "code": -32601,
-                    "message": "Narrant Babysit does not accept server requests"
-                }
-            }),
-            deadline,
-            cancellation,
-        )
-        .await
-    }
-
-    /// 写入单行 JSON；stderr 从进程层直接丢弃，避免原始输出进入 diagnostics。
-    async fn write_message(
-        &mut self,
-        value: Value,
-        deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
-    ) -> Result<(), RpcFailure> {
-        let mut encoded = serde_json::to_vec(&value).map_err(|_| RpcFailure::Protocol)?;
-        encoded.push(b'\n');
-        let mut offset = 0;
-        while offset < encoded.len() {
-            check_io_deadline(deadline, cancellation)?;
-            let wait = deadline
-                .saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(100));
-            match tokio::time::timeout(wait, self.stdin.write(&encoded[offset..])).await {
-                Ok(Ok(0)) => return Err(RpcFailure::ProcessExited),
-                Ok(Ok(written)) => offset += written,
-                Ok(Err(_)) => return Err(RpcFailure::Io),
-                Err(_) => continue,
-            }
-        }
-        loop {
-            check_io_deadline(deadline, cancellation)?;
-            let wait = deadline
-                .saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(100));
-            match tokio::time::timeout(wait, self.stdin.flush()).await {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(_)) => return Err(RpcFailure::Io),
-                Err(_) => continue,
-            }
-        }
+        self.rpc_session
+            .request(
+                &mut self.connection,
+                method,
+                params,
+                deadline,
+                cancellation,
+                |request| Ok(reject_server_request(request)),
+            )
+            .await
+            .map_err(map_session_error)
     }
 }
 
-/// 仅在 App Server 明确要求 OpenAI 认证且没有任何 account 时判定未登录。
-fn validate_account_state(value: &Value) -> Result<(), RpcFailure> {
-    let requires_openai_auth = value
-        .get("requiresOpenaiAuth")
-        .and_then(Value::as_bool)
-        .ok_or(RpcFailure::Protocol)?;
-    if requires_openai_auth && value.get("account").is_none_or(Value::is_null) {
-        return Err(RpcFailure::SignedOut);
+/// 将 session 机制错误转换回当前 Codex facade 使用的内部类别。
+fn map_session_error(error: RpcSessionError) -> RpcFailure {
+    match error {
+        RpcSessionError::Failure(error) => error,
+        RpcSessionError::Remote(error) => classify_remote_error(error.as_value()),
     }
-    Ok(())
 }
 
-/// 检查一次 stdin 写入是否仍在调用方的取消与总截止时间内。
-fn check_io_deadline(
-    deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
-) -> Result<(), RpcFailure> {
-    if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-        return Err(RpcFailure::Cancelled);
-    }
-    if Instant::now() >= deadline {
-        return Err(RpcFailure::Timeout);
-    }
-    Ok(())
-}
-
-/// partial construction 失败时也 kill 并安排 wait，避免丢失 Child handle。
-fn reap_child(mut child: Child) {
-    let _ = child.start_kill();
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async move {
-            let _ = child.wait().await;
-        });
-    }
+/// Codex facade 当前拒绝所有 server request，保持只读边界和既有 -32601 policy。
+fn reject_server_request(request: &ServerRequest) -> Value {
+    json!({
+        "id": request.as_value()["id"].clone(),
+        "error": {
+            "code": -32601,
+            "message": "Narrant Babysit does not accept server requests"
+        }
+    })
 }
 
 /// 只识别有限的认证关键词，并丢弃 server 原始错误消息。
@@ -643,21 +717,6 @@ fn classify_initialize_error(error: RpcFailure) -> RpcFailure {
     }
 }
 
-/// 校验 initialize 的稳定元数据；字段缺失属于握手损坏，不猜测运行时兼容性。
-fn validate_initialize_response(value: &Value) -> Result<(), RpcFailure> {
-    let has_user_agent = value
-        .get("userAgent")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    let has_codex_home = value
-        .get("codexHome")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    (has_user_agent && has_codex_home)
-        .then_some(())
-        .ok_or(RpcFailure::Protocol)
-}
-
 /// 生产请求保留普通传输/截止时间失败；协议字段缺失仍归类为兼容性问题。
 fn classify_start_error(error: RpcFailure) -> RpcFailure {
     match error {
@@ -685,21 +744,25 @@ fn classify_capability_probe_error(error: RpcFailure) -> RpcFailure {
     }
 }
 
-/// 判断 notification 是否属于目标 thread/turn。
-fn same_turn(message: &Value, thread_id: &str, turn_id: &str) -> bool {
-    let params = message.get("params").unwrap_or(&Value::Null);
-    let same_thread = params.get("threadId").and_then(Value::as_str) == Some(thread_id);
-    let notification_turn =
-        if message.get("method").and_then(Value::as_str) == Some("turn/completed") {
-            params
-                .get("turn")
-                .and_then(|turn| turn.get("id"))
-                .and_then(Value::as_str)
-        } else {
-            params.get("turnId").and_then(Value::as_str)
-        };
-    let same_turn = notification_turn == Some(turn_id);
-    same_thread && same_turn
+/// 校验 App Server 实际应用的 workspace、权限 profile 与只读 sandbox。
+fn validate_thread_policy(result: &Value, workspace: &str) -> Result<(), RpcFailure> {
+    let roots = result
+        .get("runtimeWorkspaceRoots")
+        .and_then(Value::as_array)
+        .ok_or(RpcFailure::Protocol)?;
+    let exact_root = roots.len() == 1 && roots[0].as_str() == Some(workspace);
+    let exact_cwd = result.get("cwd").and_then(Value::as_str) == Some(workspace);
+    let profile = result
+        .get("activePermissionProfile")
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        == Some("narrant-babysit-restricted-v1");
+    let sandbox = result.get("sandbox").unwrap_or(&Value::Null);
+    let read_only = sandbox.get("type").and_then(Value::as_str) == Some("readOnly")
+        && sandbox.get("networkAccess").and_then(Value::as_bool) == Some(false);
+    (exact_root && exact_cwd && profile && read_only)
+        .then_some(())
+        .ok_or(RpcFailure::Protocol)
 }
 
 /// 从 Codex ThreadItem 中提取最终 agentMessage 文本，不传播其它 item 内容。
@@ -712,3 +775,7 @@ fn agent_message_text(value: &Value) -> Option<String> {
     }
     value.as_array()?.iter().rev().find_map(agent_message_text)
 }
+
+#[cfg(test)]
+#[path = "../../tests/codex/transport/mod.rs"]
+mod tests;

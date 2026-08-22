@@ -11,22 +11,20 @@ use super::{
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::BufReader;
-use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex as AsyncMutex;
 
 #[path = "codex/discovery.rs"]
 mod discovery;
 #[path = "codex/runtime.rs"]
 pub(super) mod runtime;
-#[path = "codex/transport.rs"]
+#[path = "codex/transport/mod.rs"]
 mod transport;
 
 /// Babysit 一次完整分析（包括 repair）的总截止时间。
@@ -53,11 +51,8 @@ struct AppServerCommand {
 
 /// Narrant 拥有的单个 App Server 连接；所有请求串行经过同一个 JSONL stream。
 struct AppServerProcess {
-    child: Option<Child>,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_request_id: u64,
-    pending_notifications: VecDeque<Value>,
+    connection: transport::JsonlConnection,
+    rpc_session: transport::RpcSession,
 }
 
 /// 同一 File Change 的 Codex thread 状态，repair 必须复用 thread。
@@ -213,32 +208,6 @@ impl RpcFailure {
             Self::SignedOut => "Codex 登录状态不可用。",
             Self::Incompatible => "Codex App Server 缺少宝宝模式所需能力。",
             Self::Initialization => "Codex App Server 初始化失败。",
-        }
-    }
-}
-
-impl Drop for AppServerProcess {
-    /// 进程状态被丢弃时 kill 后交给 reaper 等待，避免遗留僵尸子进程。
-    fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        let _ = child.start_kill();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = child.wait().await;
-            });
-        } else {
-            std::thread::spawn(move || {
-                for _ in 0..50 {
-                    if child.try_wait().ok().flatten().is_some() {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                let _ = child.start_kill();
-                let _ = child.try_wait();
-            });
         }
     }
 }
@@ -816,27 +785,6 @@ pub(super) fn structured_output_schema(request: &BabysitProviderRequest) -> Valu
         "required": ["before", "after"],
         "additionalProperties": false
     })
-}
-
-/// 校验 App Server 实际应用的 workspace、权限 profile 与只读 sandbox。
-fn validate_thread_policy(result: &Value, workspace: &str) -> Result<(), RpcFailure> {
-    let roots = result
-        .get("runtimeWorkspaceRoots")
-        .and_then(Value::as_array)
-        .ok_or(RpcFailure::Protocol)?;
-    let exact_root = roots.len() == 1 && roots[0].as_str() == Some(workspace);
-    let exact_cwd = result.get("cwd").and_then(Value::as_str) == Some(workspace);
-    let profile = result
-        .get("activePermissionProfile")
-        .and_then(|value| value.get("id"))
-        .and_then(Value::as_str)
-        == Some("narrant-babysit-restricted-v1");
-    let sandbox = result.get("sandbox").unwrap_or(&Value::Null);
-    let read_only = sandbox.get("type").and_then(Value::as_str) == Some("readOnly")
-        && sandbox.get("networkAccess").and_then(Value::as_bool) == Some(false);
-    (exact_root && exact_cwd && profile && read_only)
-        .then_some(())
-        .ok_or(RpcFailure::Protocol)
 }
 
 /// 将 target 格式化为 prompt 中的元数据；单行 source 只发送给 Codex，不进入诊断。
