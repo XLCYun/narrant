@@ -79,7 +79,7 @@ describe("Babysit contract spine", () => {
 
   it("selects a File Change, emits generating, and renders a complete validated result binding", async () => {
     const provider = createAdapter();
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -102,7 +102,7 @@ describe("Babysit contract spine", () => {
   it("regenerates a completed File Change with the regenerate cache policy", async () => {
     const provider = createAdapter();
     const explainFile = vi.spyOn(provider.babysitAdapter, "explainFile");
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
@@ -124,7 +124,7 @@ describe("Babysit contract spine", () => {
 
   it("取消或切换 File Change 后丢弃迟到的 provider result", async () => {
     const provider = createAdapter();
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
@@ -151,7 +151,7 @@ describe("Babysit contract spine", () => {
       ],
     };
     const provider = createAdapter(twoFileSnapshot);
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -184,7 +184,7 @@ describe("Babysit contract spine", () => {
       ...provider.babysitAdapter,
       clearSnapshot,
     };
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -202,7 +202,7 @@ describe("Babysit contract spine", () => {
     const provider = createAdapter();
     const clearReview = vi.fn(async () => undefined);
     const babysitAdapter: BabysitApplicationAdapter = { ...provider.babysitAdapter, clearReview };
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -219,7 +219,7 @@ describe("Babysit contract spine", () => {
   it("uses the current UI locale in the typed analysis request", async () => {
     await i18n.changeLanguage("en");
     const provider = createAdapter();
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -237,7 +237,7 @@ describe("Babysit contract spine", () => {
       beforeSize: null, afterSize: 38, before: null, after: "#!/usr/bin/env python3\nprint('hello')\n",
     };
     const provider = createAdapter(scriptSnapshot, scriptContent);
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
     await waitFor(() => expect(result.current.reader?.babysit?.eligibility).toMatchObject({ kind: "resolved", result: { eligible: true } }));
     expect(provider.eligibilityLanguage()).toBe("python");
@@ -255,7 +255,7 @@ describe("Babysit contract spine", () => {
         throw new Error("not reached before retry");
       },
     };
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
@@ -277,7 +277,7 @@ describe("Babysit contract spine", () => {
       beforeSize: null, afterSize: 10, before: null, after: "echo maybe\n",
     };
     const provider = createAdapter(unknownSnapshot, unknownContent);
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
     await waitFor(() => expect(result.current.reader?.babysit?.eligibility).toMatchObject({ kind: "resolved", result: { eligible: false } }));
     act(() => result.current.reader?.babysit?.explain());
@@ -296,7 +296,7 @@ describe("Babysit contract spine", () => {
         throw error;
       },
     };
-    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, babysitAdapter));
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, babysitAdapter));
 
     await act(async () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });

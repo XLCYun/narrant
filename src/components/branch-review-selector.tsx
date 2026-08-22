@@ -221,7 +221,7 @@ function BranchCombobox(props: BranchComboboxProps) {
           {(group: BranchGroup) => <ComboboxGroup key={group.value} items={group.items}>
             <ComboboxLabel className="sticky top-0 z-10 bg-popover/95">{group.value}</ComboboxLabel>
             <ComboboxCollection>
-              {(ref: string) => <ComboboxItem key={ref} value={ref}>
+              {(ref: string) => <ComboboxItem key={ref} value={ref} aria-label={ref}>
                 <BranchOption
                   refName={ref}
                   currentRef={props.currentRef}

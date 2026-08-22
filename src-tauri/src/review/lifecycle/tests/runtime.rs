@@ -1,3 +1,199 @@
+/// 验证 A→B→A 保留每个 Open Review 的 Reader 与 Workspace，并让重复 present 无副作用。
+#[tokio::test]
+async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
+    let fixture = LifecycleFixture::new();
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    fixture.store.activate_initial_snapshot(&first).unwrap();
+    fixture.store.activate_initial_snapshot(&second).unwrap();
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: first.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let first_reader = lifecycle
+        .open_review_runtime(&first.review_id)
+        .unwrap()
+        .unwrap()
+        .reader;
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let second_reader = lifecycle
+        .open_review_runtime(&second.review_id)
+        .unwrap()
+        .unwrap()
+        .reader;
+
+    let first_workspace = fixture
+        .store
+        .review_workspace_path(&first.review_id)
+        .unwrap();
+    let second_workspace = fixture
+        .store
+        .review_workspace_path(&second.review_id)
+        .unwrap();
+    assert!(first_workspace.exists());
+    assert!(second_workspace.exists());
+    let worktree_list = git_text(
+        fixture.repository.path(),
+        &["worktree", "list", "--porcelain"],
+    );
+    assert!(worktree_list.contains(&first_workspace.to_string_lossy().to_string()));
+    assert!(worktree_list.contains(&second_workspace.to_string_lossy().to_string()));
+
+    let before_duplicate = fixture
+        .store
+        .list_reviews(None)
+        .unwrap()
+        .into_iter()
+        .find(|review| review.review_id == second.review_id)
+        .unwrap()
+        .last_opened_at_millis;
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let after_duplicate = fixture
+        .store
+        .list_reviews(None)
+        .unwrap()
+        .into_iter()
+        .find(|review| review.review_id == second.review_id)
+        .unwrap()
+        .last_opened_at_millis;
+    assert_eq!(before_duplicate, after_duplicate);
+
+    let repository_path = fixture.repository.path().to_path_buf();
+    let unavailable_repository = fixture._application_data.path().join("repository-unavailable");
+    std::fs::rename(&repository_path, &unavailable_repository).unwrap();
+    let warm_present = lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: first.review_id.clone(),
+            },
+        )
+        .await;
+    std::fs::rename(&unavailable_repository, &repository_path).unwrap();
+    let warm_present = warm_present.unwrap();
+    assert!(warm_present.cleanup_warnings.is_empty());
+    let first_reader_again = lifecycle
+        .open_review_runtime(&first.review_id)
+        .unwrap()
+        .unwrap()
+        .reader;
+    let second_reader_again = lifecycle
+        .open_review_runtime(&second.review_id)
+        .unwrap()
+        .unwrap()
+        .reader;
+    assert!(Arc::ptr_eq(&first_reader, &first_reader_again));
+    assert!(Arc::ptr_eq(&second_reader, &second_reader_again));
+    assert!(first_workspace.exists());
+    assert!(second_workspace.exists());
+    let runtime = lifecycle.runtime.lock().unwrap();
+    assert_eq!(runtime.open_reviews.len(), 2);
+    assert_eq!(
+        runtime.presented_review_id.as_deref(),
+        Some(first.review_id.as_str())
+    );
+}
+
+/// 验证过期失败恢复不会覆盖其后完成、最终又指向相同 Review 的 presentation。
+#[tokio::test]
+async fn stale_presentation_restore_cannot_overwrite_newer_successful_presents() {
+    let fixture = LifecycleFixture::new();
+    run_git(
+        fixture.repository.path(),
+        &["branch", "alternate", "refs/heads/topic"],
+    );
+    let first = fixture.save_current_review().await;
+    let second = fixture
+        .save_review_with_refs("refs/heads/topic", "refs/heads/base")
+        .await;
+    let third = fixture
+        .save_review_with_refs("refs/heads/base", "refs/heads/alternate")
+        .await;
+    for review in [&first, &second, &third] {
+        fixture.store.activate_initial_snapshot(review).unwrap();
+    }
+    let lifecycle = ReviewLifecycle::new(fixture.store.clone());
+    for review in [&second, &third, &first] {
+        lifecycle
+            .present(
+                &OperationContext::background(),
+                PresentReview::Saved {
+                    review_id: review.review_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let operation_guard = lifecycle.enter_operation().await.unwrap();
+    let stale_transition = lifecycle
+        .present_guarded(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap()
+        .transition;
+    drop(operation_guard);
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: third.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    lifecycle
+        .present(
+            &OperationContext::background(),
+            PresentReview::Saved {
+                review_id: second.review_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+    lifecycle.restore_presentation(stale_transition).unwrap();
+
+    assert_eq!(
+        lifecycle
+            .runtime
+            .lock()
+            .unwrap()
+            .presented_review_id
+            .as_deref(),
+        Some(second.review_id.as_str())
+    );
+}
+
 #[tokio::test]
 async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
     let fixture = LifecycleFixture::new();

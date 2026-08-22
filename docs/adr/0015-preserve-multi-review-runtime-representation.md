@@ -4,17 +4,16 @@ status: accepted
 
 # Preserve a multi-Review runtime representation
 
-Keep the runtime representation capable of holding multiple open Reviews even while
-the first release permits only one active Review at a time. The Review lifecycle module
-enforces the current product limit through its orchestration instead of reducing the
-underlying representation to a single slot, because Narrant may later allow multiple
-Reviews to remain open concurrently.
+Keep the runtime representation capable of holding multiple open Reviews while the
+application presents only one Review at a time. The Review lifecycle module retains
+every Review opened during the current process so returning to one does not rebuild its
+Review Workspace.
 
 ## Consequences
 
 - Runtime Review state remains keyed by durable `reviewId`.
-- Opening or switching Reviews continues to enforce the current single-active-Review
-  behavior until the product model explicitly changes.
+- Presentation remains single-Review, but navigation does not remove other Reviews from
+  the runtime representation.
 - Refactoring the Review lifecycle must not treat the multi-Review representation as
-  accidental generality or collapse it solely because the first release opens one
-  Review at a time.
+  accidental generality or collapse it to the Presented Review.
+- Process exit releases every retained runtime entry and Review Workspace.

@@ -10,7 +10,36 @@ use crate::review::{ChangeComparison, SnapshotContentReader};
 use crate::review::{PullRequestSelection, PullRequestSelectionResolver};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// 一个进程内 Open Review 的运行时表示；Reader 与 Snapshot identity 必须一起替换。
+#[derive(Clone)]
+pub(super) struct OpenReviewRuntime {
+    pub(super) snapshot_id: String,
+    pub(super) reader: Arc<SnapshotContentReader>,
+}
+
+/// 进程内所有已打开 Review 及唯一 Presented Review 的状态。
+pub(super) struct RuntimeState {
+    pub(super) open_reviews: HashMap<String, OpenReviewRuntime>,
+    pub(super) presented_review_id: Option<String>,
+    presentation_generation: u64,
+}
+
+/// 一次 Presented Review 变更的 CAS 令牌，用于失败复合操作安全恢复。
+pub(super) struct PresentationTransition {
+    target_review_id: String,
+    previous_review_id: Option<String>,
+    installed_generation: u64,
+    pub(super) changed: bool,
+}
+
+/// 安装 Reader 时对 Presented Review 的处理方式。
+pub(super) enum OpenReviewRuntimeUpdate {
+    OpenAndPresent,
+    ReplaceSnapshot,
+}
 
 /// Review 生命周期对外返回的稳定 Snapshot 投影。
 pub struct ReviewPresentation {
@@ -60,11 +89,16 @@ pub struct ReviewUpdate {
 pub enum WorkspaceCleanup {
     NotNeeded,
     Complete,
+    #[allow(
+        dead_code,
+        reason = "清理诊断由 Tauri adapter 映射，当前 IPC 仅暴露错误文本"
+    )]
     Deferred(String),
 }
 
 /// 关闭结果明确区分逻辑关闭和可延后重试的物理清理。
 pub struct CloseOutcome {
+    #[allow(dead_code, reason = "关闭结果由未来显式关闭入口消费")]
     pub workspace_cleanup: WorkspaceCleanup,
 }
 
@@ -94,6 +128,7 @@ pub enum ReviewLifecycleError {
         activation: String,
         rollback: Option<String>,
     },
+    ShuttingDown,
     RuntimeUnavailable,
     Operation(String),
 }
@@ -167,6 +202,7 @@ impl std::fmt::Display for ReviewLifecycleError {
                 formatter,
                 "{activation}；恢复旧 Review Workspace 失败：{rollback}"
             ),
+            Self::ShuttingDown => formatter.write_str("应用正在退出，无法开始新的 Review 操作。"),
             Self::RuntimeUnavailable => formatter.write_str("Review 状态不可用。"),
         }
     }
@@ -180,7 +216,17 @@ pub struct ReviewLifecycle {
     repository_application: Arc<RepositoryApplication>,
     branch_selections: BranchSelectionResolver,
     pull_requests: Arc<PullRequestSelectionResolver>,
-    reviews: Mutex<HashMap<String, Arc<SnapshotContentReader>>>,
+    /// 全局运行时锁只保护内存状态，绝不跨越 Core Git 操作持有。
+    runtime: Mutex<RuntimeState>,
+    /// 每个 Review 的操作锁允许同一 Review 串行收敛，同时不阻塞其他 Review。
+    review_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// 生命周期 gate 允许 Review 操作并发，但让 shutdown 等待全部操作安全收敛。
+    operation_gate: tokio::sync::RwLock<()>,
+    /// shutdown 开始后立即拒绝尚未进入 gate 的新操作。
+    shutting_down: AtomicBool,
+    /// 测试专用同步点，让操作持有 read gate 后暂停，不进入生产构建。
+    #[cfg(test)]
+    operation_gate_barrier: Mutex<Option<Arc<tests::LifecycleOperationGateBarrier>>>,
     active_refreshes: Mutex<HashSet<String>>,
 }
 
@@ -220,9 +266,215 @@ impl ReviewLifecycle {
             repository_application,
             branch_selections: BranchSelectionResolver,
             pull_requests,
-            reviews: Mutex::new(HashMap::new()),
+            runtime: Mutex::new(RuntimeState {
+                open_reviews: HashMap::new(),
+                presented_review_id: None,
+                presentation_generation: 0,
+            }),
+            review_locks: Mutex::new(HashMap::new()),
+            operation_gate: tokio::sync::RwLock::new(()),
+            shutting_down: AtomicBool::new(false),
+            #[cfg(test)]
+            operation_gate_barrier: Mutex::new(None),
             active_refreshes: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// 进入可与其他 Review 并发、但必须先于 shutdown 完成的生命周期操作。
+    pub(super) async fn enter_operation(
+        &self,
+    ) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, ReviewLifecycleError> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(ReviewLifecycleError::ShuttingDown);
+        }
+        let guard = self.operation_gate.read().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            drop(guard);
+            return Err(ReviewLifecycleError::ShuttingDown);
+        }
+        #[cfg(test)]
+        self.pause_after_operation_gate_for_test().await?;
+        Ok(guard)
+    }
+
+    /// 安装一次性测试 barrier；下一个进入 read gate 的操作会在其中暂停。
+    #[cfg(test)]
+    fn install_operation_gate_barrier(
+        &self,
+        barrier: Arc<tests::LifecycleOperationGateBarrier>,
+    ) -> Result<(), ReviewLifecycleError> {
+        self.operation_gate_barrier
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .replace(barrier);
+        Ok(())
+    }
+
+    /// 若测试安装了同步点，则在继续生命周期操作前等待测试释放。
+    #[cfg(test)]
+    async fn pause_after_operation_gate_for_test(&self) -> Result<(), ReviewLifecycleError> {
+        let barrier = self
+            .operation_gate_barrier
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?
+            .take();
+        if let Some(barrier) = barrier {
+            barrier.pause_operation().await;
+        }
+        Ok(())
+    }
+
+    /// 查询 shutdown 是否已开始，供同步 close 与并发测试拒绝新工作。
+    pub(super) fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Acquire)
+    }
+
+    /// 返回一个按 durable reviewId 复用的 Review 操作锁。
+    pub(super) fn review_lock(
+        &self,
+        review_id: &str,
+    ) -> Result<Arc<tokio::sync::Mutex<()>>, ReviewLifecycleError> {
+        let mut locks = self
+            .review_locks
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        Ok(locks
+            .entry(review_id.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone())
+    }
+
+    /// 克隆某个 Open Review runtime；锁在返回后立即释放，避免跨越 Git 读操作。
+    pub(super) fn open_review_runtime(
+        &self,
+        review_id: &str,
+    ) -> Result<Option<OpenReviewRuntime>, ReviewLifecycleError> {
+        let runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        Ok(runtime.open_reviews.get(review_id).cloned())
+    }
+
+    /// 在一个短临界区中安装或替换 Open Review runtime，并按策略更新展示状态。
+    pub(super) fn update_open_review_runtime(
+        &self,
+        review_id: String,
+        snapshot_id: String,
+        reader: Arc<SnapshotContentReader>,
+        update: OpenReviewRuntimeUpdate,
+    ) -> Result<Option<PresentationTransition>, ReviewLifecycleError> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        if matches!(update, OpenReviewRuntimeUpdate::ReplaceSnapshot)
+            && !runtime.open_reviews.contains_key(&review_id)
+        {
+            return Err(ReviewLifecycleError::ReviewUnavailable(
+                "Review 已关闭或失效，请重新打开。".to_owned(),
+            ));
+        }
+        runtime.open_reviews.insert(
+            review_id.clone(),
+            OpenReviewRuntime {
+                snapshot_id,
+                reader,
+            },
+        );
+        match update {
+            OpenReviewRuntimeUpdate::OpenAndPresent => {
+                Ok(Some(Self::transition_presentation(&mut runtime, review_id)))
+            }
+            OpenReviewRuntimeUpdate::ReplaceSnapshot => Ok(None),
+        }
+    }
+
+    /// 仅切换 Presented Review，不触碰任何 Workspace 或 Reader，并返回可恢复令牌。
+    pub(super) fn present_open_review(
+        &self,
+        review_id: &str,
+    ) -> Result<PresentationTransition, ReviewLifecycleError> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        if !runtime.open_reviews.contains_key(review_id) {
+            return Err(ReviewLifecycleError::RuntimeUnavailable);
+        }
+        Ok(Self::transition_presentation(
+            &mut runtime,
+            review_id.to_owned(),
+        ))
+    }
+
+    /// 仅当展示 generation 仍匹配时回滚复合操作，避免覆盖任何较新的成功 present。
+    pub(super) fn restore_presentation(
+        &self,
+        transition: PresentationTransition,
+    ) -> Result<(), ReviewLifecycleError> {
+        if !transition.changed {
+            return Ok(());
+        }
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        if runtime.presentation_generation == transition.installed_generation
+            && runtime.presented_review_id.as_deref() == Some(&transition.target_review_id)
+        {
+            runtime.presented_review_id = transition.previous_review_id;
+            runtime.presentation_generation = runtime.presentation_generation.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    /// 原子记录一次真实 presentation 变更；重复呈现当前 Review 不推进 generation。
+    fn transition_presentation(
+        runtime: &mut RuntimeState,
+        target_review_id: String,
+    ) -> PresentationTransition {
+        let previous_review_id = runtime.presented_review_id.clone();
+        let changed = previous_review_id.as_deref() != Some(&target_review_id);
+        if changed {
+            runtime.presented_review_id = Some(target_review_id.clone());
+            runtime.presentation_generation = runtime.presentation_generation.wrapping_add(1);
+        }
+        PresentationTransition {
+            target_review_id,
+            previous_review_id,
+            installed_generation: runtime.presentation_generation,
+            changed,
+        }
+    }
+
+    /// 从运行时集合移除 Review，并在它是 Presented Review 时清空展示指针。
+    pub(super) fn remove_runtime_review(
+        &self,
+        review_id: &str,
+    ) -> Result<(), ReviewLifecycleError> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        runtime.open_reviews.remove(review_id);
+        if runtime.presented_review_id.as_deref() == Some(review_id) {
+            runtime.presented_review_id = None;
+            runtime.presentation_generation = runtime.presentation_generation.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    /// 释放所有进程内 Reader 与展示指针；Workspace 清理由调用方在锁外执行。
+    pub(super) fn clear_runtime(&self) -> Result<(), ReviewLifecycleError> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        runtime.open_reviews.clear();
+        runtime.presented_review_id = None;
+        runtime.presentation_generation = runtime.presentation_generation.wrapping_add(1);
+        Ok(())
     }
 }
 

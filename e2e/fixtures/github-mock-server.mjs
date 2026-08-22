@@ -11,16 +11,19 @@ const json = (response, body) => {
 const server = createServer((request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   if (url.pathname === "/health") return json(response, { ok: true });
-  if (url.pathname === "/repos/octo-org/octo-repo/pulls" && url.searchParams.get("page") !== "1") {
-    return json(response, []);
-  }
-  if (url.pathname === "/repos/octo-org/octo-repo/pulls") return json(response, [{
+  const pullRequest = {
     title: "真实 Tauri 审核", number: 42, user: { login: "octocat" }, state: "open",
     draft: false, merged_at: null, base: { ref: "main", sha: baseSha },
     head: { ref: "feature", sha: headSha },
+    updated_at: "2026-08-19T00:00:00Z",
     html_url: "https://github.com/octo-org/octo-repo/pull/42",
     body: "**安全描述** <script>bad()</script> ![tracker](https://tracker.invalid/pixel.png)",
-  }]);
+  };
+  if (url.pathname === "/repos/octo-org/octo-repo/pulls/42") return json(response, pullRequest);
+  if (url.pathname === "/repos/octo-org/octo-repo/pulls" && url.searchParams.get("page") !== "1") {
+    return json(response, []);
+  }
+  if (url.pathname === "/repos/octo-org/octo-repo/pulls") return json(response, [pullRequest]);
   response.writeHead(404);
   response.end();
 });

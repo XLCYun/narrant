@@ -223,12 +223,12 @@ rebuilding it.
 
 The Workspace is created lazily and removed when:
 
-- the user closes the Review;
-- the user switches to another Review;
 - the application exits normally.
 
-Only the current open Review consumes checkout disk space. The first release does not
-retain a worktree cache.
+Every Review opened during the current application process retains its Workspace.
+Switching presentation or navigating away does not remove it, and there is no automatic
+count, disk, or idle-time eviction policy. See
+[Spec 0012](0012-process-lifetime-open-reviews.md).
 
 On startup, Narrant removes worktrees left by an interrupted prior run only when SQLite,
 the Git common directory, the registered linked-worktree path, and the expected
@@ -242,8 +242,9 @@ optional collaboration projection attached to a Pull Request Selection; Snapshot
 File Change models are not tagged as Local/GitHub code sources.
 
 Runtime commands use durable `reviewId` and immutable Snapshot identity. They do not
-expose a separate `sessionId`. Closing a Review releases its in-memory handles and
-removes its temporary Review Workspace without deleting SQLite history.
+expose a separate `sessionId`. Runtime entries remain open until process shutdown;
+closing remains an internal idempotent primitive for future explicit close or Repository
+deletion without deleting SQLite history.
 
 File Change summaries are available from persisted Snapshot metadata. Before content is
 read from the comparison-base object and after content from the head object or current
@@ -299,7 +300,8 @@ metadata remain distinguishable.
 - A successful refresh makes SQLite, File Changes, and detached head worktree agree on
   the same head object ID.
 - Optional analysis-tool failure does not roll back a successful refresh.
-- Switching Reviews and normal application exit remove the previous linked worktree.
+- Switching Reviews retains every open linked worktree; normal application exit removes
+  the complete Open Review Set.
 - Startup cleanup leaves unrelated user and third-party worktrees untouched.
 - Workspace rebuild may discard dirty and ignored contents only after exact ownership
   validation.
@@ -320,7 +322,7 @@ metadata remain distinguishable.
 - Workspace Trust revocation UI.
 - Historical Snapshot browsing UI.
 - Arbitrary revision expressions, tags, or direct object-ID selections.
-- Multiple simultaneously open Reviews or a retained worktree cache.
+- Multiple simultaneously presented Review Readers or Review tabs.
 - Exact reproduction of GitHub's historical Pull Request Files changed anchor.
 - A Narrant backend, client secret, private key, or Git transport credential injection.
 

@@ -98,6 +98,16 @@ Opening it activates the runtime resources needed to inspect its current snapsho
 The same **Review** cannot be opened more than once concurrently.
 _Avoid_: Review Session, cached review
 
+**Presented Review**:
+The one open **Review** currently visible in the application. Switching presentation
+to another Review does not close the previously presented Review.
+_Avoid_: Active Workspace, current Review Workspace
+
+**Open Review Set**:
+The Reviews whose runtime resources are retained during the current application process.
+It has no automatic size or idle-time limit and is discarded when the process exits.
+_Avoid_: Review cache, recent Reviews
+
 **Repository**:
 A specific locally cloned Git repository registered with Narrant as the home of its
 saved review history. Another clone remains a distinct Repository even when both
@@ -146,48 +156,9 @@ _Avoid_: File Change status icon
 **Review Workspace**:
 The Narrant-owned, disposable checkout of the head revision presented by one
 open **Review**. It contains no user-owned state, may be forcibly rebuilt when the
-review advances to another snapshot, and is removed when the review closes.
+review advances to another snapshot, and is removed during application exit or when
+its owning Repository is deleted.
 _Avoid_: Repository, user worktree
-
-**Babysit Mode**:
-An optional Review Reader presentation that helps a reviewer understand a Review
-Snapshot by showing AI-generated Line Explanations. It explains code without judging
-its quality, reporting findings, or proposing review decisions.
-_Avoid_: AI Review, review agent, beginner mode
-
-**Line Explanation**:
-An AI-generated explanation that helps a reviewer understand one non-empty code line
-on either side of a File Change in one Review Snapshot. Babysit Mode may filter which
-Line Explanations are visible without changing their meaning or source identity.
-It is derived review data and never modifies the File Change or Review Workspace source text.
-_Avoid_: Source comment, Review Comment, AI Finding
-
-**Babysit Regeneration**:
-An explicit reviewer action that asks the Babysit Agent Provider for a new set of Line
-Explanations for the same File Change identity and replaces the reusable derived result.
-It is distinct from Retry, which recovers a failed analysis.
-_Avoid_: Refresh, Retry, cache clear
-
-**Babysit Agent Provider**:
-A source of Line Explanations that fulfills Narrant's provider-independent analysis
-contract. It is either an Installed Coding Agent Provider or a Built-in Agent Provider.
-_Avoid_: Model, AI backend
-
-**Installed Coding Agent Provider**:
-A Babysit Agent Provider that delegates analysis to a supported coding-agent runtime
-already installed and authenticated by the reviewer.
-_Avoid_: Attached agent, external model
-
-**Codex Environment Reuse**:
-The Installed Coding Agent behavior in which Narrant asks the current executable
-environment for Codex before falling back to a reviewer-selected executable, and lets
-the resulting App Server use that reviewer-owned configuration and authentication state.
-_Avoid_: Credential Bridging, Isolated Codex Home
-
-**Built-in Agent Provider**:
-A Babysit Agent Provider whose agent loop and read-only tools are owned by Narrant and
-whose configured model service supplies inference.
-_Avoid_: Installed agent, native model
 
 ## Relationships
 
@@ -260,6 +231,14 @@ _Avoid_: Installed agent, native model
 - Every **Babysit Agent Provider** produces the same provider-independent Line Explanation contract
 - An **Installed Coding Agent Provider** reuses a reviewer-installed agent runtime and its authentication
 - A **Built-in Agent Provider** never grants its model service direct access to the Review Workspace
+- Narrant may keep multiple **Reviews** open while presenting exactly one **Presented Review**
+- Switching the **Presented Review** does not close or release the previously presented Review
+- Navigating from the Review Reader to a Repository Overview or Home does not remove
+  the Review from the Open Review Set
+- An open Review retains its Review Workspace, runtime content reader, and Review Reader
+  navigation state while another Review is presented
+- The open Review set has no automatic count, disk-usage, or idle-time eviction policy
+- A Review that is open but not presented does not check for a Review Update in the background
 - An open **Review** presents exactly one **Review Snapshot** at a time
 - Ref movement makes a newer snapshot available but never changes the snapshot being
   reviewed silently
@@ -267,13 +246,20 @@ _Avoid_: Installed agent, native model
   **Pull Request**, but does not change the presented **Review Snapshot**
 - Refreshing a **Review** adds and presents a newer **Review Snapshot** only after
   explicit user action
+- Refreshing a Review discards the previous Snapshot's materialized runtime state and
+  converges that Review's single Review Workspace on the new current Snapshot; it does
+  not release other open Reviews
 - A refresh becomes current only after its **Review Snapshot**, **File Changes**, and
   **Review Workspace** consistently represent the new head revision
 - Failure of optional analysis tooling does not roll back a current
   **Review Snapshot**
-- Closing a **Review** releases runtime resources without deleting its saved history
-- A **Review** remains closed when cleanup of its **Review Workspace** fails; the
-  leftover workspace is retained only for a later safe recovery attempt
+- Exiting the application releases every open Review's runtime resources without
+  deleting saved Review history
+- Startup recovery safely removes Review Workspaces left by an interrupted prior process;
+  the Open Review Set and its runtime state are not restored across processes
+- Presenting a different open Review updates its last-opened activity time; selecting
+  the already Presented Review is a no-op and does not update activity time
+- Deleting a Repository releases every open Review and Review Workspace it owns
 - A recent-review list is an aggregate view of **Reviews** across **Repositories**;
   each entry identifies both the Review and its owning Repository
 

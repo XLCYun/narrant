@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor, type DiffOnMount, type Monaco, type MonacoDiffEditor } from "@monaco-editor/react";
 
 import type { BabysitFileExplanations } from "@/babysit/types";
+import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
 
 /** 控制当前 File Change 显示改变行还是完整解释集合。 */
 export type BabysitExplanationFilter = "changed" | "all";
@@ -38,6 +39,9 @@ type BabysitDiffEditorProps = {
   renderSideBySide: boolean;
   explanations?: BabysitFileExplanations;
   filter: BabysitExplanationFilter;
+  identity: ReviewFileIdentity;
+  viewState: ReviewFileViewState | null;
+  onSaveViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
 };
 
 /** Monaco Diff 的单行改变范围，使用统一 before/after 字段避免 UI 依赖 provider。 */
@@ -146,20 +150,36 @@ export function BabysitDiffEditor({
   renderSideBySide,
   explanations,
   filter,
+  identity,
+  viewState,
+  onSaveViewState,
 }: BabysitDiffEditorProps) {
+  const editorRef = useRef<MonacoDiffEditor>();
   const [mounted, setMounted] = useState<{ editor: MonacoDiffEditor; monaco: Monaco }>();
   const [lineChanges, setLineChanges] = useState<readonly LineChange[]>([]);
 
   /** 记录 Monaco 实例并让后续 diff 更新重新计算 changed-only 过滤。 */
-  const onMount = useCallback<DiffOnMount>((editor, monaco) => setMounted({ editor, monaco }), []);
+  const onMount = useCallback<DiffOnMount>((editor, monaco) => {
+    editorRef.current = editor;
+    if (viewState) editor.restoreViewState?.(viewState as NonNullable<ReturnType<MonacoDiffEditor["saveViewState"]>>);
+    setMounted({ editor, monaco });
+  }, [viewState]);
+  const { reviewId, snapshotId, path } = identity;
+  /** 在 Monaco 卸载边界保存当前文件的滚动、折叠和光标状态。 */
+  useLayoutEffect(() => () => {
+    const state = editorRef.current?.saveViewState?.();
+    if (state) onSaveViewState({ reviewId, snapshotId, path }, state);
+    editorRef.current = undefined;
+  }, [onSaveViewState, path, reviewId, snapshotId]);
 
   /** 监听 Monaco 的 diff 计算完成事件，确保 changed-only 不依赖字符串猜测。 */
   useEffect(() => {
     if (!mounted) return;
-    const refresh = () => setLineChanges(mounted.editor.getLineChanges() ?? []);
+    if (typeof mounted.editor.getOriginalEditor !== "function" || typeof mounted.editor.getModifiedEditor !== "function") return;
+    const refresh = () => setLineChanges(mounted.editor.getLineChanges?.() ?? []);
     refresh();
-    const subscription = mounted.editor.onDidUpdateDiff(refresh);
-    return () => subscription.dispose();
+    const subscription = mounted.editor.onDidUpdateDiff?.(refresh);
+    return () => subscription?.dispose();
   }, [mounted, original, modified]);
 
   const selectedEntries = useMemo(() => {
@@ -173,6 +193,7 @@ export function BabysitDiffEditor({
   /** 每次结果或筛选改变时重建两侧行尾解释 decoration。 */
   useEffect(() => {
     if (!mounted) return;
+    if (typeof mounted.editor.getOriginalEditor !== "function" || typeof mounted.editor.getModifiedEditor !== "function") return;
     const apply = (side: ExplanationSide, entries: ReadonlyArray<[number, string]>) => {
       const editor = side === "before" ? mounted.editor.getOriginalEditor() : mounted.editor.getModifiedEditor();
       const model = editor.getModel();
@@ -201,6 +222,7 @@ export function BabysitDiffEditor({
   /** Monaco 单栏把删除行复制进 modified view-zone；同步 original 解释到这些红色虚拟行。 */
   useEffect(() => {
     if (!mounted || renderSideBySide) return;
+    if (typeof mounted.editor.getModifiedEditor !== "function") return;
     const root = mounted.editor.getModifiedEditor().getDomNode();
     if (!root) return;
     const sync = () => syncInlineDeletedExplanations(root, selectedEntries.before, lineChanges);

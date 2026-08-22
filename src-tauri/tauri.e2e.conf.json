@@ -1,11 +1,24 @@
 {
   "app": {
+    "windows": [
+      {
+        "title": "Narrant",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "visible": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 20, "y": 24 },
+        "hiddenTitle": true
+      }
+    ],
     "security": {
       "capabilities": [
         {
           "identifier": "wdio-e2e",
           "windows": ["main"],
-          "permissions": ["core:default", "core:window:default", "dialog:allow-open", "opener:allow-open-url", "wdio:default"]
+          "permissions": ["core:default", "core:window:default", "core:window:allow-close", "dialog:allow-open", "opener:allow-open-url", "wdio:default"]
         }
       ]
     }

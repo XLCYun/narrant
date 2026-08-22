@@ -15,8 +15,10 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let builder = tauri::Builder::default()
-        .manage(operation::CancellableOperations::default())
+    let builder = tauri::Builder::default().manage(operation::CancellableOperations::default());
+    #[cfg(feature = "wdio")]
+    let builder = builder.manage(repository::E2eRepositoryPicker::default());
+    let builder = builder
         .setup(move |app| {
             let application_data = app.path().app_data_dir()?;
             #[cfg(feature = "wdio")]
@@ -50,6 +52,13 @@ pub fn run() {
             ));
             let repository_application =
                 Arc::new(repository_module::RepositoryApplication::new(store.clone()));
+            #[cfg(feature = "wdio")]
+            if let Ok(repository_path) = std::env::var("NARRANT_E2E_REPOSITORY") {
+                // 非 Trust 专项 E2E 在前端首次加载前获得稳定的已授权 fixture。
+                let repository = repository_application
+                    .register_repository(std::path::Path::new(&repository_path))?;
+                repository_application.grant_trust_and_open(repository.repository.id)?;
+            }
             let lifecycle = review::ReviewLifecycle::with_repository_application(
                 store.clone(),
                 repository_application.clone(),
@@ -65,6 +74,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "wdio")]
+            repository::set_e2e_repository_directory,
+            #[cfg(feature = "wdio")]
+            repository::choose_e2e_repository_directory,
             repository::load_repository_navigation,
             repository::open_repository_overview,
             repository::grant_repository_workspace_trust_and_open,
@@ -124,7 +137,7 @@ pub fn run() {
             let babysit = app.state::<babysit::BabysitApplication>();
             let _ = tauri::async_runtime::block_on(babysit.shutdown());
             let lifecycle = app.state::<review::ReviewLifecycle>();
-            let _ = lifecycle.shutdown();
+            let _ = tauri::async_runtime::block_on(lifecycle.shutdown());
         }
     });
 }

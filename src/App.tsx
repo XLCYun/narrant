@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSystemTheme } from "@/lib/use-system-theme";
@@ -13,14 +13,15 @@ import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { Spinner } from "@/components/ui/spinner";
+import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import {
   ReviewReader,
   type DiffMode,
 } from "@/components/review-reader";
 import type { DiscoveredPullRequest, PullRequestGroup, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
-import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
+import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
 import { createTauriPullRequestDiscoveryApplicationAdapter } from "@/infrastructure/tauri-pull-request-discovery-application-adapter";
@@ -74,31 +75,38 @@ export function App() {
     () => createTauriGitHubOAuthApplicationAdapter(tauriTransport),
     [],
   );
+  const initialDiffMode: DiffMode = localStorage.getItem(REVIEW_DIFF_MODE_KEY) === "inline" ? "inline" : "side-by-side";
+  const savedTreeWidth = Number(localStorage.getItem(REVIEW_TREE_WIDTH_KEY));
+  const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
+    ? savedTreeWidth
+    : 24;
   const repositoryOverview = useRepositoryOverview(repositoryApplication, { enabled: desktopRuntimeEnabled });
-  const reviewLifecycle = useReviewLifecycle(reviewApplicationAdapter, babysitApplicationAdapter);
+  const reviewLifecycle = useReviewLifecycle(
+    reviewApplicationAdapter,
+    { initialDiffMode, initialTreeWidth },
+    babysitApplicationAdapter,
+  );
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
+  const repositoryOverviewPresented = appShell.destination.kind === "repository"
+    && appShell.destination.repositoryId === selectedRepository?.id;
   const githubIdentity = useGitHubIdentityLifecycle(githubOAuthApplication, { enabled: desktopRuntimeEnabled });
   const pullRequestDiscoveryLifecycle = usePullRequestDiscoveryLifecycle(pullRequestDiscovery, {
-    enabled: Boolean(selectedRepository),
+    enabled: repositoryOverviewPresented,
     repositoryId: selectedRepository?.id,
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
-  const snapshot = reviewLifecycle.reader?.snapshot;
-  const refreshingReview = reviewLifecycle.reader?.transition.kind === "refreshing";
+  const visibleReviewReader = appShell.destination.kind === "review" ? reviewLifecycle.reader : null;
+  const snapshot = visibleReviewReader?.snapshot;
+  const refreshingReview = visibleReviewReader?.transition.kind === "refreshing";
+  const currentReaderDiffMode = reviewLifecycle.reader?.diffMode;
+  const currentReaderTreeWidth = reviewLifecycle.reader?.treeWidth;
   const [repositoryPath, setRepositoryPath] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [headRef, setHeadRef] = useState("");
   const [error, setError] = useState("");
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
-  const [diffMode, setDiffMode] = useState<DiffMode>(() => (
-    localStorage.getItem(REVIEW_DIFF_MODE_KEY) === "inline" ? "inline" : "side-by-side"
-  ));
   const [narrowReview, setNarrowReview] = useState(() => window.innerWidth < 1200);
-  const savedTreeWidth = Number(localStorage.getItem(REVIEW_TREE_WIDTH_KEY));
-  const initialTreeWidth = Number.isFinite(savedTreeWidth) && savedTreeWidth >= 15 && savedTreeWidth <= 45
-    ? savedTreeWidth
-    : 24;
   const repositoryEntries = repositoryOverview.navigation.repositories;
   const recentReviews = repositoryOverview.navigation.recentReviews;
   const repositoryReviews = repositoryOverview.current?.reviews ?? [];
@@ -132,7 +140,9 @@ export function App() {
   const branchContinuation = useBranchSelectionContinuation(reviewApplicationAdapter, {
     repositoryId: snapshot
       ? undefined
-      : selectedRepository?.id ?? (testHarnessEnabled ? 0 : undefined),
+      : repositoryOverviewPresented
+        ? selectedRepository?.id
+        : testHarnessEnabled ? 0 : undefined,
     baseRef,
     headRef,
     reviews: repositoryReviews,
@@ -157,11 +167,11 @@ export function App() {
     return () => window.removeEventListener("resize", updateReviewWidth);
   }, []);
 
-  /** 保存用户明确选择的宽窗口 Diff 模式。 */
-  function selectDiffMode(mode: DiffMode) {
-    setDiffMode(mode);
-    localStorage.setItem(REVIEW_DIFF_MODE_KEY, mode);
-  }
+  useEffect(() => {
+    if (!currentReaderDiffMode || currentReaderTreeWidth === undefined) return;
+    localStorage.setItem(REVIEW_DIFF_MODE_KEY, currentReaderDiffMode);
+    localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(currentReaderTreeWidth));
+  }, [currentReaderDiffMode, currentReaderTreeWidth]);
 
   useEffect(() => {
     if (branchState.kind !== "ready") return;
@@ -190,12 +200,12 @@ export function App() {
 
   /** Repository Overview 提交后启动独立的页面数据读取。 */
   useEffect(() => {
-    if (!selectedRepository) return;
+    if (!selectedRepository || !repositoryOverviewPresented) return;
     setRepositoryPath(selectedRepository.canonicalPath);
     if (!testHarnessEnabled) void repositoryOverview.reloadBranches();
     // 页面数据只在已提交的 Repository identity 改变后重新读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRepository?.id]);
+  }, [repositoryOverviewPresented, selectedRepository?.id]);
 
   /** 不依赖 GitHub 登录或 discovery，从 cached current Snapshot 重开 Review。 */
   async function openSavedReview(review: RepositoryReviewSummary) {
@@ -291,8 +301,20 @@ export function App() {
     }
   }
 
+  useEffect(() => {
+    if (!import.meta.env.VITE_WDIO) return;
+    const target = window as Window & {
+      __NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__?: () => Promise<void>;
+    };
+    target.__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__ = repositoryOverview.reloadNavigation;
+    return () => {
+      delete target.__NARRANT_E2E_RELOAD_REPOSITORY_NAVIGATION__;
+    };
+  }, [repositoryOverview.reloadNavigation]);
+
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
-  return <AppShell
+  return <>
+  <AppShell
     navigation={{
       ...appShell,
       registerAndOpen: registerRepositoryFolder,
@@ -343,7 +365,7 @@ export function App() {
           </li>)}</ul>}
       </section>
     </article>}
-    {selectedRepository && !snapshot && <article aria-label="Repository">
+    {selectedRepository && repositoryOverviewPresented && !snapshot && <article aria-label="Repository">
       <RepositoryOverview
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
@@ -376,31 +398,6 @@ export function App() {
         reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
       />
     </article>}
-    <Dialog open={Boolean(pendingRepository)} onOpenChange={(open) => {
-      if (!open && !grantingTrust) {
-        appShell.dismissTrust();
-      }
-    }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("trustTitle")}</DialogTitle>
-          <DialogDescription>{t("trustDescription")}</DialogDescription>
-        </DialogHeader>
-        <p className="break-all text-sm text-muted-foreground">{pendingRepository?.canonicalPath}</p>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            disabled={grantingTrust}
-            onClick={appShell.dismissTrust}
-          >
-            {t("cancel")}
-          </Button>
-          <Button aria-busy={grantingTrust || undefined} disabled={grantingTrust} onClick={() => void appShell.confirmTrust()}>
-            {grantingTrust && <Spinner aria-hidden />}{t("trustAndOpen")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
       <DialogContent>
         <DialogHeader>
@@ -431,11 +428,11 @@ export function App() {
       </section>
     </>}
     {visibleError && <ErrorMessage message={visibleError} />}
-    {snapshot && reviewLifecycle.reader && <div className="h-[calc(100vh-4.5rem)]">
+    {snapshot && visibleReviewReader && <div className="h-[calc(100vh-4.5rem)]">
       <ReviewReader
-        key={`${snapshot.reviewId}:${snapshot.snapshotId}`}
+        key={snapshot.reviewId}
         review={{
-          ...reviewLifecycle.reader,
+          ...visibleReviewReader,
           close: async () => {
             if (!selectedRepository) return reviewLifecycle.close();
             await appShell.navigate({ kind: "repository", repositoryId: selectedRepository.id });
@@ -443,16 +440,20 @@ export function App() {
           },
         }}
         appearance={{
-          diffMode,
           narrow: narrowReview,
           editorTheme,
-          initialTreeWidth,
-          onDiffModeChange: selectDiffMode,
-          onTreeWidthChange: (width) => localStorage.setItem(REVIEW_TREE_WIDTH_KEY, String(width)),
           onOpenExternal: (url) => void openUrl(url),
         }}
       />
     </div>}
     </>}
-  </AppShell>;
+  </AppShell>
+  {pendingRepository && <RepositoryTrustDialog
+    open
+    canonicalPath={pendingRepository.canonicalPath}
+    granting={grantingTrust}
+    onCancel={appShell.dismissTrust}
+    onConfirm={() => void appShell.confirmTrust()}
+  />}
+  </>;
 }

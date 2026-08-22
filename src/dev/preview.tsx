@@ -7,6 +7,7 @@ import { FileChangeLoading } from "@/components/file-change-loading";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
 import { RepositoryOverview } from "@/components/repository-overview";
+import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { BabysitBinding, BabysitFileExplanations } from "@/babysit/types";
@@ -27,6 +28,22 @@ type PreviewDefinition = {
   label: string;
   scenarios: Record<string, PreviewScenario>;
 };
+
+/** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
+function RepositoryTrustPreview({ granting = false }: { granting?: boolean }) {
+  const [open, setOpen] = useState(true);
+  return <div className="min-h-[32rem] rounded-xl border bg-card/40 p-6">
+    <h2 className="font-heading text-lg font-semibold">Repository Overview</h2>
+    <p className="mt-2 text-sm text-muted-foreground">选择本地仓库后，需要先确认工作区信任。</p>
+    <RepositoryTrustDialog
+      open={open}
+      canonicalPath="/Users/example/projects/a-repository-with-a-long-readable-name"
+      granting={granting}
+      onCancel={() => setOpen(false)}
+      onConfirm={() => undefined}
+    />
+  </div>;
+}
 
 const defaultRefs = [
   "refs/heads/main",
@@ -176,7 +193,6 @@ const readerSnapshot: ReviewReaderSnapshot = {
     { path: "docs/review-reader.md", oldPath: null, status: "added" },
     { path: "fixtures/unknown.fixture", oldPath: null, status: "modified" },
     { path: "src/components/review-reader.tsx", oldPath: null, status: "modified" },
-    { path: "src/components/new-reader.ts", oldPath: null, status: "added" },
     { path: "src/components/legacy-reader.tsx", oldPath: null, status: "deleted" },
     { path: "src/lib/review-navigation.ts", oldPath: "src/lib/diff-navigation.ts", status: "renamed" },
     { path: "tests/review-reader.test.tsx", oldPath: null, status: "modified" },
@@ -192,61 +208,93 @@ const readerSnapshot: ReviewReaderSnapshot = {
 };
 
 /** 用代表性长短路径和变更内容预览完整 Review Reader。 */
-function ReviewReaderPreview({ empty = false, merged = false, update = false, babysitKind }: { empty?: boolean; merged?: boolean; update?: boolean; babysitKind?: "completed" | "generating" | "repairing" | "failed" | "missing" }) {
+function ReviewReaderPreview({
+  empty = false,
+  merged = false,
+  update = false,
+  initialView = "overview",
+  shortContent = false,
+  babysitKind,
+}: {
+  empty?: boolean;
+  merged?: boolean;
+  update?: boolean;
+  initialView?: "overview" | "file-changes";
+  shortContent?: boolean;
+  babysitKind?: "completed" | "generating" | "repairing" | "failed";
+}) {
+  const fileChanges = shortContent
+    ? readerSnapshot.fileChanges.slice(0, 2)
+    : readerSnapshot.fileChanges;
   const snapshot = {
     ...readerSnapshot,
-    fileChanges: empty ? [] : readerSnapshot.fileChanges,
+    fileChanges: empty ? [] : fileChanges,
     pullRequest: merged && readerSnapshot.pullRequest
       ? { ...readerSnapshot.pullRequest, state: "merged" as const }
       : readerSnapshot.pullRequest,
   };
-  const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => {
-    const before = change.status === "added" ? null : "export function review() {\n  return 'old reader';\n}\n";
-    const after = change.status === "deleted" ? null : change.status === "modified"
-      ? "export function review() {\n  const context = prepareContext();\n  return renderFocusedReview(context);\n  logReview(context);\n}\n"
-      : "export function review() {\n  return 'focused review reader';\n}\n";
-    return [change.path, { ...change, contentKind: "text", beforeSize: before?.length ?? null, afterSize: after?.length ?? null, before, after }];
-  }));
-  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges.find((change) => change.path.endsWith(".tsx"))?.path ?? snapshot.fileChanges[0]?.path);
+  const contents: Record<string, FileChangeContent> = Object.fromEntries(snapshot.fileChanges.map((change) => [
+    change.path,
+    {
+      ...change, contentKind: "text", beforeSize: 48, afterSize: 78,
+      before: shortContent
+        ? "return 'old';\n"
+        : "export function review() {\n  return 'old reader';\n}\n",
+      after: shortContent
+        ? "return 'new';\n"
+        : "export function review() {\n  return 'focused review reader';\n}\n",
+    },
+  ]));
+  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
-  const explanationText = "说明这一行如何把当前输入转换为 Review Reader 可以安全展示的结果，并保留前后文件之间的上下文关系。".repeat(8).slice(0, 240);
-  const previewRequest = selectedPath ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" as const } : undefined;
+  const [view, setView] = useState<"overview" | "file-changes">(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
-  const previewExplanations: BabysitFileExplanations = {
-    before: selectedContent?.before ? { "1": explanationText, "2": explanationText, "3": explanationText } : {},
-    after: selectedContent?.after ? { "1": explanationText, "2": explanationText, "3": explanationText, "4": explanationText, "5": explanationText } : {},
+  const babysitRequest = selectedPath
+    ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" as const, detectedLanguage: "typescript" }
+    : undefined;
+  const babysitExplanations: BabysitFileExplanations = {
+    before: selectedContent?.before ? { "1": "定义当前文件的旧实现入口。", "2": "返回修改前的阅读器结果。" } : {},
+    after: selectedContent?.after ? { "1": "定义当前文件的新实现入口。", "2": "返回聚焦后的阅读器结果。" } : {},
   };
-  const previewBabysitState: BabysitBinding["state"] = babysitKind === "completed"
-    ? { kind: "completed", request: previewRequest!, explanations: previewExplanations }
-    : babysitKind === "repairing"
-      ? { kind: "repairing", request: previewRequest!, attempt: 2 }
-      : babysitKind === "failed"
-        ? { kind: "failed", request: previewRequest!, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
-        : babysitKind === "missing"
-          ? { kind: "failed", request: previewRequest!, retryable: true, error: { code: "codex_not_found", detail: "", recovery: "select_codex_executable" } }
-        : { kind: "generating", request: previewRequest! };
+  const babysitState: BabysitBinding["state"] = !babysitKind || !babysitRequest
+    ? { kind: "idle" }
+    : babysitKind === "completed"
+      ? { kind: "completed", request: babysitRequest, explanations: babysitExplanations }
+      : babysitKind === "repairing"
+        ? { kind: "repairing", request: babysitRequest, attempt: 2 }
+        : babysitKind === "failed"
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
+          : { kind: "generating", request: babysitRequest };
   const review: ReviewReaderBinding = {
     snapshot,
     transition: { kind: "stable" },
     fileChange: selectedPath
       ? { kind: "ready", path: selectedPath, content: contents[selectedPath] }
       : { kind: "empty" },
+    update: update
+      ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
+      : { kind: "current" },
     babysit: {
-      eligibility: selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")
-        ? { kind: "resolved", result: { eligible: true, reason: null } }
-        : { kind: "resolved", result: { eligible: false, reason: "unsupported_language" } },
-      state: selectedPath?.endsWith(".ts") || selectedPath?.endsWith(".tsx")
-        ? (babysitKind ? previewBabysitState : { kind: "idle" })
-        : { kind: "idle" },
+      eligibility: { kind: "resolved", result: { eligible: true, reason: null } },
+      state: babysitState,
       explain: () => undefined,
       regenerate: () => undefined,
       cancel: () => undefined,
       retry: () => undefined,
       selectExecutable: () => undefined,
-    } satisfies BabysitBinding,
-    update: update
-      ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
-      : { kind: "current" },
+    },
+    view,
+    setView,
+    diffMode: mode,
+    setDiffMode: setMode,
+    treeWidth: 26,
+    setTreeWidth: () => undefined,
+    collapsedDirectories: [],
+    toggleDirectory: () => undefined,
+    scrollPositions: { overview: 0, fileTree: 0, content: 0 },
+    setScrollPosition: () => undefined,
+    fileViewState: null,
+    setFileViewState: () => undefined,
     selectFileChange: setSelectedPath,
     retryFileChange: () => undefined,
     refresh: async () => ({ kind: "unchanged" }),
@@ -256,12 +304,8 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false, ba
     <ReviewReader
       review={review}
       appearance={{
-        diffMode: mode,
         narrow: window.innerWidth < 1200,
         editorTheme: document.documentElement.classList.contains("dark") ? "vs-dark" : "light",
-        initialTreeWidth: 26,
-        onDiffModeChange: setMode,
-        onTreeWidthChange: () => undefined,
         onOpenExternal: () => undefined,
       }}
     />
@@ -269,6 +313,13 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false, ba
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  "repository-trust": {
+    label: "Repository Trust",
+    scenarios: {
+      default: { label: "等待确认", render: () => <RepositoryTrustPreview /> },
+      granting: { label: "正在授权", render: () => <RepositoryTrustPreview granting /> },
+    },
+  },
   "github-authorization": {
     label: "GitHub 授权",
     scenarios: {
@@ -354,11 +405,12 @@ const previews: Record<string, PreviewDefinition> = {
     label: "Review 阅读器",
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
-      babysit: { label: "宝宝模式完成", render: () => <ReviewReaderPreview babysitKind="completed" /> },
-      "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview babysitKind="generating" /> },
-      "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview babysitKind="repairing" /> },
-      "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview babysitKind="failed" /> },
-      "babysit-missing": { label: "Codex 缺失恢复", render: () => <ReviewReaderPreview babysitKind="missing" /> },
+      "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
+      "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },
+      babysit: { label: "宝宝模式完成", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="completed" /> },
+      "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="generating" /> },
+      "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="repairing" /> },
+      "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="failed" /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
