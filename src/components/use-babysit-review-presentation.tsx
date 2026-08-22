@@ -191,7 +191,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
           aria-busy={running || undefined}
           onClick={() => babysit.regenerate()}
         />}>
-          <Icon icon={RefreshIcon} aria-hidden />
+          <Icon icon={RefreshIcon} className="-translate-y-px" aria-hidden />
         </TooltipTrigger>
         <TooltipContent>{t("review:babysitRegenerate")}</TooltipContent>
       </Tooltip>}
