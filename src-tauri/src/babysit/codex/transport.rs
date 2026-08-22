@@ -8,9 +8,11 @@ use crate::babysit::{BabysitProviderRequest, CancellationSignal};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::path::Path;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use std::time::Instant;
+
+#[path = "transport/jsonl_connection.rs"]
+mod jsonl_connection;
+pub(super) use jsonl_connection::JsonlConnection;
 
 /// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
 const CAPABILITY_SENTINEL_THREAD_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -19,10 +21,7 @@ const CAPABILITY_SENTINEL_TURN_ID: &str = "00000000-0000-0000-0000-000000000002"
 impl AppServerProcess {
     /// poison restart 前同步完成 child reap。
     pub(super) async fn shutdown(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-        }
+        self.connection.shutdown().await;
     }
 
     /// interrupt 后等待精确匹配的 terminal notification，再允许删除 thread。
@@ -47,25 +46,9 @@ impl AppServerProcess {
 
     /// 启动 stdio App Server，并完成 initialize/initialized handshake。
     pub(super) async fn spawn(command: AppServerCommand) -> Result<Self, RpcFailure> {
-        let mut child = Command::new(&command.program)
-            .args(&command.args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| RpcFailure::Io)?;
-        let Some(stdin) = child.stdin.take() else {
-            reap_child(child);
-            return Err(RpcFailure::Io);
-        };
-        let Some(stdout) = child.stdout.take() else {
-            reap_child(child);
-            return Err(RpcFailure::Io);
-        };
+        let connection = JsonlConnection::spawn(&command).await?;
         let mut process = Self {
-            child: Some(child),
-            stdin,
-            stdout: BufReader::new(stdout),
+            connection,
             next_request_id: 1,
             pending_notifications: VecDeque::new(),
         };
@@ -473,27 +456,7 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<Value, RpcFailure> {
-        let mut line = String::new();
-        loop {
-            if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-                return Err(RpcFailure::Cancelled);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(RpcFailure::Timeout);
-            }
-            let wait = remaining.min(Duration::from_millis(100));
-            match tokio::time::timeout(wait, self.stdout.read_line(&mut line)).await {
-                Ok(Ok(0)) => return Err(RpcFailure::ProcessExited),
-                Ok(Ok(_)) => {
-                    let value = serde_json::from_str::<Value>(line.trim())
-                        .map_err(|_| RpcFailure::InvalidJson)?;
-                    return Ok(value);
-                }
-                Ok(Err(_)) => return Err(RpcFailure::Io),
-                Err(_) => continue,
-            }
-        }
+        self.connection.read_message(deadline, cancellation).await
     }
 
     /// 拒绝 Codex 可能发起的 command/approval 或其它 server request，保持只读边界。
@@ -525,32 +488,9 @@ impl AppServerProcess {
         deadline: Instant,
         cancellation: Option<&CancellationSignal>,
     ) -> Result<(), RpcFailure> {
-        let mut encoded = serde_json::to_vec(&value).map_err(|_| RpcFailure::Protocol)?;
-        encoded.push(b'\n');
-        let mut offset = 0;
-        while offset < encoded.len() {
-            check_io_deadline(deadline, cancellation)?;
-            let wait = deadline
-                .saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(100));
-            match tokio::time::timeout(wait, self.stdin.write(&encoded[offset..])).await {
-                Ok(Ok(0)) => return Err(RpcFailure::ProcessExited),
-                Ok(Ok(written)) => offset += written,
-                Ok(Err(_)) => return Err(RpcFailure::Io),
-                Err(_) => continue,
-            }
-        }
-        loop {
-            check_io_deadline(deadline, cancellation)?;
-            let wait = deadline
-                .saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(100));
-            match tokio::time::timeout(wait, self.stdin.flush()).await {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(_)) => return Err(RpcFailure::Io),
-                Err(_) => continue,
-            }
-        }
+        self.connection
+            .write_message(value, deadline, cancellation)
+            .await
     }
 }
 
@@ -564,30 +504,6 @@ fn validate_account_state(value: &Value) -> Result<(), RpcFailure> {
         return Err(RpcFailure::SignedOut);
     }
     Ok(())
-}
-
-/// 检查一次 stdin 写入是否仍在调用方的取消与总截止时间内。
-fn check_io_deadline(
-    deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
-) -> Result<(), RpcFailure> {
-    if cancellation.is_some_and(CancellationSignal::is_cancelled) {
-        return Err(RpcFailure::Cancelled);
-    }
-    if Instant::now() >= deadline {
-        return Err(RpcFailure::Timeout);
-    }
-    Ok(())
-}
-
-/// partial construction 失败时也 kill 并安排 wait，避免丢失 Child handle。
-fn reap_child(mut child: Child) {
-    let _ = child.start_kill();
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async move {
-            let _ = child.wait().await;
-        });
-    }
 }
 
 /// 只识别有限的认证关键词，并丢弃 server 原始错误消息。
