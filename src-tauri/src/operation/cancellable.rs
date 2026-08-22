@@ -38,11 +38,6 @@ impl CancellationSignal {
     pub(crate) fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
-
-    /// 由拥有应用生命周期的内部清理 seam 请求当前操作尽快退出。
-    pub(crate) fn cancel(&self) {
-        self.mark_cancelled();
-    }
 }
 
 /// 仅供操作 registry 持有的取消触发权。
@@ -260,6 +255,20 @@ impl CancellableOperations {
                         requested_at: Instant::now(),
                     },
                 );
+            }
+        }
+        Ok(())
+    }
+
+    /// 应用退出时通知当前已注册的全部运行操作，不创建新的提前取消记录。
+    pub fn cancel_all(&self) -> Result<(), OperationError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| OperationError::RegistryUnavailable)?;
+        for entry in state.entries.values() {
+            if let OperationEntry::Running { source, .. } = entry {
+                source.cancel();
             }
         }
         Ok(())

@@ -142,16 +142,21 @@ async fn shutdown_releases_the_owned_app_server_after_a_completed_run() {
 }
 
 #[tokio::test]
-async fn shutdown_cancels_active_generate_before_interrupt_delete_and_child_shutdown() {
+async fn cancelled_generate_is_cleaned_before_provider_shutdown() {
     let (provider, _temp, events) = provider("hang", CODEX_ANALYSIS_TIMEOUT);
     let provider = Arc::new(provider);
-    let cancellation = OperationContext::background().cancellation().clone();
+    let cancellation = TestCancellation::default();
     let worker_provider = provider.clone();
-    let worker =
-        tokio::spawn(async move { worker_provider.generate(request(), &cancellation).await });
+    let worker_cancellation = cancellation.clone();
+    let worker = tokio::spawn(async move {
+        worker_provider
+            .generate(request(), &worker_cancellation)
+            .await
+    });
 
     wait_for_event(&events, "turn/start:real").await;
     wait_for_active_thread(&provider).await;
+    cancellation.cancel();
     provider.shutdown().await;
 
     let error = worker.await.unwrap().unwrap_err();
@@ -171,7 +176,7 @@ async fn shutdown_cancels_active_generate_before_interrupt_delete_and_child_shut
 }
 
 #[tokio::test]
-async fn shutdown_cancels_active_repair_before_interrupt_delete_and_child_shutdown() {
+async fn cancelled_repair_is_cleaned_before_provider_shutdown() {
     let (provider, _temp, events) = provider("repair-hang", CODEX_ANALYSIS_TIMEOUT);
     let provider = Arc::new(provider);
     let cancellation = TestCancellation::default();
@@ -198,6 +203,7 @@ async fn shutdown_cancels_active_repair_before_interrupt_delete_and_child_shutdo
     });
     wait_for_event_count(&events, "turn/start:real", 2).await;
     wait_for_active_thread(&provider).await;
+    cancellation.cancel();
     provider.shutdown().await;
 
     let error = worker.await.unwrap().unwrap_err();
@@ -631,7 +637,6 @@ fn dropping_cleanup_guard_without_runtime_removes_ownership_and_poisons_generati
         turn_id: "turn-1".to_owned(),
         repair_attempts: 0,
         deadline: std::time::Instant::now() + Duration::from_secs(1),
-        cancellation: CancellationSignal::default(),
     };
     active.lock().unwrap().insert("key".to_owned(), run.clone());
 

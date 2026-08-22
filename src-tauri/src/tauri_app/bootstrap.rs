@@ -119,10 +119,12 @@ pub fn run() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
-            let lifecycle = app.state::<review::ReviewLifecycle>();
-            let _ = lifecycle.shutdown();
+            let operations = app.state::<operation::CancellableOperations>();
+            let _ = operations.cancel_all();
             let babysit = app.state::<babysit::BabysitApplication>();
             let _ = tauri::async_runtime::block_on(babysit.shutdown());
+            let lifecycle = app.state::<review::ReviewLifecycle>();
+            let _ = lifecycle.shutdown();
         }
     });
 }

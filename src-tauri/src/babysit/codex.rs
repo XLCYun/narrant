@@ -67,7 +67,6 @@ struct ActiveThread {
     turn_id: String,
     repair_attempts: u8,
     deadline: Instant,
-    cancellation: CancellationSignal,
 }
 
 /// 等待 turn 的 future 被直接丢弃时，异步中断并删除其 Narrant-owned thread。
@@ -562,7 +561,6 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                         turn_id: String::new(),
                         repair_attempts: 0,
                         deadline,
-                        cancellation: cancellation.clone(),
                     };
                     let _ = self.delete_active_thread(process, &key, &run, false).await;
                 } else {
@@ -583,7 +581,6 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             turn_id,
             repair_attempts: 0,
             deadline,
-            cancellation: cancellation.clone(),
         };
         let active_inserted = self
             .active_threads
@@ -690,15 +687,8 @@ impl BabysitAgentProvider for CodexAppServerProvider {
 
     /// 应用退出时中断并删除所有仍归 Narrant 所有的 thread，再终止 App Server。
     async fn shutdown(&self) {
-        // 先只发取消信号，不要从 active map 移除 ownership；拥有 process lock 的
-        // generate/repair future 会沿 RunCleanupGuard 正常执行 interrupt/delete。
-        if let Ok(active) = self.active_threads.lock() {
-            for run in active.values() {
-                run.cancellation.cancel();
-            }
-        }
-
-        // 给正在等待 turn 的 future 一个有界清理窗口。删除得到服务端确认前，
+        // 顶层 operation registry 已先广播取消。这里给正在等待 turn 的 future 一个
+        // 有界清理窗口；删除得到服务端确认前，
         // active map 保持非空，避免退出流程抢走同一个 thread 的所有权。
         let cleanup_finished = tokio::time::timeout(CODEX_CLEANUP_TIMEOUT, async {
             loop {
