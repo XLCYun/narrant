@@ -89,7 +89,7 @@ export const resources = {
       openOverview: "打开审核概览", closeOverview: "关闭审核概览", overview: "审核概览", reviewViews: "审核视图", toolbar: "审核工具栏",
       pullRequestOverviewDescription: "Pull Request 的协作背景与完整 revisions", branchOverviewDescription: "本地分支比较与完整 revisions",
       localBranchReview: "本地分支审核", pullRequest: "Pull Request", author: "作者", status: "状态", draft: "草稿",
-      state: { open: "开放", closed: "已关闭", merged: "已合并" }, revisions: "Revisions", description: "描述",
+      state: { open: "已开启", closed: "已关闭", merged: "已合并" }, revisions: "Revisions", description: "描述",
       blockedRemoteImage: "远程图片已阻止加载", blockedRemoteImageWithAlt: "远程图片“{{alt}}”已阻止加载", viewOnGitHub: "在 GitHub 查看",
       branchCopied: "分支名已复制", revisionCopied: "Commit SHA 已复制", referenceCopyFailed: "引用复制失败", loadRemoteImage: "在浏览器中打开远程图片",
       mergeSentenceStart: "将", mergeSentenceJoin: "合入", revisionRelationLabel: "将 Head 分支 {{head}} 合入 Base 分支 {{base}}",
