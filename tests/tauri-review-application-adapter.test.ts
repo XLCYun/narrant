@@ -231,6 +231,7 @@ describe("Tauri Babysit application adapter", () => {
         path: "Cargo.lock",
         locale: "zh-CN",
       },
+      "reuse_cached",
       vi.fn(),
       new AbortController().signal,
     )).rejects.toEqual(error);
@@ -241,6 +242,7 @@ describe("Tauri Babysit application adapter", () => {
         snapshotId: "snapshot-1",
         path: "Cargo.lock",
         locale: "zh-CN",
+        generationPolicy: "reuse_cached",
       }),
       expect.any(AbortSignal),
     );

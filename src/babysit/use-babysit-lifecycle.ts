@@ -10,6 +10,7 @@ import {
   type BabysitError,
   type BabysitEligibilityState,
   type BabysitFileRequest,
+  type BabysitGenerationPolicy,
   type BabysitProgress,
   type BabysitState,
 } from "@/babysit/types";
@@ -51,6 +52,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
   const eligibilityRequest = useRef(0);
   const [eligibility, setEligibility] = useState<BabysitEligibilityState>({ kind: "unavailable" });
   const [state, setState] = useState<BabysitState>({ kind: "idle" });
+  const lastGenerationPolicy = useRef<BabysitGenerationPolicy>("reuse_cached");
 
   /** 取消并使当前 provider response 失效；reset=false 仅用于卸载清理。 */
   const invalidateExplanation = useCallback((reset = true) => {
@@ -103,7 +105,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
   }, [adapter, fileChange, locale, snapshot]);
 
   /** 对当前 immutable File Change 发起完整文件分析，并丢弃 stale response。 */
-  const explain = useCallback(() => {
+  const generate = useCallback((generationPolicy: BabysitGenerationPolicy) => {
     if (!snapshot || fileChange.kind !== "ready" || !adapter) return;
     if (eligibility.kind !== "resolved" || !eligibility.result.eligible) return;
     const request: BabysitFileRequest = {
@@ -112,12 +114,13 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
       locale,
       detectedLanguage: detectBabysitLanguage(fileChange.path, fileChange.content),
     };
+    lastGenerationPolicy.current = generationPolicy;
     invalidateExplanation(false);
     const abort = new AbortController();
     const requestId = explanationRequest.current;
     explanationAbort.current = abort;
     setState({ kind: "generating", request });
-    void adapter.explainFile(request, (progress: BabysitProgress) => {
+    void adapter.explainFile(request, generationPolicy, (progress: BabysitProgress) => {
       if (abort.signal.aborted || requestId !== explanationRequest.current) return;
       setState(progress.phase === "repairing"
         ? { kind: "repairing", request, attempt: progress.attempt }
@@ -132,6 +135,14 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
       }
     });
   }, [adapter, eligibility, fileChange, invalidateExplanation, locale, snapshot]);
+
+  /** 普通开启允许复用精确 identity 的已完成结果。 */
+  const explain = useCallback(() => generate("reuse_cached"), [generate]);
+
+  /** 主动重新生成只对已完成结果开放，并立即替换展示状态。 */
+  const regenerate = useCallback(() => {
+    if (state.kind === "completed") generate("regenerate");
+  }, [generate, state.kind]);
 
   /** 仅在 typed recovery action 要求时打开 native picker；取消不改变失败状态。 */
   const selectExecutable = useCallback(async () => {
@@ -156,13 +167,13 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
       await select(selected);
       if (requestId !== explanationRequest.current) return;
       invalidateExplanation();
-      explain();
+      generate(lastGenerationPolicy.current);
     } catch (reason) {
       if (requestId === explanationRequest.current) {
         setState({ kind: "failed", request: failed.request, error: babysitFailure(reason), retryable: true });
       }
     }
-  }, [adapter, explain, invalidateExplanation, state]);
+  }, [adapter, generate, invalidateExplanation, state]);
 
   /** UI locale 改变后清掉旧语言结果，下一次点击使用新的 cache identity。 */
   useEffect(() => {
@@ -179,10 +190,11 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     state,
     eligibility,
     explain,
+    regenerate,
     cancel: invalidateExplanation,
-    retry: () => { if (state.kind === "failed") explain(); },
+    retry: () => { if (state.kind === "failed") generate(lastGenerationPolicy.current); },
     selectExecutable,
-  } : undefined, [adapter, eligibility, explain, invalidateExplanation, selectExecutable, state]);
+  } : undefined, [adapter, eligibility, explain, generate, invalidateExplanation, regenerate, selectExecutable, state]);
 
   /** 清理动作不阻塞 Review 主流程，provider cleanup 失败由 adapter 自行记录。 */
   const clearSnapshot = useCallback(async (identity: ReviewIdentity) => {

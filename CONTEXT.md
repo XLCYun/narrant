@@ -162,6 +162,12 @@ Line Explanations are visible without changing their meaning or source identity.
 It is derived review data and never modifies the File Change or Review Workspace source text.
 _Avoid_: Source comment, Review Comment, AI Finding
 
+**Babysit Regeneration**:
+An explicit reviewer action that asks the Babysit Agent Provider for a new set of Line
+Explanations for the same File Change identity and replaces the reusable derived result.
+It is distinct from Retry, which recovers a failed analysis.
+_Avoid_: Refresh, Retry, cache clear
+
 **Babysit Agent Provider**:
 A source of Line Explanations that fulfills Narrant's provider-independent analysis
 contract. It is either an Installed Coding Agent Provider or a Built-in Agent Provider.

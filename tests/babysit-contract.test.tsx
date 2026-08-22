@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isBabysitError, type BabysitApplicationAdapter, type BabysitError, type BabysitFileExplanations } from "@/babysit/types";
+import { isBabysitError, type BabysitApplicationAdapter, type BabysitBinding, type BabysitError, type BabysitFileExplanations } from "@/babysit/types";
 import { i18n } from "@/lib/i18n";
 import { useReviewLifecycle, type ReviewApplicationAdapter } from "@/review/use-review-lifecycle";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
@@ -50,7 +50,7 @@ function createAdapter(reviewSnapshot = snapshot, fileContent = content) {
         ? { eligible: true, reason: null }
         : { eligible: false, reason: "unsupported_language" };
     },
-    explainFile(request, onProgress, signal) {
+    explainFile(request, _generationPolicy, onProgress, signal) {
       requested = { request, signal };
       onProgress({ phase: "generating" });
       return new Promise((resolve) => { resolveExplanation = resolve; });
@@ -97,6 +97,27 @@ describe("Babysit contract spine", () => {
       kind: "completed",
       explanations: { before: { "1": "定义旧值。" }, after: { "1": "定义新值。" } },
     }));
+  });
+
+  it("regenerates a completed File Change with the regenerate cache policy", async () => {
+    const provider = createAdapter();
+    const explainFile = vi.spyOn(provider.babysitAdapter, "explainFile");
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, provider.babysitAdapter));
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    act(() => result.current.reader?.babysit?.explain());
+    await act(async () => {
+      provider.resolve({ before: { "1": "旧解释" }, after: { "1": "旧解释" } });
+    });
+    await waitFor(() => expect(result.current.reader?.babysit?.state.kind).toBe("completed"));
+
+    act(() => (result.current.reader?.babysit as BabysitBinding & { regenerate(): void }).regenerate());
+
+    expect(result.current.reader?.babysit?.state.kind).toBe("generating");
+    expect(explainFile).toHaveBeenCalledTimes(2);
+    expect(explainFile.mock.calls[1]?.[1]).toBe("regenerate");
   });
 
   it("取消或切换 File Change 后丢弃迟到的 provider result", async () => {

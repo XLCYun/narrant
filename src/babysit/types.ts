@@ -84,6 +84,9 @@ export type BabysitFileExplanations = {
   after: Record<string, string>;
 };
 
+/** 控制同 identity 的分析复用现有结果，或明确请求一套新解释。 */
+export type BabysitGenerationPolicy = "reuse_cached" | "regenerate";
+
 /** 绑定精确 Review Snapshot、File Change path 与界面语言的请求 identity。 */
 export type BabysitFileRequest = ReviewIdentity & {
   path: string;
@@ -135,6 +138,7 @@ export interface BabysitApplicationAdapter {
   /** 按完整 File Change 发起一次分析；失败时 reject 结构化 BabysitError。 */
   explainFile(
     request: BabysitFileRequest,
+    generationPolicy: BabysitGenerationPolicy,
     onProgress: (progress: BabysitProgress) => void,
     signal: AbortSignal,
   ): Promise<BabysitFileExplanations>;
@@ -154,6 +158,8 @@ export type BabysitBinding = {
   eligibility: BabysitEligibilityState;
   /** 启动当前 File Change 的完整分析。 */
   explain(): void;
+  /** 绕过当前文件缓存，重新生成并替换 Line Explanations。 */
+  regenerate(): void;
   /** 取消当前分析并丢弃未完成结果。 */
   cancel(): void;
   /** 重试最后一次失败的分析。 */

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Copy01Icon, GitCompareIcon, ListViewIcon } from "@hugeicons/core-free-icons";
+import { Copy01Icon, GitCompareIcon, ListViewIcon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
 import type { BabysitExplanationFilter } from "@/components/babysit-diff-editor";
@@ -154,32 +154,48 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
       <Icon icon={filter === "changed" ? ListViewIcon : GitCompareIcon} aria-hidden />
       <span className="hidden sm:inline">{filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}</span>
     </Button>}
-    <Tooltip>
-      <TooltipTrigger render={<Button
-        variant={visible ? "default" : "outline"}
-        size="sm"
-        aria-label={visible ? t("review:babysitDisable") : t("review:babysit")}
-        aria-pressed={visible}
-        aria-disabled={!enabled}
-        aria-describedby={!enabled ? reasonId : undefined}
-        aria-busy={running || undefined}
-        className={!enabled ? "cursor-not-allowed opacity-50" : undefined}
-        onClick={() => {
-          if (!enabled) return;
-          if (visible) {
-            if (running) babysit.cancel();
-            setVisible(false);
-            return;
-          }
-          start();
-          setVisible(true);
-        }}
-      />}>
-        <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 -translate-y-px object-contain" data-icon="inline-start" aria-hidden />
-        <span className="hidden sm:inline">{visible ? t("review:babysitDisable") : t("review:babysit")}</span>
-      </TooltipTrigger>
-      <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
-    </Tooltip>
+    <div className={cn("inline-flex", visible && "overflow-hidden rounded-4xl bg-primary")}>
+      <Tooltip>
+        <TooltipTrigger render={<Button
+          variant={visible ? "default" : "outline"}
+          size="sm"
+          aria-label={visible ? t("review:babysitDisable") : t("review:babysit")}
+          aria-pressed={visible}
+          aria-disabled={!enabled}
+          aria-describedby={!enabled ? reasonId : undefined}
+          aria-busy={running || undefined}
+          className={cn(!enabled && "cursor-not-allowed opacity-50", visible && "rounded-r-none pr-1.5")}
+          onClick={() => {
+            if (!enabled) return;
+            if (visible) {
+              if (running) babysit.cancel();
+              setVisible(false);
+              return;
+            }
+            start();
+            setVisible(true);
+          }}
+        />}>
+          <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 -translate-y-px object-contain" data-icon="inline-start" aria-hidden />
+          <span className="hidden sm:inline">{visible ? t("review:babysitDisable") : t("review:babysit")}</span>
+        </TooltipTrigger>
+        <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
+      </Tooltip>
+      {visible && <Tooltip>
+        <TooltipTrigger render={<Button
+          variant="default"
+          size="icon-sm"
+          className="rounded-l-none pl-0"
+          aria-label={t("review:babysitRegenerate")}
+          disabled={state?.kind !== "completed"}
+          aria-busy={running || undefined}
+          onClick={() => babysit.regenerate()}
+        />}>
+          <Icon icon={RefreshIcon} aria-hidden />
+        </TooltipTrigger>
+        <TooltipContent>{t("review:babysitRegenerate")}</TooltipContent>
+      </Tooltip>}
+    </div>
     {!enabled && <span id={reasonId} className="sr-only">{eligibilityReason}</span>}
   </div> : null;
 

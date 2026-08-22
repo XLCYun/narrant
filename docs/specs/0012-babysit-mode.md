@@ -68,6 +68,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
     an internal product operation does not clutter my interactive sessions.
 25. As a maintainer, I want Codex and future Claude Code providers to satisfy one
     contract, so that provider protocols cannot leak into Review Reader behavior.
+26. As a reviewer, I want to regenerate completed Line Explanations for the current
+    File Change, so that I can request a fresh analysis without closing Babysit Mode
+    or discarding cached explanations for other files.
 26. As a maintainer, I want CI to use a deterministic fake App Server, so that tests do
     not require a personal login, network access, or paid model request.
 
@@ -94,6 +97,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - The frontend Babysit module owns Review Reader session state, progress presentation,
   Monaco filtering and view zones, retry and cancellation actions, and stale-request
   rejection behind one Review Reader binding.
+- File analysis carries a provider-independent `reuse_cached` or `regenerate` policy.
+  Regeneration bypasses and replaces only the exact cached File Change result; Retry
+  remains the recovery action for a failed analysis.
 - Tauri transport remains a typed adapter. A per-request progress channel carries only
   provider-independent phases, while the command returns the final validated result.
 - The Codex adapter owns executable discovery, App Server lifecycle, JSONL protocol,

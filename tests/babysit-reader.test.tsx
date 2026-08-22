@@ -57,6 +57,7 @@ function makeReview(state: BabysitBinding["state"], overrides: Partial<BabysitBi
     eligibility: { kind: "resolved", result: { eligible: true, reason: null } },
     state,
     explain: vi.fn(),
+    regenerate: vi.fn(),
     cancel: vi.fn(),
     retry: vi.fn(),
     selectExecutable: vi.fn(),
@@ -135,6 +136,26 @@ describe("Babysit Review Reader presentation", () => {
     expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
   });
 
+  it("在关闭宝宝模式右侧提供独立的重新生成动作", () => {
+    const review = makeReview({
+      kind: "completed",
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      explanations: { before: { "2": "旧解释" }, after: { "2": "旧解释" } },
+    });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+
+    const closeButton = screen.getByRole("button", { name: "关闭宝宝模式" });
+    const regenerateButton = screen.getByRole("button", { name: "重新生成逐行解释" });
+    expect(regenerateButton).toBeEnabled();
+    expect(closeButton.parentElement).toBe(regenerateButton.parentElement);
+
+    fireEvent.click(regenerateButton);
+    expect(review.babysit?.regenerate).toHaveBeenCalledTimes(1);
+    expect(review.babysit?.cancel).not.toHaveBeenCalled();
+    expect(closeButton).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("added file 双栏不在空的 before pane 重复插入补偿区", () => {
     fakeLineChanges = [
       { originalStartLineNumber: 0, originalEndLineNumber: 0, modifiedStartLineNumber: 1, modifiedEndLineNumber: 2 },
@@ -191,6 +212,7 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
     expect(screen.getByTestId("babysit-footer")).toHaveTextContent("正在修复逐行解释（第 2 次）");
+    expect(screen.getByRole("button", { name: "重新生成逐行解释" })).toBeDisabled();
     const fileChangesPanel = screen.getByRole("tabpanel", { name: "文件改动" });
     expect(fileChangesPanel).toHaveClass("flex", "min-h-0", "flex-col");
     expect(fileChangesPanel.querySelector("[data-slot='resizable-panel-group']")).toHaveClass("h-auto!", "min-h-0", "flex-1");
@@ -208,6 +230,7 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
     const footer = screen.getByTestId("babysit-footer");
+    expect(screen.getByRole("button", { name: "重新生成逐行解释" })).toBeDisabled();
     expect(footer).toHaveTextContent("逐行解释失败");
     fireEvent.click(within(footer).getByRole("button", { name: "重试" }));
     expect(failedReview.babysit?.retry).toHaveBeenCalledTimes(1);

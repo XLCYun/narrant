@@ -403,6 +403,14 @@ pub struct ReviewIdentity {
     pub snapshot_id: String,
 }
 
+/// 一次分析如何处理同 identity 的进程内缓存。
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BabysitGenerationPolicy {
+    ReuseCached,
+    Regenerate,
+}
+
 /// 一次 file analysis 的调用参数与精确 Review Snapshot identity。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BabysitFileRequest {
@@ -412,6 +420,8 @@ pub struct BabysitFileRequest {
     /// 当前 Review Workspace 的绝对路径，不进入前端 identity 或缓存 key。
     pub workspace_path: String,
     pub detected_language: Option<String>,
+    /// 决定复用精确缓存，或请求 provider 生成并替换一套新解释。
+    pub generation_policy: BabysitGenerationPolicy,
 }
 
 /// UI 查询文件是否可进入 Babysit 的 provider-independent 结果。
@@ -542,15 +552,17 @@ impl BabysitApplication {
             process_generation: self.provider.process_generation().to_owned(),
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
         };
-        if let Some(result) = self
-            .cache
-            .lock()
-            .map_err(|_| BabysitError::CacheUnavailable)?
-            .get(&key)
-            .cloned()
-        {
-            notify(BabysitProgress::Completed)?;
-            return Ok(result);
+        if request.generation_policy == BabysitGenerationPolicy::ReuseCached {
+            if let Some(result) = self
+                .cache
+                .lock()
+                .map_err(|_| BabysitError::CacheUnavailable)?
+                .get(&key)
+                .cloned()
+            {
+                notify(BabysitProgress::Completed)?;
+                return Ok(result);
+            }
         }
 
         notify(BabysitProgress::Generating)?;

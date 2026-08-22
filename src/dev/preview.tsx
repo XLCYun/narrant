@@ -239,6 +239,7 @@ function ReviewReaderPreview({ empty = false, merged = false, update = false, ba
         ? (babysitKind ? previewBabysitState : { kind: "idle" })
         : { kind: "idle" },
       explain: () => undefined,
+      regenerate: () => undefined,
       cancel: () => undefined,
       retry: () => undefined,
       selectExecutable: () => undefined,

@@ -1,6 +1,6 @@
 use crate::babysit::{
     BabysitApplication, BabysitEligibility, BabysitErrorPayload, BabysitFileExplanations,
-    BabysitFileRequest, BabysitProgress, ReviewIdentity,
+    BabysitFileRequest, BabysitGenerationPolicy, BabysitProgress, ReviewIdentity,
 };
 use crate::operation::{self, OperationContext, OperationId};
 use crate::review;
@@ -71,6 +71,7 @@ pub(crate) async fn explain_review_file_change(
     path: String,
     locale: String,
     detected_language: Option<String>,
+    generation_policy: BabysitGenerationPolicy,
     progress: Channel<BabysitProgress>,
 ) -> Result<BabysitFileExplanations, BabysitErrorPayload> {
     run_babysit_command(&operations, operation_id, |operation| async move {
@@ -99,6 +100,7 @@ pub(crate) async fn explain_review_file_change(
                     locale,
                     workspace_path: workspace_path.to_string_lossy().into_owned(),
                     detected_language,
+                    generation_policy,
                 },
                 content,
                 operation.cancellation(),

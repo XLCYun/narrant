@@ -3,7 +3,7 @@ import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oaut
 import type { PullRequestGroup } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchSelectionUpdate } from "@/review/review-application";
-import type { BabysitEligibility, BabysitError, BabysitFileExplanations, BabysitProgress } from "@/babysit/types";
+import type { BabysitEligibility, BabysitError, BabysitFileExplanations, BabysitGenerationPolicy, BabysitProgress } from "@/babysit/types";
 import type { Channel } from "@tauri-apps/api/core";
 import type {
   BranchRefs,
@@ -40,7 +40,7 @@ export type TauriCommandContract = {
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
-  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
+  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
   select_babysit_codex_executable: { args: { executable: string }; result: void; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
