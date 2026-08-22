@@ -155,9 +155,9 @@ impl ServerRequest {
         Ok(Self(value))
     }
 
-    /// 返回 server request id，供 facade 构造同 id 回复。
-    pub(super) fn id_value(&self) -> Value {
-        self.0["id"].clone()
+    /// 返回完整 server request，供 facade 读取 id、method 与 params 并决定回复。
+    pub(super) fn as_value(&self) -> &Value {
+        &self.0
     }
 }
 

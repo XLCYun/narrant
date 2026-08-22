@@ -446,7 +446,7 @@ fn map_session_error(error: RpcSessionError) -> RpcFailure {
 /// Codex facade 当前拒绝所有 server request，保持只读边界和既有 -32601 policy。
 fn reject_server_request(request: &ServerRequest) -> Value {
     json!({
-        "id": request.id_value(),
+        "id": request.as_value()["id"].clone(),
         "error": {
             "code": -32601,
             "message": "Narrant Babysit does not accept server requests"

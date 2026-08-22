@@ -142,13 +142,14 @@ done
             Instant::now() + Duration::from_secs(2),
             None,
             move |request| {
+                let request = request.as_value();
                 *observed_by_handler.lock().unwrap() = Some((
-                    request.id_value(),
-                    request.0["method"].clone(),
-                    request.0["params"].clone(),
+                    request["id"].clone(),
+                    request["method"].clone(),
+                    request["params"].clone(),
                 ));
                 Ok(json!({
-                    "id": request.id_value(),
+                    "id": request["id"].clone(),
                     "error": {"code": -32601, "message": "unsupported"}
                 }))
             },
