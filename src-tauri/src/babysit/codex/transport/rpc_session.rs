@@ -220,7 +220,7 @@ pub(super) enum RpcSessionError {
 }
 
 /// 单连接的顺序 RPC 状态；不保存并发 pending map。
-pub(crate) struct RpcSession {
+pub(in crate::babysit::codex) struct RpcSession {
     /// 下一个顺序 request id。
     next_request_id: u64,
     /// response 等待期间暂存的 notification。
