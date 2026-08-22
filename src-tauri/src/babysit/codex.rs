@@ -18,8 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::BufReader;
-use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex as AsyncMutex;
 
 #[path = "codex/discovery.rs"]
@@ -53,9 +51,7 @@ struct AppServerCommand {
 
 /// Narrant 拥有的单个 App Server 连接；所有请求串行经过同一个 JSONL stream。
 struct AppServerProcess {
-    child: Option<Child>,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    connection: transport::JsonlConnection,
     next_request_id: u64,
     pending_notifications: VecDeque<Value>,
 }
@@ -213,32 +209,6 @@ impl RpcFailure {
             Self::SignedOut => "Codex 登录状态不可用。",
             Self::Incompatible => "Codex App Server 缺少宝宝模式所需能力。",
             Self::Initialization => "Codex App Server 初始化失败。",
-        }
-    }
-}
-
-impl Drop for AppServerProcess {
-    /// 进程状态被丢弃时 kill 后交给 reaper 等待，避免遗留僵尸子进程。
-    fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        let _ = child.start_kill();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = child.wait().await;
-            });
-        } else {
-            std::thread::spawn(move || {
-                for _ in 0..50 {
-                    if child.try_wait().ok().flatten().is_some() {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                let _ = child.start_kill();
-                let _ = child.try_wait();
-            });
         }
     }
 }
