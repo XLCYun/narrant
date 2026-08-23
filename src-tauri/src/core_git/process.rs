@@ -121,6 +121,7 @@ fn execute_core_git(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::child_process::configure_std_command(&mut command);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {
@@ -397,11 +398,14 @@ fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String>
     #[cfg(windows)]
     {
         let process_id = child.id().to_string();
-        let status = Command::new("taskkill")
+        let mut command = Command::new("taskkill");
+        command
             .args(["/PID", &process_id, "/T", "/F"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        crate::child_process::configure_std_command(&mut command);
+        let status = command
             .status()
             .map_err(|error| format!("无法启动 Core Git 进程树终止命令：{error}"))?;
         if !status.success() && child.try_wait().ok().flatten().is_none() {

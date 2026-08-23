@@ -6,6 +6,7 @@ import { BranchReviewSelector } from "@/components/branch-review-selector";
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { GitHubAuthorizationControls } from "@/components/github-authorization-controls";
+import { HomePage } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
@@ -313,6 +314,15 @@ function ReviewReaderPreview({
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  "app-shell": {
+    label: "应用框架",
+    scenarios: {
+      default: {
+        label: "Windows 标题栏",
+        render: () => <HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />,
+      },
+    },
+  },
   "repository-trust": {
     label: "Repository Trust",
     scenarios: {
@@ -432,6 +442,8 @@ function PreviewApp() {
   const requestedScenario = query.get("scenario") ?? "default";
   const scenarioKey = definition.scenarios[requestedScenario] ? requestedScenario : "default";
   const theme = query.get("theme") === "light" ? "light" : "dark";
+
+  if (componentKey === "app-shell") return definition.scenarios[scenarioKey].render();
 
   return <main className="min-h-screen bg-background text-foreground">
     <header className="sticky top-0 z-50 flex flex-wrap items-end gap-4 border-b bg-background/90 px-5 py-3 backdrop-blur">

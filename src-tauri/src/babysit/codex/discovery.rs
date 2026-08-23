@@ -119,13 +119,15 @@ impl CodexExecutableDiscovery {
         selected: bool,
         timeout: Duration,
     ) -> (Result<ResolvedExecutable, BabysitError>, bool) {
-        let child = Command::new(&path)
+        let mut command = Command::new(&path);
+        command
             .arg("--version")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn();
+            .kill_on_drop(true);
+        crate::child_process::configure_tokio_command(&mut command);
+        let child = command.spawn();
         let Ok(mut child) = child else {
             return (
                 Err(if selected {
@@ -373,6 +375,14 @@ fn known_install_locations() -> Vec<PathBuf> {
             home.join(".bun/bin/codex"),
         ]);
     }
+    #[cfg(windows)]
+    if let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        locations.extend([
+            user_profile.join(".cargo/bin/codex.exe"),
+            user_profile.join(".bun/bin/codex.exe"),
+            user_profile.join(".local/bin/codex.exe"),
+        ]);
+    }
     #[cfg(target_os = "macos")]
     locations.extend([
         PathBuf::from("/usr/local/bin/codex"),
@@ -384,10 +394,39 @@ fn known_install_locations() -> Vec<PathBuf> {
         PathBuf::from("/usr/bin/codex"),
     ]);
     #[cfg(windows)]
-    if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
-        locations.push(app_data.join("npm/codex.cmd"));
+    {
+        if let Some(pnpm_home) = std::env::var_os("PNPM_HOME").map(PathBuf::from) {
+            append_windows_pnpm_locations(&mut locations, &pnpm_home);
+        }
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            append_windows_pnpm_locations(&mut locations, &local_app_data.join("pnpm"));
+            append_windows_desktop_locations(&mut locations, &local_app_data.join("Programs"));
+        }
+        if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            locations.push(app_data.join("npm/codex.cmd"));
+        }
+        if let Some(program_files) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
+            append_windows_desktop_locations(&mut locations, &program_files);
+        }
     }
     locations
+}
+
+/** 从一个 Windows pnpm 根目录追加根级与 bin 级 Codex shim。 */
+#[cfg(windows)]
+fn append_windows_pnpm_locations(locations: &mut Vec<PathBuf>, root: &Path) {
+    locations.extend([root.join("codex.CMD"), root.join("bin/codex.CMD")]);
+}
+
+/** 追加可由外部桌面进程直接启动的 Windows ChatGPT/Codex 资源位置。 */
+#[cfg(windows)]
+fn append_windows_desktop_locations(locations: &mut Vec<PathBuf>, root: &Path) {
+    locations.extend([
+        root.join("Codex/resources/codex.exe"),
+        root.join("OpenAI/Codex/resources/codex.exe"),
+        root.join("ChatGPT/resources/codex.exe"),
+        root.join("OpenAI/ChatGPT/resources/codex.exe"),
+    ]);
 }
 
 #[cfg(test)]

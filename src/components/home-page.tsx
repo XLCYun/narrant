@@ -30,6 +30,7 @@ import narrantLogoDark from "../../assets/brand/narrant-logo-dark.svg?no-inline"
 import type { AppNavigationResult, AppShellNavigationBinding } from "@/app/use-app-shell-navigation";
 import type { RepositorySummary } from "@/repository/repository-application";
 import { tauriTransport } from "@/infrastructure/tauri/transport";
+import { useWindowsPlatform } from "@/hooks/use-windows-platform";
 
 /** 首页侧边栏所需的持久化仓库投影。 */
 export type HomeRepository = RepositorySummary;
@@ -298,6 +299,7 @@ export function AppShell({
   enabled = true,
   fallbackClassName,
 }: AppShellProps) {
+  const isWindows = useWindowsPlatform();
   const { t } = useTranslation();
   const { destination, sidebar } = navigation;
   const {
@@ -431,7 +433,10 @@ export function AppShell({
       />
       <SidebarTrigger
         aria-label={openSidebar ? t("collapse") : t("expand")}
-        className="absolute left-3 top-1.5 z-10 bg-transparent hover:bg-sidebar-accent supports-[padding:max(0px)]:left-[max(0.75rem,env(titlebar-area-x,0px)+5.5rem)]"
+        className={cn(
+          "absolute left-3 top-1.5 z-10 bg-transparent hover:bg-sidebar-accent",
+          !isWindows && "supports-[padding:max(0px)]:left-[max(0.75rem,env(titlebar-area-x,0px)+5.5rem)]",
+        )}
       />
     </div>
     <div

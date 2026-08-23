@@ -141,13 +141,12 @@ impl GitProcessAdapter {
         let canonical_workspace = workspace_path.canonicalize().map_err(|error| {
             GitCommandError::new(format!("无法验证 Review Workspace canonical path：{error}"))
         })?;
-        let expected_path =
-            format!("worktree {}", canonical_workspace.to_string_lossy()).into_bytes();
         let expected_head = format!("HEAD {expected_head_object_id}").into_bytes();
         let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-        let registered = fields
-            .windows(2)
-            .any(|fields| fields[0] == expected_path && fields[1] == expected_head);
+        let registered = fields.windows(2).any(|fields| {
+            worktree_field_matches_path(fields[0], &canonical_workspace)
+                && fields[1] == expected_head
+        });
         if !registered {
             return Err(GitCommandError::new(
                 "拒绝重建 Review Workspace：目标路径、Git worktree 注册或 current Snapshot HEAD 不一致。",
@@ -248,14 +247,30 @@ impl GitProcessAdapter {
         cancellation: &CancellationSignal,
     ) -> Result<bool, GitCommandError> {
         let expected_workspace = canonicalize_with_missing_tail(workspace_path)?;
-        let expected_field =
-            format!("worktree {}", expected_workspace.to_string_lossy()).into_bytes();
         let registered =
             self.run_workspace(["worktree", "list", "--porcelain", "-z"], cancellation)?;
         Ok(registered
             .stdout
             .split(|byte| *byte == 0)
-            .any(|field| field == expected_field))
+            .any(|field| worktree_field_matches_path(field, &expected_workspace)))
+    }
+}
+
+/** 比较 Git porcelain worktree 字段与本地规范路径，并消除 Windows 路径表示差异。 */
+fn worktree_field_matches_path(field: &[u8], expected: &Path) -> bool {
+    let Some(actual) = field.strip_prefix(b"worktree ") else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        let Ok(actual) = std::str::from_utf8(actual) else {
+            return false;
+        };
+        canonicalize_with_missing_tail(Path::new(actual)).is_ok_and(|actual| actual == expected)
+    }
+    #[cfg(not(windows))]
+    {
+        actual == expected.to_string_lossy().as_bytes()
     }
 }
 

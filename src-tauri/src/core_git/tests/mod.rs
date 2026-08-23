@@ -257,6 +257,28 @@ fn review_workspace_is_a_detached_linked_worktree_at_the_snapshot_head() {
     assert!(!symbolic.success());
 }
 
+#[cfg(windows)]
+#[test]
+fn worktree_field_uses_windows_filesystem_identity_without_lossy_folding() {
+    let root = tempfile::tempdir().unwrap();
+    let registered = root.path().join("Ä-review");
+    let different = root.path().join("other-review");
+    std::fs::create_dir(&registered).unwrap();
+    std::fs::create_dir(&different).unwrap();
+    let expected = registered.canonicalize().unwrap();
+    let alternate_case = registered
+        .to_string_lossy()
+        .replace('Ä', "ä")
+        .replace('\\', "/");
+    let field = format!("worktree {alternate_case}");
+
+    assert!(worktree_field_matches_path(field.as_bytes(), &expected));
+    assert!(!worktree_field_matches_path(
+        format!("worktree {}", different.display()).as_bytes(),
+        &expected,
+    ));
+}
+
 #[test]
 fn cancelled_workspace_creation_removes_its_partial_worktree() {
     let fixture = committed_repository();

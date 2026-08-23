@@ -25,6 +25,8 @@ function recentReview(input: {
 
 const open = vi.hoisted(() => vi.fn());
 const startDragging = vi.hoisted(() => vi.fn());
+const originalNavigatorPlatform = window.navigator.platform;
+const originalUserAgentData = (window.navigator as Navigator & { userAgentData?: unknown }).userAgentData;
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging }),
@@ -36,6 +38,8 @@ afterEach(() => {
   startDragging.mockReset();
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   window.localStorage.clear();
+  Object.defineProperty(window.navigator, "platform", { configurable: true, value: originalNavigatorPlatform });
+  Object.defineProperty(window.navigator, "userAgentData", { configurable: true, value: originalUserAgentData });
   void i18n.changeLanguage("zh-CN");
 });
 
@@ -200,7 +204,8 @@ describe("最近审核首页", () => {
     expect(wrapper).not.toHaveAttribute("data-resizing");
   });
 
-  it("48px 顶栏显式拖动原生窗口，并与原生窗口按钮保留间距", () => {
+  it("macOS 的 48px 顶栏显式拖动原生窗口，并为交通灯按钮保留间距", () => {
+    Object.defineProperty(window.navigator, "userAgentData", { configurable: true, value: { platform: "macOS" } });
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
@@ -215,6 +220,17 @@ describe("最近审核首页", () => {
     );
     fireEvent.mouseDown(trigger, { button: 0 });
     expect(startDragging).toHaveBeenCalledOnce();
+  });
+
+  it("Windows 的侧边栏切换按钮贴近顶栏左侧", () => {
+    Object.defineProperty(window.navigator, "userAgentData", { configurable: true, value: { platform: "Windows" } });
+    render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
+
+    const trigger = screen.getByRole("button", { name: "展开侧边栏" });
+    expect(trigger).toHaveClass("left-3");
+    expect(trigger).not.toHaveClass(
+      "supports-[padding:max(0px)]:left-[max(0.75rem,env(titlebar-area-x,0px)+5.5rem)]",
+    );
   });
 
   it("仓库主体独立展开 Review 列表，右侧按钮打开仓库", async () => {

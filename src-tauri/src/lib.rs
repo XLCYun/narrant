@@ -1,4 +1,5 @@
 mod babysit;
+mod child_process;
 mod core_git;
 mod github;
 mod operation;

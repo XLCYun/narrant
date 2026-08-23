@@ -28,13 +28,14 @@ pub(crate) struct JsonlConnection {
 impl JsonlConnection {
     /// 启动 stdio App Server，并在部分建构失败时回收已经创建的 child。
     pub(super) async fn spawn(command: &AppServerCommand) -> Result<Self, RpcFailure> {
-        let mut child = Command::new(&command.program)
+        let mut process = Command::new(&command.program);
+        process
             .args(&command.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| RpcFailure::Io)?;
+            .stderr(std::process::Stdio::null());
+        crate::child_process::configure_tokio_command(&mut process);
+        let mut child = process.spawn().map_err(|_| RpcFailure::Io)?;
         let Some(stdin) = child.stdin.take() else {
             reap_child(child);
             return Err(RpcFailure::Io);
