@@ -155,17 +155,45 @@ async fn auth_and_incompatible_results_use_stable_setup_categories() {
 }
 
 #[tokio::test]
-async fn timeout_discards_partial_output_and_terminates_the_process() {
-    let (provider, temp, _) = provider("hang", Duration::from_millis(100));
+async fn generic_nonzero_exit_returns_only_the_redacted_process_category() {
+    let (provider, temp, _) = provider("process_exit", Duration::from_secs(5));
+    let workspace = temp.path().join("private-workspace-sentinel");
+    std::fs::create_dir(&workspace).unwrap();
     let error = provider
         .generate(
-            request(temp.path().to_string_lossy().into_owned()),
+            request(workspace.to_string_lossy().into_owned()),
             OperationContext::background().cancellation(),
         )
         .await
         .unwrap_err();
+    let message = error.to_string();
+
+    assert_eq!(
+        message,
+        "宝宝模式 provider 失败：Claude Code 进程失败（process_exit）"
+    );
+    assert!(!message.contains("private-stdout-sentinel"));
+    assert!(!message.contains("private-stderr-sentinel"));
+    assert!(!message.contains(workspace.to_string_lossy().as_ref()));
+}
+
+#[tokio::test]
+async fn timeout_discards_partial_output_and_terminates_the_process() {
+    let (provider, temp, events) = provider("hang", Duration::from_millis(100));
+    let workspace = temp.path().to_string_lossy().into_owned();
+    let worker = tokio::spawn(async move {
+        provider
+            .generate(
+                request(workspace),
+                OperationContext::background().cancellation(),
+            )
+            .await
+    });
+    let descendant = wait_for_fixture_descendant(&events).await;
+    let error = worker.await.unwrap().unwrap_err();
     assert!(matches!(error, super::super::BabysitError::Provider { .. }));
     assert!(error.to_string().contains("timeout"));
+    assert_process_terminated(descendant, "timeout").await;
 }
 
 #[tokio::test]
@@ -179,31 +207,44 @@ async fn cancellation_discards_output_and_terminates_the_process() {
             .generate(request(workspace), &worker_cancellation)
             .await
     });
-    let mut descendant = None;
-    for _ in 0..100 {
-        descendant = std::fs::read_to_string(&events).ok().and_then(|value| {
-            value
-                .lines()
-                .find_map(|line| line.strip_prefix("child:"))?
-                .parse::<u32>()
-                .ok()
-        });
-        if descendant.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let descendant = wait_for_fixture_descendant(&events).await;
     cancellation.cancel();
     let error = worker.await.unwrap().unwrap_err();
     assert_eq!(error, super::super::BabysitError::Cancelled);
-    let descendant = descendant.expect("fixture should report its descendant process");
+    assert_process_terminated(descendant, "cancellation").await;
+}
+
+/// 等待 fixture 报告其后代 PID，避免测试与进程启动时序耦合。
+async fn wait_for_fixture_descendant(events: &std::path::Path) -> u32 {
+    for _ in 0..100 {
+        if let Some(descendant) = read_fixture_descendant(events) {
+            return descendant;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("fixture should report its descendant process");
+}
+
+/// 解析 fixture 写入的后代 PID。
+fn read_fixture_descendant(events: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(events).ok().and_then(|value| {
+        value
+            .lines()
+            .find_map(|line| line.strip_prefix("child:"))?
+            .parse::<u32>()
+            .ok()
+    })
+}
+
+/// 轮询确认指定 fixture 后代已经被进程树清理逻辑终止。
+async fn assert_process_terminated(descendant: u32, trigger: &str) {
     for _ in 0..100 {
         if !process_is_alive(descendant) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("Claude descendant process {descendant} survived cancellation");
+    panic!("Claude descendant process {descendant} survived {trigger}");
 }
 
 /// 查询 fixture 后代是否仍存活，仅用于验证进程树清理这一系统边界。

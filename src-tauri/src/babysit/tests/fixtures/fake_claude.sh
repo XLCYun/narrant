@@ -37,6 +37,11 @@ case "$scenario" in
     printf '%s\n' '{"type":"result","is_error":true,"subtype":"unsupported"}'
     exit 1
     ;;
+  process_exit)
+    printf '%s\n' "private-stdout-sentinel:$PWD"
+    printf '%s\n' "private-stderr-sentinel:$PWD" >&2
+    exit 23
+    ;;
   hang)
     sleep 30 &
     printf '%s\n' "child:$!" >> "$events"
