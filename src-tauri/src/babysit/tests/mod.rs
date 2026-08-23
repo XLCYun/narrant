@@ -483,18 +483,12 @@ fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
 fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
     let cases = [
         (
-            BabysitError::provider_setup(
-                "claude-code",
-                BabysitProviderSetupFailure::SignedOut,
-            ),
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::SignedOut),
             "provider_signed_out",
             "login_provider",
         ),
         (
-            BabysitError::provider_setup(
-                "claude-code",
-                BabysitProviderSetupFailure::Incompatible,
-            ),
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::Incompatible),
             "provider_incompatible",
             "upgrade_provider",
         ),

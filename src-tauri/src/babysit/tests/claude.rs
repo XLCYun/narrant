@@ -1,5 +1,6 @@
 use super::super::{
-    BabysitAgentProvider, BabysitProviderRequest, ClaudeCodeProvider, FileSide, LineTarget,
+    BabysitAgentProvider, BabysitProviderRequest, BabysitProviderSetupFailure, ClaudeCodeProvider,
+    FileSide, LineTarget,
 };
 use crate::operation::OperationContext;
 use crate::operation::TestCancellation;
@@ -126,10 +127,19 @@ async fn malformed_cli_json_returns_only_a_redacted_category() {
 #[tokio::test]
 async fn auth_and_incompatible_results_use_stable_setup_categories() {
     for (scenario, expected) in [
-        ("auth", super::super::BabysitError::CodexSignedOut),
+        (
+            "auth",
+            super::super::BabysitError::provider_setup(
+                "claude_code",
+                BabysitProviderSetupFailure::SignedOut,
+            ),
+        ),
         (
             "incompatible",
-            super::super::BabysitError::CodexIncompatible,
+            super::super::BabysitError::provider_setup(
+                "claude_code",
+                BabysitProviderSetupFailure::Incompatible,
+            ),
         ),
     ] {
         let (provider, temp, _) = provider(scenario, Duration::from_secs(5));

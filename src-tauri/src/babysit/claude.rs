@@ -378,9 +378,15 @@ fn classify_failure(stdout: &[u8]) -> BabysitError {
 fn classify_result_error(subtype: Option<&str>) -> BabysitError {
     match subtype {
         Some("authentication_failed" | "not_authenticated" | "signed_out") => {
-            BabysitError::CodexSignedOut
+            BabysitError::provider_setup(
+                "claude_code",
+                super::BabysitProviderSetupFailure::SignedOut,
+            )
         }
-        Some("incompatible" | "unsupported") => BabysitError::CodexIncompatible,
+        Some("incompatible" | "unsupported") => BabysitError::provider_setup(
+            "claude_code",
+            super::BabysitProviderSetupFailure::Incompatible,
+        ),
         _ => redacted_provider_error("result_error"),
     }
 }
