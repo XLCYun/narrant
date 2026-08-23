@@ -10,8 +10,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod claude;
 mod codex;
 
+pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
 
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
