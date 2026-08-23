@@ -56,8 +56,8 @@ fn process_exists(pid: u32) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-#[test]
-fn file_settings_round_trip_preserves_unified_application_settings() {
+#[tokio::test]
+async fn file_settings_round_trip_preserves_unified_application_settings() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
     let executable = version_fixture(directory.path());
@@ -73,7 +73,7 @@ fn file_settings_round_trip_preserves_unified_application_settings() {
     )
     .unwrap();
 
-    settings.save(executable.clone()).unwrap();
+    settings.save(Some(executable.clone())).await.unwrap();
 
     assert_eq!(settings.load(), Some(executable));
     let serialized = std::fs::read_to_string(path).unwrap();
@@ -127,6 +127,112 @@ async fn picker_validates_and_persists_the_canonical_executable() {
         Some(executable.canonicalize().unwrap())
     );
     assert_eq!(runtime.status(), CodexRuntimeStatus::Unknown);
+}
+
+#[tokio::test]
+async fn explicit_executable_is_the_only_provider_candidate() {
+    let directory = tempfile::tempdir().unwrap();
+    let selected_events = directory.path().join("selected.log");
+    let fallback_events = directory.path().join("fallback.log");
+    let selected = app_server_candidate(
+        directory.path(),
+        "codex-selected",
+        "complete",
+        &selected_events,
+    );
+    let fallback = app_server_candidate(
+        directory.path(),
+        "codex-fallback",
+        "complete",
+        &fallback_events,
+    );
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        directory.path().join("settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![fallback]),
+    );
+    runtime.select_executable(&selected).await.unwrap();
+
+    runtime
+        .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    assert!(selected_events.exists());
+    assert!(!fallback_events.exists());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn invalid_explicit_executable_does_not_fall_back() {
+    let directory = tempfile::tempdir().unwrap();
+    let fallback_events = directory.path().join("fallback.log");
+    let fallback = app_server_candidate(
+        directory.path(),
+        "codex-fallback",
+        "complete",
+        &fallback_events,
+    );
+    let settings_path = directory.path().join("settings.json");
+    let missing = directory.path().join("codex-missing");
+    std::fs::write(
+        &settings_path,
+        serde_json::json!({
+            "version": 1,
+            "theme": "system",
+            "codexExecutable": missing,
+            "babysitModel": { "mode": "automatic" }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        settings_path,
+        CodexExecutableDiscovery::with_candidates(vec![fallback]),
+    );
+
+    let result = runtime
+        .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await;
+
+    assert!(matches!(result, Err(BabysitError::CodexExecutableInvalid)));
+    assert!(!fallback_events.exists());
+}
+
+#[tokio::test]
+async fn clearing_explicit_executable_restores_automatic_discovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let selected_events = directory.path().join("selected.log");
+    let automatic_events = directory.path().join("automatic.log");
+    let selected = app_server_candidate(
+        directory.path(),
+        "codex-selected",
+        "complete",
+        &selected_events,
+    );
+    let automatic = app_server_candidate(
+        directory.path(),
+        "codex-automatic",
+        "complete",
+        &automatic_events,
+    );
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        directory.path().join("settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![automatic]),
+    );
+    runtime.select_executable(&selected).await.unwrap();
+    runtime.clear_executable().await.unwrap();
+
+    runtime
+        .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    assert!(!selected_events.exists());
+    assert!(automatic_events.exists());
+    runtime.shutdown().await;
 }
 
 #[test]
