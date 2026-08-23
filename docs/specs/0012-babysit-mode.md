@@ -52,7 +52,7 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
     so that hiding and reopening Babysit Mode does not call Codex again.
 17. As a reviewer, I want stale and partial output rejected, so that late, cancelled,
     timed-out, or structurally incomplete results never appear as valid explanations.
-18. As a reviewer, I want Codex to repair a malformed response automatically, so that
+18. As a reviewer, I want the Agent to repair a malformed response automatically, so that
     transient omissions do not immediately require manual retry.
 19. As a reviewer, I want unsupported files identified before analysis starts, so that
     lock files, generated content, and non-text changes do not waste Agent work.
@@ -73,6 +73,12 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
     or discarding cached explanations for other files.
 27. As a maintainer, I want CI to use a deterministic fake App Server, so that tests do
     not require a personal login, network access, or paid model request.
+28. As a reviewer with Claude Code already installed, I want Narrant to reuse its
+    official login without reading or storing credentials, so that I do not configure
+    another model account.
+29. As a reviewer, I want Claude Code analysis and repair rounds excluded from its local
+    session history, so that an internal product operation does not clutter my
+    interactive sessions.
 
 ## Scope
 
@@ -105,6 +111,11 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - The Codex adapter owns executable discovery, App Server lifecycle, JSONL protocol,
   capability probing, authentication status, sandbox configuration, and thread
   deletion. Its protocol types do not escape the provider seam.
+- Installed-provider runtime readiness and recovery use provider-aware missing,
+  signed-out, incompatible, and initialization-failed categories rather than one enum
+  branch per product. Recovery actions carry the provider identity so executable
+  selection, login guidance, upgrade, and retry remain typed without leaking protocol
+  details.
 - The provider seam is real because production Codex, a deterministic test adapter, and
   future Claude Code behavior must satisfy the same externally observable contract.
 
@@ -125,9 +136,11 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   240 Unicode characters. They preserve source identifiers and use the current UI
   locale.
 - Narrant validates target identity, exact coverage, uniqueness, non-empty text, length,
-  and control characters. A failed validation is returned to the same Agent thread for
-  repair up to three times. After the third failed repair, the run fails and the user
-  may retry manually.
+  and control characters. A failed validation is repaired up to three times. Providers
+  may keep those repair rounds in one Agent session or use self-contained stateless
+  rounds, but the progress, repair budget, deadline, validation, and final result remain
+  provider-independent. After the third failed repair, the run fails and the user may
+  retry manually.
 - Stable user-visible run phases are `generating`, `repairing`, and `completed`.
   Failed and cancelled runs end in `failed` and `cancelled` outcomes rather than
   introducing provider-specific progress phases. Provider-specific tool, message, and
@@ -143,8 +156,17 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - Narrant currently starts Babysit turns with `gpt-5.6-luna` and `low` reasoning effort
   and does not expose model details in the Babysit Mode UI. User-facing model and
   reasoning configuration may replace this fixed choice later.
-- A future Claude Code adapter may launch the installed Claude Code runtime and fulfill
-  the same contract.
+- The first Claude Code adapter launches the reviewer's unmodified installed runtime,
+  reuses only its official Claude Code login flow, and never reads, stores, proxies, or
+  embeds Claude credentials. Claude Code is the temporary default provider until the
+  separately developed settings capability supplies provider selection.
+- Claude Code runs with the `sonnet` model alias and `low` effort. Provider and model
+  settings remain outside this delivery and may replace these fixed choices later.
+- Claude Code uses safe mode, non-interactive denial, a `Read`/`Glob`/`Grep` tool
+  allowlist, and explicit denial of MCP, Shell, write, edit, and Web tools. This is a
+  model-tool policy rather than a cross-platform OS filesystem or network sandbox and
+  must not be presented as an equivalent security boundary. Platform sandboxing is a
+  separate enhancement.
 - A future Built-in Agent Provider is tracked separately. Rig is the initial candidate,
   but it is not part of the first vertical slice.
 - Installed Codex reuses the reviewer's Codex home, authentication, and configuration.
@@ -158,9 +180,14 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - The Agent runs only after Workspace Trust and Review Workspace activation succeed.
 - Workspace Trust is the only repository-level authorization gate for Babysit analysis;
   Babysit Mode does not add a separate code-upload notice or confirmation flow.
-- The provider's Agent tools may read only the current Review Workspace. They cannot
-  write files or access the network; the App Server's model-service transport remains
-  available for Codex inference.
+- The Codex provider's Agent tools may read only the current Review Workspace. They
+  cannot write files or access the network; the App Server's model-service transport
+  remains available for Codex inference.
+- The Claude Code provider restricts the tools exposed to the model to read-only
+  workspace exploration and does not expose Web or MCP tools. Because arbitrary
+  installed Claude Code cannot be placed in one reliable non-privileged OS sandbox on
+  every supported desktop platform, this first adapter makes a tool-policy guarantee,
+  not a process-level filesystem or network-isolation guarantee.
 - One Narrant process performs no Codex discovery or I/O until the reviewer first
   enables Babysit Mode for an eligible File Change. It then discovers and lazily starts
   one Codex App Server child process. Every File Change analysis uses a fresh Codex
@@ -182,6 +209,10 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - Completed, failed, and cancelled analysis threads are permanently deleted from Codex
   history. Narrant marks its threads so the next lazy App Server startup can remove only
   Narrant-owned threads left behind by an abnormal exit.
+- Every Claude Code generation and repair round uses a fresh process with session
+  persistence disabled. Narrant retains the original request, previous malformed
+  output, validation failure, and repair count only in memory, and sends a self-contained
+  repair request instead of resuming or deleting Claude Code's private session files.
 - Switching File Changes, disabling Babysit Mode, refreshing the Review Snapshot, or
   closing the Review interrupts and deletes an incomplete thread. Request identity
   prevents late results from appearing on another File Change.
@@ -234,6 +265,13 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   shows a specific recovery action rather than starting analysis. Recovery may point to
   installation or upgrade instructions, `codex login`, or copyable redacted diagnostics
   as appropriate. The UI does not display a minimum tested Codex version.
+- Claude Code setup failures use the same provider-aware missing, signed-out,
+  incompatible, and initialization-failed categories and recovery actions. Narrant does
+  not silently fall back to Codex. It offers executable selection, points login recovery
+  to the official external Claude Code flow, or requests upgrade/retry as appropriate.
+- Claude Code compatibility is determined by a capability probe for non-persistent
+  sessions, structured JSON Schema output, authentication status, and required
+  permission flags. Its version is diagnostic metadata rather than the acceptance gate.
 
 ### Diagnostics
 
@@ -243,6 +281,11 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   protocol error codes.
 - Diagnostics never record source text, prompts, Line Explanations, full paths,
   authentication tokens, or raw App Server stdout and stderr.
+- Provider-aware diagnostics may additionally record the provider identity, installed
+  runtime version, actual model identity, run phase, repair round, duration, redacted
+  error category, and process exit classification. Claude executable paths, Review
+  Workspace paths, prompts, source, model output, raw stdout/stderr, and authentication
+  material remain prohibited.
 
 ## Testing Decisions
 
@@ -265,7 +308,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - Analyzing every File Change in a Review Snapshot in the background.
 - Semantic explanation groups or a second Agent that checks coverage.
 - AI Findings, code-quality judgments, suggested edits, or GitHub Review comments.
-- Implementing the Claude Code or Built-in Agent Providers in the first vertical slice.
+- Implementing a Built-in Agent Provider.
+- Claude Code OS-level filesystem or network sandboxing, provider settings, and model
+  settings.
 
 ## Architecture Decisions
 
@@ -273,3 +318,5 @@ Provider separation and the provider-independent contract are recorded in
 [ADR-0021](../adr/0021-separate-babysit-agent-providers-behind-one-contract.md).
 Codex environment reuse and the set-aside isolation design are recorded in
 [ADR-0022](../adr/0022-reuse-the-reviewers-codex-environment.md).
+Claude Code stateless repair and session-history isolation are recorded in
+[ADR-0024](../adr/0024-use-stateless-claude-code-repair-rounds.md).
