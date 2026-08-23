@@ -163,6 +163,20 @@ impl ApplicationSettingsApplication {
         Ok(settings)
     }
 
+    /// 原子更新 Codex Executable Preference，并保留同一快照中的其他设置。
+    pub(crate) fn update_codex_executable(
+        &self,
+        executable: Option<PathBuf>,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        if executable.as_ref().is_some_and(|path| !path.is_absolute()) {
+            return Err(ApplicationSettingsError::InvalidCodexExecutable);
+        }
+        let mut settings = self.load()?;
+        settings.codex_executable = executable;
+        self.persist(&settings)?;
+        Ok(settings)
+    }
+
     /// 在目标目录写入临时文件并原子替换正式设置文件。
     fn persist(&self, settings: &ApplicationSettings) -> Result<(), ApplicationSettingsError> {
         let parent = self.settings_path.parent().ok_or_else(|| {

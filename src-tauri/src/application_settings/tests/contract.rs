@@ -36,6 +36,24 @@ fn theme_update_is_persisted_for_a_new_application_instance() {
 }
 
 #[test]
+fn executable_update_preserves_other_application_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    let legacy_path = directory.path().join("babysit-settings.json");
+    let executable = directory.path().join("codex.exe");
+    let application = ApplicationSettingsApplication::new(settings_path, legacy_path);
+    application.update_theme(ThemePreference::Dark).unwrap();
+
+    let updated = application
+        .update_codex_executable(Some(executable.clone()))
+        .unwrap();
+
+    assert_eq!(updated.theme, ThemePreference::Dark);
+    assert_eq!(updated.codex_executable, Some(executable));
+    assert_eq!(application.load().unwrap(), updated);
+}
+
+#[test]
 fn malformed_settings_are_reported_without_being_replaced() {
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
