@@ -33,7 +33,7 @@ type PreviewDefinition = {
 };
 
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false }: { saveFails?: boolean }) {
+function SettingsPreview({ saveFails = false, githubState }: { saveFails?: boolean; githubState?: "signed-in" | "confirm" | "failed" }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const application: ApplicationSettingsApplication = {
     load: async () => ({ version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } }),
@@ -43,7 +43,16 @@ function SettingsPreview({ saveFails = false }: { saveFails?: boolean }) {
       return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
     },
   };
-  return <ApplicationSettingsDestination application={application} onBack={() => undefined} />;
+  const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
+    status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
+    error: githubState === "failed" ? { scope: "github-identity", operation: "sign-out", detail: "凭据存储暂时不可用，请重试。" } : undefined,
+    transition: { kind: "stable" },
+    beginAuthorization: async () => ({ kind: "failed" }),
+    completeAuthorization: async () => ({ kind: "failed" }),
+    signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
+    retry: async () => undefined,
+  } : undefined;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
@@ -335,6 +344,9 @@ const previews: Record<string, PreviewDefinition> = {
     scenarios: {
       default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
       error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
+      "github-signed-in": { label: "GitHub 已登录", render: () => <SettingsPreview githubState="signed-in" /> },
+      "github-confirm": { label: "GitHub 退出确认", render: () => <SettingsPreview githubState="confirm" /> },
+      "github-failed": { label: "GitHub 退出失败", render: () => <SettingsPreview githubState="failed" /> },
     },
   },
   "app-shell": {
