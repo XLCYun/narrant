@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 /// 当前 Application Settings 文件格式版本。
 const SETTINGS_VERSION: u32 = 1;
@@ -80,7 +84,9 @@ impl fmt::Display for ApplicationSettingsError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "不支持 settings.json 版本 {version}")
             }
-            Self::InvalidCodexExecutable => formatter.write_str("Codex executable 必须是绝对路径"),
+            Self::InvalidCodexExecutable => formatter.write_str(
+                "Codex executable 无效；请在 Application Settings 中重新选择可执行文件",
+            ),
         }
     }
 }
@@ -164,13 +170,14 @@ impl ApplicationSettingsApplication {
     }
 
     /// 原子更新 Codex Executable Preference，并保留同一快照中的其他设置。
-    pub(crate) fn update_codex_executable(
+    pub(crate) async fn update_codex_executable(
         &self,
         executable: Option<PathBuf>,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        if executable.as_ref().is_some_and(|path| !path.is_absolute()) {
-            return Err(ApplicationSettingsError::InvalidCodexExecutable);
-        }
+        let executable = match executable {
+            Some(path) => Some(validate_codex_executable(&path).await?),
+            None => None,
+        };
         let mut settings = self.load()?;
         settings.codex_executable = executable;
         self.persist(&settings)?;
@@ -195,6 +202,49 @@ impl ApplicationSettingsApplication {
             .persist(&self.settings_path)
             .map_err(|error| ApplicationSettingsError::Io(error.error))?;
         Ok(())
+    }
+}
+
+/// 将用户选择规范化为普通可执行文件，并以有界时间运行版本探测。
+async fn validate_codex_executable(
+    path: &Path,
+) -> Result<PathBuf, ApplicationSettingsError> {
+    if !path.is_absolute() {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    if !metadata.is_file() {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+
+    let mut command = tokio::process::Command::new(&canonical);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    crate::child_process::configure_tokio_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    match status {
+        Ok(Ok(status)) if status.success() => Ok(canonical),
+        Ok(_) => Err(ApplicationSettingsError::InvalidCodexExecutable),
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            Err(ApplicationSettingsError::InvalidCodexExecutable)
+        }
     }
 }
 

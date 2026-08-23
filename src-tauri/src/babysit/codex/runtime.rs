@@ -42,10 +42,11 @@ impl ApplicationCodexSettings {
     }
 
     /// 通过唯一 Application Settings 契约持久化可执行文件偏好。
-    fn save(&self, executable: PathBuf) -> Result<(), BabysitError> {
+    async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         self.application
-            .update_codex_executable(Some(executable))
-            .map(|_| ())
+            .update_codex_executable(executable)
+            .await
+            .map(|settings| settings.codex_executable)
             .map_err(|_| BabysitError::CodexInitializationFailed)
     }
 }
@@ -139,9 +140,21 @@ impl CodexRuntime {
 
     /// 校验并保存 picker 结果；下一次明确启用时重试初始化。
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let resolved = self.discovery.validate_selected(path.to_path_buf()).await?;
-        self.settings.save(resolved.path.clone())?;
-        self.provider.configure_executable(resolved.path).await?;
+        let resolved = self
+            .settings
+            .save(Some(path.to_path_buf()))
+            .await?
+            .ok_or(BabysitError::CodexInitializationFailed)?;
+        self.provider.configure_executable(resolved).await?;
+        if let Ok(mut status) = self.status.lock() {
+            *status = CodexRuntimeStatus::Unknown;
+        }
+        Ok(())
+    }
+
+    /// 清空显式偏好，使下一次分析重新执行自动发现。
+    pub(crate) async fn clear_executable(&self) -> Result<(), BabysitError> {
+        self.settings.save(None).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
         }
