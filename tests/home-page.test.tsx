@@ -84,8 +84,8 @@ describe("最近审核首页", () => {
     const darkLogo = container.querySelector<HTMLSourceElement>('source[media="(prefers-color-scheme: dark)"]');
     expect(darkLogo?.getAttribute("srcset")).toContain("narrant-logo-dark.svg");
     expect(darkLogo?.getAttribute("srcset")).not.toMatch(/^data:/);
-    expect(screen.getAllByText("好工程，纳良言")).toHaveLength(2);
-    expect(screen.getByRole("heading", { name: "纳言：好工程，纳良言" })).toBeVisible();
+    expect(screen.getAllByText("好工程，纳良言")).toHaveLength(3);
+    expect(screen.getAllByRole("heading", { name: "纳言" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "打开仓库文件夹" })).toBeVisible();
   });
 
@@ -371,7 +371,7 @@ describe("最近审核首页", () => {
   it("英文系统语言显示英文首页", async () => {
     await i18n.changeLanguage("en");
     render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
-    expect(screen.getByRole("heading", { name: "Narrant: review code, sleep soundly" })).toBeVisible();
+    expect(screen.getAllByRole("heading", { name: "Narrant" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Open repository folder" })).toBeVisible();
   });
 
@@ -379,7 +379,7 @@ describe("最近审核首页", () => {
     render(<HomePage reviews={[]} loading onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
     expect(screen.getByRole("status", { name: "正在加载最近审核" })).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "纳言：好工程，纳良言" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("heading", { name: "纳言" })).toHaveLength(1);
   });
 
   it("最近审核首页仍提供文件夹入口并显示本地化仓库错误", async () => {

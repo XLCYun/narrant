@@ -49,8 +49,8 @@ export function formatRelativeTime(
 export const resources = {
   "zh-CN": {
     common: {
-      brand: "纳言", subtitle: "好工程，纳良言", recent: "最近审核", emptyTitle: "纳言：好工程，纳良言",
-      emptyDescription: "从本地仓库开始，只读地审好每一次代码变更。", openFolder: "打开仓库文件夹",
+      brand: "纳言", subtitle: "好工程，纳良言", recent: "最近审核", emptyTitle: "纳言",
+      emptyDescription: "好工程，纳良言", openFolder: "打开仓库文件夹",
       sidebar: "主侧边栏", collapse: "收起侧边栏", expand: "展开侧边栏", noRecent: "还没有审核记录",
       repositories: "代码仓库", viewAll: "查看全部", showLess: "收起", localBranch: "本地分支", openRepository: "打开仓库 {{name}}", openingRepository: "正在打开仓库 {{name}}",
       mergeDirection: "合入方向", lastOpened: "最近打开",
@@ -118,8 +118,8 @@ export const resources = {
   },
   en: {
     common: {
-      brand: "Narrant", subtitle: "Read-only code review", recent: "Recent reviews", emptyTitle: "Narrant: review code, sleep soundly",
-      emptyDescription: "Start from a local repository and review every change read-only.", openFolder: "Open repository folder",
+      brand: "Narrant", subtitle: "Read-only code review", recent: "Recent reviews", emptyTitle: "Narrant",
+      emptyDescription: "Read-only code review", openFolder: "Open repository folder",
       sidebar: "Primary sidebar", collapse: "Collapse sidebar", expand: "Expand sidebar", noRecent: "No reviews yet",
       repositories: "Repositories", viewAll: "View all", showLess: "Show less", localBranch: "Local branch", openRepository: "Open repository {{name}}", openingRepository: "Opening repository {{name}}",
       mergeDirection: "Merge direction", lastOpened: "Last opened",
