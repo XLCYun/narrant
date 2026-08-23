@@ -125,6 +125,50 @@ async fn cache_reuses_only_the_exact_review_snapshot_identity() {
 }
 
 #[tokio::test]
+async fn cache_isolated_by_resolved_model_and_reasoning_effort() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let application = BabysitApplication::new(provider.clone());
+    let cancellation = OperationContext::background().cancellation().clone();
+    let content = text_change(
+        "src/example.ts",
+        Some("const value = 1;"),
+        Some("const value = 2;"),
+    );
+
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    provider.set_resolved_model("test-model", "high");
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    provider.set_resolved_model("another-model", "high");
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content,
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(provider.generate_calls(), 3);
+}
+
+#[tokio::test]
 async fn regeneration_bypasses_and_replaces_the_exact_cached_result() {
     let provider = Arc::new(FakeBabysitProvider::default());
     let application = BabysitApplication::new(provider.clone());
@@ -393,6 +437,8 @@ fn response_validation_rejects_extra_missing_and_unsafe_lines() {
                 source: "const value = 2;".to_owned(),
             },
         ],
+        model: "test-model".to_owned(),
+        reasoning_effort: "test-effort".to_owned(),
     };
 
     let mut output = BabysitFileExplanations::default();

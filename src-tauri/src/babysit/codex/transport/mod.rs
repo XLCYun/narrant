@@ -5,6 +5,7 @@ use super::{
     CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
+use super::model_catalog::{CodexModelCatalog, CodexModelCapability, ModelListPage};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -247,6 +248,32 @@ struct CompletedTurn {
 }
 
 impl AppServerProcess {
+    /// 分页读取完整 model/list，并在返回前过滤隐藏模型及校验默认能力。
+    pub(super) async fn model_catalog(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<CodexModelCatalog, RpcFailure> {
+        let mut cursor: Option<String> = None;
+        let mut models: Vec<CodexModelCapability> = Vec::new();
+        loop {
+            let value = self
+                .request(
+                    "model/list",
+                    json!({"cursor": cursor}),
+                    deadline,
+                    None,
+                )
+                .await?;
+            cursor = ModelListPage::decode(value)
+                .map_err(|_| RpcFailure::Protocol)?
+                .append_to(&mut models);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        CodexModelCatalog::from_pages(models).map_err(|_| RpcFailure::Protocol)
+    }
+
     /// poison restart 前同步完成 child reap。
     pub(super) async fn shutdown(&mut self) {
         self.connection.shutdown().await;
@@ -328,6 +355,8 @@ impl AppServerProcess {
             before: String::new(),
             after: String::new(),
             targets: Vec::new(),
+            model: "capability-probe".to_owned(),
+            reasoning_effort: "low".to_owned(),
         };
         let deadline = Instant::now() + CODEX_INITIALIZATION_TIMEOUT;
         let thread_id = self
@@ -414,8 +443,8 @@ impl AppServerProcess {
                     "approvalPolicy": "never",
                     "permissions": "narrant-babysit-restricted-v1",
                     "runtimeWorkspaceRoots": [request.workspace_path],
-                    "model": super::BABYSIT_CODEX_MODEL,
-                    "reasoningEffort": super::BABYSIT_REASONING_EFFORT,
+                    "model": request.model,
+                    "reasoningEffort": request.reasoning_effort,
                     "allowProviderModelFallback": false,
                     "config": config,
                     "serviceName": CODEX_CLIENT_NAME,

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 mod codex;
 
 pub use codex::CodexAppServerProvider;
+pub(crate) use codex::CodexModelCatalog;
 
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
@@ -58,6 +59,10 @@ pub struct BabysitProviderRequest {
     pub before: String,
     pub after: String,
     pub targets: Vec<LineTarget>,
+    /// 分析启动前已由动态目录解析并固定的模型标识。
+    pub model: String,
+    /// 分析启动前已由动态目录解析并固定的思考强度。
+    pub reasoning_effort: String,
 }
 
 /// Provider 与前端共用的紧凑 before/after 行解释结构。
@@ -233,6 +238,8 @@ pub enum BabysitError {
     CodexIncompatible,
     /// App Server 初始化或握手失败。
     CodexInitializationFailed,
+    /// 保存的模型或思考强度不再被动态目录支持，需要修改设置。
+    ModelPreferenceInvalid,
 }
 
 /// Babysit command 对前端暴露的稳定错误 code；detail 只承载当前失败的可读诊断。
@@ -255,6 +262,7 @@ pub enum BabysitErrorCode {
     CodexSignedOut,
     CodexIncompatible,
     CodexInitializationFailed,
+    ModelPreferenceInvalid,
 }
 
 /// 前端可以直接执行的最小恢复动作；不携带可执行路径或进程原文。
@@ -319,12 +327,14 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::CodexSignedOut => BabysitErrorCode::CodexSignedOut,
             BabysitError::CodexIncompatible => BabysitErrorCode::CodexIncompatible,
             BabysitError::CodexInitializationFailed => BabysitErrorCode::CodexInitializationFailed,
+            BabysitError::ModelPreferenceInvalid => BabysitErrorCode::ModelPreferenceInvalid,
         };
         let recovery = match &error {
             BabysitError::CodexNotFound | BabysitError::CodexExecutableInvalid => None,
             BabysitError::CodexSignedOut => Some(BabysitRecoveryAction::LoginCodex),
             BabysitError::CodexIncompatible => Some(BabysitRecoveryAction::UpgradeCodex),
             BabysitError::CodexInitializationFailed => Some(BabysitRecoveryAction::Retry),
+            BabysitError::ModelPreferenceInvalid => None,
             BabysitError::RepairExhausted { .. }
             | BabysitError::Provider { .. }
             | BabysitError::InvalidProviderOutput { .. }
@@ -359,6 +369,9 @@ impl fmt::Display for BabysitError {
             Self::CodexSignedOut => formatter.write_str("Codex 尚未登录"),
             Self::CodexIncompatible => formatter.write_str("Codex App Server 缺少宝宝模式所需能力"),
             Self::CodexInitializationFailed => formatter.write_str("Codex App Server 初始化失败"),
+            Self::ModelPreferenceInvalid => formatter.write_str(
+                "宝宝模式模型或思考强度已不可用；请在 Application Settings 中修改设置",
+            ),
         }
     }
 }
@@ -372,6 +385,15 @@ pub trait BabysitAgentProvider: Send + Sync {
     fn provider_id(&self) -> &str;
     /// 返回本次 provider 进程 generation，进程重启后不得复用旧结果。
     fn process_generation(&self) -> &str;
+    /// 为一次新分析解析并验证模型能力；返回值同时参与缓存身份。
+    async fn resolve_analysis_model(
+        &self,
+    ) -> Result<codex::ResolvedCodexModel, BabysitError> {
+        Ok(codex::ResolvedCodexModel {
+            model: "test-model".to_owned(),
+            reasoning_effort: "test-effort".to_owned(),
+        })
+    }
     /// 生成完整 before/after 解释；provider 不得拆成逐行请求。
     async fn generate(
         &self,
@@ -449,6 +471,8 @@ struct CacheKey {
     provider_id: String,
     process_generation: String,
     contract_version: String,
+    model: String,
+    reasoning_effort: String,
 }
 
 /// 负责 eligibility、provider orchestration、校验和 process-local cache 的深模块。
@@ -471,16 +495,36 @@ impl BabysitApplication {
 
     /// 构造带有 application settings 路径的生产 Codex provider；发现仍保持懒加载。
     pub fn with_codex_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
-        let provider = Arc::new(CodexAppServerProvider::new("codex"));
+        let settings_path = settings_path.into();
+        let settings = crate::application_settings::ApplicationSettingsApplication::new(
+            settings_path.clone(),
+            settings_path.with_extension("legacy.json"),
+        );
+        let provider = Arc::new(CodexAppServerProvider::with_settings("codex", settings));
         let runtime = Arc::new(codex::runtime::CodexRuntime::new(
             provider.clone(),
-            settings_path.into(),
+            settings_path,
         ));
         Self {
             provider,
             codex_runtime: Some(runtime),
             cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 仅在 UI 明确请求修改时准备 runtime 并读取动态可见模型目录。
+    pub(crate) async fn fetch_model_catalog(
+        &self,
+        workspace_path: &Path,
+    ) -> Result<codex::CodexModelCatalog, BabysitError> {
+        self.prepare_runtime(workspace_path).await?;
+        let provider = self
+            .codex_runtime
+            .as_ref()
+            .ok_or_else(|| BabysitError::Provider {
+                detail: "当前 provider 不支持动态模型目录。".to_owned(),
+            })?;
+        provider.provider().model_catalog().await
     }
 
     /// 将首次 provider 发现和 App Server 握手保持在 Babysit 点击后的最高 seam。
@@ -529,6 +573,7 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
+        let resolved = self.provider.resolve_analysis_model().await?;
         let key = CacheKey {
             review_id: request.identity.review_id.clone(),
             snapshot_id: request.identity.snapshot_id.clone(),
@@ -538,6 +583,8 @@ impl BabysitApplication {
             provider_id: self.provider.provider_id().to_owned(),
             process_generation: self.provider.process_generation().to_owned(),
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
+            model: resolved.model.clone(),
+            reasoning_effort: resolved.reasoning_effort.clone(),
         };
         if request.generation_policy == BabysitGenerationPolicy::ReuseCached {
             if let Some(result) = self
@@ -553,7 +600,9 @@ impl BabysitApplication {
         }
 
         notify(BabysitProgress::Generating)?;
-        let provider_request = build_provider_request(&request, &content)?;
+        let mut provider_request = build_provider_request(&request, &content)?;
+        provider_request.model = resolved.model;
+        provider_request.reasoning_effort = resolved.reasoning_effort;
         let mut output = self
             .provider
             .generate(provider_request.clone(), cancellation)
@@ -770,6 +819,8 @@ fn build_provider_request(
         before: before.to_owned(),
         after: after.to_owned(),
         targets,
+        model: String::new(),
+        reasoning_effort: String::new(),
     })
 }
 
@@ -894,6 +945,7 @@ pub struct FakeBabysitProvider {
     generate_calls: AtomicUsize,
     repair_calls: AtomicUsize,
     shutdown_calls: AtomicUsize,
+    resolved_model: Mutex<codex::ResolvedCodexModel>,
 }
 
 #[cfg(test)]
@@ -920,6 +972,10 @@ impl FakeBabysitProvider {
             generate_calls: AtomicUsize::new(0),
             repair_calls: AtomicUsize::new(0),
             shutdown_calls: AtomicUsize::new(0),
+            resolved_model: Mutex::new(codex::ResolvedCodexModel {
+                model: "test-model".to_owned(),
+                reasoning_effort: "test-effort".to_owned(),
+            }),
         }
     }
 
@@ -931,6 +987,10 @@ impl FakeBabysitProvider {
             generate_calls: AtomicUsize::new(0),
             repair_calls: AtomicUsize::new(0),
             shutdown_calls: AtomicUsize::new(0),
+            resolved_model: Mutex::new(codex::ResolvedCodexModel {
+                model: "test-model".to_owned(),
+                reasoning_effort: "test-effort".to_owned(),
+            }),
         }
     }
 
@@ -947,6 +1007,14 @@ impl FakeBabysitProvider {
     /// 返回 shutdown 次数，用于验证应用退出只释放一次 provider 资源。
     pub fn shutdown_calls(&self) -> usize {
         self.shutdown_calls.load(Ordering::Acquire)
+    }
+
+    /// 测试切换未来分析使用的解析模型身份，不影响已构造的 provider 请求。
+    pub fn set_resolved_model(&self, model: &str, reasoning_effort: &str) {
+        if let Ok(mut resolved) = self.resolved_model.lock() {
+            resolved.model = model.to_owned();
+            resolved.reasoning_effort = reasoning_effort.to_owned();
+        }
     }
 
     /// 按请求 targets 构造稳定解释，故意不复述 source，避免 fake 测试输出污染日志。
@@ -1006,6 +1074,13 @@ impl BabysitAgentProvider for FakeBabysitProvider {
     /// 返回 fake 进程 generation，测试中保持固定以便验证缓存行为。
     fn process_generation(&self) -> &str {
         "fake-process-v1"
+    }
+
+    async fn resolve_analysis_model(&self) -> Result<codex::ResolvedCodexModel, BabysitError> {
+        self.resolved_model
+            .lock()
+            .map(|resolved| resolved.clone())
+            .map_err(|_| BabysitError::CacheUnavailable)
     }
 
     /// 一次生成完整 File Change 的所有解释，不拆分逐行调用。

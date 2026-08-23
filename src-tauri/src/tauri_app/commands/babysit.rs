@@ -7,6 +7,18 @@ use crate::review;
 use std::future::Future;
 use tauri::ipc::Channel;
 
+/// 设置页显式进入模型编辑时读取 App Server 当前可见动态目录。
+#[tauri::command]
+pub(crate) async fn list_babysit_models(
+    babysit: tauri::State<'_, BabysitApplication>,
+    workspace_path: String,
+) -> Result<crate::babysit::CodexModelCatalog, BabysitErrorPayload> {
+    babysit
+        .fetch_model_catalog(std::path::Path::new(&workspace_path))
+        .await
+        .map_err(BabysitErrorPayload::from)
+}
+
 /// Explain command 的后端 eligibility gate；通过前不得触碰 runtime/discovery。
 fn validate_explain_input(
     babysit: &BabysitApplication,
