@@ -570,7 +570,7 @@ pub trait BabysitAgentProvider: Send + Sync {
         request: BabysitProviderRequest,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError>;
-    /// 在同一 provider thread 上修复上一次被 Narrant 拒绝的完整输出。
+    /// 修复上一次被 Narrant 拒绝的完整输出；provider 可复用会话或启动自包含无状态轮次。
     async fn repair(
         &self,
         request: BabysitProviderRequest,
