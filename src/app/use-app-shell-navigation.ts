@@ -11,10 +11,12 @@ export type RepositoryTab = "pull-requests" | "branches" | "history";
 export type AppDestination =
   | { kind: "home" }
   | { kind: "repository"; repositoryId: number; initialTab: RepositoryTab }
-  | { kind: "review"; repositoryId: number; reviewId: string };
+  | { kind: "review"; repositoryId: number; reviewId: string }
+  | { kind: "settings" };
 
 export type AppNavigationIntent =
   | { kind: "home" }
+  | { kind: "settings" }
   | { kind: "repository"; repositoryId: number }
   | { kind: "review"; repositoryId: number; target: ReviewOpenTarget };
 
@@ -48,6 +50,7 @@ export type AppShellNavigationBinding = {
   };
   trust: null | { repository: RepositorySummary; granting: boolean };
   navigate(intent: AppNavigationIntent): Promise<AppNavigationResult>;
+  returnFromSettings(): Promise<AppNavigationResult>;
   registerAndOpen(path: string): Promise<AppNavigationResult>;
   confirmTrust(): Promise<AppNavigationResult>;
   dismissTrust(): void;
@@ -107,6 +110,7 @@ export function useAppShellNavigation(
   const [pendingIntent, setPendingIntent] = useState<Exclude<AppNavigationIntent, { kind: "home" }>>();
   const [pendingPreviousRepositoryId, setPendingPreviousRepositoryId] = useState<number>();
   const [navigationError, setNavigationError] = useState<string>();
+  const settingsReturnDestination = useRef<Exclude<AppDestination, { kind: "settings" }>>({ kind: "home" });
   const navigating = useRef(false);
   const waitForPaint = useMemo(() => options.waitForPaint ?? (() => new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
@@ -151,6 +155,14 @@ export function useAppShellNavigation(
     navigating.current = true;
     const previousRepositoryId = repository.current?.repository.id;
     try {
+      if (intent.kind === "settings") {
+        if (destination.kind !== "settings") settingsReturnDestination.current = destination;
+        setDestination({ kind: "settings" });
+        setTransition({ kind: "stable" });
+        setNavigationError(undefined);
+        return { kind: "navigated" };
+      }
+
       if (intent.kind === "home") {
         repository.leave();
         setPendingIntent(undefined);
@@ -234,6 +246,13 @@ export function useAppShellNavigation(
     }
   }, [commitReview, destination, repository, review, waitForPaint]);
 
+  /** 离开 Application Settings，并恢复进入前已提交的应用目的地。 */
+  const returnFromSettings = useCallback(async (): Promise<AppNavigationResult> => {
+    if (destination.kind !== "settings") return { kind: "ignored" };
+    setDestination(settingsReturnDestination.current);
+    return { kind: "navigated" };
+  }, [destination.kind]);
+
   const registerAndOpen = useCallback(async (path: string) => {
     try {
       const entry = await repository.register(path);
@@ -288,7 +307,9 @@ export function useAppShellNavigation(
   const pendingReviewId = transition.kind === "opening-review" && transition.key.startsWith("review:")
     ? transition.key.slice("review:".length)
     : undefined;
-  const activeRepositoryId = destination.kind === "home" ? undefined : destination.repositoryId;
+  const activeRepositoryId = destination.kind === "repository" || destination.kind === "review"
+    ? destination.repositoryId
+    : undefined;
   const activeReviewId = destination.kind === "review" ? destination.reviewId : undefined;
   const busy = transition.kind !== "stable" || review.reader?.transition.kind === "refreshing";
   const trust = useMemo(() => transition.kind === "trust-required" || transition.kind === "granting-trust"
@@ -312,8 +333,9 @@ export function useAppShellNavigation(
     },
     trust,
     navigate,
+    returnFromSettings,
     registerAndOpen,
     confirmTrust,
     dismissTrust,
-  }), [activeRepositoryId, activeReviewId, busy, confirmTrust, destination, dismissTrust, navigate, navigationError, pendingReviewId, registerAndOpen, repository.navigation, repository.transition.kind, review.reader, transition, trust]);
+  }), [activeRepositoryId, activeReviewId, busy, confirmTrust, destination, dismissTrust, navigate, navigationError, pendingReviewId, registerAndOpen, repository.navigation, repository.transition.kind, returnFromSettings, review.reader, transition, trust]);
 }
