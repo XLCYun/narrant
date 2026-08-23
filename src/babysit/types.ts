@@ -30,7 +30,6 @@ export type BabysitErrorCode =
 export type BabysitRecoveryAction =
   | "login_codex"
   | "upgrade_codex"
-  | "select_codex_executable"
   | "retry";
 
 /** Babysit command 失败的结构化 payload；detail 不参与业务分支。 */
@@ -62,7 +61,6 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
 const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
   "login_codex",
   "upgrade_codex",
-  "select_codex_executable",
   "retry",
 ]);
 

@@ -32,13 +32,12 @@ struct ApplicationCodexSettings {
 }
 
 impl ApplicationCodexSettings {
-    /// 读取绝对路径选择；格式错误或相对路径会被忽略。
-    fn load(&self) -> Option<PathBuf> {
+    /// 读取权威偏好；配置损坏必须显式失败，不能降级为自动发现。
+    fn load(&self) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .load()
-            .ok()
-            .and_then(|settings| settings.codex_executable)
-            .filter(|path| path.is_absolute())
+            .map(|settings| settings.codex_executable)
+            .map_err(|_| BabysitError::CodexExecutableInvalid)
     }
 
     /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
@@ -177,10 +176,8 @@ impl CodexRuntime {
 
     /// 解析持久化/PATH 候选，配置 #74，并在同一工作区完成握手与能力探针。
     async fn probe_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        let candidates = self
-            .discovery
-            .resolve_all(self.settings.load().as_deref())
-            .await?;
+        let persisted = self.settings.load()?;
+        let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
         let mut last_error = BabysitError::CodexNotFound;
         let mut found_signed_out = false;
         for candidate in candidates {

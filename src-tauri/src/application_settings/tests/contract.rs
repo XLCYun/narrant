@@ -208,7 +208,7 @@ fn legacy_executable_is_migrated_once_and_unified_settings_remain_authoritative(
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
     let legacy_path = directory.path().join("babysit-settings.json");
-    let first_executable = directory.path().join("codex-first.exe");
+    let first_executable = version_fixture(directory.path(), "codex-first", true);
     let later_executable = directory.path().join("codex-later.exe");
     std::fs::write(
         &legacy_path,
@@ -231,6 +231,29 @@ fn legacy_executable_is_migrated_once_and_unified_settings_remain_authoritative(
     .load()
     .unwrap();
 
-    assert_eq!(migrated.codex_executable, Some(first_executable));
+    assert_eq!(
+        migrated.codex_executable,
+        Some(first_executable.canonicalize().unwrap())
+    );
     assert_eq!(repeated, migrated);
+}
+
+#[test]
+fn invalid_legacy_executable_is_not_migrated_into_unified_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    let legacy_path = directory.path().join("babysit-settings.json");
+    let rejected = version_fixture(directory.path(), "not-codex", false);
+    std::fs::write(
+        &legacy_path,
+        serde_json::json!({ "executable": rejected }).to_string(),
+    )
+    .unwrap();
+    let application = ApplicationSettingsApplication::new(settings_path.clone(), legacy_path);
+
+    assert!(matches!(
+        application.load(),
+        Err(super::ApplicationSettingsError::InvalidCodexExecutable)
+    ));
+    assert!(!settings_path.exists());
 }

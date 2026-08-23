@@ -273,7 +273,7 @@ describe("Babysit Review Reader presentation", () => {
       kind: "failed",
       retryable: true,
       request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
-      error: { code: "codex_not_found", detail: "/Users/alice/.local/bin/codex", recovery: "select_codex_executable" },
+      error: { code: "codex_not_found", detail: "/Users/alice/.local/bin/codex" },
     });
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));

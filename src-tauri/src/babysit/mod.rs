@@ -263,7 +263,6 @@ pub enum BabysitErrorCode {
 pub enum BabysitRecoveryAction {
     LoginCodex,
     UpgradeCodex,
-    SelectCodexExecutable,
     Retry,
 }
 
@@ -322,10 +321,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::CodexInitializationFailed => BabysitErrorCode::CodexInitializationFailed,
         };
         let recovery = match &error {
-            BabysitError::CodexNotFound => Some(BabysitRecoveryAction::SelectCodexExecutable),
-            BabysitError::CodexExecutableInvalid => {
-                Some(BabysitRecoveryAction::SelectCodexExecutable)
-            }
+            BabysitError::CodexNotFound | BabysitError::CodexExecutableInvalid => None,
             BabysitError::CodexSignedOut => Some(BabysitRecoveryAction::LoginCodex),
             BabysitError::CodexIncompatible => Some(BabysitRecoveryAction::UpgradeCodex),
             BabysitError::CodexInitializationFailed => Some(BabysitRecoveryAction::Retry),

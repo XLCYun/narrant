@@ -75,14 +75,14 @@ async fn file_settings_round_trip_preserves_unified_application_settings() {
 
     settings.save(Some(executable.clone())).await.unwrap();
 
-    assert_eq!(settings.load(), Some(executable));
+    assert_eq!(settings.load().unwrap(), Some(executable));
     let serialized = std::fs::read_to_string(path).unwrap();
     assert!(serialized.contains(r#""version":1"#));
     assert!(serialized.contains(r#""theme":"dark""#));
 }
 
 #[test]
-fn malformed_or_relative_settings_are_ignored() {
+fn malformed_or_relative_settings_fail_instead_of_falling_back() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
     std::fs::write(&path, r#"{"codexExecutable":"relative/codex"}"#).unwrap();
@@ -94,7 +94,7 @@ fn malformed_or_relative_settings_are_ignored() {
         ),
     }
     .load()
-    .is_none());
+    .is_err());
 }
 
 #[test]
@@ -123,7 +123,7 @@ async fn picker_validates_and_persists_the_canonical_executable() {
     runtime.select_executable(&executable).await.unwrap();
 
     assert_eq!(
-        runtime.settings.load(),
+        runtime.settings.load().unwrap(),
         Some(executable.canonicalize().unwrap())
     );
     assert_eq!(runtime.status(), CodexRuntimeStatus::Unknown);
