@@ -15,7 +15,7 @@ import type {
   RepositoryOverview,
   RepositoryReviewList,
 } from "@/repository/repository-application";
-import type { ApplicationSettings, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettings, BabysitModelCatalog, BabysitModelPreference, ThemePreference } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -35,6 +35,8 @@ export type TauriCommandContract = {
   update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
   update_application_codex_executable: { args: { executable: string }; result: ApplicationSettings };
   clear_application_codex_executable: { args: EmptyArgs; result: ApplicationSettings };
+  list_babysit_models: { args: EmptyArgs; result: BabysitModelCatalog; error: { code: string; detail: string } };
+  update_application_babysit_model: { args: { preference: BabysitModelPreference }; result: ApplicationSettings; error: { code: string; detail: string } };
   set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
@@ -93,6 +95,8 @@ export const TAURI_COMMAND_NAMES = [
   "update_application_theme",
   "update_application_codex_executable",
   "clear_application_codex_executable",
+  "list_babysit_models",
+  "update_application_babysit_model",
   "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
   "register_repository",

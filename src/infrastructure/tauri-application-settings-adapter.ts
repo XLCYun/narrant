@@ -1,6 +1,6 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettingsApplication, BabysitModelPreference, ThemePreference } from "@/settings/application-settings";
 import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
 
 type CodexExecutablePicker = () => Promise<string | string[] | null>;
@@ -19,5 +19,7 @@ export function createTauriApplicationSettingsAdapter(
       return transport.invoke("update_application_codex_executable", { executable });
     },
     clearCodexExecutable: () => transport.invoke("clear_application_codex_executable", {}),
+    listBabysitModels: () => transport.invoke("list_babysit_models", {}),
+    updateBabysitModel: (preference: BabysitModelPreference) => transport.invoke("update_application_babysit_model", { preference }),
   };
 }

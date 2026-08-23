@@ -1,11 +1,28 @@
 export type ThemePreference = "system" | "light" | "dark";
 
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type BabysitModelPreference =
+  | { kind: "automatic" }
+  | { kind: "explicit"; modelId: string; reasoningEffort: ReasoningEffort | null };
+
+/** App Server 返回的一个可见模型及其当前思考强度能力。 */
+export type BabysitModelCatalogEntry = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  supportedReasoningEfforts: ReasoningEffort[];
+  defaultReasoningEffort: ReasoningEffort;
+};
+
+/** 一次完整、仅驻留内存的动态模型目录。 */
+export type BabysitModelCatalog = { models: BabysitModelCatalogEntry[] };
+
 /** 前端消费的设备级 Application Settings 公共投影。 */
 export type ApplicationSettings = {
   version: number;
   theme: ThemePreference;
   codexExecutable: string | null;
-  babysitModel: unknown;
+  babysitModel: BabysitModelPreference;
 };
 
 /** Settings UI 与持久化实现之间的窄应用端口。 */
@@ -16,4 +33,8 @@ export interface ApplicationSettingsApplication {
   chooseCodexExecutable(): Promise<ApplicationSettings | null>;
   /** 清空显式 Codex Executable Preference，恢复自动发现。 */
   clearCodexExecutable(): Promise<ApplicationSettings>;
+  /** 仅在用户进入修改态时获取当前完整模型目录。 */
+  listBabysitModels(): Promise<BabysitModelCatalog>;
+  /** 由后端再次校验目录组合后原子保存模型偏好。 */
+  updateBabysitModel(preference: BabysitModelPreference): Promise<ApplicationSettings>;
 }
