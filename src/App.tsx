@@ -407,6 +407,7 @@ export function App() {
     {appShell.destination.kind === "settings" && <SettingsPage
       theme={applicationTheme}
       codex={codexExecutablePreference}
+      githubIdentity={githubIdentity}
       onBack={() => void appShell.returnFromSettings()}
     />}
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
