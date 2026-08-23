@@ -116,18 +116,6 @@ pub(crate) async fn explain_review_file_change(
     .await
 }
 
-/// 接收 native executable picker 的结果，先验证 `--version` 再持久化。
-#[tauri::command]
-pub(crate) async fn select_babysit_codex_executable(
-    babysit: tauri::State<'_, BabysitApplication>,
-    executable: String,
-) -> Result<(), BabysitErrorPayload> {
-    babysit
-        .select_codex_executable(&PathBuf::from(executable))
-        .await
-        .map_err(BabysitErrorPayload::from)
-}
-
 /// 刷新 Snapshot 后删除旧 identity 的所有进程内解释缓存。
 #[tauri::command]
 pub(crate) fn clear_babysit_snapshot_cache(

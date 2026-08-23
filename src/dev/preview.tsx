@@ -33,14 +33,27 @@ type PreviewDefinition = {
 };
 
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false }: { saveFails?: boolean }) {
+function SettingsPreview({ saveFails = false, longCodexPath = false }: { saveFails?: boolean; longCodexPath?: boolean }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
+  const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
+    ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
+    : null);
   const application: ApplicationSettingsApplication = {
-    load: async () => ({ version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } }),
+    load: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
     updateTheme: async (theme) => {
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedTheme(theme);
       return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+    },
+    chooseCodexExecutable: async () => {
+      if (saveFails) throw new Error("预览中的 Codex 版本验证失败");
+      const selected = "C:\\Program Files\\Codex\\codex.exe";
+      setCodexExecutable(selected);
+      return { version: 1, theme: savedTheme, codexExecutable: selected, babysitModel: { kind: "automatic" } };
+    },
+    clearCodexExecutable: async () => {
+      setCodexExecutable(null);
+      return { version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } };
     },
   };
   return <ApplicationSettingsDestination application={application} onBack={() => undefined} />;
@@ -298,7 +311,6 @@ function ReviewReaderPreview({
       regenerate: () => undefined,
       cancel: () => undefined,
       retry: () => undefined,
-      selectExecutable: () => undefined,
     },
     view,
     setView,
@@ -335,6 +347,7 @@ const previews: Record<string, PreviewDefinition> = {
     scenarios: {
       default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
       error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
+      "long-codex-path": { label: "Codex 长路径", render: () => <SettingsPreview longCodexPath /> },
     },
   },
   "app-shell": {

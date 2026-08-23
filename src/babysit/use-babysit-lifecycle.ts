@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { detectBabysitLanguage } from "@/babysit/detected-language";
@@ -144,36 +143,6 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     if (state.kind === "completed") generate("regenerate");
   }, [generate, state.kind]);
 
-  /** 仅在 typed recovery action 要求时打开 native picker；取消不改变失败状态。 */
-  const selectExecutable = useCallback(async () => {
-    const select = adapter?.selectCodexExecutable;
-    const failed = state.kind === "failed" ? state : undefined;
-    if (!select || !failed) return;
-    const requestId = explanationRequest.current;
-    let selected: string | string[] | null;
-    try {
-      selected = await openDialog({ multiple: false, directory: false });
-    } catch {
-      setState({
-        kind: "failed",
-        request: failed.request,
-        error: { code: "provider", detail: "Codex executable picker unavailable." },
-        retryable: true,
-      });
-      return;
-    }
-    if (typeof selected !== "string" || selected.length === 0 || requestId !== explanationRequest.current) return;
-    try {
-      await select(selected);
-      if (requestId !== explanationRequest.current) return;
-      invalidateExplanation();
-      generate(lastGenerationPolicy.current);
-    } catch (reason) {
-      if (requestId === explanationRequest.current) {
-        setState({ kind: "failed", request: failed.request, error: babysitFailure(reason), retryable: true });
-      }
-    }
-  }, [adapter, generate, invalidateExplanation, state]);
 
   /** UI locale 改变后清掉旧语言结果，下一次点击使用新的 cache identity。 */
   useEffect(() => {
@@ -193,8 +162,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     regenerate,
     cancel: invalidateExplanation,
     retry: () => { if (state.kind === "failed") generate(lastGenerationPolicy.current); },
-    selectExecutable,
-  } : undefined, [adapter, eligibility, explain, generate, invalidateExplanation, regenerate, selectExecutable, state]);
+  } : undefined, [adapter, eligibility, explain, generate, invalidateExplanation, regenerate, state]);
 
   /** 清理动作不阻塞 Review 主流程，provider cleanup 失败由 adapter 自行记录。 */
   const clearSnapshot = useCallback(async (identity: ReviewIdentity) => {
