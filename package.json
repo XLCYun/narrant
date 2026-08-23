@@ -15,6 +15,7 @@
     "dev:preview": "vite --host 127.0.0.1 --port 1421 --open /preview.html",
     "prebuild": "pnpm generate:file-icons",
     "build": "tsc --noEmit && cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build",
+    "build:windows": "pnpm tauri build --bundles nsis",
     "lint": "eslint .",
     "test": "vitest run",
     "test:components": "vitest run",
