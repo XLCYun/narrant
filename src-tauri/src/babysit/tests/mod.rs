@@ -459,6 +459,155 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 }
 
 #[test]
+fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
+    let payload = BabysitErrorPayload::from(BabysitError::provider_setup(
+        "claude-code",
+        BabysitProviderSetupFailure::NotFound,
+    ));
+
+    assert_eq!(
+        serde_json::to_value(payload).unwrap(),
+        serde_json::json!({
+            "code": "provider_not_found",
+            "detail": "未找到 claude-code provider 可执行文件",
+            "providerId": "claude-code",
+            "recovery": "select_provider_executable"
+        })
+    );
+}
+
+#[test]
+fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
+    let cases = [
+        (
+            BabysitError::provider_setup(
+                "claude-code",
+                BabysitProviderSetupFailure::SignedOut,
+            ),
+            "provider_signed_out",
+            "login_provider",
+        ),
+        (
+            BabysitError::provider_setup(
+                "claude-code",
+                BabysitProviderSetupFailure::Incompatible,
+            ),
+            "provider_incompatible",
+            "upgrade_provider",
+        ),
+        (
+            BabysitError::provider_setup(
+                "claude-code",
+                BabysitProviderSetupFailure::InitializationFailed,
+            ),
+            "provider_initialization_failed",
+            "retry",
+        ),
+        (
+            BabysitError::provider_setup(
+                "claude-code",
+                BabysitProviderSetupFailure::ExecutableInvalid,
+            ),
+            "provider_executable_invalid",
+            "select_provider_executable",
+        ),
+    ];
+
+    for (error, code, recovery) in cases {
+        let value = serde_json::to_value(BabysitErrorPayload::from(error)).unwrap();
+        assert_eq!(value["code"], code);
+        assert_eq!(value["providerId"], "claude-code");
+        assert_eq!(value["recovery"], recovery);
+    }
+}
+
+/// 只记录 application lifecycle 调用的 provider-aware runtime fake。
+struct FakeInstalledRuntime {
+    provider_id: String,
+    status: Mutex<BabysitProviderRuntimeStatus>,
+    ready_calls: AtomicUsize,
+    selected_paths: Mutex<Vec<String>>,
+    shutdown_calls: AtomicUsize,
+}
+
+impl FakeInstalledRuntime {
+    /// 构造一个尚未探测的 installed provider runtime。
+    fn new(provider_id: &str) -> Self {
+        Self {
+            provider_id: provider_id.to_owned(),
+            status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
+            ready_calls: AtomicUsize::new(0),
+            selected_paths: Mutex::new(Vec::new()),
+            shutdown_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl InstalledProviderRuntime for FakeInstalledRuntime {
+    /// 返回测试 provider 的稳定 identity。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// 返回 fake runtime 保存的 provider-independent 状态。
+    fn status(&self) -> BabysitProviderRuntimeStatus {
+        self.status
+            .lock()
+            .map(|status| *status)
+            .unwrap_or(BabysitProviderRuntimeStatus::InitFailed)
+    }
+
+    /// 记录一次 readiness probe，并模拟成功初始化。
+    async fn ensure_ready(&self, _workspace_path: &Path) -> Result<(), BabysitError> {
+        self.ready_calls.fetch_add(1, Ordering::AcqRel);
+        if let Ok(mut status) = self.status.lock() {
+            *status = BabysitProviderRuntimeStatus::Ready;
+        }
+        Ok(())
+    }
+
+    /// 只记录 picker 传入的 path；不会把它放入错误或 provider request。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        self.selected_paths
+            .lock()
+            .map_err(|_| BabysitError::CacheUnavailable)?
+            .push(path.to_string_lossy().into_owned());
+        Ok(())
+    }
+
+    /// 记录应用退出时的 runtime shutdown。
+    async fn shutdown(&self) {
+        self.shutdown_calls.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[tokio::test]
+async fn application_delegates_installed_provider_lifecycle_through_one_runtime_seam() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let runtime = Arc::new(FakeInstalledRuntime::new("fake"));
+    let application = BabysitApplication::with_provider_runtime(provider, runtime.clone());
+
+    application
+        .prepare_runtime(Path::new("/tmp/narrant-test-workspace"))
+        .await
+        .unwrap();
+    application
+        .select_provider_executable("fake", Path::new("/tmp/fake-provider"))
+        .await
+        .unwrap();
+    application.shutdown().await.unwrap();
+
+    assert_eq!(runtime.ready_calls.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::Ready);
+    assert_eq!(
+        runtime.selected_paths.lock().unwrap().as_slice(),
+        ["/tmp/fake-provider".to_owned()]
+    );
+    assert_eq!(runtime.shutdown_calls.load(Ordering::Acquire), 1);
+}
+
+#[test]
 fn input_error_payload_redacts_paths_source_tokens_and_process_output() {
     let payload = BabysitErrorPayload::input_unavailable(
         "/Users/alice/repo/src/example.ts source=const secret='token'; stderr=raw output",

@@ -146,9 +146,12 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
 
   /** 仅在 typed recovery action 要求时打开 native picker；取消不改变失败状态。 */
   const selectExecutable = useCallback(async () => {
-    const select = adapter?.selectCodexExecutable;
     const failed = state.kind === "failed" ? state : undefined;
-    if (!select || !failed) return;
+    if (!failed) return;
+    const providerId = failed.error.providerId ?? "codex-app-server";
+    const selectProvider = adapter?.selectProviderExecutable;
+    const selectCodex = adapter?.selectCodexExecutable;
+    if (!selectProvider && !selectCodex) return;
     const requestId = explanationRequest.current;
     let selected: string | string[] | null;
     try {
@@ -164,7 +167,11 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     }
     if (typeof selected !== "string" || selected.length === 0 || requestId !== explanationRequest.current) return;
     try {
-      await select(selected);
+      if (selectProvider) {
+        await selectProvider(providerId, selected);
+      } else if (selectCodex) {
+        await selectCodex(selected);
+      }
       if (requestId !== explanationRequest.current) return;
       invalidateExplanation();
       generate(lastGenerationPolicy.current);
