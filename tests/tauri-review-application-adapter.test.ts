@@ -250,20 +250,6 @@ describe("Tauri Babysit application adapter", () => {
     );
   });
 
-  it("把 native picker 的 executable 交给 typed setup command", async () => {
-    const invoke = vi.fn().mockResolvedValue(undefined);
-    const adapter = createTauriBabysitApplicationAdapter({
-      invoke,
-      invokeCancellable: vi.fn(),
-    } as unknown as TypedTauriTransport);
-
-    await adapter.selectCodexExecutable?.("/opt/homebrew/bin/codex");
-
-    expect(invoke).toHaveBeenCalledWith("select_babysit_codex_executable", {
-      executable: "/opt/homebrew/bin/codex",
-    });
-  });
-
   it("把 Snapshot/Review 生命周期清理映射到 typed cache commands", async () => {
     const invoke = vi.fn().mockResolvedValue(undefined);
     const adapter = createTauriBabysitApplicationAdapter({

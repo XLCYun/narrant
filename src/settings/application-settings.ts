@@ -12,4 +12,8 @@ export type ApplicationSettings = {
 export interface ApplicationSettingsApplication {
   load(): Promise<ApplicationSettings>;
   updateTheme(theme: ThemePreference): Promise<ApplicationSettings>;
+  /** 打开原生文件选择器，并在后端验证通过后保存选中的 Codex。 */
+  chooseCodexExecutable(): Promise<ApplicationSettings | null>;
+  /** 清空显式 Codex Executable Preference，恢复自动发现。 */
+  clearCodexExecutable(): Promise<ApplicationSettings>;
 }

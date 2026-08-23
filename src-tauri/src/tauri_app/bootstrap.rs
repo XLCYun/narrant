@@ -87,6 +87,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             application_settings_commands::load_application_settings,
             application_settings_commands::update_application_theme,
+            application_settings_commands::update_application_codex_executable,
+            application_settings_commands::clear_application_codex_executable,
             #[cfg(feature = "wdio")]
             repository::set_e2e_repository_directory,
             #[cfg(feature = "wdio")]
@@ -115,7 +117,6 @@ pub fn run() {
             review_commands::read_review_file_change,
             babysit_commands::explain_review_file_change,
             babysit_commands::check_babysit_file_eligibility,
-            babysit_commands::select_babysit_codex_executable,
             babysit_commands::clear_babysit_snapshot_cache,
             babysit_commands::clear_babysit_review_cache,
             review_commands::close_review

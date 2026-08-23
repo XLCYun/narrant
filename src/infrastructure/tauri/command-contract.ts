@@ -33,6 +33,8 @@ type EmptyArgs = Record<string, never>;
 export type TauriCommandContract = {
   load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
   update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
+  update_application_codex_executable: { args: { executable: string }; result: ApplicationSettings };
+  clear_application_codex_executable: { args: EmptyArgs; result: ApplicationSettings };
   set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
@@ -47,7 +49,6 @@ export type TauriCommandContract = {
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
-  select_babysit_codex_executable: { args: { executable: string }; result: void; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
   clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
@@ -90,6 +91,8 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 export const TAURI_COMMAND_NAMES = [
   "load_application_settings",
   "update_application_theme",
+  "update_application_codex_executable",
+  "clear_application_codex_executable",
   "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
   "register_repository",
@@ -116,7 +119,6 @@ export const TAURI_COMMAND_NAMES = [
   "read_review_file_change",
   "explain_review_file_change",
   "check_babysit_file_eligibility",
-  "select_babysit_codex_executable",
   "clear_babysit_snapshot_cache",
   "clear_babysit_review_cache",
   "close_review",

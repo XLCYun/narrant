@@ -36,7 +36,6 @@ type BabysitFooterProps = {
   state: BabysitState | undefined;
   onCancel: () => void;
   onRetry: () => void;
-  onSelectExecutable?: () => void;
   labels: {
     generating: string;
     repairing: (attempt: number) => string;
@@ -47,14 +46,13 @@ type BabysitFooterProps = {
     codexInitializationFailed: string;
     cancel: string;
     retry: string;
-    selectExecutable: string;
     copyDiagnostics: string;
     copiedDiagnostics: string;
   };
 };
 
 /** 在 Diff 底部呈现文件级 Babysit 状态和恢复操作，不打断普通代码阅读。 */
-function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }: BabysitFooterProps) {
+function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps) {
   const [copied, setCopied] = useState(false);
   const errorCode = state?.kind === "failed" ? state.error.code : undefined;
   useEffect(() => setCopied(false), [state?.kind, errorCode]);
@@ -90,7 +88,6 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
     {running
       ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
       : <>
-        {state.kind === "failed" && state.error.recovery === "select_codex_executable" && onSelectExecutable && <Button variant="outline" size="xs" onClick={onSelectExecutable}>{labels.selectExecutable}</Button>}
         <Button variant="outline" size="xs" onClick={onRetry}>{labels.retry}</Button>
         <Button variant="ghost" size="xs" onClick={copyDiagnostics} aria-label={copied ? labels.copiedDiagnostics : labels.copyDiagnostics}>
           <Icon icon={Copy01Icon} aria-hidden />
@@ -203,7 +200,6 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
     state={visible ? state : undefined}
     onCancel={() => babysit?.cancel()}
     onRetry={() => babysit?.retry()}
-    onSelectExecutable={babysit?.selectExecutable ? () => babysit.selectExecutable?.() : undefined}
     labels={{
       generating: t("review:babysitGenerating"),
       repairing: (attempt) => t("review:babysitRepairing", { attempt }),
@@ -213,7 +209,6 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
       codexIncompatible: t("review:babysitCodexIncompatible"),
       codexInitializationFailed: t("review:babysitCodexInitializationFailed"),
       cancel: t("review:babysitCancel"),
-      selectExecutable: t("review:babysitSelectCodex"),
       retry: t("common:retry"),
       copyDiagnostics: t("review:babysitCopyDiagnostics"),
       copiedDiagnostics: t("review:babysitCopiedDiagnostics"),
