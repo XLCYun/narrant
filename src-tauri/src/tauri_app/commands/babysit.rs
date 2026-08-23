@@ -11,10 +11,9 @@ use tauri::ipc::Channel;
 #[tauri::command]
 pub(crate) async fn list_babysit_models(
     babysit: tauri::State<'_, BabysitApplication>,
-    workspace_path: String,
 ) -> Result<crate::babysit::CodexModelCatalog, BabysitErrorPayload> {
     babysit
-        .fetch_model_catalog(std::path::Path::new(&workspace_path))
+        .fetch_model_catalog()
         .await
         .map_err(BabysitErrorPayload::from)
 }

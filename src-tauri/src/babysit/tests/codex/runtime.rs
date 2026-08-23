@@ -111,6 +111,29 @@ fn runtime_construction_does_not_probe_or_create_settings() {
 }
 
 #[tokio::test]
+async fn model_catalog_uses_explicit_executable_before_automatic_candidates() {
+    let directory = tempfile::tempdir().unwrap();
+    let selected_events = directory.path().join("selected-events");
+    let fallback_events = directory.path().join("fallback-events");
+    let selected = app_server_candidate(directory.path(), "selected-codex", "complete", &selected_events);
+    let fallback = app_server_candidate(directory.path(), "fallback-codex", "complete", &fallback_events);
+    let settings_path = directory.path().join("settings.json");
+    let provider = Arc::new(CodexAppServerProvider::new("codex"));
+    let runtime = CodexRuntime::new_with_discovery(
+        provider,
+        settings_path,
+        CodexExecutableDiscovery::with_candidates(vec![fallback]),
+    );
+    runtime.select_executable(&selected).await.unwrap();
+
+    let catalog = runtime.model_catalog().await.unwrap();
+
+    assert_eq!(catalog.models[0].id, "fixture-model");
+    assert!(std::fs::read_to_string(selected_events).unwrap().contains("model/list"));
+    assert!(!fallback_events.exists());
+}
+
+#[tokio::test]
 async fn picker_validates_and_persists_the_canonical_executable() {
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("babysit-settings.json");

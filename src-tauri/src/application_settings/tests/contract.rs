@@ -283,3 +283,33 @@ fn explicit_babysit_model_update_preserves_other_application_settings() {
         }
     );
 }
+
+#[test]
+fn babysit_model_preference_uses_public_camel_case_dto_and_reads_legacy_settings() {
+    let current = BabysitModelPreference::Explicit {
+        model: "server-model".to_owned(),
+        reasoning_effort: Some("high".to_owned()),
+    };
+    assert_eq!(
+        serde_json::to_value(&current).unwrap(),
+        serde_json::json!({
+            "kind": "explicit",
+            "modelId": "server-model",
+            "reasoningEffort": "high"
+        })
+    );
+
+    let legacy: BabysitModelPreference = serde_json::from_value(serde_json::json!({
+        "mode": "explicit",
+        "model": "legacy-model",
+        "reasoning_effort": null
+    }))
+    .unwrap();
+    assert_eq!(
+        legacy,
+        BabysitModelPreference::Explicit {
+            model: "legacy-model".to_owned(),
+            reasoning_effort: None,
+        }
+    );
+}

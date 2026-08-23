@@ -58,12 +58,41 @@ pub(crate) struct CodexRuntime {
     settings: ApplicationCodexSettings,
     status: Mutex<CodexRuntimeStatus>,
     flight: AsyncMutex<Option<Arc<Notify>>>,
+    catalog_executable: Mutex<Option<PathBuf>>,
 }
 
 impl CodexRuntime {
-    /// 向 Babysit 应用边界暴露同一窄 provider，以读取动态模型目录。
-    pub(crate) fn provider(&self) -> &CodexAppServerProvider {
-        &self.provider
+    /// 无需 Review Workspace 地发现 executable，并读取只依赖 initialize/account 的模型目录。
+    pub(crate) async fn model_catalog(
+        &self,
+    ) -> Result<super::CodexModelCatalog, BabysitError> {
+        let persisted = self.settings.load()?;
+        let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
+        let mut last_error = BabysitError::CodexNotFound;
+        for candidate in candidates {
+            let candidate_path = candidate.path;
+            let already_configured = self
+                .catalog_executable
+                .lock()
+                .map(|configured| configured.as_ref() == Some(&candidate_path))
+                .unwrap_or(false);
+            if !already_configured {
+                self.provider.shutdown().await;
+                self.provider
+                    .configure_executable(candidate_path.clone())
+                    .await?;
+            }
+            match self.provider.model_catalog().await {
+                Ok(catalog) => {
+                    if let Ok(mut configured) = self.catalog_executable.lock() {
+                        *configured = Some(candidate_path);
+                    }
+                    return Ok(catalog);
+                }
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
     }
 
     /// 构造 idle runtime；此处不执行设置、PATH 或进程 I/O。
@@ -88,6 +117,7 @@ impl CodexRuntime {
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
             flight: AsyncMutex::new(None),
+            catalog_executable: Mutex::new(None),
         }
     }
 
@@ -186,9 +216,17 @@ impl CodexRuntime {
         let mut last_error = BabysitError::CodexNotFound;
         let mut found_signed_out = false;
         for candidate in candidates {
-            self.provider.configure_executable(candidate.path).await?;
+            let candidate_path = candidate.path;
+            self.provider
+                .configure_executable(candidate_path.clone())
+                .await?;
             match self.provider.prepare_process(workspace_path).await {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    if let Ok(mut configured) = self.catalog_executable.lock() {
+                        *configured = Some(candidate_path);
+                    }
+                    return Ok(());
+                }
                 Err(BabysitError::CodexSignedOut) => found_signed_out = true,
                 Err(error) => last_error = error,
             }

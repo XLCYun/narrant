@@ -240,6 +240,8 @@ pub enum BabysitError {
     CodexInitializationFailed,
     /// 保存的模型或思考强度不再被动态目录支持，需要修改设置。
     ModelPreferenceInvalid,
+    /// 模型偏好已通过能力验证，但统一设置文件无法原子保存。
+    SettingsPersistenceFailed,
 }
 
 /// Babysit command 对前端暴露的稳定错误 code；detail 只承载当前失败的可读诊断。
@@ -263,6 +265,7 @@ pub enum BabysitErrorCode {
     CodexIncompatible,
     CodexInitializationFailed,
     ModelPreferenceInvalid,
+    SettingsPersistenceFailed,
 }
 
 /// 前端可以直接执行的最小恢复动作；不携带可执行路径或进程原文。
@@ -328,6 +331,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::CodexIncompatible => BabysitErrorCode::CodexIncompatible,
             BabysitError::CodexInitializationFailed => BabysitErrorCode::CodexInitializationFailed,
             BabysitError::ModelPreferenceInvalid => BabysitErrorCode::ModelPreferenceInvalid,
+            BabysitError::SettingsPersistenceFailed => BabysitErrorCode::SettingsPersistenceFailed,
         };
         let recovery = match &error {
             BabysitError::CodexNotFound | BabysitError::CodexExecutableInvalid => None,
@@ -335,6 +339,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::CodexIncompatible => Some(BabysitRecoveryAction::UpgradeCodex),
             BabysitError::CodexInitializationFailed => Some(BabysitRecoveryAction::Retry),
             BabysitError::ModelPreferenceInvalid => None,
+            BabysitError::SettingsPersistenceFailed => None,
             BabysitError::RepairExhausted { .. }
             | BabysitError::Provider { .. }
             | BabysitError::InvalidProviderOutput { .. }
@@ -372,6 +377,9 @@ impl fmt::Display for BabysitError {
             Self::ModelPreferenceInvalid => formatter.write_str(
                 "宝宝模式模型或思考强度已不可用；请在 Application Settings 中修改设置",
             ),
+            Self::SettingsPersistenceFailed => {
+                formatter.write_str("宝宝模式模型设置保存失败；原设置保持不变")
+            }
         }
     }
 }
@@ -515,16 +523,14 @@ impl BabysitApplication {
     /// 仅在 UI 明确请求修改时准备 runtime 并读取动态可见模型目录。
     pub(crate) async fn fetch_model_catalog(
         &self,
-        workspace_path: &Path,
     ) -> Result<codex::CodexModelCatalog, BabysitError> {
-        self.prepare_runtime(workspace_path).await?;
-        let provider = self
+        let runtime = self
             .codex_runtime
             .as_ref()
             .ok_or_else(|| BabysitError::Provider {
                 detail: "当前 provider 不支持动态模型目录。".to_owned(),
             })?;
-        provider.provider().model_catalog().await
+        runtime.model_catalog().await
     }
 
     /// 将首次 provider 发现和 App Server 握手保持在 Babysit 点击后的最高 seam。

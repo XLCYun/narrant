@@ -128,7 +128,7 @@ describe("Settings application-shell UI", () => {
   });
 
   it("typed adapter 不改写模型目录与结构化失败", async () => {
-    const catalog = { models: [{ id: "custom-model", name: "Custom Model", isDefault: false, supportedReasoningEfforts: ["xhigh" as const], defaultReasoningEffort: "xhigh" as const }] };
+    const catalog = { models: [{ id: "custom-model", name: "Custom Model", isDefault: false, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" }] };
     const failure = { code: "catalog_unavailable", detail: "连接中断" };
     const invoke = vi.fn()
       .mockResolvedValueOnce(catalog)
@@ -137,6 +137,20 @@ describe("Settings application-shell UI", () => {
 
     await expect(adapter.listBabysitModels()).resolves.toBe(catalog);
     await expect(adapter.updateBabysitModel({ kind: "automatic" })).rejects.toBe(failure);
+  });
+
+  it("呈现服务端动态增加的思考强度而不依赖前端枚举", async () => {
+    mockSystemTheme(false);
+    const settings = application();
+    vi.mocked(settings.listBabysitModels).mockResolvedValue({ models: [
+      { id: "future-model", name: "Future Model", isDefault: true, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" },
+    ] });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "修改模型偏好" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Future Model/ }));
+
+    expect(screen.getByRole("radio", { name: "模型默认（ultra）" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "ultra" })).toBeInTheDocument();
   });
 
   it("展示可扩展二级导航，并为后续分区提供稳定占位", async () => {

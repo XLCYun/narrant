@@ -119,6 +119,7 @@ export function CodexExecutableSettings({ binding, modelApplication, initialMode
   </section>;
 }
 
+/** 模型编辑器的延迟目录状态；目录只存在于 editing 分支。 */
 type ModelEditorState =
   | { kind: "idle" }
   | { kind: "loading" }
@@ -213,10 +214,12 @@ function EffortChoices({ model, value, onChoose }: { model: BabysitModelCatalogE
   return <fieldset className="grid gap-2"><legend className="mb-2 text-sm font-medium">思考强度</legend><ModelRadio checked={value === null} label={`模型默认（${model.defaultReasoningEffort}）`} onChoose={() => onChoose(null)} />{model.supportedReasoningEfforts.map((effort) => <ModelRadio key={effort} checked={value === effort} label={effort} onChoose={() => onChoose(effort)} />)}</fieldset>;
 }
 
+/** 在已有目录时显示服务端名称，否则稳定显示保存的模型标识。 */
 function modelName(editor: ModelEditorState, modelId: string) {
   return editor.kind === "editing" ? editor.models.find((model) => model.id === modelId)?.name ?? modelId : modelId;
 }
 
+/** 从 typed command 结构化错误或普通异常中提取用户可见详情。 */
 function errorDetail(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
   if (typeof error === "object" && error && "detail" in error && typeof error.detail === "string") return error.detail;

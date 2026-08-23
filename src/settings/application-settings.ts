@@ -1,6 +1,9 @@
 export type ThemePreference = "system" | "light" | "dark";
 
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+/** App Server 动态公布的思考强度标识；前端不维护封闭枚举。 */
+export type ReasoningEffort = string;
+
+/** 未来分析使用的自动或显式 Babysit Model Preference。 */
 export type BabysitModelPreference =
   | { kind: "automatic" }
   | { kind: "explicit"; modelId: string; reasoningEffort: ReasoningEffort | null };
@@ -27,7 +30,9 @@ export type ApplicationSettings = {
 
 /** Settings UI 与持久化实现之间的窄应用端口。 */
 export interface ApplicationSettingsApplication {
+  /** 读取当前设备级 Application Settings 快照。 */
   load(): Promise<ApplicationSettings>;
+  /** 原子更新主题偏好。 */
   updateTheme(theme: ThemePreference): Promise<ApplicationSettings>;
   /** 打开原生文件选择器，并在后端验证通过后保存选中的 Codex。 */
   chooseCodexExecutable(): Promise<ApplicationSettings | null>;

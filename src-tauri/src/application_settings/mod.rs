@@ -24,17 +24,76 @@ pub(crate) enum ThemePreference {
 }
 
 /// Babysit Mode 对未来分析使用的模型偏好。
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "mode")]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
 pub(crate) enum BabysitModelPreference {
     /// 每次分析采用 Codex App Server 的默认模型与思考强度。
     #[default]
     Automatic,
     /// 固定使用指定模型；空思考强度表示采用该模型的服务端默认值。
     Explicit {
+        #[serde(rename = "modelId")]
+        model: String,
+        #[serde(rename = "reasoningEffort")]
+        reasoning_effort: Option<String>,
+    },
+}
+
+/// 当前 IPC/settings.json DTO 的反序列化表示。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum CurrentBabysitModelPreference {
+    Automatic,
+    Explicit {
+        model_id: String,
+        reasoning_effort: Option<String>,
+    },
+}
+
+/// Issue #102 集成前短暂写出的旧模型偏好表示，仅用于兼容读取。
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+enum LegacyBabysitModelPreference {
+    Automatic,
+    Explicit {
         model: String,
         reasoning_effort: Option<String>,
     },
+}
+
+/// 同时接受公开 camelCase DTO 和旧 settings.json 表示，后续写入统一使用新格式。
+impl<'de> Deserialize<'de> for BabysitModelPreference {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum CompatiblePreference {
+            Current(CurrentBabysitModelPreference),
+            Legacy(LegacyBabysitModelPreference),
+        }
+        Ok(match CompatiblePreference::deserialize(deserializer)? {
+            CompatiblePreference::Current(CurrentBabysitModelPreference::Automatic)
+            | CompatiblePreference::Legacy(LegacyBabysitModelPreference::Automatic) => {
+                Self::Automatic
+            }
+            CompatiblePreference::Current(CurrentBabysitModelPreference::Explicit {
+                model_id,
+                reasoning_effort,
+            }) => Self::Explicit {
+                model: model_id,
+                reasoning_effort,
+            },
+            CompatiblePreference::Legacy(LegacyBabysitModelPreference::Explicit {
+                model,
+                reasoning_effort,
+            }) => Self::Explicit {
+                model,
+                reasoning_effort,
+            },
+        })
+    }
 }
 
 /// 经校验的设备级 Application Settings 快照。

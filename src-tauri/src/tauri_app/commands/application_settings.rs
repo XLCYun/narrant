@@ -18,18 +18,23 @@ pub(crate) async fn update_application_babysit_model(
     application: State<'_, ApplicationSettingsApplication>,
     babysit: State<'_, crate::babysit::BabysitApplication>,
     preference: BabysitModelPreference,
-    workspace_path: String,
-) -> Result<ApplicationSettings, String> {
+) -> Result<ApplicationSettings, crate::babysit::BabysitErrorPayload> {
     let catalog = babysit
-        .fetch_model_catalog(std::path::Path::new(&workspace_path))
+        .fetch_model_catalog()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(crate::babysit::BabysitErrorPayload::from)?;
     catalog.resolve(&preference).map_err(|_| {
-        crate::babysit::BabysitError::ModelPreferenceInvalid.to_string()
+        crate::babysit::BabysitErrorPayload::from(
+            crate::babysit::BabysitError::ModelPreferenceInvalid,
+        )
     })?;
     application
         .update_babysit_model(preference)
-        .map_err(|error| error.to_string())
+        .map_err(|_| {
+            crate::babysit::BabysitErrorPayload::from(
+                crate::babysit::BabysitError::SettingsPersistenceFailed,
+            )
+        })
 }
 
 /// 原子更新主题偏好，并返回持久化后的完整设置快照。

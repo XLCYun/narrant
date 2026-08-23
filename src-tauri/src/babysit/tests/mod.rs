@@ -2,6 +2,48 @@ use super::*;
 use crate::operation::OperationContext;
 use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
 use std::sync::Arc;
+use tokio::sync::Notify;
+
+/// 在 generate 中暂停的 provider，用于观察偏好变化不会改写已解析请求。
+struct InFlightModelProvider {
+    resolved: Mutex<codex::ResolvedCodexModel>,
+    observed: Mutex<Vec<(String, String)>>,
+    started: Notify,
+    release: Notify,
+}
+
+#[async_trait]
+impl BabysitAgentProvider for InFlightModelProvider {
+    /// 返回并发测试使用的稳定 provider identity。
+    fn provider_id(&self) -> &str { "in-flight-model" }
+    /// 返回并发测试使用的稳定进程 generation。
+    fn process_generation(&self) -> &str { "generation-1" }
+    /// 在每次新分析开始时快照当前解析模型。
+    async fn resolve_analysis_model(&self) -> Result<codex::ResolvedCodexModel, BabysitError> {
+        Ok(self.resolved.lock().unwrap().clone())
+    }
+    /// 记录分析收到的模型组合，并暂停到测试显式释放。
+    async fn generate(
+        &self,
+        request: BabysitProviderRequest,
+        _cancellation: &CancellationSignal,
+    ) -> Result<BabysitFileExplanations, BabysitError> {
+        self.observed.lock().unwrap().push((request.model.clone(), request.reasoning_effort.clone()));
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(FakeBabysitProvider::complete_output(&request))
+    }
+    /// 完整 fixture 输出不应触发 repair。
+    async fn repair(
+        &self,
+        _request: BabysitProviderRequest,
+        _previous: BabysitFileExplanations,
+        _failure: ValidationFailure,
+        _cancellation: &CancellationSignal,
+    ) -> Result<BabysitFileExplanations, BabysitError> {
+        unreachable!("完整输出不会进入 repair")
+    }
+}
 
 /// 构造只包含文本内容的 File Change fixture。
 fn text_change(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeContent {
@@ -166,6 +208,54 @@ async fn cache_isolated_by_resolved_model_and_reasoning_effort() {
         .unwrap();
 
     assert_eq!(provider.generate_calls(), 3);
+}
+
+#[tokio::test]
+async fn preference_change_during_generate_keeps_the_active_resolved_model() {
+    let provider = Arc::new(InFlightModelProvider {
+        resolved: Mutex::new(codex::ResolvedCodexModel {
+            model: "model-before".to_owned(),
+            reasoning_effort: "low".to_owned(),
+        }),
+        observed: Mutex::new(Vec::new()),
+        started: Notify::new(),
+        release: Notify::new(),
+    });
+    let application = Arc::new(BabysitApplication::new(provider.clone()));
+    let task = tokio::spawn({
+        let application = application.clone();
+        async move {
+            application
+                .explain_file(
+                    request("review-1", "snapshot-1", "src/example.ts"),
+                    text_change("src/example.ts", Some("old();"), Some("next();")),
+                    &OperationContext::background().cancellation().clone(),
+                    |_| Ok(()),
+                )
+                .await
+        }
+    });
+    provider.started.notified().await;
+    *provider.resolved.lock().unwrap() = codex::ResolvedCodexModel {
+        model: "model-after".to_owned(),
+        reasoning_effort: "high".to_owned(),
+    };
+    provider.release.notify_one();
+
+    task.await.unwrap().unwrap();
+    assert_eq!(
+        provider.observed.lock().unwrap().as_slice(),
+        &[("model-before".to_owned(), "low".to_owned())]
+    );
+}
+
+#[test]
+fn settings_persistence_failure_has_stable_structured_payload() {
+    let payload = BabysitErrorPayload::from(BabysitError::SettingsPersistenceFailed);
+
+    assert_eq!(payload.code, BabysitErrorCode::SettingsPersistenceFailed);
+    assert_eq!(payload.detail, "宝宝模式模型设置保存失败；原设置保持不变");
+    assert_eq!(payload.recovery, None);
 }
 
 #[tokio::test]
