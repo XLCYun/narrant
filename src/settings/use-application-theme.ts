@@ -17,6 +17,8 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
   const [preference, setPreference] = useState<ThemePreference>("system");
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [editorTheme, setEditorTheme] = useState<"light" | "vs-dark">("light");
 
   const sync = useCallback((next: ThemePreference, systemDark = media.current?.matches ?? false) => {
@@ -55,6 +57,9 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
 
   /** 先提交视觉选择，再保存；失败时恢复原偏好与相同的有效主题。 */
   const choose = useCallback(async (next: ThemePreference) => {
+    if (savingRef.current || next === preference) return;
+    savingRef.current = true;
+    setSaving(true);
     const previous = preference;
     setError(undefined);
     setPreference(next);
@@ -67,10 +72,13 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
       setPreference(previous);
       sync(previous);
       setError(`未能保存主题设置：${String(reason)}。请重试。`);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   }, [application, preference, sync]);
 
-  return { preference, loaded, error, editorTheme, choose };
+  return { preference, loaded, saving, error, editorTheme, choose };
 }
 
 export type ApplicationThemeBinding = ReturnType<typeof useApplicationTheme>;

@@ -3,9 +3,8 @@ import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
 
 /** 把 Settings 应用端口映射到集中、可替换的 typed Tauri commands。 */
 export function createTauriApplicationSettingsAdapter(transport: TypedTauriTransport): ApplicationSettingsApplication {
-  const invoke = transport.invoke as unknown as <T>(command: string, args: Record<string, unknown>) => Promise<T>;
   return {
-    load: () => invoke("load_application_settings", {}),
-    updateTheme: (theme: ThemePreference) => invoke("update_application_theme", { theme }),
+    load: () => transport.invoke("load_application_settings", {}),
+    updateTheme: (theme: ThemePreference) => transport.invoke("update_application_theme", { theme }),
   };
 }

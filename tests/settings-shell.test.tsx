@@ -90,4 +90,23 @@ describe("Settings application-shell UI", () => {
     act(() => changeSystemTheme(true));
     expect(document.documentElement).not.toHaveClass("dark");
   });
+
+  it("主题保存期间禁用其他选择，避免乱序结果覆盖用户决定", async () => {
+    mockSystemTheme(false);
+    let finishSave!: () => void;
+    const settings = application("light");
+    vi.mocked(settings.updateTheme).mockImplementation((theme) => new Promise((resolve) => {
+      finishSave = () => resolve({ version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } });
+    }));
+    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
+    await screen.findByRole("radio", { name: /^浅色/ });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^深色/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^跟随系统/ }));
+
+    expect(settings.updateTheme).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("radio", { name: /^跟随系统/ })).toBeDisabled();
+    await act(async () => finishSave());
+    expect(screen.getByRole("radio", { name: /^深色/ })).toHaveAttribute("aria-checked", "true");
+  });
 });

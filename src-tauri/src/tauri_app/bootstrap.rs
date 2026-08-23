@@ -1,7 +1,11 @@
 use super::commands::{
-    babysit as babysit_commands, github as github_commands, repository, review as review_commands,
+    application_settings as application_settings_commands, babysit as babysit_commands,
+    github as github_commands, repository, review as review_commands,
 };
-use crate::{babysit, github, operation, persistence, repository as repository_module, review};
+use crate::{
+    application_settings::ApplicationSettingsApplication, babysit, github, operation, persistence,
+    repository as repository_module, review,
+};
 use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
@@ -68,12 +72,21 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
-            app.manage(babysit::BabysitApplication::with_codex_provider_at(
+            let application_settings = ApplicationSettingsApplication::new(
+                application_data.join("settings.json"),
                 application_data.join("babysit-settings.json"),
+            );
+            // 在 Babysit runtime 读取统一文件前完成幂等迁移，使 settings.json 成为唯一权威来源。
+            application_settings.load()?;
+            app.manage(application_settings);
+            app.manage(babysit::BabysitApplication::with_codex_provider_at(
+                application_data.join("settings.json"),
             ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            application_settings_commands::load_application_settings,
+            application_settings_commands::update_application_theme,
             #[cfg(feature = "wdio")]
             repository::set_e2e_repository_directory,
             #[cfg(feature = "wdio")]
