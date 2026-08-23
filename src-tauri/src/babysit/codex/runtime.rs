@@ -6,7 +6,9 @@
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
 use crate::application_settings::ApplicationSettingsApplication;
-use crate::babysit::{BabysitAgentProvider, BabysitError};
+use crate::babysit::{
+    BabysitAgentProvider, BabysitError, BabysitProviderRuntimeStatus, InstalledProviderRuntime,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -41,7 +43,6 @@ impl ApplicationCodexSettings {
     }
 
     /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
-    #[cfg(all(test, unix))]
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .update_codex_executable(executable)
@@ -154,7 +155,6 @@ impl CodexRuntime {
     }
 
     /// 并发调用由 lifecycle 锁串行；已 Ready 的同一进程不重复探测。
-    #[cfg(all(test, unix))]
     pub(crate) async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         let _lifecycle = self.lifecycle.lock().await;
         self.ensure_ready_once(workspace_path).await
@@ -178,12 +178,12 @@ impl CodexRuntime {
         result
     }
 
-    /// 测试中通过生产设置边界准备显式可执行文件偏好。
-    #[cfg(all(test, unix))]
+    /// 通过生产设置边界验证并保存显式可执行文件偏好。
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        let selected = self.discovery.validate_selected(path.to_path_buf()).await?;
         let resolved = self
             .settings
-            .save(Some(path.to_path_buf()))
+            .save(Some(selected.path))
             .await?
             .ok_or(BabysitError::CodexInitializationFailed)?;
         self.provider.activate_executable(resolved).await?;
@@ -235,6 +235,55 @@ impl CodexRuntime {
     }
 }
 
+#[async_trait::async_trait]
+impl InstalledProviderRuntime for CodexRuntime {
+    /// 返回 Codex runtime 的稳定 provider identity，供通用 application seam 使用。
+    fn provider_id(&self) -> &str {
+        "codex-app-server"
+    }
+
+    /// 将 Codex 旧状态投影到 provider-independent runtime status。
+    fn status(&self) -> BabysitProviderRuntimeStatus {
+        match CodexRuntime::status(self) {
+            CodexRuntimeStatus::Unknown => BabysitProviderRuntimeStatus::Unknown,
+            CodexRuntimeStatus::Probing => BabysitProviderRuntimeStatus::Probing,
+            CodexRuntimeStatus::Ready => BabysitProviderRuntimeStatus::Ready,
+            CodexRuntimeStatus::Missing => BabysitProviderRuntimeStatus::Missing,
+            CodexRuntimeStatus::SignedOut => BabysitProviderRuntimeStatus::SignedOut,
+            CodexRuntimeStatus::Incompatible => BabysitProviderRuntimeStatus::Incompatible,
+            CodexRuntimeStatus::InitFailed => BabysitProviderRuntimeStatus::InitFailed,
+        }
+    }
+
+    /// 复用 Codex 原有懒 discovery、能力探针和并发 flight 实现。
+    async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        CodexRuntime::ensure_ready(self, workspace_path).await
+    }
+
+    /// 复用 Codex 原有 picker 验证与 durable settings 写入实现。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        CodexRuntime::select_executable(self, path).await
+    }
+
+    /// 复用 Codex 原有线程和 App Server shutdown 实现。
+    async fn shutdown(&self) {
+        CodexRuntime::shutdown(self).await;
+    }
+}
+
+/// 将完成的探测映射为 Tauri 使用的同一稳定 typed 错误。
+fn status_error(status: CodexRuntimeStatus) -> Result<(), BabysitError> {
+    match status {
+        CodexRuntimeStatus::Ready => Ok(()),
+        CodexRuntimeStatus::Missing => Err(BabysitError::CodexNotFound),
+        CodexRuntimeStatus::SignedOut => Err(BabysitError::CodexSignedOut),
+        CodexRuntimeStatus::Incompatible => Err(BabysitError::CodexIncompatible),
+        CodexRuntimeStatus::InitFailed => Err(BabysitError::CodexInitializationFailed),
+        CodexRuntimeStatus::Unknown | CodexRuntimeStatus::Probing => {
+            Err(BabysitError::CodexInitializationFailed)
+        }
+    }
+}
 /// 保持状态转换表小而且与 provider 无关。
 fn status_for_error(error: &BabysitError) -> CodexRuntimeStatus {
     match error {

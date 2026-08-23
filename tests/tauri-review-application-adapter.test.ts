@@ -250,6 +250,20 @@ describe("Tauri Babysit application adapter", () => {
     );
   });
 
+  it("把 provider identity 与 native picker executable 一起交给通用 setup command", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const adapter = createTauriBabysitApplicationAdapter({
+      invoke,
+      invokeCancellable: vi.fn(),
+    } as unknown as TypedTauriTransport);
+
+    await adapter.selectProviderExecutable?.("claude_code", "C:\\Tools\\claude.exe");
+
+    expect(invoke).toHaveBeenCalledWith("select_babysit_provider_executable", {
+      providerId: "claude_code",
+      executable: "C:\\Tools\\claude.exe",
+    });
+  });
   it("把 Snapshot/Review 生命周期清理映射到 typed cache commands", async () => {
     const invoke = vi.fn().mockResolvedValue(undefined);
     const adapter = createTauriBabysitApplicationAdapter({

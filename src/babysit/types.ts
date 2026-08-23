@@ -20,14 +20,22 @@ export type BabysitErrorCode =
   | "invalid_request"
   | "operation_conflict"
   | "operation_unavailable"
+  | "provider_not_found"
+  | "provider_executable_invalid"
+  | "provider_signed_out"
+  | "provider_incompatible"
+  | "provider_initialization_failed"
   | "codex_not_found"
   | "codex_executable_invalid"
   | "codex_signed_out"
   | "codex_incompatible"
   | "codex_initialization_failed";
 
-/** Codex setup failure 可执行的恢复动作，不包含路径或原始进程输出。 */
+/** provider-aware setup failure 的恢复动作，不包含路径或原始进程输出。 */
 export type BabysitRecoveryAction =
+  | "login_provider"
+  | "upgrade_provider"
+  | "select_provider_executable"
   | "login_codex"
   | "upgrade_codex"
   | "retry";
@@ -36,6 +44,8 @@ export type BabysitRecoveryAction =
 export type BabysitError = {
   code: BabysitErrorCode;
   detail: string;
+  /** setup failure 所属 provider；普通分析错误不携带该字段。 */
+  providerId?: string;
   recovery?: BabysitRecoveryAction;
 };
 
@@ -52,6 +62,11 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
   "invalid_request",
   "operation_conflict",
   "operation_unavailable",
+  "provider_not_found",
+  "provider_executable_invalid",
+  "provider_signed_out",
+  "provider_incompatible",
+  "provider_initialization_failed",
   "codex_not_found",
   "codex_executable_invalid",
   "codex_signed_out",
@@ -59,6 +74,9 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
   "codex_initialization_failed",
 ]);
 const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
+  "login_provider",
+  "upgrade_provider",
+  "select_provider_executable",
   "login_codex",
   "upgrade_codex",
   "retry",
@@ -71,6 +89,7 @@ export function isBabysitError(value: unknown): value is BabysitError {
   return typeof candidate.code === "string"
     && babysitErrorCodes.has(candidate.code as BabysitErrorCode)
     && typeof candidate.detail === "string"
+    && (candidate.providerId === undefined || typeof candidate.providerId === "string")
     && (candidate.recovery === undefined
       || (typeof candidate.recovery === "string"
         && babysitRecoveryActions.has(candidate.recovery as BabysitRecoveryAction)));
@@ -149,6 +168,8 @@ export interface BabysitApplicationAdapter {
   clearSnapshot?(identity: ReviewIdentity): Promise<void>;
   /** Review 关闭或切换后删除该 Review 的进程内结果。 */
   clearReview?(reviewId: string): Promise<void>;
+  /** 由 native picker 选择并验证任意 installed provider executable。 */
+  selectProviderExecutable?(providerId: string, path: string): Promise<void>;
 }
 
 /** Review Reader 消费的最小 Babysit action binding。 */

@@ -31,6 +31,68 @@ pub const MAX_EXPLANATION_CHARS: usize = 240;
 /// 同一个 provider 输出失败后允许的最大修复次数。
 pub const MAX_REPAIR_ATTEMPTS: u8 = 3;
 
+/// Installed provider 初始化失败的 provider-independent 分类。
+///
+/// 分类只描述恢复方向，不包含 provider 协议、版本输出或 executable 路径；
+/// provider identity 单独通过 `provider_id` 传递，因而新增 provider 不需要新增
+/// 一组 Codex-shaped enum variant。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+// expand-first seam：其余分类由后续 installed provider adapter 构造。
+#[allow(dead_code)]
+pub enum BabysitProviderSetupFailure {
+    NotFound,
+    ExecutableInvalid,
+    SignedOut,
+    Incompatible,
+    InitializationFailed,
+}
+
+impl fmt::Display for BabysitProviderSetupFailure {
+    /// 将通用 setup 分类投影为不含路径和原始进程输出的稳定短文本。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotFound => "未找到可用的 provider 可执行文件",
+            Self::ExecutableInvalid => "provider 可执行文件不可用",
+            Self::SignedOut => "provider 尚未登录",
+            Self::Incompatible => "provider 缺少宝宝模式所需能力",
+            Self::InitializationFailed => "provider 初始化失败",
+        })
+    }
+}
+
+/// Installed provider runtime 的 provider-independent readiness 状态。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+// expand-first seam：后续 provider-aware command 会把 readiness 投影到 IPC。
+#[allow(dead_code)]
+pub enum BabysitProviderRuntimeStatus {
+    #[default]
+    Unknown,
+    Probing,
+    Ready,
+    Missing,
+    SignedOut,
+    Incompatible,
+    InitFailed,
+}
+
+/// Installed Coding Agent provider runtime 的唯一 application lifecycle seam。
+#[async_trait]
+pub trait InstalledProviderRuntime: Send + Sync {
+    /// 返回稳定 provider identity；它会进入 cache、错误 payload 和 diagnostics 分类。
+    fn provider_id(&self) -> &str;
+    /// 返回当前 runtime readiness，但不暴露 executable 路径或原始进程信息。
+    #[allow(dead_code)]
+    fn status(&self) -> BabysitProviderRuntimeStatus;
+    /// 懒执行 discovery、认证检查、能力探针和 provider 进程初始化。
+    async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError>;
+    /// 验证并保存 native picker 选择的 executable；路径只留在 provider settings 内。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError>;
+    /// 应用退出时释放 provider 进程、线程和未完成的 runtime ownership。
+    async fn shutdown(&self);
+}
+
 /// Babysit 运行阶段的 provider-independent IPC 事件。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
@@ -237,6 +299,11 @@ pub enum BabysitError {
     },
     ProgressClosed,
     CacheUnavailable,
+    /// 任意 Installed provider 共享的 setup failure；provider identity 不参与 enum 形状。
+    ProviderSetup {
+        provider_id: String,
+        failure: BabysitProviderSetupFailure,
+    },
     /// 未找到可用的 Codex 可执行文件，需要安装或重新选择。
     CodexNotFound,
     /// 用户选择的 Codex 路径无法通过 `codex --version` 验证。
@@ -251,6 +318,32 @@ pub enum BabysitError {
     ModelPreferenceInvalid,
     /// 模型偏好已通过能力验证，但统一设置文件无法原子保存。
     SettingsPersistenceFailed,
+}
+
+impl BabysitError {
+    /// 以 provider identity 和通用分类构造稳定 setup failure。
+    pub fn provider_setup(
+        provider_id: impl Into<String>,
+        failure: BabysitProviderSetupFailure,
+    ) -> Self {
+        Self::ProviderSetup {
+            provider_id: provider_id.into(),
+            failure,
+        }
+    }
+
+    /// 返回 setup failure 关联的稳定 provider identity；普通分析错误没有 identity。
+    pub fn provider_id(&self) -> Option<&str> {
+        match self {
+            Self::ProviderSetup { provider_id, .. } => Some(provider_id),
+            Self::CodexNotFound
+            | Self::CodexExecutableInvalid
+            | Self::CodexSignedOut
+            | Self::CodexIncompatible
+            | Self::CodexInitializationFailed => Some("codex-app-server"),
+            _ => None,
+        }
+    }
 }
 
 /// Babysit command 对前端暴露的稳定错误 code；detail 只承载当前失败的可读诊断。
@@ -268,6 +361,11 @@ pub enum BabysitErrorCode {
     InvalidRequest,
     OperationConflict,
     OperationUnavailable,
+    ProviderNotFound,
+    ProviderExecutableInvalid,
+    ProviderSignedOut,
+    ProviderIncompatible,
+    ProviderInitializationFailed,
     CodexNotFound,
     CodexExecutableInvalid,
     CodexSignedOut,
@@ -281,6 +379,9 @@ pub enum BabysitErrorCode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BabysitRecoveryAction {
+    LoginProvider,
+    UpgradeProvider,
+    SelectProviderExecutable,
     LoginCodex,
     UpgradeCodex,
     Retry,
@@ -292,6 +393,9 @@ pub enum BabysitRecoveryAction {
 pub struct BabysitErrorPayload {
     pub code: BabysitErrorCode,
     pub detail: String,
+    /// setup failure 所属的稳定 provider identity；普通错误不填写。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<BabysitRecoveryAction>,
 }
@@ -303,6 +407,7 @@ impl BabysitErrorPayload {
             code: BabysitErrorCode::InputUnavailable,
             // 下层 Review/Git 诊断可能含绝对路径；IPC detail 只保留稳定错误类别。
             detail: "Review File Change 内容不可用。".to_owned(),
+            provider_id: None,
             recovery: None,
         }
     }
@@ -318,6 +423,7 @@ impl BabysitErrorPayload {
         Self {
             code,
             detail: error.to_string(),
+            provider_id: None,
             recovery: None,
         }
     }
@@ -334,6 +440,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::Provider { .. } => BabysitErrorCode::Provider,
             BabysitError::ProgressClosed => BabysitErrorCode::ProgressClosed,
             BabysitError::CacheUnavailable => BabysitErrorCode::CacheUnavailable,
+            BabysitError::ProviderSetup { failure, .. } => setup_error_code(*failure),
             BabysitError::CodexNotFound => BabysitErrorCode::CodexNotFound,
             BabysitError::CodexExecutableInvalid => BabysitErrorCode::CodexExecutableInvalid,
             BabysitError::CodexSignedOut => BabysitErrorCode::CodexSignedOut,
@@ -343,6 +450,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::SettingsPersistenceFailed => BabysitErrorCode::SettingsPersistenceFailed,
         };
         let recovery = match &error {
+            BabysitError::ProviderSetup { failure, .. } => setup_recovery_action(*failure),
             BabysitError::CodexNotFound | BabysitError::CodexExecutableInvalid => None,
             BabysitError::CodexSignedOut => Some(BabysitRecoveryAction::LoginCodex),
             BabysitError::CodexIncompatible => Some(BabysitRecoveryAction::UpgradeCodex),
@@ -360,6 +468,7 @@ impl From<BabysitError> for BabysitErrorPayload {
         Self {
             code,
             detail: error.to_string(),
+            provider_id: error.provider_id().map(str::to_owned),
             recovery,
         }
     }
@@ -378,6 +487,26 @@ impl fmt::Display for BabysitError {
             Self::Provider { detail } => write!(formatter, "宝宝模式 provider 失败：{detail}"),
             Self::ProgressClosed => formatter.write_str("宝宝模式进度通道已关闭"),
             Self::CacheUnavailable => formatter.write_str("宝宝模式缓存不可用"),
+            Self::ProviderSetup {
+                provider_id,
+                failure,
+            } => match failure {
+                BabysitProviderSetupFailure::NotFound => {
+                    write!(formatter, "未找到 {provider_id} provider 可执行文件")
+                }
+                BabysitProviderSetupFailure::ExecutableInvalid => {
+                    write!(formatter, "{provider_id} provider 可执行文件不可用")
+                }
+                BabysitProviderSetupFailure::SignedOut => {
+                    write!(formatter, "{provider_id} provider 尚未登录")
+                }
+                BabysitProviderSetupFailure::Incompatible => {
+                    write!(formatter, "{provider_id} provider 缺少宝宝模式所需能力")
+                }
+                BabysitProviderSetupFailure::InitializationFailed => {
+                    write!(formatter, "{provider_id} provider 初始化失败")
+                }
+            },
             Self::CodexNotFound => formatter.write_str("未找到 Codex 可执行文件"),
             Self::CodexExecutableInvalid => formatter.write_str("选择的 Codex 可执行文件不可用"),
             Self::CodexSignedOut => formatter.write_str("Codex 尚未登录"),
@@ -390,6 +519,33 @@ impl fmt::Display for BabysitError {
             }
         }
     }
+}
+
+/// 将通用 setup failure 映射成前端稳定错误 code。
+fn setup_error_code(failure: BabysitProviderSetupFailure) -> BabysitErrorCode {
+    match failure {
+        BabysitProviderSetupFailure::NotFound => BabysitErrorCode::ProviderNotFound,
+        BabysitProviderSetupFailure::ExecutableInvalid => {
+            BabysitErrorCode::ProviderExecutableInvalid
+        }
+        BabysitProviderSetupFailure::SignedOut => BabysitErrorCode::ProviderSignedOut,
+        BabysitProviderSetupFailure::Incompatible => BabysitErrorCode::ProviderIncompatible,
+        BabysitProviderSetupFailure::InitializationFailed => {
+            BabysitErrorCode::ProviderInitializationFailed
+        }
+    }
+}
+
+/// 将通用 setup failure 映射成带 provider identity 的恢复动作。
+fn setup_recovery_action(failure: BabysitProviderSetupFailure) -> Option<BabysitRecoveryAction> {
+    Some(match failure {
+        BabysitProviderSetupFailure::NotFound | BabysitProviderSetupFailure::ExecutableInvalid => {
+            BabysitRecoveryAction::SelectProviderExecutable
+        }
+        BabysitProviderSetupFailure::SignedOut => BabysitRecoveryAction::LoginProvider,
+        BabysitProviderSetupFailure::Incompatible => BabysitRecoveryAction::UpgradeProvider,
+        BabysitProviderSetupFailure::InitializationFailed => BabysitRecoveryAction::Retry,
+    })
 }
 
 impl std::error::Error for BabysitError {}
@@ -492,6 +648,7 @@ struct CacheKey {
 /// 负责 eligibility、provider orchestration、校验和 process-local cache 的深模块。
 pub struct BabysitApplication {
     provider: Arc<dyn BabysitAgentProvider>,
+    runtime: Option<Arc<dyn InstalledProviderRuntime>>,
     codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
     model_catalogs: Mutex<VecDeque<(String, codex::CodexModelCatalog)>>,
     next_model_catalog_revision: AtomicU64,
@@ -504,6 +661,22 @@ impl BabysitApplication {
     pub fn new(provider: Arc<dyn BabysitAgentProvider>) -> Self {
         Self {
             provider,
+            runtime: None,
+            codex_runtime: None,
+            model_catalogs: Mutex::new(VecDeque::new()),
+            next_model_catalog_revision: AtomicU64::new(1),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 注入一个 provider 与 provider-aware runtime；发现和初始化仍保持懒加载。
+    pub fn with_provider_runtime(
+        provider: Arc<dyn BabysitAgentProvider>,
+        runtime: Arc<dyn InstalledProviderRuntime>,
+    ) -> Self {
+        Self {
+            provider,
+            runtime: Some(runtime),
             codex_runtime: None,
             model_catalogs: Mutex::new(VecDeque::new()),
             next_model_catalog_revision: AtomicU64::new(1),
@@ -521,6 +694,7 @@ impl BabysitApplication {
         ));
         Self {
             provider,
+            runtime: Some(runtime.clone()),
             codex_runtime: Some(runtime),
             model_catalogs: Mutex::new(VecDeque::new()),
             next_model_catalog_revision: AtomicU64::new(1),
@@ -596,6 +770,39 @@ impl BabysitApplication {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }
+    }
+
+    /// 将首次 provider 发现和握手保持在 Babysit 点击后的最高 application seam。
+    pub async fn prepare_runtime(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        if let Some(runtime) = &self.runtime {
+            runtime.ensure_ready(workspace_path).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 由 native picker 选择并验证指定 provider executable，再写入 durable provider setting。
+    pub async fn select_provider_executable(
+        &self,
+        provider_id: &str,
+        path: &Path,
+    ) -> Result<(), BabysitError> {
+        let runtime = self.runtime.as_ref().ok_or_else(|| {
+            BabysitError::provider_setup(provider_id, BabysitProviderSetupFailure::NotFound)
+        })?;
+        if runtime.provider_id() != provider_id {
+            return Err(BabysitError::provider_setup(
+                provider_id,
+                BabysitProviderSetupFailure::NotFound,
+            ));
+        }
+        runtime.select_executable(path).await
+    }
+
+    /// 兼容现有 Codex command；新 provider 通过 `select_provider_executable` 接入。
+    pub async fn select_codex_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        self.select_provider_executable("codex-app-server", path)
+            .await
     }
 
     /// 用后端规则判断 eligibility；detected_language 允许无扩展名和特殊文件名表达已识别语言。
@@ -751,7 +958,7 @@ impl BabysitApplication {
     /// 应用退出时清空缓存并交给 provider 释放进程/线程资源。
     pub async fn shutdown(&self) -> Result<(), BabysitError> {
         let clear_result = self.clear();
-        if let Some(runtime) = &self.codex_runtime {
+        if let Some(runtime) = &self.runtime {
             runtime.shutdown().await;
         } else {
             self.provider.shutdown().await;

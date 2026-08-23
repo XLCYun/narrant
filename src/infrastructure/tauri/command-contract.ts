@@ -51,6 +51,7 @@ export type TauriCommandContract = {
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
+  select_babysit_provider_executable: { args: { providerId: string; executable: string }; result: void; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
   clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
@@ -123,6 +124,7 @@ export const TAURI_COMMAND_NAMES = [
   "read_review_file_change",
   "explain_review_file_change",
   "check_babysit_file_eligibility",
+  "select_babysit_provider_executable",
   "clear_babysit_snapshot_cache",
   "clear_babysit_review_cache",
   "close_review",
