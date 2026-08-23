@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useSystemTheme } from "@/lib/use-system-theme";
 import { AppShell } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { BranchRelation } from "@/components/branch-relation";
@@ -35,6 +34,9 @@ import { useBranchSelectionContinuation } from "@/review/use-branch-selection-co
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
 import { useRepositoryOverview } from "@/repository/use-repository-overview";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
+import { SettingsPage } from "@/components/settings-page";
+import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
+import { useApplicationTheme } from "@/settings/use-application-theme";
 import "@/lib/i18n";
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
@@ -54,7 +56,9 @@ export function App() {
   const { t } = useTranslation(["common", "review"]);
   const desktopRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
-  const editorTheme = useSystemTheme();
+  const applicationSettings = useMemo(() => createTauriApplicationSettingsAdapter(tauriTransport), []);
+  const applicationTheme = useApplicationTheme(applicationSettings, desktopRuntimeEnabled && !testHarnessEnabled);
+  const editorTheme = applicationTheme.editorTheme;
   const pullRequestDiscovery = useMemo(
     () => createTauriPullRequestDiscoveryApplicationAdapter(tauriTransport),
     [],
@@ -398,6 +402,10 @@ export function App() {
         reviewNavigationBusy={Boolean(reviewOpeningKey) || refreshingReview || grantingTrust}
       />
     </article>}
+    {appShell.destination.kind === "settings" && <SettingsPage
+      theme={applicationTheme}
+      onBack={() => void appShell.returnFromSettings()}
+    />}
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
       <DialogContent>
         <DialogHeader>
