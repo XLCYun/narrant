@@ -27,6 +27,8 @@ fn request() -> BabysitProviderRequest {
                 source: "const next = 2;".to_owned(),
             },
         ],
+        model: "gpt-5.6-luna".to_owned(),
+        reasoning_effort: "low".to_owned(),
     }
 }
 

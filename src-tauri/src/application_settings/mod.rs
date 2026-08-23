@@ -94,6 +94,7 @@ impl fmt::Display for ApplicationSettingsError {
 impl std::error::Error for ApplicationSettingsError {}
 
 /// 设备级 Application Settings 的应用契约。
+#[derive(Clone)]
 pub(crate) struct ApplicationSettingsApplication {
     settings_path: PathBuf,
     legacy_babysit_path: PathBuf,
@@ -182,6 +183,18 @@ impl ApplicationSettingsApplication {
         self.persist(&settings)?;
         Ok(settings)
     }
+
+    /// 原子更新 Babysit Model Preference，并保留同一快照中的其他设置。
+    pub(crate) fn update_babysit_model(
+        &self,
+        preference: BabysitModelPreference,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        let mut settings = self.load()?;
+        settings.babysit_model = preference;
+        self.persist(&settings)?;
+        Ok(settings)
+    }
+
 
     /// 在目标目录写入临时文件并原子替换正式设置文件。
     fn persist(&self, settings: &ApplicationSettings) -> Result<(), ApplicationSettingsError> {

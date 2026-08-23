@@ -257,3 +257,29 @@ fn invalid_legacy_executable_is_not_migrated_into_unified_settings() {
     ));
     assert!(!settings_path.exists());
 }
+
+#[test]
+fn explicit_babysit_model_update_preserves_other_application_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let application = ApplicationSettingsApplication::new(
+        directory.path().join("settings.json"),
+        directory.path().join("legacy.json"),
+    );
+    application.update_theme(ThemePreference::Dark).unwrap();
+
+    let updated = application
+        .update_babysit_model(BabysitModelPreference::Explicit {
+            model: "server-model".to_owned(),
+            reasoning_effort: Some("high".to_owned()),
+        })
+        .unwrap();
+
+    assert_eq!(updated.theme, ThemePreference::Dark);
+    assert_eq!(
+        updated.babysit_model,
+        BabysitModelPreference::Explicit {
+            model: "server-model".to_owned(),
+            reasoning_effort: Some("high".to_owned()),
+        }
+    );
+}

@@ -61,6 +61,11 @@ pub(crate) struct CodexRuntime {
 }
 
 impl CodexRuntime {
+    /// 向 Babysit 应用边界暴露同一窄 provider，以读取动态模型目录。
+    pub(crate) fn provider(&self) -> &CodexAppServerProvider {
+        &self.provider
+    }
+
     /// 构造 idle runtime；此处不执行设置、PATH 或进程 I/O。
     pub(crate) fn new(provider: Arc<CodexAppServerProvider>, settings_path: PathBuf) -> Self {
         Self::new_with_discovery(provider, settings_path, CodexExecutableDiscovery::default())
