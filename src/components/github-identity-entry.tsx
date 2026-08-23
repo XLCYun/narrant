@@ -33,6 +33,12 @@ type Props = {
   className?: string;
 };
 
+/** 将缓存头像路径转换为当前 WebView 可以加载的资源地址。 */
+export function githubIdentityAvatarUrl(avatarPath: string | null | undefined) {
+  if (!avatarPath) return null;
+  return "__TAURI_INTERNALS__" in window ? convertFileSrc(avatarPath) : avatarPath;
+}
+
 /** 从显示名称或 login 生成最多两个字符的头像占位文本。 */
 function identityInitials(identity: GitHubIdentity) {
   const source = identity.name?.trim() || identity.login;
@@ -54,9 +60,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
   }
 
   const compactName = identity?.name?.trim() || identity?.login || t("connected");
-  const avatarUrl = identity?.avatarPath
-    ? ("__TAURI_INTERNALS__" in window ? convertFileSrc(identity.avatarPath) : identity.avatarPath)
-    : null;
+  const avatarUrl = githubIdentityAvatarUrl(identity?.avatarPath);
   return <div className="min-w-0 space-y-1">
     <DropdownMenu>
       <DropdownMenuTrigger

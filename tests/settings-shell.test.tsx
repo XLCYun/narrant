@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { ApplicationSettingsDestination } from "@/components/settings-page";
 import type { ApplicationSettingsApplication } from "@/settings/application-settings";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
+import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 
 afterEach(() => {
   cleanup();
@@ -35,6 +37,18 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
   };
 }
 
+/** 构造设置页消费的 GitHub Identity lifecycle 公共绑定。 */
+function githubIdentity(): GitHubIdentityLifecycleBinding {
+  return {
+    status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa", avatarPath: "/cached/octocat.png" } },
+    transition: { kind: "stable" },
+    beginAuthorization: vi.fn(async () => ({ kind: "failed" })),
+    completeAuthorization: vi.fn(async () => ({ kind: "failed" })),
+    signOut: vi.fn(async () => ({ kind: "signed-out" })),
+    retry: vi.fn(async () => undefined),
+  };
+}
+
 describe("Settings application-shell UI", () => {
   it("通过约定的 Tauri commands 读取并更新完整 Application Settings", async () => {
     const invoke = vi.fn(async (_command: string, args: Record<string, unknown>) => ({
@@ -59,6 +73,71 @@ describe("Settings application-shell UI", () => {
     expect(screen.getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "宝宝模式" }));
     expect(screen.getByText("宝宝模式设置将在后续版本中提供。" )).toBeInTheDocument();
+  });
+
+  it("在 GitHub 分区展示 lifecycle 提供的当前身份", async () => {
+    mockSystemTheme(false);
+    render(<ApplicationSettingsDestination application={application()} githubIdentity={githubIdentity()} onBack={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "GitHub" }));
+
+    expect(screen.getByText("Monalisa")).toBeInTheDocument();
+    expect(screen.getByText("@octocat")).toBeInTheDocument();
+    const avatar = screen.getByLabelText("Monalisa 的 GitHub 头像");
+    expect(avatar).toBeInTheDocument();
+  });
+
+  it("说明退出影响，取消不调用 lifecycle，确认才退出", async () => {
+    mockSystemTheme(false);
+    const identity = githubIdentity();
+    render(<ApplicationSettingsDestination application={application()} githubIdentity={identity} onBack={() => undefined} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "GitHub" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "退出 GitHub" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("授权凭据以及身份和头像缓存");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Repository、Review 与本地代码不会被删除");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(identity.signOut).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "退出 GitHub" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认退出" }));
+    await waitFor(() => expect(identity.signOut).toHaveBeenCalledTimes(1));
+  });
+
+  it("退出失败时保留身份、展示错误并通过同一 lifecycle 重试", async () => {
+    mockSystemTheme(false);
+    const identity = githubIdentity();
+    identity.error = { scope: "github-identity", operation: "sign-out", detail: "凭据存储暂时不可用" };
+    vi.mocked(identity.signOut).mockResolvedValue({ kind: "failed" });
+    render(<ApplicationSettingsDestination application={application()} githubIdentity={identity} onBack={() => undefined} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "GitHub" }));
+
+    expect(screen.getByText("Monalisa")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("凭据存储暂时不可用");
+    fireEvent.click(screen.getByRole("button", { name: "重试退出" }));
+    await waitFor(() => expect(identity.signOut).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Monalisa")).toBeInTheDocument();
+  });
+
+  it("退出成功后提交 lifecycle 的已退出身份状态", async () => {
+    mockSystemTheme(false);
+    /** 用公开 binding 模拟真实 lifecycle 成功后提交新状态。 */
+    function SuccessfulSignOutSettings() {
+      const [signedIn, setSignedIn] = useState(true);
+      const identity = githubIdentity();
+      identity.status = { ...identity.status!, signedIn, identity: signedIn ? identity.status!.identity : null };
+      identity.signOut = async () => {
+        setSignedIn(false);
+        return { kind: "signed-out" };
+      };
+      return <ApplicationSettingsDestination application={application()} githubIdentity={identity} initialSection="github" onBack={() => undefined} />;
+    }
+    render(<SuccessfulSignOutSettings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "退出 GitHub" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认退出" }));
+
+    await waitFor(() => expect(screen.queryByText("Monalisa")).not.toBeInTheDocument());
   });
 
   it("主题选择立即生效，持久化失败时恢复旧主题并显示可操作错误", async () => {
