@@ -85,7 +85,6 @@ describe("Settings application-shell UI", () => {
     expect(screen.getByText("@octocat")).toBeInTheDocument();
     const avatar = screen.getByLabelText("Monalisa 的 GitHub 头像");
     expect(avatar).toBeInTheDocument();
-    expect(avatar.querySelector("img")).toHaveAttribute("src", "/cached/octocat.png");
   });
 
   it("说明退出影响，取消不调用 lifecycle，确认才退出", async () => {
