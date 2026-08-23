@@ -79,12 +79,12 @@ pub(crate) async fn explain_review_file_change(
             .read_file_change(&operation, &review_id, &snapshot_id, &path)
             .await
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
-        // 先通过后端权威 eligibility gate；不支持的文件不能触发 settings/PATH/Codex I/O。
+        // 先通过后端权威 eligibility gate；不支持的文件不能触发 provider runtime I/O。
         validate_explain_input(&babysit, &path, &content, detected_language.as_deref())?;
         let workspace_path = lifecycle
             .workspace_path(&review_id, &snapshot_id)
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
-        // 只有用户已经点击宝宝模式并真正请求解释时，才进行 Codex discovery/initialize。
+        // 只有用户已经点击宝宝模式并真正请求解释时，才进行 provider discovery/initialize。
         babysit
             .prepare_runtime(&workspace_path)
             .await
@@ -116,7 +116,20 @@ pub(crate) async fn explain_review_file_change(
     .await
 }
 
-/// 接收 native executable picker 的结果，先验证 `--version` 再持久化。
+/// 接收 provider-aware native executable picker 的结果，先验证再持久化。
+#[tauri::command]
+pub(crate) async fn select_babysit_provider_executable(
+    babysit: tauri::State<'_, BabysitApplication>,
+    provider_id: String,
+    executable: String,
+) -> Result<(), BabysitErrorPayload> {
+    babysit
+        .select_provider_executable(&provider_id, &PathBuf::from(executable))
+        .await
+        .map_err(BabysitErrorPayload::from)
+}
+
+/// 兼容现有 Codex picker command；新 provider 使用通用 command。
 #[tauri::command]
 pub(crate) async fn select_babysit_codex_executable(
     babysit: tauri::State<'_, BabysitApplication>,

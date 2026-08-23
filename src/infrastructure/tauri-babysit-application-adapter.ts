@@ -40,7 +40,14 @@ export function createTauriBabysitApplicationAdapter(
     clearReview(reviewId) {
       return transport.invoke("clear_babysit_review_cache", { reviewId });
     },
-    /** 将 native picker 选择交给后端验证并持久化，不把路径写入诊断。 */
+    /** 将 provider-aware native picker 选择交给后端验证并持久化。 */
+    selectProviderExecutable(providerId, path) {
+      return transport.invoke("select_babysit_provider_executable", {
+        providerId,
+        executable: path,
+      });
+    },
+    /** 兼容现有 Codex picker command；provider-aware caller 使用上面的通用方法。 */
     selectCodexExecutable(path) {
       return transport.invoke("select_babysit_codex_executable", { executable: path });
     },

@@ -102,6 +102,7 @@ pub fn run() {
             review_commands::read_review_file_change,
             babysit_commands::explain_review_file_change,
             babysit_commands::check_babysit_file_eligibility,
+            babysit_commands::select_babysit_provider_executable,
             babysit_commands::select_babysit_codex_executable,
             babysit_commands::clear_babysit_snapshot_cache,
             babysit_commands::clear_babysit_review_cache,
