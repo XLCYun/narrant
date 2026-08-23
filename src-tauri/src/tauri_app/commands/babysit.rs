@@ -5,7 +5,6 @@ use crate::babysit::{
 use crate::operation::{self, OperationContext, OperationId};
 use crate::review;
 use std::future::Future;
-use std::path::PathBuf;
 use tauri::ipc::Channel;
 
 /// Explain command 的后端 eligibility gate；通过前不得触碰 runtime/discovery。

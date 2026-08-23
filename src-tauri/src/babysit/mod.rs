@@ -496,15 +496,6 @@ impl BabysitApplication {
         }
     }
 
-    /// 由 native picker 选择并验证 Codex executable，再写入 durable application setting。
-    pub async fn select_codex_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        self.codex_runtime
-            .as_ref()
-            .ok_or(BabysitError::CodexNotFound)?
-            .select_executable(path)
-            .await
-    }
-
     /// 用后端规则判断 eligibility；detected_language 允许无扩展名和特殊文件名表达已识别语言。
     pub fn eligibility(
         &self,

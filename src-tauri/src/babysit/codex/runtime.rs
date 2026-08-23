@@ -41,7 +41,8 @@ impl ApplicationCodexSettings {
             .filter(|path| path.is_absolute())
     }
 
-    /// 通过唯一 Application Settings 契约持久化可执行文件偏好。
+    /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
+    #[cfg(test)]
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .update_codex_executable(executable)
@@ -138,7 +139,8 @@ impl CodexRuntime {
         }
     }
 
-    /// 校验并保存 picker 结果；下一次明确启用时重试初始化。
+    /// 测试中通过生产设置边界准备显式可执行文件偏好。
+    #[cfg(test)]
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
         let resolved = self
             .settings
@@ -152,7 +154,8 @@ impl CodexRuntime {
         Ok(())
     }
 
-    /// 清空显式偏好，使下一次分析重新执行自动发现。
+    /// 测试中清空显式偏好，使下一次分析重新执行自动发现。
+    #[cfg(test)]
     pub(crate) async fn clear_executable(&self) -> Result<(), BabysitError> {
         self.settings.save(None).await?;
         if let Ok(mut status) = self.status.lock() {
