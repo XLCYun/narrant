@@ -3,6 +3,9 @@ use crate::operation::OperationContext;
 use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
 use std::sync::Arc;
 
+#[path = "claude.rs"]
+mod claude;
+
 /// 构造只包含文本内容的 File Change fixture。
 fn text_change(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeContent {
     fn content(value: Option<&str>) -> Option<FileContent> {
@@ -480,18 +483,12 @@ fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
 fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
     let cases = [
         (
-            BabysitError::provider_setup(
-                "claude-code",
-                BabysitProviderSetupFailure::SignedOut,
-            ),
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::SignedOut),
             "provider_signed_out",
             "login_provider",
         ),
         (
-            BabysitError::provider_setup(
-                "claude-code",
-                BabysitProviderSetupFailure::Incompatible,
-            ),
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::Incompatible),
             "provider_incompatible",
             "upgrade_provider",
         ),

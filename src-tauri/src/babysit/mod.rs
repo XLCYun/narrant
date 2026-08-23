@@ -10,8 +10,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod claude;
 mod codex;
 
+pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
 
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
@@ -326,7 +328,6 @@ impl BabysitError {
             _ => None,
         }
     }
-
 }
 
 /// Babysit command 对前端暴露的稳定错误 code；detail 只承载当前失败的可读诊断。
@@ -539,7 +540,7 @@ pub trait BabysitAgentProvider: Send + Sync {
         request: BabysitProviderRequest,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError>;
-    /// 在同一 provider thread 上修复上一次被 Narrant 拒绝的完整输出。
+    /// 修复上一次被 Narrant 拒绝的完整输出；provider 可复用会话或启动自包含无状态轮次。
     async fn repair(
         &self,
         request: BabysitProviderRequest,
@@ -667,12 +668,9 @@ impl BabysitApplication {
         provider_id: &str,
         path: &Path,
     ) -> Result<(), BabysitError> {
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or_else(|| {
-                BabysitError::provider_setup(provider_id, BabysitProviderSetupFailure::NotFound)
-            })?;
+        let runtime = self.runtime.as_ref().ok_or_else(|| {
+            BabysitError::provider_setup(provider_id, BabysitProviderSetupFailure::NotFound)
+        })?;
         if runtime.provider_id() != provider_id {
             return Err(BabysitError::provider_setup(
                 provider_id,
