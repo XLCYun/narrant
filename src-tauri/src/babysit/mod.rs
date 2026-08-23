@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::atomic::{AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
+mod claude;
 mod codex;
 
+pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
 /// 设置页一次模型编辑会话使用的不可持久化目录快照。
 #[derive(Clone, Debug, Serialize)]

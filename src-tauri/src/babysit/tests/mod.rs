@@ -144,6 +144,9 @@ impl BabysitAgentProvider for InFlightModelProvider {
     }
 }
 
+#[path = "claude.rs"]
+mod claude;
+
 /// 构造只包含文本内容的 File Change fixture。
 fn text_change(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeContent {
     fn content(value: Option<&str>) -> Option<FileContent> {
