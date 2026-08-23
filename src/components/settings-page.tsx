@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft02Icon, ComputerIcon, GithubIcon, Moon02Icon, Settings02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Icon } from "@/components/ui/icon";
 import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
-import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitModelPreference, ReasoningEffort, ThemePreference } from "@/settings/application-settings";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
 import { useCodexExecutablePreference, type CodexExecutablePreferenceBinding } from "@/settings/use-codex-executable-preference";
 import { cn } from "@/lib/utils";
@@ -27,7 +27,7 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, codex, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; codex: CodexExecutablePreferenceBinding; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function SettingsPage({ theme, codex, modelApplication, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, initialModelEditing = false, onBack }: { theme: ApplicationThemeBinding; codex: CodexExecutablePreferenceBinding; modelApplication: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; initialModelEditing?: boolean; onBack(): void }) {
   const [section, setSection] = useState<Section>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-6xl py-4 sm:py-8">
     <header className="mb-6 flex items-center gap-3">
@@ -52,17 +52,17 @@ export function SettingsPage({ theme, codex, githubIdentity, initialSection = "a
         {section === "github" && (githubIdentity
           ? <GitHubSettings identity={githubIdentity} initiallyConfirming={initialGitHubSignOutConfirmation} />
           : <section><div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 className="font-heading text-xl font-semibold">GitHub</h2></div><p className="mt-4 text-sm text-muted-foreground">GitHub Identity 设置将在后续版本中提供。</p></section>)}
-        {section === "babysit" && <CodexExecutableSettings binding={codex} />}
+        {section === "babysit" && <CodexExecutableSettings binding={codex} modelApplication={modelApplication} initialModelEditing={initialModelEditing} />}
       </div>
     </div>
   </section>;
 }
 
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
-export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, initialModelEditing, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; initialModelEditing?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
   const codex = useCodexExecutablePreference(application);
-  return <SettingsPage theme={theme} codex={codex} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
+  return <SettingsPage theme={theme} codex={codex} modelApplication={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} initialModelEditing={initialModelEditing} onBack={onBack} />;
 }
 
 /** 展示当前 GitHub Identity，并在解释本机数据影响后复用 lifecycle 退出。 */
@@ -98,7 +98,7 @@ function GitHubSettings({ identity, initiallyConfirming = false }: { identity: G
 }
 
 /** Application Settings 中管理 Codex Executable Preference 的公共呈现组件。 */
-export function CodexExecutableSettings({ binding }: { binding: CodexExecutablePreferenceBinding }) {
+export function CodexExecutableSettings({ binding, modelApplication, initialModelEditing = false }: { binding: CodexExecutablePreferenceBinding; modelApplication: ApplicationSettingsApplication; initialModelEditing?: boolean }) {
   return <section aria-labelledby="babysit-title">
     <h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2>
     <p className="mt-1 text-sm text-muted-foreground">为之后启动的逐行解释选择 Codex 可执行文件。</p>
@@ -115,5 +115,113 @@ export function CodexExecutableSettings({ binding }: { binding: CodexExecutableP
         </div>
       </div>
     </div>
+    <BabysitModelSettings application={modelApplication} initialEditing={initialModelEditing} />
   </section>;
+}
+
+/** 模型编辑器的延迟目录状态；目录只存在于 editing 分支。 */
+type ModelEditorState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "failed"; detail: string }
+  | { kind: "editing"; models: BabysitModelCatalogEntry[] };
+
+/** 管理延迟模型目录、草稿与显式提交，目录永不进入持久化投影。 */
+function BabysitModelSettings({ application, initialEditing }: { application: ApplicationSettingsApplication; initialEditing: boolean }) {
+  const [saved, setSaved] = useState<BabysitModelPreference>({ kind: "automatic" });
+  const [loaded, setLoaded] = useState(false);
+  const [editor, setEditor] = useState<ModelEditorState>({ kind: "idle" });
+  const [draft, setDraft] = useState<BabysitModelPreference>({ kind: "automatic" });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    void application.load().then((settings) => {
+      if (active) { setSaved(settings.babysitModel); setLoaded(true); }
+    });
+    return () => { active = false; };
+  }, [application]);
+
+  useEffect(() => {
+    if (initialEditing && loaded && editor.kind === "idle") void loadCatalog();
+  // Preview-only initial state is consumed once after the saved preference loads.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialEditing, loaded]);
+
+  /** 进入编辑态时获取新鲜目录；失败或空目录均保留旧偏好。 */
+  async function loadCatalog() {
+    setEditor({ kind: "loading" });
+    setSaveError(undefined);
+    try {
+      const catalog = await application.listBabysitModels();
+      if (catalog.models.length === 0) {
+        setEditor({ kind: "failed", detail: "当前没有可用模型" });
+        return;
+      }
+      setDraft(saved);
+      setEditor({ kind: "editing", models: catalog.models });
+    } catch (error) {
+      setEditor({ kind: "failed", detail: errorDetail(error, "无法获取模型目录") });
+    }
+  }
+
+  /** 显式保存草稿；失败时编辑态和旧保存值均保持不变。 */
+  async function save() {
+    setSaving(true);
+    setSaveError(undefined);
+    try {
+      const settings = await application.updateBabysitModel(draft);
+      setSaved(settings.babysitModel);
+      setEditor({ kind: "idle" });
+    } catch (error) {
+      setSaveError(errorDetail(error, "无法保存模型偏好"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const savedLabel = saved.kind === "automatic"
+    ? "自动（使用 App Server 默认值）"
+    : `${modelName(editor, saved.modelId)} · ${saved.reasoningEffort ?? "模型默认"}`;
+
+  return <div className="mt-4 rounded-xl border bg-background p-4">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <div className="min-w-0 flex-1"><p className="text-sm font-medium">模型与思考强度</p><p className="mt-1 text-sm text-muted-foreground">{loaded ? savedLabel : "正在读取保存值…"}</p></div>
+      {editor.kind === "idle" && <Button variant="outline" disabled={!loaded} onClick={() => void loadCatalog()}>修改模型偏好</Button>}
+    </div>
+    {editor.kind === "loading" && <p role="status" className="mt-4 text-sm text-muted-foreground">正在获取可用模型…</p>}
+    {editor.kind === "failed" && <div className="mt-4 space-y-3"><p role="alert" className="text-sm text-destructive">{editor.detail}，原设置已保留。</p><div className="flex gap-2"><Button variant="outline" onClick={() => void loadCatalog()}>重试获取模型</Button><Button variant="ghost" onClick={() => setEditor({ kind: "idle" })}>取消模型修改</Button></div></div>}
+    {editor.kind === "editing" && <div className="mt-5 space-y-5">
+      {saveError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{saveError}，原设置已保留。</p>}
+      <div role="radiogroup" aria-label="模型偏好" className="grid gap-2">
+        <ModelRadio checked={draft.kind === "automatic"} label="自动（使用 App Server 默认值）" onChoose={() => setDraft({ kind: "automatic" })} />
+        {editor.models.map((model) => <ModelRadio key={model.id} checked={draft.kind === "explicit" && draft.modelId === model.id} label={`${model.name}${model.isDefault ? "（服务端默认）" : ""}`} onChoose={() => setDraft({ kind: "explicit", modelId: model.id, reasoningEffort: null })} />)}
+      </div>
+      {draft.kind === "explicit" && <EffortChoices model={editor.models.find((model) => model.id === draft.modelId)!} value={draft.reasoningEffort} onChoose={(reasoningEffort) => setDraft({ ...draft, reasoningEffort })} />}
+      <div className="flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={saving} onClick={() => { setEditor({ kind: "idle" }); setSaveError(undefined); }}>取消模型修改</Button><Button disabled={saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存模型偏好"}</Button></div>
+    </div>}
+  </div>;
+}
+
+/** 使用原生 radio 语义呈现一个可访问的模型选项。 */
+function ModelRadio({ checked, label, onChoose }: { checked: boolean; label: string; onChoose(): void }) {
+  return <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm"><input type="radio" checked={checked} onChange={onChoose} />{label}</label>;
+}
+
+/** 只呈现当前模型声明支持的思考强度，并包含模型默认选项。 */
+function EffortChoices({ model, value, onChoose }: { model: BabysitModelCatalogEntry; value: ReasoningEffort | null; onChoose(value: ReasoningEffort | null): void }) {
+  return <fieldset className="grid gap-2"><legend className="mb-2 text-sm font-medium">思考强度</legend><ModelRadio checked={value === null} label={`模型默认（${model.defaultReasoningEffort}）`} onChoose={() => onChoose(null)} />{model.supportedReasoningEfforts.map((effort) => <ModelRadio key={effort} checked={value === effort} label={effort} onChoose={() => onChoose(effort)} />)}</fieldset>;
+}
+
+/** 在已有目录时显示服务端名称，否则稳定显示保存的模型标识。 */
+function modelName(editor: ModelEditorState, modelId: string) {
+  return editor.kind === "editing" ? editor.models.find((model) => model.id === modelId)?.name ?? modelId : modelId;
+}
+
+/** 从 typed command 结构化错误或普通异常中提取用户可见详情。 */
+function errorDetail(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "detail" in error && typeof error.detail === "string") return error.detail;
+  return fallback;
 }

@@ -9,6 +9,7 @@ use super::{
     ValidationFailure, MAX_EXPLANATION_CHARS, MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
+use crate::application_settings::ApplicationSettingsApplication;
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -26,6 +27,8 @@ mod discovery;
 pub(super) mod runtime;
 #[path = "codex/transport/mod.rs"]
 mod transport;
+mod model_catalog;
+pub(crate) use model_catalog::{CodexModelCatalog, ResolvedCodexModel};
 
 /// Babysit 一次完整分析（包括 repair）的总截止时间。
 pub const CODEX_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -220,6 +223,7 @@ pub struct CodexAppServerProvider {
     failed: Arc<AtomicBool>,
     generation: String,
     timeout: Duration,
+    settings: Option<ApplicationSettingsApplication>,
 }
 
 impl CodexAppServerProvider {
@@ -232,6 +236,16 @@ impl CodexAppServerProvider {
         )
     }
 
+    /// 构造会在每次新分析前读取统一 Application Settings 的生产 provider。
+    pub(crate) fn with_settings(
+        executable: impl Into<PathBuf>,
+        settings: ApplicationSettingsApplication,
+    ) -> Self {
+        let mut provider = Self::new(executable);
+        provider.settings = Some(settings);
+        provider
+    }
+
     /// 为确定性 JSONL fixture 注入完整命令；生产 discovery issue 可复用此 seam。
     fn with_command_parts(program: PathBuf, args: Vec<OsString>, timeout: Duration) -> Self {
         Self {
@@ -241,7 +255,20 @@ impl CodexAppServerProvider {
             failed: Arc::new(AtomicBool::new(false)),
             generation: process_generation(),
             timeout,
+            settings: None,
         }
+    }
+
+    /// 从当前 App Server 连接获取新鲜、完整且仅含可见项的模型目录。
+    pub(crate) async fn model_catalog(&self) -> Result<CodexModelCatalog, BabysitError> {
+        let mut process_guard = self.process().await?;
+        let process = process_guard
+            .as_mut()
+            .ok_or_else(|| provider_error("Codex App Server 进程不可用。"))?;
+        process
+            .model_catalog(Instant::now() + CODEX_INITIALIZATION_TIMEOUT)
+            .await
+            .map_err(codex_error)
     }
 
     /// 设置 runtime 已解析的 executable；provider 本身不做 discovery 或持久化。
@@ -286,6 +313,8 @@ impl CodexAppServerProvider {
         request.workspace_path.hash(&mut hasher);
         request.before.hash(&mut hasher);
         request.after.hash(&mut hasher);
+        request.model.hash(&mut hasher);
+        request.reasoning_effort.hash(&mut hasher);
         for target in &request.targets {
             target.side.hash(&mut hasher);
             target.line_number.hash(&mut hasher);
@@ -476,6 +505,24 @@ impl BabysitAgentProvider for CodexAppServerProvider {
     /// provider 构造时固定一个 process generation；进程出错后不会在同一实例静默重启。
     fn process_generation(&self) -> &str {
         &self.generation
+    }
+
+    /// 每次新分析重新读取偏好和动态目录，显式失效时返回稳定可操作错误。
+    async fn resolve_analysis_model(&self) -> Result<ResolvedCodexModel, BabysitError> {
+        let Some(settings) = &self.settings else {
+            return Ok(ResolvedCodexModel {
+                model: BABYSIT_CODEX_MODEL.to_owned(),
+                reasoning_effort: BABYSIT_REASONING_EFFORT.to_owned(),
+            });
+        };
+        let preference = settings
+            .load()
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)?
+            .babysit_model;
+        self.model_catalog()
+            .await?
+            .resolve(&preference)
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)
     }
 
     /// 启动一个 fresh marked thread，并把完整 File Change 作为一次 turn 提交。

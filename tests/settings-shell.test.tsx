@@ -36,6 +36,11 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
     updateTheme: vi.fn(async (nextTheme) => ({ version: 1, theme: nextTheme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
     chooseCodexExecutable: vi.fn(async () => ({ version: 1, theme, codexExecutable: "C:\\Program Files\\Codex\\codex.exe", babysitModel: { kind: "automatic" } })),
     clearCodexExecutable: vi.fn(async () => ({ version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
+    listBabysitModels: vi.fn(async () => ({ models: [
+      { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
+      { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
+    ] })),
+    updateBabysitModel: vi.fn(async (babysitModel) => ({ version: 1, theme, codexExecutable: null, babysitModel })),
   };
 }
 
@@ -52,6 +57,55 @@ function githubIdentity(): GitHubIdentityLifecycleBinding {
 }
 
 describe("Settings application-shell UI", () => {
+  it("仅在修改时获取模型目录，取消后完整保留保存偏好", async () => {
+    mockSystemTheme(false);
+    const settings = application();
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: null, babysitModel: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: "high" } });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByText("gpt-5.4 · high")).toBeInTheDocument();
+    expect(settings.listBabysitModels).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
+    await screen.findByRole("radiogroup", { name: "模型偏好" });
+    expect(settings.listBabysitModels).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("radio", { name: /GPT-5.4 Mini/ }));
+    fireEvent.click(screen.getByRole("button", { name: "取消模型修改" }));
+
+    expect(screen.getByText("gpt-5.4 · high")).toBeInTheDocument();
+    expect(settings.updateBabysitModel).not.toHaveBeenCalled();
+  });
+
+  it("切换模型重置为模型默认，并显式保存具体思考强度", async () => {
+    mockSystemTheme(false);
+    const settings = application();
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+    await screen.findByText("自动（使用 App Server 默认值）");
+    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /GPT-5.4 Mini/ }));
+    expect(screen.getByRole("radio", { name: "模型默认（medium）" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "low" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
+
+    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "explicit", modelId: "gpt-5.4-mini", reasoningEffort: "low" }));
+    expect(await screen.findByText("gpt-5.4-mini · low")).toBeInTheDocument();
+  });
+
+  it("目录失败保留旧值并允许重试，保存失败也不覆盖旧值", async () => {
+    mockSystemTheme(false);
+    const settings = application();
+    vi.mocked(settings.listBabysitModels).mockRejectedValueOnce({ code: "app_server_unavailable", detail: "App Server 无法启动" });
+    vi.mocked(settings.updateBabysitModel).mockRejectedValueOnce({ code: "settings_write_failed", detail: "磁盘已满" });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+    await screen.findByText("自动（使用 App Server 默认值）");
+    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("App Server 无法启动");
+    fireEvent.click(screen.getByRole("button", { name: "重试获取模型" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /GPT-5.4（服务端默认）/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("磁盘已满");
+    fireEvent.click(screen.getByRole("button", { name: "取消模型修改" }));
+    expect(screen.getByText("自动（使用 App Server 默认值）")).toBeInTheDocument();
+  });
   it("通过约定的 Tauri commands 读取并更新完整 Application Settings", async () => {
     const invoke = vi.fn(async (_command: string, args: Record<string, unknown>) => ({
       version: 1, theme: args.theme ?? "system", codexExecutable: null, babysitModel: { kind: "automatic" },
@@ -62,11 +116,41 @@ describe("Settings application-shell UI", () => {
     await adapter.updateTheme("dark");
     await adapter.chooseCodexExecutable();
     await adapter.clearCodexExecutable();
+    await adapter.listBabysitModels();
+    await adapter.updateBabysitModel({ kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null });
 
     expect(invoke).toHaveBeenNthCalledWith(1, "load_application_settings", {});
     expect(invoke).toHaveBeenNthCalledWith(2, "update_application_theme", { theme: "dark" });
     expect(invoke).toHaveBeenNthCalledWith(3, "update_application_codex_executable", { executable: "C:\\Tools\\codex.exe" });
     expect(invoke).toHaveBeenNthCalledWith(4, "clear_application_codex_executable", {});
+    expect(invoke).toHaveBeenNthCalledWith(5, "list_babysit_models", {});
+    expect(invoke).toHaveBeenNthCalledWith(6, "update_application_babysit_model", { preference: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null } });
+  });
+
+  it("typed adapter 不改写模型目录与结构化失败", async () => {
+    const catalog = { models: [{ id: "custom-model", name: "Custom Model", isDefault: false, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" }] };
+    const failure = { code: "catalog_unavailable", detail: "连接中断" };
+    const invoke = vi.fn()
+      .mockResolvedValueOnce(catalog)
+      .mockRejectedValueOnce(failure);
+    const adapter = createTauriApplicationSettingsAdapter({ invoke } as never);
+
+    await expect(adapter.listBabysitModels()).resolves.toBe(catalog);
+    await expect(adapter.updateBabysitModel({ kind: "automatic" })).rejects.toBe(failure);
+  });
+
+  it("呈现服务端动态增加的思考强度而不依赖前端枚举", async () => {
+    mockSystemTheme(false);
+    const settings = application();
+    vi.mocked(settings.listBabysitModels).mockResolvedValue({ models: [
+      { id: "future-model", name: "Future Model", isDefault: true, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" },
+    ] });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: "修改模型偏好" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Future Model/ }));
+
+    expect(screen.getByRole("radio", { name: "模型默认（ultra）" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "ultra" })).toBeInTheDocument();
   });
 
   it("展示可扩展二级导航，并为后续分区提供稳定占位", async () => {

@@ -33,7 +33,7 @@ type PreviewDefinition = {
 };
 
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false, longCodexPath = false, githubState }: { saveFails?: boolean; longCodexPath?: boolean; githubState?: "signed-in" | "confirm" | "failed" }) {
+function SettingsPreview({ saveFails = false, longCodexPath = false, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
@@ -55,6 +55,16 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
       setCodexExecutable(null);
       return { version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } };
     },
+    listBabysitModels: async () => {
+      if (modelState === "loading") return new Promise(() => undefined);
+      if (modelState === "error") throw { code: "app_server_unavailable", detail: "App Server 暂时无法启动" };
+      if (modelState === "empty") return { models: [] };
+      return { models: [
+        { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high" },
+        { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
+      ] };
+    },
+    updateBabysitModel: async (babysitModel) => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel }),
   };
   const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
     status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
@@ -65,7 +75,7 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} initialModelEditing={modelState !== "idle"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
@@ -360,6 +370,10 @@ const previews: Record<string, PreviewDefinition> = {
       "github-signed-in": { label: "GitHub 已登录", render: () => <SettingsPreview githubState="signed-in" /> },
       "github-confirm": { label: "GitHub 退出确认", render: () => <SettingsPreview githubState="confirm" /> },
       "github-failed": { label: "GitHub 退出失败", render: () => <SettingsPreview githubState="failed" /> },
+      "model-wide": { label: "模型编辑（宽窗口）", render: () => <SettingsPreview modelState="idle" /> },
+      "model-loading": { label: "模型目录加载", render: () => <SettingsPreview modelState="loading" /> },
+      "model-empty": { label: "模型目录为空", render: () => <SettingsPreview modelState="empty" /> },
+      "model-error": { label: "模型目录失败", render: () => <SettingsPreview modelState="error" /> },
     },
   },
   "app-shell": {

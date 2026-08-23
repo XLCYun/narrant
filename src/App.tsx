@@ -407,6 +407,7 @@ export function App() {
     {appShell.destination.kind === "settings" && <SettingsPage
       theme={applicationTheme}
       codex={codexExecutablePreference}
+      modelApplication={applicationSettings}
       githubIdentity={githubIdentity}
       onBack={() => void appShell.returnFromSettings()}
     />}
