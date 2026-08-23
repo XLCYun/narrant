@@ -75,6 +75,18 @@ describe("Babysit contract spine", () => {
     expect(isBabysitError({ code: "provider_timeout", detail: "timeout" })).toBe(false);
     expect(isBabysitError({ code: "provider", detail: "provider failed" })).toBe(true);
     expect(isBabysitError({ code: "codex_not_found", detail: "missing", recovery: "open_shell" })).toBe(false);
+    expect(isBabysitError({
+      code: "provider_not_found",
+      detail: "missing",
+      providerId: "claude-code",
+      recovery: "select_provider_executable",
+    })).toBe(true);
+    expect(isBabysitError({
+      code: "provider_not_found",
+      detail: "missing",
+      providerId: 42,
+      recovery: "select_provider_executable",
+    })).toBe(false);
   });
 
   it("selects a File Change, emits generating, and renders a complete validated result binding", async () => {
