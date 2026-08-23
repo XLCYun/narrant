@@ -160,6 +160,22 @@ review advances to another snapshot, and is removed during application exit or w
 its owning Repository is deleted.
 _Avoid_: Repository, user worktree
 
+**Application Settings**:
+The device-local preferences that shape Narrant's appearance, external identities,
+and Babysit Mode integration for the current operating-system user.
+_Avoid_: Repository Settings, Review Settings
+
+**Codex Executable Preference**:
+The optional user-selected Codex executable that Babysit Mode uses ahead of automatic
+Codex discovery; clearing it restores automatic discovery.
+_Avoid_: Codex installation, Codex path
+
+**Babysit Model Preference**:
+The automatic or explicit model selection Babysit Mode applies to future Line
+Explanation analyses. An automatic preference follows the Codex App Server defaults;
+an explicit preference remains authoritative and must be supported when analysis starts.
+_Avoid_: Review model, Codex account model
+
 ## Relationships
 
 - A **Pull Request** selects the base and head revisions for one repository-local

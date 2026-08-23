@@ -16,7 +16,8 @@ credentials; it checks account state through the App Server protocol instead.
   Codex history may participate in App Server startup and analysis.
 - Babysit threads still use a Narrant-owned read-only permission profile, deny network
   access and approval escalation, and are deleted after use.
-- A selected executable remains a fallback and never replaces a working bare `codex`.
+- A selected executable was originally a fallback behind a working bare `codex`; this
+  priority rule is superseded by ADR-0023.
 - The temporary Codex home approach is deliberately set aside. Its original process
   isolation is recoverable from `43bbcf6f3414a5cb9b07c99b612fd454fb947c2c`,
   Keychain credential bridging from `84035d45be15684ea4969319d6ba917c60775ddc`,
