@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
+import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
@@ -66,6 +67,7 @@ export function ApplicationSettingsDestination({ application, githubIdentity, in
 function GitHubSettings({ identity, initiallyConfirming = false }: { identity: GitHubIdentityLifecycleBinding; initiallyConfirming?: boolean }) {
   const [confirming, setConfirming] = useState(initiallyConfirming);
   const profile = identity.status?.identity;
+  const avatarUrl = githubIdentityAvatarUrl(profile?.avatarPath);
   const signingOut = identity.transition.kind === "signing-out";
   const displayName = profile?.name?.trim() || profile?.login || "已连接 GitHub";
 
@@ -79,7 +81,7 @@ function GitHubSettings({ identity, initiallyConfirming = false }: { identity: G
     <div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 id="github-settings-title" className="font-heading text-xl font-semibold">GitHub</h2></div>
     <p className="mt-1 text-sm text-muted-foreground">管理此设备当前授权的 GitHub Identity。</p>
     {identity.status?.signedIn && <div className="mt-6 flex flex-wrap items-center gap-4 rounded-xl border p-4">
-      {profile ? <Avatar aria-label={`${displayName} 的 GitHub 头像`} className="size-12">{profile.avatarPath && <AvatarImage src={profile.avatarPath} alt="" />}<AvatarFallback>{displayName.slice(0, 2).toUpperCase()}</AvatarFallback></Avatar> : <Icon icon={GithubIcon} className="size-10" />}
+      {profile ? <Avatar aria-label={`${displayName} 的 GitHub 头像`} className="size-12">{avatarUrl && <AvatarImage src={avatarUrl} alt="" />}<AvatarFallback>{displayName.slice(0, 2).toUpperCase()}</AvatarFallback></Avatar> : <Icon icon={GithubIcon} className="size-10" />}
       <div className="min-w-0 flex-1"><strong className="block truncate">{displayName}</strong>{profile && <span className="block truncate text-sm text-muted-foreground">@{profile.login}</span>}</div>
       <Button variant="destructive" onClick={() => setConfirming(true)}>退出 GitHub</Button>
     </div>}

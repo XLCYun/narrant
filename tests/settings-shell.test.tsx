@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { ApplicationSettingsDestination } from "@/components/settings-page";
@@ -82,7 +83,9 @@ describe("Settings application-shell UI", () => {
 
     expect(screen.getByText("Monalisa")).toBeInTheDocument();
     expect(screen.getByText("@octocat")).toBeInTheDocument();
-    expect(screen.getByLabelText("Monalisa 的 GitHub 头像")).toBeInTheDocument();
+    const avatar = screen.getByLabelText("Monalisa 的 GitHub 头像");
+    expect(avatar).toBeInTheDocument();
+    expect(avatar.querySelector("img")).toHaveAttribute("src", "/cached/octocat.png");
   });
 
   it("说明退出影响，取消不调用 lifecycle，确认才退出", async () => {
@@ -115,6 +118,27 @@ describe("Settings application-shell UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "重试退出" }));
     await waitFor(() => expect(identity.signOut).toHaveBeenCalledTimes(1));
     expect(screen.getByText("Monalisa")).toBeInTheDocument();
+  });
+
+  it("退出成功后提交 lifecycle 的已退出身份状态", async () => {
+    mockSystemTheme(false);
+    /** 用公开 binding 模拟真实 lifecycle 成功后提交新状态。 */
+    function SuccessfulSignOutSettings() {
+      const [signedIn, setSignedIn] = useState(true);
+      const identity = githubIdentity();
+      identity.status = { ...identity.status!, signedIn, identity: signedIn ? identity.status!.identity : null };
+      identity.signOut = async () => {
+        setSignedIn(false);
+        return { kind: "signed-out" };
+      };
+      return <ApplicationSettingsDestination application={application()} githubIdentity={identity} initialSection="github" onBack={() => undefined} />;
+    }
+    render(<SuccessfulSignOutSettings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "退出 GitHub" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认退出" }));
+
+    await waitFor(() => expect(screen.queryByText("Monalisa")).not.toBeInTheDocument());
   });
 
   it("主题选择立即生效，持久化失败时恢复旧主题并显示可操作错误", async () => {
