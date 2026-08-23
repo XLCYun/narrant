@@ -15,6 +15,7 @@ import type {
   RepositoryOverview,
   RepositoryReviewList,
 } from "@/repository/repository-application";
+import type { ApplicationSettings, ThemePreference } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -30,6 +31,8 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
+  load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
+  update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
   set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
@@ -85,6 +88,8 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "load_application_settings",
+  "update_application_theme",
   "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
   "register_repository",

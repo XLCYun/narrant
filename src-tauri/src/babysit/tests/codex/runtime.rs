@@ -57,26 +57,44 @@ fn process_exists(pid: u32) -> bool {
 }
 
 #[test]
-fn file_settings_round_trip_only_the_executable_path() {
+fn file_settings_round_trip_preserves_unified_application_settings() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("babysit-settings.json");
+    let path = directory.path().join("settings.json");
     let executable = version_fixture(directory.path());
-    let settings = FileCodexSettings { path: path.clone() };
+    let settings = ApplicationCodexSettings {
+        application: ApplicationSettingsApplication::new(
+            path.clone(),
+            directory.path().join("legacy.json"),
+        ),
+    };
+    std::fs::write(
+        &path,
+        r#"{"version":1,"theme":"dark","codexExecutable":null,"babysitModel":{"mode":"automatic"}}"#,
+    )
+    .unwrap();
 
     settings.save(executable.clone()).unwrap();
 
     assert_eq!(settings.load(), Some(executable));
     let serialized = std::fs::read_to_string(path).unwrap();
-    assert!(!serialized.contains("version"));
+    assert!(serialized.contains(r#""version":1"#));
+    assert!(serialized.contains(r#""theme":"dark""#));
 }
 
 #[test]
 fn malformed_or_relative_settings_are_ignored() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("babysit-settings.json");
-    std::fs::write(&path, r#"{"executable":"relative/codex"}"#).unwrap();
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, r#"{"codexExecutable":"relative/codex"}"#).unwrap();
 
-    assert!(FileCodexSettings { path }.load().is_none());
+    assert!(ApplicationCodexSettings {
+        application: ApplicationSettingsApplication::new(
+            path,
+            directory.path().join("legacy.json"),
+        ),
+    }
+    .load()
+    .is_none());
 }
 
 #[test]

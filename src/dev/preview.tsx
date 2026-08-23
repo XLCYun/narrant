@@ -17,6 +17,8 @@ import { i18n } from "@/lib/i18n";
 import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
+import { ApplicationSettingsDestination } from "@/components/settings-page";
+import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -29,6 +31,20 @@ type PreviewDefinition = {
   label: string;
   scenarios: Record<string, PreviewScenario>;
 };
+
+/** 用公开端口提供可交互的主题设置与持久化失败预览。 */
+function SettingsPreview({ saveFails = false }: { saveFails?: boolean }) {
+  const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
+  const application: ApplicationSettingsApplication = {
+    load: async () => ({ version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } }),
+    updateTheme: async (theme) => {
+      if (saveFails) throw new Error("预览中的 settings.json 无法写入");
+      setSavedTheme(theme);
+      return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+    },
+  };
+  return <ApplicationSettingsDestination application={application} onBack={() => undefined} />;
+}
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
 function RepositoryTrustPreview({ granting = false }: { granting?: boolean }) {
@@ -314,6 +330,13 @@ function ReviewReaderPreview({
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  settings: {
+    label: "应用设置",
+    scenarios: {
+      default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
+      error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
+    },
+  },
   "app-shell": {
     label: "应用框架",
     scenarios: {

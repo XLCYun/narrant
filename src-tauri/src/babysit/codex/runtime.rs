@@ -5,8 +5,9 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
+use crate::application_settings::ApplicationSettingsApplication;
 use crate::babysit::{BabysitAgentProvider, BabysitError};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -25,40 +26,26 @@ pub enum CodexRuntimeStatus {
     InitFailed,
 }
 
-/// 持久化应用设置；Review 状态和缓存永远不会接收此路径。
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexSettings {
-    executable: Option<PathBuf>,
+/// 将 Babysit runtime 的 Codex 偏好映射到统一 Application Settings 契约。
+struct ApplicationCodexSettings {
+    application: ApplicationSettingsApplication,
 }
 
-/// 与可执行文件 discovery 分离的文件设置 adapter。
-struct FileCodexSettings {
-    path: PathBuf,
-}
-
-impl FileCodexSettings {
+impl ApplicationCodexSettings {
     /// 读取绝对路径选择；格式错误或相对路径会被忽略。
     fn load(&self) -> Option<PathBuf> {
-        std::fs::read_to_string(&self.path)
+        self.application
+            .load()
             .ok()
-            .and_then(|value| serde_json::from_str::<CodexSettings>(&value).ok())
-            .and_then(|settings| settings.executable)
+            .and_then(|settings| settings.codex_executable)
             .filter(|path| path.is_absolute())
     }
 
-    /// 只持久化选择的可执行文件路径，并在同目录替换文件。
+    /// 通过唯一 Application Settings 契约持久化可执行文件偏好。
     fn save(&self, executable: PathBuf) -> Result<(), BabysitError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| BabysitError::CodexInitializationFailed)?;
-        }
-        let payload = serde_json::to_vec(&CodexSettings {
-            executable: Some(executable),
-        })
-        .map_err(|_| BabysitError::CodexInitializationFailed)?;
-        let temporary = self.path.with_extension("tmp");
-        std::fs::write(&temporary, payload)
-            .and_then(|_| std::fs::rename(&temporary, &self.path))
+        self.application
+            .update_codex_executable(Some(executable))
+            .map(|_| ())
             .map_err(|_| BabysitError::CodexInitializationFailed)
     }
 }
@@ -67,7 +54,7 @@ impl FileCodexSettings {
 pub(crate) struct CodexRuntime {
     provider: Arc<CodexAppServerProvider>,
     discovery: CodexExecutableDiscovery,
-    settings: FileCodexSettings,
+    settings: ApplicationCodexSettings,
     status: Mutex<CodexRuntimeStatus>,
     flight: AsyncMutex<Option<Arc<Notify>>>,
 }
@@ -87,8 +74,11 @@ impl CodexRuntime {
         Self {
             provider,
             discovery,
-            settings: FileCodexSettings {
-                path: settings_path,
+            settings: ApplicationCodexSettings {
+                application: ApplicationSettingsApplication::new(
+                    settings_path.clone(),
+                    settings_path.with_extension("legacy.json"),
+                ),
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
             flight: AsyncMutex::new(None),

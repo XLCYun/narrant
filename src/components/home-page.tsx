@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type 
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
-import { ArrowDown01Icon, ArrowRight02Icon, Folder01Icon, FolderOpenIcon } from "@hugeicons/core-free-icons";
+import { ArrowDown01Icon, ArrowRight02Icon, Folder01Icon, FolderOpenIcon, Settings02Icon } from "@hugeicons/core-free-icons";
 import { BranchRelation, branchName } from "@/components/branch-relation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,7 @@ type HomePageProps = {
   workspace?: boolean;
 };
 
-type AppShellNavigation = Pick<AppShellNavigationBinding, "destination" | "navigate" | "registerAndOpen"> & {
+type AppShellNavigation = Pick<AppShellNavigationBinding, "destination" | "navigate" | "returnFromSettings" | "registerAndOpen"> & {
   sidebar: Omit<AppShellNavigationBinding["sidebar"], "repositories"> & { repositories: HomeRepository[] };
 };
 
@@ -458,10 +458,11 @@ export function AppShell({
           className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           onClick={() => void navigation.navigate({ kind: "home" })}
         >
-          <picture className="size-12 shrink-0">
-            <source media="(prefers-color-scheme: dark)" srcSet={narrantLogoDark} />
-            <img className="size-12" src={narrantLogo} alt={t("brand")} />
-          </picture>
+          <span className="size-12 shrink-0">
+            <picture className="hidden" aria-hidden><source media="(prefers-color-scheme: dark)" srcSet={narrantLogoDark} /><img alt="" src={narrantLogo} /></picture>
+            <img className="size-12 dark:hidden" src={narrantLogo} alt={t("brand")} />
+            <img aria-hidden alt="" className="hidden size-12 dark:block" src={narrantLogoDark} />
+          </span>
           <span className="min-w-0">
             <span className="block font-brand text-lg">{t("brand")}</span>
             <span className="block truncate text-xs text-muted-foreground">{t("subtitle")}</span>
@@ -570,7 +571,21 @@ export function AppShell({
           </SidebarGroupContent>}
         </SidebarGroup>
       </SidebarContent>
-      {githubIdentityEntry && <SidebarFooter className="border-t p-3">{githubIdentityEntry}</SidebarFooter>}
+      <SidebarFooter className="border-t p-3">
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">{githubIdentityEntry}</div>
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-10 shrink-0 rounded-full"
+            aria-label="设置"
+            aria-current={destination.kind === "settings" ? "page" : undefined}
+            onClick={() => void navigation.navigate({ kind: "settings" })}
+          >
+            <Icon icon={Settings02Icon} />
+          </Button>
+        </div>
+      </SidebarFooter>
       <div aria-label={t("resizeSidebar")} className="absolute right-0 top-12 h-[calc(100%-3rem)] w-1 cursor-col-resize" onMouseDown={resizeSidebar} />
     </Sidebar>
     <main className={cn(
@@ -644,6 +659,7 @@ export function HomePage({
         }
         return navigated();
       },
+      returnFromSettings: navigated,
       registerAndOpen(path) {
         onOpenFolder(path);
         return navigated();
