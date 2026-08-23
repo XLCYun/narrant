@@ -1,3 +1,4 @@
+mod application_settings;
 mod babysit;
 mod child_process;
 mod core_git;
