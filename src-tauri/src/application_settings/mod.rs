@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 /// 当前 Application Settings 文件格式版本。
 const SETTINGS_VERSION: u32 = 1;
@@ -80,7 +84,9 @@ impl fmt::Display for ApplicationSettingsError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "不支持 settings.json 版本 {version}")
             }
-            Self::InvalidCodexExecutable => formatter.write_str("Codex executable 必须是绝对路径"),
+            Self::InvalidCodexExecutable => formatter.write_str(
+                "Codex executable 无效；请在 Application Settings 中重新选择可执行文件",
+            ),
         }
     }
 }
@@ -141,9 +147,8 @@ impl ApplicationSettingsApplication {
         let Some(executable) = legacy.executable else {
             return Ok(ApplicationSettings::default());
         };
-        if !executable.is_absolute() {
-            return Err(ApplicationSettingsError::InvalidCodexExecutable);
-        }
+        let executable = canonical_codex_file(&executable)?;
+        validate_codex_version_sync(&executable)?;
         let settings = ApplicationSettings {
             codex_executable: Some(executable),
             ..ApplicationSettings::default()
@@ -164,13 +169,14 @@ impl ApplicationSettingsApplication {
     }
 
     /// 原子更新 Codex Executable Preference，并保留同一快照中的其他设置。
-    pub(crate) fn update_codex_executable(
+    pub(crate) async fn update_codex_executable(
         &self,
         executable: Option<PathBuf>,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        if executable.as_ref().is_some_and(|path| !path.is_absolute()) {
-            return Err(ApplicationSettingsError::InvalidCodexExecutable);
-        }
+        let executable = match executable {
+            Some(path) => Some(validate_codex_executable(&path).await?),
+            None => None,
+        };
         let mut settings = self.load()?;
         settings.codex_executable = executable;
         self.persist(&settings)?;
@@ -196,6 +202,98 @@ impl ApplicationSettingsApplication {
             .map_err(|error| ApplicationSettingsError::Io(error.error))?;
         Ok(())
     }
+}
+
+/// 将用户选择规范化为普通可执行文件，并以有界时间运行版本探测。
+async fn validate_codex_executable(
+    path: &Path,
+) -> Result<PathBuf, ApplicationSettingsError> {
+    let canonical = canonical_codex_file(path)?;
+
+    let mut command = tokio::process::Command::new(&canonical);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    crate::child_process::configure_tokio_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    match status {
+        Ok(Ok(status)) if status.success() => Ok(canonical),
+        Ok(Ok(_)) => Err(ApplicationSettingsError::InvalidCodexExecutable),
+        Ok(Err(_)) | Err(_) => {
+            reap_tokio_child(&mut child).await;
+            Err(ApplicationSettingsError::InvalidCodexExecutable)
+        }
+    }
+}
+
+/// 尽力终止并回收版本探测子进程，避免错误或超时分支遗留进程。
+async fn reap_tokio_child(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+/// 把偏好规范化为当前仍存在的普通可执行文件。
+fn canonical_codex_file(path: &Path) -> Result<PathBuf, ApplicationSettingsError> {
+    if !path.is_absolute() {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    if !metadata.is_file() {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    Ok(canonical)
+}
+
+/// 在同步启动迁移中有界验证旧偏好，失败时不创建统一设置文件。
+fn validate_codex_version_sync(path: &Path) -> Result<(), ApplicationSettingsError> {
+    let mut command = std::process::Command::new(path);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::child_process::configure_std_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err(ApplicationSettingsError::InvalidCodexExecutable),
+            Err(_) => {
+                reap_std_child(&mut child);
+                return Err(ApplicationSettingsError::InvalidCodexExecutable);
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                reap_std_child(&mut child);
+                return Err(ApplicationSettingsError::InvalidCodexExecutable);
+            }
+        }
+    }
+}
+
+/// 尽力终止并回收同步迁移的版本探测子进程。
+fn reap_std_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(test)]

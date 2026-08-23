@@ -32,20 +32,21 @@ struct ApplicationCodexSettings {
 }
 
 impl ApplicationCodexSettings {
-    /// 读取绝对路径选择；格式错误或相对路径会被忽略。
-    fn load(&self) -> Option<PathBuf> {
+    /// 读取权威偏好；配置损坏必须显式失败，不能降级为自动发现。
+    fn load(&self) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .load()
-            .ok()
-            .and_then(|settings| settings.codex_executable)
-            .filter(|path| path.is_absolute())
+            .map(|settings| settings.codex_executable)
+            .map_err(|_| BabysitError::CodexExecutableInvalid)
     }
 
-    /// 通过唯一 Application Settings 契约持久化可执行文件偏好。
-    fn save(&self, executable: PathBuf) -> Result<(), BabysitError> {
+    /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
+    #[cfg(test)]
+    async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         self.application
-            .update_codex_executable(Some(executable))
-            .map(|_| ())
+            .update_codex_executable(executable)
+            .await
+            .map(|settings| settings.codex_executable)
             .map_err(|_| BabysitError::CodexInitializationFailed)
     }
 }
@@ -137,11 +138,25 @@ impl CodexRuntime {
         }
     }
 
-    /// 校验并保存 picker 结果；下一次明确启用时重试初始化。
+    /// 测试中通过生产设置边界准备显式可执行文件偏好。
+    #[cfg(test)]
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let resolved = self.discovery.validate_selected(path.to_path_buf()).await?;
-        self.settings.save(resolved.path.clone())?;
-        self.provider.configure_executable(resolved.path).await?;
+        let resolved = self
+            .settings
+            .save(Some(path.to_path_buf()))
+            .await?
+            .ok_or(BabysitError::CodexInitializationFailed)?;
+        self.provider.configure_executable(resolved).await?;
+        if let Ok(mut status) = self.status.lock() {
+            *status = CodexRuntimeStatus::Unknown;
+        }
+        Ok(())
+    }
+
+    /// 测试中清空显式偏好，使下一次分析重新执行自动发现。
+    #[cfg(test)]
+    pub(crate) async fn clear_executable(&self) -> Result<(), BabysitError> {
+        self.settings.save(None).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
         }
@@ -161,10 +176,8 @@ impl CodexRuntime {
 
     /// 解析持久化/PATH 候选，配置 #74，并在同一工作区完成握手与能力探针。
     async fn probe_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        let candidates = self
-            .discovery
-            .resolve_all(self.settings.load().as_deref())
-            .await?;
+        let persisted = self.settings.load()?;
+        let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
         let mut last_error = BabysitError::CodexNotFound;
         let mut found_signed_out = false;
         for candidate in candidates {

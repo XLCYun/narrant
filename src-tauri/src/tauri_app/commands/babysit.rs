@@ -5,7 +5,6 @@ use crate::babysit::{
 use crate::operation::{self, OperationContext, OperationId};
 use crate::review;
 use std::future::Future;
-use std::path::PathBuf;
 use tauri::ipc::Channel;
 
 /// Explain command 的后端 eligibility gate；通过前不得触碰 runtime/discovery。
@@ -114,18 +113,6 @@ pub(crate) async fn explain_review_file_change(
             .map_err(BabysitErrorPayload::from)
     })
     .await
-}
-
-/// 接收 native executable picker 的结果，先验证 `--version` 再持久化。
-#[tauri::command]
-pub(crate) async fn select_babysit_codex_executable(
-    babysit: tauri::State<'_, BabysitApplication>,
-    executable: String,
-) -> Result<(), BabysitErrorPayload> {
-    babysit
-        .select_codex_executable(&PathBuf::from(executable))
-        .await
-        .map_err(BabysitErrorPayload::from)
 }
 
 /// 刷新 Snapshot 后删除旧 identity 的所有进程内解释缓存。

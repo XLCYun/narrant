@@ -9,6 +9,7 @@ import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
+import { useCodexExecutablePreference, type CodexExecutablePreferenceBinding } from "@/settings/use-codex-executable-preference";
 import { cn } from "@/lib/utils";
 
 type Section = "appearance" | "github" | "babysit";
@@ -26,7 +27,7 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function SettingsPage({ theme, codex, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; codex: CodexExecutablePreferenceBinding; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
   const [section, setSection] = useState<Section>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-6xl py-4 sm:py-8">
     <header className="mb-6 flex items-center gap-3">
@@ -51,7 +52,7 @@ export function SettingsPage({ theme, githubIdentity, initialSection = "appearan
         {section === "github" && (githubIdentity
           ? <GitHubSettings identity={githubIdentity} initiallyConfirming={initialGitHubSignOutConfirmation} />
           : <section><div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 className="font-heading text-xl font-semibold">GitHub</h2></div><p className="mt-4 text-sm text-muted-foreground">GitHub Identity 设置将在后续版本中提供。</p></section>)}
-        {section === "babysit" && <section><h2 className="font-heading text-xl font-semibold">宝宝模式</h2><p className="mt-4 text-sm text-muted-foreground">宝宝模式设置将在后续版本中提供。</p></section>}
+        {section === "babysit" && <CodexExecutableSettings binding={codex} />}
       </div>
     </div>
   </section>;
@@ -60,7 +61,8 @@ export function SettingsPage({ theme, githubIdentity, initialSection = "appearan
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
 export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
-  return <SettingsPage theme={theme} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
+  const codex = useCodexExecutablePreference(application);
+  return <SettingsPage theme={theme} codex={codex} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
 }
 
 /** 展示当前 GitHub Identity，并在解释本机数据影响后复用 lifecycle 退出。 */
@@ -92,5 +94,26 @@ function GitHubSettings({ identity, initiallyConfirming = false }: { identity: G
         <DialogFooter><DialogClose render={<Button variant="outline" />} disabled={signingOut}>取消</DialogClose><Button variant="destructive" disabled={signingOut} onClick={() => void confirmSignOut()}>{signingOut ? "正在退出…" : "确认退出"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
+  </section>;
+}
+
+/** Application Settings 中管理 Codex Executable Preference 的公共呈现组件。 */
+export function CodexExecutableSettings({ binding }: { binding: CodexExecutablePreferenceBinding }) {
+  return <section aria-labelledby="babysit-title">
+    <h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2>
+    <p className="mt-1 text-sm text-muted-foreground">为之后启动的逐行解释选择 Codex 可执行文件。</p>
+    {binding.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{binding.error}</p>}
+    <div aria-busy={!binding.loaded || binding.saving || undefined} className="mt-6 min-w-0 rounded-xl border bg-background p-4">
+      <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">Codex 可执行文件</p>
+          <p className="mt-1 break-all font-mono text-xs text-muted-foreground" title={binding.executable ?? undefined} data-testid="codex-executable-value">{binding.executable ?? "自动发现"}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button variant="outline" disabled={!binding.loaded || binding.saving} onClick={() => void binding.choose()}>{binding.saving ? "正在验证…" : "选择 Codex 可执行文件"}</Button>
+          {binding.executable && <Button variant="ghost" disabled={binding.saving} onClick={() => void binding.clear()}>恢复自动发现</Button>}
+        </div>
+      </div>
+    </div>
   </section>;
 }

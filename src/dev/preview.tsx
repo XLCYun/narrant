@@ -33,14 +33,27 @@ type PreviewDefinition = {
 };
 
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false, githubState }: { saveFails?: boolean; githubState?: "signed-in" | "confirm" | "failed" }) {
+function SettingsPreview({ saveFails = false, longCodexPath = false, githubState }: { saveFails?: boolean; longCodexPath?: boolean; githubState?: "signed-in" | "confirm" | "failed" }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
+  const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
+    ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
+    : null);
   const application: ApplicationSettingsApplication = {
-    load: async () => ({ version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } }),
+    load: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
     updateTheme: async (theme) => {
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedTheme(theme);
       return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+    },
+    chooseCodexExecutable: async () => {
+      if (saveFails) throw new Error("预览中的 Codex 版本验证失败");
+      const selected = "C:\\Program Files\\Codex\\codex.exe";
+      setCodexExecutable(selected);
+      return { version: 1, theme: savedTheme, codexExecutable: selected, babysitModel: { kind: "automatic" } };
+    },
+    clearCodexExecutable: async () => {
+      setCodexExecutable(null);
+      return { version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } };
     },
   };
   const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
@@ -52,7 +65,7 @@ function SettingsPreview({ saveFails = false, githubState }: { saveFails?: boole
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
@@ -307,7 +320,6 @@ function ReviewReaderPreview({
       regenerate: () => undefined,
       cancel: () => undefined,
       retry: () => undefined,
-      selectExecutable: () => undefined,
     },
     view,
     setView,
@@ -344,6 +356,7 @@ const previews: Record<string, PreviewDefinition> = {
     scenarios: {
       default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
       error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
+      "long-codex-path": { label: "Codex 长路径", render: () => <SettingsPreview longCodexPath /> },
       "github-signed-in": { label: "GitHub 已登录", render: () => <SettingsPreview githubState="signed-in" /> },
       "github-confirm": { label: "GitHub 退出确认", render: () => <SettingsPreview githubState="confirm" /> },
       "github-failed": { label: "GitHub 退出失败", render: () => <SettingsPreview githubState="failed" /> },
