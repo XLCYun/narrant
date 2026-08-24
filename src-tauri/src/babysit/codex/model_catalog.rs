@@ -7,8 +7,9 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexModelCapability {
-    #[serde(alias = "model")]
     pub id: String,
+    #[serde(skip_serializing)]
+    pub model: String,
     #[serde(alias = "displayName")]
     pub name: String,
     #[serde(default)]
@@ -99,6 +100,7 @@ impl CodexModelCatalog {
             || visible.iter().filter(|model| model.is_default).count() != 1
             || visible.iter().any(|model| {
                 model.id.trim().is_empty()
+                    || model.model.trim().is_empty()
                     || model.name.trim().is_empty()
                     || model.default_reasoning_effort.trim().is_empty()
                     || !model
@@ -117,10 +119,9 @@ impl CodexModelCatalog {
         preference: &BabysitModelPreference,
     ) -> Result<ResolvedCodexModel, ()> {
         let (model, requested_effort) = match preference {
-            BabysitModelPreference::Automatic => (
-                self.models.iter().find(|model| model.is_default),
-                None,
-            ),
+            BabysitModelPreference::Automatic => {
+                (self.models.iter().find(|model| model.is_default), None)
+            }
             BabysitModelPreference::Explicit {
                 model,
                 reasoning_effort,
@@ -139,7 +140,7 @@ impl CodexModelCatalog {
             return Err(());
         }
         Ok(ResolvedCodexModel {
-            model: model.id.clone(),
+            model: model.model.clone(),
             reasoning_effort: effort.to_owned(),
         })
     }

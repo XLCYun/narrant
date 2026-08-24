@@ -53,7 +53,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
   const { t } = useTranslation(["github", "common"]);
 
   if (!signedIn) {
-    return <Button variant="ghost" className={className} onClick={error && onRetry ? onRetry : onConnect}>
+    return <Button variant="ghost" pressMotion={false} className={className} onClick={error && onRetry ? onRetry : onConnect}>
       <GitHubMark className="size-[22px] shrink-0" />
       <span className="truncate">{error ? t("retryStatus") : t("connect")}</span>
     </Button>;
@@ -66,7 +66,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
       <DropdownMenuTrigger
         aria-label={compactName}
         className={className}
-        render={<Button variant="ghost" />}
+        render={<Button variant="ghost" pressMotion={false} />}
       >
         {identity
           ? <Avatar className="size-9">

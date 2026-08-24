@@ -71,7 +71,7 @@ while IFS= read -r line; do
       fi
       ;;
     model/list)
-      printf '{"id":%s,"result":{"data":[{"id":"fixture-model","name":"Fixture Model","isDefault":true,"hidden":false,"supportedReasoningEfforts":["low"],"defaultReasoningEffort":"low"}],"nextCursor":null}}\n' "$request_id"
+      printf '{"id":%s,"result":{"data":[{"id":"fixture-model","model":"gpt-5.6-luna","displayName":"Fixture Model","isDefault":true,"hidden":false,"supportedReasoningEfforts":["low"],"defaultReasoningEffort":"low"}],"nextCursor":null}}\n' "$request_id"
       ;;
     thread/list)
       if contains '"sourceKinds"'; then

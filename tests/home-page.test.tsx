@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AppShell, HomePage } from "@/components/home-page";
+import { GitHubIdentityEntry } from "@/components/github-identity-entry";
 import { i18n } from "@/lib/i18n";
 import type { PullRequestMetadata, RecentReviewSummary } from "@/lib/review-types";
 
@@ -44,6 +45,25 @@ afterEach(() => {
 });
 
 describe("最近审核首页", () => {
+  it("侧边栏底部入口点击时不改变垂直位置", () => {
+    render(<AppShell
+      navigation={{
+        destination: { kind: "home" },
+        sidebar: { reviews: [], repositories: [], loading: false, busy: false },
+        navigate: async () => ({ kind: "navigated" }),
+        registerAndOpen: async () => ({ kind: "navigated" }),
+      }}
+      githubIdentityEntry={<GitHubIdentityEntry signedIn={false} onConnect={() => undefined} onSignOut={() => undefined} />}
+    ><p>Home</p></AppShell>);
+
+    for (const button of [
+      screen.getByRole("button", { name: /^(连接 GitHub|Connect GitHub)$/ }),
+      screen.getByRole("button", { name: "设置" }),
+    ]) {
+      expect(button.className).not.toContain("active:not-aria-[haspopup]:translate-y-px");
+    }
+  });
+
   it("首页中的品牌入口保留语义与悬停反馈，但不显示常驻选中背景", () => {
     render(<HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />);
 
