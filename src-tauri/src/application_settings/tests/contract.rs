@@ -89,27 +89,30 @@ fn legacy_flat_schema_is_rejected_and_not_replaced() {
 }
 
 #[test]
-fn model_default_rejects_a_non_default_reasoning_effort() {
+fn model_and_reasoning_effort_are_independent_nullable_preferences() {
     let directory = tempfile::tempdir().unwrap();
     let application = ApplicationSettingsApplication::new(directory.path().join("settings.json"));
 
-    let result = application.update_provider_settings(
+    let saved = application
+        .update_provider_settings(
         BabysitProvider::Codex,
         BabysitProviderSettings {
             executable: None,
             model: None,
             reasoning_effort: Some("high".to_owned()),
         },
-    );
+    )
+        .unwrap();
 
-    assert!(matches!(
-        result,
-        Err(super::ApplicationSettingsError::InvalidProviderPreference)
-    ));
     assert_eq!(
-        application.load().unwrap(),
-        super::ApplicationSettings::default()
+        saved.babysit.codex,
+        BabysitProviderSettings {
+            executable: None,
+            model: None,
+            reasoning_effort: Some("high".to_owned()),
+        }
     );
+    assert_eq!(application.load().unwrap(), saved);
 }
 
 #[test]
