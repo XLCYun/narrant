@@ -453,6 +453,7 @@ export function App() {
           narrow: narrowReview,
           editorTheme,
           onOpenExternal: (url) => void openUrl(url),
+          onOpenApplicationSettings: () => void appShell.navigate({ kind: "settings" }),
         }}
       />
     </div>}

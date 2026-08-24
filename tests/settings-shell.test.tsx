@@ -120,6 +120,23 @@ describe("Settings application-shell UI", () => {
     expect(await screen.findByRole("option", { name: "Best（使用最强的可用模型）" })).toBeInTheDocument();
   });
 
+  it("Codex 目录加载、空结果与失败都保留已保存偏好", async () => {
+    const settings = application();
+    let rejectCatalog!: (reason: Error) => void;
+    vi.mocked(settings.listBabysitModels).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCatalog = reject; }));
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "修改模型偏好" }));
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取 Codex 模型目录");
+    await act(async () => rejectCatalog(new Error("目录不可用")));
+    expect(await screen.findByRole("button", { name: "重试获取模型" })).toBeInTheDocument();
+    expect(screen.getByText(/已保留当前保存值/)).toBeInTheDocument();
+
+    vi.mocked(settings.listBabysitModels).mockResolvedValueOnce({ provider: "codex", revision: "empty", models: [] });
+    fireEvent.click(screen.getByRole("button", { name: "重试获取模型" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("未返回可用模型"));
+  });
+
   it("Claude Code Custom 提供完整 effort 选择", async () => {
     const settings = application();
     vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: "vendor/custom-model", reasoningEffort: null } } });
