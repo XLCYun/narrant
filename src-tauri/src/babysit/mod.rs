@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
 mod claude;
+mod claude_runtime;
 mod codex;
 
 pub use claude::ClaudeCodeProvider;
@@ -770,6 +771,16 @@ impl BabysitApplication {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
         }
+    }
+
+    /// 构造生产默认的 Claude Code provider；仅在首次启用 Babysit 时发现并探测。
+    pub fn with_claude_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
+        let provider = Arc::new(ClaudeCodeProvider::new("claude"));
+        let runtime = Arc::new(claude_runtime::ClaudeRuntime::new(
+            provider.clone(),
+            settings_path.into(),
+        ));
+        Self::with_provider_runtime(provider, runtime)
     }
 
     /// 将首次 provider 发现和握手保持在 Babysit 点击后的最高 application seam。

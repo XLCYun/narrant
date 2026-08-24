@@ -36,6 +36,7 @@ type BabysitFooterProps = {
   state: BabysitState | undefined;
   onCancel: () => void;
   onRetry: () => void;
+  onSelectExecutable?: () => void;
   labels: {
     generating: string;
     repairing: (attempt: number) => string;
@@ -44,33 +45,56 @@ type BabysitFooterProps = {
     codexSignedOut: string;
     codexIncompatible: string;
     codexInitializationFailed: string;
+    claudeMissing: string;
+    claudeSignedOut: string;
+    claudeIncompatible: string;
+    claudeInitializationFailed: string;
     cancel: string;
     retry: string;
+    selectClaudeExecutable: string;
+    selectCodexExecutable: string;
     copyDiagnostics: string;
     copiedDiagnostics: string;
   };
 };
 
 /** 在 Diff 底部呈现文件级 Babysit 状态和恢复操作，不打断普通代码阅读。 */
-function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps) {
+function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }: BabysitFooterProps) {
   const [copied, setCopied] = useState(false);
   const errorCode = state?.kind === "failed" ? state.error.code : undefined;
   useEffect(() => setCopied(false), [state?.kind, errorCode]);
   if (!state || (state.kind !== "generating" && state.kind !== "repairing" && state.kind !== "failed")) return null;
 
   const running = state.kind === "generating" || state.kind === "repairing";
+  const providerLabels = state.kind === "failed" && state.error.providerId === "claude_code"
+    ? {
+      missing: labels.claudeMissing,
+      signedOut: labels.claudeSignedOut,
+      incompatible: labels.claudeIncompatible,
+      initializationFailed: labels.claudeInitializationFailed,
+      selectExecutable: labels.selectClaudeExecutable,
+    }
+    : state.kind === "failed" && state.error.providerId === "codex-app-server"
+      ? {
+        missing: labels.codexMissing,
+        signedOut: labels.codexSignedOut,
+        incompatible: labels.codexIncompatible,
+        initializationFailed: labels.codexInitializationFailed,
+        selectExecutable: labels.selectCodexExecutable,
+      }
+      : undefined;
   const status = state.kind === "generating"
     ? labels.generating
     : state.kind === "repairing"
       ? labels.repairing(state.attempt)
-      : state.error.code === "codex_not_found" || state.error.code === "codex_executable_invalid"
-        ? labels.codexMissing
-        : state.error.code === "codex_signed_out"
-          ? labels.codexSignedOut
-          : state.error.code === "codex_incompatible"
-            ? labels.codexIncompatible
-            : state.error.code === "codex_initialization_failed"
-              ? labels.codexInitializationFailed
+      : providerLabels && (state.error.code === "provider_not_found" || state.error.code === "provider_executable_invalid")
+        ? providerLabels.missing
+        : providerLabels && state.error.code === "provider_signed_out"
+          ? providerLabels.signedOut
+          : providerLabels && state.error.code === "provider_incompatible"
+            ? providerLabels.incompatible
+            : providerLabels && state.error.code === "provider_initialization_failed"
+              ? providerLabels.initializationFailed
               : labels.failed;
   const diagnostics = state.kind === "failed"
     ? JSON.stringify({ category: "babysit", code: state.error.code })
@@ -88,6 +112,7 @@ function BabysitFooter({ state, onCancel, onRetry, labels }: BabysitFooterProps)
     {running
       ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
       : <>
+        {state.kind === "failed" && state.error.recovery === "select_provider_executable" && providerLabels && onSelectExecutable && <Button variant="outline" size="xs" onClick={onSelectExecutable}>{providerLabels.selectExecutable}</Button>}
         <Button variant="outline" size="xs" onClick={onRetry}>{labels.retry}</Button>
         <Button variant="ghost" size="xs" onClick={copyDiagnostics} aria-label={copied ? labels.copiedDiagnostics : labels.copyDiagnostics}>
           <Icon icon={Copy01Icon} aria-hidden />
@@ -200,6 +225,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
     state={visible ? state : undefined}
     onCancel={() => babysit?.cancel()}
     onRetry={() => babysit?.retry()}
+    onSelectExecutable={babysit?.selectExecutable ? () => babysit.selectExecutable?.() : undefined}
     labels={{
       generating: t("review:babysitGenerating"),
       repairing: (attempt) => t("review:babysitRepairing", { attempt }),
@@ -208,7 +234,13 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
       codexSignedOut: t("review:babysitCodexSignedOut"),
       codexIncompatible: t("review:babysitCodexIncompatible"),
       codexInitializationFailed: t("review:babysitCodexInitializationFailed"),
+      claudeMissing: t("review:babysitClaudeMissing"),
+      claudeSignedOut: t("review:babysitClaudeSignedOut"),
+      claudeIncompatible: t("review:babysitClaudeIncompatible"),
+      claudeInitializationFailed: t("review:babysitClaudeInitializationFailed"),
       cancel: t("review:babysitCancel"),
+      selectClaudeExecutable: t("review:babysitSelectClaude"),
+      selectCodexExecutable: t("review:babysitSelectCodex"),
       retry: t("common:retry"),
       copyDiagnostics: t("review:babysitCopyDiagnostics"),
       copiedDiagnostics: t("review:babysitCopiedDiagnostics"),

@@ -284,6 +284,29 @@ describe("Babysit Review Reader presentation", () => {
     expect(footer).not.toHaveTextContent("/Users/alice");
   });
 
+  it("Claude Code 缺失时显示 provider-aware 恢复动作且不建议回退 Codex", () => {
+    const selectExecutable = vi.fn();
+    const review = makeReview({
+      kind: "failed",
+      retryable: true,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      error: {
+        code: "provider_not_found",
+        detail: "C:\\Users\\alice\\.local\\bin\\claude.exe",
+        providerId: "claude_code",
+        recovery: "select_provider_executable",
+      },
+    }, { selectExecutable });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    const footer = screen.getByTestId("babysit-footer");
+    expect(footer).toHaveTextContent("未找到可用的 Claude Code，请选择可执行文件");
+    expect(within(footer).getByRole("button", { name: "选择 Claude Code 可执行文件" })).toBeInTheDocument();
+    expect(footer).not.toHaveTextContent("Codex");
+    expect(footer).not.toHaveTextContent("alice");
+  });
+
   it("把解释直接注入代码行尾且不包含变更前后行号标签", () => {
     const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(8).slice(0, 240);
     const review = makeReview({
