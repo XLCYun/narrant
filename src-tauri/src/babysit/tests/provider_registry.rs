@@ -27,9 +27,11 @@ impl RecordingBundle {
 
 #[async_trait]
 impl BabysitProviderCapabilities for RecordingBundle {
+    /// 返回 fixture 的稳定 provider identity。
     fn provider_id(&self) -> &str {
         self.identity
     }
+    /// 记录准备次数及传入的设置快照，并返回确定性分析快照。
     async fn prepare_analysis(
         &self,
         _workspace_path: &Path,
@@ -50,15 +52,19 @@ impl BabysitProviderCapabilities for RecordingBundle {
             _lease: None,
         })
     }
+    /// 返回空目录；本 fixture 的目录内容不参与路由断言。
     async fn model_catalog(&self) -> Result<codex::CodexModelCatalog, BabysitError> {
         Ok(codex::CodexModelCatalog { models: Vec::new() })
     }
+    /// 原样返回 fixture 路径，避免触碰真实文件系统。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
         Ok(path.to_path_buf())
     }
+    /// 接受 fixture executable；选择行为不参与本组断言。
     async fn select_executable(&self, _path: &Path) -> Result<(), BabysitError> {
         Ok(())
     }
+    /// 记录 shutdown 次数，验证 registry 会遍历全部 bundle。
     async fn shutdown(&self) {
         self.shutdown_calls.fetch_add(1, Ordering::AcqRel);
     }

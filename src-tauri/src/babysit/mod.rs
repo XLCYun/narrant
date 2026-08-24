@@ -137,10 +137,12 @@ struct ProviderCapabilityBundle {
 
 #[async_trait]
 impl BabysitProviderCapabilities for ProviderCapabilityBundle {
+    /// 返回 bundle 注册时绑定的稳定 provider identity。
     fn provider_id(&self) -> &str {
         &self.identity
     }
 
+    /// 准备所选 runtime，并冻结本次分析使用的 provider、模型和生命周期 lease。
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
@@ -166,6 +168,7 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
         })
     }
 
+    /// 通过 bundle 拥有的目录能力解析当前模型目录。
     async fn model_catalog(&self) -> Result<codex::CodexModelCatalog, BabysitError> {
         self.codex_runtime
             .as_ref()
@@ -176,6 +179,7 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
             .await
     }
 
+    /// 使用 bundle 对应的 runtime 校验 executable，但不改写设置。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
         if let Some(runtime) = &self.codex_runtime {
             runtime.validate_executable(path).await
@@ -184,6 +188,7 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
         }
     }
 
+    /// 委托 bundle runtime 验证并激活用户选择的 executable。
     async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
         self.runtime
             .as_ref()
@@ -194,6 +199,7 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
             .await
     }
 
+    /// 释放 bundle 拥有的 runtime；无 runtime 的测试 provider 直接关闭 provider。
     async fn shutdown(&self) {
         if let Some(runtime) = &self.runtime {
             runtime.shutdown().await
@@ -830,10 +836,9 @@ impl BabysitApplication {
             (
                 crate::application_settings::BabysitProvider::Codex,
                 Arc::new(ProviderCapabilityBundle {
-                    identity: provider_identity(
-                        crate::application_settings::BabysitProvider::Codex,
-                    )
-                    .to_owned(),
+                    identity: crate::application_settings::BabysitProvider::Codex
+                        .identity()
+                        .to_owned(),
                     provider: codex_provider,
                     runtime: Some(codex_runtime.clone()),
                     codex_runtime: Some(codex_runtime),
@@ -842,10 +847,9 @@ impl BabysitApplication {
             (
                 crate::application_settings::BabysitProvider::ClaudeCode,
                 Arc::new(ProviderCapabilityBundle {
-                    identity: provider_identity(
-                        crate::application_settings::BabysitProvider::ClaudeCode,
-                    )
-                    .to_owned(),
+                    identity: crate::application_settings::BabysitProvider::ClaudeCode
+                        .identity()
+                        .to_owned(),
                     provider: claude_provider,
                     runtime: Some(claude_runtime),
                     codex_runtime: None,
@@ -884,7 +888,7 @@ impl BabysitApplication {
                 (
                     identity,
                     Arc::new(ProviderCapabilityBundle {
-                        identity: provider_identity(identity).to_owned(),
+                        identity: identity.identity().to_owned(),
                         provider,
                         runtime: None,
                         codex_runtime: None,
@@ -951,7 +955,7 @@ impl BabysitApplication {
                 .get(&provider)
                 .ok_or_else(|| {
                     BabysitError::provider_setup(
-                        provider_identity(provider),
+                        provider.identity(),
                         BabysitProviderSetupFailure::NotFound,
                     )
                 })?
@@ -960,7 +964,7 @@ impl BabysitApplication {
         };
         let revision = format!(
             "{}:catalog-{}",
-            provider_identity(provider),
+            provider.identity(),
             self.next_model_catalog_revision
                 .fetch_add(1, Ordering::AcqRel)
         );
@@ -1162,19 +1166,15 @@ impl BabysitApplication {
         let selected_identity = selected_settings
             .as_ref()
             .map(|settings| settings.babysit.provider);
-        let selected_preference =
-            selected_settings
-                .as_ref()
-                .map(|settings| match settings.babysit.provider {
-                    crate::application_settings::BabysitProvider::Codex => &settings.babysit.codex,
-                    crate::application_settings::BabysitProvider::ClaudeCode => {
-                        &settings.babysit.claude_code
-                    }
-                });
+        let selected_preference = selected_settings.as_ref().map(|settings| {
+            settings
+                .babysit
+                .provider_settings(settings.babysit.provider)
+        });
         let selected_bundle: Arc<dyn BabysitProviderCapabilities> = match selected_identity {
             Some(identity) => self.registry.get(&identity).cloned().ok_or_else(|| {
                 BabysitError::provider_setup(
-                    provider_identity(identity),
+                    identity.identity(),
                     BabysitProviderSetupFailure::NotFound,
                 )
             })?,
@@ -1197,7 +1197,7 @@ impl BabysitApplication {
             locale: request.locale.clone(),
             detected_language: request.detected_language.clone(),
             provider_id: selected_identity
-                .map(provider_identity)
+                .map(crate::application_settings::BabysitProvider::identity)
                 .unwrap_or_else(|| selected_provider.provider_id())
                 .to_owned(),
             process_generation: prepared.process_generation,
@@ -1308,14 +1308,6 @@ impl BabysitApplication {
             self.provider.shutdown().await;
         }
         clear_result
-    }
-}
-
-/// 将 settings enum 映射为不会泄露 transport 的稳定公开 identity。
-fn provider_identity(provider: crate::application_settings::BabysitProvider) -> &'static str {
-    match provider {
-        crate::application_settings::BabysitProvider::Codex => "codex",
-        crate::application_settings::BabysitProvider::ClaudeCode => "claude-code",
     }
 }
 
