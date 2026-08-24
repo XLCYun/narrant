@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 /// 记录完整 capability seam 调用的确定性 bundle。
 struct RecordingBundle {
-    identity: &'static str,
     provider: Arc<FakeBabysitProvider>,
     prepare_calls: AtomicUsize,
     shutdown_calls: AtomicUsize,
@@ -14,9 +13,8 @@ struct RecordingBundle {
 
 impl RecordingBundle {
     /// 构造尚未发生任何 provider I/O 的 bundle。
-    fn new(identity: &'static str) -> Self {
+    fn new() -> Self {
         Self {
-            identity,
             provider: Arc::new(FakeBabysitProvider::default()),
             prepare_calls: AtomicUsize::new(0),
             shutdown_calls: AtomicUsize::new(0),
@@ -27,10 +25,6 @@ impl RecordingBundle {
 
 #[async_trait]
 impl BabysitProviderCapabilities for RecordingBundle {
-    /// 返回 fixture 的稳定 provider identity。
-    fn provider_id(&self) -> &str {
-        self.identity
-    }
     /// 记录准备次数及传入的设置快照，并返回确定性分析快照。
     async fn prepare_analysis(
         &self,
@@ -60,10 +54,6 @@ impl BabysitProviderCapabilities for RecordingBundle {
     /// 原样返回 fixture 路径，避免触碰真实文件系统。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
         Ok(path.to_path_buf())
-    }
-    /// 接受 fixture executable；选择行为不参与本组断言。
-    async fn select_executable(&self, _path: &Path) -> Result<(), BabysitError> {
-        Ok(())
     }
     /// 记录 shutdown 次数，验证 registry 会遍历全部 bundle。
     async fn shutdown(&self) {
@@ -180,8 +170,8 @@ async fn readiness_is_lazy_and_limited_to_the_selected_bundle() {
     settings
         .update_provider(BabysitProvider::ClaudeCode)
         .unwrap();
-    let codex = Arc::new(RecordingBundle::new("codex"));
-    let claude = Arc::new(RecordingBundle::new("claude-code"));
+    let codex = Arc::new(RecordingBundle::new());
+    let claude = Arc::new(RecordingBundle::new());
     let application = BabysitApplication::with_capability_registry_at(
         settings_path,
         [
@@ -223,7 +213,7 @@ async fn missing_selected_registration_fails_without_touching_registered_bundles
     ApplicationSettingsApplication::new(settings_path.clone())
         .update_provider(BabysitProvider::ClaudeCode)
         .unwrap();
-    let codex = Arc::new(RecordingBundle::new("codex"));
+    let codex = Arc::new(RecordingBundle::new());
     let application = BabysitApplication::with_capability_registry_at(
         settings_path,
         [(

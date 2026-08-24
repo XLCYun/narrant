@@ -5,7 +5,6 @@ use crate::babysit::{
 use crate::operation::{self, OperationContext, OperationId};
 use crate::review;
 use std::future::Future;
-use std::path::PathBuf;
 use tauri::ipc::Channel;
 
 /// 设置页显式进入模型编辑时读取 App Server 当前可见动态目录。
@@ -124,18 +123,6 @@ pub(crate) async fn explain_review_file_change(
     .await
 }
 
-/// 接收 provider-aware native executable picker 的结果，先验证再持久化。
-#[tauri::command]
-pub(crate) async fn select_babysit_provider_executable(
-    babysit: tauri::State<'_, BabysitApplication>,
-    provider_id: String,
-    executable: String,
-) -> Result<(), BabysitErrorPayload> {
-    babysit
-        .select_provider_executable(&provider_id, &PathBuf::from(executable))
-        .await
-        .map_err(BabysitErrorPayload::from)
-}
 /// 刷新 Snapshot 后删除旧 identity 的所有进程内解释缓存。
 #[tauri::command]
 pub(crate) fn clear_babysit_snapshot_cache(
