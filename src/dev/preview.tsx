@@ -316,9 +316,9 @@ function ReviewReaderPreview({
       : babysitKind === "repairing"
         ? { kind: "repairing", request: babysitRequest, attempt: 2 }
         : babysitKind === "claude-recovery"
-          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_not_found", detail: "Claude Code executable unavailable", providerId: "claude_code", recovery: "select_provider_executable" } }
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_not_found", detail: "Claude Code executable unavailable", providerId: "claude-code", recovery: "select_provider_executable" } }
         : babysitKind === "claude-signed-out"
-          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_signed_out", detail: "Claude Code authentication unavailable", providerId: "claude_code", recovery: "login_provider" } }
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_signed_out", detail: "Claude Code authentication unavailable", providerId: "claude-code", recovery: "login_provider" } }
         : babysitKind === "failed"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };

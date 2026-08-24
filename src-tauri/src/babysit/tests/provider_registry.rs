@@ -71,6 +71,60 @@ impl BabysitProviderCapabilities for RecordingBundle {
     }
 }
 
+/// Claude capability bundle 通过 provider-neutral seam 暴露离线目录，且不会为读取目录启动 CLI。
+#[tokio::test]
+async fn claude_bundle_exposes_its_offline_catalog_without_runtime_io() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ClaudeCodeProvider::new("unused-claude"));
+    let bundle = ClaudeCapabilityBundle {
+        provider: provider.clone(),
+        runtime: Arc::new(super::super::claude::runtime::ClaudeRuntime::new(
+            provider,
+            directory.path().join("settings.json"),
+        )),
+    };
+
+    let models = bundle.model_catalog().await.unwrap().models();
+    assert_eq!(
+        models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+        ["default", "best", "fable", "opus", "sonnet", "haiku", "custom"]
+    );
+    assert!(models
+        .iter()
+        .find(|model| model.id == "haiku")
+        .unwrap()
+        .supported_reasoning_efforts
+        .is_empty());
+}
+
+#[test]
+fn claude_bundle_resolves_nullable_and_explicit_settings_without_runtime_io() {
+    assert_eq!(
+        ClaudeCapabilityBundle::resolve_preference(
+            &crate::application_settings::BabysitProviderSettings::default()
+        )
+        .unwrap(),
+        BabysitResolvedModel {
+            model: String::new(),
+            reasoning_effort: String::new(),
+        }
+    );
+    assert_eq!(
+        ClaudeCapabilityBundle::resolve_preference(
+            &crate::application_settings::BabysitProviderSettings {
+                executable: None,
+                model: Some("sonnet".to_owned()),
+                reasoning_effort: Some("max".to_owned()),
+            }
+        )
+        .unwrap(),
+        BabysitResolvedModel {
+            model: "sonnet".to_owned(),
+            reasoning_effort: "max".to_owned(),
+        }
+    );
+}
+
 /// 通过公开应用 seam 验证每次分析都按设备设置选择 provider。
 #[tokio::test]
 async fn new_analysis_routes_to_the_selected_provider_without_touching_the_other() {
