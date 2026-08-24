@@ -45,7 +45,9 @@ pub(crate) enum BabysitModelPreference {
 enum CurrentBabysitModelPreference {
     Automatic,
     Explicit {
+        #[serde(rename = "modelId")]
         model_id: String,
+        #[serde(rename = "reasoningEffort")]
         reasoning_effort: Option<String>,
     },
 }

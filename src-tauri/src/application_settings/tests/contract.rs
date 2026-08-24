@@ -290,13 +290,15 @@ fn babysit_model_preference_uses_public_camel_case_dto_and_reads_legacy_settings
         model: "server-model".to_owned(),
         reasoning_effort: Some("high".to_owned()),
     };
+    let current_payload = serde_json::json!({
+        "kind": "explicit",
+        "modelId": "server-model",
+        "reasoningEffort": "high"
+    });
+    assert_eq!(serde_json::to_value(&current).unwrap(), current_payload);
     assert_eq!(
-        serde_json::to_value(&current).unwrap(),
-        serde_json::json!({
-            "kind": "explicit",
-            "modelId": "server-model",
-            "reasoningEffort": "high"
-        })
+        serde_json::from_value::<BabysitModelPreference>(current_payload).unwrap(),
+        current
     );
 
     let legacy: BabysitModelPreference = serde_json::from_value(serde_json::json!({
