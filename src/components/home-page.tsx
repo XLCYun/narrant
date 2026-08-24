@@ -582,7 +582,7 @@ export function AppShell({
             aria-current={destination.kind === "settings" ? "page" : undefined}
             onClick={() => void navigation.navigate({ kind: "settings" })}
           >
-            <Icon icon={Settings02Icon} />
+            <Icon icon={Settings02Icon} className="size-[22px]" />
           </Button>
         </div>
       </SidebarFooter>

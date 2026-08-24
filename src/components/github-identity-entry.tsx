@@ -54,7 +54,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
 
   if (!signedIn) {
     return <Button variant="ghost" className={className} onClick={error && onRetry ? onRetry : onConnect}>
-      <GitHubMark />
+      <GitHubMark className="size-[22px] shrink-0" />
       <span className="truncate">{error ? t("retryStatus") : t("connect")}</span>
     </Button>;
   }
@@ -69,11 +69,11 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
         render={<Button variant="ghost" />}
       >
         {identity
-          ? <Avatar className="size-8">
+          ? <Avatar className="size-9">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
             <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
           </Avatar>
-          : <GitHubMark />}
+          : <GitHubMark className="size-[22px] shrink-0" />}
         <span className="truncate">{compactName}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="w-64">
