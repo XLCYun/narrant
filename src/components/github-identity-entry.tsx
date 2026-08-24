@@ -33,6 +33,12 @@ type Props = {
   className?: string;
 };
 
+/** 将缓存头像路径转换为当前 WebView 可以加载的资源地址。 */
+export function githubIdentityAvatarUrl(avatarPath: string | null | undefined) {
+  if (!avatarPath) return null;
+  return "__TAURI_INTERNALS__" in window ? convertFileSrc(avatarPath) : avatarPath;
+}
+
 /** 从显示名称或 login 生成最多两个字符的头像占位文本。 */
 function identityInitials(identity: GitHubIdentity) {
   const source = identity.name?.trim() || identity.login;
@@ -48,16 +54,14 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
 
   if (!signedIn) {
     return <Button variant="ghost" className={className} onClick={error && onRetry ? onRetry : onConnect}>
-      <GitHubMark />
+      <GitHubMark className="size-[22px] shrink-0" />
       <span className="truncate">{error ? t("retryStatus") : t("connect")}</span>
     </Button>;
   }
 
   const compactName = identity?.name?.trim() || identity?.login || t("connected");
-  const avatarUrl = identity?.avatarPath
-    ? ("__TAURI_INTERNALS__" in window ? convertFileSrc(identity.avatarPath) : identity.avatarPath)
-    : null;
-  return <div className="min-w-0 space-y-1">
+  const avatarUrl = githubIdentityAvatarUrl(identity?.avatarPath);
+  return <div className="min-w-0">
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label={compactName}
@@ -65,11 +69,11 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
         render={<Button variant="ghost" />}
       >
         {identity
-          ? <Avatar className="size-8">
+          ? <Avatar className="size-9">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
             <AvatarFallback>{identityInitials(identity)}</AvatarFallback>
           </Avatar>
-          : <GitHubMark />}
+          : <GitHubMark className="size-[22px] shrink-0" />}
         <span className="truncate">{compactName}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="w-64">
@@ -94,7 +98,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-    {error && <div className="space-y-1 px-2 text-xs text-destructive">
+    {error && <div className="mt-1 space-y-1 px-2 text-xs text-destructive">
       <p role="alert" className="break-words">{error}</p>
       {onRetry && <Button variant="outline" size="sm" className="w-full" onClick={onRetry}>{t("retryAction")}</Button>}
     </div>}

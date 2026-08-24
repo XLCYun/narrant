@@ -114,6 +114,7 @@ fn execute_core_git(
 ) -> Result<GitOutput, CoreGitFailure> {
     let (timeout, output_limit) = limits.unwrap_or_else(|| policy_for(invocation.class));
     let mut command = Command::new("git");
+    configure_non_interactive_credentials(&mut command);
     command
         .arg("-C")
         .arg(&invocation.repository_path)
@@ -261,6 +262,13 @@ fn execute_core_git(
         ));
     }
     Ok(GitOutput { stdout })
+}
+
+/// 保留已配置凭据助手的静默读取能力，但禁止 Core Git 或 GCM 打开交互式提示。
+pub(super) fn configure_non_interactive_credentials(command: &mut Command) {
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never");
 }
 
 fn policy_for(class: GitOperationClass) -> (Duration, usize) {

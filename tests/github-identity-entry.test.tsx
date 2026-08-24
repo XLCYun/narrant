@@ -16,7 +16,9 @@ describe("全局 GitHub Identity 入口", () => {
     const onConnect = vi.fn();
     render(<GitHubIdentityEntry signedIn={false} onConnect={onConnect} onSignOut={() => undefined} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
+    const trigger = screen.getByRole("button", { name: "连接 GitHub" });
+    expect(trigger.querySelector("svg")).toHaveClass("size-[22px]");
+    fireEvent.click(trigger);
 
     expect(onConnect).toHaveBeenCalledOnce();
   });
@@ -50,6 +52,8 @@ describe("全局 GitHub Identity 入口", () => {
 
     const trigger = screen.getByRole("button", { name: "Monalisa" });
     expect(trigger).toHaveClass("min-h-12", "py-2");
+    expect(trigger.querySelector('[data-slot="avatar"]')).toHaveClass("size-9");
+    expect(trigger.parentElement).not.toHaveClass("space-y-1");
     fireEvent.click(trigger);
 
     const menu = await waitFor(() => {

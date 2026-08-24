@@ -38,6 +38,12 @@ impl CodexExecutableDiscovery {
         &self,
         persisted: Option<&Path>,
     ) -> Result<Vec<ResolvedExecutable>, BabysitError> {
+        if let Some(persisted) = persisted {
+            return self
+                .validate_selected(persisted.to_path_buf())
+                .await
+                .map(|executable| vec![executable]);
+        }
         let candidates = self.ordered_candidates(persisted);
         let mut resolved = Vec::new();
         for (index, candidate) in candidates.into_iter().enumerate() {
@@ -74,7 +80,7 @@ impl CodexExecutableDiscovery {
     }
 
     /// 注入测试候选，不修改进程 PATH 或用户设置。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn with_candidates(candidates: Vec<PathBuf>) -> Self {
         Self {
             candidate_override: Some(candidates),
@@ -429,6 +435,6 @@ fn append_windows_desktop_locations(locations: &mut Vec<PathBuf>, root: &Path) {
     ]);
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../tests/codex/discovery.rs"]
 mod tests;

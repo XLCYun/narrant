@@ -205,6 +205,45 @@ describe("AppShell navigation module", () => {
     expect(closeReview).not.toHaveBeenCalled();
   });
 
+  it("Settings 是独立目的地，返回时恢复进入前的 Repository", async () => {
+    const { result } = renderNavigation(createRepositoryAdapter(), createReviewAdapter());
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await result.current.navigate({ kind: "repository", repositoryId: 1 });
+    });
+    await act(async () => {
+      await result.current.navigate({ kind: "settings" });
+    });
+
+    expect(result.current.destination).toEqual({ kind: "settings" });
+
+    await act(async () => {
+      await result.current.returnFromSettings();
+    });
+
+    expect(result.current.destination).toEqual({ kind: "repository", repositoryId: 1, initialTab: "pull-requests" });
+  });
+
+  it("从 Review 返回 Settings 后恢复同一个 Presented Review", async () => {
+    const reviewAdapter = createReviewAdapter();
+    const switchReview = vi.spyOn(reviewAdapter, "switchReview");
+    const { result } = renderNavigation(createRepositoryAdapter(), reviewAdapter);
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    await act(async () => {
+      await result.current.navigate({ kind: "review", repositoryId: 1, target: { kind: "saved-review", reviewId: "review-1" } });
+    });
+    await act(async () => {
+      await result.current.navigate({ kind: "settings" });
+    });
+    await act(async () => {
+      await result.current.returnFromSettings();
+    });
+
+    expect(result.current.destination).toEqual({ kind: "review", repositoryId: 1, reviewId: "review-1" });
+    expect(result.current.reader?.snapshot.reviewId).toBe("review-1");
+    expect(switchReview).toHaveBeenCalledTimes(1);
+  });
+
   it("重复点击当前 Presented Review 不调用 adapter", async () => {
     const repositoryAdapter = createRepositoryAdapter();
     const reviewAdapter = createReviewAdapter();

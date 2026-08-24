@@ -70,6 +70,9 @@ while IFS= read -r line; do
         printf '{"id":%s,"result":{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}}\n' "$request_id"
       fi
       ;;
+    model/list)
+      printf '{"id":%s,"result":{"data":[{"id":"fixture-model","model":"gpt-5.6-luna","displayName":"Fixture Model","isDefault":true,"hidden":false,"supportedReasoningEfforts":["low"],"defaultReasoningEffort":"low"}],"nextCursor":null}}\n' "$request_id"
+      ;;
     thread/list)
       if contains '"sourceKinds"'; then
         record "thread/list:source-filtered"
@@ -91,7 +94,6 @@ while IFS= read -r line; do
       for expected in \
         '"permissions":"narrant-babysit-restricted-v1"' \
         '"runtimeWorkspaceRoots":["/tmp/narrant-review-workspace"]' \
-        '"model":"gpt-5.6-luna"' \
         '"reasoningEffort":"low"' \
         '"allowProviderModelFallback":false' \
         '"default_permissions":"narrant-babysit-restricted-v1"' \
@@ -103,6 +105,9 @@ while IFS= read -r line; do
           policy_ok=false
         fi
       done
+      if ! contains '"model":"gpt-5.6-luna"' && ! contains '"model":"capability-probe"'; then
+        policy_ok=false
+      fi
       if [ "$policy_ok" = true ]; then
         record "thread/start:restricted"
       else

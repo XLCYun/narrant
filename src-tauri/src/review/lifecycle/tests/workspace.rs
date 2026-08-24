@@ -90,11 +90,7 @@ async fn core_git_workspace_block_does_not_hold_open_review_set_lock() {
         .reader;
     let hook_entered = fixture._application_data.path().join("hook-entered");
     let hook_released = fixture._application_data.path().join("hook-released");
-    install_blocking_post_checkout_hook(
-        fixture.repository.path(),
-        &hook_entered,
-        &hook_released,
-    );
+    install_blocking_post_checkout_hook(fixture.repository.path(), &hook_entered, &hook_released);
 
     let present_lifecycle = lifecycle.clone();
     let second_review_id = second.review_id.clone();
@@ -120,9 +116,7 @@ async fn core_git_workspace_block_does_not_hold_open_review_set_lock() {
     let first_review_id = first.review_id.clone();
     let runtime_access = tokio::time::timeout(
         Duration::from_secs(1),
-        tokio::task::spawn_blocking(move || {
-            access_lifecycle.open_review_runtime(&first_review_id)
-        }),
+        tokio::task::spawn_blocking(move || access_lifecycle.open_review_runtime(&first_review_id)),
     )
     .await;
     std::fs::write(&hook_released, "release\n").unwrap();
@@ -214,11 +208,9 @@ async fn recovery_removes_registration_for_an_unactivated_review_without_a_works
         )
         .unwrap();
     std::fs::remove_dir_all(&workspace).unwrap();
-    assert!(git_text(
-        fixture.repository.path(),
-        &["worktree", "list", "--porcelain"]
-    )
-    .contains(&workspace.to_string_lossy().to_string()));
+    assert!(GitProcessAdapter::new(fixture.repository.path())
+        .is_registered_worktree(&workspace, OperationContext::background().cancellation())
+        .unwrap());
     let lifecycle = ReviewLifecycle::new(fixture.store.clone());
 
     let report = lifecycle.recover().unwrap();
@@ -241,7 +233,10 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
     let fixture = LifecycleFixture::new();
     for index in 0..1_000 {
         std::fs::write(
-            fixture.repository.path().join(format!("materialize-{index}.txt")),
+            fixture
+                .repository
+                .path()
+                .join(format!("materialize-{index}.txt")),
             format!("{index}\n"),
         )
         .unwrap();
@@ -251,7 +246,10 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
         fixture.repository.path(),
         &["commit", "-q", "-m", "large materialization"],
     );
-    run_git(fixture.repository.path(), &["branch", "-f", "topic", "HEAD"]);
+    run_git(
+        fixture.repository.path(),
+        &["branch", "-f", "topic", "HEAD"],
+    );
     let saved = fixture.save_current_review().await;
     fixture.store.activate_initial_snapshot(&saved).unwrap();
     let workspace = fixture
@@ -283,7 +281,10 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
         )
         .await;
 
-    assert!(observer.join().unwrap(), "未观察到 Review Workspace 开始物化");
+    assert!(
+        observer.join().unwrap(),
+        "未观察到 Review Workspace 开始物化"
+    );
     let opened = opened.unwrap();
     assert!(cancellation.is_cancelled());
     assert_eq!(
@@ -299,9 +300,8 @@ async fn failed_target_materialization_preserves_presented_and_open_reviews() {
     let first_repository = test_repository_with_commit();
     let second_repository = test_repository_with_commit();
     let target_repository = test_repository_with_commit();
-    let store = Arc::new(
-        ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap(),
-    );
+    let store =
+        Arc::new(ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap());
     let repository_entries = [
         store
             .upsert_repository(&verify_repository_location(first_repository.path()).unwrap())
@@ -320,10 +320,8 @@ async fn failed_target_materialization_preserves_presented_and_open_reviews() {
     let second_entry = &repository_entries[1];
     let target_entry = &repository_entries[2];
     let first_saved = save_current_review(&store, first_entry.id, first_repository.path()).await;
-    let second_saved =
-        save_current_review(&store, second_entry.id, second_repository.path()).await;
-    let target_saved =
-        save_current_review(&store, target_entry.id, target_repository.path()).await;
+    let second_saved = save_current_review(&store, second_entry.id, second_repository.path()).await;
+    let target_saved = save_current_review(&store, target_entry.id, target_repository.path()).await;
     for saved in [&first_saved, &second_saved, &target_saved] {
         store.activate_initial_snapshot(saved).unwrap();
     }
@@ -480,10 +478,11 @@ impl LifecycleFixture {
     fn new() -> Self {
         let application_data = tempfile::TempDir::new().unwrap();
         let repository = test_repository_with_commit();
-        let store = Arc::new(
-            ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap(),
-        );
-        let entry = store.upsert_repository(&verify_repository_location(repository.path()).unwrap()).unwrap();
+        let store =
+            Arc::new(ReviewStore::open(&application_data.path().join("store.sqlite3")).unwrap());
+        let entry = store
+            .upsert_repository(&verify_repository_location(repository.path()).unwrap())
+            .unwrap();
         store.insert_workspace_trust(entry.id).unwrap();
         Self {
             _application_data: application_data,
@@ -506,11 +505,7 @@ impl LifecycleFixture {
     }
 
     /// 保存指定 branch pair 的测试 Review，供多 Review 生命周期断言复用。
-    async fn save_review_with_refs(
-        &self,
-        base_ref: &str,
-        head_ref: &str,
-    ) -> PersistedReviewState {
+    async fn save_review_with_refs(&self, base_ref: &str, head_ref: &str) -> PersistedReviewState {
         save_review_with_refs(
             &self.store,
             self.repository_id,

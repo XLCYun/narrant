@@ -15,17 +15,20 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
 
 #[path = "codex/discovery.rs"]
 mod discovery;
+mod model_catalog;
 #[path = "codex/runtime.rs"]
 pub(super) mod runtime;
 #[path = "codex/transport/mod.rs"]
 mod transport;
+pub(crate) use model_catalog::CodexModelCapability;
+pub(crate) use model_catalog::{CodexModelCatalog, ResolvedCodexModel};
 
 /// Babysit 一次完整分析（包括 repair）的总截止时间。
 pub const CODEX_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -218,7 +221,8 @@ pub struct CodexAppServerProvider {
     process: Arc<AsyncMutex<Option<AppServerProcess>>>,
     active_threads: Arc<Mutex<HashMap<String, ActiveThread>>>,
     failed: Arc<AtomicBool>,
-    generation: String,
+    generation_prefix: String,
+    generation: AtomicU64,
     timeout: Duration,
 }
 
@@ -239,30 +243,55 @@ impl CodexAppServerProvider {
             process: Arc::new(AsyncMutex::new(None)),
             active_threads: Arc::new(Mutex::new(HashMap::new())),
             failed: Arc::new(AtomicBool::new(false)),
-            generation: process_generation(),
+            generation_prefix: process_generation(),
+            generation: AtomicU64::new(0),
             timeout,
         }
     }
 
-    /// 设置 runtime 已解析的 executable；provider 本身不做 discovery 或持久化。
-    pub async fn configure_executable(&self, path: PathBuf) -> Result<(), BabysitError> {
-        let mut process = self.process.lock().await;
-        let reset_failed_process = self.failed.load(Ordering::Acquire);
-        if process.is_some() && !reset_failed_process {
-            return Err(BabysitError::CodexInitializationFailed);
+    /// 从当前 App Server 连接获取新鲜、完整且仅含可见项的模型目录。
+    pub(crate) async fn model_catalog(&self) -> Result<CodexModelCatalog, BabysitError> {
+        let mut process_guard = self.process().await?;
+        let process = process_guard
+            .as_mut()
+            .ok_or_else(|| provider_error("Codex App Server 进程不可用。"))?;
+        let result = process
+            .model_catalog(Instant::now() + CODEX_INITIALIZATION_TIMEOUT)
+            .await;
+        if let Err(error) = result {
+            self.mark_failed(error);
+            return Err(codex_error(error));
         }
-        if reset_failed_process {
+        result.map_err(codex_error)
+    }
+
+    /// 原子切换到 runtime 已解析的 executable；相同路径复用当前 App Server。
+    pub(super) async fn activate_executable(&self, path: PathBuf) -> Result<bool, BabysitError> {
+        let mut process = self.process.lock().await;
+        let same_executable = self
+            .command
+            .lock()
+            .map_err(|_| BabysitError::CodexInitializationFailed)?
+            .program
+            == path;
+        if same_executable {
+            return Ok(false);
+        }
+        if process.is_some() {
             if let Some(process) = process.as_mut() {
                 process.shutdown().await;
             }
             *process = None;
         }
-        drop(process);
+        self.failed.store(false, Ordering::Release);
+        if let Ok(mut active) = self.active_threads.lock() {
+            active.clear();
+        }
         self.command
             .lock()
             .map_err(|_| BabysitError::CodexInitializationFailed)?
             .program = path;
-        Ok(())
+        Ok(true)
     }
 
     /// Runtime 已完成 executable discovery 后，复用同一连接完成 capability probe。
@@ -286,6 +315,8 @@ impl CodexAppServerProvider {
         request.workspace_path.hash(&mut hasher);
         request.before.hash(&mut hasher);
         request.after.hash(&mut hasher);
+        request.model.hash(&mut hasher);
+        request.reasoning_effort.hash(&mut hasher);
         for target in &request.targets {
             target.side.hash(&mut hasher);
             target.line_number.hash(&mut hasher);
@@ -312,7 +343,10 @@ impl CodexAppServerProvider {
                 .map_err(|_| BabysitError::CodexInitializationFailed)?
                 .clone();
             match AppServerProcess::spawn(command).await {
-                Ok(started) => *process = Some(started),
+                Ok(started) => {
+                    self.generation.fetch_add(1, Ordering::AcqRel);
+                    *process = Some(started);
+                }
                 Err(error) => {
                     self.failed.store(true, Ordering::Release);
                     return Err(codex_initialization_error(error));
@@ -473,9 +507,21 @@ impl BabysitAgentProvider for CodexAppServerProvider {
         "codex-app-server"
     }
 
-    /// provider 构造时固定一个 process generation；进程出错后不会在同一实例静默重启。
-    fn process_generation(&self) -> &str {
-        &self.generation
+    /// 返回当前真实 App Server 代际；每次成功 spawn 都生成新的缓存 identity。
+    fn process_generation(&self) -> String {
+        format!(
+            "{}-{}",
+            self.generation_prefix,
+            self.generation.load(Ordering::Acquire)
+        )
+    }
+
+    /// 无 Runtime 的测试 provider 保留稳定默认值；生产模型解析由 Codex Capability 负责。
+    async fn resolve_analysis_model(&self) -> Result<ResolvedCodexModel, BabysitError> {
+        Ok(ResolvedCodexModel {
+            model: BABYSIT_CODEX_MODEL.to_owned(),
+            reasoning_effort: BABYSIT_REASONING_EFFORT.to_owned(),
+        })
     }
 
     /// 启动一个 fresh marked thread，并把完整 File Change 作为一次 turn 提交。

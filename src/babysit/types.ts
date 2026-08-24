@@ -30,7 +30,6 @@ export type BabysitErrorCode =
 export type BabysitRecoveryAction =
   | "login_codex"
   | "upgrade_codex"
-  | "select_codex_executable"
   | "retry";
 
 /** Babysit command 失败的结构化 payload；detail 不参与业务分支。 */
@@ -62,7 +61,6 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
 const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
   "login_codex",
   "upgrade_codex",
-  "select_codex_executable",
   "retry",
 ]);
 
@@ -151,8 +149,6 @@ export interface BabysitApplicationAdapter {
   clearSnapshot?(identity: ReviewIdentity): Promise<void>;
   /** Review 关闭或切换后删除该 Review 的进程内结果。 */
   clearReview?(reviewId: string): Promise<void>;
-  /** 由 native picker 选择并验证 Codex executable；未安装 provider 可不实现。 */
-  selectCodexExecutable?(path: string): Promise<void>;
 }
 
 /** Review Reader 消费的最小 Babysit action binding。 */
@@ -169,6 +165,4 @@ export type BabysitBinding = {
   cancel(): void;
   /** 重试最后一次失败的分析。 */
   retry(): void;
-  /** 执行 typed executable recovery action；取消选择不改变失败状态。 */
-  selectExecutable?(): void;
 };

@@ -241,7 +241,7 @@ impl GitProcessAdapter {
     }
 
     /// 通过机器格式 worktree 清单判断精确受管路径是否仍有 Git 注册。
-    fn is_registered_worktree(
+    pub(crate) fn is_registered_worktree(
         &self,
         workspace_path: &Path,
         cancellation: &CancellationSignal,
@@ -257,7 +257,7 @@ impl GitProcessAdapter {
 }
 
 /** 比较 Git porcelain worktree 字段与本地规范路径，并消除 Windows 路径表示差异。 */
-fn worktree_field_matches_path(field: &[u8], expected: &Path) -> bool {
+pub(crate) fn worktree_field_matches_path(field: &[u8], expected: &Path) -> bool {
     let Some(actual) = field.strip_prefix(b"worktree ") else {
         return false;
     };

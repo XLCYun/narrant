@@ -15,6 +15,7 @@ import type {
   RepositoryOverview,
   RepositoryReviewList,
 } from "@/repository/repository-application";
+import type { ApplicationSettings, BabysitModelCatalog, BabysitModelPreference, ThemePreference } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -30,6 +31,12 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
+  load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
+  update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
+  update_application_codex_executable: { args: { executable: string }; result: ApplicationSettings };
+  clear_application_codex_executable: { args: EmptyArgs; result: ApplicationSettings };
+  list_babysit_models: { args: EmptyArgs; result: BabysitModelCatalog; error: { code: string; detail: string } };
+  update_application_babysit_model: { args: { preference: BabysitModelPreference; catalogRevision: string }; result: ApplicationSettings; error: { code: string; detail: string } };
   set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
@@ -44,7 +51,6 @@ export type TauriCommandContract = {
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
-  select_babysit_codex_executable: { args: { executable: string }; result: void; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
   clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
@@ -85,6 +91,12 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "load_application_settings",
+  "update_application_theme",
+  "update_application_codex_executable",
+  "clear_application_codex_executable",
+  "list_babysit_models",
+  "update_application_babysit_model",
   "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
   "register_repository",
@@ -111,7 +123,6 @@ export const TAURI_COMMAND_NAMES = [
   "read_review_file_change",
   "explain_review_file_change",
   "check_babysit_file_eligibility",
-  "select_babysit_codex_executable",
   "clear_babysit_snapshot_cache",
   "clear_babysit_review_cache",
   "close_review",

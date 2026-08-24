@@ -1,5 +1,25 @@
+use super::workspace::worktree_field_matches_path;
 use super::*;
 use crate::operation::{OperationContext, TestCancellation};
+
+#[test]
+fn core_git_commands_disable_interactive_credential_prompts() {
+    let mut command = std::process::Command::new("git");
+    super::process::configure_non_interactive_credentials(&mut command);
+    let environment = command
+        .get_envs()
+        .filter_map(|(name, value)| value.map(|value| (name, value)))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    assert_eq!(
+        environment.get(std::ffi::OsStr::new("GIT_TERMINAL_PROMPT")),
+        Some(&std::ffi::OsStr::new("0"))
+    );
+    assert_eq!(
+        environment.get(std::ffi::OsStr::new("GCM_INTERACTIVE")),
+        Some(&std::ffi::OsStr::new("Never"))
+    );
+}
 
 /// 创建最小真实仓库，供 adapter 限制测试执行机器格式命令。
 fn repository() -> tempfile::TempDir {

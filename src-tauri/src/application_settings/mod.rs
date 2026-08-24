@@ -1,0 +1,375 @@
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+/// 当前 Application Settings 文件格式版本。
+const SETTINGS_VERSION: u32 = 1;
+
+/// Narrant 的持久化主题偏好。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ThemePreference {
+    /// 跟随操作系统当前主题及后续变化。
+    #[default]
+    System,
+    /// 始终使用浅色主题。
+    Light,
+    /// 始终使用深色主题。
+    Dark,
+}
+
+/// Babysit Mode 对未来分析使用的模型偏好。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub(crate) enum BabysitModelPreference {
+    /// 每次分析采用 Codex App Server 的默认模型与思考强度。
+    #[default]
+    Automatic,
+    /// 固定使用指定模型；空思考强度表示采用该模型的服务端默认值。
+    Explicit {
+        #[serde(rename = "modelId")]
+        model: String,
+        #[serde(rename = "reasoningEffort")]
+        reasoning_effort: Option<String>,
+    },
+}
+
+/// 当前 IPC/settings.json DTO 的反序列化表示。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum CurrentBabysitModelPreference {
+    Automatic,
+    Explicit {
+        #[serde(rename = "modelId")]
+        model_id: String,
+        #[serde(rename = "reasoningEffort")]
+        reasoning_effort: Option<String>,
+    },
+}
+
+/// Issue #102 集成前短暂写出的旧模型偏好表示，仅用于兼容读取。
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+enum LegacyBabysitModelPreference {
+    Automatic,
+    Explicit {
+        model: String,
+        reasoning_effort: Option<String>,
+    },
+}
+
+/// 同时接受公开 camelCase DTO 和旧 settings.json 表示，后续写入统一使用新格式。
+impl<'de> Deserialize<'de> for BabysitModelPreference {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum CompatiblePreference {
+            Current(CurrentBabysitModelPreference),
+            Legacy(LegacyBabysitModelPreference),
+        }
+        Ok(match CompatiblePreference::deserialize(deserializer)? {
+            CompatiblePreference::Current(CurrentBabysitModelPreference::Automatic)
+            | CompatiblePreference::Legacy(LegacyBabysitModelPreference::Automatic) => {
+                Self::Automatic
+            }
+            CompatiblePreference::Current(CurrentBabysitModelPreference::Explicit {
+                model_id,
+                reasoning_effort,
+            }) => Self::Explicit {
+                model: model_id,
+                reasoning_effort,
+            },
+            CompatiblePreference::Legacy(LegacyBabysitModelPreference::Explicit {
+                model,
+                reasoning_effort,
+            }) => Self::Explicit {
+                model,
+                reasoning_effort,
+            },
+        })
+    }
+}
+
+/// 经校验的设备级 Application Settings 快照。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApplicationSettings {
+    pub version: u32,
+    pub theme: ThemePreference,
+    pub codex_executable: Option<PathBuf>,
+    pub babysit_model: BabysitModelPreference,
+}
+
+/// 旧 Babysit 文件中唯一可迁移的非敏感偏好。
+#[derive(Deserialize)]
+struct LegacyBabysitSettings {
+    executable: Option<PathBuf>,
+}
+
+impl Default for ApplicationSettings {
+    /// 构造首次启动采用的安全默认设置。
+    fn default() -> Self {
+        Self {
+            version: SETTINGS_VERSION,
+            theme: ThemePreference::System,
+            codex_executable: None,
+            babysit_model: BabysitModelPreference::Automatic,
+        }
+    }
+}
+
+/// Application Settings 读取或持久化失败。
+#[derive(Debug)]
+pub(crate) enum ApplicationSettingsError {
+    Io(std::io::Error),
+    Malformed(serde_json::Error),
+    UnsupportedVersion(u32),
+    InvalidCodexExecutable,
+}
+
+impl fmt::Display for ApplicationSettingsError {
+    /// 将设置失败转换为不泄露文件内容的稳定诊断。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "Application Settings I/O 失败：{error}"),
+            Self::Malformed(error) => write!(formatter, "settings.json 格式无效：{error}"),
+            Self::UnsupportedVersion(version) => {
+                write!(formatter, "不支持 settings.json 版本 {version}")
+            }
+            Self::InvalidCodexExecutable => formatter.write_str(
+                "Codex executable 无效；请在 Application Settings 中重新选择可执行文件",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ApplicationSettingsError {}
+
+/// 设备级 Application Settings 的应用契约。
+#[derive(Clone)]
+pub(crate) struct ApplicationSettingsApplication {
+    settings_path: PathBuf,
+    legacy_babysit_path: PathBuf,
+}
+
+impl ApplicationSettingsApplication {
+    /// 为统一设置文件与一次性旧 Babysit 设置来源建立应用边界。
+    pub(crate) fn new(settings_path: PathBuf, legacy_babysit_path: PathBuf) -> Self {
+        Self {
+            settings_path,
+            legacy_babysit_path,
+        }
+    }
+
+    /// 读取并校验当前设置；缺失文件返回默认值且不产生磁盘写入。
+    pub(crate) fn load(&self) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        match std::fs::read_to_string(&self.settings_path) {
+            Ok(contents) => {
+                let settings = serde_json::from_str::<ApplicationSettings>(&contents)
+                    .map_err(ApplicationSettingsError::Malformed)?;
+                if settings.version != SETTINGS_VERSION {
+                    return Err(ApplicationSettingsError::UnsupportedVersion(
+                        settings.version,
+                    ));
+                }
+                if settings
+                    .codex_executable
+                    .as_ref()
+                    .is_some_and(|path| !path.is_absolute())
+                {
+                    return Err(ApplicationSettingsError::InvalidCodexExecutable);
+                }
+                Ok(settings)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.migrate_legacy(),
+            Err(error) => Err(ApplicationSettingsError::Io(error)),
+        }
+    }
+
+    /// 缺少统一文件时迁移一次旧 executable；无有效旧值仍只返回默认值。
+    fn migrate_legacy(&self) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        let contents = match std::fs::read_to_string(&self.legacy_babysit_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(ApplicationSettings::default());
+            }
+            Err(error) => return Err(ApplicationSettingsError::Io(error)),
+        };
+        let legacy = serde_json::from_str::<LegacyBabysitSettings>(&contents)
+            .map_err(ApplicationSettingsError::Malformed)?;
+        let Some(executable) = legacy.executable else {
+            return Ok(ApplicationSettings::default());
+        };
+        let executable = canonical_codex_file(&executable)?;
+        validate_codex_version_sync(&executable)?;
+        let settings = ApplicationSettings {
+            codex_executable: Some(executable),
+            ..ApplicationSettings::default()
+        };
+        self.persist(&settings)?;
+        Ok(settings)
+    }
+
+    /// 原子保存主题并返回新的权威快照；失败时旧文件保持不变。
+    pub(crate) fn update_theme(
+        &self,
+        theme: ThemePreference,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        let mut settings = self.load()?;
+        settings.theme = theme;
+        self.persist(&settings)?;
+        Ok(settings)
+    }
+
+    /// 原子更新 Codex Executable Preference，并保留同一快照中的其他设置。
+    pub(crate) async fn update_codex_executable(
+        &self,
+        executable: Option<PathBuf>,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        let executable = match executable {
+            Some(path) => Some(validate_codex_executable(&path).await?),
+            None => None,
+        };
+        let mut settings = self.load()?;
+        settings.codex_executable = executable;
+        self.persist(&settings)?;
+        Ok(settings)
+    }
+
+    /// 原子更新 Babysit Model Preference，并保留同一快照中的其他设置。
+    pub(crate) fn update_babysit_model(
+        &self,
+        preference: BabysitModelPreference,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        let mut settings = self.load()?;
+        settings.babysit_model = preference;
+        self.persist(&settings)?;
+        Ok(settings)
+    }
+
+
+    /// 在目标目录写入临时文件并原子替换正式设置文件。
+    fn persist(&self, settings: &ApplicationSettings) -> Result<(), ApplicationSettingsError> {
+        let parent = self.settings_path.parent().ok_or_else(|| {
+            ApplicationSettingsError::Io(std::io::Error::other("设置路径缺少父目录"))
+        })?;
+        std::fs::create_dir_all(parent).map_err(ApplicationSettingsError::Io)?;
+        let payload =
+            serde_json::to_vec_pretty(settings).map_err(ApplicationSettingsError::Malformed)?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(parent).map_err(ApplicationSettingsError::Io)?;
+        temporary
+            .write_all(&payload)
+            .and_then(|_| temporary.as_file().sync_all())
+            .map_err(ApplicationSettingsError::Io)?;
+        temporary
+            .persist(&self.settings_path)
+            .map_err(|error| ApplicationSettingsError::Io(error.error))?;
+        Ok(())
+    }
+}
+
+/// 将用户选择规范化为普通可执行文件，并以有界时间运行版本探测。
+async fn validate_codex_executable(
+    path: &Path,
+) -> Result<PathBuf, ApplicationSettingsError> {
+    let canonical = canonical_codex_file(path)?;
+
+    let mut command = tokio::process::Command::new(&canonical);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    crate::child_process::configure_tokio_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    match status {
+        Ok(Ok(status)) if status.success() => Ok(canonical),
+        Ok(Ok(_)) => Err(ApplicationSettingsError::InvalidCodexExecutable),
+        Ok(Err(_)) | Err(_) => {
+            reap_tokio_child(&mut child).await;
+            Err(ApplicationSettingsError::InvalidCodexExecutable)
+        }
+    }
+}
+
+/// 尽力终止并回收版本探测子进程，避免错误或超时分支遗留进程。
+async fn reap_tokio_child(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+/// 把偏好规范化为当前仍存在的普通可执行文件。
+fn canonical_codex_file(path: &Path) -> Result<PathBuf, ApplicationSettingsError> {
+    if !path.is_absolute() {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    if !metadata.is_file() {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    }
+    Ok(canonical)
+}
+
+/// 在同步启动迁移中有界验证旧偏好，失败时不创建统一设置文件。
+fn validate_codex_version_sync(path: &Path) -> Result<(), ApplicationSettingsError> {
+    let mut command = std::process::Command::new(path);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::child_process::configure_std_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err(ApplicationSettingsError::InvalidCodexExecutable),
+            Err(_) => {
+                reap_std_child(&mut child);
+                return Err(ApplicationSettingsError::InvalidCodexExecutable);
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                reap_std_child(&mut child);
+                return Err(ApplicationSettingsError::InvalidCodexExecutable);
+            }
+        }
+    }
+}
+
+/// 尽力终止并回收同步迁移的版本探测子进程。
+fn reap_std_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(test)]
+#[path = "tests/contract.rs"]
+mod tests;

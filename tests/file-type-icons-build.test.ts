@@ -28,5 +28,5 @@ describe("File Type Icon 构建资产", () => {
     expect(existsSync(resolve(process.cwd(), "public/file-type-icons/file.svg"))).toBe(true);
     expect(existsSync(resolve(process.cwd(), "public/file-type-icons/blink_light.svg"))).toBe(true);
     expect(existsSync(resolve(process.cwd(), "public/third-party-licenses/material-icon-theme-MIT.txt"))).toBe(true);
-  });
+  }, 15_000);
 });

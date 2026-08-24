@@ -5,11 +5,12 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
+use crate::application_settings::ApplicationSettingsApplication;
 use crate::babysit::{BabysitAgentProvider, BabysitError};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::Mutex as AsyncMutex;
 
 /// 用户可见的设置状态；契约不包含最低版本号。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -25,40 +26,27 @@ pub enum CodexRuntimeStatus {
     InitFailed,
 }
 
-/// 持久化应用设置；Review 状态和缓存永远不会接收此路径。
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexSettings {
-    executable: Option<PathBuf>,
+/// 将 Babysit runtime 的 Codex 偏好映射到统一 Application Settings 契约。
+struct ApplicationCodexSettings {
+    application: ApplicationSettingsApplication,
 }
 
-/// 与可执行文件 discovery 分离的文件设置 adapter。
-struct FileCodexSettings {
-    path: PathBuf,
-}
-
-impl FileCodexSettings {
-    /// 读取绝对路径选择；格式错误或相对路径会被忽略。
-    fn load(&self) -> Option<PathBuf> {
-        std::fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|value| serde_json::from_str::<CodexSettings>(&value).ok())
-            .and_then(|settings| settings.executable)
-            .filter(|path| path.is_absolute())
+impl ApplicationCodexSettings {
+    /// 读取权威偏好；配置损坏必须显式失败，不能降级为自动发现。
+    fn load(&self) -> Result<Option<PathBuf>, BabysitError> {
+        self.application
+            .load()
+            .map(|settings| settings.codex_executable)
+            .map_err(|_| BabysitError::CodexExecutableInvalid)
     }
 
-    /// 只持久化选择的可执行文件路径，并在同目录替换文件。
-    fn save(&self, executable: PathBuf) -> Result<(), BabysitError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| BabysitError::CodexInitializationFailed)?;
-        }
-        let payload = serde_json::to_vec(&CodexSettings {
-            executable: Some(executable),
-        })
-        .map_err(|_| BabysitError::CodexInitializationFailed)?;
-        let temporary = self.path.with_extension("tmp");
-        std::fs::write(&temporary, payload)
-            .and_then(|_| std::fs::rename(&temporary, &self.path))
+    /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
+    #[cfg(all(test, unix))]
+    async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
+        self.application
+            .update_codex_executable(executable)
+            .await
+            .map(|settings| settings.codex_executable)
             .map_err(|_| BabysitError::CodexInitializationFailed)
     }
 }
@@ -67,12 +55,71 @@ impl FileCodexSettings {
 pub(crate) struct CodexRuntime {
     provider: Arc<CodexAppServerProvider>,
     discovery: CodexExecutableDiscovery,
-    settings: FileCodexSettings,
+    settings: ApplicationCodexSettings,
     status: Mutex<CodexRuntimeStatus>,
-    flight: AsyncMutex<Option<Arc<Notify>>>,
+    lifecycle: AsyncMutex<()>,
 }
 
 impl CodexRuntime {
+    /// 每次新分析读取权威模型偏好，并用新鲜目录解析实际模型与思考强度。
+    pub(crate) async fn prepare_analysis(
+        &self,
+        workspace_path: &Path,
+    ) -> Result<(super::ResolvedCodexModel, tokio::sync::MutexGuard<'_, ()>), BabysitError> {
+        let lifecycle = self.lifecycle.lock().await;
+        let preference = self
+            .settings
+            .application
+            .load()
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)?
+            .babysit_model;
+        let catalog = self.model_catalog_once().await?;
+        self.ensure_ready_once(workspace_path).await?;
+        let resolved = catalog
+            .resolve(&preference)
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)?;
+        Ok((resolved, lifecycle))
+    }
+
+    /// 无需 Review Workspace 地发现 executable，并读取只依赖 initialize/account 的模型目录。
+    pub(crate) async fn model_catalog(&self) -> Result<super::CodexModelCatalog, BabysitError> {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.model_catalog_once().await
+    }
+
+    /// 在持有 lifecycle 锁时发现 executable 并读取目录。
+    async fn model_catalog_once(&self) -> Result<super::CodexModelCatalog, BabysitError> {
+        let persisted = self.settings.load()?;
+        let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
+        let mut last_error = BabysitError::CodexNotFound;
+        for candidate in candidates {
+            let candidate_path = candidate.path;
+            if self.provider.activate_executable(candidate_path).await? {
+                if let Ok(mut status) = self.status.lock() {
+                    *status = CodexRuntimeStatus::Unknown;
+                }
+            }
+            let generation_before = self.provider.process_generation();
+            match self.provider.model_catalog().await {
+                Ok(catalog) => {
+                    if self.provider.process_generation() != generation_before {
+                        if let Ok(mut status) = self.status.lock() {
+                            *status = CodexRuntimeStatus::Unknown;
+                        }
+                    }
+                    return Ok(catalog);
+                }
+                Err(error) => {
+                    if let Ok(mut status) = self.status.lock() {
+                        *status = status_for_error(&error);
+                    }
+                    last_error = error;
+                }
+            }
+        }
+        Err(last_error)
+    }
+
     /// 构造 idle runtime；此处不执行设置、PATH 或进程 I/O。
     pub(crate) fn new(provider: Arc<CodexAppServerProvider>, settings_path: PathBuf) -> Self {
         Self::new_with_discovery(provider, settings_path, CodexExecutableDiscovery::default())
@@ -87,11 +134,14 @@ impl CodexRuntime {
         Self {
             provider,
             discovery,
-            settings: FileCodexSettings {
-                path: settings_path,
+            settings: ApplicationCodexSettings {
+                application: ApplicationSettingsApplication::new(
+                    settings_path.clone(),
+                    settings_path.with_extension("legacy.json"),
+                ),
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
-            flight: AsyncMutex::new(None),
+            lifecycle: AsyncMutex::new(()),
         }
     }
 
@@ -103,55 +153,50 @@ impl CodexRuntime {
             .unwrap_or(CodexRuntimeStatus::InitFailed)
     }
 
-    /// 并发调用只执行一次探测；后续重试会开启新的 flight。
+    /// 并发调用由 lifecycle 锁串行；已 Ready 的同一进程不重复探测。
+    #[cfg(all(test, unix))]
     pub(crate) async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        loop {
-            let waiter = {
-                let mut flight = self.flight.lock().await;
-                match flight.as_ref() {
-                    Some(waiter) => Some(waiter.clone()),
-                    None => {
-                        if self.status() == CodexRuntimeStatus::Ready {
-                            return Ok(());
-                        }
-                        let waiter = Arc::new(Notify::new());
-                        *flight = Some(waiter.clone());
-                        if let Ok(mut status) = self.status.lock() {
-                            *status = CodexRuntimeStatus::Probing;
-                        }
-                        None
-                    }
-                }
-            };
-
-            if let Some(waiter) = waiter {
-                waiter.notified().await;
-                if self.status() == CodexRuntimeStatus::Probing {
-                    continue;
-                }
-                return status_error(self.status());
-            }
-
-            let result = self.probe_once(workspace_path).await;
-            if let Ok(mut status) = self.status.lock() {
-                *status = result
-                    .as_ref()
-                    .map(|_| CodexRuntimeStatus::Ready)
-                    .unwrap_or_else(|error| status_for_error(error));
-            }
-            let waiter = self.flight.lock().await.take();
-            if let Some(waiter) = waiter {
-                waiter.notify_waiters();
-            }
-            return result;
-        }
+        let _lifecycle = self.lifecycle.lock().await;
+        self.ensure_ready_once(workspace_path).await
     }
 
-    /// 校验并保存 picker 结果；下一次明确启用时重试初始化。
+    /// 在持有 lifecycle 锁时完成一次 readiness 状态转换。
+    async fn ensure_ready_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        if self.status() == CodexRuntimeStatus::Ready {
+            return Ok(());
+        }
+        if let Ok(mut status) = self.status.lock() {
+            *status = CodexRuntimeStatus::Probing;
+        }
+        let result = self.probe_once(workspace_path).await;
+        if let Ok(mut status) = self.status.lock() {
+            *status = result
+                .as_ref()
+                .map(|_| CodexRuntimeStatus::Ready)
+                .unwrap_or_else(|error| status_for_error(error));
+        }
+        result
+    }
+
+    /// 测试中通过生产设置边界准备显式可执行文件偏好。
+    #[cfg(all(test, unix))]
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let resolved = self.discovery.validate_selected(path.to_path_buf()).await?;
-        self.settings.save(resolved.path.clone())?;
-        self.provider.configure_executable(resolved.path).await?;
+        let resolved = self
+            .settings
+            .save(Some(path.to_path_buf()))
+            .await?
+            .ok_or(BabysitError::CodexInitializationFailed)?;
+        self.provider.activate_executable(resolved).await?;
+        if let Ok(mut status) = self.status.lock() {
+            *status = CodexRuntimeStatus::Unknown;
+        }
+        Ok(())
+    }
+
+    /// 测试中清空显式偏好，使下一次分析重新执行自动发现。
+    #[cfg(all(test, unix))]
+    pub(crate) async fn clear_executable(&self) -> Result<(), BabysitError> {
+        self.settings.save(None).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
         }
@@ -160,25 +205,22 @@ impl CodexRuntime {
 
     /// 应用退出时释放 provider 进程，并让下一次显式启用重新完成 discovery。
     pub(crate) async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
         self.provider.shutdown().await;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
-        }
-        if let Some(waiter) = self.flight.lock().await.take() {
-            waiter.notify_waiters();
         }
     }
 
     /// 解析持久化/PATH 候选，配置 #74，并在同一工作区完成握手与能力探针。
     async fn probe_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        let candidates = self
-            .discovery
-            .resolve_all(self.settings.load().as_deref())
-            .await?;
+        let persisted = self.settings.load()?;
+        let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
         let mut last_error = BabysitError::CodexNotFound;
         let mut found_signed_out = false;
         for candidate in candidates {
-            self.provider.configure_executable(candidate.path).await?;
+            let candidate_path = candidate.path;
+            self.provider.activate_executable(candidate_path).await?;
             match self.provider.prepare_process(workspace_path).await {
                 Ok(()) => return Ok(()),
                 Err(BabysitError::CodexSignedOut) => found_signed_out = true,
@@ -189,20 +231,6 @@ impl CodexRuntime {
             Err(BabysitError::CodexSignedOut)
         } else {
             Err(last_error)
-        }
-    }
-}
-
-/// 将完成的探测映射为 Tauri 使用的同一稳定 typed 错误。
-fn status_error(status: CodexRuntimeStatus) -> Result<(), BabysitError> {
-    match status {
-        CodexRuntimeStatus::Ready => Ok(()),
-        CodexRuntimeStatus::Missing => Err(BabysitError::CodexNotFound),
-        CodexRuntimeStatus::SignedOut => Err(BabysitError::CodexSignedOut),
-        CodexRuntimeStatus::Incompatible => Err(BabysitError::CodexIncompatible),
-        CodexRuntimeStatus::InitFailed => Err(BabysitError::CodexInitializationFailed),
-        CodexRuntimeStatus::Unknown | CodexRuntimeStatus::Probing => {
-            Err(BabysitError::CodexInitializationFailed)
         }
     }
 }
@@ -219,6 +247,6 @@ fn status_for_error(error: &BabysitError) -> CodexRuntimeStatus {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../tests/codex/runtime.rs"]
 mod tests;

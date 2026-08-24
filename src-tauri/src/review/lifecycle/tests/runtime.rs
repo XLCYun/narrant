@@ -49,12 +49,19 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
         .unwrap();
     assert!(first_workspace.exists());
     assert!(second_workspace.exists());
-    let worktree_list = git_text(
-        fixture.repository.path(),
-        &["worktree", "list", "--porcelain"],
-    );
-    assert!(worktree_list.contains(&first_workspace.to_string_lossy().to_string()));
-    assert!(worktree_list.contains(&second_workspace.to_string_lossy().to_string()));
+    let git = GitProcessAdapter::new(fixture.repository.path());
+    assert!(git
+        .is_registered_worktree(
+            &first_workspace,
+            OperationContext::background().cancellation()
+        )
+        .unwrap());
+    assert!(git
+        .is_registered_worktree(
+            &second_workspace,
+            OperationContext::background().cancellation()
+        )
+        .unwrap());
 
     let before_duplicate = fixture
         .store
@@ -84,7 +91,10 @@ async fn presenting_multiple_reviews_retains_each_runtime_and_reuses_reader() {
     assert_eq!(before_duplicate, after_duplicate);
 
     let repository_path = fixture.repository.path().to_path_buf();
-    let unavailable_repository = fixture._application_data.path().join("repository-unavailable");
+    let unavailable_repository = fixture
+        ._application_data
+        .path()
+        .join("repository-unavailable");
     std::fs::rename(&repository_path, &unavailable_repository).unwrap();
     let warm_present = lifecycle
         .present(
@@ -341,5 +351,8 @@ async fn branch_refresh_converges_persistence_workspace_and_runtime_reader() {
         )
         .await
         .unwrap();
-    assert_eq!(content.after.as_ref().and_then(FileContent::text), Some("refreshed\n"));
+    assert_eq!(
+        content.after.as_ref().and_then(FileContent::text),
+        Some("refreshed\n")
+    );
 }

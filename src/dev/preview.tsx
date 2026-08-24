@@ -17,6 +17,8 @@ import { i18n } from "@/lib/i18n";
 import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
+import { ApplicationSettingsDestination } from "@/components/settings-page";
+import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -29,6 +31,52 @@ type PreviewDefinition = {
   label: string;
   scenarios: Record<string, PreviewScenario>;
 };
+
+/** 用公开端口提供可交互的主题设置与持久化失败预览。 */
+function SettingsPreview({ saveFails = false, longCodexPath = false, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
+  const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
+  const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
+    ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
+    : null);
+  const application: ApplicationSettingsApplication = {
+    load: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
+    updateTheme: async (theme) => {
+      if (saveFails) throw new Error("预览中的 settings.json 无法写入");
+      setSavedTheme(theme);
+      return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+    },
+    chooseCodexExecutable: async () => {
+      if (saveFails) throw new Error("预览中的 Codex 版本验证失败");
+      const selected = "C:\\Program Files\\Codex\\codex.exe";
+      setCodexExecutable(selected);
+      return { version: 1, theme: savedTheme, codexExecutable: selected, babysitModel: { kind: "automatic" } };
+    },
+    clearCodexExecutable: async () => {
+      setCodexExecutable(null);
+      return { version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+    },
+    listBabysitModels: async () => {
+      if (modelState === "loading") return new Promise(() => undefined);
+      if (modelState === "error") throw { code: "app_server_unavailable", detail: "App Server 暂时无法启动" };
+      if (modelState === "empty") return { revision: "preview-catalog", models: [] };
+      return { revision: "preview-catalog", models: [
+        { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high" },
+        { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
+      ] };
+    },
+    updateBabysitModel: async (babysitModel) => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel }),
+  };
+  const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
+    status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
+    error: githubState === "failed" ? { scope: "github-identity", operation: "sign-out", detail: "凭据存储暂时不可用，请重试。" } : undefined,
+    transition: { kind: "stable" },
+    beginAuthorization: async () => ({ kind: "failed" }),
+    completeAuthorization: async () => ({ kind: "failed" }),
+    signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
+    retry: async () => undefined,
+  } : undefined;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} initialModelEditing={modelState !== "idle"} onBack={() => undefined} />;
+}
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
 function RepositoryTrustPreview({ granting = false }: { granting?: boolean }) {
@@ -282,7 +330,6 @@ function ReviewReaderPreview({
       regenerate: () => undefined,
       cancel: () => undefined,
       retry: () => undefined,
-      selectExecutable: () => undefined,
     },
     view,
     setView,
@@ -314,6 +361,21 @@ function ReviewReaderPreview({
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  settings: {
+    label: "应用设置",
+    scenarios: {
+      default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
+      error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
+      "long-codex-path": { label: "Codex 长路径", render: () => <SettingsPreview longCodexPath /> },
+      "github-signed-in": { label: "GitHub 已登录", render: () => <SettingsPreview githubState="signed-in" /> },
+      "github-confirm": { label: "GitHub 退出确认", render: () => <SettingsPreview githubState="confirm" /> },
+      "github-failed": { label: "GitHub 退出失败", render: () => <SettingsPreview githubState="failed" /> },
+      "model-wide": { label: "模型编辑（宽窗口）", render: () => <SettingsPreview modelState="idle" /> },
+      "model-loading": { label: "模型目录加载", render: () => <SettingsPreview modelState="loading" /> },
+      "model-empty": { label: "模型目录为空", render: () => <SettingsPreview modelState="empty" /> },
+      "model-error": { label: "模型目录失败", render: () => <SettingsPreview modelState="error" /> },
+    },
+  },
   "app-shell": {
     label: "应用框架",
     scenarios: {
