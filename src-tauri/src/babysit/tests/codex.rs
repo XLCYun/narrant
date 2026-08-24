@@ -7,6 +7,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
+/// 断言 Codex adapter 通过共享的 installed-provider setup 契约返回指定失败类别。
+fn assert_codex_setup_failure(error: &BabysitError, expected: BabysitProviderSetupFailure) {
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup { provider_id, failure }
+            if provider_id == "codex-app-server" && *failure == expected
+    ));
+}
+
 /// 构造一个只含 before/after 第 1 行的 provider 请求，便于 fixture 保持确定性。
 fn request() -> BabysitProviderRequest {
     BabysitProviderRequest {
@@ -237,15 +246,19 @@ async fn thread_list_capability_probe_returns_upgrade_recovery_category() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert!(matches!(
+        &error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::Incompatible }
+            if provider_id == "codex-app-server"
+    ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
         payload.code,
-        crate::babysit::BabysitErrorCode::CodexIncompatible
+        crate::babysit::BabysitErrorCode::ProviderIncompatible
     );
     assert_eq!(
         payload.recovery,
-        Some(crate::babysit::BabysitRecoveryAction::UpgradeCodex)
+        Some(crate::babysit::BabysitRecoveryAction::UpgradeProvider)
     );
     assert!(!payload.detail.contains("/tmp"));
 }
@@ -260,7 +273,11 @@ async fn initialize_transport_failure_returns_retry_recovery_category() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexInitializationFailed));
+    assert!(matches!(
+        &error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::InitializationFailed }
+            if provider_id == "codex-app-server"
+    ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
         payload.recovery,
@@ -278,15 +295,19 @@ async fn app_server_auth_failure_returns_login_recovery_category() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexSignedOut));
+    assert!(matches!(
+        &error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::SignedOut }
+            if provider_id == "codex-app-server"
+    ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
         payload.code,
-        crate::babysit::BabysitErrorCode::CodexSignedOut
+        crate::babysit::BabysitErrorCode::ProviderSignedOut
     );
     assert_eq!(
         payload.recovery,
-        Some(crate::babysit::BabysitRecoveryAction::LoginCodex)
+        Some(crate::babysit::BabysitRecoveryAction::LoginProvider)
     );
 }
 
@@ -300,7 +321,11 @@ async fn malformed_initialize_response_returns_retry_recovery_category() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexInitializationFailed));
+    assert!(matches!(
+        &error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::InitializationFailed }
+            if provider_id == "codex-app-server"
+    ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
         payload.recovery,
@@ -351,7 +376,7 @@ async fn missing_interrupt_is_incompatible_but_probe_thread_is_deleted() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_codex_setup_failure(&error, BabysitProviderSetupFailure::Incompatible);
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
     assert!(events.lines().any(|line| line == "turn/interrupt:sentinel"));
@@ -368,7 +393,7 @@ async fn missing_delete_is_incompatible_after_the_probe_turn() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_codex_setup_failure(&error, BabysitProviderSetupFailure::Incompatible);
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "turn/start:sentinel"));
     assert!(events.lines().any(|line| line == "turn/interrupt:sentinel"));
@@ -386,7 +411,7 @@ async fn rejected_output_schema_is_incompatible_without_source_call() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_codex_setup_failure(&error, BabysitProviderSetupFailure::Incompatible);
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));
     assert!(events.lines().any(|line| line == "turn/start:sentinel"));
@@ -404,7 +429,7 @@ async fn rejected_permission_profile_is_incompatible_before_turn() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_codex_setup_failure(&error, BabysitProviderSetupFailure::Incompatible);
     let events = std::fs::read_to_string(events).unwrap();
     assert!(!events.lines().any(|line| line == "turn/start:sentinel"));
     assert!(!events.lines().any(|line| line == "turn/start:real"));
@@ -421,7 +446,7 @@ async fn restricted_policy_probe_returns_upgrade_recovery_category() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_codex_setup_failure(&error, BabysitProviderSetupFailure::Incompatible);
 }
 
 #[tokio::test]
@@ -695,7 +720,7 @@ async fn insecure_thread_policy_fails_closed_before_starting_a_turn() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexIncompatible));
+    assert_codex_setup_failure(&error, BabysitProviderSetupFailure::Incompatible);
     let events = std::fs::read_to_string(events).unwrap();
     assert!(!events.lines().any(|line| line == "turn/start"));
     assert!(events.lines().any(|line| line == "thread/delete:thread-1"));

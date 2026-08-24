@@ -55,8 +55,13 @@ impl ClaudeCodeProvider {
         events: PathBuf,
         timeout: Duration,
     ) -> Self {
+        let program = if cfg!(windows) {
+            PathBuf::from(r"C:\Program Files\Git\bin\sh.exe")
+        } else {
+            PathBuf::from("sh")
+        };
         Self {
-            program: Mutex::new(PathBuf::from("sh")),
+            program: Mutex::new(program),
             prefix_args: vec![
                 fixture.into_os_string(),
                 scenario.into(),
@@ -92,8 +97,6 @@ impl ClaudeCodeProvider {
             .arg("--no-session-persistence")
             .arg("--output-format")
             .arg("json")
-            .arg("--json-schema")
-            .arg(schema.to_string())
             .arg("--safe-mode")
             .arg("--permission-mode")
             .arg("dontAsk")
@@ -105,6 +108,8 @@ impl ClaudeCodeProvider {
             .arg("sonnet")
             .arg("--effort")
             .arg("low")
+            .arg("--json-schema")
+            .arg(schema.to_string())
             .current_dir(&request.workspace_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -7,6 +7,15 @@ use crate::operation::TestCancellation;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// 断言事件日志中某个 CLI flag 后紧跟指定值，并兼容平台换行符。
+fn assert_flag_value(events: &str, flag: &str, value: &str) {
+    let lines: Vec<_> = events.lines().collect();
+    assert!(
+        lines.windows(2).any(|pair| pair == [flag, value]),
+        "expected {flag} followed by {value}; events={lines:?}"
+    );
+}
+
 /// 构造同时包含 before/after 目标的 provider 请求。
 fn request(workspace_path: String) -> BabysitProviderRequest {
     BabysitProviderRequest {
@@ -27,6 +36,8 @@ fn request(workspace_path: String) -> BabysitProviderRequest {
                 source: "let next = 2;".to_owned(),
             },
         ],
+        model: "sonnet".to_owned(),
+        reasoning_effort: "low".to_owned(),
     }
 }
 
@@ -51,12 +62,12 @@ async fn structured_output_uses_non_persistent_read_only_claude_process() {
     assert_eq!(output.after["1"], "新值初始化");
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.contains("--no-session-persistence"));
-    assert!(events.contains("--model\nsonnet"));
-    assert!(events.contains("--effort\nlow"));
+    assert_flag_value(&events, "--model", "sonnet");
+    assert_flag_value(&events, "--effort", "low");
     assert!(events.contains("--safe-mode"));
-    assert!(events.contains("--tools\nRead,Glob,Grep"));
-    assert!(events.contains("--disallowedTools\nBash,Write,Edit,Web,mcp__*"));
-    assert!(events.contains("--permission-mode\ndontAsk"));
+    assert_flag_value(&events, "--tools", "Read,Glob,Grep");
+    assert_flag_value(&events, "--disallowedTools", "Bash,Write,Edit,Web,mcp__*");
+    assert_flag_value(&events, "--permission-mode", "dontAsk");
     assert!(!events.contains("--resume"));
 }
 

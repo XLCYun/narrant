@@ -346,7 +346,11 @@ async fn invalid_explicit_executable_does_not_fall_back() {
         .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
         .await;
 
-    assert!(matches!(result, Err(BabysitError::CodexExecutableInvalid)));
+    assert!(matches!(
+        result,
+        Err(BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid })
+            if provider_id == "codex-app-server"
+    ));
     assert!(!fallback_events.exists());
 }
 
@@ -388,15 +392,24 @@ async fn clearing_explicit_executable_restores_automatic_discovery() {
 #[test]
 fn runtime_maps_setup_failures_to_typed_states() {
     assert_eq!(
-        status_for_error(&BabysitError::CodexNotFound),
+        status_for_error(&BabysitError::provider_setup(
+            "codex-app-server",
+            BabysitProviderSetupFailure::NotFound,
+        )),
         CodexRuntimeStatus::Missing
     );
     assert_eq!(
-        status_for_error(&BabysitError::CodexSignedOut),
+        status_for_error(&BabysitError::provider_setup(
+            "codex-app-server",
+            BabysitProviderSetupFailure::SignedOut,
+        )),
         CodexRuntimeStatus::SignedOut
     );
     assert_eq!(
-        status_for_error(&BabysitError::CodexIncompatible),
+        status_for_error(&BabysitError::provider_setup(
+            "codex-app-server",
+            BabysitProviderSetupFailure::Incompatible,
+        )),
         CodexRuntimeStatus::Incompatible
     );
     assert_eq!(

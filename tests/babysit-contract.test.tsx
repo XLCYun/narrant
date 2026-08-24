@@ -78,9 +78,11 @@ describe("Babysit contract spine", () => {
     expect(isBabysitError({
       code: "provider_not_found",
       detail: "missing",
-      providerId: "claude-code",
+      providerId: "claude_code",
       recovery: "select_provider_executable",
     })).toBe(true);
+    expect(isBabysitError({ code: "model_preference_invalid", detail: "open settings" })).toBe(true);
+    expect(isBabysitError({ code: "settings_persistence_failed", detail: "unchanged" })).toBe(true);
     expect(isBabysitError({
       code: "provider_not_found",
       detail: "missing",

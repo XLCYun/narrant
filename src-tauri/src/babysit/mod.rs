@@ -31,6 +31,8 @@ pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
 pub const MAX_EXPLANATION_CHARS: usize = 240;
 /// 同一个 provider 输出失败后允许的最大修复次数。
 pub const MAX_REPAIR_ATTEMPTS: u8 = 3;
+/// Codex App Server 在 provider-independent 错误契约中的稳定 identity。
+const CODEX_PROVIDER_ID: &str = "codex-app-server";
 
 /// Installed provider 初始化失败的 provider-independent 分类。
 ///
@@ -305,16 +307,6 @@ pub enum BabysitError {
         provider_id: String,
         failure: BabysitProviderSetupFailure,
     },
-    /// 未找到可用的 Codex 可执行文件，需要安装或重新选择。
-    CodexNotFound,
-    /// 用户选择的 Codex 路径无法通过 `codex --version` 验证。
-    CodexExecutableInvalid,
-    /// Codex App Server 要求登录，但 Narrant 不会代替用户执行登录。
-    CodexSignedOut,
-    /// App Server 缺少 Babysit 所需的稳定能力。
-    CodexIncompatible,
-    /// App Server 初始化或握手失败。
-    CodexInitializationFailed,
     /// 保存的模型或思考强度不再被动态目录支持，需要修改设置。
     ModelPreferenceInvalid,
     /// 模型偏好已通过能力验证，但统一设置文件无法原子保存。
@@ -337,11 +329,6 @@ impl BabysitError {
     pub fn provider_id(&self) -> Option<&str> {
         match self {
             Self::ProviderSetup { provider_id, .. } => Some(provider_id),
-            Self::CodexNotFound
-            | Self::CodexExecutableInvalid
-            | Self::CodexSignedOut
-            | Self::CodexIncompatible
-            | Self::CodexInitializationFailed => Some("codex-app-server"),
             _ => None,
         }
     }
@@ -367,11 +354,6 @@ pub enum BabysitErrorCode {
     ProviderSignedOut,
     ProviderIncompatible,
     ProviderInitializationFailed,
-    CodexNotFound,
-    CodexExecutableInvalid,
-    CodexSignedOut,
-    CodexIncompatible,
-    CodexInitializationFailed,
     ModelPreferenceInvalid,
     SettingsPersistenceFailed,
 }
@@ -383,8 +365,6 @@ pub enum BabysitRecoveryAction {
     LoginProvider,
     UpgradeProvider,
     SelectProviderExecutable,
-    LoginCodex,
-    UpgradeCodex,
     Retry,
 }
 
@@ -442,20 +422,14 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::ProgressClosed => BabysitErrorCode::ProgressClosed,
             BabysitError::CacheUnavailable => BabysitErrorCode::CacheUnavailable,
             BabysitError::ProviderSetup { failure, .. } => setup_error_code(*failure),
-            BabysitError::CodexNotFound => BabysitErrorCode::CodexNotFound,
-            BabysitError::CodexExecutableInvalid => BabysitErrorCode::CodexExecutableInvalid,
-            BabysitError::CodexSignedOut => BabysitErrorCode::CodexSignedOut,
-            BabysitError::CodexIncompatible => BabysitErrorCode::CodexIncompatible,
-            BabysitError::CodexInitializationFailed => BabysitErrorCode::CodexInitializationFailed,
             BabysitError::ModelPreferenceInvalid => BabysitErrorCode::ModelPreferenceInvalid,
             BabysitError::SettingsPersistenceFailed => BabysitErrorCode::SettingsPersistenceFailed,
         };
         let recovery = match &error {
-            BabysitError::ProviderSetup { failure, .. } => setup_recovery_action(*failure),
-            BabysitError::CodexNotFound | BabysitError::CodexExecutableInvalid => None,
-            BabysitError::CodexSignedOut => Some(BabysitRecoveryAction::LoginCodex),
-            BabysitError::CodexIncompatible => Some(BabysitRecoveryAction::UpgradeCodex),
-            BabysitError::CodexInitializationFailed => Some(BabysitRecoveryAction::Retry),
+            BabysitError::ProviderSetup {
+                provider_id,
+                failure,
+            } => setup_recovery_action(provider_id, *failure),
             BabysitError::ModelPreferenceInvalid => None,
             BabysitError::SettingsPersistenceFailed => None,
             BabysitError::RepairExhausted { .. }
@@ -508,11 +482,6 @@ impl fmt::Display for BabysitError {
                     write!(formatter, "{provider_id} provider 初始化失败")
                 }
             },
-            Self::CodexNotFound => formatter.write_str("未找到 Codex 可执行文件"),
-            Self::CodexExecutableInvalid => formatter.write_str("选择的 Codex 可执行文件不可用"),
-            Self::CodexSignedOut => formatter.write_str("Codex 尚未登录"),
-            Self::CodexIncompatible => formatter.write_str("Codex App Server 缺少宝宝模式所需能力"),
-            Self::CodexInitializationFailed => formatter.write_str("Codex App Server 初始化失败"),
             Self::ModelPreferenceInvalid => formatter
                 .write_str("宝宝模式模型或思考强度已不可用；请在 Application Settings 中修改设置"),
             Self::SettingsPersistenceFailed => {
@@ -538,7 +507,18 @@ fn setup_error_code(failure: BabysitProviderSetupFailure) -> BabysitErrorCode {
 }
 
 /// 将通用 setup failure 映射成带 provider identity 的恢复动作。
-fn setup_recovery_action(failure: BabysitProviderSetupFailure) -> Option<BabysitRecoveryAction> {
+fn setup_recovery_action(
+    provider_id: &str,
+    failure: BabysitProviderSetupFailure,
+) -> Option<BabysitRecoveryAction> {
+    if provider_id == CODEX_PROVIDER_ID
+        && matches!(
+            failure,
+            BabysitProviderSetupFailure::NotFound | BabysitProviderSetupFailure::ExecutableInvalid
+        )
+    {
+        return None;
+    }
     Some(match failure {
         BabysitProviderSetupFailure::NotFound | BabysitProviderSetupFailure::ExecutableInvalid => {
             BabysitRecoveryAction::SelectProviderExecutable
@@ -654,6 +634,11 @@ pub struct BabysitApplication {
     model_catalogs: Mutex<VecDeque<(String, codex::CodexModelCatalog)>>,
     next_model_catalog_revision: AtomicU64,
     cache: Mutex<HashMap<CacheKey, BabysitFileExplanations>>,
+}
+
+/// 构造 Codex App Server 的 provider-independent setup failure。
+fn codex_setup_error(failure: BabysitProviderSetupFailure) -> BabysitError {
+    BabysitError::provider_setup(CODEX_PROVIDER_ID, failure)
 }
 
 impl BabysitApplication {

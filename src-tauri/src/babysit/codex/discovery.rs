@@ -3,7 +3,7 @@
 //! 发现 seam 只负责解析和校验可执行文件。持久化设置由 `runtime.rs` 单独拥有，
 //! App Server 协议和进程生命周期仍由 provider 负责，避免路径进入 Review 状态和诊断。
 
-use crate::babysit::BabysitError;
+use crate::babysit::{codex_setup_error, BabysitError, BabysitProviderSetupFailure};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -59,7 +59,7 @@ impl CodexExecutableDiscovery {
             }
         }
         if resolved.is_empty() {
-            Err(BabysitError::CodexNotFound)
+            Err(codex_setup_error(BabysitProviderSetupFailure::NotFound))
         } else {
             Ok(resolved)
         }
@@ -92,7 +92,8 @@ impl CodexExecutableDiscovery {
         &self,
         path: PathBuf,
     ) -> Result<ResolvedExecutable, BabysitError> {
-        let path = canonical_executable(&path).ok_or(BabysitError::CodexExecutableInvalid)?;
+        let path = canonical_executable(&path)
+            .ok_or_else(|| codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid))?;
         self.validate(path, true).await
     }
 
@@ -137,9 +138,9 @@ impl CodexExecutableDiscovery {
         let Ok(mut child) = child else {
             return (
                 Err(if selected {
-                    BabysitError::CodexExecutableInvalid
+                    codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid)
                 } else {
-                    BabysitError::CodexNotFound
+                    codex_setup_error(BabysitProviderSetupFailure::NotFound)
                 }),
                 true,
             );
@@ -148,9 +149,9 @@ impl CodexExecutableDiscovery {
             let reaped = kill_and_reap_child(&mut child).await;
             return (
                 Err(if selected {
-                    BabysitError::CodexExecutableInvalid
+                    codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid)
                 } else {
-                    BabysitError::CodexNotFound
+                    codex_setup_error(BabysitProviderSetupFailure::NotFound)
                 }),
                 reaped,
             );
@@ -159,9 +160,9 @@ impl CodexExecutableDiscovery {
             let reaped = kill_and_reap_child(&mut child).await;
             return (
                 Err(if selected {
-                    BabysitError::CodexExecutableInvalid
+                    codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid)
                 } else {
-                    BabysitError::CodexNotFound
+                    codex_setup_error(BabysitProviderSetupFailure::NotFound)
                 }),
                 reaped,
             );
@@ -176,9 +177,9 @@ impl CodexExecutableDiscovery {
                 let reaped = probe.reaped;
                 return (
                     Err(if selected {
-                        BabysitError::CodexExecutableInvalid
+                        codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid)
                     } else {
-                        BabysitError::CodexNotFound
+                        codex_setup_error(BabysitProviderSetupFailure::NotFound)
                     }),
                     reaped,
                 );
@@ -187,9 +188,9 @@ impl CodexExecutableDiscovery {
         if !status.success() {
             return (
                 Err(if selected {
-                    BabysitError::CodexExecutableInvalid
+                    codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid)
                 } else {
-                    BabysitError::CodexNotFound
+                    codex_setup_error(BabysitProviderSetupFailure::NotFound)
                 }),
                 probe.reaped,
             );
@@ -210,9 +211,9 @@ impl CodexExecutableDiscovery {
             None => {
                 return (
                     Err(if selected {
-                        BabysitError::CodexExecutableInvalid
+                        codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid)
                     } else {
-                        BabysitError::CodexNotFound
+                        codex_setup_error(BabysitProviderSetupFailure::NotFound)
                     }),
                     probe.reaped,
                 )

@@ -42,6 +42,12 @@ case "$scenario" in
     printf '%s\n' "private-stderr-sentinel:$PWD" >&2
     exit 23
     ;;
+  partial_then_hang)
+    printf '%s\n' '{"type":"result","structured_output":'
+    sleep 30 &
+    printf '%s\n' "child:$!" >> "$events"
+    wait
+    ;;
   hang)
     sleep 30 &
     printf '%s\n' "child:$!" >> "$events"
