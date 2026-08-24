@@ -9,12 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitProvider, BabysitProviderPreference, BabysitSettings, ThemePreference } from "@/settings/application-settings";
+import type { SettingsSection } from "@/settings/settings-section";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
 import { cn } from "@/lib/utils";
 
-type Section = "appearance" | "github" | "babysit";
-
-const sections: Array<{ id: Section; label: string }> = [
+const sections: Array<{ id: SettingsSection; label: string }> = [
   { id: "appearance", label: "外观" },
   { id: "github", label: "GitHub" },
   { id: "babysit", label: "宝宝模式" },
@@ -27,8 +26,8 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
-  const [section, setSection] = useState<Section>(initialSection);
+export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-6xl py-4 sm:py-8">
     <header className="mb-6 flex items-center gap-3">
       <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}><Icon icon={ArrowLeft02Icon} /></Button>
@@ -59,7 +58,7 @@ export function SettingsPage({ theme, application, githubIdentity, initialSectio
 }
 
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
-export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
   return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
 }

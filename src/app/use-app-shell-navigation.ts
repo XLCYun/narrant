@@ -5,10 +5,9 @@ import type { RepositoryOverview, RepositorySummary } from "@/repository/reposit
 import type { RepositoryOverviewBinding } from "@/repository/use-repository-overview";
 import { knownReviewId, type ReviewOpenTarget } from "@/review/review-application";
 import type { ReviewLifecycleBinding, ReviewReaderBinding } from "@/review/use-review-lifecycle";
+import type { SettingsSection } from "@/settings/settings-section";
 
 export type RepositoryTab = "pull-requests" | "branches" | "history";
-/** 设置目的地可直接打开的稳定分区。 */
-export type SettingsSection = "appearance" | "github" | "babysit";
 
 export type AppDestination =
   | { kind: "home" }
