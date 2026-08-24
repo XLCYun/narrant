@@ -688,7 +688,12 @@ impl BabysitApplication {
                 BabysitProviderSetupFailure::NotFound,
             ));
         }
-        runtime.select_executable(path).await
+        runtime.select_executable(path).await?;
+        self.cache
+            .lock()
+            .map_err(|_| BabysitError::CacheUnavailable)?
+            .clear();
+        Ok(())
     }
 
     /// 兼容现有 Codex command；新 provider 通过 `select_provider_executable` 接入。

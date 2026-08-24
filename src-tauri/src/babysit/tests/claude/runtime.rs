@@ -81,18 +81,32 @@ async fn successful_auth_command_without_logged_in_true_is_signed_out() {
 async fn any_missing_required_help_flag_is_incompatible() {
     let (runtime, _directory, events) = runtime(&["missing-flag"]);
 
-    let error = runtime.ensure_ready(std::path::Path::new(".")).await.expect_err("all six flags are required");
+    let error = runtime
+        .ensure_ready(std::path::Path::new("."))
+        .await
+        .expect_err("all six flags are required");
 
-    assert!(matches!(error, BabysitError::ProviderSetup { failure: BabysitProviderSetupFailure::Incompatible, .. }));
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup {
+            failure: BabysitProviderSetupFailure::Incompatible,
+            ..
+        }
+    ));
     assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::Incompatible);
-    assert!(!std::fs::read_to_string(events).expect("read events").contains("auth status"));
+    assert!(!std::fs::read_to_string(events)
+        .expect("read events")
+        .contains("auth status"));
 }
 
 #[tokio::test]
 async fn malformed_auth_status_is_redacted_initialization_failure() {
     let (runtime, _directory, _events) = runtime(&["malformed-auth"]);
 
-    let error = runtime.ensure_ready(std::path::Path::new("C:/private/repository")).await.expect_err("missing loggedIn field must fail closed");
+    let error = runtime
+        .ensure_ready(std::path::Path::new("C:/private/repository"))
+        .await
+        .expect_err("missing loggedIn field must fail closed");
     let payload = BabysitErrorPayload::from(error);
 
     assert_eq!(payload.code, BabysitErrorCode::ProviderInitializationFailed);
@@ -116,11 +130,92 @@ async fn unavailable_candidates_are_classified_as_missing_without_leaking_paths(
     assert!(!payload.detail.contains("private"));
 }
 
+#[tokio::test]
+async fn every_probe_step_has_a_bounded_timeout() {
+    for scenario in ["hang-version", "hang-help", "hang-auth"] {
+        let (runtime, _directory, _events) = runtime(&[scenario]);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            runtime.ensure_ready(std::path::Path::new(".")),
+        )
+        .await;
+        assert!(result.is_ok(), "{scenario} probe exceeded its step timeout");
+        assert!(result.unwrap().is_err());
+    }
+}
+
+#[tokio::test]
+async fn actionable_candidate_error_is_not_shadowed_by_later_missing_candidate() {
+    for (scenarios, expected) in [
+        (
+            vec!["signed-out", "invalid"],
+            BabysitProviderSetupFailure::SignedOut,
+        ),
+        (
+            vec!["incompatible", "invalid"],
+            BabysitProviderSetupFailure::Incompatible,
+        ),
+        (
+            vec!["initialization-failed", "invalid"],
+            BabysitProviderSetupFailure::InitializationFailed,
+        ),
+    ] {
+        let (runtime, _directory, _events) = runtime(&scenarios);
+        let error = runtime
+            .ensure_ready(std::path::Path::new("."))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, BabysitError::ProviderSetup { failure, .. } if failure == expected)
+        );
+    }
+}
+
+#[tokio::test]
+async fn signed_out_precedes_incompatible_and_initialization_failure() {
+    let (runtime, _directory, _events) =
+        runtime(&["initialization-failed", "incompatible", "signed-out"]);
+    let error = runtime
+        .ensure_ready(std::path::Path::new("."))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup {
+            failure: BabysitProviderSetupFailure::SignedOut,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn incompatible_precedes_initialization_failure() {
+    let (runtime, _directory, _events) = runtime(&["initialization-failed", "incompatible"]);
+    let error = runtime
+        .ensure_ready(std::path::Path::new("."))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup {
+            failure: BabysitProviderSetupFailure::Incompatible,
+            ..
+        }
+    ));
+}
+
 #[test]
 fn bare_path_is_preferred_before_selected_and_environment_fallbacks() {
     assert_eq!(
-        candidate_paths(Some("selected-claude".into()), Some("environment-claude".into())),
-        vec![std::path::PathBuf::from("claude"), std::path::PathBuf::from("selected-claude"), std::path::PathBuf::from("environment-claude")],
+        candidate_paths(
+            Some("selected-claude".into()),
+            Some("environment-claude".into())
+        ),
+        vec![
+            std::path::PathBuf::from("claude"),
+            std::path::PathBuf::from("selected-claude"),
+            std::path::PathBuf::from("environment-claude")
+        ],
     );
 }
 
@@ -128,6 +223,20 @@ fn bare_path_is_preferred_before_selected_and_environment_fallbacks() {
 fn duplicate_fallbacks_are_not_probed_twice() {
     assert_eq!(
         candidate_paths(Some("claude".into()), Some("selected-claude".into())),
-        vec![std::path::PathBuf::from("claude"), std::path::PathBuf::from("selected-claude")],
+        vec![
+            std::path::PathBuf::from("claude"),
+            std::path::PathBuf::from("selected-claude")
+        ],
+    );
+}
+
+#[test]
+fn non_adjacent_duplicate_fallbacks_are_not_probed_twice() {
+    assert_eq!(
+        candidate_paths(Some("selected-claude".into()), Some("claude".into())),
+        vec![
+            std::path::PathBuf::from("claude"),
+            std::path::PathBuf::from("selected-claude")
+        ],
     );
 }

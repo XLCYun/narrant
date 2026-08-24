@@ -10,9 +10,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::process::Command;
 
 const PROVIDER_ID: &str = "claude_code";
+#[cfg(not(test))]
+const PROBE_STEP_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const PROBE_STEP_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Claude Code runtime；状态与 executable 设置均由 application 生命周期统一拥有。
 pub(crate) struct ClaudeRuntime {
@@ -78,10 +83,14 @@ impl ClaudeRuntime {
         if let Some(candidates) = &self.candidates_override {
             return candidates.clone();
         }
-        let selected = std::fs::read_to_string(&self.settings_path).ok()
+        let selected = std::fs::read_to_string(&self.settings_path)
+            .ok()
             .and_then(|value| serde_json::from_str::<ClaudeSettings>(&value).ok())
             .map(|settings| settings.executable);
-        let paths = candidate_paths(selected, std::env::var_os("CLAUDE_CODE_EXECUTABLE").map(PathBuf::from));
+        let paths = candidate_paths(
+            selected,
+            std::env::var_os("CLAUDE_CODE_EXECUTABLE").map(PathBuf::from),
+        );
         paths
             .into_iter()
             .map(|program| ClaudeCandidate {
@@ -93,28 +102,48 @@ impl ClaudeRuntime {
 
     /// 仅用本地元数据命令验证版本、所需 flags 与认证，不触发付费模型请求。
     async fn probe(candidate: &ClaudeCandidate, workspace_path: &Path) -> Result<(), BabysitError> {
-        let version = Command::new(&candidate.program)
+        let mut version_command = Command::new(&candidate.program);
+        version_command
             .args(&candidate.prefix_args)
             .arg("--version")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .await;
+            .kill_on_drop(true);
+        crate::child_process::configure_tokio_command(&mut version_command);
+        let version = tokio::time::timeout(PROBE_STEP_TIMEOUT, version_command.status()).await;
+        let version = match version {
+            Ok(result) => result,
+            Err(_) => {
+                return Err(BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::ExecutableInvalid,
+                ))
+            }
+        };
         if !matches!(version, Ok(status) if status.success()) {
             return Err(BabysitError::provider_setup(
                 PROVIDER_ID,
                 BabysitProviderSetupFailure::ExecutableInvalid,
             ));
         }
-        let help = Command::new(&candidate.program)
+        let mut help_command = Command::new(&candidate.program);
+        help_command
             .args(&candidate.prefix_args)
             .arg("--help")
             .current_dir(workspace_path)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
-            .output()
+            .kill_on_drop(true);
+        crate::child_process::configure_tokio_command(&mut help_command);
+        let help = tokio::time::timeout(PROBE_STEP_TIMEOUT, help_command.output())
             .await
+            .map_err(|_| {
+                BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )
+            })?
             .map_err(|_| {
                 BabysitError::provider_setup(
                     PROVIDER_ID,
@@ -139,14 +168,23 @@ impl ClaudeRuntime {
                 BabysitProviderSetupFailure::Incompatible,
             ));
         }
-        let auth = Command::new(&candidate.program)
+        let mut auth_command = Command::new(&candidate.program);
+        auth_command
             .args(&candidate.prefix_args)
             .args(["auth", "status", "--json"])
             .current_dir(workspace_path)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
-            .output()
+            .kill_on_drop(true);
+        crate::child_process::configure_tokio_command(&mut auth_command);
+        let auth = tokio::time::timeout(PROBE_STEP_TIMEOUT, auth_command.output())
             .await
+            .map_err(|_| {
+                BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )
+            })?
             .map_err(|_| {
                 BabysitError::provider_setup(
                     PROVIDER_ID,
@@ -164,8 +202,14 @@ impl ClaudeRuntime {
                 .and_then(|value| value.get("loggedIn").and_then(serde_json::Value::as_bool))
             {
                 Some(true) => Ok(()),
-                Some(false) => Err(BabysitError::provider_setup(PROVIDER_ID, BabysitProviderSetupFailure::SignedOut)),
-                None => Err(BabysitError::provider_setup(PROVIDER_ID, BabysitProviderSetupFailure::InitializationFailed)),
+                Some(false) => Err(BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::SignedOut,
+                )),
+                None => Err(BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )),
             }
         }
     }
@@ -183,8 +227,37 @@ fn candidate_paths(selected: Option<PathBuf>, environment: Option<PathBuf>) -> V
     let mut paths = vec![PathBuf::from("claude")];
     paths.extend(selected);
     paths.extend(environment);
-    paths.dedup();
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
     paths
+}
+
+/// 按用户可操作性聚合候选错误，避免后续缺失项遮蔽更明确的诊断。
+fn preferred_error(current: BabysitError, candidate: BabysitError) -> BabysitError {
+    if setup_error_priority(&candidate) > setup_error_priority(&current) {
+        candidate
+    } else {
+        current
+    }
+}
+
+/// SignedOut 最明确；Incompatible 比瞬时初始化失败更可操作，缺失类最低。
+fn setup_error_priority(error: &BabysitError) -> u8 {
+    match error {
+        BabysitError::ProviderSetup {
+            failure: BabysitProviderSetupFailure::SignedOut,
+            ..
+        } => 4,
+        BabysitError::ProviderSetup {
+            failure: BabysitProviderSetupFailure::Incompatible,
+            ..
+        } => 3,
+        BabysitError::ProviderSetup {
+            failure: BabysitProviderSetupFailure::InitializationFailed,
+            ..
+        } => 2,
+        _ => 1,
+    }
 }
 
 #[async_trait]
@@ -217,7 +290,7 @@ impl InstalledProviderRuntime for ClaudeRuntime {
                     self.set_status(BabysitProviderRuntimeStatus::Ready);
                     return Ok(());
                 }
-                Err(error) => last = error,
+                Err(error) => last = preferred_error(last, error),
             }
         }
         let status = match &last {
