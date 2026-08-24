@@ -21,6 +21,8 @@ pub use codex::CodexAppServerProvider;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BabysitModelCatalog {
+    /// 目录所属的稳定 provider ID，避免 revision 跨 provider 误用。
+    pub provider: crate::application_settings::BabysitProvider,
     pub revision: String,
     pub models: Vec<codex::CodexModelCapability>,
 }
@@ -704,6 +706,7 @@ impl BabysitApplication {
         );
         self.remember_model_catalog(revision.clone(), catalog.clone())?;
         Ok(BabysitModelCatalog {
+            provider: crate::application_settings::BabysitProvider::Codex,
             revision,
             models: catalog.models,
         })

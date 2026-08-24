@@ -5,7 +5,9 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
-use crate::application_settings::ApplicationSettingsApplication;
+use crate::application_settings::{
+    ApplicationSettingsApplication, BabysitModelPreference, BabysitProvider,
+};
 use crate::babysit::{
     codex_setup_error, BabysitAgentProvider, BabysitError, BabysitProviderRuntimeStatus,
     BabysitProviderSetupFailure, InstalledProviderRuntime, CODEX_PROVIDER_ID,
@@ -39,16 +41,22 @@ impl ApplicationCodexSettings {
     fn load(&self) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .load()
-            .map(|settings| settings.codex_executable)
+            .map(|settings| settings.babysit.codex.executable)
             .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid))
     }
 
     /// 通过统一 Application Settings 边界保存 executable 偏好。
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
+        let mut preference = self
+            .application
+            .load()
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?
+            .babysit
+            .codex;
+        preference.executable = executable;
         self.application
-            .update_codex_executable(executable)
-            .await
-            .map(|settings| settings.codex_executable)
+            .update_provider_settings(BabysitProvider::Codex, preference)
+            .map(|settings| settings.babysit.codex.executable)
             .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))
     }
 }
@@ -74,7 +82,9 @@ impl CodexRuntime {
             .application
             .load()
             .map_err(|_| BabysitError::ModelPreferenceInvalid)?
-            .babysit_model;
+            .babysit
+            .codex;
+        let preference = BabysitModelPreference::from(&preference);
         let catalog = self.model_catalog_once().await?;
         self.ensure_ready_once(workspace_path).await?;
         let resolved = catalog
@@ -137,10 +147,7 @@ impl CodexRuntime {
             provider,
             discovery,
             settings: ApplicationCodexSettings {
-                application: ApplicationSettingsApplication::new(
-                    settings_path.clone(),
-                    settings_path.with_extension("legacy.json"),
-                ),
+                application: ApplicationSettingsApplication::new(settings_path),
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
             lifecycle: AsyncMutex::new(()),
