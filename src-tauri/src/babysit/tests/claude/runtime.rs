@@ -101,6 +101,21 @@ async fn malformed_auth_status_is_redacted_initialization_failure() {
     assert!(!payload.detail.contains("oauth"));
 }
 
+#[tokio::test]
+async fn unavailable_candidates_are_classified_as_missing_without_leaking_paths() {
+    let (runtime, _directory, _events) = runtime(&["invalid"]);
+
+    let error = runtime
+        .ensure_ready(std::path::Path::new("C:/private/repository"))
+        .await
+        .expect_err("an unavailable executable must be reported as missing");
+    let payload = BabysitErrorPayload::from(error);
+
+    assert_eq!(payload.code, BabysitErrorCode::ProviderNotFound);
+    assert_eq!(payload.provider_id.as_deref(), Some("claude_code"));
+    assert!(!payload.detail.contains("private"));
+}
+
 #[test]
 fn bare_path_is_preferred_before_selected_and_environment_fallbacks() {
     assert_eq!(

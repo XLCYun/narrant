@@ -25,4 +25,4 @@ issue、日志或诊断文本中。
 3. 验证生成中、修复中和完成状态；关闭再打开应复用进程内缓存，“重新生成”必须发起 fresh Claude Code rounds。
 4. 临时选择无效 executable，确认只显示 Claude Code 选择器恢复动作，且不会启动或建议 Codex。
 5. 在未登录与旧版 Claude Code 环境分别确认登录、升级恢复文案；诊断不得包含 executable 路径、仓库内容或原始 stderr。
-6. 用 `pnpm dev:preview` 检查 `review-reader` 的 `babysit`、`babysit-generating`、`babysit-repairing`、`babysit-claude-recovery`，并分别使用宽、窄 viewport。
+6. 用 `pnpm dev:preview` 检查 `review-reader` 的 `babysit`、`babysit-generating`、`babysit-repairing`、`babysit-claude-recovery`、`babysit-claude-signed-out`，并分别使用宽、窄 viewport。
