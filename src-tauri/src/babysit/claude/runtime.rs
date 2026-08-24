@@ -4,7 +4,7 @@ use super::super::{
     BabysitError, BabysitProviderRuntimeStatus, BabysitProviderSetupFailure, ClaudeCodeProvider,
     InstalledProviderRuntime,
 };
-use crate::application_settings::{ApplicationSettingsApplication, BabysitProvider};
+use crate::application_settings::ApplicationSettingsApplication;
 use async_trait::async_trait;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -320,33 +320,6 @@ impl InstalledProviderRuntime for ClaudeRuntime {
         };
         self.set_status(status);
         Err(last)
-    }
-
-    /// picker 选择必须先通过完整探针，再原子更新统一 Application Settings。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let path = Self::validate_executable(path).await?;
-        let mut preference = self
-            .settings
-            .load()
-            .map(|settings| settings.babysit.claude_code)
-            .map_err(|_| {
-                BabysitError::provider_setup(
-                    PROVIDER_ID,
-                    BabysitProviderSetupFailure::InitializationFailed,
-                )
-            })?;
-        preference.executable = Some(path.clone());
-        self.settings
-            .update_provider_settings(BabysitProvider::ClaudeCode, preference)
-            .map_err(|_| {
-                BabysitError::provider_setup(
-                    PROVIDER_ID,
-                    BabysitProviderSetupFailure::InitializationFailed,
-                )
-            })?;
-        self.provider.set_program(path)?;
-        self.set_status(BabysitProviderRuntimeStatus::Ready);
-        Ok(())
     }
 
     /// Claude 每轮使用 fresh process，因此 runtime 无常驻进程需要关闭。

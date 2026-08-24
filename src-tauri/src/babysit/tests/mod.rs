@@ -738,7 +738,7 @@ fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
             "code": "provider_not_found",
             "detail": "未找到 claude-code provider 可执行文件",
             "providerId": "claude-code",
-            "recovery": "select_provider_executable"
+            "recovery": "open_application_settings"
         })
     );
 }
@@ -770,7 +770,7 @@ fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
                 BabysitProviderSetupFailure::ExecutableInvalid,
             ),
             "provider_executable_invalid",
-            "select_provider_executable",
+            "open_application_settings",
         ),
     ];
 
@@ -788,12 +788,12 @@ fn codex_setup_failures_use_provider_codes_and_provider_recovery_actions() {
         (
             BabysitProviderSetupFailure::NotFound,
             "provider_not_found",
-            None,
+            Some("open_application_settings"),
         ),
         (
             BabysitProviderSetupFailure::ExecutableInvalid,
             "provider_executable_invalid",
-            None,
+            Some("open_application_settings"),
         ),
         (
             BabysitProviderSetupFailure::SignedOut,
@@ -831,7 +831,6 @@ struct FakeInstalledRuntime {
     provider_id: String,
     status: Mutex<BabysitProviderRuntimeStatus>,
     ready_calls: AtomicUsize,
-    selected_paths: Mutex<Vec<String>>,
     shutdown_calls: AtomicUsize,
 }
 
@@ -842,7 +841,6 @@ impl FakeInstalledRuntime {
             provider_id: provider_id.to_owned(),
             status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
             ready_calls: AtomicUsize::new(0),
-            selected_paths: Mutex::new(Vec::new()),
             shutdown_calls: AtomicUsize::new(0),
         }
     }
@@ -872,15 +870,6 @@ impl InstalledProviderRuntime for FakeInstalledRuntime {
         Ok(())
     }
 
-    /// 只记录 picker 传入的 path；不会把它放入错误或 provider request。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        self.selected_paths
-            .lock()
-            .map_err(|_| BabysitError::CacheUnavailable)?
-            .push(path.to_string_lossy().into_owned());
-        Ok(())
-    }
-
     /// 记录应用退出时的 runtime shutdown。
     async fn shutdown(&self) {
         self.shutdown_calls.fetch_add(1, Ordering::AcqRel);
@@ -897,53 +886,11 @@ async fn application_delegates_installed_provider_lifecycle_through_one_runtime_
         .prepare_runtime(Path::new("/tmp/narrant-test-workspace"))
         .await
         .unwrap();
-    application
-        .select_provider_executable("fake", Path::new("/tmp/fake-provider"))
-        .await
-        .unwrap();
     application.shutdown().await.unwrap();
 
     assert_eq!(runtime.ready_calls.load(Ordering::Acquire), 1);
     assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::Ready);
-    assert_eq!(
-        runtime.selected_paths.lock().unwrap().as_slice(),
-        ["/tmp/fake-provider".to_owned()]
-    );
     assert_eq!(runtime.shutdown_calls.load(Ordering::Acquire), 1);
-}
-
-#[tokio::test]
-async fn selecting_provider_executable_invalidates_cached_explanations() {
-    let provider = Arc::new(FakeBabysitProvider::default());
-    let runtime = Arc::new(FakeInstalledRuntime::new("fake"));
-    let application = BabysitApplication::with_provider_runtime(provider.clone(), runtime);
-    let cancellation = OperationContext::background().cancellation().clone();
-    let content = text_change("src/example.ts", None, Some("const value = 1;"));
-
-    application
-        .explain_file(
-            request("review-1", "snapshot-1", "src/example.ts"),
-            content.clone(),
-            &cancellation,
-            |_| Ok(()),
-        )
-        .await
-        .unwrap();
-    application
-        .select_provider_executable("fake", Path::new("/tmp/new-provider"))
-        .await
-        .unwrap();
-    application
-        .explain_file(
-            request("review-1", "snapshot-1", "src/example.ts"),
-            content,
-            &cancellation,
-            |_| Ok(()),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(provider.generate_calls(), 2);
 }
 
 #[test]

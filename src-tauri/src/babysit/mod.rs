@@ -225,15 +225,13 @@ pub enum BabysitProviderRuntimeStatus {
 /// Installed Coding Agent provider runtime 的唯一 application lifecycle seam。
 #[async_trait]
 pub trait InstalledProviderRuntime: Send + Sync {
-    /// 返回稳定 provider identity；它会进入 cache、错误 payload 和 diagnostics 分类。
+    /// 返回稳定 provider identity；它会进入错误 payload 和 diagnostics 分类。
     fn provider_id(&self) -> &str;
     /// 返回当前 runtime readiness，但不暴露 executable 路径或原始进程信息。
     #[allow(dead_code)]
     fn status(&self) -> BabysitProviderRuntimeStatus;
     /// 懒执行 discovery、认证检查、能力探针和 provider 进程初始化。
     async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError>;
-    /// 验证并保存 native picker 选择的 executable；路径只留在 provider settings 内。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError>;
     /// 应用退出时释放 provider 进程、线程和未完成的 runtime ownership。
     async fn shutdown(&self);
 }
@@ -241,8 +239,6 @@ pub trait InstalledProviderRuntime: Send + Sync {
 /// Registry 中一个 provider 拥有的完整能力集合。
 #[async_trait]
 pub trait BabysitProviderCapabilities: Send + Sync {
-    /// 返回不泄露 transport 的稳定设置 identity。
-    fn provider_id(&self) -> &str;
     /// 懒准备本次分析，并冻结 provider、模型和进程 generation。
     async fn prepare_analysis(
         &self,
@@ -253,8 +249,6 @@ pub trait BabysitProviderCapabilities: Send + Sync {
     async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError>;
     /// 只验证 executable，不持久化设置。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError>;
-    /// 验证并保存该 provider 的 executable。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError>;
     /// 关闭该 bundle 拥有的运行资源。
     async fn shutdown(&self);
 }
@@ -276,11 +270,6 @@ struct ProviderCapabilityBundle {
 
 #[async_trait]
 impl BabysitProviderCapabilities for ProviderCapabilityBundle {
-    /// 返回 bundle 注册时绑定的稳定 provider identity。
-    fn provider_id(&self) -> &str {
-        &self.identity
-    }
-
     /// 准备所选 runtime，并冻结本次分析使用的 provider、模型和生命周期 lease。
     async fn prepare_analysis(
         &self,
@@ -316,17 +305,6 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
         ))
     }
 
-    /// 委托 bundle runtime 验证并激活用户选择的 executable。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        self.runtime
-            .as_ref()
-            .ok_or_else(|| {
-                BabysitError::provider_setup(&self.identity, BabysitProviderSetupFailure::NotFound)
-            })?
-            .select_executable(path)
-            .await
-    }
-
     /// 释放 bundle 拥有的 runtime；无 runtime 的测试 provider 直接关闭 provider。
     async fn shutdown(&self) {
         if let Some(runtime) = &self.runtime {
@@ -345,11 +323,6 @@ struct CodexCapabilityBundle {
 
 #[async_trait]
 impl BabysitProviderCapabilities for CodexCapabilityBundle {
-    /// 返回 Codex 的稳定设置 identity。
-    fn provider_id(&self) -> &str {
-        crate::application_settings::BabysitProvider::Codex.identity()
-    }
-
     /// 使用同一次 settings 快照解析模型并保留 Codex lifecycle lease。
     async fn prepare_analysis(
         &self,
@@ -379,11 +352,6 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
         self.runtime.validate_executable(path).await
     }
 
-    /// 验证并激活 Codex executable。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        self.runtime.select_executable(path).await
-    }
-
     /// 关闭 Codex runtime 及其 App Server。
     async fn shutdown(&self) {
         self.runtime.shutdown().await;
@@ -410,11 +378,6 @@ impl ClaudeCapabilityBundle {
 
 #[async_trait]
 impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
-    /// 返回 Claude Code 的稳定设置 identity。
-    fn provider_id(&self) -> &str {
-        crate::application_settings::BabysitProvider::ClaudeCode.identity()
-    }
-
     /// 懒准备 Claude runtime 并冻结当前 provider 解析结果。
     async fn prepare_analysis(
         &self,
@@ -440,11 +403,6 @@ impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
     /// 校验 Claude executable 而不保存设置。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
         claude::runtime::ClaudeRuntime::validate_executable(path).await
-    }
-
-    /// 验证并激活 Claude executable。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        self.runtime.select_executable(path).await
     }
 
     /// Claude 每轮使用新进程；仍通过 runtime 统一执行关闭生命周期。
@@ -724,7 +682,7 @@ pub enum BabysitErrorCode {
 pub enum BabysitRecoveryAction {
     LoginProvider,
     UpgradeProvider,
-    SelectProviderExecutable,
+    OpenApplicationSettings,
     Retry,
 }
 
@@ -786,10 +744,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::SettingsPersistenceFailed => BabysitErrorCode::SettingsPersistenceFailed,
         };
         let recovery = match &error {
-            BabysitError::ProviderSetup {
-                provider_id,
-                failure,
-            } => setup_recovery_action(provider_id, *failure),
+            BabysitError::ProviderSetup { failure, .. } => setup_recovery_action(*failure),
             BabysitError::ModelPreferenceInvalid => None,
             BabysitError::SettingsPersistenceFailed => None,
             BabysitError::RepairExhausted { .. }
@@ -866,22 +821,11 @@ fn setup_error_code(failure: BabysitProviderSetupFailure) -> BabysitErrorCode {
     }
 }
 
-/// 将通用 setup failure 映射成带 provider identity 的恢复动作。
-fn setup_recovery_action(
-    provider_id: &str,
-    failure: BabysitProviderSetupFailure,
-) -> Option<BabysitRecoveryAction> {
-    if provider_id == CODEX_PROVIDER_ID
-        && matches!(
-            failure,
-            BabysitProviderSetupFailure::NotFound | BabysitProviderSetupFailure::ExecutableInvalid
-        )
-    {
-        return None;
-    }
+/// 将通用 setup failure 映射成不依赖具体 provider 的恢复动作。
+fn setup_recovery_action(failure: BabysitProviderSetupFailure) -> Option<BabysitRecoveryAction> {
     Some(match failure {
         BabysitProviderSetupFailure::NotFound | BabysitProviderSetupFailure::ExecutableInvalid => {
-            BabysitRecoveryAction::SelectProviderExecutable
+            BabysitRecoveryAction::OpenApplicationSettings
         }
         BabysitProviderSetupFailure::SignedOut => BabysitRecoveryAction::LoginProvider,
         BabysitProviderSetupFailure::Incompatible => BabysitRecoveryAction::UpgradeProvider,
@@ -1321,43 +1265,6 @@ impl BabysitApplication {
         } else {
             Ok(())
         }
-    }
-
-    /// 由 native picker 选择并验证指定 provider executable，再写入 durable provider setting。
-    pub async fn select_provider_executable(
-        &self,
-        provider_id: &str,
-        path: &Path,
-    ) -> Result<(), BabysitError> {
-        if let Some((_, bundle)) = self
-            .registry
-            .iter()
-            .find(|(_, bundle)| bundle.provider_id() == provider_id)
-        {
-            bundle.select_executable(path).await?;
-            self.invalidate_provider_preferences();
-            return Ok(());
-        }
-        let runtime = self.runtime.as_ref().ok_or_else(|| {
-            BabysitError::provider_setup(provider_id, BabysitProviderSetupFailure::NotFound)
-        })?;
-        if runtime.provider_id() != provider_id {
-            return Err(BabysitError::provider_setup(
-                provider_id,
-                BabysitProviderSetupFailure::NotFound,
-            ));
-        }
-        runtime.select_executable(path).await?;
-        self.cache
-            .lock()
-            .map_err(|_| BabysitError::CacheUnavailable)?
-            .clear();
-        Ok(())
-    }
-
-    /// 兼容现有 Codex command；新 provider 通过 `select_provider_executable` 接入。
-    pub async fn select_codex_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        self.select_provider_executable("codex", path).await
     }
 
     /// 用后端规则判断 eligibility；detected_language 允许无扩展名和特殊文件名表达已识别语言。
