@@ -51,9 +51,9 @@ Application Settings 的四个交付分片已经实现，但仍需在同一应�
 
 ## Verification Record
 
-- 应用壳 UI 聚焦测试 `tests/settings-shell.test.tsx`：21 项通过；typed command/adapter 聚焦测试：26 项通过。
+- 应用壳 UI 聚焦测试 `tests/settings-shell.test.tsx`：23 项通过；typed command/adapter 聚焦测试：26 项通过。
 - TypeScript typecheck、Lint、生产构建与 `git diff --check` 通过。
-- TypeScript 全量测试共 238 项；首次冷安装并发运行仅 `file-type-icons-build` 超过 5 秒预算，单独重跑在 3.62 秒通过，判定为非设置回归的瞬态超时。
-- `pnpm dev:preview` 成功启动。应用内 Browser 按要求只尝试一次；连接被 trusted RPC 路径限制阻塞：`browser-service.mjs` 未解析到 configured trusted code path。未使用替代浏览器工具，因此宽窄 viewport 的截图、DOM 与尺寸实测保留为已知验收风险。
+- 权限恢复后的 TypeScript 全量测试共 241 项：239 项通过；GitHub Identity 超时项串行复跑 6/6 通过；未被本分支修改的 `file-type-icons-build` 在当前机器持续超过硬编码的 5 秒测试预算，仍是独立的基线门禁风险，不能宣称全量通过。
+- `pnpm dev:preview` 与应用内 Browser 在权限恢复后成功连接。1440×900 的长 Codex 路径场景和 390×844 的窄窗口均无横向溢出；GitHub 退出确认弹层尺寸与可访问 DOM 正常；验收后已恢复默认 viewport。
 - `scripts/cargo-agent.sh check --lib` 通过。最终 Rust 全量测试执行一次，在 Windows 基线 harness 编译阶段被 8 个既有错误阻断：Unix-only `PermissionsExt` fixtures 以及 `core_git` 私有 helper 可见性；错误与本集成分片无代码差异，未重复运行。
 - Standards 审查发现的领域术语漂移已修复；Spec 审查发现的门禁证据缺失通过本记录修复。
