@@ -157,6 +157,41 @@ async fn readiness_is_lazy_and_limited_to_the_selected_bundle() {
     );
 }
 
+/// 设置选择了未注册 provider 时返回稳定缺失错误，且不会准备其他 bundle。
+#[tokio::test]
+async fn missing_selected_registration_fails_without_touching_registered_bundles() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    ApplicationSettingsApplication::new(settings_path.clone())
+        .update_provider(BabysitProvider::ClaudeCode)
+        .unwrap();
+    let codex = Arc::new(RecordingBundle::new("codex"));
+    let application = BabysitApplication::with_capability_registry_at(
+        settings_path,
+        [(
+            BabysitProvider::Codex,
+            codex.clone() as Arc<dyn BabysitProviderCapabilities>,
+        )],
+    );
+
+    let error = application
+        .explain_file(
+            request("r", "s", "src/lib.rs"),
+            text_change("src/lib.rs", None, Some("fn main() {}")),
+            &OperationContext::background().cancellation().clone(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::NotFound }
+            if provider_id == "claude-code"
+    ));
+    assert_eq!(codex.prepare_calls.load(Ordering::Acquire), 0);
+}
+
 /// provider 切换后的同一 File Change 不得命中另一 provider 的完成缓存。
 #[tokio::test]
 async fn provider_switch_keeps_completed_cache_identities_isolated() {
@@ -221,7 +256,6 @@ async fn in_flight_analysis_keeps_the_provider_snapshot_selected_at_start() {
             identity: identity.to_owned(),
             provider,
             runtime: None,
-            codex_runtime: None,
         }) as Arc<dyn BabysitProviderCapabilities>
     };
     let application = Arc::new(BabysitApplication::with_capability_registry_at(

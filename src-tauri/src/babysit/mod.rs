@@ -17,6 +17,10 @@ mod codex;
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
+/// Provider-neutral 的模型解析结果；具体目录协议只在 adapter 内转换。
+pub(crate) type BabysitResolvedModel = codex::ResolvedCodexModel;
+/// Provider-neutral 的模型目录快照；Claude adapter 可提供离线目录。
+pub(crate) type BabysitProviderModelCatalog = codex::CodexModelCatalog;
 /// 设置页一次模型编辑会话使用的不可持久化目录快照。
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,7 +114,7 @@ pub trait BabysitProviderCapabilities: Send + Sync {
         preference: Option<&crate::application_settings::BabysitProviderSettings>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError>;
     /// 解析该 provider 当前可见的模型目录。
-    async fn model_catalog(&self) -> Result<codex::CodexModelCatalog, BabysitError>;
+    async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError>;
     /// 只验证 executable，不持久化设置。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError>;
     /// 验证并保存该 provider 的 executable。
@@ -122,7 +126,7 @@ pub trait BabysitProviderCapabilities: Send + Sync {
 /// 一次分析开始时冻结的 provider 能力快照。
 pub struct PreparedBabysitAnalysis {
     provider: Arc<dyn BabysitAgentProvider>,
-    resolved: codex::ResolvedCodexModel,
+    resolved: BabysitResolvedModel,
     process_generation: String,
     _lease: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
@@ -132,7 +136,6 @@ struct ProviderCapabilityBundle {
     identity: String,
     provider: Arc<dyn BabysitAgentProvider>,
     runtime: Option<Arc<dyn InstalledProviderRuntime>>,
-    codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
 }
 
 #[async_trait]
@@ -148,44 +151,33 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
         workspace_path: &Path,
         preference: Option<&crate::application_settings::BabysitProviderSettings>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
-        let (resolved, lease) = if let Some(runtime) = &self.codex_runtime {
-            let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
-            let (resolved, lease) = runtime
-                .prepare_analysis_with_preference(workspace_path, preference)
-                .await?;
-            (resolved, Some(lease))
-        } else {
-            if let Some(runtime) = &self.runtime {
-                runtime.ensure_ready(workspace_path).await?;
-            }
-            (self.provider.resolve_analysis_model().await?, None)
-        };
+        let _ = preference;
+        if let Some(runtime) = &self.runtime {
+            runtime.ensure_ready(workspace_path).await?;
+        }
+        let resolved = self.provider.resolve_analysis_model().await?;
         Ok(PreparedBabysitAnalysis {
             process_generation: self.provider.process_generation(),
             provider: self.provider.clone(),
             resolved,
-            _lease: lease,
+            _lease: None,
         })
     }
 
     /// 通过 bundle 拥有的目录能力解析当前模型目录。
-    async fn model_catalog(&self) -> Result<codex::CodexModelCatalog, BabysitError> {
-        self.codex_runtime
-            .as_ref()
-            .ok_or_else(|| BabysitError::Provider {
-                detail: "当前 provider 不支持动态模型目录。".to_owned(),
-            })?
-            .model_catalog()
-            .await
+    async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
+        Err(BabysitError::Provider {
+            detail: "当前 provider 不支持模型目录。".to_owned(),
+        })
     }
 
     /// 使用 bundle 对应的 runtime 校验 executable，但不改写设置。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
-        if let Some(runtime) = &self.codex_runtime {
-            runtime.validate_executable(path).await
-        } else {
-            claude_runtime::ClaudeRuntime::validate_executable(path).await
-        }
+        let _ = path;
+        Err(BabysitError::provider_setup(
+            &self.identity,
+            BabysitProviderSetupFailure::ExecutableInvalid,
+        ))
     }
 
     /// 委托 bundle runtime 验证并激活用户选择的 executable。
@@ -206,6 +198,110 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
         } else {
             self.provider.shutdown().await
         }
+    }
+}
+
+/// Codex 的 capability adapter；Codex runtime 细节不会进入 application orchestration。
+struct CodexCapabilityBundle {
+    provider: Arc<CodexAppServerProvider>,
+    runtime: Arc<codex::runtime::CodexRuntime>,
+}
+
+#[async_trait]
+impl BabysitProviderCapabilities for CodexCapabilityBundle {
+    /// 返回 Codex 的稳定设置 identity。
+    fn provider_id(&self) -> &str {
+        crate::application_settings::BabysitProvider::Codex.identity()
+    }
+
+    /// 使用同一次 settings 快照解析模型并保留 Codex lifecycle lease。
+    async fn prepare_analysis(
+        &self,
+        workspace_path: &Path,
+        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+    ) -> Result<PreparedBabysitAnalysis, BabysitError> {
+        let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+        let (resolved, lease) = self
+            .runtime
+            .prepare_analysis_with_preference(workspace_path, preference)
+            .await?;
+        Ok(PreparedBabysitAnalysis {
+            provider: self.provider.clone(),
+            resolved,
+            process_generation: self.provider.process_generation(),
+            _lease: Some(lease),
+        })
+    }
+
+    /// 读取 Codex App Server 的动态模型目录。
+    async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
+        self.runtime.model_catalog().await
+    }
+
+    /// 校验 Codex executable 而不保存设置。
+    async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
+        self.runtime.validate_executable(path).await
+    }
+
+    /// 验证并激活 Codex executable。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        self.runtime.select_executable(path).await
+    }
+
+    /// 关闭 Codex runtime 及其 App Server。
+    async fn shutdown(&self) {
+        self.runtime.shutdown().await;
+    }
+}
+
+/// Claude Code 的 capability adapter；离线目录与偏好解析由 #117 深化。
+struct ClaudeCapabilityBundle {
+    provider: Arc<ClaudeCodeProvider>,
+    runtime: Arc<claude_runtime::ClaudeRuntime>,
+}
+
+#[async_trait]
+impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
+    /// 返回 Claude Code 的稳定设置 identity。
+    fn provider_id(&self) -> &str {
+        crate::application_settings::BabysitProvider::ClaudeCode.identity()
+    }
+
+    /// 懒准备 Claude runtime 并冻结当前 provider 解析结果。
+    async fn prepare_analysis(
+        &self,
+        workspace_path: &Path,
+        _preference: Option<&crate::application_settings::BabysitProviderSettings>,
+    ) -> Result<PreparedBabysitAnalysis, BabysitError> {
+        self.runtime.ensure_ready(workspace_path).await?;
+        Ok(PreparedBabysitAnalysis {
+            provider: self.provider.clone(),
+            resolved: self.provider.resolve_analysis_model().await?,
+            process_generation: self.provider.process_generation(),
+            _lease: None,
+        })
+    }
+
+    /// Claude 离线 alias 目录由 #117 的 adapter 实现。
+    async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
+        Err(BabysitError::Provider {
+            detail: "Claude Code 模型目录尚未装配。".to_owned(),
+        })
+    }
+
+    /// 校验 Claude executable 而不保存设置。
+    async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
+        claude_runtime::ClaudeRuntime::validate_executable(path).await
+    }
+
+    /// 验证并激活 Claude executable。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        self.runtime.select_executable(path).await
+    }
+
+    /// Claude 每轮使用新进程；仍通过 runtime 统一执行关闭生命周期。
+    async fn shutdown(&self) {
+        self.runtime.shutdown().await;
     }
 }
 
@@ -835,24 +931,16 @@ impl BabysitApplication {
         let registry: HashMap<_, Arc<dyn BabysitProviderCapabilities>> = [
             (
                 crate::application_settings::BabysitProvider::Codex,
-                Arc::new(ProviderCapabilityBundle {
-                    identity: crate::application_settings::BabysitProvider::Codex
-                        .identity()
-                        .to_owned(),
+                Arc::new(CodexCapabilityBundle {
                     provider: codex_provider,
-                    runtime: Some(codex_runtime.clone()),
-                    codex_runtime: Some(codex_runtime),
+                    runtime: codex_runtime,
                 }) as Arc<dyn BabysitProviderCapabilities>,
             ),
             (
                 crate::application_settings::BabysitProvider::ClaudeCode,
-                Arc::new(ProviderCapabilityBundle {
-                    identity: crate::application_settings::BabysitProvider::ClaudeCode
-                        .identity()
-                        .to_owned(),
+                Arc::new(ClaudeCapabilityBundle {
                     provider: claude_provider,
-                    runtime: Some(claude_runtime),
-                    codex_runtime: None,
+                    runtime: claude_runtime,
                 }) as Arc<dyn BabysitProviderCapabilities>,
             ),
         ]
@@ -891,7 +979,6 @@ impl BabysitApplication {
                         identity: identity.identity().to_owned(),
                         provider,
                         runtime: None,
-                        codex_runtime: None,
                     }) as Arc<dyn BabysitProviderCapabilities>,
                 )
             })
@@ -1182,7 +1269,6 @@ impl BabysitApplication {
                 identity: self.provider.provider_id().to_owned(),
                 provider: self.provider.clone(),
                 runtime: self.runtime.clone(),
-                codex_runtime: self.codex_runtime.clone(),
             }),
         };
         let prepared = selected_bundle
