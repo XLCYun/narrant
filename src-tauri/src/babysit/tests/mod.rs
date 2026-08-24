@@ -839,6 +839,40 @@ async fn application_delegates_installed_provider_lifecycle_through_one_runtime_
     assert_eq!(runtime.shutdown_calls.load(Ordering::Acquire), 1);
 }
 
+#[tokio::test]
+async fn selecting_provider_executable_invalidates_cached_explanations() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let runtime = Arc::new(FakeInstalledRuntime::new("fake"));
+    let application = BabysitApplication::with_provider_runtime(provider.clone(), runtime);
+    let cancellation = OperationContext::background().cancellation().clone();
+    let content = text_change("src/example.ts", None, Some("const value = 1;"));
+
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content.clone(),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    application
+        .select_provider_executable("fake", Path::new("/tmp/new-provider"))
+        .await
+        .unwrap();
+    application
+        .explain_file(
+            request("review-1", "snapshot-1", "src/example.ts"),
+            content,
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(provider.generate_calls(), 2);
+}
+
 #[test]
 fn input_error_payload_redacts_paths_source_tokens_and_process_output() {
     let payload = BabysitErrorPayload::input_unavailable(
