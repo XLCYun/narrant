@@ -725,7 +725,7 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 #[test]
 fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
     let payload = BabysitErrorPayload::from(BabysitError::provider_setup(
-        "claude_code",
+        "claude-code",
         BabysitProviderSetupFailure::NotFound,
     ));
 
@@ -733,8 +733,8 @@ fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
         serde_json::to_value(payload).unwrap(),
         serde_json::json!({
             "code": "provider_not_found",
-            "detail": "未找到 claude_code provider 可执行文件",
-            "providerId": "claude_code",
+            "detail": "未找到 claude-code provider 可执行文件",
+            "providerId": "claude-code",
             "recovery": "select_provider_executable"
         })
     );
@@ -744,18 +744,18 @@ fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
 fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
     let cases = [
         (
-            BabysitError::provider_setup("claude_code", BabysitProviderSetupFailure::SignedOut),
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::SignedOut),
             "provider_signed_out",
             "login_provider",
         ),
         (
-            BabysitError::provider_setup("claude_code", BabysitProviderSetupFailure::Incompatible),
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::Incompatible),
             "provider_incompatible",
             "upgrade_provider",
         ),
         (
             BabysitError::provider_setup(
-                "claude_code",
+                "claude-code",
                 BabysitProviderSetupFailure::InitializationFailed,
             ),
             "provider_initialization_failed",
@@ -763,7 +763,7 @@ fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
         ),
         (
             BabysitError::provider_setup(
-                "claude_code",
+                "claude-code",
                 BabysitProviderSetupFailure::ExecutableInvalid,
             ),
             "provider_executable_invalid",
@@ -774,7 +774,7 @@ fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
     for (error, code, recovery) in cases {
         let value = serde_json::to_value(BabysitErrorPayload::from(error)).unwrap();
         assert_eq!(value["code"], code);
-        assert_eq!(value["providerId"], "claude_code");
+        assert_eq!(value["providerId"], "claude-code");
         assert_eq!(value["recovery"], recovery);
     }
 }
