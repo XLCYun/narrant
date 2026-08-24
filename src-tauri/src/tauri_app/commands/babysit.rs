@@ -12,7 +12,15 @@ use tauri::ipc::Channel;
 #[tauri::command]
 pub(crate) async fn list_babysit_models(
     babysit: tauri::State<'_, BabysitApplication>,
+    provider: crate::application_settings::BabysitProvider,
 ) -> Result<crate::babysit::BabysitModelCatalog, BabysitErrorPayload> {
+    if provider != crate::application_settings::BabysitProvider::Codex {
+        return Err(BabysitErrorPayload::from(
+            crate::babysit::BabysitError::Provider {
+                detail: "当前 provider 使用离线模型目录。".to_owned(),
+            },
+        ));
+    }
     babysit
         .fetch_model_catalog()
         .await

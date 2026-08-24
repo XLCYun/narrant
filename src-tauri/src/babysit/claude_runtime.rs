@@ -43,6 +43,28 @@ struct ClaudeSettings {
 }
 
 impl ClaudeRuntime {
+    /// 仅执行 Claude Code 完整能力探针并返回规范路径，不持久化或切换 provider。
+    pub(crate) async fn validate_executable(path: &Path) -> Result<PathBuf, BabysitError> {
+        let workspace = std::env::current_dir().map_err(|_| {
+            BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::InitializationFailed,
+            )
+        })?;
+        let canonical = path.canonicalize().map_err(|_| {
+            BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::ExecutableInvalid,
+            )
+        })?;
+        let candidate = ClaudeCandidate {
+            program: canonical.clone(),
+            prefix_args: Vec::new(),
+        };
+        Self::probe(&candidate, &workspace).await?;
+        Ok(canonical)
+    }
+
     /// 构造未知状态的 runtime；构造过程不启动任何 Claude 进程。
     pub(crate) fn new(provider: Arc<ClaudeCodeProvider>, settings_path: PathBuf) -> Self {
         Self {
@@ -316,17 +338,7 @@ impl InstalledProviderRuntime for ClaudeRuntime {
 
     /// picker 选择必须先通过完整探针，成功后再持久化并切换 provider。
     async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let workspace = std::env::current_dir().map_err(|_| {
-            BabysitError::provider_setup(
-                PROVIDER_ID,
-                BabysitProviderSetupFailure::InitializationFailed,
-            )
-        })?;
-        let candidate = ClaudeCandidate {
-            program: path.to_owned(),
-            prefix_args: Vec::new(),
-        };
-        Self::probe(&candidate, &workspace).await?;
+        let path = Self::validate_executable(path).await?;
         if let Some(parent) = self.settings_path.parent() {
             std::fs::create_dir_all(parent).map_err(|_| {
                 BabysitError::provider_setup(
@@ -336,7 +348,7 @@ impl InstalledProviderRuntime for ClaudeRuntime {
             })?;
         }
         let payload = serde_json::to_vec(&ClaudeSettings {
-            executable: path.to_owned(),
+            executable: path.clone(),
         })
         .map_err(|_| {
             BabysitError::provider_setup(
@@ -350,7 +362,7 @@ impl InstalledProviderRuntime for ClaudeRuntime {
                 BabysitProviderSetupFailure::InitializationFailed,
             )
         })?;
-        self.provider.set_program(path.to_owned())?;
+        self.provider.set_program(path)?;
         self.set_status(BabysitProviderRuntimeStatus::Ready);
         Ok(())
     }

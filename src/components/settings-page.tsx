@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft02Icon, ComputerIcon, GithubIcon, Moon02Icon, Settings02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -8,9 +8,8 @@ import { Icon } from "@/components/ui/icon";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
-import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitModelPreference, ReasoningEffort, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitProvider, BabysitProviderPreference, BabysitSettings, ThemePreference } from "@/settings/application-settings";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
-import { useCodexExecutablePreference, type CodexExecutablePreferenceBinding } from "@/settings/use-codex-executable-preference";
 import { cn } from "@/lib/utils";
 
 type Section = "appearance" | "github" | "babysit";
@@ -28,7 +27,7 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, codex, modelApplication, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, initialModelEditing = false, onBack }: { theme: ApplicationThemeBinding; codex: CodexExecutablePreferenceBinding; modelApplication: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; initialModelEditing?: boolean; onBack(): void }) {
+export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
   const [section, setSection] = useState<Section>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-6xl py-4 sm:py-8">
     <header className="mb-6 flex items-center gap-3">
@@ -53,17 +52,155 @@ export function SettingsPage({ theme, codex, modelApplication, githubIdentity, i
         {section === "github" && (githubIdentity
           ? <GitHubSettings identity={githubIdentity} initiallyConfirming={initialGitHubSignOutConfirmation} />
           : <section><div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 className="font-heading text-xl font-semibold">GitHub</h2></div><p className="mt-4 text-sm text-muted-foreground">GitHub Identity 设置将在后续版本中提供。</p></section>)}
-        {section === "babysit" && <CodexExecutableSettings binding={codex} modelApplication={modelApplication} initialModelEditing={initialModelEditing} />}
+        {section === "babysit" && <BabysitProviderSettings application={application} />}
       </div>
     </div>
   </section>;
 }
 
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
-export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, initialModelEditing, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; initialModelEditing?: boolean; onBack(): void }) {
+export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
-  const codex = useCodexExecutablePreference(application);
-  return <SettingsPage theme={theme} codex={codex} modelApplication={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} initialModelEditing={initialModelEditing} onBack={onBack} />;
+  return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
+}
+
+const claudeModels = [
+  { value: "", label: "Default" }, { value: "best", label: "Best（使用最强的可用模型）" },
+  { value: "fable", label: "Fable" }, { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }, { value: "custom", label: "Custom" },
+];
+const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
+
+/** 通过公共设置端口呈现当前 provider，并对每次选择执行完整组合原子保存。 */
+function BabysitProviderSettings({ application }: { application: ApplicationSettingsApplication }) {
+  const [saved, setSaved] = useState<BabysitSettings>();
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let current = true;
+    void application.load().then((settings) => {
+      if (!current) return;
+      setSaved(settings.babysit);
+    }).catch((reason) => current && setError(errorDetail(reason, "无法读取 Babysit 设置")));
+    return () => { current = false; };
+  }, [application]);
+
+  if (!saved) return <section aria-labelledby="babysit-title"><h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2><p role={error ? "alert" : "status"} className="mt-4 text-sm text-muted-foreground">{error ?? "正在读取设置…"}</p></section>;
+  const provider = saved.provider;
+  const key = provider === "codex" ? "codex" : "claudeCode";
+  const preference = saved[key];
+
+  /** 乐观提交新快照，失败时恢复先前权威值并显示错误。 */
+  async function commit(next: BabysitSettings, operation: () => Promise<{ babysit: BabysitSettings }>) {
+    if (saving) return;
+    const previous = saved!;
+    setSaved(next); setSaving(true); setError(undefined);
+    try {
+      const result = await operation();
+      setSaved(result.babysit);
+    } catch (reason) {
+      setSaved(previous);
+      setError(`${errorDetail(reason, "无法保存 Babysit 设置")}，已恢复原设置。`);
+    } finally { setSaving(false); }
+  }
+
+  /** 更新当前 provider 的完整偏好，避免产生中间不一致状态。 */
+  function updatePreference(nextPreference: BabysitProviderPreference, revision: string | null = null) {
+    const next = { ...saved!, [key]: nextPreference };
+    return commit(next, () => application.updateBabysitPreferences(provider, nextPreference, revision));
+  }
+
+  return <section aria-labelledby="babysit-title">
+    <h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2>
+    <p className="mt-1 text-sm text-muted-foreground">选择未来逐行解释使用的 Agent Provider；每套偏好独立保留。</p>
+    {error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}
+    <div className="mt-6 grid gap-5" aria-busy={saving || undefined}>
+      <label className="grid gap-2 text-sm font-medium">Provider
+        <Select value={provider} disabled={saving} onValueChange={(value) => {
+          if (!value) return;
+          const nextProvider = value as BabysitProvider;
+          void commit({ ...saved, provider: nextProvider }, () => application.updateBabysitProvider(nextProvider));
+        }}><SelectTrigger aria-label="Provider"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="codex">Codex</SelectItem><SelectItem value="claude-code">Claude Code</SelectItem></SelectContent></Select>
+      </label>
+      {provider === "codex"
+        ? <CodexProviderFields application={application} preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} onError={setError} />
+        : <ClaudeCodeProviderFields preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} />}
+    </div>
+  </section>;
+
+  /** 选择并保存当前 provider 的 executable，失败时恢复加载得到的权威快照。 */
+  async function chooseExecutable() {
+    const previous = saved!;
+    setSaving(true); setError(undefined);
+    try {
+      const result = await application.chooseBabysitExecutable(provider, preference);
+      if (result?.babysit) setSaved(result.babysit);
+    } catch (reason) {
+      setSaved(previous);
+      setError(`${errorDetail(reason, "无法保存可执行文件")}，已恢复原设置。`);
+    } finally { setSaving(false); }
+  }
+}
+
+type ProviderFieldsProps = {
+  preference: BabysitProviderPreference;
+  saving: boolean;
+  onUpdate(preference: BabysitProviderPreference, revision?: string | null): Promise<void>;
+  onChooseExecutable(): Promise<void>;
+};
+
+/** 呈现 provider 共用的 executable 值、原生选择与恢复自动发现操作。 */
+function ProviderExecutableFields({ label, preference, saving, onUpdate, onChooseExecutable }: ProviderFieldsProps & { label: string }) {
+  return <div className="rounded-xl border bg-background p-4">
+    <p className="text-sm font-medium">{label} 可执行文件</p>
+    <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{preference.executable ?? "自动发现"}</p>
+    <div className="mt-3 flex gap-2">
+      <Button variant="outline" disabled={saving} onClick={() => void onChooseExecutable()}>选择 {label} 可执行文件</Button>
+      {preference.executable && <Button variant="ghost" disabled={saving} onClick={() => void onUpdate({ ...preference, executable: null })}>恢复自动发现</Button>}
+    </div>
+  </div>;
+}
+
+/** 呈现 Codex 的延迟动态目录，并即时保存目录 revision 约束的完整组合。 */
+function CodexProviderFields({ application, preference, saving, onUpdate, onChooseExecutable, onError }: ProviderFieldsProps & { application: ApplicationSettingsApplication; onError(detail: string): void }) {
+  const [catalog, setCatalog] = useState<{ revision: string; models: BabysitModelCatalogEntry[] }>();
+  return <div className="grid gap-4" data-testid="codex-preferences">
+    <ProviderExecutableFields label="Codex" preference={preference} saving={saving} onUpdate={onUpdate} onChooseExecutable={onChooseExecutable} />
+    {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving} onClick={async () => {
+      try { setCatalog(await application.listBabysitModels("codex")); }
+      catch (reason) { onError(errorDetail(reason, "无法获取模型目录")); }
+    }}>修改模型偏好</Button>}
+    {catalog && <>
+      <label className="grid gap-2 text-sm font-medium">模型<Select value={preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
+        if (!value) return;
+        const model = value === "__default" ? null : value;
+        const supported = catalog.models.find((item) => item.id === model)?.supportedReasoningEfforts;
+        const reasoningEffort = preference.reasoningEffort && supported?.includes(preference.reasoningEffort) ? preference.reasoningEffort : null;
+        void onUpdate({ ...preference, model, reasoningEffort }, catalog.revision);
+      }}><SelectTrigger aria-label="模型"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__default">Default</SelectItem>{catalog.models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}</SelectContent></Select></label>
+      <label className="grid gap-2 text-sm font-medium">思考强度<Select value={preference.reasoningEffort ?? "default"} disabled={saving || !preference.model} onValueChange={(value) => value && void onUpdate({ ...preference, reasoningEffort: value === "default" ? null : value }, catalog.revision)}><SelectTrigger aria-label="思考强度"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Default</SelectItem>{catalog.models.find((model) => model.id === preference.model)?.supportedReasoningEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort}</SelectItem>)}</SelectContent></Select></label>
+    </>}
+  </div>;
+}
+
+/** 呈现 Claude Code 离线 alias、自定义模型与受模型约束的完整 effort 选项。 */
+function ClaudeCodeProviderFields({ preference, saving, onUpdate, onChooseExecutable }: ProviderFieldsProps) {
+  const customPreference = preference.model !== null && !claudeModels.some((item) => item.value === preference.model);
+  const [customEditing, setCustomEditing] = useState(customPreference);
+  const [customModel, setCustomModel] = useState(customPreference ? preference.model ?? "" : "");
+  return <div className="grid gap-4" data-testid="claude-code-preferences">
+    <ProviderExecutableFields label="Claude Code" preference={preference} saving={saving} onUpdate={onUpdate} onChooseExecutable={onChooseExecutable} />
+    <label className="grid gap-2 text-sm font-medium">模型<Select value={customEditing || customPreference ? "custom" : preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
+      if (!value) return;
+      if (value === "custom") { setCustomModel(customPreference ? preference.model ?? "" : ""); setCustomEditing(true); return; }
+      setCustomEditing(false);
+      const model = value === "__default" ? null : value;
+      void onUpdate({ ...preference, model, reasoningEffort: model === "haiku" ? null : preference.reasoningEffort });
+    }}><SelectTrigger aria-label="模型"><SelectValue>{customEditing || customPreference ? "Custom" : claudeModels.find((item) => item.value === (preference.model ?? ""))?.label}</SelectValue></SelectTrigger><SelectContent>{claudeModels.map((item) => <SelectItem key={item.value || "default"} value={item.value || "__default"}>{item.label}</SelectItem>)}</SelectContent></Select></label>
+    {(customEditing || customPreference) && <label className="grid gap-2 text-sm font-medium">自定义模型<input aria-label="自定义模型" className="h-9 rounded-md border bg-transparent px-3" value={customModel} onChange={(event) => setCustomModel(event.target.value)} onBlur={() => customModel.trim() && void onUpdate({ ...preference, model: customModel.trim() })} /></label>}
+    <label className="grid gap-2 text-sm font-medium">思考强度<Select value={preference.reasoningEffort ?? "default"} disabled={saving || preference.model === "haiku"} onValueChange={(value) => value && void onUpdate({ ...preference, reasoningEffort: value === "default" ? null : value })}><SelectTrigger aria-label="思考强度"><SelectValue>{preference.reasoningEffort === null ? "Default" : preference.reasoningEffort === "xhigh" ? "XHigh" : preference.reasoningEffort[0].toUpperCase() + preference.reasoningEffort.slice(1)}</SelectValue></SelectTrigger><SelectContent><SelectItem value="default">Default</SelectItem>{preference.model !== "haiku" && claudeEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort === "xhigh" ? "XHigh" : effort[0].toUpperCase() + effort.slice(1)}</SelectItem>)}</SelectContent></Select></label>
+  </div>;
 }
 
 /** 展示当前 GitHub Identity，并在解释本机数据影响后复用 lifecycle 退出。 */
@@ -96,167 +233,6 @@ function GitHubSettings({ identity, initiallyConfirming = false }: { identity: G
       </DialogContent>
     </Dialog>
   </section>;
-}
-
-/** Application Settings 中管理 Codex Executable Preference 的公共呈现组件。 */
-export function CodexExecutableSettings({ binding, modelApplication, initialModelEditing = false }: { binding: CodexExecutablePreferenceBinding; modelApplication: ApplicationSettingsApplication; initialModelEditing?: boolean }) {
-  return <section aria-labelledby="babysit-title">
-    <h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2>
-    <p className="mt-1 text-sm text-muted-foreground">为之后启动的逐行解释选择 Codex 可执行文件。</p>
-    {binding.error && <p role="alert" className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{binding.error}</p>}
-    <div aria-busy={!binding.loaded || binding.saving || undefined} className="mt-6 min-w-0 rounded-xl border bg-background p-4">
-      <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">Codex 可执行文件</p>
-          <p className="mt-1 break-all font-mono text-xs text-muted-foreground" title={binding.executable ?? undefined} data-testid="codex-executable-value">{binding.executable ?? "自动发现"}</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <Button variant="outline" disabled={!binding.loaded || binding.saving} onClick={() => void binding.choose()}>{binding.saving ? "正在验证…" : "选择 Codex 可执行文件"}</Button>
-          {binding.executable && <Button variant="ghost" disabled={binding.saving} onClick={() => void binding.clear()}>恢复自动发现</Button>}
-        </div>
-      </div>
-    </div>
-    <BabysitModelSettings application={modelApplication} initialEditing={initialModelEditing} />
-  </section>;
-}
-
-/** 模型编辑器的延迟目录状态；目录只存在于 editing 分支。 */
-type ModelEditorState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "failed"; detail: string }
-  | { kind: "editing"; revision: string; models: BabysitModelCatalogEntry[] };
-
-/** 管理延迟模型目录、草稿与显式提交，目录永不进入持久化投影。 */
-function BabysitModelSettings({ application, initialEditing }: { application: ApplicationSettingsApplication; initialEditing: boolean }) {
-  const [saved, setSaved] = useState<BabysitModelPreference>({ kind: "automatic" });
-  const [loaded, setLoaded] = useState(false);
-  const [editor, setEditor] = useState<ModelEditorState>({ kind: "idle" });
-  const [draft, setDraft] = useState<BabysitModelPreference>({ kind: "automatic" });
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string>();
-  const [loadError, setLoadError] = useState<string>();
-
-  /** 读取当前持久化模型偏好；失败时保留现有投影并提供显式重试。 */
-  const loadSavedPreference = useCallback(async () => {
-    setLoadError(undefined);
-    try {
-      const settings = await application.load();
-      setSaved(settings.babysitModel);
-      setLoaded(true);
-    } catch (error) {
-      setLoadError(errorDetail(error, "无法读取模型设置"));
-    }
-  }, [application]);
-
-  useEffect(() => {
-    void loadSavedPreference();
-  }, [loadSavedPreference]);
-
-  useEffect(() => {
-    if (initialEditing && loaded && editor.kind === "idle") void loadCatalog();
-  // Preview-only initial state is consumed once after the saved preference loads.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialEditing, loaded]);
-
-  /** 进入编辑态时获取新鲜目录；失败或空目录均保留旧偏好。 */
-  async function loadCatalog() {
-    setEditor({ kind: "loading" });
-    setSaveError(undefined);
-    try {
-      const catalog = await application.listBabysitModels();
-      if (catalog.models.length === 0) {
-        setEditor({ kind: "failed", detail: "当前没有可用模型" });
-        return;
-      }
-      setDraft(saved);
-      setEditor({ kind: "editing", revision: catalog.revision, models: catalog.models });
-    } catch (error) {
-      setEditor({ kind: "failed", detail: errorDetail(error, "无法获取模型目录") });
-    }
-  }
-
-  /** 显式保存草稿；失败时编辑态和旧保存值均保持不变。 */
-  async function save() {
-    setSaving(true);
-    setSaveError(undefined);
-    try {
-      if (editor.kind !== "editing") return;
-      const settings = await application.updateBabysitModel(draft, editor.revision);
-      setSaved(settings.babysitModel);
-      setEditor({ kind: "idle" });
-    } catch (error) {
-      setSaveError(errorDetail(error, "无法保存模型偏好"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const savedLabel = saved.kind === "automatic"
-    ? "自动（使用 App Server 默认值）"
-    : `${modelName(editor, saved.modelId)} · ${saved.reasoningEffort ?? "模型默认"}`;
-  const draftModel = editor.kind === "editing" && draft.kind === "explicit"
-    ? editor.models.find((model) => model.id === draft.modelId)
-    : undefined;
-
-  return <div className="mt-4 rounded-xl border bg-background p-4">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-      <div className="min-w-0 flex-1"><p className="text-sm font-medium">模型与思考强度</p><p className="mt-1 text-sm text-muted-foreground">{loaded ? savedLabel : "正在读取保存值…"}</p></div>
-      {editor.kind === "idle" && <Button variant="outline" disabled={!loaded} onClick={() => void loadCatalog()}>修改模型偏好</Button>}
-    </div>
-    {loadError && <div className="mt-4 space-y-3"><p role="alert" className="text-sm text-destructive">{loadError}，当前显示值保持不变。</p><Button variant="outline" onClick={() => void loadSavedPreference()}>重试读取模型设置</Button></div>}
-    {editor.kind === "loading" && <p role="status" className="mt-4 text-sm text-muted-foreground">正在获取可用模型…</p>}
-    {editor.kind === "failed" && <div className="mt-4 space-y-3"><p role="alert" className="text-sm text-destructive">{editor.detail}，原设置已保留。</p><div className="flex gap-2"><Button variant="outline" onClick={() => void loadCatalog()}>重试获取模型</Button><Button variant="ghost" onClick={() => setEditor({ kind: "idle" })}>取消模型修改</Button></div></div>}
-    {editor.kind === "editing" && <div className="mt-5 space-y-5">
-      {saveError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{saveError}，原设置已保留。</p>}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <ModelPreferenceSelect models={editor.models} value={draft} onChange={setDraft} />
-        <ReasoningEffortSelect model={draftModel} value={draft.kind === "explicit" ? draft.reasoningEffort : null} automatic={draft.kind === "automatic"} onChange={(reasoningEffort) => draft.kind === "explicit" && setDraft({ ...draft, reasoningEffort })} />
-      </div>
-      {draft.kind === "explicit" && !draftModel && <p role="alert" className="text-sm text-destructive">已保存模型不再可用，请选择自动模式或其他模型。</p>}
-      <div className="flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={saving} onClick={() => { setEditor({ kind: "idle" }); setSaveError(undefined); }}>取消模型修改</Button><Button disabled={saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存模型偏好"}</Button></div>
-    </div>}
-  </div>;
-}
-
-/** 通过动态模型目录呈现自动模式与显式模型选择。 */
-function ModelPreferenceSelect({ models, value, onChange }: { models: BabysitModelCatalogEntry[]; value: BabysitModelPreference; onChange(value: BabysitModelPreference): void }) {
-  const selectedValue = value.kind === "automatic" ? "mode:automatic" : `model:${value.modelId}`;
-  const unavailable = value.kind === "explicit" && !models.some((model) => model.id === value.modelId) ? value.modelId : undefined;
-  const selectedModel = value.kind === "explicit" ? models.find((model) => model.id === value.modelId) : undefined;
-  const selectedLabel = value.kind === "automatic"
-    ? "自动（使用 App Server 默认值）"
-    : selectedModel ? `${selectedModel.name}${selectedModel.isDefault ? "（服务端默认）" : ""}` : `${value.modelId}（不可用）`;
-  return <label className="grid gap-2 text-sm font-medium">模型
-    <Select value={selectedValue} onValueChange={(nextValue) => nextValue && onChange(nextValue === "mode:automatic" ? { kind: "automatic" } : { kind: "explicit", modelId: nextValue.slice("model:".length), reasoningEffort: null })}>
-      <SelectTrigger aria-label="模型" className="w-full"><SelectValue>{selectedLabel}</SelectValue></SelectTrigger>
-      <SelectContent align="start">
-        <SelectItem value="mode:automatic">自动（使用 App Server 默认值）</SelectItem>
-        {unavailable && <SelectItem value={`model:${unavailable}`} disabled>{unavailable}（不可用）</SelectItem>}
-        {models.map((model) => <SelectItem key={model.id} value={`model:${model.id}`}>{model.name}{model.isDefault ? "（服务端默认）" : ""}</SelectItem>)}
-      </SelectContent>
-    </Select>
-  </label>;
-}
-
-/** 仅呈现当前显式模型动态声明的思考强度。 */
-function ReasoningEffortSelect({ model, value, automatic, onChange }: { model?: BabysitModelCatalogEntry; value: ReasoningEffort | null; automatic: boolean; onChange(value: ReasoningEffort | null): void }) {
-  const selectedValue = value === null ? "effort:default" : `effort:${value}`;
-  const selectedLabel = automatic ? "使用 App Server 默认值" : model ? value ?? `模型默认（${model.defaultReasoningEffort}）` : "请选择可用模型";
-  return <label className="grid gap-2 text-sm font-medium">思考强度
-    <Select value={selectedValue} disabled={automatic || !model} onValueChange={(nextValue) => nextValue && onChange(nextValue === "effort:default" ? null : nextValue.slice("effort:".length))}>
-      <SelectTrigger aria-label="思考强度" className="w-full"><SelectValue>{selectedLabel}</SelectValue></SelectTrigger>
-      <SelectContent align="start">
-        {model && <SelectItem value="effort:default">模型默认（{model.defaultReasoningEffort}）</SelectItem>}
-        {model?.supportedReasoningEfforts.map((effort) => <SelectItem key={effort} value={`effort:${effort}`}>{effort}</SelectItem>)}
-      </SelectContent>
-    </Select>
-  </label>;
-}
-
-/** 在已有目录时显示服务端名称，否则稳定显示保存的模型标识。 */
-function modelName(editor: ModelEditorState, modelId: string) {
-  return editor.kind === "editing" ? editor.models.find((model) => model.id === modelId)?.name ?? modelId : modelId;
 }
 
 /** 从 typed command 结构化错误或普通异常中提取用户可见详情。 */

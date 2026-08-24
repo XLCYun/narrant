@@ -18,7 +18,7 @@ import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
-import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, ThemePreference } from "@/settings/application-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -38,33 +38,37 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
     : null);
+  const [babysit, setBabysit] = useState<BabysitSettings>({ provider: "codex", codex: { executable: codexExecutable, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: null, reasoningEffort: null } });
+  const snapshot = (theme: ThemePreference, value = babysit): ApplicationSettings => ({ version: 1, theme, babysit: value });
   const application: ApplicationSettingsApplication = {
-    load: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
+    load: async () => snapshot(savedTheme),
     updateTheme: async (theme) => {
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedTheme(theme);
-      return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
-    },
-    chooseCodexExecutable: async () => {
-      if (saveFails) throw new Error("预览中的 Codex 版本验证失败");
-      const selected = "C:\\Program Files\\Codex\\codex.exe";
-      setCodexExecutable(selected);
-      return { version: 1, theme: savedTheme, codexExecutable: selected, babysitModel: { kind: "automatic" } };
-    },
-    clearCodexExecutable: async () => {
-      setCodexExecutable(null);
-      return { version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+      return snapshot(theme);
     },
     listBabysitModels: async () => {
       if (modelState === "loading") return new Promise(() => undefined);
       if (modelState === "error") throw { code: "app_server_unavailable", detail: "App Server 暂时无法启动" };
-      if (modelState === "empty") return { revision: "preview-catalog", models: [] };
-      return { revision: "preview-catalog", models: [
+      if (modelState === "empty") return { provider: "codex", revision: "preview-catalog", models: [] };
+      return { provider: "codex", revision: "preview-catalog", models: [
         { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high" },
         { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
       ] };
     },
-    updateBabysitModel: async (babysitModel) => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel }),
+    updateBabysitProvider: async (provider) => {
+      const next = { ...babysit, provider }; setBabysit(next); return snapshot(savedTheme, next);
+    },
+    chooseBabysitExecutable: async (provider, preference) => {
+      if (saveFails) throw new Error("预览中的 provider 版本验证失败");
+      const executable = provider === "codex" ? "C:\\Program Files\\Codex\\codex.exe" : "C:\\Program Files\\Claude\\claude.exe";
+      const key = provider === "codex" ? "codex" : "claudeCode";
+      const next = { ...babysit, [key]: { ...preference, executable } }; setCodexExecutable(next.codex.executable); setBabysit(next); return snapshot(savedTheme, next);
+    },
+    updateBabysitPreferences: async (provider, preference) => {
+      const key = provider === "codex" ? "codex" : "claudeCode";
+      const next = { ...babysit, [key]: preference }; setCodexExecutable(next.codex.executable); setBabysit(next); return snapshot(savedTheme, next);
+    },
   };
   const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
     status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
@@ -75,7 +79,7 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} initialModelEditing={modelState !== "idle"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */

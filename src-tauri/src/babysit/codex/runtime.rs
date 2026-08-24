@@ -5,7 +5,9 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
-use crate::application_settings::ApplicationSettingsApplication;
+use crate::application_settings::{
+    ApplicationSettingsApplication, BabysitModelPreference, BabysitProvider,
+};
 use crate::babysit::{
     codex_setup_error, BabysitAgentProvider, BabysitError, BabysitProviderRuntimeStatus,
     BabysitProviderSetupFailure, InstalledProviderRuntime, CODEX_PROVIDER_ID,
@@ -39,16 +41,22 @@ impl ApplicationCodexSettings {
     fn load(&self) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .load()
-            .map(|settings| settings.codex_executable)
+            .map(|settings| settings.babysit.codex.executable)
             .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid))
     }
 
     /// 通过统一 Application Settings 边界保存 executable 偏好。
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
+        let mut preference = self
+            .application
+            .load()
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?
+            .babysit
+            .codex;
+        preference.executable = executable;
         self.application
-            .update_codex_executable(executable)
-            .await
-            .map(|settings| settings.codex_executable)
+            .update_provider_settings(BabysitProvider::Codex, preference)
+            .map(|settings| settings.babysit.codex.executable)
             .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))
     }
 }
@@ -63,6 +71,14 @@ pub(crate) struct CodexRuntime {
 }
 
 impl CodexRuntime {
+    /// 仅验证用户选择的 Codex executable 并返回规范路径，不修改 runtime 或 settings。
+    pub(crate) async fn validate_executable(&self, path: &Path) -> Result<PathBuf, BabysitError> {
+        self.discovery
+            .validate_selected(path.to_path_buf())
+            .await
+            .map(|candidate| candidate.path)
+    }
+
     /// 每次新分析读取权威模型偏好，并用新鲜目录解析实际模型与思考强度。
     pub(crate) async fn prepare_analysis(
         &self,
@@ -74,7 +90,9 @@ impl CodexRuntime {
             .application
             .load()
             .map_err(|_| BabysitError::ModelPreferenceInvalid)?
-            .babysit_model;
+            .babysit
+            .codex;
+        let preference = BabysitModelPreference::from(&preference);
         let catalog = self.model_catalog_once().await?;
         self.ensure_ready_once(workspace_path).await?;
         let resolved = catalog
@@ -137,10 +155,7 @@ impl CodexRuntime {
             provider,
             discovery,
             settings: ApplicationCodexSettings {
-                application: ApplicationSettingsApplication::new(
-                    settings_path.clone(),
-                    settings_path.with_extension("legacy.json"),
-                ),
+                application: ApplicationSettingsApplication::new(settings_path),
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
             lifecycle: AsyncMutex::new(()),
@@ -181,12 +196,11 @@ impl CodexRuntime {
 
     /// 通过生产设置边界验证并保存显式可执行文件偏好。
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let selected = self.discovery.validate_selected(path.to_path_buf()).await?;
-        let resolved = self
-            .settings
-            .save(Some(selected.path))
-            .await?
-            .ok_or_else(|| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?;
+        let selected = self.validate_executable(path).await?;
+        let resolved =
+            self.settings.save(Some(selected)).await?.ok_or_else(|| {
+                codex_setup_error(BabysitProviderSetupFailure::InitializationFailed)
+            })?;
         self.provider.activate_executable(resolved).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;

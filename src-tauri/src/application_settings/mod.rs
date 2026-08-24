@@ -1,20 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::{fmt, io::Write, path::PathBuf};
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
-/// 当前 Application Settings 文件格式版本。
 const SETTINGS_VERSION: u32 = 1;
 
 /// Narrant 的持久化主题偏好。
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ThemePreference {
-    /// 跟随操作系统当前主题及后续变化。
+    /// 跟随操作系统主题。
     #[default]
     System,
     /// 始终使用浅色主题。
@@ -23,106 +16,92 @@ pub(crate) enum ThemePreference {
     Dark,
 }
 
-/// Babysit Mode 对未来分析使用的模型偏好。
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-pub(crate) enum BabysitModelPreference {
-    /// 每次分析采用 Codex App Server 的默认模型与思考强度。
+/// Babysit Mode 支持的稳定 provider 身份。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum BabysitProvider {
+    /// 使用 Codex App Server。
     #[default]
-    Automatic,
-    /// 固定使用指定模型；空思考强度表示采用该模型的服务端默认值。
-    Explicit {
-        #[serde(rename = "modelId")]
-        model: String,
-        #[serde(rename = "reasoningEffort")]
-        reasoning_effort: Option<String>,
-    },
+    Codex,
+    /// 使用本机 Claude Code。
+    ClaudeCode,
 }
 
-/// 当前 IPC/settings.json DTO 的反序列化表示。
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-enum CurrentBabysitModelPreference {
-    Automatic,
-    Explicit {
-        #[serde(rename = "modelId")]
-        model_id: String,
-        #[serde(rename = "reasoningEffort")]
-        reasoning_effort: Option<String>,
-    },
+/// 单个 provider 独立保留的完整偏好组合。
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BabysitProviderSettings {
+    /// 用户显式选择的 executable；空值恢复 provider 自动发现。
+    pub executable: Option<PathBuf>,
+    /// 用户显式选择的模型；空值使用 provider 默认模型。
+    pub model: Option<String>,
+    /// 用户显式选择的思考强度；空值使用 provider 默认强度。
+    pub reasoning_effort: Option<String>,
 }
 
-/// Issue #102 集成前短暂写出的旧模型偏好表示，仅用于兼容读取。
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case", tag = "mode")]
-enum LegacyBabysitModelPreference {
-    Automatic,
-    Explicit {
-        model: String,
-        reasoning_effort: Option<String>,
-    },
+/// Babysit 的设备级 provider 选择及两套独立配置。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BabysitSettings {
+    pub provider: BabysitProvider,
+    pub codex: BabysitProviderSettings,
+    pub claude_code: BabysitProviderSettings,
 }
 
-/// 同时接受公开 camelCase DTO 和旧 settings.json 表示，后续写入统一使用新格式。
-impl<'de> Deserialize<'de> for BabysitModelPreference {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum CompatiblePreference {
-            Current(CurrentBabysitModelPreference),
-            Legacy(LegacyBabysitModelPreference),
+impl Default for BabysitSettings {
+    /// 首次启动默认选择 Codex，并为两个 provider 建立空配置。
+    fn default() -> Self {
+        Self {
+            provider: BabysitProvider::Codex,
+            codex: BabysitProviderSettings::default(),
+            claude_code: BabysitProviderSettings::default(),
         }
-        Ok(match CompatiblePreference::deserialize(deserializer)? {
-            CompatiblePreference::Current(CurrentBabysitModelPreference::Automatic)
-            | CompatiblePreference::Legacy(LegacyBabysitModelPreference::Automatic) => {
-                Self::Automatic
-            }
-            CompatiblePreference::Current(CurrentBabysitModelPreference::Explicit {
-                model_id,
-                reasoning_effort,
-            }) => Self::Explicit {
-                model: model_id,
-                reasoning_effort,
-            },
-            CompatiblePreference::Legacy(LegacyBabysitModelPreference::Explicit {
-                model,
-                reasoning_effort,
-            }) => Self::Explicit {
-                model,
-                reasoning_effort,
-            },
-        })
     }
 }
 
 /// 经校验的设备级 Application Settings 快照。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ApplicationSettings {
     pub version: u32,
     pub theme: ThemePreference,
-    pub codex_executable: Option<PathBuf>,
-    pub babysit_model: BabysitModelPreference,
-}
-
-/// 旧 Babysit 文件中唯一可迁移的非敏感偏好。
-#[derive(Deserialize)]
-struct LegacyBabysitSettings {
-    executable: Option<PathBuf>,
+    pub babysit: BabysitSettings,
 }
 
 impl Default for ApplicationSettings {
-    /// 构造首次启动采用的安全默认设置。
+    /// 构造 settings v1 的设备级默认快照。
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
             theme: ThemePreference::System,
-            codex_executable: None,
-            babysit_model: BabysitModelPreference::Automatic,
+            babysit: BabysitSettings::default(),
+        }
+    }
+}
+
+/// Codex runtime 使用的 automatic/explicit 投影。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub(crate) enum BabysitModelPreference {
+    #[default]
+    Automatic,
+    Explicit {
+        #[serde(rename = "modelId")]
+        model: String,
+        #[serde(rename = "reasoningEffort")]
+        reasoning_effort: Option<String>,
+    },
+}
+
+impl From<&BabysitProviderSettings> for BabysitModelPreference {
+    /// 将 nullable model/effort 配置投影为 Codex 目录解析契约。
+    fn from(value: &BabysitProviderSettings) -> Self {
+        match &value.model {
+            Some(model) => Self::Explicit {
+                model: model.clone(),
+                reasoning_effort: value.reasoning_effort.clone(),
+            },
+            None => Self::Automatic,
         }
     }
 }
@@ -133,11 +112,11 @@ pub(crate) enum ApplicationSettingsError {
     Io(std::io::Error),
     Malformed(serde_json::Error),
     UnsupportedVersion(u32),
-    InvalidCodexExecutable,
+    InvalidProviderPreference,
 }
 
 impl fmt::Display for ApplicationSettingsError {
-    /// 将设置失败转换为不泄露文件内容的稳定诊断。
+    /// 将设置错误投影为稳定且不泄露设置内容的用户可读诊断。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "Application Settings I/O 失败：{error}"),
@@ -145,119 +124,113 @@ impl fmt::Display for ApplicationSettingsError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "不支持 settings.json 版本 {version}")
             }
-            Self::InvalidCodexExecutable => formatter.write_str(
-                "Codex executable 无效；请在 Application Settings 中重新选择可执行文件",
-            ),
+            Self::InvalidProviderPreference => formatter.write_str("Babysit provider 偏好组合无效"),
         }
     }
 }
-
 impl std::error::Error for ApplicationSettingsError {}
 
 /// 设备级 Application Settings 的应用契约。
 #[derive(Clone)]
 pub(crate) struct ApplicationSettingsApplication {
     settings_path: PathBuf,
-    legacy_babysit_path: PathBuf,
 }
 
 impl ApplicationSettingsApplication {
-    /// 为统一设置文件与一次性旧 Babysit 设置来源建立应用边界。
-    pub(crate) fn new(settings_path: PathBuf, legacy_babysit_path: PathBuf) -> Self {
-        Self {
-            settings_path,
-            legacy_babysit_path,
-        }
+    /// 为首版统一设置文件建立应用边界，不读取或迁移旧文件。
+    pub(crate) fn new(settings_path: PathBuf) -> Self {
+        Self { settings_path }
     }
 
-    /// 读取并校验当前设置；缺失文件返回默认值且不产生磁盘写入。
+    /// 读取并校验当前设置；缺失文件返回默认值且不写磁盘。
     pub(crate) fn load(&self) -> Result<ApplicationSettings, ApplicationSettingsError> {
         match std::fs::read_to_string(&self.settings_path) {
             Ok(contents) => {
-                let settings = serde_json::from_str::<ApplicationSettings>(&contents)
-                    .map_err(ApplicationSettingsError::Malformed)?;
+                let settings: ApplicationSettings =
+                    serde_json::from_str(&contents).map_err(ApplicationSettingsError::Malformed)?;
                 if settings.version != SETTINGS_VERSION {
                     return Err(ApplicationSettingsError::UnsupportedVersion(
                         settings.version,
                     ));
                 }
-                if settings
-                    .codex_executable
-                    .as_ref()
-                    .is_some_and(|path| !path.is_absolute())
-                {
-                    return Err(ApplicationSettingsError::InvalidCodexExecutable);
-                }
+                validate_provider_settings(BabysitProvider::Codex, &settings.babysit.codex)?;
+                validate_provider_settings(
+                    BabysitProvider::ClaudeCode,
+                    &settings.babysit.claude_code,
+                )?;
                 Ok(settings)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.migrate_legacy(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(ApplicationSettings::default())
+            }
             Err(error) => Err(ApplicationSettingsError::Io(error)),
         }
     }
 
-    /// 缺少统一文件时迁移一次旧 executable；无有效旧值仍只返回默认值。
-    fn migrate_legacy(&self) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        let contents = match std::fs::read_to_string(&self.legacy_babysit_path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(ApplicationSettings::default());
-            }
-            Err(error) => return Err(ApplicationSettingsError::Io(error)),
-        };
-        let legacy = serde_json::from_str::<LegacyBabysitSettings>(&contents)
-            .map_err(ApplicationSettingsError::Malformed)?;
-        let Some(executable) = legacy.executable else {
-            return Ok(ApplicationSettings::default());
-        };
-        let executable = canonical_codex_file(&executable)?;
-        validate_codex_version_sync(&executable)?;
-        let settings = ApplicationSettings {
-            codex_executable: Some(executable),
-            ..ApplicationSettings::default()
-        };
-        self.persist(&settings)?;
-        Ok(settings)
-    }
-
-    /// 原子保存主题并返回新的权威快照；失败时旧文件保持不变。
+    /// 原子保存主题并返回新快照。
     pub(crate) fn update_theme(
         &self,
         theme: ThemePreference,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        let mut settings = self.load()?;
-        settings.theme = theme;
-        self.persist(&settings)?;
-        Ok(settings)
+        self.update(|settings| settings.theme = theme)
     }
 
-    /// 原子更新 Codex Executable Preference，并保留同一快照中的其他设置。
-    pub(crate) async fn update_codex_executable(
+    /// 原子切换 future analyses 使用的 provider，保留两套 provider 配置。
+    pub(crate) fn update_provider(
         &self,
-        executable: Option<PathBuf>,
+        provider: BabysitProvider,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        let executable = match executable {
-            Some(path) => Some(validate_codex_executable(&path).await?),
-            None => None,
-        };
-        let mut settings = self.load()?;
-        settings.codex_executable = executable;
-        self.persist(&settings)?;
-        Ok(settings)
+        self.update(|settings| settings.babysit.provider = provider)
     }
 
-    /// 原子更新 Babysit Model Preference，并保留同一快照中的其他设置。
+    /// 原子替换一个 provider 的完整 executable/model/effort 组合。
+    pub(crate) fn update_provider_settings(
+        &self,
+        provider: BabysitProvider,
+        preference: BabysitProviderSettings,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        validate_provider_settings(provider, &preference)?;
+        self.update(|settings| match provider {
+            BabysitProvider::Codex => settings.babysit.codex = preference,
+            BabysitProvider::ClaudeCode => settings.babysit.claude_code = preference,
+        })
+    }
+
+    /// 将 Codex runtime 的模型投影写回完整 provider 配置，同时保留 executable。
+    #[cfg(test)]
     pub(crate) fn update_babysit_model(
         &self,
         preference: BabysitModelPreference,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        let mut provider = self.load()?.babysit.codex;
+        match preference {
+            BabysitModelPreference::Automatic => {
+                provider.model = None;
+                provider.reasoning_effort = None;
+            }
+            BabysitModelPreference::Explicit {
+                model,
+                reasoning_effort,
+            } => {
+                provider.model = Some(model);
+                provider.reasoning_effort = reasoning_effort;
+            }
+        }
+        self.update_provider_settings(BabysitProvider::Codex, provider)
+    }
+
+    /// 在内存快照完成一次变更，并仅在原子替换成功后返回新权威值。
+    fn update(
+        &self,
+        change: impl FnOnce(&mut ApplicationSettings),
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
         let mut settings = self.load()?;
-        settings.babysit_model = preference;
+        change(&mut settings);
         self.persist(&settings)?;
         Ok(settings)
     }
 
-
-    /// 在目标目录写入临时文件并原子替换正式设置文件。
+    /// 通过同目录临时文件同步落盘并原子替换正式设置文件。
     fn persist(&self, settings: &ApplicationSettings) -> Result<(), ApplicationSettingsError> {
         let parent = self.settings_path.parent().ok_or_else(|| {
             ApplicationSettingsError::Io(std::io::Error::other("设置路径缺少父目录"))
@@ -278,96 +251,31 @@ impl ApplicationSettingsApplication {
     }
 }
 
-/// 将用户选择规范化为普通可执行文件，并以有界时间运行版本探测。
-async fn validate_codex_executable(
-    path: &Path,
-) -> Result<PathBuf, ApplicationSettingsError> {
-    let canonical = canonical_codex_file(path)?;
-
-    let mut command = tokio::process::Command::new(&canonical);
-    command
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    crate::child_process::configure_tokio_command(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
-    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-    match status {
-        Ok(Ok(status)) if status.success() => Ok(canonical),
-        Ok(Ok(_)) => Err(ApplicationSettingsError::InvalidCodexExecutable),
-        Ok(Err(_)) | Err(_) => {
-            reap_tokio_child(&mut child).await;
-            Err(ApplicationSettingsError::InvalidCodexExecutable)
-        }
+/// 校验 provider 的 nullable model/effort 是否构成后端可接受的完整组合。
+fn validate_provider_settings(
+    provider: BabysitProvider,
+    preference: &BabysitProviderSettings,
+) -> Result<(), ApplicationSettingsError> {
+    if preference.model.is_none() && preference.reasoning_effort.is_some() {
+        return Err(ApplicationSettingsError::InvalidProviderPreference);
     }
-}
-
-/// 尽力终止并回收版本探测子进程，避免错误或超时分支遗留进程。
-async fn reap_tokio_child(child: &mut tokio::process::Child) {
-    let _ = child.start_kill();
-    let _ = child.wait().await;
-}
-
-/// 把偏好规范化为当前仍存在的普通可执行文件。
-fn canonical_codex_file(path: &Path) -> Result<PathBuf, ApplicationSettingsError> {
-    if !path.is_absolute() {
-        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    if provider != BabysitProvider::ClaudeCode {
+        return Ok(());
     }
-    let canonical = path
-        .canonicalize()
-        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
-    let metadata = std::fs::metadata(&canonical)
-        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
-    if !metadata.is_file() {
-        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    let Some(model) = preference.model.as_deref() else {
+        return Ok(());
+    };
+    if model.trim().is_empty() {
+        return Err(ApplicationSettingsError::InvalidProviderPreference);
     }
-    #[cfg(unix)]
-    if metadata.permissions().mode() & 0o111 == 0 {
-        return Err(ApplicationSettingsError::InvalidCodexExecutable);
+    let effort_valid = preference
+        .reasoning_effort
+        .as_deref()
+        .is_none_or(|effort| matches!(effort, "low" | "medium" | "high" | "xhigh" | "max"));
+    if !effort_valid || (model == "haiku" && preference.reasoning_effort.is_some()) {
+        return Err(ApplicationSettingsError::InvalidProviderPreference);
     }
-    Ok(canonical)
-}
-
-/// 在同步启动迁移中有界验证旧偏好，失败时不创建统一设置文件。
-fn validate_codex_version_sync(path: &Path) -> Result<(), ApplicationSettingsError> {
-    let mut command = std::process::Command::new(path);
-    command
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    crate::child_process::configure_std_command(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|_| ApplicationSettingsError::InvalidCodexExecutable)?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => return Err(ApplicationSettingsError::InvalidCodexExecutable),
-            Err(_) => {
-                reap_std_child(&mut child);
-                return Err(ApplicationSettingsError::InvalidCodexExecutable);
-            }
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) => {
-                reap_std_child(&mut child);
-                return Err(ApplicationSettingsError::InvalidCodexExecutable);
-            }
-        }
-    }
-}
-
-/// 尽力终止并回收同步迁移的版本探测子进程。
-fn reap_std_child(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+    Ok(())
 }
 
 #[cfg(test)]
