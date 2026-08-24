@@ -5,12 +5,23 @@
 
 ## 默认 fixture 流程
 
-1. 运行前端测试与 `pnpm dev:preview`，不设置任何 provider 凭据。
-2. 在 Application Settings 的宝宝模式分区确认新设置默认选中 Codex。
-3. 切换 Codex 与 Claude Code，分别修改 executable、model 和 effort；往返切换后确认两套偏好独立保留。
-4. 验证 Codex 模型目录的 loading、empty、error/重试与 model 变化后不兼容 effort 原子回到 Default。
-5. 在 Review Reader preview 验证 generating、repairing、failed 和 provider setup failure。setup failure 只能打开 Application Settings，不得显示 Diff footer executable picker。
-6. 用明确的宽、窄 viewport 检查长路径、下拉展开、sticky footer 和关键按钮的实际尺寸。
+1. 在 Git Bash、macOS 或 Linux shell 中运行下列 deterministic backend fixtures；Windows PowerShell
+   应显式使用 `C:\Program Files\Git\bin\sh.exe` 代替 `sh`，避免系统询问如何打开 `.sh`：
+
+   ```sh
+   sh scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml babysit::tests::provider_registry
+   sh scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml babysit::tests::fake_provider_counts_invalid_generate_and_repair_rounds -- --exact
+   sh scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml babysit::tests::claude::cancellation_discards_output_and_terminates_the_process -- --exact
+   ```
+
+   这些测试分别验证 selected-provider 路由与冻结快照、生成/修复，以及取消和子进程清理；
+   全部使用仓库 fixture，不读取真实凭据、不访问模型服务。
+2. 运行 `pnpm test -- --run` 与 `pnpm dev:preview`，不设置任何 provider 凭据。
+3. 在 Application Settings 的宝宝模式分区确认新设置默认选中 Codex。
+4. 切换 Codex 与 Claude Code，分别修改 executable、model 和 effort；往返切换后确认两套偏好独立保留。
+5. 验证 Codex 模型目录的 loading、empty、error/重试与 model 变化后不兼容 effort 原子回到 Default。
+6. 在 Review Reader preview 验证 generating、repairing、failed 和 provider setup failure。setup failure 的“打开应用设置”必须直达宝宝模式分区，不得显示 Diff footer executable picker。
+7. 用明确的宽、窄 viewport 检查长路径、下拉展开、sticky footer 和关键按钮的实际尺寸。
 
 ## 可选真实 provider probe
 

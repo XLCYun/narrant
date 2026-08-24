@@ -7,16 +7,18 @@ import { knownReviewId, type ReviewOpenTarget } from "@/review/review-applicatio
 import type { ReviewLifecycleBinding, ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
 export type RepositoryTab = "pull-requests" | "branches" | "history";
+/** 设置目的地可直接打开的稳定分区。 */
+export type SettingsSection = "appearance" | "github" | "babysit";
 
 export type AppDestination =
   | { kind: "home" }
   | { kind: "repository"; repositoryId: number; initialTab: RepositoryTab }
   | { kind: "review"; repositoryId: number; reviewId: string }
-  | { kind: "settings" };
+  | { kind: "settings"; initialSection?: SettingsSection };
 
 export type AppNavigationIntent =
   | { kind: "home" }
-  | { kind: "settings" }
+  | { kind: "settings"; initialSection?: SettingsSection }
   | { kind: "repository"; repositoryId: number }
   | { kind: "review"; repositoryId: number; target: ReviewOpenTarget };
 
@@ -157,7 +159,7 @@ export function useAppShellNavigation(
     try {
       if (intent.kind === "settings") {
         if (destination.kind !== "settings") settingsReturnDestination.current = destination;
-        setDestination({ kind: "settings" });
+        setDestination({ kind: "settings", initialSection: intent.initialSection });
         setTransition({ kind: "stable" });
         setNavigationError(undefined);
         return { kind: "navigated" };
