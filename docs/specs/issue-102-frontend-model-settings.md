@@ -36,4 +36,3 @@ validated save succeeds.
 
 - Run focused Vitest tests, typecheck, and lint for changed frontend code.
 - Do not perform the final browser pass; the drone does that after integration.
-

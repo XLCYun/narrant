@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { ApplicationSettingsDestination } from "@/components/settings-page";
+import { ApplicationSettingsDestination, SettingsPage } from "@/components/settings-page";
 import type { ApplicationSettingsApplication } from "@/settings/application-settings";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
@@ -88,6 +88,44 @@ describe("Settings application-shell UI", () => {
 
     await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "explicit", modelId: "gpt-5.4-mini", reasoningEffort: "low" }));
     expect(await screen.findByText("gpt-5.4-mini · low")).toBeInTheDocument();
+  });
+
+  it("已保存模型从动态目录消失时仍可选择 automatic 并保存", async () => {
+    mockSystemTheme(false);
+    const settings = application();
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: null, babysitModel: { kind: "explicit", modelId: "retired-model", reasoningEffort: "high" } });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByText("retired-model · high")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
+
+    const automatic = await screen.findByRole("radio", { name: "自动（使用 App Server 默认值）" });
+    expect(automatic).not.toBeChecked();
+    fireEvent.click(automatic);
+    fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
+
+    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "automatic" }));
+    expect(screen.getByText("自动（使用 App Server 默认值）")).toBeInTheDocument();
+  });
+
+  it("模型保存值读取失败时显示错误并允许重试", async () => {
+    const settings = application();
+    vi.mocked(settings.load)
+      .mockRejectedValueOnce(new Error("settings.json 暂时不可读"))
+      .mockResolvedValueOnce({ version: 1, theme: "system", codexExecutable: null, babysitModel: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: "high" } });
+    render(<SettingsPage
+      theme={{ preference: "system", loaded: true, saving: false, error: undefined, editorTheme: "light", choose: vi.fn() }}
+      codex={{ executable: null, loaded: true, saving: false, error: undefined, choose: vi.fn(), clear: vi.fn() }}
+      modelApplication={settings}
+      initialSection="babysit"
+      onBack={() => undefined}
+    />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("settings.json 暂时不可读");
+    fireEvent.click(screen.getByRole("button", { name: "重试读取模型设置" }));
+
+    expect(await screen.findByText("gpt-5.4 · high")).toBeInTheDocument();
+    expect(settings.load).toHaveBeenCalledTimes(2);
   });
 
   it("目录失败保留旧值并允许重试，保存失败也不覆盖旧值", async () => {

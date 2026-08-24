@@ -37,4 +37,3 @@ and reasoning effort.
 - Run focused Rust checks/tests through `scripts/cargo-agent.sh` during development.
 - Run relevant TypeScript adapter/transport tests if the command contract changes.
 - Do not run the final full suite; the drone does that after integration.
-

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft02Icon, ComputerIcon, GithubIcon, Moon02Icon, Settings02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -134,14 +134,23 @@ function BabysitModelSettings({ application, initialEditing }: { application: Ap
   const [draft, setDraft] = useState<BabysitModelPreference>({ kind: "automatic" });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
+  const [loadError, setLoadError] = useState<string>();
+
+  /** 读取当前持久化模型偏好；失败时保留现有投影并提供显式重试。 */
+  const loadSavedPreference = useCallback(async () => {
+    setLoadError(undefined);
+    try {
+      const settings = await application.load();
+      setSaved(settings.babysitModel);
+      setLoaded(true);
+    } catch (error) {
+      setLoadError(errorDetail(error, "无法读取模型设置"));
+    }
+  }, [application]);
 
   useEffect(() => {
-    let active = true;
-    void application.load().then((settings) => {
-      if (active) { setSaved(settings.babysitModel); setLoaded(true); }
-    });
-    return () => { active = false; };
-  }, [application]);
+    void loadSavedPreference();
+  }, [loadSavedPreference]);
 
   useEffect(() => {
     if (initialEditing && loaded && editor.kind === "idle") void loadCatalog();
@@ -184,12 +193,16 @@ function BabysitModelSettings({ application, initialEditing }: { application: Ap
   const savedLabel = saved.kind === "automatic"
     ? "自动（使用 App Server 默认值）"
     : `${modelName(editor, saved.modelId)} · ${saved.reasoningEffort ?? "模型默认"}`;
+  const draftModel = editor.kind === "editing" && draft.kind === "explicit"
+    ? editor.models.find((model) => model.id === draft.modelId)
+    : undefined;
 
   return <div className="mt-4 rounded-xl border bg-background p-4">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1"><p className="text-sm font-medium">模型与思考强度</p><p className="mt-1 text-sm text-muted-foreground">{loaded ? savedLabel : "正在读取保存值…"}</p></div>
       {editor.kind === "idle" && <Button variant="outline" disabled={!loaded} onClick={() => void loadCatalog()}>修改模型偏好</Button>}
     </div>
+    {loadError && <div className="mt-4 space-y-3"><p role="alert" className="text-sm text-destructive">{loadError}，当前显示值保持不变。</p><Button variant="outline" onClick={() => void loadSavedPreference()}>重试读取模型设置</Button></div>}
     {editor.kind === "loading" && <p role="status" className="mt-4 text-sm text-muted-foreground">正在获取可用模型…</p>}
     {editor.kind === "failed" && <div className="mt-4 space-y-3"><p role="alert" className="text-sm text-destructive">{editor.detail}，原设置已保留。</p><div className="flex gap-2"><Button variant="outline" onClick={() => void loadCatalog()}>重试获取模型</Button><Button variant="ghost" onClick={() => setEditor({ kind: "idle" })}>取消模型修改</Button></div></div>}
     {editor.kind === "editing" && <div className="mt-5 space-y-5">
@@ -198,7 +211,8 @@ function BabysitModelSettings({ application, initialEditing }: { application: Ap
         <ModelRadio checked={draft.kind === "automatic"} label="自动（使用 App Server 默认值）" onChoose={() => setDraft({ kind: "automatic" })} />
         {editor.models.map((model) => <ModelRadio key={model.id} checked={draft.kind === "explicit" && draft.modelId === model.id} label={`${model.name}${model.isDefault ? "（服务端默认）" : ""}`} onChoose={() => setDraft({ kind: "explicit", modelId: model.id, reasoningEffort: null })} />)}
       </div>
-      {draft.kind === "explicit" && <EffortChoices model={editor.models.find((model) => model.id === draft.modelId)!} value={draft.reasoningEffort} onChoose={(reasoningEffort) => setDraft({ ...draft, reasoningEffort })} />}
+      {draft.kind === "explicit" && !draftModel && <p role="alert" className="text-sm text-destructive">已保存模型不再可用，请选择自动模式或其他模型。</p>}
+      {draft.kind === "explicit" && draftModel && <EffortChoices model={draftModel} value={draft.reasoningEffort} onChoose={(reasoningEffort) => setDraft({ ...draft, reasoningEffort })} />}
       <div className="flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={saving} onClick={() => { setEditor({ kind: "idle" }); setSaveError(undefined); }}>取消模型修改</Button><Button disabled={saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存模型偏好"}</Button></div>
     </div>}
   </div>;
