@@ -44,6 +44,15 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
   };
 }
 
+/** 通过公开 combobox 语义选择一个动态设置项。 */
+async function chooseSelect(label: string, option: string | RegExp) {
+  fireEvent.click(screen.getByRole("combobox", { name: label }));
+  const item = await screen.findByRole("option", { name: option });
+  fireEvent.pointerDown(item);
+  fireEvent.pointerUp(item);
+  fireEvent.click(item);
+}
+
 /** 构造设置页消费的 GitHub Identity lifecycle 公共绑定。 */
 function githubIdentity(): GitHubIdentityLifecycleBinding {
   return {
@@ -66,9 +75,9 @@ describe("Settings application-shell UI", () => {
     expect(await screen.findByText("gpt-5.4 · high")).toBeInTheDocument();
     expect(settings.listBabysitModels).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
-    await screen.findByRole("radiogroup", { name: "模型偏好" });
+    await screen.findByRole("combobox", { name: "模型" });
     expect(settings.listBabysitModels).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("radio", { name: /GPT-5.4 Mini/ }));
+    await chooseSelect("模型", /GPT-5.4 Mini/);
     fireEvent.click(screen.getByRole("button", { name: "取消模型修改" }));
 
     expect(screen.getByText("gpt-5.4 · high")).toBeInTheDocument();
@@ -81,9 +90,10 @@ describe("Settings application-shell UI", () => {
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
     await screen.findByText("自动（使用 App Server 默认值）");
     fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /GPT-5.4 Mini/ }));
-    expect(screen.getByRole("radio", { name: "模型默认（medium）" })).toBeChecked();
-    fireEvent.click(screen.getByRole("radio", { name: "low" }));
+    await screen.findByRole("combobox", { name: "模型" });
+    await chooseSelect("模型", /GPT-5.4 Mini/);
+    expect(screen.getByRole("combobox", { name: "思考强度" })).toHaveTextContent("模型默认（medium）");
+    await chooseSelect("思考强度", "low");
     fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
 
     await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "explicit", modelId: "gpt-5.4-mini", reasoningEffort: "low" }));
@@ -99,9 +109,9 @@ describe("Settings application-shell UI", () => {
     expect(await screen.findByText("retired-model · high")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
 
-    const automatic = await screen.findByRole("radio", { name: "自动（使用 App Server 默认值）" });
-    expect(automatic).not.toBeChecked();
-    fireEvent.click(automatic);
+    const modelSelect = await screen.findByRole("combobox", { name: "模型" });
+    expect(modelSelect).toHaveTextContent("retired-model（不可用）");
+    await chooseSelect("模型", "自动（使用 App Server 默认值）");
     fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
 
     await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "automatic" }));
@@ -132,15 +142,16 @@ describe("Settings application-shell UI", () => {
     mockSystemTheme(false);
     const settings = application();
     vi.mocked(settings.listBabysitModels).mockRejectedValueOnce({ code: "app_server_unavailable", detail: "App Server 无法启动" });
-    vi.mocked(settings.updateBabysitModel).mockRejectedValueOnce({ code: "settings_write_failed", detail: "磁盘已满" });
+    vi.mocked(settings.updateBabysitModel).mockRejectedValueOnce("settings.json 无法原子替换");
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
     await screen.findByText("自动（使用 App Server 默认值）");
     fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("App Server 无法启动");
     fireEvent.click(screen.getByRole("button", { name: "重试获取模型" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /GPT-5.4（服务端默认）/ }));
+    await screen.findByRole("combobox", { name: "模型" });
+    await chooseSelect("模型", /GPT-5.4（服务端默认）/);
     fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("磁盘已满");
+    expect(await screen.findByRole("alert")).toHaveTextContent("settings.json 无法原子替换");
     fireEvent.click(screen.getByRole("button", { name: "取消模型修改" }));
     expect(screen.getByText("自动（使用 App Server 默认值）")).toBeInTheDocument();
   });
@@ -185,10 +196,13 @@ describe("Settings application-shell UI", () => {
     ] });
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
     fireEvent.click(await screen.findByRole("button", { name: "修改模型偏好" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /Future Model/ }));
+    await screen.findByRole("combobox", { name: "模型" });
+    await chooseSelect("模型", /Future Model/);
 
-    expect(screen.getByRole("radio", { name: "模型默认（ultra）" })).toBeChecked();
-    expect(screen.getByRole("radio", { name: "ultra" })).toBeInTheDocument();
+    const effortSelect = screen.getByRole("combobox", { name: "思考强度" });
+    expect(effortSelect).toHaveTextContent("模型默认（ultra）");
+    fireEvent.click(effortSelect);
+    expect(await screen.findByRole("option", { name: "ultra" })).toBeInTheDocument();
   });
 
   it("展示可扩展二级导航，并为后续分区提供稳定占位", async () => {

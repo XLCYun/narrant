@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitModelPreference, ReasoningEffort, ThemePreference } from "@/settings/application-settings";
@@ -207,25 +208,49 @@ function BabysitModelSettings({ application, initialEditing }: { application: Ap
     {editor.kind === "failed" && <div className="mt-4 space-y-3"><p role="alert" className="text-sm text-destructive">{editor.detail}，原设置已保留。</p><div className="flex gap-2"><Button variant="outline" onClick={() => void loadCatalog()}>重试获取模型</Button><Button variant="ghost" onClick={() => setEditor({ kind: "idle" })}>取消模型修改</Button></div></div>}
     {editor.kind === "editing" && <div className="mt-5 space-y-5">
       {saveError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{saveError}，原设置已保留。</p>}
-      <div role="radiogroup" aria-label="模型偏好" className="grid gap-2">
-        <ModelRadio checked={draft.kind === "automatic"} label="自动（使用 App Server 默认值）" onChoose={() => setDraft({ kind: "automatic" })} />
-        {editor.models.map((model) => <ModelRadio key={model.id} checked={draft.kind === "explicit" && draft.modelId === model.id} label={`${model.name}${model.isDefault ? "（服务端默认）" : ""}`} onChoose={() => setDraft({ kind: "explicit", modelId: model.id, reasoningEffort: null })} />)}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <ModelPreferenceSelect models={editor.models} value={draft} onChange={setDraft} />
+        <ReasoningEffortSelect model={draftModel} value={draft.kind === "explicit" ? draft.reasoningEffort : null} automatic={draft.kind === "automatic"} onChange={(reasoningEffort) => draft.kind === "explicit" && setDraft({ ...draft, reasoningEffort })} />
       </div>
       {draft.kind === "explicit" && !draftModel && <p role="alert" className="text-sm text-destructive">已保存模型不再可用，请选择自动模式或其他模型。</p>}
-      {draft.kind === "explicit" && draftModel && <EffortChoices model={draftModel} value={draft.reasoningEffort} onChoose={(reasoningEffort) => setDraft({ ...draft, reasoningEffort })} />}
       <div className="flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={saving} onClick={() => { setEditor({ kind: "idle" }); setSaveError(undefined); }}>取消模型修改</Button><Button disabled={saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存模型偏好"}</Button></div>
     </div>}
   </div>;
 }
 
-/** 使用原生 radio 语义呈现一个可访问的模型选项。 */
-function ModelRadio({ checked, label, onChoose }: { checked: boolean; label: string; onChoose(): void }) {
-  return <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm"><input type="radio" checked={checked} onChange={onChoose} />{label}</label>;
+/** 通过动态模型目录呈现自动模式与显式模型选择。 */
+function ModelPreferenceSelect({ models, value, onChange }: { models: BabysitModelCatalogEntry[]; value: BabysitModelPreference; onChange(value: BabysitModelPreference): void }) {
+  const selectedValue = value.kind === "automatic" ? "mode:automatic" : `model:${value.modelId}`;
+  const unavailable = value.kind === "explicit" && !models.some((model) => model.id === value.modelId) ? value.modelId : undefined;
+  const selectedModel = value.kind === "explicit" ? models.find((model) => model.id === value.modelId) : undefined;
+  const selectedLabel = value.kind === "automatic"
+    ? "自动（使用 App Server 默认值）"
+    : selectedModel ? `${selectedModel.name}${selectedModel.isDefault ? "（服务端默认）" : ""}` : `${value.modelId}（不可用）`;
+  return <label className="grid gap-2 text-sm font-medium">模型
+    <Select value={selectedValue} onValueChange={(nextValue) => nextValue && onChange(nextValue === "mode:automatic" ? { kind: "automatic" } : { kind: "explicit", modelId: nextValue.slice("model:".length), reasoningEffort: null })}>
+      <SelectTrigger aria-label="模型" className="w-full"><SelectValue>{selectedLabel}</SelectValue></SelectTrigger>
+      <SelectContent align="start">
+        <SelectItem value="mode:automatic">自动（使用 App Server 默认值）</SelectItem>
+        {unavailable && <SelectItem value={`model:${unavailable}`} disabled>{unavailable}（不可用）</SelectItem>}
+        {models.map((model) => <SelectItem key={model.id} value={`model:${model.id}`}>{model.name}{model.isDefault ? "（服务端默认）" : ""}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  </label>;
 }
 
-/** 只呈现当前模型声明支持的思考强度，并包含模型默认选项。 */
-function EffortChoices({ model, value, onChoose }: { model: BabysitModelCatalogEntry; value: ReasoningEffort | null; onChoose(value: ReasoningEffort | null): void }) {
-  return <fieldset className="grid gap-2"><legend className="mb-2 text-sm font-medium">思考强度</legend><ModelRadio checked={value === null} label={`模型默认（${model.defaultReasoningEffort}）`} onChoose={() => onChoose(null)} />{model.supportedReasoningEfforts.map((effort) => <ModelRadio key={effort} checked={value === effort} label={effort} onChoose={() => onChoose(effort)} />)}</fieldset>;
+/** 仅呈现当前显式模型动态声明的思考强度。 */
+function ReasoningEffortSelect({ model, value, automatic, onChange }: { model?: BabysitModelCatalogEntry; value: ReasoningEffort | null; automatic: boolean; onChange(value: ReasoningEffort | null): void }) {
+  const selectedValue = value === null ? "effort:default" : `effort:${value}`;
+  const selectedLabel = automatic ? "使用 App Server 默认值" : model ? value ?? `模型默认（${model.defaultReasoningEffort}）` : "请选择可用模型";
+  return <label className="grid gap-2 text-sm font-medium">思考强度
+    <Select value={selectedValue} disabled={automatic || !model} onValueChange={(nextValue) => nextValue && onChange(nextValue === "effort:default" ? null : nextValue.slice("effort:".length))}>
+      <SelectTrigger aria-label="思考强度" className="w-full"><SelectValue>{selectedLabel}</SelectValue></SelectTrigger>
+      <SelectContent align="start">
+        {model && <SelectItem value="effort:default">模型默认（{model.defaultReasoningEffort}）</SelectItem>}
+        {model?.supportedReasoningEfforts.map((effort) => <SelectItem key={effort} value={`effort:${effort}`}>{effort}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  </label>;
 }
 
 /** 在已有目录时显示服务端名称，否则稳定显示保存的模型标识。 */
@@ -236,6 +261,7 @@ function modelName(editor: ModelEditorState, modelId: string) {
 /** 从 typed command 结构化错误或普通异常中提取用户可见详情。 */
 function errorDetail(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
+  if (typeof error === "string" && error.trim().length > 0) return error;
   if (typeof error === "object" && error && "detail" in error && typeof error.detail === "string") return error.detail;
   return fallback;
 }

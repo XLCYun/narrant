@@ -4,6 +4,29 @@ use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
 use std::sync::Arc;
 use tokio::sync::Notify;
 
+#[test]
+fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_session() {
+    let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
+    application.remember_model_catalog(codex::CodexModelCatalog {
+        models: vec![codex::CodexModelCapability {
+            id: "catalog-entry".to_owned(),
+            model: "gpt-runtime-model".to_owned(),
+            name: "Catalog Model".to_owned(),
+            is_default: true,
+            hidden: false,
+            supported_reasoning_efforts: vec!["low".to_owned()],
+            default_reasoning_effort: "low".to_owned(),
+        }],
+    });
+
+    assert!(application
+        .validate_model_preference(&crate::application_settings::BabysitModelPreference::Explicit {
+            model: "catalog-entry".to_owned(),
+            reasoning_effort: Some("low".to_owned()),
+        })
+        .is_ok());
+}
+
 /// 在 generate 中暂停的 provider，用于观察偏好变化不会改写已解析请求。
 struct InFlightModelProvider {
     resolved: Mutex<codex::ResolvedCodexModel>,

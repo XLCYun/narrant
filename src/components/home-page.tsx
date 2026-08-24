@@ -577,7 +577,6 @@ export function AppShell({
           <Button
             variant="outline"
             size="icon"
-            pressMotion={false}
             className="size-10 shrink-0 rounded-full"
             aria-label="设置"
             aria-current={destination.kind === "settings" ? "page" : undefined}

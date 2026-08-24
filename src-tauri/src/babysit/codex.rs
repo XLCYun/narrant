@@ -28,6 +28,8 @@ pub(super) mod runtime;
 #[path = "codex/transport/mod.rs"]
 mod transport;
 mod model_catalog;
+#[cfg(test)]
+pub(crate) use model_catalog::CodexModelCapability;
 pub(crate) use model_catalog::{CodexModelCatalog, ResolvedCodexModel};
 
 /// Babysit 一次完整分析（包括 repair）的总截止时间。

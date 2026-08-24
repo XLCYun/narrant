@@ -53,7 +53,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
   const { t } = useTranslation(["github", "common"]);
 
   if (!signedIn) {
-    return <Button variant="ghost" pressMotion={false} className={className} onClick={error && onRetry ? onRetry : onConnect}>
+    return <Button variant="ghost" className={className} onClick={error && onRetry ? onRetry : onConnect}>
       <GitHubMark className="size-[22px] shrink-0" />
       <span className="truncate">{error ? t("retryStatus") : t("connect")}</span>
     </Button>;
@@ -61,12 +61,12 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
 
   const compactName = identity?.name?.trim() || identity?.login || t("connected");
   const avatarUrl = githubIdentityAvatarUrl(identity?.avatarPath);
-  return <div className="min-w-0 space-y-1">
+  return <div className="min-w-0">
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label={compactName}
         className={className}
-        render={<Button variant="ghost" pressMotion={false} />}
+        render={<Button variant="ghost" />}
       >
         {identity
           ? <Avatar className="size-9">
@@ -98,7 +98,7 @@ export function GitHubIdentityEntry({ signedIn, identity, error, onConnect, onSi
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-    {error && <div className="space-y-1 px-2 text-xs text-destructive">
+    {error && <div className="mt-1 space-y-1 px-2 text-xs text-destructive">
       <p role="alert" className="break-words">{error}</p>
       {onRetry && <Button variant="outline" size="sm" className="w-full" onClick={onRetry}>{t("retryAction")}</Button>}
     </div>}

@@ -487,6 +487,7 @@ struct CacheKey {
 pub struct BabysitApplication {
     provider: Arc<dyn BabysitAgentProvider>,
     codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
+    latest_model_catalog: Mutex<Option<codex::CodexModelCatalog>>,
     cache: Mutex<HashMap<CacheKey, BabysitFileExplanations>>,
 }
 
@@ -497,6 +498,7 @@ impl BabysitApplication {
         Self {
             provider,
             codex_runtime: None,
+            latest_model_catalog: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -516,6 +518,7 @@ impl BabysitApplication {
         Self {
             provider,
             codex_runtime: Some(runtime),
+            latest_model_catalog: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -530,7 +533,37 @@ impl BabysitApplication {
             .ok_or_else(|| BabysitError::Provider {
                 detail: "当前 provider 不支持动态模型目录。".to_owned(),
             })?;
-        runtime.model_catalog().await
+        let catalog = runtime.model_catalog().await?;
+        self.remember_model_catalog(catalog.clone())?;
+        Ok(catalog)
+    }
+
+    /// 记录设置页本次成功加载的模型目录，供显式保存使用同一份能力快照。
+    fn remember_model_catalog(
+        &self,
+        catalog: codex::CodexModelCatalog,
+    ) -> Result<(), BabysitError> {
+        *self.latest_model_catalog.lock().map_err(|_| BabysitError::Provider {
+            detail: "模型目录状态不可用。".to_owned(),
+        })? = Some(catalog);
+        Ok(())
+    }
+
+    /// 使用设置页当前编辑会话的目录校验模型偏好，避免保存时再次请求 App Server。
+    pub(crate) fn validate_model_preference(
+        &self,
+        preference: &crate::application_settings::BabysitModelPreference,
+    ) -> Result<(), BabysitError> {
+        let catalog = self
+            .latest_model_catalog
+            .lock()
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)?;
+        catalog
+            .as_ref()
+            .ok_or(BabysitError::ModelPreferenceInvalid)?
+            .resolve(preference)
+            .map(|_| ())
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)
     }
 
     /// 将首次 provider 发现和 App Server 握手保持在 Babysit 点击后的最高 seam。
