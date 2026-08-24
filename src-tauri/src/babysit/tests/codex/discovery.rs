@@ -97,7 +97,7 @@ async fn invalid_selected_executable_returns_reselection_error_without_raw_outpu
     assert!(matches!(
         &error,
         BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid }
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     assert!(!error.to_string().contains("codex-bad"));
 }
@@ -115,7 +115,7 @@ async fn oversized_version_output_is_bounded_and_child_is_reaped() {
     assert!(matches!(
         result,
         Err(BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid })
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     assert!(marker.exists(), "version fixture did not start");
     assert!(reaped, "direct version child was not reaped");
@@ -132,7 +132,7 @@ async fn hanging_version_process_is_killed_and_reaped_on_timeout() {
     assert!(matches!(
         result,
         Err(BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid })
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     assert!(marker.exists(), "version fixture did not start");
     assert!(reaped, "direct version child was not reaped");

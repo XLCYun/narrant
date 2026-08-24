@@ -14,15 +14,8 @@ pub(crate) async fn list_babysit_models(
     babysit: tauri::State<'_, BabysitApplication>,
     provider: crate::application_settings::BabysitProvider,
 ) -> Result<crate::babysit::BabysitModelCatalog, BabysitErrorPayload> {
-    if provider != crate::application_settings::BabysitProvider::Codex {
-        return Err(BabysitErrorPayload::from(
-            crate::babysit::BabysitError::Provider {
-                detail: "当前 provider 使用离线模型目录。".to_owned(),
-            },
-        ));
-    }
     babysit
-        .fetch_model_catalog()
+        .fetch_model_catalog(provider)
         .await
         .map_err(BabysitErrorPayload::from)
 }
@@ -103,11 +96,7 @@ pub(crate) async fn explain_review_file_change(
         let workspace_path = lifecycle
             .workspace_path(&review_id, &snapshot_id)
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
-        // 只有用户已经点击宝宝模式并真正请求解释时，才进行 provider discovery/initialize。
-        babysit
-            .prepare_runtime(&workspace_path)
-            .await
-            .map_err(BabysitErrorPayload::from)?;
+        // Provider 选择、模型解析和 readiness 在同一次应用调用内冻结，避免设置切换撕裂运行快照。
         babysit
             .explain_file(
                 BabysitFileRequest {

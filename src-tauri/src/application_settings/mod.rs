@@ -17,7 +17,7 @@ pub(crate) enum ThemePreference {
 }
 
 /// Babysit Mode 支持的稳定 provider 身份。
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Hash, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum BabysitProvider {
     /// 使用 Codex App Server。
@@ -25,6 +25,16 @@ pub(crate) enum BabysitProvider {
     Codex,
     /// 使用本机 Claude Code。
     ClaudeCode,
+}
+
+impl BabysitProvider {
+    /// 返回不会泄露底层 transport 的稳定 provider identity。
+    pub(crate) const fn identity(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+        }
+    }
 }
 
 /// 单个 provider 独立保留的完整偏好组合。
@@ -55,6 +65,16 @@ impl Default for BabysitSettings {
             provider: BabysitProvider::Codex,
             codex: BabysitProviderSettings::default(),
             claude_code: BabysitProviderSettings::default(),
+        }
+    }
+}
+
+impl BabysitSettings {
+    /// 返回指定 provider 的独立配置，供一次分析冻结完整偏好快照。
+    pub(crate) fn provider_settings(&self, provider: BabysitProvider) -> &BabysitProviderSettings {
+        match provider {
+            BabysitProvider::Codex => &self.codex,
+            BabysitProvider::ClaudeCode => &self.claude_code,
         }
     }
 }

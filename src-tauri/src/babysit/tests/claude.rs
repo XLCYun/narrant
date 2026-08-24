@@ -141,14 +141,14 @@ async fn auth_and_incompatible_results_use_stable_setup_categories() {
         (
             "auth",
             super::super::BabysitError::provider_setup(
-                "claude_code",
+                "claude-code",
                 BabysitProviderSetupFailure::SignedOut,
             ),
         ),
         (
             "incompatible",
             super::super::BabysitError::provider_setup(
-                "claude_code",
+                "claude-code",
                 BabysitProviderSetupFailure::Incompatible,
             ),
         ),
