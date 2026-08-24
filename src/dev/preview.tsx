@@ -270,7 +270,7 @@ function ReviewReaderPreview({
   update?: boolean;
   initialView?: "overview" | "file-changes";
   shortContent?: boolean;
-  babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery";
+  babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out";
 }) {
   const fileChanges = shortContent
     ? readerSnapshot.fileChanges.slice(0, 2)
@@ -313,6 +313,8 @@ function ReviewReaderPreview({
         ? { kind: "repairing", request: babysitRequest, attempt: 2 }
         : babysitKind === "claude-recovery"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_not_found", detail: "Claude Code executable unavailable", providerId: "claude_code", recovery: "select_provider_executable" } }
+        : babysitKind === "claude-signed-out"
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_signed_out", detail: "Claude Code authentication unavailable", providerId: "claude_code", recovery: "login_provider" } }
         : babysitKind === "failed"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
@@ -486,6 +488,7 @@ const previews: Record<string, PreviewDefinition> = {
       "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="repairing" /> },
       "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="failed" /> },
       "babysit-claude-recovery": { label: "Claude Code 恢复", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-recovery" /> },
+      "babysit-claude-signed-out": { label: "Claude Code 未登录", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-signed-out" /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
