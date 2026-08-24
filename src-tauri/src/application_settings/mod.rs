@@ -49,6 +49,7 @@ pub(crate) struct BabysitSettings {
 }
 
 impl Default for BabysitSettings {
+    /// 首次启动默认选择 Codex，并为两个 provider 建立空配置。
     fn default() -> Self {
         Self {
             provider: BabysitProvider::Codex,
@@ -68,6 +69,7 @@ pub(crate) struct ApplicationSettings {
 }
 
 impl Default for ApplicationSettings {
+    /// 构造 settings v1 的设备级默认快照。
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
@@ -92,6 +94,7 @@ pub(crate) enum BabysitModelPreference {
 }
 
 impl From<&BabysitProviderSettings> for BabysitModelPreference {
+    /// 将 nullable model/effort 配置投影为 Codex 目录解析契约。
     fn from(value: &BabysitProviderSettings) -> Self {
         match &value.model {
             Some(model) => Self::Explicit {
@@ -109,6 +112,7 @@ pub(crate) enum ApplicationSettingsError {
     Io(std::io::Error),
     Malformed(serde_json::Error),
     UnsupportedVersion(u32),
+    InvalidProviderPreference,
 }
 
 impl fmt::Display for ApplicationSettingsError {
@@ -119,6 +123,7 @@ impl fmt::Display for ApplicationSettingsError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "不支持 settings.json 版本 {version}")
             }
+            Self::InvalidProviderPreference => formatter.write_str("Babysit provider 偏好组合无效"),
         }
     }
 }
@@ -147,6 +152,11 @@ impl ApplicationSettingsApplication {
                         settings.version,
                     ));
                 }
+                validate_provider_settings(BabysitProvider::Codex, &settings.babysit.codex)?;
+                validate_provider_settings(
+                    BabysitProvider::ClaudeCode,
+                    &settings.babysit.claude_code,
+                )?;
                 Ok(settings)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -178,6 +188,7 @@ impl ApplicationSettingsApplication {
         provider: BabysitProvider,
         preference: BabysitProviderSettings,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        validate_provider_settings(provider, &preference)?;
         self.update(|settings| match provider {
             BabysitProvider::Codex => settings.babysit.codex = preference,
             BabysitProvider::ClaudeCode => settings.babysit.claude_code = preference,
@@ -207,6 +218,7 @@ impl ApplicationSettingsApplication {
         self.update_provider_settings(BabysitProvider::Codex, provider)
     }
 
+    /// 在内存快照完成一次变更，并仅在原子替换成功后返回新权威值。
     fn update(
         &self,
         change: impl FnOnce(&mut ApplicationSettings),
@@ -217,6 +229,7 @@ impl ApplicationSettingsApplication {
         Ok(settings)
     }
 
+    /// 通过同目录临时文件同步落盘并原子替换正式设置文件。
     fn persist(&self, settings: &ApplicationSettings) -> Result<(), ApplicationSettingsError> {
         let parent = self.settings_path.parent().ok_or_else(|| {
             ApplicationSettingsError::Io(std::io::Error::other("设置路径缺少父目录"))
@@ -235,6 +248,33 @@ impl ApplicationSettingsApplication {
             .map_err(|error| ApplicationSettingsError::Io(error.error))?;
         Ok(())
     }
+}
+
+/// 校验 provider 的 nullable model/effort 是否构成后端可接受的完整组合。
+fn validate_provider_settings(
+    provider: BabysitProvider,
+    preference: &BabysitProviderSettings,
+) -> Result<(), ApplicationSettingsError> {
+    if preference.model.is_none() && preference.reasoning_effort.is_some() {
+        return Err(ApplicationSettingsError::InvalidProviderPreference);
+    }
+    if provider != BabysitProvider::ClaudeCode {
+        return Ok(());
+    }
+    let Some(model) = preference.model.as_deref() else {
+        return Ok(());
+    };
+    if model.trim().is_empty() {
+        return Err(ApplicationSettingsError::InvalidProviderPreference);
+    }
+    let effort_valid = preference
+        .reasoning_effort
+        .as_deref()
+        .is_none_or(|effort| matches!(effort, "low" | "medium" | "high" | "xhigh" | "max"));
+    if !effort_valid || (model == "haiku" && preference.reasoning_effort.is_some()) {
+        return Err(ApplicationSettingsError::InvalidProviderPreference);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -88,6 +88,52 @@ fn legacy_flat_schema_is_rejected_and_not_replaced() {
     assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
 }
 
+#[test]
+fn model_default_rejects_a_non_default_reasoning_effort() {
+    let directory = tempfile::tempdir().unwrap();
+    let application = ApplicationSettingsApplication::new(directory.path().join("settings.json"));
+
+    let result = application.update_provider_settings(
+        BabysitProvider::Codex,
+        BabysitProviderSettings {
+            executable: None,
+            model: None,
+            reasoning_effort: Some("high".to_owned()),
+        },
+    );
+
+    assert!(matches!(
+        result,
+        Err(super::ApplicationSettingsError::InvalidProviderPreference)
+    ));
+    assert_eq!(
+        application.load().unwrap(),
+        super::ApplicationSettings::default()
+    );
+}
+
+#[test]
+fn claude_haiku_accepts_only_default_effort_and_custom_models_are_non_empty() {
+    let directory = tempfile::tempdir().unwrap();
+    let application = ApplicationSettingsApplication::new(directory.path().join("settings.json"));
+
+    assert!(application
+        .update_provider_settings(
+            BabysitProvider::ClaudeCode,
+            preference("haiku", Some("low")),
+        )
+        .is_err());
+    assert!(application
+        .update_provider_settings(BabysitProvider::ClaudeCode, preference("   ", None),)
+        .is_err());
+    assert!(application
+        .update_provider_settings(
+            BabysitProvider::ClaudeCode,
+            preference("vendor/custom-model", Some("max")),
+        )
+        .is_ok());
+}
+
 fn preference(model: &str, effort: Option<&str>) -> BabysitProviderSettings {
     BabysitProviderSettings {
         executable: None,

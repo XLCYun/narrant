@@ -9,6 +9,7 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
     let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
     application
         .remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1".to_owned(),
             codex::CodexModelCatalog {
                 models: vec![codex::CodexModelCapability {
@@ -26,6 +27,7 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
 
     assert!(application
         .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1",
             &crate::application_settings::BabysitModelPreference::Explicit {
                 model: "catalog-entry".to_owned(),
@@ -35,6 +37,7 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
         .is_ok());
     application
         .remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-2".to_owned(),
             codex::CodexModelCatalog {
                 models: vec![codex::CodexModelCapability {
@@ -51,13 +54,35 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
         .unwrap();
     assert!(application
         .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1",
             &crate::application_settings::BabysitModelPreference::Automatic,
         )
         .is_ok());
     assert!(application
         .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-missing",
+            &crate::application_settings::BabysitModelPreference::Automatic,
+        )
+        .is_err());
+}
+
+#[test]
+fn model_catalog_revision_is_bound_to_its_provider() {
+    let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
+    application
+        .remember_model_catalog(
+            crate::application_settings::BabysitProvider::ClaudeCode,
+            "shared-revision".to_owned(),
+            codex::CodexModelCatalog { models: Vec::new() },
+        )
+        .unwrap();
+
+    assert!(application
+        .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
+            "shared-revision",
             &crate::application_settings::BabysitModelPreference::Automatic,
         )
         .is_err());
@@ -69,6 +94,7 @@ async fn executable_invalidation_discards_catalog_and_analysis_cache() {
     let application = BabysitApplication::new(provider.clone());
     application
         .remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1".to_owned(),
             codex::CodexModelCatalog { models: Vec::new() },
         )

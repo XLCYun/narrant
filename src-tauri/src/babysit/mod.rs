@@ -633,7 +633,13 @@ pub struct BabysitApplication {
     provider: Arc<dyn BabysitAgentProvider>,
     runtime: Option<Arc<dyn InstalledProviderRuntime>>,
     codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
-    model_catalogs: Mutex<VecDeque<(String, codex::CodexModelCatalog)>>,
+    model_catalogs: Mutex<
+        VecDeque<(
+            crate::application_settings::BabysitProvider,
+            String,
+            codex::CodexModelCatalog,
+        )>,
+    >,
     next_model_catalog_revision: AtomicU64,
     cache: Mutex<HashMap<CacheKey, BabysitFileExplanations>>,
 }
@@ -700,11 +706,15 @@ impl BabysitApplication {
             })?;
         let catalog = runtime.model_catalog().await?;
         let revision = format!(
-            "catalog-{}",
+            "codex:catalog-{}",
             self.next_model_catalog_revision
                 .fetch_add(1, Ordering::AcqRel)
         );
-        self.remember_model_catalog(revision.clone(), catalog.clone())?;
+        self.remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
+            revision.clone(),
+            catalog.clone(),
+        )?;
         Ok(BabysitModelCatalog {
             provider: crate::application_settings::BabysitProvider::Codex,
             revision,
@@ -715,6 +725,7 @@ impl BabysitApplication {
     /// 记录设置页本次成功加载的模型目录，供显式保存使用同一份能力快照。
     fn remember_model_catalog(
         &self,
+        provider: crate::application_settings::BabysitProvider,
         revision: String,
         catalog: codex::CodexModelCatalog,
     ) -> Result<(), BabysitError> {
@@ -727,13 +738,14 @@ impl BabysitApplication {
         if catalogs.len() == 8 {
             catalogs.pop_front();
         }
-        catalogs.push_back((revision, catalog));
+        catalogs.push_back((provider, revision, catalog));
         Ok(())
     }
 
     /// 使用设置页当前编辑会话的目录校验模型偏好，避免保存时再次请求 App Server。
     pub(crate) fn validate_model_preference(
         &self,
+        provider: crate::application_settings::BabysitProvider,
         revision: &str,
         preference: &crate::application_settings::BabysitModelPreference,
     ) -> Result<(), BabysitError> {
@@ -741,9 +753,11 @@ impl BabysitApplication {
             .model_catalogs
             .lock()
             .map_err(|_| BabysitError::ModelPreferenceInvalid)?;
-        let (_, catalog) = catalogs
+        let (_, _, catalog) = catalogs
             .iter()
-            .find(|(current_revision, _)| current_revision == revision)
+            .find(|(current_provider, current_revision, _)| {
+                *current_provider == provider && current_revision == revision
+            })
             .ok_or(BabysitError::ModelPreferenceInvalid)?;
         catalog
             .resolve(preference)
@@ -753,6 +767,36 @@ impl BabysitApplication {
 
     /// Codex executable 偏好变化后丢弃目录与缓存；旧进程由下一次能力调用安全切换。
     pub(crate) async fn invalidate_codex_executable(&self) {
+        self.invalidate_provider_preferences();
+    }
+
+    /// 校验 provider 对应 executable 并返回规范路径，全程不写 Application Settings。
+    pub(crate) async fn validate_provider_executable(
+        &self,
+        provider: crate::application_settings::BabysitProvider,
+        path: &Path,
+    ) -> Result<std::path::PathBuf, BabysitError> {
+        match provider {
+            crate::application_settings::BabysitProvider::Codex => {
+                self.codex_runtime
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BabysitError::provider_setup(
+                            CODEX_PROVIDER_ID,
+                            BabysitProviderSetupFailure::NotFound,
+                        )
+                    })?
+                    .validate_executable(path)
+                    .await
+            }
+            crate::application_settings::BabysitProvider::ClaudeCode => {
+                claude_runtime::ClaudeRuntime::validate_executable(path).await
+            }
+        }
+    }
+
+    /// provider 或其偏好成功保存后丢弃目录 revision 与已完成缓存，不触碰运行中任务。
+    pub(crate) fn invalidate_provider_preferences(&self) {
         if let Ok(mut catalogs) = self.model_catalogs.lock() {
             catalogs.clear();
         }

@@ -71,6 +71,14 @@ pub(crate) struct CodexRuntime {
 }
 
 impl CodexRuntime {
+    /// 仅验证用户选择的 Codex executable 并返回规范路径，不修改 runtime 或 settings。
+    pub(crate) async fn validate_executable(&self, path: &Path) -> Result<PathBuf, BabysitError> {
+        self.discovery
+            .validate_selected(path.to_path_buf())
+            .await
+            .map(|candidate| candidate.path)
+    }
+
     /// 每次新分析读取权威模型偏好，并用新鲜目录解析实际模型与思考强度。
     pub(crate) async fn prepare_analysis(
         &self,
@@ -188,12 +196,11 @@ impl CodexRuntime {
 
     /// 通过生产设置边界验证并保存显式可执行文件偏好。
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let selected = self.discovery.validate_selected(path.to_path_buf()).await?;
-        let resolved = self
-            .settings
-            .save(Some(selected.path))
-            .await?
-            .ok_or_else(|| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?;
+        let selected = self.validate_executable(path).await?;
+        let resolved =
+            self.settings.save(Some(selected)).await?.ok_or_else(|| {
+                codex_setup_error(BabysitProviderSetupFailure::InitializationFailed)
+            })?;
         self.provider.activate_executable(resolved).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
