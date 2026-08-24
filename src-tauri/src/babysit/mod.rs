@@ -17,6 +17,34 @@ mod codex;
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
+/// 设置页与 provider adapters 共用的一项模型能力。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BabysitModelCapability {
+    pub id: String,
+    #[serde(skip_serializing)]
+    pub model: String,
+    pub name: String,
+    pub is_default: bool,
+    pub hidden: bool,
+    pub supported_reasoning_efforts: Vec<String>,
+    pub default_reasoning_effort: String,
+}
+
+impl From<codex::CodexModelCapability> for BabysitModelCapability {
+    /// 将 Codex 协议目录项逐字段转换到 provider-neutral 能力。
+    fn from(value: codex::CodexModelCapability) -> Self {
+        Self {
+            id: value.id,
+            model: value.model,
+            name: value.name,
+            is_default: value.is_default,
+            hidden: value.hidden,
+            supported_reasoning_efforts: value.supported_reasoning_efforts,
+            default_reasoning_effort: value.default_reasoning_effort,
+        }
+    }
+}
 /// Provider-neutral 的模型解析结果；具体目录协议只在 adapter 内转换。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BabysitResolvedModel {
@@ -34,14 +62,16 @@ impl From<codex::ResolvedCodexModel> for BabysitResolvedModel {
     }
 }
 
-/// Provider-neutral 的模型目录快照；provider 协议类型只保存在 adapter wrapper 内。
+/// Provider-neutral 的模型目录快照；任意 adapter 均可直接构造。
 #[derive(Clone)]
-pub(crate) struct BabysitProviderModelCatalog(codex::CodexModelCatalog);
+pub(crate) struct BabysitProviderModelCatalog {
+    models: Vec<BabysitModelCapability>,
+}
 
 impl BabysitProviderModelCatalog {
     /// 返回设置页需要的模型能力列表。
-    fn models(&self) -> Vec<codex::CodexModelCapability> {
-        self.0.models.clone()
+    fn models(&self) -> Vec<BabysitModelCapability> {
+        self.models.clone()
     }
 
     /// 使用当前目录快照校验并解析一次模型偏好。
@@ -49,14 +79,40 @@ impl BabysitProviderModelCatalog {
         &self,
         preference: &crate::application_settings::BabysitModelPreference,
     ) -> Result<BabysitResolvedModel, ()> {
-        self.0.resolve(preference).map(Into::into)
+        let (model, requested_effort) = match preference {
+            crate::application_settings::BabysitModelPreference::Automatic => {
+                (self.models.iter().find(|model| model.is_default), None)
+            }
+            crate::application_settings::BabysitModelPreference::Explicit {
+                model,
+                reasoning_effort,
+            } => (
+                self.models.iter().find(|candidate| candidate.id == *model),
+                reasoning_effort.as_deref(),
+            ),
+        };
+        let model = model.ok_or(())?;
+        let effort = requested_effort.unwrap_or(&model.default_reasoning_effort);
+        if !model
+            .supported_reasoning_efforts
+            .iter()
+            .any(|supported| supported == effort)
+        {
+            return Err(());
+        }
+        Ok(BabysitResolvedModel {
+            model: model.model.clone(),
+            reasoning_effort: effort.to_owned(),
+        })
     }
 }
 
 impl From<codex::CodexModelCatalog> for BabysitProviderModelCatalog {
     /// 将 Codex 动态目录包装到 provider-neutral registry seam。
     fn from(value: codex::CodexModelCatalog) -> Self {
-        Self(value)
+        Self {
+            models: value.models.into_iter().map(Into::into).collect(),
+        }
     }
 }
 /// 设置页一次模型编辑会话使用的不可持久化目录快照。
@@ -66,7 +122,7 @@ pub(crate) struct BabysitModelCatalog {
     /// 目录所属的稳定 provider ID，避免 revision 跨 provider 误用。
     pub provider: crate::application_settings::BabysitProvider,
     pub revision: String,
-    pub models: Vec<codex::CodexModelCapability>,
+    pub models: Vec<BabysitModelCapability>,
 }
 
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
