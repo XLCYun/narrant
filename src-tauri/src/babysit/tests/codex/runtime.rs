@@ -62,10 +62,7 @@ async fn file_settings_round_trip_preserves_unified_application_settings() {
     let path = directory.path().join("settings.json");
     let executable = version_fixture(directory.path());
     let settings = ApplicationCodexSettings {
-        application: ApplicationSettingsApplication::new(
-            path.clone(),
-            directory.path().join("legacy.json"),
-        ),
+        application: ApplicationSettingsApplication::new(path.clone()),
     };
     std::fs::write(
         &path,
@@ -88,10 +85,7 @@ fn malformed_or_relative_settings_fail_instead_of_falling_back() {
     std::fs::write(&path, r#"{"codexExecutable":"relative/codex"}"#).unwrap();
 
     assert!(ApplicationCodexSettings {
-        application: ApplicationSettingsApplication::new(
-            path,
-            directory.path().join("legacy.json"),
-        ),
+        application: ApplicationSettingsApplication::new(path),
     }
     .load()
     .is_err());
