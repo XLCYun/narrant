@@ -188,8 +188,8 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
     }
 
     /// 返回 executable/probe generation，供缓存隔离使用。
-    fn process_generation(&self) -> &str {
-        &self.generation
+    fn process_generation(&self) -> String {
+        self.generation.clone()
     }
 
     /// 用一轮 fresh CLI process 生成完整 File Change 解释。

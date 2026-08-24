@@ -204,4 +204,6 @@ export type BabysitBinding = {
   cancel(): void;
   /** 重试最后一次失败的分析。 */
   retry(): void;
+  /** 执行 provider executable 恢复动作；取消选择不改变失败状态。 */
+  selectExecutable?(): void;
 };

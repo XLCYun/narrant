@@ -7,8 +7,8 @@ use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
 use crate::application_settings::ApplicationSettingsApplication;
 use crate::babysit::{
-    codex_setup_error, BabysitAgentProvider, BabysitError, BabysitProviderSetupFailure,
-    CODEX_PROVIDER_ID,
+    codex_setup_error, BabysitAgentProvider, BabysitError, BabysitProviderRuntimeStatus,
+    BabysitProviderSetupFailure, InstalledProviderRuntime, CODEX_PROVIDER_ID,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -43,8 +43,7 @@ impl ApplicationCodexSettings {
             .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid))
     }
 
-    /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
-    #[cfg(all(test, unix))]
+    /// 通过统一 Application Settings 边界保存 executable 偏好。
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .update_codex_executable(executable)
@@ -157,7 +156,6 @@ impl CodexRuntime {
     }
 
     /// 并发调用由 lifecycle 锁串行；已 Ready 的同一进程不重复探测。
-    #[cfg(all(test, unix))]
     pub(crate) async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         let _lifecycle = self.lifecycle.lock().await;
         self.ensure_ready_once(workspace_path).await
@@ -181,12 +179,12 @@ impl CodexRuntime {
         result
     }
 
-    /// 测试中通过生产设置边界准备显式可执行文件偏好。
-    #[cfg(all(test, unix))]
+    /// 通过生产设置边界验证并保存显式可执行文件偏好。
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        let selected = self.discovery.validate_selected(path.to_path_buf()).await?;
         let resolved = self
             .settings
-            .save(Some(path.to_path_buf()))
+            .save(Some(selected.path))
             .await?
             .ok_or_else(|| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?;
         self.provider.activate_executable(resolved).await?;
@@ -238,6 +236,42 @@ impl CodexRuntime {
         } else {
             Err(last_error)
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl InstalledProviderRuntime for CodexRuntime {
+    /// 返回 Codex runtime 的稳定 provider identity。
+    fn provider_id(&self) -> &str {
+        CODEX_PROVIDER_ID
+    }
+
+    /// 将 Codex 内部状态投影到 provider-independent runtime status。
+    fn status(&self) -> BabysitProviderRuntimeStatus {
+        match CodexRuntime::status(self) {
+            CodexRuntimeStatus::Unknown => BabysitProviderRuntimeStatus::Unknown,
+            CodexRuntimeStatus::Probing => BabysitProviderRuntimeStatus::Probing,
+            CodexRuntimeStatus::Ready => BabysitProviderRuntimeStatus::Ready,
+            CodexRuntimeStatus::Missing => BabysitProviderRuntimeStatus::Missing,
+            CodexRuntimeStatus::SignedOut => BabysitProviderRuntimeStatus::SignedOut,
+            CodexRuntimeStatus::Incompatible => BabysitProviderRuntimeStatus::Incompatible,
+            CodexRuntimeStatus::InitFailed => BabysitProviderRuntimeStatus::InitFailed,
+        }
+    }
+
+    /// 复用 Codex 的 settings、模型目录和 lifecycle readiness 流程。
+    async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        CodexRuntime::ensure_ready(self, workspace_path).await
+    }
+
+    /// 复用 Codex 的 executable 验证与统一设置持久化流程。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        CodexRuntime::select_executable(self, path).await
+    }
+
+    /// 复用 Codex provider shutdown，并重置 runtime 状态。
+    async fn shutdown(&self) {
+        CodexRuntime::shutdown(self).await;
     }
 }
 
