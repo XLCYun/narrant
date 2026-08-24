@@ -65,6 +65,9 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
       ] };
     },
     updateBabysitModel: async (babysitModel) => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel }),
+    updateBabysitProvider: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
+    chooseBabysitExecutable: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
+    updateBabysitPreferences: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
   };
   const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
     status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
