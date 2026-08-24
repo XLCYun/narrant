@@ -36,7 +36,7 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
     updateTheme: vi.fn(async (nextTheme) => ({ version: 1, theme: nextTheme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
     chooseCodexExecutable: vi.fn(async () => ({ version: 1, theme, codexExecutable: "C:\\Program Files\\Codex\\codex.exe", babysitModel: { kind: "automatic" } })),
     clearCodexExecutable: vi.fn(async () => ({ version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
-    listBabysitModels: vi.fn(async () => ({ models: [
+    listBabysitModels: vi.fn(async () => ({ revision: "catalog-1", models: [
       { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
       { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
     ] })),
@@ -96,7 +96,7 @@ describe("Settings application-shell UI", () => {
     await chooseSelect("思考强度", "low");
     fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
 
-    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "explicit", modelId: "gpt-5.4-mini", reasoningEffort: "low" }));
+    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "explicit", modelId: "gpt-5.4-mini", reasoningEffort: "low" }, "catalog-1"));
     expect(await screen.findByText("gpt-5.4-mini · low")).toBeInTheDocument();
   });
 
@@ -114,7 +114,7 @@ describe("Settings application-shell UI", () => {
     await chooseSelect("模型", "自动（使用 App Server 默认值）");
     fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
 
-    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "automatic" }));
+    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "automatic" }, "catalog-1"));
     expect(screen.getByText("自动（使用 App Server 默认值）")).toBeInTheDocument();
   });
 
@@ -166,18 +166,18 @@ describe("Settings application-shell UI", () => {
     await adapter.chooseCodexExecutable();
     await adapter.clearCodexExecutable();
     await adapter.listBabysitModels();
-    await adapter.updateBabysitModel({ kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null });
+    await adapter.updateBabysitModel({ kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null }, "catalog-1");
 
     expect(invoke).toHaveBeenNthCalledWith(1, "load_application_settings", {});
     expect(invoke).toHaveBeenNthCalledWith(2, "update_application_theme", { theme: "dark" });
     expect(invoke).toHaveBeenNthCalledWith(3, "update_application_codex_executable", { executable: "C:\\Tools\\codex.exe" });
     expect(invoke).toHaveBeenNthCalledWith(4, "clear_application_codex_executable", {});
     expect(invoke).toHaveBeenNthCalledWith(5, "list_babysit_models", {});
-    expect(invoke).toHaveBeenNthCalledWith(6, "update_application_babysit_model", { preference: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null } });
+    expect(invoke).toHaveBeenNthCalledWith(6, "update_application_babysit_model", { preference: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null }, catalogRevision: "catalog-1" });
   });
 
   it("typed adapter 不改写模型目录与结构化失败", async () => {
-    const catalog = { models: [{ id: "custom-model", name: "Custom Model", isDefault: false, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" }] };
+    const catalog = { revision: "catalog-custom", models: [{ id: "custom-model", name: "Custom Model", isDefault: false, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" }] };
     const failure = { code: "catalog_unavailable", detail: "连接中断" };
     const invoke = vi.fn()
       .mockResolvedValueOnce(catalog)
@@ -185,13 +185,13 @@ describe("Settings application-shell UI", () => {
     const adapter = createTauriApplicationSettingsAdapter({ invoke } as never);
 
     await expect(adapter.listBabysitModels()).resolves.toBe(catalog);
-    await expect(adapter.updateBabysitModel({ kind: "automatic" })).rejects.toBe(failure);
+    await expect(adapter.updateBabysitModel({ kind: "automatic" }, "catalog-custom")).rejects.toBe(failure);
   });
 
   it("呈现服务端动态增加的思考强度而不依赖前端枚举", async () => {
     mockSystemTheme(false);
     const settings = application();
-    vi.mocked(settings.listBabysitModels).mockResolvedValue({ models: [
+    vi.mocked(settings.listBabysitModels).mockResolvedValue({ revision: "catalog-2", models: [
       { id: "future-model", name: "Future Model", isDefault: true, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" },
     ] });
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);

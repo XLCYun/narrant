@@ -80,7 +80,7 @@ impl CodexExecutableDiscovery {
     }
 
     /// 注入测试候选，不修改进程 PATH 或用户设置。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn with_candidates(candidates: Vec<PathBuf>) -> Self {
         Self {
             candidate_override: Some(candidates),
@@ -435,6 +435,6 @@ fn append_windows_desktop_locations(locations: &mut Vec<PathBuf>, root: &Path) {
     ]);
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../tests/codex/discovery.rs"]
 mod tests;

@@ -115,8 +115,18 @@ async fn model_catalog_uses_explicit_executable_before_automatic_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let selected_events = directory.path().join("selected-events");
     let fallback_events = directory.path().join("fallback-events");
-    let selected = app_server_candidate(directory.path(), "selected-codex", "complete", &selected_events);
-    let fallback = app_server_candidate(directory.path(), "fallback-codex", "complete", &fallback_events);
+    let selected = app_server_candidate(
+        directory.path(),
+        "selected-codex",
+        "complete",
+        &selected_events,
+    );
+    let fallback = app_server_candidate(
+        directory.path(),
+        "fallback-codex",
+        "complete",
+        &fallback_events,
+    );
     let settings_path = directory.path().join("settings.json");
     let provider = Arc::new(CodexAppServerProvider::new("codex"));
     let runtime = CodexRuntime::new_with_discovery(
@@ -129,8 +139,125 @@ async fn model_catalog_uses_explicit_executable_before_automatic_candidates() {
     let catalog = runtime.model_catalog().await.unwrap();
 
     assert_eq!(catalog.models[0].id, "fixture-model");
-    assert!(std::fs::read_to_string(selected_events).unwrap().contains("model/list"));
+    assert!(std::fs::read_to_string(selected_events)
+        .unwrap()
+        .contains("model/list"));
     assert!(!fallback_events.exists());
+}
+
+#[tokio::test]
+async fn model_catalog_process_is_reused_when_babysit_mode_starts() {
+    let directory = tempfile::tempdir().unwrap();
+    let events = directory.path().join("events");
+    let executable = app_server_candidate(directory.path(), "catalog-codex", "complete", &events);
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        directory.path().join("settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![executable]),
+    );
+
+    runtime.model_catalog().await.unwrap();
+    runtime
+        .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    let observed = std::fs::read_to_string(events).unwrap();
+    assert!(observed.contains("model/list"));
+    assert!(observed.contains("thread/list"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn babysit_process_is_reused_when_model_catalog_opens_after_analysis() {
+    let directory = tempfile::tempdir().unwrap();
+    let events = directory.path().join("events");
+    let executable = app_server_candidate(directory.path(), "analysis-codex", "complete", &events);
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        directory.path().join("settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![executable]),
+    );
+
+    runtime
+        .ensure_ready(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+    runtime.model_catalog().await.unwrap();
+
+    let observed = std::fs::read_to_string(events).unwrap();
+    assert!(observed.contains("thread/list"));
+    assert!(observed.contains("model/list"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn capability_resolves_saved_model_through_the_same_app_server() {
+    let directory = tempfile::tempdir().unwrap();
+    let events = directory.path().join("events");
+    let executable = app_server_candidate(directory.path(), "model-codex", "complete", &events);
+    let runtime = CodexRuntime::new_with_discovery(
+        Arc::new(CodexAppServerProvider::new("codex")),
+        directory.path().join("settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![executable]),
+    );
+    runtime
+        .settings
+        .application
+        .update_babysit_model(
+            crate::application_settings::BabysitModelPreference::Explicit {
+                model: "fixture-model".to_owned(),
+                reasoning_effort: Some("low".to_owned()),
+            },
+        )
+        .unwrap();
+
+    let (resolved, analysis) = runtime
+        .prepare_analysis(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+
+    assert_eq!(resolved.model, "gpt-5.6-luna");
+    assert_eq!(resolved.reasoning_effort, "low");
+    drop(analysis);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn restarted_process_is_probed_before_the_next_analysis() {
+    let directory = tempfile::tempdir().unwrap();
+    let events = directory.path().join("events");
+    let executable = app_server_candidate(directory.path(), "restart-codex", "complete", &events);
+    let provider = Arc::new(CodexAppServerProvider::new("codex"));
+    let runtime = CodexRuntime::new_with_discovery(
+        provider.clone(),
+        directory.path().join("settings.json"),
+        CodexExecutableDiscovery::with_candidates(vec![executable]),
+    );
+
+    let (_, first_analysis) = runtime
+        .prepare_analysis(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+    drop(first_analysis);
+    let first_generation = provider.process_generation();
+    provider.shutdown().await;
+    let (_, second_analysis) = runtime
+        .prepare_analysis(std::path::Path::new("/tmp/narrant-review-workspace"))
+        .await
+        .unwrap();
+    drop(second_analysis);
+
+    assert_ne!(provider.process_generation(), first_generation);
+    assert_eq!(
+        std::fs::read_to_string(events)
+            .unwrap()
+            .lines()
+            .filter(|event| *event == "thread/list")
+            .count(),
+        2
+    );
+    runtime.shutdown().await;
 }
 
 #[tokio::test]

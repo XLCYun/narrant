@@ -125,7 +125,7 @@ type ModelEditorState =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "failed"; detail: string }
-  | { kind: "editing"; models: BabysitModelCatalogEntry[] };
+  | { kind: "editing"; revision: string; models: BabysitModelCatalogEntry[] };
 
 /** 管理延迟模型目录、草稿与显式提交，目录永不进入持久化投影。 */
 function BabysitModelSettings({ application, initialEditing }: { application: ApplicationSettingsApplication; initialEditing: boolean }) {
@@ -170,7 +170,7 @@ function BabysitModelSettings({ application, initialEditing }: { application: Ap
         return;
       }
       setDraft(saved);
-      setEditor({ kind: "editing", models: catalog.models });
+      setEditor({ kind: "editing", revision: catalog.revision, models: catalog.models });
     } catch (error) {
       setEditor({ kind: "failed", detail: errorDetail(error, "无法获取模型目录") });
     }
@@ -181,7 +181,8 @@ function BabysitModelSettings({ application, initialEditing }: { application: Ap
     setSaving(true);
     setSaveError(undefined);
     try {
-      const settings = await application.updateBabysitModel(draft);
+      if (editor.kind !== "editing") return;
+      const settings = await application.updateBabysitModel(draft, editor.revision);
       setSaved(settings.babysitModel);
       setEditor({ kind: "idle" });
     } catch (error) {

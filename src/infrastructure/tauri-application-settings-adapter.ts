@@ -20,6 +20,6 @@ export function createTauriApplicationSettingsAdapter(
     },
     clearCodexExecutable: () => transport.invoke("clear_application_codex_executable", {}),
     listBabysitModels: () => transport.invoke("list_babysit_models", {}),
-    updateBabysitModel: (preference: BabysitModelPreference) => transport.invoke("update_application_babysit_model", { preference }),
+    updateBabysitModel: (preference: BabysitModelPreference, catalogRevision: string) => transport.invoke("update_application_babysit_model", { preference, catalogRevision }),
   };
 }

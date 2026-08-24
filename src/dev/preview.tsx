@@ -58,8 +58,8 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
     listBabysitModels: async () => {
       if (modelState === "loading") return new Promise(() => undefined);
       if (modelState === "error") throw { code: "app_server_unavailable", detail: "App Server 暂时无法启动" };
-      if (modelState === "empty") return { models: [] };
-      return { models: [
+      if (modelState === "empty") return { revision: "preview-catalog", models: [] };
+      return { revision: "preview-catalog", models: [
         { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high" },
         { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
       ] };

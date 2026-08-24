@@ -1,12 +1,16 @@
 #[test]
-fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
+fn preserves_platform_supported_special_paths_in_nul_delimited_output() {
     let fixture = TempDir::new().expect("fixture directory");
     let repository = Repository::init(fixture.path()).expect("initialize fixture repo");
     commit_file(&repository, "seed.txt", "seed\n", "base");
     let base = repository.head().unwrap().peel_to_commit().unwrap();
     repository.branch("base", &base, true).unwrap();
 
-    for path in ["space name.txt", "line\nbreak.txt", "你好.txt"] {
+    #[cfg(unix)]
+    let special_paths = vec!["space name.txt", "line\nbreak.txt", "你好.txt"];
+    #[cfg(windows)]
+    let special_paths = vec!["space name.txt", "你好.txt"];
+    for path in special_paths {
         commit_file(&repository, path, "special\n", "special path");
     }
     let head = repository.head().unwrap().peel_to_commit().unwrap();
@@ -21,9 +25,22 @@ fn preserves_spaces_newlines_and_unicode_in_nul_delimited_paths() {
         .collect::<Vec<_>>();
     paths.sort();
 
+    #[cfg(unix)]
     assert_eq!(paths, vec!["line\nbreak.txt", "space name.txt", "你好.txt"]);
+    #[cfg(windows)]
+    assert_eq!(paths, vec!["space name.txt", "你好.txt"]);
+    let readable_path = if cfg!(unix) {
+        "line\nbreak.txt"
+    } else {
+        "你好.txt"
+    };
     assert_eq!(
-        review.read("line\nbreak.txt").unwrap().after.as_ref().and_then(FileContent::text),
+        review
+            .read(readable_path)
+            .unwrap()
+            .after
+            .as_ref()
+            .and_then(FileContent::text),
         Some("special\n")
     );
 }
@@ -45,8 +62,14 @@ fn distinguishes_executable_mode_changes_in_snapshot_metadata() {
     let change = &review.comparison.file_changes[0];
 
     assert_eq!(change.status, FileChangeStatus::Modified);
-    assert_eq!(change.before.as_ref().map(|content| content.mode), Some(0o100644));
-    assert_eq!(change.after.as_ref().map(|content| content.mode), Some(0o100755));
+    assert_eq!(
+        change.before.as_ref().map(|content| content.mode),
+        Some(0o100644)
+    );
+    assert_eq!(
+        change.after.as_ref().map(|content| content.mode),
+        Some(0o100755)
+    );
     assert_eq!(
         change.before.as_ref().map(|content| &content.object_id),
         change.after.as_ref().map(|content| &content.object_id)
@@ -96,7 +119,10 @@ fn compares_canonical_refs_in_a_real_shallow_clone() {
     let review = resolve_comparison(&clone_path, "refs/heads/head", "refs/remotes/origin/head")
         .expect("compare shallow refs");
 
-    assert_eq!(review.comparison.base_revision, review.comparison.head_revision);
+    assert_eq!(
+        review.comparison.base_revision,
+        review.comparison.head_revision
+    );
     assert!(review.comparison.file_changes.is_empty());
 }
 
@@ -135,7 +161,17 @@ fn selected_remote_fetch_observes_force_push_without_credentials_injection() {
         .unwrap()
         .success());
     assert!(Command::new("git")
-        .args(["commit", "--amend", "--quiet", "-m", "forced"])
+        .args([
+            "-c",
+            "user.name=Narrant Test",
+            "-c",
+            "user.email=test@narrant.invalid",
+            "commit",
+            "--amend",
+            "--quiet",
+            "-m",
+            "forced",
+        ])
         .current_dir(source_fixture.path())
         .status()
         .unwrap()

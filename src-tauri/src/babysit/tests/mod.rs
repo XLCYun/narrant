@@ -7,24 +7,93 @@ use tokio::sync::Notify;
 #[test]
 fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_session() {
     let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
-    application.remember_model_catalog(codex::CodexModelCatalog {
-        models: vec![codex::CodexModelCapability {
-            id: "catalog-entry".to_owned(),
-            model: "gpt-runtime-model".to_owned(),
-            name: "Catalog Model".to_owned(),
-            is_default: true,
-            hidden: false,
-            supported_reasoning_efforts: vec!["low".to_owned()],
-            default_reasoning_effort: "low".to_owned(),
-        }],
-    });
+    application
+        .remember_model_catalog(
+            "catalog-1".to_owned(),
+            codex::CodexModelCatalog {
+                models: vec![codex::CodexModelCapability {
+                    id: "catalog-entry".to_owned(),
+                    model: "gpt-runtime-model".to_owned(),
+                    name: "Catalog Model".to_owned(),
+                    is_default: true,
+                    hidden: false,
+                    supported_reasoning_efforts: vec!["low".to_owned()],
+                    default_reasoning_effort: "low".to_owned(),
+                }],
+            },
+        )
+        .unwrap();
 
     assert!(application
-        .validate_model_preference(&crate::application_settings::BabysitModelPreference::Explicit {
-            model: "catalog-entry".to_owned(),
-            reasoning_effort: Some("low".to_owned()),
-        })
+        .validate_model_preference(
+            "catalog-1",
+            &crate::application_settings::BabysitModelPreference::Explicit {
+                model: "catalog-entry".to_owned(),
+                reasoning_effort: Some("low".to_owned()),
+            }
+        )
         .is_ok());
+    application
+        .remember_model_catalog(
+            "catalog-2".to_owned(),
+            codex::CodexModelCatalog {
+                models: vec![codex::CodexModelCapability {
+                    id: "catalog-entry".to_owned(),
+                    model: "gpt-runtime-model".to_owned(),
+                    name: "Catalog Model".to_owned(),
+                    is_default: true,
+                    hidden: false,
+                    supported_reasoning_efforts: vec!["low".to_owned()],
+                    default_reasoning_effort: "low".to_owned(),
+                }],
+            },
+        )
+        .unwrap();
+    assert!(application
+        .validate_model_preference(
+            "catalog-1",
+            &crate::application_settings::BabysitModelPreference::Automatic,
+        )
+        .is_ok());
+    assert!(application
+        .validate_model_preference(
+            "catalog-missing",
+            &crate::application_settings::BabysitModelPreference::Automatic,
+        )
+        .is_err());
+}
+
+#[tokio::test]
+async fn executable_invalidation_discards_catalog_and_analysis_cache() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let application = BabysitApplication::new(provider.clone());
+    application
+        .remember_model_catalog(
+            "catalog-1".to_owned(),
+            codex::CodexModelCatalog { models: Vec::new() },
+        )
+        .unwrap();
+    application.cache.lock().unwrap().insert(
+        CacheKey {
+            review_id: "review".to_owned(),
+            snapshot_id: "snapshot".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            locale: "zh-CN".to_owned(),
+            detected_language: Some("rust".to_owned()),
+            model: "model".to_owned(),
+            reasoning_effort: "low".to_owned(),
+            contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
+            provider_id: "provider".to_owned(),
+            process_generation: "generation".to_owned(),
+        },
+        BabysitFileExplanations::default(),
+    );
+
+    application.invalidate_codex_executable().await;
+
+    assert!(application.model_catalogs.lock().unwrap().is_empty());
+    assert!(application.cache.lock().unwrap().is_empty());
+    assert_eq!(provider.shutdown_calls(), 0);
 }
 
 /// 在 generate 中暂停的 provider，用于观察偏好变化不会改写已解析请求。
@@ -38,9 +107,13 @@ struct InFlightModelProvider {
 #[async_trait]
 impl BabysitAgentProvider for InFlightModelProvider {
     /// 返回并发测试使用的稳定 provider identity。
-    fn provider_id(&self) -> &str { "in-flight-model" }
+    fn provider_id(&self) -> &str {
+        "in-flight-model"
+    }
     /// 返回并发测试使用的稳定进程 generation。
-    fn process_generation(&self) -> &str { "generation-1" }
+    fn process_generation(&self) -> String {
+        "generation-1".to_owned()
+    }
     /// 在每次新分析开始时快照当前解析模型。
     async fn resolve_analysis_model(&self) -> Result<codex::ResolvedCodexModel, BabysitError> {
         Ok(self.resolved.lock().unwrap().clone())
@@ -51,7 +124,10 @@ impl BabysitAgentProvider for InFlightModelProvider {
         request: BabysitProviderRequest,
         _cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
-        self.observed.lock().unwrap().push((request.model.clone(), request.reasoning_effort.clone()));
+        self.observed
+            .lock()
+            .unwrap()
+            .push((request.model.clone(), request.reasoning_effort.clone()));
         self.started.notify_one();
         self.release.notified().await;
         Ok(FakeBabysitProvider::complete_output(&request))

@@ -18,7 +18,7 @@ export type BabysitModelCatalogEntry = {
 };
 
 /** 一次完整、仅驻留内存的动态模型目录。 */
-export type BabysitModelCatalog = { models: BabysitModelCatalogEntry[] };
+export type BabysitModelCatalog = { revision: string; models: BabysitModelCatalogEntry[] };
 
 /** 前端消费的设备级 Application Settings 公共投影。 */
 export type ApplicationSettings = {
@@ -41,5 +41,5 @@ export interface ApplicationSettingsApplication {
   /** 仅在用户进入修改态时获取当前完整模型目录。 */
   listBabysitModels(): Promise<BabysitModelCatalog>;
   /** 由后端再次校验目录组合后原子保存模型偏好。 */
-  updateBabysitModel(preference: BabysitModelPreference): Promise<ApplicationSettings>;
+  updateBabysitModel(preference: BabysitModelPreference, catalogRevision: string): Promise<ApplicationSettings>;
 }

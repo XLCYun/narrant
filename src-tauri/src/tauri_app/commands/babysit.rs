@@ -11,7 +11,7 @@ use tauri::ipc::Channel;
 #[tauri::command]
 pub(crate) async fn list_babysit_models(
     babysit: tauri::State<'_, BabysitApplication>,
-) -> Result<crate::babysit::CodexModelCatalog, BabysitErrorPayload> {
+) -> Result<crate::babysit::BabysitModelCatalog, BabysitErrorPayload> {
     babysit
         .fetch_model_catalog()
         .await
@@ -94,11 +94,6 @@ pub(crate) async fn explain_review_file_change(
         let workspace_path = lifecycle
             .workspace_path(&review_id, &snapshot_id)
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
-        // 只有用户已经点击宝宝模式并真正请求解释时，才进行 Codex discovery/initialize。
-        babysit
-            .prepare_runtime(&workspace_path)
-            .await
-            .map_err(BabysitErrorPayload::from)?;
         babysit
             .explain_file(
                 BabysitFileRequest {

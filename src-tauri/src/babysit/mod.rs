@@ -3,17 +3,24 @@ use crate::review::{FileChangeContent, FileContentKind};
 use async_trait::async_trait;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
 mod codex;
 
 pub use codex::CodexAppServerProvider;
-pub(crate) use codex::CodexModelCatalog;
+/// 设置页一次模型编辑会话使用的不可持久化目录快照。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BabysitModelCatalog {
+    pub revision: String,
+    pub models: Vec<codex::CodexModelCapability>,
+}
 
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
@@ -374,9 +381,8 @@ impl fmt::Display for BabysitError {
             Self::CodexSignedOut => formatter.write_str("Codex 尚未登录"),
             Self::CodexIncompatible => formatter.write_str("Codex App Server 缺少宝宝模式所需能力"),
             Self::CodexInitializationFailed => formatter.write_str("Codex App Server 初始化失败"),
-            Self::ModelPreferenceInvalid => formatter.write_str(
-                "宝宝模式模型或思考强度已不可用；请在 Application Settings 中修改设置",
-            ),
+            Self::ModelPreferenceInvalid => formatter
+                .write_str("宝宝模式模型或思考强度已不可用；请在 Application Settings 中修改设置"),
             Self::SettingsPersistenceFailed => {
                 formatter.write_str("宝宝模式模型设置保存失败；原设置保持不变")
             }
@@ -392,11 +398,9 @@ pub trait BabysitAgentProvider: Send + Sync {
     /// 返回用于缓存隔离和诊断分类的稳定 provider identity。
     fn provider_id(&self) -> &str;
     /// 返回本次 provider 进程 generation，进程重启后不得复用旧结果。
-    fn process_generation(&self) -> &str;
+    fn process_generation(&self) -> String;
     /// 为一次新分析解析并验证模型能力；返回值同时参与缓存身份。
-    async fn resolve_analysis_model(
-        &self,
-    ) -> Result<codex::ResolvedCodexModel, BabysitError> {
+    async fn resolve_analysis_model(&self) -> Result<codex::ResolvedCodexModel, BabysitError> {
         Ok(codex::ResolvedCodexModel {
             model: "test-model".to_owned(),
             reasoning_effort: "test-effort".to_owned(),
@@ -487,7 +491,8 @@ struct CacheKey {
 pub struct BabysitApplication {
     provider: Arc<dyn BabysitAgentProvider>,
     codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
-    latest_model_catalog: Mutex<Option<codex::CodexModelCatalog>>,
+    model_catalogs: Mutex<VecDeque<(String, codex::CodexModelCatalog)>>,
+    next_model_catalog_revision: AtomicU64,
     cache: Mutex<HashMap<CacheKey, BabysitFileExplanations>>,
 }
 
@@ -498,7 +503,8 @@ impl BabysitApplication {
         Self {
             provider,
             codex_runtime: None,
-            latest_model_catalog: Mutex::new(None),
+            model_catalogs: Mutex::new(VecDeque::new()),
+            next_model_catalog_revision: AtomicU64::new(1),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -506,11 +512,7 @@ impl BabysitApplication {
     /// 构造带有 application settings 路径的生产 Codex provider；发现仍保持懒加载。
     pub fn with_codex_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
         let settings_path = settings_path.into();
-        let settings = crate::application_settings::ApplicationSettingsApplication::new(
-            settings_path.clone(),
-            settings_path.with_extension("legacy.json"),
-        );
-        let provider = Arc::new(CodexAppServerProvider::with_settings("codex", settings));
+        let provider = Arc::new(CodexAppServerProvider::new("codex"));
         let runtime = Arc::new(codex::runtime::CodexRuntime::new(
             provider.clone(),
             settings_path,
@@ -518,15 +520,14 @@ impl BabysitApplication {
         Self {
             provider,
             codex_runtime: Some(runtime),
-            latest_model_catalog: Mutex::new(None),
+            model_catalogs: Mutex::new(VecDeque::new()),
+            next_model_catalog_revision: AtomicU64::new(1),
             cache: Mutex::new(HashMap::new()),
         }
     }
 
     /// 仅在 UI 明确请求修改时准备 runtime 并读取动态可见模型目录。
-    pub(crate) async fn fetch_model_catalog(
-        &self,
-    ) -> Result<codex::CodexModelCatalog, BabysitError> {
+    pub(crate) async fn fetch_model_catalog(&self) -> Result<BabysitModelCatalog, BabysitError> {
         let runtime = self
             .codex_runtime
             .as_ref()
@@ -534,44 +535,64 @@ impl BabysitApplication {
                 detail: "当前 provider 不支持动态模型目录。".to_owned(),
             })?;
         let catalog = runtime.model_catalog().await?;
-        self.remember_model_catalog(catalog.clone())?;
-        Ok(catalog)
+        let revision = format!(
+            "catalog-{}",
+            self.next_model_catalog_revision
+                .fetch_add(1, Ordering::AcqRel)
+        );
+        self.remember_model_catalog(revision.clone(), catalog.clone())?;
+        Ok(BabysitModelCatalog {
+            revision,
+            models: catalog.models,
+        })
     }
 
     /// 记录设置页本次成功加载的模型目录，供显式保存使用同一份能力快照。
     fn remember_model_catalog(
         &self,
+        revision: String,
         catalog: codex::CodexModelCatalog,
     ) -> Result<(), BabysitError> {
-        *self.latest_model_catalog.lock().map_err(|_| BabysitError::Provider {
-            detail: "模型目录状态不可用。".to_owned(),
-        })? = Some(catalog);
+        let mut catalogs = self
+            .model_catalogs
+            .lock()
+            .map_err(|_| BabysitError::Provider {
+                detail: "模型目录状态不可用。".to_owned(),
+            })?;
+        if catalogs.len() == 8 {
+            catalogs.pop_front();
+        }
+        catalogs.push_back((revision, catalog));
         Ok(())
     }
 
     /// 使用设置页当前编辑会话的目录校验模型偏好，避免保存时再次请求 App Server。
     pub(crate) fn validate_model_preference(
         &self,
+        revision: &str,
         preference: &crate::application_settings::BabysitModelPreference,
     ) -> Result<(), BabysitError> {
-        let catalog = self
-            .latest_model_catalog
+        let catalogs = self
+            .model_catalogs
             .lock()
             .map_err(|_| BabysitError::ModelPreferenceInvalid)?;
+        let (_, catalog) = catalogs
+            .iter()
+            .find(|(current_revision, _)| current_revision == revision)
+            .ok_or(BabysitError::ModelPreferenceInvalid)?;
         catalog
-            .as_ref()
-            .ok_or(BabysitError::ModelPreferenceInvalid)?
             .resolve(preference)
             .map(|_| ())
             .map_err(|_| BabysitError::ModelPreferenceInvalid)
     }
 
-    /// 将首次 provider 发现和 App Server 握手保持在 Babysit 点击后的最高 seam。
-    pub async fn prepare_runtime(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        if let Some(runtime) = &self.codex_runtime {
-            runtime.ensure_ready(workspace_path).await
-        } else {
-            Ok(())
+    /// Codex executable 偏好变化后丢弃目录与缓存；旧进程由下一次能力调用安全切换。
+    pub(crate) async fn invalidate_codex_executable(&self) {
+        if let Ok(mut catalogs) = self.model_catalogs.lock() {
+            catalogs.clear();
+        }
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
         }
     }
 
@@ -612,7 +633,15 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
-        let resolved = self.provider.resolve_analysis_model().await?;
+        let (resolved, _runtime_analysis) = match &self.codex_runtime {
+            Some(runtime) => {
+                let (resolved, guard) = runtime
+                    .prepare_analysis(Path::new(&request.workspace_path))
+                    .await?;
+                (resolved, Some(guard))
+            }
+            None => (self.provider.resolve_analysis_model().await?, None),
+        };
         let key = CacheKey {
             review_id: request.identity.review_id.clone(),
             snapshot_id: request.identity.snapshot_id.clone(),
@@ -620,7 +649,7 @@ impl BabysitApplication {
             locale: request.locale.clone(),
             detected_language: request.detected_language.clone(),
             provider_id: self.provider.provider_id().to_owned(),
-            process_generation: self.provider.process_generation().to_owned(),
+            process_generation: self.provider.process_generation(),
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
             model: resolved.model.clone(),
             reasoning_effort: resolved.reasoning_effort.clone(),
@@ -1111,8 +1140,8 @@ impl BabysitAgentProvider for FakeBabysitProvider {
     }
 
     /// 返回 fake 进程 generation，测试中保持固定以便验证缓存行为。
-    fn process_generation(&self) -> &str {
-        "fake-process-v1"
+    fn process_generation(&self) -> String {
+        "fake-process-v1".to_owned()
     }
 
     async fn resolve_analysis_model(&self) -> Result<codex::ResolvedCodexModel, BabysitError> {

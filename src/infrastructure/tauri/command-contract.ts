@@ -36,7 +36,7 @@ export type TauriCommandContract = {
   update_application_codex_executable: { args: { executable: string }; result: ApplicationSettings };
   clear_application_codex_executable: { args: EmptyArgs; result: ApplicationSettings };
   list_babysit_models: { args: EmptyArgs; result: BabysitModelCatalog; error: { code: string; detail: string } };
-  update_application_babysit_model: { args: { preference: BabysitModelPreference }; result: ApplicationSettings; error: { code: string; detail: string } };
+  update_application_babysit_model: { args: { preference: BabysitModelPreference; catalogRevision: string }; result: ApplicationSettings; error: { code: string; detail: string } };
   set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
