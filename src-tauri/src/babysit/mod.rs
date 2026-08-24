@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
 mod claude;
-mod claude_runtime;
 mod codex;
 
 pub use claude::ClaudeCodeProvider;
@@ -58,6 +57,16 @@ impl From<codex::ResolvedCodexModel> for BabysitResolvedModel {
         Self {
             model: value.model,
             reasoning_effort: value.reasoning_effort,
+        }
+    }
+}
+
+impl From<claude::ResolvedClaudeModel> for BabysitResolvedModel {
+    /// 将 Claude nullable CLI 覆盖投影为空字符串哨兵，直到构造 provider request 时再还原。
+    fn from(value: claude::ResolvedClaudeModel) -> Self {
+        Self {
+            model: value.model.unwrap_or_default(),
+            reasoning_effort: value.reasoning_effort.unwrap_or_default(),
         }
     }
 }
@@ -115,6 +124,37 @@ impl From<codex::CodexModelCatalog> for BabysitProviderModelCatalog {
         }
     }
 }
+
+impl From<claude::ClaudeModelCatalog> for BabysitProviderModelCatalog {
+    /// 将 Claude 离线 alias/custom 目录投影到设置页共用的 provider-neutral 能力。
+    fn from(value: claude::ClaudeModelCatalog) -> Self {
+        let models = value
+            .models
+            .into_iter()
+            .map(|model| {
+                let is_default = model.id == "default";
+                BabysitModelCapability {
+                    model: if is_default {
+                        String::new()
+                    } else {
+                        model.id.clone()
+                    },
+                    id: model.id,
+                    name: model.name,
+                    is_default,
+                    hidden: false,
+                    supported_reasoning_efforts: model
+                        .supported_reasoning_efforts
+                        .iter()
+                        .filter_map(Clone::clone)
+                        .collect(),
+                    default_reasoning_effort: String::new(),
+                }
+            })
+            .collect();
+        Self { models }
+    }
+}
 /// 设置页一次模型编辑会话使用的不可持久化目录快照。
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,6 +171,8 @@ pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
 pub const MAX_EXPLANATION_CHARS: usize = 240;
 /// 同一个 provider 输出失败后允许的最大修复次数。
 pub const MAX_REPAIR_ATTEMPTS: u8 = 3;
+/// 为 provider 私有运行状态分配进程内唯一身份，避免相同 File Change 的并发分析碰撞。
+static NEXT_ANALYSIS_RUN_ID: AtomicU64 = AtomicU64::new(1);
 /// Codex App Server 在 provider-independent 错误契约中的稳定 identity。
 const CODEX_PROVIDER_ID: &str = "codex";
 
@@ -351,7 +393,19 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
 /// Claude Code 的 capability adapter；离线目录与偏好解析由 #117 深化。
 struct ClaudeCapabilityBundle {
     provider: Arc<ClaudeCodeProvider>,
-    runtime: Arc<claude_runtime::ClaudeRuntime>,
+    runtime: Arc<claude::runtime::ClaudeRuntime>,
+}
+
+impl ClaudeCapabilityBundle {
+    /// 使用离线能力表解析一次不可变设置快照，不触发 runtime 或模型服务 I/O。
+    fn resolve_preference(
+        preference: &crate::application_settings::BabysitProviderSettings,
+    ) -> Result<BabysitResolvedModel, BabysitError> {
+        claude::ClaudeModelCatalog::offline()
+            .resolve(preference)
+            .map(Into::into)
+            .map_err(|_| BabysitError::ModelPreferenceInvalid)
+    }
 }
 
 #[async_trait]
@@ -365,27 +419,27 @@ impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        _preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderSettings>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
+        let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+        let resolved = Self::resolve_preference(preference)?;
         self.runtime.ensure_ready(workspace_path).await?;
         Ok(PreparedBabysitAnalysis {
             provider: self.provider.clone(),
-            resolved: self.provider.resolve_analysis_model().await?.into(),
+            resolved,
             process_generation: self.provider.process_generation(),
             _lease: None,
         })
     }
 
-    /// Claude 离线 alias 目录由 #117 的 adapter 实现。
+    /// 返回随应用发布且不启动 CLI 的 Claude alias/custom 离线目录。
     async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
-        Err(BabysitError::Provider {
-            detail: "Claude Code 模型目录尚未装配。".to_owned(),
-        })
+        Ok(claude::ClaudeModelCatalog::offline().into())
     }
 
     /// 校验 Claude executable 而不保存设置。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
-        claude_runtime::ClaudeRuntime::validate_executable(path).await
+        claude::runtime::ClaudeRuntime::validate_executable(path).await
     }
 
     /// 验证并激活 Claude executable。
@@ -429,6 +483,9 @@ pub struct LineTarget {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BabysitProviderRequest {
+    /// 仅用于 provider 内部关联 generation/repair；不会进入 prompt 或 IPC payload。
+    #[serde(skip)]
+    pub analysis_run_id: u64,
     pub path: String,
     pub locale: String,
     /// 当前 Review Workspace 的绝对路径；provider 只能把它作为只读 cwd 使用。
@@ -1018,7 +1075,7 @@ impl BabysitApplication {
         ));
         let fallback_provider: Arc<dyn BabysitAgentProvider> = codex_provider.clone();
         let claude_provider = Arc::new(ClaudeCodeProvider::new("claude"));
-        let claude_runtime = Arc::new(claude_runtime::ClaudeRuntime::new(
+        let claude_runtime = Arc::new(claude::runtime::ClaudeRuntime::new(
             claude_provider.clone(),
             settings_path.clone(),
         ));
@@ -1232,7 +1289,7 @@ impl BabysitApplication {
                     .await
             }
             crate::application_settings::BabysitProvider::ClaudeCode => {
-                claude_runtime::ClaudeRuntime::validate_executable(path).await
+                claude::runtime::ClaudeRuntime::validate_executable(path).await
             }
         }
     }
@@ -1250,7 +1307,7 @@ impl BabysitApplication {
     /// 构造生产默认的 Claude Code provider；仅在首次启用 Babysit 时发现并探测。
     pub fn with_claude_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
         let provider = Arc::new(ClaudeCodeProvider::new("claude"));
-        let runtime = Arc::new(claude_runtime::ClaudeRuntime::new(
+        let runtime = Arc::new(claude::runtime::ClaudeRuntime::new(
             provider.clone(),
             settings_path.into(),
         ));
@@ -1618,6 +1675,7 @@ fn build_provider_request(
     targets.extend(non_empty_targets(FileSide::After, after));
     validate_target_inventory(&targets)?;
     Ok(BabysitProviderRequest {
+        analysis_run_id: NEXT_ANALYSIS_RUN_ID.fetch_add(1, Ordering::Relaxed),
         path: request.path.clone(),
         locale: request.locale.clone(),
         workspace_path: request.workspace_path.clone(),

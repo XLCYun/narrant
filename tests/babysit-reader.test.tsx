@@ -276,7 +276,7 @@ describe("Babysit Review Reader presentation", () => {
       error: {
         code: "provider_not_found",
         detail: "/Users/alice/.local/bin/codex",
-        providerId: "codex-app-server",
+        providerId: "codex",
       },
     });
     render(<ReviewReader review={review} appearance={appearance} />);
@@ -297,7 +297,7 @@ describe("Babysit Review Reader presentation", () => {
       error: {
         code: "provider_not_found",
         detail: "C:\\Users\\alice\\.local\\bin\\claude.exe",
-        providerId: "claude_code",
+        providerId: "claude-code",
         recovery: "select_provider_executable",
       },
     }, { selectExecutable });

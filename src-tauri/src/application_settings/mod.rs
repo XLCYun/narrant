@@ -70,7 +70,7 @@ impl Default for BabysitSettings {
 }
 
 impl BabysitSettings {
-    /// 返回指定 provider 的独立配置，供一次分析冻结完整偏好快照。
+    /// 返回指定 provider 的独立配置，供一次分析冻结完整偏好。
     pub(crate) fn provider_settings(&self, provider: BabysitProvider) -> &BabysitProviderSettings {
         match provider {
             BabysitProvider::Codex => &self.codex,
@@ -79,7 +79,7 @@ impl BabysitSettings {
     }
 }
 
-/// 经校验的设备级 Application Settings 快照。
+/// 经校验的设备级 Application Settings 值。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ApplicationSettings {
@@ -276,23 +276,23 @@ fn validate_provider_settings(
     provider: BabysitProvider,
     preference: &BabysitProviderSettings,
 ) -> Result<(), ApplicationSettingsError> {
-    if preference.model.is_none() && preference.reasoning_effort.is_some() {
-        return Err(ApplicationSettingsError::InvalidProviderPreference);
-    }
     if provider != BabysitProvider::ClaudeCode {
         return Ok(());
     }
-    let Some(model) = preference.model.as_deref() else {
-        return Ok(());
-    };
-    if model.trim().is_empty() {
+    if preference
+        .model
+        .as_deref()
+        .is_some_and(|model| model.trim().is_empty())
+    {
         return Err(ApplicationSettingsError::InvalidProviderPreference);
     }
     let effort_valid = preference
         .reasoning_effort
         .as_deref()
         .is_none_or(|effort| matches!(effort, "low" | "medium" | "high" | "xhigh" | "max"));
-    if !effort_valid || (model == "haiku" && preference.reasoning_effort.is_some()) {
+    if !effort_valid
+        || (preference.model.as_deref() == Some("haiku") && preference.reasoning_effort.is_some())
+    {
         return Err(ApplicationSettingsError::InvalidProviderPreference);
     }
     Ok(())

@@ -640,6 +640,7 @@ async fn incomplete_output_fails_after_three_repairs_and_is_not_cached() {
 #[test]
 fn response_validation_rejects_extra_missing_and_unsafe_lines() {
     let request = BabysitProviderRequest {
+        analysis_run_id: 1,
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),

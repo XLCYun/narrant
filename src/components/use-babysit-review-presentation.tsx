@@ -66,7 +66,7 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
   if (!state || (state.kind !== "generating" && state.kind !== "repairing" && state.kind !== "failed")) return null;
 
   const running = state.kind === "generating" || state.kind === "repairing";
-  const providerLabels = state.kind === "failed" && state.error.providerId === "claude_code"
+  const providerLabels = state.kind === "failed" && state.error.providerId === "claude-code"
     ? {
       missing: labels.claudeMissing,
       signedOut: labels.claudeSignedOut,
@@ -74,7 +74,7 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
       initializationFailed: labels.claudeInitializationFailed,
       selectExecutable: labels.selectClaudeExecutable,
     }
-    : state.kind === "failed" && state.error.providerId === "codex-app-server"
+    : state.kind === "failed" && state.error.providerId === "codex"
       ? {
         missing: labels.codexMissing,
         signedOut: labels.codexSignedOut,

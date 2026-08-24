@@ -1,11 +1,11 @@
 //! Codex App Server 协议门面。
 
+use super::model_catalog::{CodexModelCapability, CodexModelCatalog, ModelListPage};
 use super::{
     restricted_config, AppServerCommand, AppServerProcess, RpcFailure, CODEX_CLEANUP_TIMEOUT,
     CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
-use super::model_catalog::{CodexModelCatalog, CodexModelCapability, ModelListPage};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -257,12 +257,7 @@ impl AppServerProcess {
         let mut models: Vec<CodexModelCapability> = Vec::new();
         loop {
             let value = self
-                .request(
-                    "model/list",
-                    json!({"cursor": cursor}),
-                    deadline,
-                    None,
-                )
+                .request("model/list", json!({"cursor": cursor}), deadline, None)
                 .await?;
             cursor = ModelListPage::decode(value)
                 .map_err(|_| RpcFailure::Protocol)?
@@ -349,6 +344,7 @@ impl AppServerProcess {
     pub(super) async fn probe_capabilities(&mut self, workspace: &Path) -> Result<(), RpcFailure> {
         let cancellation = CancellationSignal::default();
         let request = BabysitProviderRequest {
+            analysis_run_id: 1,
             path: "__narrant_babysit_capability_probe__".to_owned(),
             locale: "en".to_owned(),
             workspace_path: workspace.to_string_lossy().into_owned(),

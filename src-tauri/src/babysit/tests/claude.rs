@@ -7,6 +7,11 @@ use crate::operation::TestCancellation;
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[path = "claude/process.rs"]
+mod process;
+#[path = "claude/protocol.rs"]
+mod protocol;
+
 /// 断言事件日志中某个 CLI flag 后紧跟指定值，并兼容平台换行符。
 fn assert_flag_value(events: &str, flag: &str, value: &str) {
     let lines: Vec<_> = events.lines().collect();
@@ -19,6 +24,7 @@ fn assert_flag_value(events: &str, flag: &str, value: &str) {
 /// 构造同时包含 before/after 目标的 provider 请求。
 fn request(workspace_path: String) -> BabysitProviderRequest {
     BabysitProviderRequest {
+        analysis_run_id: 1,
         path: "src/example.rs".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path,
@@ -39,6 +45,18 @@ fn request(workspace_path: String) -> BabysitProviderRequest {
         model: "sonnet".to_owned(),
         reasoning_effort: "low".to_owned(),
     }
+}
+
+/// 构造指定 nullable Claude CLI 覆盖的请求；空字符串代表设置中的 null。
+fn request_with_model(
+    workspace_path: String,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> BabysitProviderRequest {
+    let mut request = request(workspace_path);
+    request.model = model.unwrap_or_default().to_owned();
+    request.reasoning_effort = reasoning_effort.unwrap_or_default().to_owned();
+    request
 }
 
 #[tokio::test]

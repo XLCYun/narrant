@@ -6,7 +6,6 @@ use super::{
     ValidationFailure, MAX_EXPLANATION_CHARS, MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -15,6 +14,23 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+
+mod discovery;
+mod model_catalog;
+mod process;
+mod protocol;
+pub(crate) mod runtime;
+
+use process::configure_round_command;
+use protocol::{
+    classify_failure, classify_result_error, redacted_provider_error, ClaudeResultEnvelope,
+};
+
+pub(crate) use model_catalog::{ClaudeModelCatalog, ResolvedClaudeModel};
+
+#[cfg(test)]
+#[path = "tests/claude/model_catalog.rs"]
+mod model_catalog_tests;
 
 /// Claude Code generation 与 repair 共用的总运行上限；上层仍拥有完整分析截止时间。
 const CLAUDE_ROUND_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -29,10 +45,11 @@ pub struct ClaudeCodeProvider {
 }
 
 /// 一次 File Change 分析跨 fresh process 保留的最小内存状态。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ClaudeRunState {
     deadline: Instant,
     repair_attempts: u8,
+    resolved_model: ResolvedClaudeModel,
 }
 
 impl ClaudeCodeProvider {
@@ -78,6 +95,7 @@ impl ClaudeCodeProvider {
         &self,
         request: &BabysitProviderRequest,
         prompt: String,
+        resolved_model: &ResolvedClaudeModel,
         deadline: Instant,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
@@ -91,25 +109,8 @@ impl ClaudeCodeProvider {
             .map_err(|_| redacted_provider_error("state_unavailable"))?
             .clone();
         let mut command = Command::new(program);
+        configure_round_command(&mut command, &self.prefix_args, resolved_model, &schema);
         command
-            .args(&self.prefix_args)
-            .arg("-p")
-            .arg("--no-session-persistence")
-            .arg("--output-format")
-            .arg("json")
-            .arg("--safe-mode")
-            .arg("--permission-mode")
-            .arg("dontAsk")
-            .arg("--tools")
-            .arg("Read,Glob,Grep")
-            .arg("--disallowedTools")
-            .arg("Bash,Write,Edit,Web,mcp__*")
-            .arg("--model")
-            .arg("sonnet")
-            .arg("--effort")
-            .arg("low")
-            .arg("--json-schema")
-            .arg(schema.to_string())
             .current_dir(&request.workspace_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -200,6 +201,7 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
     ) -> Result<BabysitFileExplanations, BabysitError> {
         let key = request_key(&request);
         let deadline = Instant::now() + self.timeout;
+        let resolved_model = resolved_model_from_request(&request);
         self.runs
             .lock()
             .map_err(|_| redacted_provider_error("state_unavailable"))?
@@ -208,11 +210,12 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
                 ClaudeRunState {
                     deadline,
                     repair_attempts: 0,
+                    resolved_model: resolved_model.clone(),
                 },
             );
         let prompt = generation_prompt(&request);
         let result = self
-            .run_round(&request, prompt, deadline, cancellation)
+            .run_round(&request, prompt, &resolved_model, deadline, cancellation)
             .await;
         if result
             .as_ref()
@@ -240,13 +243,20 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
             let state = runs.entry(key.clone()).or_insert(ClaudeRunState {
                 deadline: Instant::now() + self.timeout,
                 repair_attempts: 0,
+                resolved_model: resolved_model_from_request(&request),
             });
             state.repair_attempts = state.repair_attempts.saturating_add(1);
-            *state
+            state.clone()
         };
         let prompt = repair_prompt(&request, &previous, &failure);
         let result = self
-            .run_round(&request, prompt, state.deadline, cancellation)
+            .run_round(
+                &request,
+                prompt,
+                &state.resolved_model,
+                state.deadline,
+                cancellation,
+            )
             .await;
         if state.repair_attempts >= MAX_REPAIR_ATTEMPTS
             || result
@@ -282,17 +292,6 @@ impl ClaudeCodeProvider {
     }
 }
 
-/// Claude JSON result envelope；未知字段由 serde 默认忽略。
-#[derive(Deserialize)]
-struct ClaudeResultEnvelope {
-    #[serde(default)]
-    structured_output: Option<Value>,
-    #[serde(default)]
-    is_error: Option<bool>,
-    #[serde(default)]
-    subtype: Option<String>,
-}
-
 /// 生成只允许 before/after 及精确目标行的 JSON Schema。
 fn output_schema(request: &BabysitProviderRequest) -> Value {
     let side_schema = |side| {
@@ -325,15 +324,18 @@ fn generation_prompt(request: &BabysitProviderRequest) -> String {
     )
 }
 
-/// 生成只在内存中使用的 request key，不进入日志或 IPC。
+/// 返回 Narrant 为本次分析分配的进程内身份，不进入日志、prompt 或 IPC。
 fn request_key(request: &BabysitProviderRequest) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    request.path.hash(&mut hasher);
-    request.workspace_path.hash(&mut hasher);
-    request.before.hash(&mut hasher);
-    request.after.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    request.analysis_run_id.to_string()
+}
+
+/// 将 provider-independent 请求中的空字符串还原为 nullable Claude CLI 覆盖。
+fn resolved_model_from_request(request: &BabysitProviderRequest) -> ResolvedClaudeModel {
+    let present = |value: &str| (!value.is_empty()).then(|| value.to_owned());
+    ResolvedClaudeModel {
+        model: present(&request.model),
+        reasoning_effort: present(&request.reasoning_effort),
+    }
 }
 
 /// 构造自包含 repair；failure 文本只含 side/line/category，不含源代码或路径。
@@ -375,37 +377,4 @@ async fn terminate_process_tree(child: &mut tokio::process::Child, process_id: O
     }
     let _ = child.kill().await;
     let _ = child.wait().await;
-}
-
-/// 将进程失败压缩为不含路径、prompt、stdout/stderr 的稳定类别。
-fn redacted_provider_error(category: &str) -> BabysitError {
-    BabysitError::Provider {
-        detail: format!("Claude Code 进程失败（{category}）"),
-    }
-}
-
-/// 仅解析结构化 stdout 中的稳定错误类别，不回传原始内容。
-fn classify_failure(stdout: &[u8]) -> BabysitError {
-    serde_json::from_slice::<ClaudeResultEnvelope>(stdout)
-        .ok()
-        .filter(|value| value.is_error.unwrap_or(false))
-        .map(|value| classify_result_error(value.subtype.as_deref()))
-        .unwrap_or_else(|| redacted_provider_error("process_exit"))
-}
-
-/// 将 Claude result subtype 投影为现有稳定 setup/provider 类别。
-fn classify_result_error(subtype: Option<&str>) -> BabysitError {
-    match subtype {
-        Some("authentication_failed" | "not_authenticated" | "signed_out") => {
-            BabysitError::provider_setup(
-                "claude-code",
-                super::BabysitProviderSetupFailure::SignedOut,
-            )
-        }
-        Some("incompatible" | "unsupported") => BabysitError::provider_setup(
-            "claude-code",
-            super::BabysitProviderSetupFailure::Incompatible,
-        ),
-        _ => redacted_provider_error("result_error"),
-    }
 }

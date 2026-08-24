@@ -257,10 +257,10 @@ describe("Tauri Babysit application adapter", () => {
       invokeCancellable: vi.fn(),
     } as unknown as TypedTauriTransport);
 
-    await adapter.selectProviderExecutable?.("claude_code", "C:\\Tools\\claude.exe");
+    await adapter.selectProviderExecutable?.("claude-code", "C:\\Tools\\claude.exe");
 
     expect(invoke).toHaveBeenCalledWith("select_babysit_provider_executable", {
-      providerId: "claude_code",
+      providerId: "claude-code",
       executable: "C:\\Tools\\claude.exe",
     });
   });
