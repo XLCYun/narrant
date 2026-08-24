@@ -21,6 +21,7 @@ type BabysitReviewPresentationInput = {
   reviewId: string;
   snapshotId: string;
   selectedPath: string | undefined;
+  onOpenApplicationSettings?: () => void;
 };
 
 /** Babysit 对 Review Reader 暴露的紧凑展示投影。 */
@@ -36,7 +37,7 @@ type BabysitFooterProps = {
   state: BabysitState | undefined;
   onCancel: () => void;
   onRetry: () => void;
-  onSelectExecutable?: () => void;
+  onOpenApplicationSettings?: () => void;
   labels: {
     generating: string;
     repairing: (attempt: number) => string;
@@ -51,15 +52,14 @@ type BabysitFooterProps = {
     claudeInitializationFailed: string;
     cancel: string;
     retry: string;
-    selectClaudeExecutable: string;
-    selectCodexExecutable: string;
     copyDiagnostics: string;
     copiedDiagnostics: string;
+    openApplicationSettings: string;
   };
 };
 
 /** 在 Diff 底部呈现文件级 Babysit 状态和恢复操作，不打断普通代码阅读。 */
-function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }: BabysitFooterProps) {
+function BabysitFooter({ state, onCancel, onRetry, onOpenApplicationSettings, labels }: BabysitFooterProps) {
   const [copied, setCopied] = useState(false);
   const errorCode = state?.kind === "failed" ? state.error.code : undefined;
   useEffect(() => setCopied(false), [state?.kind, errorCode]);
@@ -72,7 +72,6 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
       signedOut: labels.claudeSignedOut,
       incompatible: labels.claudeIncompatible,
       initializationFailed: labels.claudeInitializationFailed,
-      selectExecutable: labels.selectClaudeExecutable,
     }
     : state.kind === "failed" && state.error.providerId === "codex"
       ? {
@@ -80,7 +79,6 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
         signedOut: labels.codexSignedOut,
         incompatible: labels.codexIncompatible,
         initializationFailed: labels.codexInitializationFailed,
-        selectExecutable: labels.selectCodexExecutable,
       }
       : undefined;
   const status = state.kind === "generating"
@@ -112,7 +110,7 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
     {running
       ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
       : <>
-        {state.kind === "failed" && state.error.recovery === "select_provider_executable" && providerLabels && onSelectExecutable && <Button variant="outline" size="xs" onClick={onSelectExecutable}>{providerLabels.selectExecutable}</Button>}
+        {state.kind === "failed" && state.error.recovery === "open_application_settings" && onOpenApplicationSettings && <Button variant="outline" size="xs" onClick={onOpenApplicationSettings}>{labels.openApplicationSettings}</Button>}
         <Button variant="outline" size="xs" onClick={onRetry}>{labels.retry}</Button>
         <Button variant="ghost" size="xs" onClick={copyDiagnostics} aria-label={copied ? labels.copiedDiagnostics : labels.copyDiagnostics}>
           <Icon icon={Copy01Icon} aria-hidden />
@@ -125,7 +123,7 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
 /** 收拢 Babysit 的启动、筛选和状态 UI，让 Review Reader 只消费展示投影。 */
 export function useBabysitReviewPresentation(input: BabysitReviewPresentationInput): BabysitReviewPresentation {
   const { t, i18n } = useTranslation(["common", "review"]);
-  const { babysit, reviewId, snapshotId, selectedPath } = input;
+  const { babysit, reviewId, snapshotId, selectedPath, onOpenApplicationSettings } = input;
   const state = babysit?.state;
   const running = state ? isBabysitRunning(state) : false;
   const [visible, setVisible] = useState(false);
@@ -225,7 +223,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
     state={visible ? state : undefined}
     onCancel={() => babysit?.cancel()}
     onRetry={() => babysit?.retry()}
-    onSelectExecutable={babysit?.selectExecutable ? () => babysit.selectExecutable?.() : undefined}
+    onOpenApplicationSettings={onOpenApplicationSettings}
     labels={{
       generating: t("review:babysitGenerating"),
       repairing: (attempt) => t("review:babysitRepairing", { attempt }),
@@ -239,11 +237,10 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
       claudeIncompatible: t("review:babysitClaudeIncompatible"),
       claudeInitializationFailed: t("review:babysitClaudeInitializationFailed"),
       cancel: t("review:babysitCancel"),
-      selectClaudeExecutable: t("review:babysitSelectClaude"),
-      selectCodexExecutable: t("review:babysitSelectCodex"),
       retry: t("common:retry"),
       copyDiagnostics: t("review:babysitCopyDiagnostics"),
       copiedDiagnostics: t("review:babysitCopiedDiagnostics"),
+      openApplicationSettings: t("review:babysitOpenApplicationSettings"),
     }}
   />;
 

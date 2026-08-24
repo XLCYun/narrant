@@ -165,12 +165,25 @@ function ProviderExecutableFields({ label, preference, saving, onUpdate, onChoos
 /** 呈现 Codex 的延迟动态目录，并即时保存目录 revision 约束的完整组合。 */
 function CodexProviderFields({ application, preference, saving, onUpdate, onChooseExecutable, onError }: ProviderFieldsProps & { application: ApplicationSettingsApplication; onError(detail: string): void }) {
   const [catalog, setCatalog] = useState<{ revision: string; models: BabysitModelCatalogEntry[] }>();
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string>();
+  /** 按需读取最新 Codex 目录，失败后保留显式重试入口。 */
+  async function loadCatalog() {
+    setCatalogLoading(true);
+    setCatalogError(undefined);
+    try { setCatalog(await application.listBabysitModels("codex")); }
+    catch (reason) {
+      const detail = errorDetail(reason, "无法获取模型目录");
+      setCatalogError(detail);
+      onError(detail);
+    } finally { setCatalogLoading(false); }
+  }
   return <div className="grid gap-4" data-testid="codex-preferences">
     <ProviderExecutableFields label="Codex" preference={preference} saving={saving} onUpdate={onUpdate} onChooseExecutable={onChooseExecutable} />
-    {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving} onClick={async () => {
-      try { setCatalog(await application.listBabysitModels("codex")); }
-      catch (reason) { onError(errorDetail(reason, "无法获取模型目录")); }
-    }}>修改模型偏好</Button>}
+    {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving || catalogLoading} onClick={() => void loadCatalog()}>{catalogLoading ? "正在获取模型…" : catalogError ? "重试获取模型" : "修改模型偏好"}</Button>}
+    {catalogLoading && <p role="status" className="text-sm text-muted-foreground">正在读取 Codex 模型目录…</p>}
+    {catalogError && !catalogLoading && <p className="text-sm text-muted-foreground">已保留当前保存值，可重试获取模型目录。</p>}
+    {catalog?.models.length === 0 && <p role="status" className="rounded-lg border p-3 text-sm text-muted-foreground">当前 Codex 未返回可用模型，已保留当前设置。</p>}
     {catalog && <>
       <label className="grid gap-2 text-sm font-medium">模型<Select value={preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
         if (!value) return;

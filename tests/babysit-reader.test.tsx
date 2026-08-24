@@ -289,7 +289,7 @@ describe("Babysit Review Reader presentation", () => {
   });
 
   it("Claude Code 缺失时显示 provider-aware 恢复动作且不建议回退 Codex", () => {
-    const selectExecutable = vi.fn();
+    const openApplicationSettings = vi.fn();
     const review = makeReview({
       kind: "failed",
       retryable: true,
@@ -298,15 +298,17 @@ describe("Babysit Review Reader presentation", () => {
         code: "provider_not_found",
         detail: "C:\\Users\\alice\\.local\\bin\\claude.exe",
         providerId: "claude-code",
-        recovery: "select_provider_executable",
+        recovery: "open_application_settings",
       },
-    }, { selectExecutable });
-    render(<ReviewReader review={review} appearance={appearance} />);
+    });
+    render(<ReviewReader review={review} appearance={{ ...appearance, onOpenApplicationSettings: openApplicationSettings }} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
     const footer = screen.getByTestId("babysit-footer");
-    expect(footer).toHaveTextContent("未找到可用的 Claude Code，请选择可执行文件");
-    expect(within(footer).getByRole("button", { name: "选择 Claude Code 可执行文件" })).toBeInTheDocument();
+    expect(footer).toHaveTextContent("请前往应用设置的宝宝模式分区配置");
+    fireEvent.click(within(footer).getByRole("button", { name: "打开应用设置" }));
+    expect(openApplicationSettings).toHaveBeenCalledOnce();
+    expect(within(footer).queryByRole("button", { name: /选择.*可执行文件/ })).not.toBeInTheDocument();
     expect(footer).not.toHaveTextContent("Codex");
     expect(footer).not.toHaveTextContent("alice");
   });
