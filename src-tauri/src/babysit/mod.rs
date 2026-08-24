@@ -107,6 +107,7 @@ pub trait BabysitProviderCapabilities: Send + Sync {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
+        preference: Option<&crate::application_settings::BabysitProviderSettings>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError>;
     /// 解析该 provider 当前可见的模型目录。
     async fn model_catalog(&self) -> Result<codex::CodexModelCatalog, BabysitError>;
@@ -143,9 +144,13 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
+        preference: Option<&crate::application_settings::BabysitProviderSettings>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
         let (resolved, lease) = if let Some(runtime) = &self.codex_runtime {
-            let (resolved, lease) = runtime.prepare_analysis(workspace_path).await?;
+            let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+            let (resolved, lease) = runtime
+                .prepare_analysis_with_preference(workspace_path, preference)
+                .await?;
             (resolved, Some(lease))
         } else {
             if let Some(runtime) = &self.runtime {
@@ -815,6 +820,7 @@ impl BabysitApplication {
             codex_provider.clone(),
             settings_path.clone(),
         ));
+        let fallback_provider: Arc<dyn BabysitAgentProvider> = codex_provider.clone();
         let claude_provider = Arc::new(ClaudeCodeProvider::new("claude"));
         let claude_runtime = Arc::new(claude_runtime::ClaudeRuntime::new(
             claude_provider.clone(),
@@ -849,7 +855,7 @@ impl BabysitApplication {
         .into_iter()
         .collect();
         Self {
-            provider: Arc::new(FakeBabysitProvider::default()),
+            provider: fallback_provider,
             runtime: None,
             codex_runtime: None,
             model_catalogs: Mutex::new(VecDeque::new()),
@@ -1145,15 +1151,26 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
-        let selected_identity = self
+        let selected_settings = self
             .settings
             .as_ref()
             .map(|settings| settings.load())
             .transpose()
             .map_err(|_| BabysitError::Provider {
                 detail: "Application Settings 不可用。".to_owned(),
-            })?
+            })?;
+        let selected_identity = selected_settings
+            .as_ref()
             .map(|settings| settings.babysit.provider);
+        let selected_preference =
+            selected_settings
+                .as_ref()
+                .map(|settings| match settings.babysit.provider {
+                    crate::application_settings::BabysitProvider::Codex => &settings.babysit.codex,
+                    crate::application_settings::BabysitProvider::ClaudeCode => {
+                        &settings.babysit.claude_code
+                    }
+                });
         let selected_bundle: Arc<dyn BabysitProviderCapabilities> = match selected_identity {
             Some(identity) => self.registry.get(&identity).cloned().ok_or_else(|| {
                 BabysitError::provider_setup(
@@ -1169,7 +1186,7 @@ impl BabysitApplication {
             }),
         };
         let prepared = selected_bundle
-            .prepare_analysis(Path::new(&request.workspace_path))
+            .prepare_analysis(Path::new(&request.workspace_path), selected_preference)
             .await?;
         let selected_provider = prepared.provider;
         let resolved = prepared.resolved;

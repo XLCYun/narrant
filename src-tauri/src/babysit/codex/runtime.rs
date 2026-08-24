@@ -84,7 +84,6 @@ impl CodexRuntime {
         &self,
         workspace_path: &Path,
     ) -> Result<(super::ResolvedCodexModel, tokio::sync::OwnedMutexGuard<()>), BabysitError> {
-        let lifecycle = self.lifecycle.clone().lock_owned().await;
         let preference = self
             .settings
             .application
@@ -92,7 +91,18 @@ impl CodexRuntime {
             .map_err(|_| BabysitError::ModelPreferenceInvalid)?
             .babysit
             .codex;
-        let preference = BabysitModelPreference::from(&preference);
+        self.prepare_analysis_with_preference(workspace_path, &preference)
+            .await
+    }
+
+    /// 使用上层已冻结的设置快照准备分析，保证 provider 与模型偏好来自同一次读取。
+    pub(crate) async fn prepare_analysis_with_preference(
+        &self,
+        workspace_path: &Path,
+        preference: &crate::application_settings::BabysitProviderSettings,
+    ) -> Result<(super::ResolvedCodexModel, tokio::sync::OwnedMutexGuard<()>), BabysitError> {
+        let lifecycle = self.lifecycle.clone().lock_owned().await;
+        let preference = BabysitModelPreference::from(preference);
         let catalog = self.model_catalog_once().await?;
         self.ensure_ready_once(workspace_path).await?;
         let resolved = catalog

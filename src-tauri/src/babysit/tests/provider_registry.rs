@@ -9,6 +9,7 @@ struct RecordingBundle {
     provider: Arc<FakeBabysitProvider>,
     prepare_calls: AtomicUsize,
     shutdown_calls: AtomicUsize,
+    observed_models: Mutex<Vec<Option<String>>>,
 }
 
 impl RecordingBundle {
@@ -19,6 +20,7 @@ impl RecordingBundle {
             provider: Arc::new(FakeBabysitProvider::default()),
             prepare_calls: AtomicUsize::new(0),
             shutdown_calls: AtomicUsize::new(0),
+            observed_models: Mutex::new(Vec::new()),
         }
     }
 }
@@ -31,8 +33,13 @@ impl BabysitProviderCapabilities for RecordingBundle {
     async fn prepare_analysis(
         &self,
         _workspace_path: &Path,
+        preference: Option<&crate::application_settings::BabysitProviderSettings>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
         self.prepare_calls.fetch_add(1, Ordering::AcqRel);
+        self.observed_models
+            .lock()
+            .unwrap()
+            .push(preference.and_then(|settings| settings.model.clone()));
         Ok(PreparedBabysitAnalysis {
             provider: self.provider.clone(),
             resolved: codex::ResolvedCodexModel {
@@ -95,7 +102,18 @@ async fn new_analysis_routes_to_the_selected_provider_without_touching_the_other
 async fn readiness_is_lazy_and_limited_to_the_selected_bundle() {
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
-    ApplicationSettingsApplication::new(settings_path.clone())
+    let settings = ApplicationSettingsApplication::new(settings_path.clone());
+    settings
+        .update_provider_settings(
+            BabysitProvider::ClaudeCode,
+            crate::application_settings::BabysitProviderSettings {
+                executable: None,
+                model: Some("sonnet".to_owned()),
+                reasoning_effort: Some("high".to_owned()),
+            },
+        )
+        .unwrap();
+    settings
         .update_provider(BabysitProvider::ClaudeCode)
         .unwrap();
     let codex = Arc::new(RecordingBundle::new("codex"));
@@ -127,6 +145,10 @@ async fn readiness_is_lazy_and_limited_to_the_selected_bundle() {
         .unwrap();
     assert_eq!(codex.prepare_calls.load(Ordering::Acquire), 0);
     assert_eq!(claude.prepare_calls.load(Ordering::Acquire), 1);
+    assert_eq!(
+        claude.observed_models.lock().unwrap().as_slice(),
+        &[Some("sonnet".to_owned())]
+    );
 }
 
 /// provider 切换后的同一 File Change 不得命中另一 provider 的完成缓存。
