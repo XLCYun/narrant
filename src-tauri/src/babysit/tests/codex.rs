@@ -19,6 +19,7 @@ fn assert_codex_setup_failure(error: &BabysitError, expected: BabysitProviderSet
 /// 构造一个只含 before/after 第 1 行的 provider 请求，便于 fixture 保持确定性。
 fn request() -> BabysitProviderRequest {
     BabysitProviderRequest {
+        analysis_run_id: 1,
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-review-workspace".to_owned(),

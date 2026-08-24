@@ -324,15 +324,9 @@ fn generation_prompt(request: &BabysitProviderRequest) -> String {
     )
 }
 
-/// 生成只在内存中使用的 request key，不进入日志或 IPC。
+/// 返回 Narrant 为本次分析分配的进程内身份，不进入日志、prompt 或 IPC。
 fn request_key(request: &BabysitProviderRequest) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    request.path.hash(&mut hasher);
-    request.workspace_path.hash(&mut hasher);
-    request.before.hash(&mut hasher);
-    request.after.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    request.analysis_run_id.to_string()
 }
 
 /// 将 provider-independent 请求中的空字符串还原为 nullable Claude CLI 覆盖。

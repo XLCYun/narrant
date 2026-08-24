@@ -19,7 +19,7 @@ pub(crate) struct ClaudeModelCatalog {
     pub models: Vec<ClaudeModelCapability>,
 }
 
-/// 一次分析开始前冻结的 Claude Code 模型与 effort 覆盖。
+/// 一次分析开始前冻结的 Claude Code 模型与 effort 偏好解析结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedClaudeModel {
     pub model: Option<String>,

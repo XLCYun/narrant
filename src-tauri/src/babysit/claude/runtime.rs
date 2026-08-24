@@ -4,8 +4,8 @@ use super::super::{
     BabysitError, BabysitProviderRuntimeStatus, BabysitProviderSetupFailure, ClaudeCodeProvider,
     InstalledProviderRuntime,
 };
+use crate::application_settings::{ApplicationSettingsApplication, BabysitProvider};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -24,7 +24,7 @@ const PROBE_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 /// Claude Code runtime；状态与 executable 设置均由 application 生命周期统一拥有。
 pub(crate) struct ClaudeRuntime {
     provider: Arc<ClaudeCodeProvider>,
-    settings_path: PathBuf,
+    settings: ApplicationSettingsApplication,
     status: Mutex<BabysitProviderRuntimeStatus>,
     #[cfg(test)]
     candidates_override: Option<Vec<ClaudeCandidate>>,
@@ -35,13 +35,6 @@ pub(crate) struct ClaudeRuntime {
 struct ClaudeCandidate {
     program: PathBuf,
     prefix_args: Vec<OsString>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-/// 只持久化用户明确选择且已通过探针的 Claude Code executable。
-struct ClaudeSettings {
-    executable: PathBuf,
 }
 
 impl ClaudeRuntime {
@@ -71,7 +64,7 @@ impl ClaudeRuntime {
     pub(crate) fn new(provider: Arc<ClaudeCodeProvider>, settings_path: PathBuf) -> Self {
         Self {
             provider,
-            settings_path,
+            settings: ApplicationSettingsApplication::new(settings_path),
             status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
             #[cfg(test)]
             candidates_override: None,
@@ -87,7 +80,7 @@ impl ClaudeRuntime {
     ) -> Self {
         Self {
             provider,
-            settings_path,
+            settings: ApplicationSettingsApplication::new(settings_path),
             status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
             candidates_override: Some(
                 candidates
@@ -107,10 +100,11 @@ impl ClaudeRuntime {
         if let Some(candidates) = &self.candidates_override {
             return candidates.clone();
         }
-        let selected = std::fs::read_to_string(&self.settings_path)
+        let selected = self
+            .settings
+            .load()
             .ok()
-            .and_then(|value| serde_json::from_str::<ClaudeSettings>(&value).ok())
-            .map(|settings| settings.executable);
+            .and_then(|settings| settings.babysit.claude_code.executable);
         let paths = candidate_paths(
             selected,
             std::env::var_os("CLAUDE_CODE_EXECUTABLE").map(PathBuf::from),
@@ -328,32 +322,28 @@ impl InstalledProviderRuntime for ClaudeRuntime {
         Err(last)
     }
 
-    /// picker 选择必须先通过完整探针，成功后再持久化并切换 provider。
+    /// picker 选择必须先通过完整探针，再原子更新统一 Application Settings。
     async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
         let path = Self::validate_executable(path).await?;
-        if let Some(parent) = self.settings_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| {
+        let mut preference = self
+            .settings
+            .load()
+            .map(|settings| settings.babysit.claude_code)
+            .map_err(|_| {
                 BabysitError::provider_setup(
                     PROVIDER_ID,
                     BabysitProviderSetupFailure::InitializationFailed,
                 )
             })?;
-        }
-        let payload = serde_json::to_vec(&ClaudeSettings {
-            executable: path.clone(),
-        })
-        .map_err(|_| {
-            BabysitError::provider_setup(
-                PROVIDER_ID,
-                BabysitProviderSetupFailure::InitializationFailed,
-            )
-        })?;
-        std::fs::write(&self.settings_path, payload).map_err(|_| {
-            BabysitError::provider_setup(
-                PROVIDER_ID,
-                BabysitProviderSetupFailure::InitializationFailed,
-            )
-        })?;
+        preference.executable = Some(path.clone());
+        self.settings
+            .update_provider_settings(BabysitProvider::ClaudeCode, preference)
+            .map_err(|_| {
+                BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )
+            })?;
         self.provider.set_program(path)?;
         self.set_status(BabysitProviderRuntimeStatus::Ready);
         Ok(())

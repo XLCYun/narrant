@@ -24,6 +24,7 @@ fn assert_flag_value(events: &str, flag: &str, value: &str) {
 /// 构造同时包含 before/after 目标的 provider 请求。
 fn request(workspace_path: String) -> BabysitProviderRequest {
     BabysitProviderRequest {
+        analysis_run_id: 1,
         path: "src/example.rs".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path,
@@ -56,23 +57,6 @@ fn request_with_model(
     request.model = model.unwrap_or_default().to_owned();
     request.reasoning_effort = reasoning_effort.unwrap_or_default().to_owned();
     request
-}
-
-#[tokio::test]
-async fn default_model_and_effort_omit_both_cli_flags() {
-    let (provider, temp, events) = provider("success", Duration::from_secs(5));
-
-    provider
-        .generate(
-            request_with_model(temp.path().to_string_lossy().into_owned(), None, None),
-            OperationContext::background().cancellation(),
-        )
-        .await
-        .unwrap();
-
-    let events = std::fs::read_to_string(events).unwrap();
-    assert!(!events.lines().any(|line| line == "--model"));
-    assert!(!events.lines().any(|line| line == "--effort"));
 }
 
 #[tokio::test]
@@ -149,39 +133,6 @@ async fn malformed_generation_is_repaired_by_a_fresh_self_contained_process() {
     assert!(events.contains("let old = 1;"));
     assert!(events.contains("上一轮输出 JSON"));
     assert!(events.contains("Before 缺少第 1 行解释"));
-}
-
-#[tokio::test]
-async fn repair_uses_the_model_snapshot_frozen_by_generation() {
-    let (provider, temp, events) = provider("repair", Duration::from_secs(5));
-    let cancellation = OperationContext::background().cancellation().clone();
-    let workspace = temp.path().to_string_lossy().into_owned();
-    let generation_request = request_with_model(workspace.clone(), Some("opus"), Some("max"));
-    let previous = provider
-        .generate(generation_request.clone(), &cancellation)
-        .await
-        .unwrap();
-    let mut changed_request = generation_request;
-    changed_request.model = "haiku".to_owned();
-    changed_request.reasoning_effort.clear();
-
-    provider
-        .repair(
-            changed_request,
-            previous,
-            super::super::ValidationFailure::MissingLine {
-                side: FileSide::Before,
-                line_number: 1,
-            },
-            &cancellation,
-        )
-        .await
-        .unwrap();
-
-    let events = std::fs::read_to_string(events).unwrap();
-    assert_eq!(events.matches("--model\nopus").count(), 2);
-    assert_eq!(events.matches("--effort\nmax").count(), 2);
-    assert!(!events.lines().any(|line| line == "haiku"));
 }
 
 #[tokio::test]

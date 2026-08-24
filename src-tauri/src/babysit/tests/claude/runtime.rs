@@ -1,4 +1,7 @@
 use super::*;
+use crate::application_settings::{
+    ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings, ThemePreference,
+};
 use crate::babysit::{BabysitErrorCode, BabysitErrorPayload};
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -205,38 +208,35 @@ async fn incompatible_precedes_initialization_failure() {
 }
 
 #[test]
-fn bare_path_is_preferred_before_selected_and_environment_fallbacks() {
-    assert_eq!(
-        candidate_paths(
-            Some("selected-claude".into()),
-            Some("environment-claude".into())
-        ),
-        vec![
-            std::path::PathBuf::from("claude"),
-            std::path::PathBuf::from("selected-claude"),
-            std::path::PathBuf::from("environment-claude")
-        ],
+fn unified_settings_supply_the_authoritative_claude_executable() {
+    let directory = tempfile::tempdir().expect("create settings directory");
+    let settings_path = directory.path().join("settings.json");
+    let settings = ApplicationSettingsApplication::new(settings_path.clone());
+    settings
+        .update_theme(ThemePreference::Dark)
+        .expect("persist complete unified settings");
+    settings
+        .update_provider(BabysitProvider::ClaudeCode)
+        .expect("persist selected provider");
+    settings
+        .update_provider_settings(
+            BabysitProvider::ClaudeCode,
+            BabysitProviderSettings {
+                executable: Some("selected-claude".into()),
+                model: Some("sonnet".to_owned()),
+                reasoning_effort: Some("high".to_owned()),
+            },
+        )
+        .expect("persist Claude preference");
+    let runtime = ClaudeRuntime::new(
+        Arc::new(ClaudeCodeProvider::new("unused-claude")),
+        settings_path,
     );
-}
 
-#[test]
-fn duplicate_fallbacks_are_not_probed_twice() {
+    let candidates = runtime.candidates();
+    assert_eq!(candidates.len(), 1);
     assert_eq!(
-        candidate_paths(Some("claude".into()), Some("selected-claude".into())),
-        vec![
-            std::path::PathBuf::from("claude"),
-            std::path::PathBuf::from("selected-claude")
-        ],
-    );
-}
-
-#[test]
-fn non_adjacent_duplicate_fallbacks_are_not_probed_twice() {
-    assert_eq!(
-        candidate_paths(Some("selected-claude".into()), Some("claude".into())),
-        vec![
-            std::path::PathBuf::from("claude"),
-            std::path::PathBuf::from("selected-claude")
-        ],
+        candidates[0].program,
+        std::path::PathBuf::from("selected-claude")
     );
 }

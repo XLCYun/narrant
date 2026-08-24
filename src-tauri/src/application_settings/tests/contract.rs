@@ -95,13 +95,13 @@ fn model_and_reasoning_effort_are_independent_nullable_preferences() {
 
     let saved = application
         .update_provider_settings(
-        BabysitProvider::Codex,
-        BabysitProviderSettings {
-            executable: None,
-            model: None,
-            reasoning_effort: Some("high".to_owned()),
-        },
-    )
+            BabysitProvider::Codex,
+            BabysitProviderSettings {
+                executable: None,
+                model: None,
+                reasoning_effort: Some("high".to_owned()),
+            },
+        )
         .unwrap();
 
     assert_eq!(

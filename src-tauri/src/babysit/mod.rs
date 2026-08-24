@@ -171,6 +171,8 @@ pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
 pub const MAX_EXPLANATION_CHARS: usize = 240;
 /// 同一个 provider 输出失败后允许的最大修复次数。
 pub const MAX_REPAIR_ATTEMPTS: u8 = 3;
+/// 为 provider 私有运行状态分配进程内唯一身份，避免相同 File Change 的并发分析碰撞。
+static NEXT_ANALYSIS_RUN_ID: AtomicU64 = AtomicU64::new(1);
 /// Codex App Server 在 provider-independent 错误契约中的稳定 identity。
 const CODEX_PROVIDER_ID: &str = "codex";
 
@@ -481,6 +483,9 @@ pub struct LineTarget {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BabysitProviderRequest {
+    /// 仅用于 provider 内部关联 generation/repair；不会进入 prompt 或 IPC payload。
+    #[serde(skip)]
+    pub analysis_run_id: u64,
     pub path: String,
     pub locale: String,
     /// 当前 Review Workspace 的绝对路径；provider 只能把它作为只读 cwd 使用。
@@ -1670,6 +1675,7 @@ fn build_provider_request(
     targets.extend(non_empty_targets(FileSide::After, after));
     validate_target_inventory(&targets)?;
     Ok(BabysitProviderRequest {
+        analysis_run_id: NEXT_ANALYSIS_RUN_ID.fetch_add(1, Ordering::Relaxed),
         path: request.path.clone(),
         locale: request.locale.clone(),
         workspace_path: request.workspace_path.clone(),

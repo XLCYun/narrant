@@ -3,7 +3,10 @@ use crate::application_settings::BabysitProviderSettings;
 
 #[test]
 fn claude_code_uses_the_stable_provider_identity() {
-    assert_eq!(ClaudeCodeProvider::new("claude").provider_id(), "claude-code");
+    assert_eq!(
+        ClaudeCodeProvider::new("claude").provider_id(),
+        "claude-code"
+    );
 }
 
 #[test]

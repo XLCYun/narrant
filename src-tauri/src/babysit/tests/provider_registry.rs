@@ -86,7 +86,10 @@ async fn claude_bundle_exposes_its_offline_catalog_without_runtime_io() {
 
     let models = bundle.model_catalog().await.unwrap().models();
     assert_eq!(
-        models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
         ["default", "best", "fable", "opus", "sonnet", "haiku", "custom"]
     );
     assert!(models
