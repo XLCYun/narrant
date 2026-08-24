@@ -12,7 +12,7 @@ fn assert_codex_setup_failure(error: &BabysitError, expected: BabysitProviderSet
     assert!(matches!(
         error,
         BabysitError::ProviderSetup { provider_id, failure }
-            if provider_id == "codex-app-server" && *failure == expected
+            if provider_id == "codex" && *failure == expected
     ));
 }
 
@@ -249,7 +249,7 @@ async fn thread_list_capability_probe_returns_upgrade_recovery_category() {
     assert!(matches!(
         &error,
         BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::Incompatible }
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
@@ -276,7 +276,7 @@ async fn initialize_transport_failure_returns_retry_recovery_category() {
     assert!(matches!(
         &error,
         BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::InitializationFailed }
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
@@ -298,7 +298,7 @@ async fn app_server_auth_failure_returns_login_recovery_category() {
     assert!(matches!(
         &error,
         BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::SignedOut }
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(
@@ -324,7 +324,7 @@ async fn malformed_initialize_response_returns_retry_recovery_category() {
     assert!(matches!(
         &error,
         BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::InitializationFailed }
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     let payload = crate::babysit::BabysitErrorPayload::from(error);
     assert_eq!(

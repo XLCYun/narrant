@@ -67,7 +67,7 @@ pub(crate) struct CodexRuntime {
     discovery: CodexExecutableDiscovery,
     settings: ApplicationCodexSettings,
     status: Mutex<CodexRuntimeStatus>,
-    lifecycle: AsyncMutex<()>,
+    lifecycle: Arc<AsyncMutex<()>>,
 }
 
 impl CodexRuntime {
@@ -83,8 +83,8 @@ impl CodexRuntime {
     pub(crate) async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-    ) -> Result<(super::ResolvedCodexModel, tokio::sync::MutexGuard<'_, ()>), BabysitError> {
-        let lifecycle = self.lifecycle.lock().await;
+    ) -> Result<(super::ResolvedCodexModel, tokio::sync::OwnedMutexGuard<()>), BabysitError> {
+        let lifecycle = self.lifecycle.clone().lock_owned().await;
         let preference = self
             .settings
             .application
@@ -158,7 +158,7 @@ impl CodexRuntime {
                 application: ApplicationSettingsApplication::new(settings_path),
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
-            lifecycle: AsyncMutex::new(()),
+            lifecycle: Arc::new(AsyncMutex::new(())),
         }
     }
 

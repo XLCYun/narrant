@@ -343,7 +343,7 @@ async fn invalid_explicit_executable_does_not_fall_back() {
     assert!(matches!(
         result,
         Err(BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid })
-            if provider_id == "codex-app-server"
+            if provider_id == "codex"
     ));
     assert!(!fallback_events.exists());
 }
@@ -387,21 +387,21 @@ async fn clearing_explicit_executable_restores_automatic_discovery() {
 fn runtime_maps_setup_failures_to_typed_states() {
     assert_eq!(
         status_for_error(&BabysitError::provider_setup(
-            "codex-app-server",
+            "codex",
             BabysitProviderSetupFailure::NotFound,
         )),
         CodexRuntimeStatus::Missing
     );
     assert_eq!(
         status_for_error(&BabysitError::provider_setup(
-            "codex-app-server",
+            "codex",
             BabysitProviderSetupFailure::SignedOut,
         )),
         CodexRuntimeStatus::SignedOut
     );
     assert_eq!(
         status_for_error(&BabysitError::provider_setup(
-            "codex-app-server",
+            "codex",
             BabysitProviderSetupFailure::Incompatible,
         )),
         CodexRuntimeStatus::Incompatible
