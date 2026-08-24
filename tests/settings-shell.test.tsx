@@ -110,6 +110,54 @@ describe("Settings application-shell UI", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("已恢复原设置");
     expect(screen.getByRole("combobox", { name: "模型" })).toHaveTextContent("Sonnet");
   });
+
+  it("Claude Code 显示 Best 的完整说明", async () => {
+    const settings = application();
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: null, reasoningEffort: null } } });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "模型" }));
+    expect(await screen.findByRole("option", { name: "Best（使用最强的可用模型）" })).toBeInTheDocument();
+  });
+
+  it("Claude Code Custom 提供完整 effort 选择", async () => {
+    const settings = application();
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: "vendor/custom-model", reasoningEffort: null } } });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByRole("textbox", { name: "自定义模型" })).toHaveValue("vendor/custom-model");
+    fireEvent.click(screen.getByRole("combobox", { name: "思考强度" }));
+    for (const effort of ["Default", "Low", "Medium", "High", "XHigh", "Max"]) expect(await screen.findByRole("option", { name: effort })).toBeInTheDocument();
+  });
+
+  it("Claude Code Haiku 只允许 Default effort", async () => {
+    const settings = application();
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: "haiku", reasoningEffort: null } } });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    const effort = await screen.findByRole("combobox", { name: "思考强度" });
+    expect(effort).toHaveTextContent("Default");
+    expect(effort).toBeDisabled();
+  });
+
+  it("切换 provider 往返时保留各自偏好", async () => {
+    const settings = application();
+    let babysit = { provider: "codex" as "codex" | "claude-code", codex: { executable: "C:\\codex.exe", model: "gpt-5.4", reasoningEffort: "high" }, claudeCode: { executable: "C:\\claude.exe", model: "sonnet", reasoningEffort: "medium" } };
+    vi.mocked(settings.load).mockImplementation(async () => ({ version: 1, theme: "system", babysit }));
+    vi.mocked(settings.updateBabysitProvider).mockImplementation(async (provider) => {
+      babysit = { ...babysit, provider };
+      return { version: 1, theme: "system", babysit };
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByTestId("codex-preferences")).toHaveTextContent("C:\\codex.exe");
+    await chooseSelect("Provider", "Claude Code");
+    expect(await screen.findByTestId("claude-code-preferences")).toHaveTextContent("C:\\claude.exe");
+    expect(screen.getByRole("combobox", { name: "模型" })).toHaveTextContent("Sonnet");
+    await chooseSelect("Provider", "Codex");
+    expect(await screen.findByTestId("codex-preferences")).toHaveTextContent("C:\\codex.exe");
+    expect(settings.updateBabysitProvider).toHaveBeenCalledTimes(2);
+  });
   it("展示可扩展二级导航，并为后续分区提供稳定占位", async () => {
     mockSystemTheme(false);
     render(<ApplicationSettingsDestination application={application()} onBack={() => undefined} />);

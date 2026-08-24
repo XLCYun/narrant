@@ -76,9 +76,6 @@ function BabysitProviderSettings({ application }: { application: ApplicationSett
   const [saved, setSaved] = useState<BabysitSettings>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
-  const [customModel, setCustomModel] = useState("");
-  const [customEditing, setCustomEditing] = useState(false);
-  const [catalog, setCatalog] = useState<{ revision: string; models: BabysitModelCatalogEntry[] }>();
 
   useEffect(() => {
     let current = true;
@@ -126,42 +123,84 @@ function BabysitProviderSettings({ application }: { application: ApplicationSett
           void commit({ ...saved, provider: nextProvider }, () => application.updateBabysitProvider(nextProvider));
         }}><SelectTrigger aria-label="Provider"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="codex">Codex</SelectItem><SelectItem value="claude-code">Claude Code</SelectItem></SelectContent></Select>
       </label>
-      <div className="rounded-xl border bg-background p-4" data-testid={`${provider}-preferences`}>
-        <p className="text-sm font-medium">{provider === "codex" ? "Codex" : "Claude Code"} 可执行文件</p>
-        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{preference.executable ?? "自动发现"}</p>
-        <div className="mt-3 flex gap-2"><Button variant="outline" disabled={saving} onClick={async () => {
-          const previous = saved; setSaving(true); setError(undefined);
-          try { const result = await application.chooseBabysitExecutable(provider, preference); if (result?.babysit) setSaved(result.babysit); }
-          catch (reason) { setSaved(previous); setError(`${errorDetail(reason, "无法保存可执行文件")}，已恢复原设置。`); }
-          finally { setSaving(false); }
-        }}>选择{provider === "codex" ? " Codex" : " Claude Code"}可执行文件</Button>
-        {preference.executable && <Button variant="ghost" disabled={saving} onClick={() => void updatePreference({ ...preference, executable: null })}>恢复自动发现</Button>}</div>
-      </div>
-      {provider === "codex" && <div className="grid gap-4">
-        {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving} onClick={async () => { try { const result = await application.listBabysitModels("codex"); setCatalog(result); } catch (reason) { setError(errorDetail(reason, "无法获取模型目录")); } }}>修改模型偏好</Button>}
-        {catalog && <><label className="grid gap-2 text-sm font-medium">模型<Select value={preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
-          if (!value) return;
-          const model = value === "__default" ? null : value;
-          const supported = catalog.models.find((item) => item.id === model)?.supportedReasoningEfforts;
-          const reasoningEffort = preference.reasoningEffort && supported?.includes(preference.reasoningEffort) ? preference.reasoningEffort : null;
-          void updatePreference({ ...preference, model, reasoningEffort }, catalog.revision);
-        }}><SelectTrigger aria-label="模型"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__default">Default</SelectItem>{catalog.models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}</SelectContent></Select></label>
-        <label className="grid gap-2 text-sm font-medium">思考强度<Select value={preference.reasoningEffort ?? "default"} disabled={saving || !preference.model} onValueChange={(value) => value && void updatePreference({ ...preference, reasoningEffort: value === "default" ? null : value }, catalog.revision)}><SelectTrigger aria-label="思考强度"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Default</SelectItem>{catalog.models.find((model) => model.id === preference.model)?.supportedReasoningEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort}</SelectItem>)}</SelectContent></Select></label></>}
-      </div>}
-      {provider === "claude-code" && <>
-        <label className="grid gap-2 text-sm font-medium">模型<Select value={preference.model && !claudeModels.some((item) => item.value === preference.model) ? "custom" : preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
-          if (value === undefined) return;
-          if (value === "custom") { setCustomModel(""); setCustomEditing(true); return; }
-          setCustomEditing(false);
-          const model = value === "__default" ? null : value;
-          const reasoningEffort = model === "haiku" ? null : preference.reasoningEffort;
-          void updatePreference({ ...preference, model, reasoningEffort });
-        }}><SelectTrigger aria-label="模型"><SelectValue>{claudeModels.find((item) => item.value === (preference.model ?? ""))?.label ?? preference.model}</SelectValue></SelectTrigger><SelectContent>{claudeModels.map((item) => <SelectItem key={item.value || "default"} value={item.value || "__default"}>{item.label}</SelectItem>)}</SelectContent></Select></label>
-        {(customEditing || (preference.model !== null && !claudeModels.some((item) => item.value === preference.model))) && <label className="grid gap-2 text-sm font-medium">自定义模型<input aria-label="自定义模型" className="h-9 rounded-md border bg-transparent px-3" value={customModel || preference.model || ""} onChange={(event) => setCustomModel(event.target.value)} onBlur={() => customModel.trim() && void updatePreference({ ...preference, model: customModel.trim() })} /></label>}
-        <label className="grid gap-2 text-sm font-medium">思考强度<Select value={preference.reasoningEffort ?? "default"} disabled={saving || preference.model === "haiku"} onValueChange={(value) => value && void updatePreference({ ...preference, reasoningEffort: value === "default" ? null : value })}><SelectTrigger aria-label="思考强度"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Default</SelectItem>{claudeEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort === "xhigh" ? "XHigh" : effort[0].toUpperCase() + effort.slice(1)}</SelectItem>)}</SelectContent></Select></label>
-      </>}
+      {provider === "codex"
+        ? <CodexProviderFields application={application} preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} onError={setError} />
+        : <ClaudeCodeProviderFields preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} />}
     </div>
   </section>;
+
+  /** 选择并保存当前 provider 的 executable，失败时恢复加载得到的权威快照。 */
+  async function chooseExecutable() {
+    const previous = saved!;
+    setSaving(true); setError(undefined);
+    try {
+      const result = await application.chooseBabysitExecutable(provider, preference);
+      if (result?.babysit) setSaved(result.babysit);
+    } catch (reason) {
+      setSaved(previous);
+      setError(`${errorDetail(reason, "无法保存可执行文件")}，已恢复原设置。`);
+    } finally { setSaving(false); }
+  }
+}
+
+type ProviderFieldsProps = {
+  preference: BabysitProviderPreference;
+  saving: boolean;
+  onUpdate(preference: BabysitProviderPreference, revision?: string | null): Promise<void>;
+  onChooseExecutable(): Promise<void>;
+};
+
+/** 呈现 provider 共用的 executable 值、原生选择与恢复自动发现操作。 */
+function ProviderExecutableFields({ label, preference, saving, onUpdate, onChooseExecutable }: ProviderFieldsProps & { label: string }) {
+  return <div className="rounded-xl border bg-background p-4">
+    <p className="text-sm font-medium">{label} 可执行文件</p>
+    <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{preference.executable ?? "自动发现"}</p>
+    <div className="mt-3 flex gap-2">
+      <Button variant="outline" disabled={saving} onClick={() => void onChooseExecutable()}>选择 {label} 可执行文件</Button>
+      {preference.executable && <Button variant="ghost" disabled={saving} onClick={() => void onUpdate({ ...preference, executable: null })}>恢复自动发现</Button>}
+    </div>
+  </div>;
+}
+
+/** 呈现 Codex 的延迟动态目录，并即时保存目录 revision 约束的完整组合。 */
+function CodexProviderFields({ application, preference, saving, onUpdate, onChooseExecutable, onError }: ProviderFieldsProps & { application: ApplicationSettingsApplication; onError(detail: string): void }) {
+  const [catalog, setCatalog] = useState<{ revision: string; models: BabysitModelCatalogEntry[] }>();
+  return <div className="grid gap-4" data-testid="codex-preferences">
+    <ProviderExecutableFields label="Codex" preference={preference} saving={saving} onUpdate={onUpdate} onChooseExecutable={onChooseExecutable} />
+    {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving} onClick={async () => {
+      try { setCatalog(await application.listBabysitModels("codex")); }
+      catch (reason) { onError(errorDetail(reason, "无法获取模型目录")); }
+    }}>修改模型偏好</Button>}
+    {catalog && <>
+      <label className="grid gap-2 text-sm font-medium">模型<Select value={preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
+        if (!value) return;
+        const model = value === "__default" ? null : value;
+        const supported = catalog.models.find((item) => item.id === model)?.supportedReasoningEfforts;
+        const reasoningEffort = preference.reasoningEffort && supported?.includes(preference.reasoningEffort) ? preference.reasoningEffort : null;
+        void onUpdate({ ...preference, model, reasoningEffort }, catalog.revision);
+      }}><SelectTrigger aria-label="模型"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__default">Default</SelectItem>{catalog.models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}</SelectContent></Select></label>
+      <label className="grid gap-2 text-sm font-medium">思考强度<Select value={preference.reasoningEffort ?? "default"} disabled={saving || !preference.model} onValueChange={(value) => value && void onUpdate({ ...preference, reasoningEffort: value === "default" ? null : value }, catalog.revision)}><SelectTrigger aria-label="思考强度"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Default</SelectItem>{catalog.models.find((model) => model.id === preference.model)?.supportedReasoningEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort}</SelectItem>)}</SelectContent></Select></label>
+    </>}
+  </div>;
+}
+
+/** 呈现 Claude Code 离线 alias、自定义模型与受模型约束的完整 effort 选项。 */
+function ClaudeCodeProviderFields({ preference, saving, onUpdate, onChooseExecutable }: ProviderFieldsProps) {
+  const customPreference = preference.model !== null && !claudeModels.some((item) => item.value === preference.model);
+  const [customEditing, setCustomEditing] = useState(customPreference);
+  const [customModel, setCustomModel] = useState(customPreference ? preference.model ?? "" : "");
+  return <div className="grid gap-4" data-testid="claude-code-preferences">
+    <ProviderExecutableFields label="Claude Code" preference={preference} saving={saving} onUpdate={onUpdate} onChooseExecutable={onChooseExecutable} />
+    <label className="grid gap-2 text-sm font-medium">模型<Select value={customEditing || customPreference ? "custom" : preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
+      if (!value) return;
+      if (value === "custom") { setCustomModel(customPreference ? preference.model ?? "" : ""); setCustomEditing(true); return; }
+      setCustomEditing(false);
+      const model = value === "__default" ? null : value;
+      void onUpdate({ ...preference, model, reasoningEffort: model === "haiku" ? null : preference.reasoningEffort });
+    }}><SelectTrigger aria-label="模型"><SelectValue>{customEditing || customPreference ? "Custom" : claudeModels.find((item) => item.value === (preference.model ?? ""))?.label}</SelectValue></SelectTrigger><SelectContent>{claudeModels.map((item) => <SelectItem key={item.value || "default"} value={item.value || "__default"}>{item.label}</SelectItem>)}</SelectContent></Select></label>
+    {(customEditing || customPreference) && <label className="grid gap-2 text-sm font-medium">自定义模型<input aria-label="自定义模型" className="h-9 rounded-md border bg-transparent px-3" value={customModel} onChange={(event) => setCustomModel(event.target.value)} onBlur={() => customModel.trim() && void onUpdate({ ...preference, model: customModel.trim() })} /></label>}
+    <label className="grid gap-2 text-sm font-medium">思考强度<Select value={preference.reasoningEffort ?? "default"} disabled={saving || preference.model === "haiku"} onValueChange={(value) => value && void onUpdate({ ...preference, reasoningEffort: value === "default" ? null : value })}><SelectTrigger aria-label="思考强度"><SelectValue>{preference.reasoningEffort === null ? "Default" : preference.reasoningEffort === "xhigh" ? "XHigh" : preference.reasoningEffort[0].toUpperCase() + preference.reasoningEffort.slice(1)}</SelectValue></SelectTrigger><SelectContent><SelectItem value="default">Default</SelectItem>{preference.model !== "haiku" && claudeEfforts.map((effort) => <SelectItem key={effort} value={effort}>{effort === "xhigh" ? "XHigh" : effort[0].toUpperCase() + effort.slice(1)}</SelectItem>)}</SelectContent></Select></label>
+  </div>;
 }
 
 /** 展示当前 GitHub Identity，并在解释本机数据影响后复用 lifecycle 退出。 */
