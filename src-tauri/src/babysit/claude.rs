@@ -16,6 +16,14 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
+mod model_catalog;
+
+pub(crate) use model_catalog::{ClaudeModelCatalog, ResolvedClaudeModel};
+
+#[cfg(test)]
+#[path = "tests/claude/model_catalog.rs"]
+mod model_catalog_tests;
+
 /// Claude Code generation 与 repair 共用的总运行上限；上层仍拥有完整分析截止时间。
 const CLAUDE_ROUND_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
