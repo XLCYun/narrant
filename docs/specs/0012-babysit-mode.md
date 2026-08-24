@@ -9,8 +9,8 @@ Narrant into an automated reviewer or modifying the code being reviewed.
 
 ## Solution
 
-Babysit Mode lets a reviewer ask an installed Codex runtime to explain the current
-File Change. Codex receives the complete before-and-after text as one analysis batch,
+Babysit Mode lets a reviewer ask the agent provider selected in Application Settings
+to explain the current File Change. The provider receives the complete before-and-after text as one analysis batch,
 may explore the trusted Review Workspace through a restricted read-only sandbox, and
 returns a short explanation for every non-empty line. Narrant validates the complete
 response, caches it only for the current process, and presents explanations above the
@@ -79,6 +79,10 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 29. As a reviewer, I want Claude Code analysis and repair rounds excluded from its local
     session history, so that an internal product operation does not clutter my
     interactive sessions.
+30. As a reviewer, I want to select Codex or Claude Code once in Application Settings,
+    so that future analyses use one predictable device-level provider.
+31. As a reviewer, I want each provider to retain its own executable, model, and effort
+    preferences, so that switching providers does not erase previous choices.
 
 ## Scope
 
@@ -118,6 +122,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   details.
 - The provider seam is real because production Codex, a deterministic test adapter, and
   future Claude Code behavior must satisfy the same externally observable contract.
+- A provider registry owns one capability bundle per supported provider. The selected
+  device-level provider is resolved from Application Settings for each new analysis;
+  no Codex- or Claude-shaped runtime branch escapes the registry.
 
 ### Analysis Contract
 
@@ -150,18 +157,23 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 
 - Installed Coding Agent Providers and Built-in Agent Providers implement the same
   contract described above.
-- The first vertical slice requires an installed Codex executable and launches a
+- The initial provider set contains Codex and Claude Code. Fresh settings select Codex.
+  The selected provider, rather than a Review or request field, determines future runs.
+- The Codex provider requires an installed Codex executable and launches a
   Narrant-owned `codex app-server` child process. It reuses the user's Codex
   authentication but does not attach to an arbitrary running Codex UI or terminal.
-- Narrant currently starts Babysit turns with `gpt-5.6-luna` and `low` reasoning effort
-  and does not expose model details in the Babysit Mode UI. User-facing model and
-  reasoning configuration may replace this fixed choice later.
 - The first Claude Code adapter launches the reviewer's unmodified installed runtime,
   reuses only its official Claude Code login flow, and never reads, stores, proxies, or
-  embeds Claude credentials. Claude Code is the temporary default provider until the
-  separately developed settings capability supplies provider selection.
-- Claude Code runs with the `sonnet` model alias and `low` effort. Provider and model
-  settings remain outside this delivery and may replace these fixed choices later.
+  embeds Claude credentials.
+- Model and reasoning-effort preferences are retained independently per provider.
+  Codex obtains a dynamic App Server catalog. Claude Code exposes a versioned offline
+  alias catalog plus a custom model identifier; it does not scrape the interactive
+  `/model` picker or treat the Claude Platform API catalog as OAuth account truth.
+- Claude Code aliases are `default`, `best`, `fable`, `opus`, `sonnet`, and `haiku`.
+  `best` is presented as “use the strongest available model”. `opusplan`, extended-
+  context aliases, and `ultracode` are excluded because Babysit is a bounded,
+  non-interactive, stateless file analysis. Custom model identifiers are preserved
+  verbatim after non-empty validation.
 - Claude Code uses safe mode, non-interactive denial, a `Read`/`Glob`/`Grep` tool
   allowlist, and explicit denial of MCP, Shell, write, edit, and Web tools. This is a
   model-tool policy rather than a cross-platform OS filesystem or network sandbox and
@@ -178,6 +190,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 ### Runtime and Cache Decisions
 
 - The Agent runs only after Workspace Trust and Review Workspace activation succeed.
+- Application startup does not probe either CLI. Settings and analysis lazily prepare
+  only the provider whose capability is currently requested; an unselected provider
+  never needs to be installed or signed in.
 - Workspace Trust is the only repository-level authorization gate for Babysit analysis;
   Babysit Mode does not add a separate code-upload notice or confirmation flow.
 - The Codex provider's Agent tools may read only the current Review Workspace. They
@@ -218,8 +233,11 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   prevents late results from appearing on another File Change.
 - Narrant terminates its App Server child process during application exit.
 - A completed result is cached only in backend memory. The cache identity includes the
-  Review Snapshot, File Change path, provider, App Server process generation, and
-  analysis-contract version.
+  Review Snapshot, File Change path, provider, resolved model, resolved effort,
+  provider process generation, and analysis-contract version.
+- Provider changes are persisted immediately and affect only analyses started after
+  the change. An in-flight run retains its frozen provider/model/effort snapshot;
+  provider changes invalidate catalog revisions and completed explanation caches.
 - Disabling Babysit Mode after completion hides the Line Explanations but retains the
   completed in-memory result. Re-enabling the mode displays that result immediately.
   Disabling during a run cancels the thread and retains no partial result.
@@ -267,8 +285,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   as appropriate. The UI does not display a minimum tested Codex version.
 - Claude Code setup failures use the same provider-aware missing, signed-out,
   incompatible, and initialization-failed categories and recovery actions. Narrant does
-  not silently fall back to Codex. It offers executable selection, points login recovery
-  to the official external Claude Code flow, or requests upgrade/retry as appropriate.
+  not silently fall back to Codex. Executable configuration for every provider lives
+  only in Application Settings; Babysit points there rather than opening a second picker.
+  Login recovery uses the official external flow, with upgrade/retry as appropriate.
 - Claude Code compatibility is determined by a capability probe for non-persistent
   sessions, structured JSON Schema output, authentication status, and required
   permission flags. Its version is diagnostic metadata rather than the acceptance gate.
@@ -309,8 +328,7 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - Semantic explanation groups or a second Agent that checks coverage.
 - AI Findings, code-quality judgments, suggested edits, or GitHub Review comments.
 - Implementing a Built-in Agent Provider.
-- Claude Code OS-level filesystem or network sandboxing, provider settings, and model
-  settings.
+- Claude Code OS-level filesystem or network sandboxing.
 
 ## Architecture Decisions
 
@@ -320,3 +338,5 @@ Codex environment reuse and the set-aside isolation design are recorded in
 [ADR-0022](../adr/0022-reuse-the-reviewers-codex-environment.md).
 Claude Code stateless repair and session-history isolation are recorded in
 [ADR-0024](../adr/0024-use-stateless-claude-code-repair-rounds.md).
+Provider selection and capability-bundle ownership are recorded in
+[ADR-0025](../adr/0025-select-babysit-providers-through-application-settings.md).
