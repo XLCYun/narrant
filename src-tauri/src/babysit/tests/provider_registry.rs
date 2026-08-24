@@ -47,14 +47,15 @@ impl BabysitProviderCapabilities for RecordingBundle {
             resolved: codex::ResolvedCodexModel {
                 model: "model".to_owned(),
                 reasoning_effort: "high".to_owned(),
-            },
+            }
+            .into(),
             process_generation: "generation".to_owned(),
             _lease: None,
         })
     }
     /// 返回空目录；本 fixture 的目录内容不参与路由断言。
-    async fn model_catalog(&self) -> Result<codex::CodexModelCatalog, BabysitError> {
-        Ok(codex::CodexModelCatalog { models: Vec::new() })
+    async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
+        Ok(codex::CodexModelCatalog { models: Vec::new() }.into())
     }
     /// 原样返回 fixture 路径，避免触碰真实文件系统。
     async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {

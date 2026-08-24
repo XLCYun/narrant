@@ -18,9 +18,47 @@ mod codex;
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
 /// Provider-neutral 的模型解析结果；具体目录协议只在 adapter 内转换。
-pub(crate) type BabysitResolvedModel = codex::ResolvedCodexModel;
-/// Provider-neutral 的模型目录快照；Claude adapter 可提供离线目录。
-pub(crate) type BabysitProviderModelCatalog = codex::CodexModelCatalog;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BabysitResolvedModel {
+    model: String,
+    reasoning_effort: String,
+}
+
+impl From<codex::ResolvedCodexModel> for BabysitResolvedModel {
+    /// 将 Codex adapter 的内部解析结果投影到 provider-neutral 快照。
+    fn from(value: codex::ResolvedCodexModel) -> Self {
+        Self {
+            model: value.model,
+            reasoning_effort: value.reasoning_effort,
+        }
+    }
+}
+
+/// Provider-neutral 的模型目录快照；provider 协议类型只保存在 adapter wrapper 内。
+#[derive(Clone)]
+pub(crate) struct BabysitProviderModelCatalog(codex::CodexModelCatalog);
+
+impl BabysitProviderModelCatalog {
+    /// 返回设置页需要的模型能力列表。
+    fn models(&self) -> Vec<codex::CodexModelCapability> {
+        self.0.models.clone()
+    }
+
+    /// 使用当前目录快照校验并解析一次模型偏好。
+    fn resolve(
+        &self,
+        preference: &crate::application_settings::BabysitModelPreference,
+    ) -> Result<BabysitResolvedModel, ()> {
+        self.0.resolve(preference).map(Into::into)
+    }
+}
+
+impl From<codex::CodexModelCatalog> for BabysitProviderModelCatalog {
+    /// 将 Codex 动态目录包装到 provider-neutral registry seam。
+    fn from(value: codex::CodexModelCatalog) -> Self {
+        Self(value)
+    }
+}
 /// 设置页一次模型编辑会话使用的不可持久化目录快照。
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,7 +197,7 @@ impl BabysitProviderCapabilities for ProviderCapabilityBundle {
         Ok(PreparedBabysitAnalysis {
             process_generation: self.provider.process_generation(),
             provider: self.provider.clone(),
-            resolved,
+            resolved: resolved.into(),
             _lease: None,
         })
     }
@@ -227,7 +265,7 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
             .await?;
         Ok(PreparedBabysitAnalysis {
             provider: self.provider.clone(),
-            resolved,
+            resolved: resolved.into(),
             process_generation: self.provider.process_generation(),
             _lease: Some(lease),
         })
@@ -235,7 +273,7 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
 
     /// 读取 Codex App Server 的动态模型目录。
     async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
-        self.runtime.model_catalog().await
+        self.runtime.model_catalog().await.map(Into::into)
     }
 
     /// 校验 Codex executable 而不保存设置。
@@ -276,7 +314,7 @@ impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
         self.runtime.ensure_ready(workspace_path).await?;
         Ok(PreparedBabysitAnalysis {
             provider: self.provider.clone(),
-            resolved: self.provider.resolve_analysis_model().await?,
+            resolved: self.provider.resolve_analysis_model().await?.into(),
             process_generation: self.provider.process_generation(),
             _lease: None,
         })
@@ -844,7 +882,7 @@ pub struct BabysitApplication {
         VecDeque<(
             crate::application_settings::BabysitProvider,
             String,
-            codex::CodexModelCatalog,
+            BabysitProviderModelCatalog,
         )>,
     >,
     next_model_catalog_revision: AtomicU64,
@@ -1037,6 +1075,7 @@ impl BabysitApplication {
                 })?
                 .model_catalog()
                 .await?
+                .into()
         } else {
             self.registry
                 .get(&provider)
@@ -1059,17 +1098,20 @@ impl BabysitApplication {
         Ok(BabysitModelCatalog {
             provider,
             revision,
-            models: catalog.models,
+            models: catalog.models(),
         })
     }
 
     /// 记录设置页本次成功加载的模型目录，供显式保存使用同一份能力快照。
-    fn remember_model_catalog(
+    fn remember_model_catalog<C>(
         &self,
         provider: crate::application_settings::BabysitProvider,
         revision: String,
-        catalog: codex::CodexModelCatalog,
-    ) -> Result<(), BabysitError> {
+        catalog: C,
+    ) -> Result<(), BabysitError>
+    where
+        C: Into<BabysitProviderModelCatalog>,
+    {
         let mut catalogs = self
             .model_catalogs
             .lock()
@@ -1079,7 +1121,7 @@ impl BabysitApplication {
         if catalogs.len() == 8 {
             catalogs.pop_front();
         }
-        catalogs.push_back((provider, revision, catalog));
+        catalogs.push_back((provider, revision, catalog.into()));
         Ok(())
     }
 
