@@ -505,7 +505,7 @@ impl CodexAppServerProvider {
 impl BabysitAgentProvider for CodexAppServerProvider {
     /// 稳定 provider identity，供 cache 与 diagnostics 分类使用。
     fn provider_id(&self) -> &str {
-        "codex-app-server"
+        "codex"
     }
 
     /// 返回当前真实 App Server 代际；每次成功 spawn 都生成新的缓存 identity。

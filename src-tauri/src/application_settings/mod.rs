@@ -17,7 +17,7 @@ pub(crate) enum ThemePreference {
 }
 
 /// Babysit Mode 支持的稳定 provider 身份。
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Hash, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum BabysitProvider {
     /// 使用 Codex App Server。

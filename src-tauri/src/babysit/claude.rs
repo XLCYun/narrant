@@ -184,7 +184,7 @@ impl ClaudeCodeProvider {
 impl BabysitAgentProvider for ClaudeCodeProvider {
     /// 返回稳定 Claude provider identity。
     fn provider_id(&self) -> &str {
-        "claude_code"
+        "claude-code"
     }
 
     /// 返回 executable/probe generation，供缓存隔离使用。
@@ -398,12 +398,12 @@ fn classify_result_error(subtype: Option<&str>) -> BabysitError {
     match subtype {
         Some("authentication_failed" | "not_authenticated" | "signed_out") => {
             BabysitError::provider_setup(
-                "claude_code",
+                "claude-code",
                 super::BabysitProviderSetupFailure::SignedOut,
             )
         }
         Some("incompatible" | "unsupported") => BabysitError::provider_setup(
-            "claude_code",
+            "claude-code",
             super::BabysitProviderSetupFailure::Incompatible,
         ),
         _ => redacted_provider_error("result_error"),
