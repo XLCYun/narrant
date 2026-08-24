@@ -1,6 +1,6 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-import type { ApplicationSettingsApplication, BabysitModelPreference, BabysitProvider, BabysitProviderPreference, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettingsApplication, BabysitProvider, BabysitProviderPreference, ThemePreference } from "@/settings/application-settings";
 import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
 
 type CodexExecutablePicker = () => Promise<string | string[] | null>;
@@ -13,14 +13,7 @@ export function createTauriApplicationSettingsAdapter(
   return {
     load: () => transport.invoke("load_application_settings", {}),
     updateTheme: (theme: ThemePreference) => transport.invoke("update_application_theme", { theme }),
-    async chooseCodexExecutable() {
-      const executable = await pickCodexExecutable();
-      if (typeof executable !== "string" || executable.length === 0) return null;
-      return transport.invoke("update_application_codex_executable", { executable });
-    },
-    clearCodexExecutable: () => transport.invoke("clear_application_codex_executable", {}),
-    listBabysitModels: (provider: BabysitProvider = "codex") => transport.invoke("list_babysit_models", { provider }),
-    updateBabysitModel: (preference: BabysitModelPreference, catalogRevision: string) => transport.invoke("update_application_babysit_model", { preference, catalogRevision }),
+    listBabysitModels: (provider: BabysitProvider) => transport.invoke("list_babysit_models", { provider }),
     updateBabysitProvider: (provider: BabysitProvider) => transport.invoke("update_application_babysit_provider", { provider }),
     async chooseBabysitExecutable(provider: BabysitProvider, preference: BabysitProviderPreference) {
       const executable = await pickCodexExecutable();

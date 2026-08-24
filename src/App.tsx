@@ -37,7 +37,6 @@ import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import { SettingsPage } from "@/components/settings-page";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
 import { useApplicationTheme } from "@/settings/use-application-theme";
-import { useCodexExecutablePreference } from "@/settings/use-codex-executable-preference";
 import "@/lib/i18n";
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
@@ -59,7 +58,6 @@ export function App() {
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const applicationSettings = useMemo(() => createTauriApplicationSettingsAdapter(tauriTransport), []);
   const applicationTheme = useApplicationTheme(applicationSettings, desktopRuntimeEnabled && !testHarnessEnabled);
-  const codexExecutablePreference = useCodexExecutablePreference(applicationSettings, desktopRuntimeEnabled && !testHarnessEnabled);
   const editorTheme = applicationTheme.editorTheme;
   const pullRequestDiscovery = useMemo(
     () => createTauriPullRequestDiscoveryApplicationAdapter(tauriTransport),
@@ -406,8 +404,7 @@ export function App() {
     </article>}
     {appShell.destination.kind === "settings" && <SettingsPage
       theme={applicationTheme}
-      codex={codexExecutablePreference}
-      modelApplication={applicationSettings}
+      application={applicationSettings}
       githubIdentity={githubIdentity}
       onBack={() => void appShell.returnFromSettings()}
     />}

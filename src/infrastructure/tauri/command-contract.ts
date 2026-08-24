@@ -15,7 +15,7 @@ import type {
   RepositoryOverview,
   RepositoryReviewList,
 } from "@/repository/repository-application";
-import type { ApplicationSettings, BabysitModelCatalog, BabysitModelPreference, BabysitProvider, BabysitProviderPreference, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, ThemePreference } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -33,10 +33,7 @@ type EmptyArgs = Record<string, never>;
 export type TauriCommandContract = {
   load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
   update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
-  update_application_codex_executable: { args: { executable: string }; result: ApplicationSettings };
-  clear_application_codex_executable: { args: EmptyArgs; result: ApplicationSettings };
   list_babysit_models: { args: { provider: BabysitProvider }; result: BabysitModelCatalog; error: { code: string; detail: string } };
-  update_application_babysit_model: { args: { preference: BabysitModelPreference; catalogRevision: string }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_provider: { args: { provider: BabysitProvider }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_preferences: { args: { provider: BabysitProvider; preference: BabysitProviderPreference; catalogRevision: string | null }; result: ApplicationSettings; error: { code: string; detail: string } };
   set_e2e_repository_directory: { args: { path: string }; result: void };
@@ -96,10 +93,7 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 export const TAURI_COMMAND_NAMES = [
   "load_application_settings",
   "update_application_theme",
-  "update_application_codex_executable",
-  "clear_application_codex_executable",
   "list_babysit_models",
-  "update_application_babysit_model",
   "update_application_babysit_provider",
   "update_application_babysit_preferences",
   "set_e2e_repository_directory",
