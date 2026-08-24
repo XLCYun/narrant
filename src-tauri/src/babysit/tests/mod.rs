@@ -813,8 +813,7 @@ fn codex_setup_failures_use_provider_codes_and_provider_recovery_actions() {
 
     for (failure, code, recovery) in cases {
         let value = serde_json::to_value(BabysitErrorPayload::from(BabysitError::provider_setup(
-            "codex",
-            failure,
+            "codex", failure,
         )))
         .unwrap();
         assert_eq!(value["code"], code);

@@ -75,9 +75,11 @@ pub fn run() {
             let application_settings =
                 ApplicationSettingsApplication::new(application_data.join("settings.json"));
             app.manage(application_settings);
-            app.manage(babysit::BabysitApplication::with_codex_provider_at(
-                application_data.join("settings.json"),
-            ));
+            app.manage(
+                babysit::BabysitApplication::with_installed_provider_registry_at(
+                    application_data.join("settings.json"),
+                ),
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
