@@ -116,6 +116,7 @@ pub(crate) enum ApplicationSettingsError {
 }
 
 impl fmt::Display for ApplicationSettingsError {
+    /// 将设置错误投影为稳定且不泄露设置内容的用户可读诊断。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "Application Settings I/O 失败：{error}"),
