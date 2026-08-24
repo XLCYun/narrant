@@ -40,12 +40,5 @@ export function createTauriBabysitApplicationAdapter(
     clearReview(reviewId) {
       return transport.invoke("clear_babysit_review_cache", { reviewId });
     },
-    /** 将 provider-aware native picker 选择交给后端验证并持久化。 */
-    selectProviderExecutable(providerId, path) {
-      return transport.invoke("select_babysit_provider_executable", {
-        providerId,
-        executable: path,
-      });
-    },
   };
 }

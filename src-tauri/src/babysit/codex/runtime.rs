@@ -288,11 +288,6 @@ impl InstalledProviderRuntime for CodexRuntime {
         CodexRuntime::ensure_ready(self, workspace_path).await
     }
 
-    /// 复用 Codex 的 executable 验证与统一设置持久化流程。
-    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        CodexRuntime::select_executable(self, path).await
-    }
-
     /// 复用 Codex provider shutdown，并重置 runtime 状态。
     async fn shutdown(&self) {
         CodexRuntime::shutdown(self).await;

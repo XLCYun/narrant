@@ -5,6 +5,7 @@ import type { RepositoryOverview, RepositorySummary } from "@/repository/reposit
 import type { RepositoryOverviewBinding } from "@/repository/use-repository-overview";
 import { knownReviewId, type ReviewOpenTarget } from "@/review/review-application";
 import type { ReviewLifecycleBinding, ReviewReaderBinding } from "@/review/use-review-lifecycle";
+import type { SettingsSection } from "@/settings/settings-section";
 
 export type RepositoryTab = "pull-requests" | "branches" | "history";
 
@@ -12,11 +13,11 @@ export type AppDestination =
   | { kind: "home" }
   | { kind: "repository"; repositoryId: number; initialTab: RepositoryTab }
   | { kind: "review"; repositoryId: number; reviewId: string }
-  | { kind: "settings" };
+  | { kind: "settings"; initialSection?: SettingsSection };
 
 export type AppNavigationIntent =
   | { kind: "home" }
-  | { kind: "settings" }
+  | { kind: "settings"; initialSection?: SettingsSection }
   | { kind: "repository"; repositoryId: number }
   | { kind: "review"; repositoryId: number; target: ReviewOpenTarget };
 
@@ -157,7 +158,7 @@ export function useAppShellNavigation(
     try {
       if (intent.kind === "settings") {
         if (destination.kind !== "settings") settingsReturnDestination.current = destination;
-        setDestination({ kind: "settings" });
+        setDestination({ kind: "settings", initialSection: intent.initialSection });
         setTransition({ kind: "stable" });
         setNavigationError(undefined);
         return { kind: "navigated" };

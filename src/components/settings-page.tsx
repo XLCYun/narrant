@@ -9,12 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitProvider, BabysitProviderPreference, BabysitSettings, ThemePreference } from "@/settings/application-settings";
+import type { SettingsSection } from "@/settings/settings-section";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
 import { cn } from "@/lib/utils";
 
-type Section = "appearance" | "github" | "babysit";
-
-const sections: Array<{ id: Section; label: string }> = [
+const sections: Array<{ id: SettingsSection; label: string }> = [
   { id: "appearance", label: "外观" },
   { id: "github", label: "GitHub" },
   { id: "babysit", label: "宝宝模式" },
@@ -27,8 +26,8 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
-  const [section, setSection] = useState<Section>(initialSection);
+export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-6xl py-4 sm:py-8">
     <header className="mb-6 flex items-center gap-3">
       <Button variant="ghost" size="icon" aria-label="返回" onClick={onBack}><Icon icon={ArrowLeft02Icon} /></Button>
@@ -59,7 +58,7 @@ export function SettingsPage({ theme, application, githubIdentity, initialSectio
 }
 
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
-export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: Section; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
   return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
 }
@@ -165,12 +164,25 @@ function ProviderExecutableFields({ label, preference, saving, onUpdate, onChoos
 /** 呈现 Codex 的延迟动态目录，并即时保存目录 revision 约束的完整组合。 */
 function CodexProviderFields({ application, preference, saving, onUpdate, onChooseExecutable, onError }: ProviderFieldsProps & { application: ApplicationSettingsApplication; onError(detail: string): void }) {
   const [catalog, setCatalog] = useState<{ revision: string; models: BabysitModelCatalogEntry[] }>();
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string>();
+  /** 按需读取最新 Codex 目录，失败后保留显式重试入口。 */
+  async function loadCatalog() {
+    setCatalogLoading(true);
+    setCatalogError(undefined);
+    try { setCatalog(await application.listBabysitModels("codex")); }
+    catch (reason) {
+      const detail = errorDetail(reason, "无法获取模型目录");
+      setCatalogError(detail);
+      onError(detail);
+    } finally { setCatalogLoading(false); }
+  }
   return <div className="grid gap-4" data-testid="codex-preferences">
     <ProviderExecutableFields label="Codex" preference={preference} saving={saving} onUpdate={onUpdate} onChooseExecutable={onChooseExecutable} />
-    {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving} onClick={async () => {
-      try { setCatalog(await application.listBabysitModels("codex")); }
-      catch (reason) { onError(errorDetail(reason, "无法获取模型目录")); }
-    }}>修改模型偏好</Button>}
+    {!catalog && <Button variant="outline" className="justify-self-start" disabled={saving || catalogLoading} onClick={() => void loadCatalog()}>{catalogLoading ? "正在获取模型…" : catalogError ? "重试获取模型" : "修改模型偏好"}</Button>}
+    {catalogLoading && <p role="status" className="text-sm text-muted-foreground">正在读取 Codex 模型目录…</p>}
+    {catalogError && !catalogLoading && <p className="text-sm text-muted-foreground">已保留当前保存值，可重试获取模型目录。</p>}
+    {catalog?.models.length === 0 && <p role="status" className="rounded-lg border p-3 text-sm text-muted-foreground">当前 Codex 未返回可用模型，已保留当前设置。</p>}
     {catalog && <>
       <label className="grid gap-2 text-sm font-medium">模型<Select value={preference.model ?? "__default"} disabled={saving} onValueChange={(value) => {
         if (!value) return;

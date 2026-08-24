@@ -224,6 +224,17 @@ describe("AppShell navigation module", () => {
     expect(result.current.destination).toEqual({ kind: "repository", repositoryId: 1, initialTab: "pull-requests" });
   });
 
+  it("Babysit 恢复入口会保留目标设置分区", async () => {
+    const { result } = renderNavigation(createRepositoryAdapter(), createReviewAdapter());
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.navigate({ kind: "settings", initialSection: "babysit" });
+    });
+
+    expect(result.current.destination).toEqual({ kind: "settings", initialSection: "babysit" });
+  });
+
   it("从 Review 返回 Settings 后恢复同一个 Presented Review", async () => {
     const reviewAdapter = createReviewAdapter();
     const switchReview = vi.spyOn(reviewAdapter, "switchReview");

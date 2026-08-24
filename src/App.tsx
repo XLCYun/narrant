@@ -406,6 +406,7 @@ export function App() {
       theme={applicationTheme}
       application={applicationSettings}
       githubIdentity={githubIdentity}
+      initialSection={appShell.destination.initialSection}
       onBack={() => void appShell.returnFromSettings()}
     />}
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
@@ -453,6 +454,7 @@ export function App() {
           narrow: narrowReview,
           editorTheme,
           onOpenExternal: (url) => void openUrl(url),
+          onOpenApplicationSettings: () => void appShell.navigate({ kind: "settings", initialSection: "babysit" }),
         }}
       />
     </div>}
