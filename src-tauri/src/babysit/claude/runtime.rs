@@ -1,6 +1,6 @@
 //! Claude Code executable 的懒发现、持久化选择与能力探针。
 
-use super::{
+use super::super::{
     BabysitError, BabysitProviderRuntimeStatus, BabysitProviderSetupFailure, ClaudeCodeProvider,
     InstalledProviderRuntime,
 };
@@ -13,11 +13,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::Command;
 
+use super::discovery::candidate_paths;
+
 const PROVIDER_ID: &str = "claude-code";
 #[cfg(not(test))]
 const PROBE_STEP_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
-const PROBE_STEP_TIMEOUT: Duration = Duration::from_millis(250);
+const PROBE_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// Claude Code runtime；状态与 executable 设置均由 application 生命周期统一拥有。
 pub(crate) struct ClaudeRuntime {
@@ -244,16 +246,6 @@ impl ClaudeRuntime {
     }
 }
 
-/// 保持 bare PATH 优先，并把用户选择与环境覆盖作为有序 fallback。
-fn candidate_paths(selected: Option<PathBuf>, environment: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("claude")];
-    paths.extend(selected);
-    paths.extend(environment);
-    let mut seen = std::collections::HashSet::new();
-    paths.retain(|path| seen.insert(path.clone()));
-    paths
-}
-
 /// 按用户可操作性聚合候选错误，避免后续缺失项遮蔽更明确的诊断。
 fn preferred_error(current: BabysitError, candidate: BabysitError) -> BabysitError {
     if setup_error_priority(&candidate) > setup_error_priority(&current) {
@@ -372,5 +364,5 @@ impl InstalledProviderRuntime for ClaudeRuntime {
 }
 
 #[cfg(test)]
-#[path = "tests/claude/runtime.rs"]
+#[path = "../tests/claude/runtime.rs"]
 mod tests;
