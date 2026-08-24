@@ -21,7 +21,7 @@ const CLAUDE_ROUND_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// 每轮都启动 fresh、non-persistent CLI 的 installed Claude Code adapter。
 pub struct ClaudeCodeProvider {
-    program: PathBuf,
+    program: Mutex<PathBuf>,
     prefix_args: Vec<OsString>,
     generation: String,
     timeout: Duration,
@@ -39,7 +39,7 @@ impl ClaudeCodeProvider {
     /// 使用已发现的 Claude Code executable 构造生产 provider。
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
-            program: program.into(),
+            program: Mutex::new(program.into()),
             prefix_args: Vec::new(),
             generation: "claude-installed-1".to_owned(),
             timeout: CLAUDE_ROUND_TIMEOUT,
@@ -56,7 +56,7 @@ impl ClaudeCodeProvider {
         timeout: Duration,
     ) -> Self {
         Self {
-            program: PathBuf::from("sh"),
+            program: Mutex::new(PathBuf::from("sh")),
             prefix_args: vec![
                 fixture.into_os_string(),
                 scenario.into(),
@@ -80,7 +80,12 @@ impl ClaudeCodeProvider {
             return Err(BabysitError::Cancelled);
         }
         let schema = output_schema(request);
-        let mut command = Command::new(&self.program);
+        let program = self
+            .program
+            .lock()
+            .map_err(|_| redacted_provider_error("state_unavailable"))?
+            .clone();
+        let mut command = Command::new(program);
         command
             .args(&self.prefix_args)
             .arg("-p")
@@ -255,6 +260,15 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
 }
 
 impl ClaudeCodeProvider {
+    /// 在 runtime 完成 discovery 与能力探针后切换到已验证的 executable。
+    pub(crate) fn set_program(&self, program: PathBuf) -> Result<(), BabysitError> {
+        *self
+            .program
+            .lock()
+            .map_err(|_| redacted_provider_error("state_unavailable"))? = program;
+        Ok(())
+    }
+
     /// 尽力清除一项 provider 私有运行状态；mutex poison 不得扩大为含敏感信息的诊断。
     fn remove_run(&self, key: &str) {
         if let Ok(mut runs) = self.runs.lock() {

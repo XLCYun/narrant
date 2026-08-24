@@ -1,0 +1,291 @@
+//! Claude Code executable 的懒发现、持久化选择与能力探针。
+
+use super::{
+    BabysitError, BabysitProviderRuntimeStatus, BabysitProviderSetupFailure, ClaudeCodeProvider,
+    InstalledProviderRuntime,
+};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use tokio::process::Command;
+
+const PROVIDER_ID: &str = "claude_code";
+
+/// Claude Code runtime；状态与 executable 设置均由 application 生命周期统一拥有。
+pub(crate) struct ClaudeRuntime {
+    provider: Arc<ClaudeCodeProvider>,
+    settings_path: PathBuf,
+    status: Mutex<BabysitProviderRuntimeStatus>,
+    #[cfg(test)]
+    candidates_override: Option<Vec<ClaudeCandidate>>,
+}
+
+/// 一个可启动的 Claude Code 候选；测试可注入 shell fixture 前缀参数。
+#[derive(Clone)]
+struct ClaudeCandidate {
+    program: PathBuf,
+    prefix_args: Vec<OsString>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// 只持久化用户明确选择且已通过探针的 Claude Code executable。
+struct ClaudeSettings {
+    executable: PathBuf,
+}
+
+impl ClaudeRuntime {
+    /// 构造未知状态的 runtime；构造过程不启动任何 Claude 进程。
+    pub(crate) fn new(provider: Arc<ClaudeCodeProvider>, settings_path: PathBuf) -> Self {
+        Self {
+            provider,
+            settings_path,
+            status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
+            #[cfg(test)]
+            candidates_override: None,
+        }
+    }
+
+    /// 注入确定性候选，测试不依赖本机 Claude 安装或认证。
+    #[cfg(test)]
+    pub(super) fn with_candidates(
+        provider: Arc<ClaudeCodeProvider>,
+        settings_path: PathBuf,
+        candidates: Vec<(PathBuf, Vec<OsString>)>,
+    ) -> Self {
+        Self {
+            provider,
+            settings_path,
+            status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
+            candidates_override: Some(
+                candidates
+                    .into_iter()
+                    .map(|(program, prefix_args)| ClaudeCandidate {
+                        program,
+                        prefix_args,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// 返回设置路径、环境覆盖与 PATH 命令组成的有序候选集。
+    fn candidates(&self) -> Vec<ClaudeCandidate> {
+        #[cfg(test)]
+        if let Some(candidates) = &self.candidates_override {
+            return candidates.clone();
+        }
+        let selected = std::fs::read_to_string(&self.settings_path).ok()
+            .and_then(|value| serde_json::from_str::<ClaudeSettings>(&value).ok())
+            .map(|settings| settings.executable);
+        let paths = candidate_paths(selected, std::env::var_os("CLAUDE_CODE_EXECUTABLE").map(PathBuf::from));
+        paths
+            .into_iter()
+            .map(|program| ClaudeCandidate {
+                program,
+                prefix_args: Vec::new(),
+            })
+            .collect()
+    }
+
+    /// 仅用本地元数据命令验证版本、所需 flags 与认证，不触发付费模型请求。
+    async fn probe(candidate: &ClaudeCandidate, workspace_path: &Path) -> Result<(), BabysitError> {
+        let version = Command::new(&candidate.program)
+            .args(&candidate.prefix_args)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+        if !matches!(version, Ok(status) if status.success()) {
+            return Err(BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::ExecutableInvalid,
+            ));
+        }
+        let help = Command::new(&candidate.program)
+            .args(&candidate.prefix_args)
+            .arg("--help")
+            .current_dir(workspace_path)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .map_err(|_| {
+                BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )
+            })?;
+        let help_text = String::from_utf8_lossy(&help.stdout);
+        if !help.status.success()
+            || ![
+                "--output-format",
+                "--json-schema",
+                "--no-session-persistence",
+                "--permission-mode",
+                "--tools",
+                "--disallowedTools",
+            ]
+            .iter()
+            .all(|flag| help_text.contains(flag))
+        {
+            return Err(BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::Incompatible,
+            ));
+        }
+        let auth = Command::new(&candidate.program)
+            .args(&candidate.prefix_args)
+            .args(["auth", "status", "--json"])
+            .current_dir(workspace_path)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .map_err(|_| {
+                BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )
+            })?;
+        if !auth.status.success() {
+            Err(BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::SignedOut,
+            ))
+        } else {
+            match serde_json::from_slice::<serde_json::Value>(&auth.stdout)
+                .ok()
+                .and_then(|value| value.get("loggedIn").and_then(serde_json::Value::as_bool))
+            {
+                Some(true) => Ok(()),
+                Some(false) => Err(BabysitError::provider_setup(PROVIDER_ID, BabysitProviderSetupFailure::SignedOut)),
+                None => Err(BabysitError::provider_setup(PROVIDER_ID, BabysitProviderSetupFailure::InitializationFailed)),
+            }
+        }
+    }
+
+    /// 更新公开 readiness；锁中毒统一收敛为初始化失败。
+    fn set_status(&self, next: BabysitProviderRuntimeStatus) {
+        if let Ok(mut status) = self.status.lock() {
+            *status = next;
+        }
+    }
+}
+
+/// 保持 bare PATH 优先，并把用户选择与环境覆盖作为有序 fallback。
+fn candidate_paths(selected: Option<PathBuf>, environment: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("claude")];
+    paths.extend(selected);
+    paths.extend(environment);
+    paths.dedup();
+    paths
+}
+
+#[async_trait]
+impl InstalledProviderRuntime for ClaudeRuntime {
+    /// 返回稳定 Claude Code provider identity。
+    fn provider_id(&self) -> &str {
+        PROVIDER_ID
+    }
+
+    /// 返回最近一次懒探针结果。
+    fn status(&self) -> BabysitProviderRuntimeStatus {
+        self.status
+            .lock()
+            .map(|value| *value)
+            .unwrap_or(BabysitProviderRuntimeStatus::InitFailed)
+    }
+
+    /// 首次需要时依次探测候选；失败不会尝试或装配 Codex。
+    async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        if self.status() == BabysitProviderRuntimeStatus::Ready {
+            return Ok(());
+        }
+        self.set_status(BabysitProviderRuntimeStatus::Probing);
+        let mut last =
+            BabysitError::provider_setup(PROVIDER_ID, BabysitProviderSetupFailure::NotFound);
+        for candidate in self.candidates() {
+            match Self::probe(&candidate, workspace_path).await {
+                Ok(()) => {
+                    self.provider.set_program(candidate.program)?;
+                    self.set_status(BabysitProviderRuntimeStatus::Ready);
+                    return Ok(());
+                }
+                Err(error) => last = error,
+            }
+        }
+        let status = match &last {
+            BabysitError::ProviderSetup {
+                failure: BabysitProviderSetupFailure::SignedOut,
+                ..
+            } => BabysitProviderRuntimeStatus::SignedOut,
+            BabysitError::ProviderSetup {
+                failure: BabysitProviderSetupFailure::Incompatible,
+                ..
+            } => BabysitProviderRuntimeStatus::Incompatible,
+            BabysitError::ProviderSetup {
+                failure:
+                    BabysitProviderSetupFailure::NotFound
+                    | BabysitProviderSetupFailure::ExecutableInvalid,
+                ..
+            } => BabysitProviderRuntimeStatus::Missing,
+            _ => BabysitProviderRuntimeStatus::InitFailed,
+        };
+        self.set_status(status);
+        Err(last)
+    }
+
+    /// picker 选择必须先通过完整探针，成功后再持久化并切换 provider。
+    async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
+        let workspace = std::env::current_dir().map_err(|_| {
+            BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::InitializationFailed,
+            )
+        })?;
+        let candidate = ClaudeCandidate {
+            program: path.to_owned(),
+            prefix_args: Vec::new(),
+        };
+        Self::probe(&candidate, &workspace).await?;
+        if let Some(parent) = self.settings_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| {
+                BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::InitializationFailed,
+                )
+            })?;
+        }
+        let payload = serde_json::to_vec(&ClaudeSettings {
+            executable: path.to_owned(),
+        })
+        .map_err(|_| {
+            BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::InitializationFailed,
+            )
+        })?;
+        std::fs::write(&self.settings_path, payload).map_err(|_| {
+            BabysitError::provider_setup(
+                PROVIDER_ID,
+                BabysitProviderSetupFailure::InitializationFailed,
+            )
+        })?;
+        self.provider.set_program(path.to_owned())?;
+        self.set_status(BabysitProviderRuntimeStatus::Ready);
+        Ok(())
+    }
+
+    /// Claude 每轮使用 fresh process，因此 runtime 无常驻进程需要关闭。
+    async fn shutdown(&self) {}
+}
+
+#[cfg(test)]
+#[path = "tests/claude/runtime.rs"]
+mod tests;

@@ -45,9 +45,14 @@ type BabysitFooterProps = {
     codexSignedOut: string;
     codexIncompatible: string;
     codexInitializationFailed: string;
+    claudeMissing: string;
+    claudeSignedOut: string;
+    claudeIncompatible: string;
+    claudeInitializationFailed: string;
     cancel: string;
     retry: string;
     selectExecutable: string;
+    selectClaudeExecutable: string;
     copyDiagnostics: string;
     copiedDiagnostics: string;
   };
@@ -61,10 +66,19 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
   if (!state || (state.kind !== "generating" && state.kind !== "repairing" && state.kind !== "failed")) return null;
 
   const running = state.kind === "generating" || state.kind === "repairing";
+  const isClaudeFailure = state.kind === "failed" && state.error.providerId === "claude_code";
   const status = state.kind === "generating"
     ? labels.generating
     : state.kind === "repairing"
       ? labels.repairing(state.attempt)
+      : isClaudeFailure && (state.error.code === "provider_not_found" || state.error.code === "provider_executable_invalid")
+        ? labels.claudeMissing
+        : isClaudeFailure && state.error.code === "provider_signed_out"
+          ? labels.claudeSignedOut
+          : isClaudeFailure && state.error.code === "provider_incompatible"
+            ? labels.claudeIncompatible
+            : isClaudeFailure && state.error.code === "provider_initialization_failed"
+              ? labels.claudeInitializationFailed
       : state.error.code === "codex_not_found" || state.error.code === "codex_executable_invalid"
         ? labels.codexMissing
         : state.error.code === "codex_signed_out"
@@ -90,7 +104,7 @@ function BabysitFooter({ state, onCancel, onRetry, onSelectExecutable, labels }:
     {running
       ? <Button variant="outline" size="xs" onClick={onCancel}>{labels.cancel}</Button>
       : <>
-        {state.kind === "failed" && state.error.recovery === "select_codex_executable" && onSelectExecutable && <Button variant="outline" size="xs" onClick={onSelectExecutable}>{labels.selectExecutable}</Button>}
+        {state.kind === "failed" && (state.error.recovery === "select_codex_executable" || state.error.recovery === "select_provider_executable") && onSelectExecutable && <Button variant="outline" size="xs" onClick={onSelectExecutable}>{isClaudeFailure ? labels.selectClaudeExecutable : labels.selectExecutable}</Button>}
         <Button variant="outline" size="xs" onClick={onRetry}>{labels.retry}</Button>
         <Button variant="ghost" size="xs" onClick={copyDiagnostics} aria-label={copied ? labels.copiedDiagnostics : labels.copyDiagnostics}>
           <Icon icon={Copy01Icon} aria-hidden />
@@ -212,8 +226,13 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
       codexSignedOut: t("review:babysitCodexSignedOut"),
       codexIncompatible: t("review:babysitCodexIncompatible"),
       codexInitializationFailed: t("review:babysitCodexInitializationFailed"),
+      claudeMissing: t("review:babysitClaudeMissing"),
+      claudeSignedOut: t("review:babysitClaudeSignedOut"),
+      claudeIncompatible: t("review:babysitClaudeIncompatible"),
+      claudeInitializationFailed: t("review:babysitClaudeInitializationFailed"),
       cancel: t("review:babysitCancel"),
       selectExecutable: t("review:babysitSelectCodex"),
+      selectClaudeExecutable: t("review:babysitSelectClaude"),
       retry: t("common:retry"),
       copyDiagnostics: t("review:babysitCopyDiagnostics"),
       copiedDiagnostics: t("review:babysitCopiedDiagnostics"),

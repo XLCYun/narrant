@@ -18,3 +18,11 @@ Codex 做一次真实 smoke；该流程当前固定使用 `gpt-5.6-luna` 与 `lo
 如果 Codex 未安装、未登录或 capability probe 失败，记录 UI 中的 typed recovery
 状态即可；不要把真实源码、完整路径、prompt、token 或 App Server 原始输出复制到
 issue、日志或诊断文本中。
+# Claude Code 默认 provider 本地 smoke
+
+1. 确认已安装并登录 Claude Code，然后启动 Narrant，打开一个受信任 Review 的文本 File Change。
+2. 打开宝宝模式，确认此时才首次启动 Claude Code discovery/probe；应用启动阶段不应出现 Claude 进程。
+3. 验证生成中、修复中和完成状态；关闭再打开应复用进程内缓存，“重新生成”必须发起 fresh Claude Code rounds。
+4. 临时选择无效 executable，确认只显示 Claude Code 选择器恢复动作，且不会启动或建议 Codex。
+5. 在未登录与旧版 Claude Code 环境分别确认登录、升级恢复文案；诊断不得包含 executable 路径、仓库内容或原始 stderr。
+6. 用 `pnpm dev:preview` 检查 `review-reader` 的 `babysit`、`babysit-generating`、`babysit-repairing`、`babysit-claude-recovery`，并分别使用宽、窄 viewport。

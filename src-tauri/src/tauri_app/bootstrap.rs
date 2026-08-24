@@ -68,7 +68,7 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
-            app.manage(babysit::BabysitApplication::with_codex_provider_at(
+            app.manage(babysit::BabysitApplication::with_claude_provider_at(
                 application_data.join("babysit-settings.json"),
             ));
             Ok(())
