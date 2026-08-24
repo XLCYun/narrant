@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::Command;
 
-const PROVIDER_ID: &str = "claude_code";
+const PROVIDER_ID: &str = "claude-code";
 #[cfg(not(test))]
 const PROBE_STEP_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]

@@ -51,7 +51,7 @@ async fn failed_candidate_does_not_shadow_later_authenticated_candidate() {
         .await
         .expect("later candidate should become ready");
 
-    assert_eq!(runtime.provider_id(), "claude_code");
+    assert_eq!(runtime.provider_id(), "claude-code");
     assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::Ready);
     let invocations = std::fs::read_to_string(events).expect("read probe events");
     assert!(invocations.contains("invalid:--version"));
@@ -70,7 +70,7 @@ async fn successful_auth_command_without_logged_in_true_is_signed_out() {
         .expect_err("explicit loggedIn false must fail");
 
     assert!(
-        matches!(error, BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::SignedOut } if provider_id == "claude_code")
+        matches!(error, BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::SignedOut } if provider_id == "claude-code")
     );
     assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::SignedOut);
     let invocations = std::fs::read_to_string(events).expect("read probe events");
@@ -110,7 +110,7 @@ async fn malformed_auth_status_is_redacted_initialization_failure() {
     let payload = BabysitErrorPayload::from(error);
 
     assert_eq!(payload.code, BabysitErrorCode::ProviderInitializationFailed);
-    assert_eq!(payload.provider_id.as_deref(), Some("claude_code"));
+    assert_eq!(payload.provider_id.as_deref(), Some("claude-code"));
     assert!(!payload.detail.contains("private"));
     assert!(!payload.detail.contains("oauth"));
 }
@@ -126,7 +126,7 @@ async fn unavailable_candidates_are_classified_as_missing_without_leaking_paths(
     let payload = BabysitErrorPayload::from(error);
 
     assert_eq!(payload.code, BabysitErrorCode::ProviderNotFound);
-    assert_eq!(payload.provider_id.as_deref(), Some("claude_code"));
+    assert_eq!(payload.provider_id.as_deref(), Some("claude-code"));
     assert!(!payload.detail.contains("private"));
 }
 
