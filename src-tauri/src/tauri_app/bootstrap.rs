@@ -125,15 +125,10 @@ pub fn run() {
         ])
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        // 仅恢复用户可见的桌面窗口状态，避免意外恢复全屏或其他窗口属性。
+        // 仅恢复窗口布局；不恢复可见性，避免正常退出保存的隐藏状态导致下次启动无窗口。
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(
-                    StateFlags::SIZE
-                        | StateFlags::POSITION
-                        | StateFlags::MAXIMIZED
-                        | StateFlags::VISIBLE,
-                )
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
                 .build(),
         );
     #[cfg(feature = "wdio")]

@@ -31,11 +31,19 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
       height: 760,
       minWidth: 900,
       minHeight: 600,
-      visible: false,
+      visible: true,
     });
     expect(backend).toMatch(/tauri_plugin_window_state::Builder::default\(\)/);
-    expect(backend).toMatch(/StateFlags::SIZE\s*\|\s*StateFlags::POSITION\s*\|\s*StateFlags::MAXIMIZED\s*\|\s*StateFlags::VISIBLE/);
+    expect(backend).toMatch(/StateFlags::SIZE\s*\|\s*StateFlags::POSITION\s*\|\s*StateFlags::MAXIMIZED/);
+    expect(backend).not.toMatch(/StateFlags::VISIBLE/);
     expect(backend).not.toMatch(/StateFlags::FULLSCREEN/);
+  });
+
+  it("Windows release 使用 GUI 子系统，避免启动时出现控制台窗口", () => {
+    const main = read("src-tauri/src/main.rs");
+
+    expect(main).toMatch(/all\(not\(debug_assertions\), target_os = "windows"\)/);
+    expect(main).toMatch(/windows_subsystem = "windows"/);
   });
 
   it("wdio 不是默认 Cargo feature,且为可选依赖", () => {

@@ -4,10 +4,11 @@ Narrant currently starts every desktop session at the configured default size, w
 
 ## Scope
 
-- Use Tauri’s official `window-state` plugin to persist the main window’s normal width, height, position, maximized state, and visibility during an orderly application exit.
+- Use Tauri’s official `window-state` plugin to persist the main window’s normal width, height, position, and maximized state during an orderly application exit.
 - When restarting from a maximized state, let the plugin restore the saved normal bounds before maximizing so a later restore returns to the user’s prior bounds.
 - Do not persist or restore fullscreen state.
-- Start the configured window hidden so the plugin can restore it before showing it, preventing visible movement at launch.
+- Start the configured window visible so first launch and invalid or hidden saved state cannot leave the application running without an accessible window.
+- Do not restore visibility; Narrant has one main window and every launch must present it.
 - Rely on the plugin’s built-in monitor-intersection check: when the saved position does not intersect an available display, do not restore that position and let the operating system choose placement. A malformed state file is treated as no saved state.
 - Keep this application-level state separate from the Review persistence and frontend layout preferences.
 
@@ -21,6 +22,6 @@ Narrant currently starts every desktop session at the configured default size, w
 1. A normal main window reopened after an orderly exit retains its last usable size and position.
 2. A maximized main window reopens maximized; restoring it returns to its prior normal bounds.
 3. Fullscreen is not restored.
-4. A saved position outside all available displays is not applied; a malformed state file falls back to the configured default behavior.
+4. A saved position outside all available displays is not applied; a malformed state file falls back to a visible window at the configured defaults.
 5. The configured minimum size is 900×600 and the initial default remains 1100×760 when no valid saved state exists.
-6. Static integration tests verify the selected plugin state flags and hidden initial window; real Tauri E2E covers normal and maximized relaunch behavior.
+6. Static integration tests verify the selected plugin state flags, visible initial window, and excluded visibility restoration; real Tauri E2E covers normal and maximized relaunch behavior.
