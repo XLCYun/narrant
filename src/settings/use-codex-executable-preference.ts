@@ -18,7 +18,7 @@ export function useCodexExecutablePreference(application: ApplicationSettingsApp
     let current = true;
     void application.load().then((settings) => {
       if (!current) return;
-      setExecutable(settings.codexExecutable);
+      setExecutable(settings.babysit?.codex.executable ?? settings.codexExecutable ?? null);
       setLoaded(true);
     }).catch((reason) => {
       if (!current) return;
@@ -36,7 +36,7 @@ export function useCodexExecutablePreference(application: ApplicationSettingsApp
     setError(undefined);
     try {
       const saved = await application.chooseCodexExecutable();
-      if (saved) setExecutable(saved.codexExecutable);
+      if (saved) setExecutable(saved.babysit?.codex.executable ?? saved.codexExecutable ?? null);
     } catch (reason) {
       setError(`未能保存 Codex 可执行文件：${String(reason)}。原设置已保留，请重新选择。`);
     } finally {
@@ -53,7 +53,7 @@ export function useCodexExecutablePreference(application: ApplicationSettingsApp
     setError(undefined);
     try {
       const saved = await application.clearCodexExecutable();
-      setExecutable(saved.codexExecutable);
+      setExecutable(saved.babysit?.codex.executable ?? saved.codexExecutable ?? null);
     } catch (reason) {
       setError(`未能恢复自动发现：${String(reason)}。原设置已保留，请重试。`);
     } finally {
