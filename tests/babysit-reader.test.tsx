@@ -273,7 +273,11 @@ describe("Babysit Review Reader presentation", () => {
       kind: "failed",
       retryable: true,
       request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
-      error: { code: "codex_not_found", detail: "/Users/alice/.local/bin/codex" },
+      error: {
+        code: "provider_not_found",
+        detail: "/Users/alice/.local/bin/codex",
+        providerId: "codex",
+      },
     });
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
@@ -282,6 +286,31 @@ describe("Babysit Review Reader presentation", () => {
     expect(footer).toHaveTextContent("请前往应用设置的宝宝模式分区配置");
     expect(within(footer).queryByRole("button", { name: "选择 Codex 可执行文件" })).not.toBeInTheDocument();
     expect(footer).not.toHaveTextContent("/Users/alice");
+  });
+
+  it("Claude Code 缺失时显示 provider-aware 恢复动作且不建议回退 Codex", () => {
+    const openApplicationSettings = vi.fn();
+    const review = makeReview({
+      kind: "failed",
+      retryable: true,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      error: {
+        code: "provider_not_found",
+        detail: "C:\\Users\\alice\\.local\\bin\\claude.exe",
+        providerId: "claude-code",
+        recovery: "open_application_settings",
+      },
+    });
+    render(<ReviewReader review={review} appearance={{ ...appearance, onOpenApplicationSettings: openApplicationSettings }} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    const footer = screen.getByTestId("babysit-footer");
+    expect(footer).toHaveTextContent("请前往应用设置的宝宝模式分区配置");
+    fireEvent.click(within(footer).getByRole("button", { name: "打开应用设置" }));
+    expect(openApplicationSettings).toHaveBeenCalledOnce();
+    expect(within(footer).queryByRole("button", { name: /选择.*可执行文件/ })).not.toBeInTheDocument();
+    expect(footer).not.toHaveTextContent("Codex");
+    expect(footer).not.toHaveTextContent("alice");
   });
 
   it("把解释直接注入代码行尾且不包含变更前后行号标签", () => {

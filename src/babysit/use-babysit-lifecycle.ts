@@ -143,7 +143,6 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     if (state.kind === "completed") generate("regenerate");
   }, [generate, state.kind]);
 
-
   /** UI locale 改变后清掉旧语言结果，下一次点击使用新的 cache identity。 */
   useEffect(() => {
     if (state.kind !== "idle" && state.request.locale !== locale) invalidateExplanation();

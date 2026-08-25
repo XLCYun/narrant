@@ -40,6 +40,5 @@ export function createTauriBabysitApplicationAdapter(
     clearReview(reviewId) {
       return transport.invoke("clear_babysit_review_cache", { reviewId });
     },
-    /** 将 native picker 选择交给后端验证并持久化，不把路径写入诊断。 */
   };
 }

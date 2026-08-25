@@ -1,20 +1,31 @@
 # Babysit 本地 smoke test
 
-CI 使用 fake JSONL App Server，不需要 Codex 登录或网络。发布前可在本机用已安装的
-Codex 做一次真实 smoke；该流程当前固定使用 `gpt-5.6-luna` 与 `low` reasoning，且不会把
-代码解释写回 Review Workspace。
+默认 smoke 使用仓库内的确定性 provider fixtures，不需要安装、登录 Codex 或 Claude Code，
+也不会产生付费模型请求。只有明确的发布前本机 probe 才能使用真实 provider。
 
-1. 确认 `codex --version` 可执行，并已通过 Codex 支持的任一账户类型完成认证。
-2. 启动 Narrant，打开一个已授予 Workspace Trust 的 Review。
-3. 进入一个 `.ts`、`.tsx`、`.js`、`.jsx`、`.rs`、`.py`、`.go`、`.java`、`.c` 或
-   `.cpp` File Change，点击宝宝模式。
-4. 确认首次点击后才出现 Codex discovery/初始化，Diff 在生成期间仍可阅读，最终
-   before/after 解释都显示在对应行上方。
-5. 切换“改变行/全部非空行”、隐藏后重新打开宝宝模式，并切换到另一个 File Change；
-   确认隐藏/返回已完成文件不产生新的模型 turn，而切换文件会取消旧 turn。
-6. 在生成期间刷新 Snapshot、关闭 Review，再退出应用；确认旧解释不再出现在新
-   Snapshot，Codex history 中没有 Narrant 的 Babysit thread。
+## 默认 fixture 流程
 
-如果 Codex 未安装、未登录或 capability probe 失败，记录 UI 中的 typed recovery
-状态即可；不要把真实源码、完整路径、prompt、token 或 App Server 原始输出复制到
-issue、日志或诊断文本中。
+1. 在 Git Bash、macOS 或 Linux shell 中运行下列 deterministic backend fixtures；Windows PowerShell
+   应显式使用 `C:\Program Files\Git\bin\sh.exe` 代替 `sh`，避免系统询问如何打开 `.sh`：
+
+   ```sh
+   sh scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml babysit::tests::provider_registry
+   sh scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml babysit::tests::fake_provider_counts_invalid_generate_and_repair_rounds -- --exact
+   sh scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml babysit::tests::claude::cancellation_discards_output_and_terminates_the_process -- --exact
+   ```
+
+   这些测试分别验证 selected-provider 路由与冻结快照、生成/修复，以及取消和子进程清理；
+   全部使用仓库 fixture，不读取真实凭据、不访问模型服务。
+2. 运行 `pnpm test -- --run` 与 `pnpm dev:preview`，不设置任何 provider 凭据。
+3. 在 Application Settings 的宝宝模式分区确认新设置默认选中 Codex。
+4. 切换 Codex 与 Claude Code，分别修改 executable、model 和 effort；往返切换后确认两套偏好独立保留。
+5. 验证 Codex 模型目录的 loading、empty、error/重试与 model 变化后不兼容 effort 原子回到 Default。
+6. 在 Review Reader preview 验证 generating、repairing、failed 和 provider setup failure。setup failure 的“打开应用设置”必须直达宝宝模式分区，不得显示 Diff footer executable picker。
+7. 用明确的宽、窄 viewport 检查长路径、下拉展开、sticky footer 和关键按钮的实际尺寸。
+
+## 可选真实 provider probe
+
+只在维护者明确同意使用本机已登录 provider 及可能的付费请求时执行。在 Application
+Settings 中选择目标 provider 和 executable，打开受信任 Review 的代码 File Change，再验证生成、
+修复、缓存复用、重新生成、取消和线程清理。不得把真实源码、完整路径、prompt、token、
+provider 原始输出或 stderr 写入 issue、日志和诊断文本。

@@ -18,7 +18,7 @@ import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
-import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, ThemePreference } from "@/settings/application-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -33,38 +33,46 @@ type PreviewDefinition = {
 };
 
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false, longCodexPath = false, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
+function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSection = false, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; babysitSection?: boolean; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
     : null);
+  const [babysit, setBabysit] = useState<BabysitSettings>({
+    provider: babysitSection ? "claude-code" : "codex",
+    codex: { executable: codexExecutable, model: null, reasoningEffort: null },
+    claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
+  });
+  const snapshot = (theme: ThemePreference, value = babysit): ApplicationSettings => ({ version: 1, theme, babysit: value });
   const application: ApplicationSettingsApplication = {
-    load: async () => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel: { kind: "automatic" } }),
+    load: async () => snapshot(savedTheme),
     updateTheme: async (theme) => {
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedTheme(theme);
-      return { version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } };
-    },
-    chooseCodexExecutable: async () => {
-      if (saveFails) throw new Error("预览中的 Codex 版本验证失败");
-      const selected = "C:\\Program Files\\Codex\\codex.exe";
-      setCodexExecutable(selected);
-      return { version: 1, theme: savedTheme, codexExecutable: selected, babysitModel: { kind: "automatic" } };
-    },
-    clearCodexExecutable: async () => {
-      setCodexExecutable(null);
-      return { version: 1, theme: savedTheme, codexExecutable: null, babysitModel: { kind: "automatic" } };
+      return snapshot(theme);
     },
     listBabysitModels: async () => {
       if (modelState === "loading") return new Promise(() => undefined);
       if (modelState === "error") throw { code: "app_server_unavailable", detail: "App Server 暂时无法启动" };
-      if (modelState === "empty") return { revision: "preview-catalog", models: [] };
-      return { revision: "preview-catalog", models: [
+      if (modelState === "empty") return { provider: "codex", revision: "preview-catalog", models: [] };
+      return { provider: "codex", revision: "preview-catalog", models: [
         { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "high" },
         { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
       ] };
     },
-    updateBabysitModel: async (babysitModel) => ({ version: 1, theme: savedTheme, codexExecutable, babysitModel }),
+    updateBabysitProvider: async (provider) => {
+      const next = { ...babysit, provider }; setBabysit(next); return snapshot(savedTheme, next);
+    },
+    chooseBabysitExecutable: async (provider, preference) => {
+      if (saveFails) throw new Error("预览中的 provider 版本验证失败");
+      const executable = provider === "codex" ? "C:\\Program Files\\Codex\\codex.exe" : "C:\\Program Files\\Claude\\claude.exe";
+      const key = provider === "codex" ? "codex" : "claudeCode";
+      const next = { ...babysit, [key]: { ...preference, executable } }; setCodexExecutable(next.codex.executable); setBabysit(next); return snapshot(savedTheme, next);
+    },
+    updateBabysitPreferences: async (provider, preference) => {
+      const key = provider === "codex" ? "codex" : "claudeCode";
+      const next = { ...babysit, [key]: preference }; setCodexExecutable(next.codex.executable); setBabysit(next); return snapshot(savedTheme, next);
+    },
   };
   const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
     status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
@@ -75,7 +83,7 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, githubState
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} initialModelEditing={modelState !== "idle"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || babysitSection || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
@@ -270,7 +278,7 @@ function ReviewReaderPreview({
   update?: boolean;
   initialView?: "overview" | "file-changes";
   shortContent?: boolean;
-  babysitKind?: "completed" | "generating" | "repairing" | "failed";
+  babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out";
 }) {
   const fileChanges = shortContent
     ? readerSnapshot.fileChanges.slice(0, 2)
@@ -311,6 +319,10 @@ function ReviewReaderPreview({
       ? { kind: "completed", request: babysitRequest, explanations: babysitExplanations }
       : babysitKind === "repairing"
         ? { kind: "repairing", request: babysitRequest, attempt: 2 }
+        : babysitKind === "claude-recovery"
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_not_found", detail: "Claude Code executable unavailable", providerId: "claude-code", recovery: "open_application_settings" } }
+        : babysitKind === "claude-signed-out"
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_signed_out", detail: "Claude Code authentication unavailable", providerId: "claude-code", recovery: "login_provider" } }
         : babysitKind === "failed"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
@@ -355,6 +367,7 @@ function ReviewReaderPreview({
         narrow: window.innerWidth < 1200,
         editorTheme: document.documentElement.classList.contains("dark") ? "vs-dark" : "light",
         onOpenExternal: () => undefined,
+        onOpenApplicationSettings: () => undefined,
       }}
     />
   </div>;
@@ -370,7 +383,7 @@ const previews: Record<string, PreviewDefinition> = {
       "github-signed-in": { label: "GitHub 已登录", render: () => <SettingsPreview githubState="signed-in" /> },
       "github-confirm": { label: "GitHub 退出确认", render: () => <SettingsPreview githubState="confirm" /> },
       "github-failed": { label: "GitHub 退出失败", render: () => <SettingsPreview githubState="failed" /> },
-      "model-wide": { label: "模型编辑（宽窗口）", render: () => <SettingsPreview modelState="idle" /> },
+      "model-wide": { label: "模型编辑（宽窗口）", render: () => <SettingsPreview babysitSection /> },
       "model-loading": { label: "模型目录加载", render: () => <SettingsPreview modelState="loading" /> },
       "model-empty": { label: "模型目录为空", render: () => <SettingsPreview modelState="empty" /> },
       "model-error": { label: "模型目录失败", render: () => <SettingsPreview modelState="error" /> },
@@ -483,6 +496,8 @@ const previews: Record<string, PreviewDefinition> = {
       "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="generating" /> },
       "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="repairing" /> },
       "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="failed" /> },
+      "babysit-claude-recovery": { label: "Claude Code 恢复", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-recovery" /> },
+      "babysit-claude-signed-out": { label: "Claude Code 未登录", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-signed-out" /> },
       update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },

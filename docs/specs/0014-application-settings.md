@@ -14,8 +14,9 @@ GitHub Identity 的退出只能从侧栏快捷菜单触发，宝宝模式的 Cod
 `settings.json`；GitHub 凭据继续存入操作系统凭据存储。
 
 外观支持跟随系统、浅色和深色。GitHub 分区展示当前 GitHub Identity 并提供带确认的
-退出操作。宝宝模式允许显式选择 Codex 可执行文件，并从 Codex App Server 动态读取模型
-及其支持的思考强度。显式选择始终受到尊重；失效配置产生可操作错误，不静默回退。
+退出操作。宝宝模式先选择 Codex 或 Claude Code，再配置当前 provider 的可执行文件、模型
+与思考强度；两套配置独立保留。Codex 动态读取目录，Claude Code 使用离线 alias 目录并
+允许自定义模型标识。显式选择始终受到尊重；失效配置产生可操作错误，不静默回退。
 
 ## User Stories
 
@@ -24,7 +25,7 @@ GitHub Identity 的退出只能从侧栏快捷菜单触发，宝宝模式的 Cod
 3. 作为未来会使用更多设置的用户，我希望设置页采用可扩展的二级导航，以便快速定位不同分区。
 4. 作为从 Review 进入设置的用户，我希望离开设置后回到进入前的页面，以便不中断阅读上下文。
 5. 作为桌面用户，我希望设置在当前设备和操作系统用户范围内生效，以便不同 Repository 共享一致偏好。
-6. 作为升级用户，我希望现有宝宝模式路径设置迁移到统一配置，以便升级后无需重新配置。
+6. 作为尚未正式发布的应用维护者，我希望直接定义首版完整设置 schema，以免保留临时迁移负担。
 7. 作为安全敏感用户，我希望 GitHub 凭据不写入普通 JSON，以便仍由操作系统安全存储保护。
 8. 作为偏好系统外观的用户，我希望主题默认跟随系统，并在系统主题变化时同步更新。
 9. 作为偏好稳定浅色界面的用户，我希望选择浅色后不再受系统主题变化影响。
@@ -51,36 +52,41 @@ GitHub Identity 的退出只能从侧栏快捷菜单触发，宝宝模式的 Cod
 30. 作为正在运行分析的用户，我希望修改偏好不取消当前任务，而只影响之后的新分析。
 31. 作为阅读解释的用户，我希望不同模型和思考强度不复用彼此的缓存，以免来源混淆。
 32. 作为小窗口用户，我希望设置二级导航和内容仍然可用，以便无需扩大窗口完成配置。
+33. 作为宝宝模式用户，我希望选择 Codex 或 Claude Code，并默认使用 Codex。
+34. 作为会切换 provider 的用户，我希望两边的 executable、model 和 effort 分别保留。
+35. 作为 Claude Code 用户，我希望选择稳定 alias 或自定义云 provider 模型名。
 
 ## Implementation Decisions
 
 - Application Settings 是应用壳中的独立目的地。侧栏底部由 GitHub Identity 和圆形设置按钮组成；设置页记住进入前目的地并支持返回。
 - 设置页从第一版开始采用左侧二级导航，包含外观、GitHub、宝宝模式，并允许以后增加分区。
-- 建立一个设备级 Application Settings 应用边界，负责读取、校验、原子写入和版本迁移。配置文件位于应用数据目录，名称为 `settings.json`。
-- 统一配置保存主题偏好、Codex Executable Preference 与 Babysit Model Preference。动态模型目录不保存。GitHub 密钥、token 和公开身份缓存不进入该文件。
-- 迁移现有宝宝模式设置文件中的 Codex 可执行文件；迁移成功后以统一配置为权威来源，并保证重复启动迁移幂等。
+- 建立一个设备级 Application Settings 应用边界，负责读取、校验和原子写入。配置文件位于应用数据目录，名称为 `settings.json`。
+- 未正式发布阶段直接重定义 settings v1，不迁移临时 `babysit-settings.json` 或旧模型表示。
+- `babysit.provider` 使用稳定 ID `codex` 或 `claude-code`，首次默认 `codex`；显式 `codex` 与 `claudeCode` 子结构分别保存 executable、nullable model 和 nullable reasoning effort。动态目录不保存。
 - 主题类型为 system、light、dark，默认 system。有效主题同时驱动根节点主题类、Monaco 主题和品牌图像，不再由独立 media query 各自决定。
 - 主题选择立即保存；写入失败恢复旧主题并返回可见错误。
 - GitHub 设置复用现有 GitHub Identity lifecycle 和退出应用契约，不创建第二套退出状态机。设置页退出前确认，侧栏快捷退出保持无确认。
 - 确认文案说明退出会删除本机 GitHub 授权凭据和身份/头像缓存，但不会删除 Repository、Review 或本地代码。
 - Codex 可执行文件只能通过原生文件选择器配置。后端要求绝对路径、规范化路径并执行 `codex --version`；只有验证成功才原子替换旧值。
 - 显式 Codex Executable Preference 拥有绝对优先级。它失效时返回可操作错误且不自动发现其他安装。清空后才按环境 PATH、平台安装位置自动发现。
-- Review Reader 中现有的“选择 Codex 可执行文件”失败恢复操作被移除；错误指向 Application Settings。
-- Babysit Model Preference 支持 automatic 或 explicit。automatic 每次分析使用 App Server 标记的默认模型及其默认思考强度。
-- explicit 保存模型标识，以及“模型默认”或一个具体思考强度。选择另一模型时，思考强度重置为该模型默认选项。
-- 设置页平时不启动 App Server。用户点击修改后才连接并分页调用 `model/list`，过滤隐藏模型，显示服务端名称、默认项、`supportedReasoningEfforts` 与 `defaultReasoningEffort`。
-- 模型编辑采用显式保存和取消。保存只接受本次模型目录支持的组合；失败不覆盖旧值。
+- Review Reader 中所有 provider executable picker 均被移除；错误统一指向 Application Settings。
+- model 与 reasoning effort 是每个 provider 独立的 nullable 偏好；null 表示不覆盖 provider 默认值。
+- Provider 下拉框立即原子保存。Executable 验证成功后立即保存。Model 或 effort 每次变化时提交完整组合；若模型不支持当前 effort，同一次更新把 effort 重置为默认，页面不保留中间不一致状态。
+- 设置页只展示当前 provider 的配置。平时不启动 CLI；需要 Codex 目录时才分页调用 `model/list`。Claude Code 使用随应用发布的 alias 目录，不抓取交互式 picker。
+- provider-neutral 模型目录的 revision 绑定 provider ID。Codex 保存只接受动态目录支持的组合；Claude alias 按内置能力校验，自定义模型只要求非空并允许完整 effort 下拉框。
+- Claude Code 显示 Default、Best（使用最强的可用模型）、Fable、Opus、Sonnet、Haiku 与 Custom。Haiku 仅支持默认 effort；Custom 可选择 Default、Low、Medium、High、XHigh 或 Max。
 - 启动每次新分析前调用 `model/list` 验证 explicit 配置。模型不存在或思考强度不支持时分析失败、保留配置并引导进入设置；不得静默回退或写回其他值。
 - 模型目录获取失败时保留当前保存值并显示重试，不提供内置列表或自由文本输入。
-- 设置变化不取消正在运行的分析，只影响之后启动的分析。provider 身份、模型标识、解析后的思考强度和分析契约版本共同参与缓存身份。
+- provider 变化立即保存并清理目录 revision 与完成结果缓存，但不取消正在运行的分析；运行中任务使用启动时冻结的 provider/model/effort。
+- 应用启动不探测 CLI；只懒准备当前请求所需 provider。未选中的 provider 不要求安装、登录或通过 readiness。
 - Tauri transport 继续使用统一 typed command contract；Application Settings、GitHub OAuth 与 Babysit 模块通过各自窄应用接口组合，不把设置页变成跨领域状态机。
 - 新增或修改的方法、结构体和类提供易读中文注释；Rust 私有模块测试放入对应 `tests/` 目录的独立文件。
 
 ## Testing Decisions
 
-- 最高测试缝是 Application Settings 应用契约：通过公开行为验证默认值、原子更新、错误回滚、旧宝宝模式配置迁移和幂等启动，不直接测试私有 JSON helper。
+- 最高测试缝是 Application Settings 应用契约：通过公开行为验证默认值、provider 切换、独立偏好、原子更新和错误回滚，不直接测试私有 JSON helper。
 - Babysit provider 契约测试覆盖显式路径绝对优先、失效不回退、清空恢复发现、分页 `model/list`、自动默认、显式能力验证和稳定错误分类。
-- 应用壳组件测试覆盖设置目的地、进入前页面恢复、二级导航、即时主题、GitHub 确认退出、模型编辑保存/取消和错误状态。
+- 应用壳组件测试覆盖设置目的地、进入前页面恢复、二级导航、即时主题、GitHub 确认退出、provider 下拉框、即时模型/effort 保存和错误状态。
 - GitHub 退出继续复用现有 identity entry、identity lifecycle 和 Tauri adapter 的先例测试。
 - 模型协议 fixture 断言服务端模型、默认模型、支持思考强度与分页，不把当前本机模型名称硬编码为产品契约。
 - 缓存行为测试证明模型或思考强度改变不会命中旧解释，同时不会取消已经运行的分析。
@@ -92,8 +98,8 @@ GitHub Identity 的退出只能从侧栏快捷菜单触发，宝宝模式的 Cod
 - GitHub Identity 登录或 OAuth 流程重设计。
 - 同步设置到 GitHub、云端或其他设备。
 - Repository 或 Review 级设置覆盖。
-- 自由输入 Codex 路径、模型 ID 或思考强度。
-- 内置模型目录、模型目录持久化缓存或离线编辑目录。
+- 自由输入 executable 路径或思考强度。
+- 模型目录持久化缓存，以及从 Claude Code OAuth/TUI 或 Claude Platform API 抓取账户模型目录。
 - 修改 Codex 身份验证、Codex home、权限、网络或审批策略。
 - 修改正在运行的宝宝模式分析或自动重启分析。
 - 手动语言选择器以及外观、GitHub、宝宝模式之外的新设置分区。

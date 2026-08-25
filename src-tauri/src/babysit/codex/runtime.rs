@@ -5,8 +5,13 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
-use crate::application_settings::ApplicationSettingsApplication;
-use crate::babysit::{BabysitAgentProvider, BabysitError};
+#[cfg(test)]
+use crate::application_settings::BabysitProvider;
+use crate::application_settings::{ApplicationSettingsApplication, BabysitModelPreference};
+use crate::babysit::{
+    codex_setup_error, BabysitAgentProvider, BabysitError, BabysitProviderRuntimeStatus,
+    BabysitProviderSetupFailure, InstalledProviderRuntime, CODEX_PROVIDER_ID,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,18 +41,24 @@ impl ApplicationCodexSettings {
     fn load(&self) -> Result<Option<PathBuf>, BabysitError> {
         self.application
             .load()
-            .map(|settings| settings.codex_executable)
-            .map_err(|_| BabysitError::CodexExecutableInvalid)
+            .map(|settings| settings.babysit.codex.executable)
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::ExecutableInvalid))
     }
 
-    /// 仅供 provider 契约测试通过同一 Application Settings 边界准备偏好。
-    #[cfg(all(test, unix))]
+    /// 通过统一 Application Settings 边界保存 executable 偏好。
+    #[cfg(test)]
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
+        let mut preference = self
+            .application
+            .load()
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?
+            .babysit
+            .codex;
+        preference.executable = executable;
         self.application
-            .update_codex_executable(executable)
-            .await
-            .map(|settings| settings.codex_executable)
-            .map_err(|_| BabysitError::CodexInitializationFailed)
+            .update_provider_settings(BabysitProvider::Codex, preference)
+            .map(|settings| settings.babysit.codex.executable)
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))
     }
 }
 
@@ -57,22 +68,43 @@ pub(crate) struct CodexRuntime {
     discovery: CodexExecutableDiscovery,
     settings: ApplicationCodexSettings,
     status: Mutex<CodexRuntimeStatus>,
-    lifecycle: AsyncMutex<()>,
+    lifecycle: Arc<AsyncMutex<()>>,
 }
 
 impl CodexRuntime {
+    /// 仅验证用户选择的 Codex executable 并返回规范路径，不修改 runtime 或 settings。
+    pub(crate) async fn validate_executable(&self, path: &Path) -> Result<PathBuf, BabysitError> {
+        self.discovery
+            .validate_selected(path.to_path_buf())
+            .await
+            .map(|candidate| candidate.path)
+    }
+
     /// 每次新分析读取权威模型偏好，并用新鲜目录解析实际模型与思考强度。
+    #[cfg(test)]
     pub(crate) async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-    ) -> Result<(super::ResolvedCodexModel, tokio::sync::MutexGuard<'_, ()>), BabysitError> {
-        let lifecycle = self.lifecycle.lock().await;
+    ) -> Result<(super::ResolvedCodexModel, tokio::sync::OwnedMutexGuard<()>), BabysitError> {
         let preference = self
             .settings
             .application
             .load()
             .map_err(|_| BabysitError::ModelPreferenceInvalid)?
-            .babysit_model;
+            .babysit
+            .codex;
+        self.prepare_analysis_with_preference(workspace_path, &preference)
+            .await
+    }
+
+    /// 使用上层已冻结的设置快照准备分析，保证 provider 与模型偏好来自同一次读取。
+    pub(crate) async fn prepare_analysis_with_preference(
+        &self,
+        workspace_path: &Path,
+        preference: &crate::application_settings::BabysitProviderSettings,
+    ) -> Result<(super::ResolvedCodexModel, tokio::sync::OwnedMutexGuard<()>), BabysitError> {
+        let lifecycle = self.lifecycle.clone().lock_owned().await;
+        let preference = BabysitModelPreference::from(preference);
         let catalog = self.model_catalog_once().await?;
         self.ensure_ready_once(workspace_path).await?;
         let resolved = catalog
@@ -91,7 +123,7 @@ impl CodexRuntime {
     async fn model_catalog_once(&self) -> Result<super::CodexModelCatalog, BabysitError> {
         let persisted = self.settings.load()?;
         let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
-        let mut last_error = BabysitError::CodexNotFound;
+        let mut last_error = codex_setup_error(BabysitProviderSetupFailure::NotFound);
         for candidate in candidates {
             let candidate_path = candidate.path;
             if self.provider.activate_executable(candidate_path).await? {
@@ -135,13 +167,10 @@ impl CodexRuntime {
             provider,
             discovery,
             settings: ApplicationCodexSettings {
-                application: ApplicationSettingsApplication::new(
-                    settings_path.clone(),
-                    settings_path.with_extension("legacy.json"),
-                ),
+                application: ApplicationSettingsApplication::new(settings_path),
             },
             status: Mutex::new(CodexRuntimeStatus::Unknown),
-            lifecycle: AsyncMutex::new(()),
+            lifecycle: Arc::new(AsyncMutex::new(())),
         }
     }
 
@@ -154,7 +183,6 @@ impl CodexRuntime {
     }
 
     /// 并发调用由 lifecycle 锁串行；已 Ready 的同一进程不重复探测。
-    #[cfg(all(test, unix))]
     pub(crate) async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         let _lifecycle = self.lifecycle.lock().await;
         self.ensure_ready_once(workspace_path).await
@@ -178,14 +206,14 @@ impl CodexRuntime {
         result
     }
 
-    /// 测试中通过生产设置边界准备显式可执行文件偏好。
-    #[cfg(all(test, unix))]
+    /// 通过生产设置边界验证并保存显式可执行文件偏好。
+    #[cfg(test)]
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
-        let resolved = self
-            .settings
-            .save(Some(path.to_path_buf()))
-            .await?
-            .ok_or(BabysitError::CodexInitializationFailed)?;
+        let selected = self.validate_executable(path).await?;
+        let resolved =
+            self.settings.save(Some(selected)).await?.ok_or_else(|| {
+                codex_setup_error(BabysitProviderSetupFailure::InitializationFailed)
+            })?;
         self.provider.activate_executable(resolved).await?;
         if let Ok(mut status) = self.status.lock() {
             *status = CodexRuntimeStatus::Unknown;
@@ -216,33 +244,70 @@ impl CodexRuntime {
     async fn probe_once(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         let persisted = self.settings.load()?;
         let candidates = self.discovery.resolve_all(persisted.as_deref()).await?;
-        let mut last_error = BabysitError::CodexNotFound;
+        let mut last_error = codex_setup_error(BabysitProviderSetupFailure::NotFound);
         let mut found_signed_out = false;
         for candidate in candidates {
             let candidate_path = candidate.path;
             self.provider.activate_executable(candidate_path).await?;
             match self.provider.prepare_process(workspace_path).await {
                 Ok(()) => return Ok(()),
-                Err(BabysitError::CodexSignedOut) => found_signed_out = true,
+                Err(BabysitError::ProviderSetup {
+                    provider_id,
+                    failure: BabysitProviderSetupFailure::SignedOut,
+                }) if provider_id == CODEX_PROVIDER_ID => found_signed_out = true,
                 Err(error) => last_error = error,
             }
         }
         if found_signed_out {
-            Err(BabysitError::CodexSignedOut)
+            Err(codex_setup_error(BabysitProviderSetupFailure::SignedOut))
         } else {
             Err(last_error)
         }
     }
 }
 
+#[async_trait::async_trait]
+impl InstalledProviderRuntime for CodexRuntime {
+    /// 将 Codex 内部状态投影到 provider-independent runtime status。
+    fn status(&self) -> BabysitProviderRuntimeStatus {
+        match CodexRuntime::status(self) {
+            CodexRuntimeStatus::Unknown => BabysitProviderRuntimeStatus::Unknown,
+            CodexRuntimeStatus::Probing => BabysitProviderRuntimeStatus::Probing,
+            CodexRuntimeStatus::Ready => BabysitProviderRuntimeStatus::Ready,
+            CodexRuntimeStatus::Missing => BabysitProviderRuntimeStatus::Missing,
+            CodexRuntimeStatus::SignedOut => BabysitProviderRuntimeStatus::SignedOut,
+            CodexRuntimeStatus::Incompatible => BabysitProviderRuntimeStatus::Incompatible,
+            CodexRuntimeStatus::InitFailed => BabysitProviderRuntimeStatus::InitFailed,
+        }
+    }
+
+    /// 复用 Codex 的 settings、模型目录和 lifecycle readiness 流程。
+    async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError> {
+        CodexRuntime::ensure_ready(self, workspace_path).await
+    }
+
+    /// 复用 Codex provider shutdown，并重置 runtime 状态。
+    async fn shutdown(&self) {
+        CodexRuntime::shutdown(self).await;
+    }
+}
+
 /// 保持状态转换表小而且与 provider 无关。
 fn status_for_error(error: &BabysitError) -> CodexRuntimeStatus {
     match error {
-        BabysitError::CodexNotFound | BabysitError::CodexExecutableInvalid => {
-            CodexRuntimeStatus::Missing
-        }
-        BabysitError::CodexSignedOut => CodexRuntimeStatus::SignedOut,
-        BabysitError::CodexIncompatible => CodexRuntimeStatus::Incompatible,
+        BabysitError::ProviderSetup {
+            provider_id,
+            failure:
+                BabysitProviderSetupFailure::NotFound | BabysitProviderSetupFailure::ExecutableInvalid,
+        } if provider_id == CODEX_PROVIDER_ID => CodexRuntimeStatus::Missing,
+        BabysitError::ProviderSetup {
+            provider_id,
+            failure: BabysitProviderSetupFailure::SignedOut,
+        } if provider_id == CODEX_PROVIDER_ID => CodexRuntimeStatus::SignedOut,
+        BabysitError::ProviderSetup {
+            provider_id,
+            failure: BabysitProviderSetupFailure::Incompatible,
+        } if provider_id == CODEX_PROVIDER_ID => CodexRuntimeStatus::Incompatible,
         _ => CodexRuntimeStatus::InitFailed,
     }
 }

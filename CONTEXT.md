@@ -165,16 +165,20 @@ The device-local preferences that shape Narrant's appearance, external identitie
 and Babysit Mode integration for the current operating-system user.
 _Avoid_: Repository Settings, Review Settings
 
-**Codex Executable Preference**:
-The optional user-selected Codex executable that Babysit Mode uses ahead of automatic
-Codex discovery; clearing it restores automatic discovery.
-_Avoid_: Codex installation, Codex path
+**Babysit Agent Provider Preference**:
+The device-local choice of agent provider that future Babysit Mode analyses use.
+It does not belong to a Repository, Review, or individual analysis request.
+_Avoid_: Review provider, repository provider, active agent
+
+**Babysit Provider Executable Preference**:
+The optional user-selected executable for one Babysit agent provider, used ahead of
+that provider's automatic discovery; clearing it restores automatic discovery.
+_Avoid_: Provider installation, global executable path
 
 **Babysit Model Preference**:
-The automatic or explicit model selection Babysit Mode applies to future Line
-Explanation analyses. An automatic preference follows the Codex App Server defaults;
-an explicit preference remains authoritative and must be supported when analysis starts.
-_Avoid_: Review model, Codex account model
+The automatic or explicit model and reasoning-effort selection retained independently
+for one Babysit agent provider and applied to that provider's future analyses.
+_Avoid_: Review model, account model, global Babysit model
 
 ## Relationships
 

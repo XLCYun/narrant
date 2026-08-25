@@ -20,24 +20,45 @@ export type BabysitErrorCode =
   | "invalid_request"
   | "operation_conflict"
   | "operation_unavailable"
-  | "codex_not_found"
-  | "codex_executable_invalid"
-  | "codex_signed_out"
-  | "codex_incompatible"
-  | "codex_initialization_failed";
+  | "provider_not_found"
+  | "provider_executable_invalid"
+  | "provider_signed_out"
+  | "provider_incompatible"
+  | "provider_initialization_failed"
+  | "model_preference_invalid"
+  | "settings_persistence_failed";
 
-/** Codex setup failure 可执行的恢复动作，不包含路径或原始进程输出。 */
+/** Installed provider 初始化阶段共用的稳定失败 code。 */
+export type BabysitProviderSetupErrorCode = Extract<BabysitErrorCode,
+  | "provider_not_found"
+  | "provider_executable_invalid"
+  | "provider_signed_out"
+  | "provider_incompatible"
+  | "provider_initialization_failed"
+>;
+
+/** provider-aware setup failure 的恢复动作，不包含路径或原始进程输出。 */
 export type BabysitRecoveryAction =
-  | "login_codex"
-  | "upgrade_codex"
+  | "login_provider"
+  | "upgrade_provider"
+  | "open_application_settings"
   | "retry";
 
 /** Babysit command 失败的结构化 payload；detail 不参与业务分支。 */
-export type BabysitError = {
-  code: BabysitErrorCode;
-  detail: string;
-  recovery?: BabysitRecoveryAction;
-};
+export type BabysitError =
+  | {
+    code: BabysitProviderSetupErrorCode;
+    detail: string;
+    /** setup failure 必须标明所属 provider，UI 不从错误码猜测 provider。 */
+    providerId: string;
+    recovery?: BabysitRecoveryAction;
+  }
+  | {
+    code: Exclude<BabysitErrorCode, BabysitProviderSetupErrorCode>;
+    detail: string;
+    providerId?: never;
+    recovery?: never;
+  };
 
 /** 运行时校验使用的公开 Babysit error code 白名单。 */
 const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
@@ -52,28 +73,44 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
   "invalid_request",
   "operation_conflict",
   "operation_unavailable",
-  "codex_not_found",
-  "codex_executable_invalid",
-  "codex_signed_out",
-  "codex_incompatible",
-  "codex_initialization_failed",
+  "provider_not_found",
+  "provider_executable_invalid",
+  "provider_signed_out",
+  "provider_incompatible",
+  "provider_initialization_failed",
+  "model_preference_invalid",
+  "settings_persistence_failed",
+]);
+const babysitProviderSetupErrorCodes: ReadonlySet<BabysitProviderSetupErrorCode> = new Set([
+  "provider_not_found",
+  "provider_executable_invalid",
+  "provider_signed_out",
+  "provider_incompatible",
+  "provider_initialization_failed",
 ]);
 const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
-  "login_codex",
-  "upgrade_codex",
+  "login_provider",
+  "upgrade_provider",
+  "open_application_settings",
   "retry",
 ]);
 
 /** 判断 Tauri reject 值是否符合 provider-independent Babysit error shape。 */
 export function isBabysitError(value: unknown): value is BabysitError {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<BabysitError>;
-  return typeof candidate.code === "string"
-    && babysitErrorCodes.has(candidate.code as BabysitErrorCode)
-    && typeof candidate.detail === "string"
-    && (candidate.recovery === undefined
-      || (typeof candidate.recovery === "string"
-        && babysitRecoveryActions.has(candidate.recovery as BabysitRecoveryAction)));
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.code !== "string"
+    || !babysitErrorCodes.has(candidate.code as BabysitErrorCode)
+    || typeof candidate.detail !== "string") return false;
+  const setupError = babysitProviderSetupErrorCodes.has(candidate.code as BabysitProviderSetupErrorCode);
+  if (setupError) {
+    return typeof candidate.providerId === "string"
+      && candidate.providerId.length > 0
+      && (candidate.recovery === undefined
+        || (typeof candidate.recovery === "string"
+          && babysitRecoveryActions.has(candidate.recovery as BabysitRecoveryAction)));
+  }
+  return candidate.providerId === undefined && candidate.recovery === undefined;
 }
 
 /** 一次 File Change 的完整 before/after Line Explanation 结果。 */

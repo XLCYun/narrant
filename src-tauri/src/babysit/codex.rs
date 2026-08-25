@@ -4,9 +4,10 @@
 //! `BabysitAgentProvider` 的 provider-independent 请求、结果和失败类别。
 
 use super::{
-    parse_provider_response, validate_response, BabysitAgentProvider, BabysitError,
-    BabysitFileExplanations, BabysitProviderRequest, CancellationSignal, FileSide, LineTarget,
-    ValidationFailure, MAX_EXPLANATION_CHARS, MAX_REPAIR_ATTEMPTS,
+    codex_setup_error, parse_provider_response, validate_response, BabysitAgentProvider,
+    BabysitError, BabysitFileExplanations, BabysitProviderRequest, BabysitProviderSetupFailure,
+    CancellationSignal, FileSide, LineTarget, ValidationFailure, MAX_EXPLANATION_CHARS,
+    MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -271,7 +272,7 @@ impl CodexAppServerProvider {
         let same_executable = self
             .command
             .lock()
-            .map_err(|_| BabysitError::CodexInitializationFailed)?
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?
             .program
             == path;
         if same_executable {
@@ -289,7 +290,7 @@ impl CodexAppServerProvider {
         }
         self.command
             .lock()
-            .map_err(|_| BabysitError::CodexInitializationFailed)?
+            .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?
             .program = path;
         Ok(true)
     }
@@ -340,7 +341,7 @@ impl CodexAppServerProvider {
             let command = self
                 .command
                 .lock()
-                .map_err(|_| BabysitError::CodexInitializationFailed)?
+                .map_err(|_| codex_setup_error(BabysitProviderSetupFailure::InitializationFailed))?
                 .clone();
             match AppServerProcess::spawn(command).await {
                 Ok(started) => {
@@ -504,7 +505,7 @@ impl CodexAppServerProvider {
 impl BabysitAgentProvider for CodexAppServerProvider {
     /// 稳定 provider identity，供 cache 与 diagnostics 分类使用。
     fn provider_id(&self) -> &str {
-        "codex-app-server"
+        "codex"
     }
 
     /// 返回当前真实 App Server 代际；每次成功 spawn 都生成新的缓存 identity。
@@ -852,9 +853,11 @@ fn provider_error(detail: impl Into<String>) -> BabysitError {
 /// 将 Codex 协议失败映射成前端可恢复的稳定类别；不携带路径或原始进程输出。
 fn codex_error(error: RpcFailure) -> BabysitError {
     match error {
-        RpcFailure::SignedOut => BabysitError::CodexSignedOut,
-        RpcFailure::Incompatible => BabysitError::CodexIncompatible,
-        RpcFailure::Initialization => BabysitError::CodexInitializationFailed,
+        RpcFailure::SignedOut => codex_setup_error(BabysitProviderSetupFailure::SignedOut),
+        RpcFailure::Incompatible => codex_setup_error(BabysitProviderSetupFailure::Incompatible),
+        RpcFailure::Initialization => {
+            codex_setup_error(BabysitProviderSetupFailure::InitializationFailed)
+        }
         other => provider_error(other.detail()),
     }
 }
@@ -862,9 +865,9 @@ fn codex_error(error: RpcFailure) -> BabysitError {
 /// 将进程启动与 initialize 阶段的异常归为 init_failed，保留认证和能力分类。
 fn codex_initialization_error(error: RpcFailure) -> BabysitError {
     match error {
-        RpcFailure::SignedOut => BabysitError::CodexSignedOut,
-        RpcFailure::Incompatible => BabysitError::CodexIncompatible,
-        _ => BabysitError::CodexInitializationFailed,
+        RpcFailure::SignedOut => codex_setup_error(BabysitProviderSetupFailure::SignedOut),
+        RpcFailure::Incompatible => codex_setup_error(BabysitProviderSetupFailure::Incompatible),
+        _ => codex_setup_error(BabysitProviderSetupFailure::InitializationFailed),
     }
 }
 

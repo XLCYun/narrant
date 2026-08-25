@@ -9,6 +9,7 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
     let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
     application
         .remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1".to_owned(),
             codex::CodexModelCatalog {
                 models: vec![codex::CodexModelCapability {
@@ -26,6 +27,7 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
 
     assert!(application
         .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1",
             &crate::application_settings::BabysitModelPreference::Explicit {
                 model: "catalog-entry".to_owned(),
@@ -35,6 +37,7 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
         .is_ok());
     application
         .remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-2".to_owned(),
             codex::CodexModelCatalog {
                 models: vec![codex::CodexModelCapability {
@@ -51,13 +54,35 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
         .unwrap();
     assert!(application
         .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1",
             &crate::application_settings::BabysitModelPreference::Automatic,
         )
         .is_ok());
     assert!(application
         .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-missing",
+            &crate::application_settings::BabysitModelPreference::Automatic,
+        )
+        .is_err());
+}
+
+#[test]
+fn model_catalog_revision_is_bound_to_its_provider() {
+    let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
+    application
+        .remember_model_catalog(
+            crate::application_settings::BabysitProvider::ClaudeCode,
+            "shared-revision".to_owned(),
+            codex::CodexModelCatalog { models: Vec::new() },
+        )
+        .unwrap();
+
+    assert!(application
+        .validate_model_preference(
+            crate::application_settings::BabysitProvider::Codex,
+            "shared-revision",
             &crate::application_settings::BabysitModelPreference::Automatic,
         )
         .is_err());
@@ -69,6 +94,7 @@ async fn executable_invalidation_discards_catalog_and_analysis_cache() {
     let application = BabysitApplication::new(provider.clone());
     application
         .remember_model_catalog(
+            crate::application_settings::BabysitProvider::Codex,
             "catalog-1".to_owned(),
             codex::CodexModelCatalog { models: Vec::new() },
         )
@@ -143,6 +169,11 @@ impl BabysitAgentProvider for InFlightModelProvider {
         unreachable!("完整输出不会进入 repair")
     }
 }
+
+#[path = "claude.rs"]
+mod claude;
+#[path = "provider_registry.rs"]
+mod provider_registry;
 
 /// 构造只包含文本内容的 File Change fixture。
 fn text_change(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeContent {
@@ -609,6 +640,7 @@ async fn incomplete_output_fails_after_three_repairs_and_is_not_cached() {
 #[test]
 fn response_validation_rejects_extra_missing_and_unsafe_lines() {
     let request = BabysitProviderRequest {
+        analysis_run_id: 1,
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
@@ -691,6 +723,167 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
             "detail": "此文件不支持宝宝模式：lock file"
         })
     );
+}
+
+#[test]
+fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
+    let payload = BabysitErrorPayload::from(BabysitError::provider_setup(
+        "claude-code",
+        BabysitProviderSetupFailure::NotFound,
+    ));
+
+    assert_eq!(
+        serde_json::to_value(payload).unwrap(),
+        serde_json::json!({
+            "code": "provider_not_found",
+            "detail": "未找到 claude-code provider 可执行文件",
+            "providerId": "claude-code",
+            "recovery": "open_application_settings"
+        })
+    );
+}
+
+#[test]
+fn provider_setup_failure_categories_are_shared_by_installed_adapters() {
+    let cases = [
+        (
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::SignedOut),
+            "provider_signed_out",
+            "login_provider",
+        ),
+        (
+            BabysitError::provider_setup("claude-code", BabysitProviderSetupFailure::Incompatible),
+            "provider_incompatible",
+            "upgrade_provider",
+        ),
+        (
+            BabysitError::provider_setup(
+                "claude-code",
+                BabysitProviderSetupFailure::InitializationFailed,
+            ),
+            "provider_initialization_failed",
+            "retry",
+        ),
+        (
+            BabysitError::provider_setup(
+                "claude-code",
+                BabysitProviderSetupFailure::ExecutableInvalid,
+            ),
+            "provider_executable_invalid",
+            "open_application_settings",
+        ),
+    ];
+
+    for (error, code, recovery) in cases {
+        let value = serde_json::to_value(BabysitErrorPayload::from(error)).unwrap();
+        assert_eq!(value["code"], code);
+        assert_eq!(value["providerId"], "claude-code");
+        assert_eq!(value["recovery"], recovery);
+    }
+}
+
+#[test]
+fn codex_setup_failures_use_provider_codes_and_provider_recovery_actions() {
+    let cases = [
+        (
+            BabysitProviderSetupFailure::NotFound,
+            "provider_not_found",
+            Some("open_application_settings"),
+        ),
+        (
+            BabysitProviderSetupFailure::ExecutableInvalid,
+            "provider_executable_invalid",
+            Some("open_application_settings"),
+        ),
+        (
+            BabysitProviderSetupFailure::SignedOut,
+            "provider_signed_out",
+            Some("login_provider"),
+        ),
+        (
+            BabysitProviderSetupFailure::Incompatible,
+            "provider_incompatible",
+            Some("upgrade_provider"),
+        ),
+        (
+            BabysitProviderSetupFailure::InitializationFailed,
+            "provider_initialization_failed",
+            Some("retry"),
+        ),
+    ];
+
+    for (failure, code, recovery) in cases {
+        let value = serde_json::to_value(BabysitErrorPayload::from(BabysitError::provider_setup(
+            "codex", failure,
+        )))
+        .unwrap();
+        assert_eq!(value["code"], code);
+        assert_eq!(value["providerId"], "codex");
+        assert_eq!(
+            value.get("recovery").and_then(|value| value.as_str()),
+            recovery
+        );
+    }
+}
+
+/// 只记录 application lifecycle 调用的 provider-aware runtime fake。
+struct FakeInstalledRuntime {
+    status: Mutex<BabysitProviderRuntimeStatus>,
+    ready_calls: AtomicUsize,
+    shutdown_calls: AtomicUsize,
+}
+
+impl FakeInstalledRuntime {
+    /// 构造一个尚未探测的 installed provider runtime。
+    fn new() -> Self {
+        Self {
+            status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
+            ready_calls: AtomicUsize::new(0),
+            shutdown_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl InstalledProviderRuntime for FakeInstalledRuntime {
+    /// 返回 fake runtime 保存的 provider-independent 状态。
+    fn status(&self) -> BabysitProviderRuntimeStatus {
+        self.status
+            .lock()
+            .map(|status| *status)
+            .unwrap_or(BabysitProviderRuntimeStatus::InitFailed)
+    }
+
+    /// 记录一次 readiness probe，并模拟成功初始化。
+    async fn ensure_ready(&self, _workspace_path: &Path) -> Result<(), BabysitError> {
+        self.ready_calls.fetch_add(1, Ordering::AcqRel);
+        if let Ok(mut status) = self.status.lock() {
+            *status = BabysitProviderRuntimeStatus::Ready;
+        }
+        Ok(())
+    }
+
+    /// 记录应用退出时的 runtime shutdown。
+    async fn shutdown(&self) {
+        self.shutdown_calls.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[tokio::test]
+async fn application_delegates_installed_provider_lifecycle_through_one_runtime_seam() {
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let runtime = Arc::new(FakeInstalledRuntime::new());
+    let application = BabysitApplication::with_provider_runtime(provider, runtime.clone());
+
+    application
+        .prepare_runtime(Path::new("/tmp/narrant-test-workspace"))
+        .await
+        .unwrap();
+    application.shutdown().await.unwrap();
+
+    assert_eq!(runtime.ready_calls.load(Ordering::Acquire), 1);
+    assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::Ready);
+    assert_eq!(runtime.shutdown_calls.load(Ordering::Acquire), 1);
 }
 
 #[test]

@@ -49,21 +49,25 @@ async fn selected_executable_is_version_checked_without_persisting_from_discover
 }
 
 #[tokio::test]
-async fn persisted_invalid_path_falls_back_to_process_candidates() {
+async fn persisted_invalid_path_is_authoritative_over_process_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let executable = version_fixture(directory.path(), true);
     let discovery = CodexExecutableDiscovery::with_candidates(vec![executable.clone()]);
 
-    let resolved = discovery
+    let error = discovery
         .resolve_all(Some(&directory.path().join("missing-codex")))
-        .await;
+        .await
+        .unwrap_err();
 
-    let resolved = resolved.unwrap().remove(0);
-    assert_eq!(resolved.path, executable.canonicalize().unwrap());
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid }
+            if provider_id == "codex"
+    ));
 }
 
 #[tokio::test]
-async fn process_environment_candidate_precedes_a_valid_persisted_path() {
+async fn valid_persisted_path_is_authoritative_over_process_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let environment = version_fixture(directory.path(), true);
     let persisted_directory = tempfile::tempdir().unwrap();
@@ -75,7 +79,7 @@ async fn process_environment_candidate_precedes_a_valid_persisted_path() {
         .unwrap()
         .remove(0);
 
-    assert_eq!(resolved.path, environment.canonicalize().unwrap());
+    assert_eq!(resolved.path, persisted.canonicalize().unwrap());
 }
 
 #[test]
@@ -94,7 +98,11 @@ async fn invalid_selected_executable_returns_reselection_error_without_raw_outpu
         .await
         .unwrap_err();
 
-    assert!(matches!(error, BabysitError::CodexExecutableInvalid));
+    assert!(matches!(
+        &error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid }
+            if provider_id == "codex"
+    ));
     assert!(!error.to_string().contains("codex-bad"));
 }
 
@@ -108,7 +116,11 @@ async fn oversized_version_output_is_bounded_and_child_is_reaped() {
         .validate_with_timeout_observed(executable, true, std::time::Duration::from_secs(5))
         .await;
 
-    assert!(matches!(result, Err(BabysitError::CodexExecutableInvalid)));
+    assert!(matches!(
+        result,
+        Err(BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid })
+            if provider_id == "codex"
+    ));
     assert!(marker.exists(), "version fixture did not start");
     assert!(reaped, "direct version child was not reaped");
 }
@@ -121,7 +133,11 @@ async fn hanging_version_process_is_killed_and_reaped_on_timeout() {
         .validate_with_timeout_observed(executable, true, std::time::Duration::from_secs(3))
         .await;
 
-    assert!(matches!(result, Err(BabysitError::CodexExecutableInvalid)));
+    assert!(matches!(
+        result,
+        Err(BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid })
+            if provider_id == "codex"
+    ));
     assert!(marker.exists(), "version fixture did not start");
     assert!(reaped, "direct version child was not reaped");
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { ApplicationSettingsDestination, SettingsPage } from "@/components/settings-page";
+import { ApplicationSettingsDestination } from "@/components/settings-page";
 import type { ApplicationSettingsApplication } from "@/settings/application-settings";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
@@ -31,16 +31,21 @@ function mockSystemTheme(initialDark: boolean) {
 }
 
 function application(theme: "system" | "light" | "dark" = "system"): ApplicationSettingsApplication {
+  const babysit = {
+    provider: "codex" as const,
+    codex: { executable: null, model: null, reasoningEffort: null },
+    claudeCode: { executable: null, model: null, reasoningEffort: null },
+  };
   return {
-    load: vi.fn(async () => ({ version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
-    updateTheme: vi.fn(async (nextTheme) => ({ version: 1, theme: nextTheme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
-    chooseCodexExecutable: vi.fn(async () => ({ version: 1, theme, codexExecutable: "C:\\Program Files\\Codex\\codex.exe", babysitModel: { kind: "automatic" } })),
-    clearCodexExecutable: vi.fn(async () => ({ version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } })),
-    listBabysitModels: vi.fn(async () => ({ revision: "catalog-1", models: [
+    load: vi.fn(async () => ({ version: 1, theme, babysit })),
+    updateTheme: vi.fn(async (nextTheme) => ({ version: 1, theme: nextTheme, babysit })),
+    listBabysitModels: vi.fn(async (provider) => ({ provider, revision: "catalog-1", models: [
       { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
       { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
     ] })),
-    updateBabysitModel: vi.fn(async (babysitModel) => ({ version: 1, theme, codexExecutable: null, babysitModel })),
+    updateBabysitProvider: vi.fn(async (provider) => ({ version: 1, theme, babysit: { ...babysit, provider } })),
+    chooseBabysitExecutable: vi.fn(async () => ({ version: 1, theme, babysit })),
+    updateBabysitPreferences: vi.fn(async () => ({ version: 1, theme, babysit })),
   };
 }
 
@@ -66,145 +71,110 @@ function githubIdentity(): GitHubIdentityLifecycleBinding {
 }
 
 describe("Settings application-shell UI", () => {
-  it("仅在修改时获取模型目录，取消后完整保留保存偏好", async () => {
-    mockSystemTheme(false);
-    const settings = application();
-    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: null, babysitModel: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: "high" } });
-    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+  it("typed adapter 原样提交 provider 与完整偏好组合", async () => {
+    const invoke = vi.fn(async () => undefined);
+    const adapter = createTauriApplicationSettingsAdapter({ invoke } as never, vi.fn(async () => "C:\\Tools\\claude.exe"));
 
-    expect(await screen.findByText("gpt-5.4 · high")).toBeInTheDocument();
-    expect(settings.listBabysitModels).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
-    await screen.findByRole("combobox", { name: "模型" });
-    expect(settings.listBabysitModels).toHaveBeenCalledTimes(1);
-    await chooseSelect("模型", /GPT-5.4 Mini/);
-    fireEvent.click(screen.getByRole("button", { name: "取消模型修改" }));
+    await adapter.updateBabysitProvider("claude-code");
+    await adapter.chooseBabysitExecutable("claude-code", { executable: null, model: "sonnet", reasoningEffort: "high" });
+    await adapter.updateBabysitPreferences("claude-code", { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, "claude-catalog-1");
 
-    expect(screen.getByText("gpt-5.4 · high")).toBeInTheDocument();
-    expect(settings.updateBabysitModel).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenNthCalledWith(1, "update_application_babysit_provider", { provider: "claude-code" });
+    expect(invoke).toHaveBeenNthCalledWith(2, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "sonnet", reasoningEffort: "high" }, catalogRevision: null });
+    expect(invoke).toHaveBeenNthCalledWith(3, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, catalogRevision: "claude-catalog-1" });
   });
 
-  it("切换模型重置为模型默认，并显式保存具体思考强度", async () => {
+  it("只呈现当前 provider，并即时保存完整组合且失败时回滚", async () => {
     mockSystemTheme(false);
     const settings = application();
-    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
-    await screen.findByText("自动（使用 App Server 默认值）");
-    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
-    await screen.findByRole("combobox", { name: "模型" });
-    await chooseSelect("模型", /GPT-5.4 Mini/);
-    expect(screen.getByRole("combobox", { name: "思考强度" })).toHaveTextContent("模型默认（medium）");
-    await chooseSelect("思考强度", "low");
-    fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
-
-    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "explicit", modelId: "gpt-5.4-mini", reasoningEffort: "low" }, "catalog-1"));
-    expect(await screen.findByText("gpt-5.4-mini · low")).toBeInTheDocument();
-  });
-
-  it("已保存模型从动态目录消失时仍可选择 automatic 并保存", async () => {
-    mockSystemTheme(false);
-    const settings = application();
-    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: null, babysitModel: { kind: "explicit", modelId: "retired-model", reasoningEffort: "high" } });
+    const snapshot = {
+      version: 1, theme: "system" as const,
+      babysit: {
+        provider: "codex" as const,
+        codex: { executable: "C:\\codex.exe", model: null, reasoningEffort: null },
+        claudeCode: { executable: "C:\\claude.exe", model: "sonnet", reasoningEffort: "high" },
+      },
+    };
+    vi.mocked(settings.load).mockResolvedValue(snapshot);
+    vi.mocked(settings.updateBabysitProvider).mockResolvedValue({ ...snapshot, babysit: { ...snapshot.babysit, provider: "claude-code" } });
+    vi.mocked(settings.updateBabysitPreferences).mockRejectedValueOnce(new Error("原子替换失败"));
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
 
-    expect(await screen.findByText("retired-model · high")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
+    expect(await screen.findByTestId("codex-preferences")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\claude.exe")).not.toBeInTheDocument();
+    await chooseSelect("使用的 Agent", "Claude Code");
+    expect(await screen.findByTestId("claude-code-preferences")).toHaveTextContent("C:\\claude.exe");
+    await chooseSelect("模型", "Haiku");
 
-    const modelSelect = await screen.findByRole("combobox", { name: "模型" });
-    expect(modelSelect).toHaveTextContent("retired-model（不可用）");
-    await chooseSelect("模型", "自动（使用 App Server 默认值）");
-    fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
-
-    await waitFor(() => expect(settings.updateBabysitModel).toHaveBeenCalledWith({ kind: "automatic" }, "catalog-1"));
-    expect(screen.getByText("自动（使用 App Server 默认值）")).toBeInTheDocument();
+    await waitFor(() => expect(settings.updateBabysitPreferences).toHaveBeenCalledWith("claude-code", { executable: "C:\\claude.exe", model: "haiku", reasoningEffort: null }, null));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已恢复原设置");
+    expect(screen.getByRole("combobox", { name: "模型" })).toHaveTextContent("Sonnet");
   });
 
-  it("模型保存值读取失败时显示错误并允许重试", async () => {
+  it("Claude Code 显示 Best 的完整说明", async () => {
     const settings = application();
-    vi.mocked(settings.load)
-      .mockRejectedValueOnce(new Error("settings.json 暂时不可读"))
-      .mockResolvedValueOnce({ version: 1, theme: "system", codexExecutable: null, babysitModel: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: "high" } });
-    render(<SettingsPage
-      theme={{ preference: "system", loaded: true, saving: false, error: undefined, editorTheme: "light", choose: vi.fn() }}
-      codex={{ executable: null, loaded: true, saving: false, error: undefined, choose: vi.fn(), clear: vi.fn() }}
-      modelApplication={settings}
-      initialSection="babysit"
-      onBack={() => undefined}
-    />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("settings.json 暂时不可读");
-    fireEvent.click(screen.getByRole("button", { name: "重试读取模型设置" }));
-
-    expect(await screen.findByText("gpt-5.4 · high")).toBeInTheDocument();
-    expect(settings.load).toHaveBeenCalledTimes(2);
-  });
-
-  it("目录失败保留旧值并允许重试，保存失败也不覆盖旧值", async () => {
-    mockSystemTheme(false);
-    const settings = application();
-    vi.mocked(settings.listBabysitModels).mockRejectedValueOnce({ code: "app_server_unavailable", detail: "App Server 无法启动" });
-    vi.mocked(settings.updateBabysitModel).mockRejectedValueOnce("settings.json 无法原子替换");
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: null, reasoningEffort: null } } });
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
-    await screen.findByText("自动（使用 App Server 默认值）");
-    fireEvent.click(screen.getByRole("button", { name: "修改模型偏好" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("App Server 无法启动");
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "模型" }));
+    expect(await screen.findByRole("option", { name: "Best（使用最强的可用模型）" })).toBeInTheDocument();
+  });
+
+  it("Codex 目录加载、空结果与失败都保留已保存偏好", async () => {
+    const settings = application();
+    let rejectCatalog!: (reason: Error) => void;
+    vi.mocked(settings.listBabysitModels).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCatalog = reject; }));
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByRole("combobox", { name: "模型" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取 Codex 模型目录");
+    await act(async () => rejectCatalog(new Error("目录不可用")));
+    expect(await screen.findByRole("button", { name: "重试获取模型" })).toBeInTheDocument();
+    expect(screen.getByText("已保留当前保存值。")).toBeInTheDocument();
+
+    vi.mocked(settings.listBabysitModels).mockResolvedValueOnce({ provider: "codex", revision: "empty", models: [] });
     fireEvent.click(screen.getByRole("button", { name: "重试获取模型" }));
-    await screen.findByRole("combobox", { name: "模型" });
-    await chooseSelect("模型", /GPT-5.4（服务端默认）/);
-    fireEvent.click(screen.getByRole("button", { name: "保存模型偏好" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("settings.json 无法原子替换");
-    fireEvent.click(screen.getByRole("button", { name: "取消模型修改" }));
-    expect(screen.getByText("自动（使用 App Server 默认值）")).toBeInTheDocument();
-  });
-  it("通过约定的 Tauri commands 读取并更新完整 Application Settings", async () => {
-    const invoke = vi.fn(async (_command: string, args: Record<string, unknown>) => ({
-      version: 1, theme: args.theme ?? "system", codexExecutable: null, babysitModel: { kind: "automatic" },
-    }));
-    const adapter = createTauriApplicationSettingsAdapter({ invoke } as never, vi.fn(async () => "C:\\Tools\\codex.exe"));
-
-    await adapter.load();
-    await adapter.updateTheme("dark");
-    await adapter.chooseCodexExecutable();
-    await adapter.clearCodexExecutable();
-    await adapter.listBabysitModels();
-    await adapter.updateBabysitModel({ kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null }, "catalog-1");
-
-    expect(invoke).toHaveBeenNthCalledWith(1, "load_application_settings", {});
-    expect(invoke).toHaveBeenNthCalledWith(2, "update_application_theme", { theme: "dark" });
-    expect(invoke).toHaveBeenNthCalledWith(3, "update_application_codex_executable", { executable: "C:\\Tools\\codex.exe" });
-    expect(invoke).toHaveBeenNthCalledWith(4, "clear_application_codex_executable", {});
-    expect(invoke).toHaveBeenNthCalledWith(5, "list_babysit_models", {});
-    expect(invoke).toHaveBeenNthCalledWith(6, "update_application_babysit_model", { preference: { kind: "explicit", modelId: "gpt-5.4", reasoningEffort: null }, catalogRevision: "catalog-1" });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("未返回可用模型"));
   });
 
-  it("typed adapter 不改写模型目录与结构化失败", async () => {
-    const catalog = { revision: "catalog-custom", models: [{ id: "custom-model", name: "Custom Model", isDefault: false, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" }] };
-    const failure = { code: "catalog_unavailable", detail: "连接中断" };
-    const invoke = vi.fn()
-      .mockResolvedValueOnce(catalog)
-      .mockRejectedValueOnce(failure);
-    const adapter = createTauriApplicationSettingsAdapter({ invoke } as never);
-
-    await expect(adapter.listBabysitModels()).resolves.toBe(catalog);
-    await expect(adapter.updateBabysitModel({ kind: "automatic" }, "catalog-custom")).rejects.toBe(failure);
-  });
-
-  it("呈现服务端动态增加的思考强度而不依赖前端枚举", async () => {
-    mockSystemTheme(false);
+  it("Claude Code Custom 提供完整 effort 选择", async () => {
     const settings = application();
-    vi.mocked(settings.listBabysitModels).mockResolvedValue({ revision: "catalog-2", models: [
-      { id: "future-model", name: "Future Model", isDefault: true, supportedReasoningEfforts: ["ultra"], defaultReasoningEffort: "ultra" },
-    ] });
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: "vendor/custom-model", reasoningEffort: null } } });
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("button", { name: "修改模型偏好" }));
-    await screen.findByRole("combobox", { name: "模型" });
-    await chooseSelect("模型", /Future Model/);
 
-    const effortSelect = screen.getByRole("combobox", { name: "思考强度" });
-    expect(effortSelect).toHaveTextContent("模型默认（ultra）");
-    fireEvent.click(effortSelect);
-    expect(await screen.findByRole("option", { name: "ultra" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "自定义模型" })).toHaveValue("vendor/custom-model");
+    fireEvent.click(screen.getByRole("combobox", { name: "思考强度" }));
+    for (const effort of ["Default", "Low", "Medium", "High", "XHigh", "Max"]) expect(await screen.findByRole("option", { name: effort })).toBeInTheDocument();
   });
 
+  it("Claude Code Haiku 只允许 Default effort", async () => {
+    const settings = application();
+    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", babysit: { provider: "claude-code", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: "haiku", reasoningEffort: null } } });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    const effort = await screen.findByRole("combobox", { name: "思考强度" });
+    expect(effort).toHaveTextContent("Default");
+    expect(effort).toBeDisabled();
+  });
+
+  it("切换 provider 往返时保留各自偏好", async () => {
+    const settings = application();
+    let babysit = { provider: "codex" as "codex" | "claude-code", codex: { executable: "C:\\codex.exe", model: "gpt-5.4", reasoningEffort: "high" }, claudeCode: { executable: "C:\\claude.exe", model: "sonnet", reasoningEffort: "medium" } };
+    vi.mocked(settings.load).mockImplementation(async () => ({ version: 1, theme: "system", babysit }));
+    vi.mocked(settings.updateBabysitProvider).mockImplementation(async (provider) => {
+      babysit = { ...babysit, provider };
+      return { version: 1, theme: "system", babysit };
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByTestId("codex-preferences")).toHaveTextContent("C:\\codex.exe");
+    await chooseSelect("使用的 Agent", "Claude Code");
+    expect(await screen.findByTestId("claude-code-preferences")).toHaveTextContent("C:\\claude.exe");
+    expect(screen.getByRole("combobox", { name: "模型" })).toHaveTextContent("Sonnet");
+    await chooseSelect("使用的 Agent", "Codex");
+    expect(await screen.findByTestId("codex-preferences")).toHaveTextContent("C:\\codex.exe");
+    expect(settings.updateBabysitProvider).toHaveBeenCalledTimes(2);
+  });
   it("展示可扩展二级导航，并为后续分区提供稳定占位", async () => {
     mockSystemTheme(false);
     render(<ApplicationSettingsDestination application={application()} onBack={() => undefined} />);
@@ -215,99 +185,6 @@ describe("Settings application-shell UI", () => {
     expect(screen.getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "宝宝模式" }));
     expect(screen.getByRole("heading", { name: "宝宝模式" })).toBeInTheDocument();
-  });
-
-  it("通过原生文件选择器保存 Codex Executable Preference", async () => {
-    mockSystemTheme(false);
-    const settings = application();
-    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "宝宝模式" }));
-
-    expect(screen.getByText("自动发现")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "选择 Codex 可执行文件" }));
-
-    expect(await screen.findByText("C:\\Program Files\\Codex\\codex.exe")).toBeInTheDocument();
-    expect(settings.chooseCodexExecutable).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  });
-
-  it("取消原生文件选择时不调用保存 command", async () => {
-    const invoke = vi.fn();
-    const adapter = createTauriApplicationSettingsAdapter({ invoke } as never, vi.fn(async () => null));
-
-    await expect(adapter.chooseCodexExecutable()).resolves.toBeNull();
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("验证失败时保留旧路径并显示可操作错误", async () => {
-    mockSystemTheme(false);
-    const oldPath = "C:\\Tools\\codex.exe";
-    const settings = application();
-    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: oldPath, babysitModel: { kind: "automatic" } });
-    vi.mocked(settings.chooseCodexExecutable).mockRejectedValue(new Error("版本探测失败"));
-    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "宝宝模式" }));
-    expect(await screen.findByText(oldPath)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "选择 Codex 可执行文件" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("原设置已保留");
-    expect(screen.getByText(oldPath)).toBeInTheDocument();
-  });
-
-  it("清空显式路径后恢复自动发现", async () => {
-    mockSystemTheme(false);
-    const settings = application();
-    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: "C:\\Tools\\codex.exe", babysitModel: { kind: "automatic" } });
-    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "宝宝模式" }));
-    fireEvent.click(await screen.findByRole("button", { name: "恢复自动发现" }));
-
-    expect(await screen.findByText("自动发现")).toBeInTheDocument();
-    expect(settings.clearCodexExecutable).toHaveBeenCalledTimes(1);
-  });
-
-  it("验证保存期间禁用重复选择", async () => {
-    mockSystemTheme(false);
-    let finish!: () => void;
-    const settings = application();
-    vi.mocked(settings.chooseCodexExecutable).mockImplementation(() => new Promise((resolve) => {
-      finish = () => resolve({ version: 1, theme: "system", codexExecutable: "C:\\Tools\\codex.exe", babysitModel: { kind: "automatic" } });
-    }));
-    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "宝宝模式" }));
-    fireEvent.click(screen.getByRole("button", { name: "选择 Codex 可执行文件" }));
-
-    expect(screen.getByRole("button", { name: "正在验证…" })).toBeDisabled();
-    await act(async () => finish());
-    expect(screen.getByText("C:\\Tools\\codex.exe")).toBeInTheDocument();
-  });
-
-  it("清空失败时保留旧路径", async () => {
-    mockSystemTheme(false);
-    const oldPath = "C:\\Tools\\codex.exe";
-    const settings = application();
-    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: oldPath, babysitModel: { kind: "automatic" } });
-    vi.mocked(settings.clearCodexExecutable).mockRejectedValue(new Error("写入失败"));
-    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "宝宝模式" }));
-    fireEvent.click(await screen.findByRole("button", { name: "恢复自动发现" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("原设置已保留");
-    expect(screen.getByText(oldPath)).toBeInTheDocument();
-  });
-
-  it("长路径允许换行且操作区保持可用", async () => {
-    mockSystemTheme(false);
-    const longPath = `C:\\${"very-long-directory\\".repeat(12)}codex.exe`;
-    const settings = application();
-    vi.mocked(settings.load).mockResolvedValue({ version: 1, theme: "system", codexExecutable: longPath, babysitModel: { kind: "automatic" } });
-    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "宝宝模式" }));
-
-    expect(await screen.findByTestId("codex-executable-value")).toHaveClass("break-all");
-    expect(screen.getByRole("button", { name: "选择 Codex 可执行文件" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "恢复自动发现" })).toBeEnabled();
   });
 
   it("在 GitHub 分区展示 lifecycle 提供的当前身份", async () => {
@@ -410,7 +287,7 @@ describe("Settings application-shell UI", () => {
     let finishSave!: () => void;
     const settings = application("light");
     vi.mocked(settings.updateTheme).mockImplementation((theme) => new Promise((resolve) => {
-      finishSave = () => resolve({ version: 1, theme, codexExecutable: null, babysitModel: { kind: "automatic" } });
+      finishSave = () => resolve({ version: 1, theme, babysit: { provider: "codex", codex: { executable: null, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: null, reasoningEffort: null } } });
     }));
     render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
     await screen.findByRole("radio", { name: /^浅色/ });

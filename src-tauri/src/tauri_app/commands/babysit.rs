@@ -11,9 +11,10 @@ use tauri::ipc::Channel;
 #[tauri::command]
 pub(crate) async fn list_babysit_models(
     babysit: tauri::State<'_, BabysitApplication>,
+    provider: crate::application_settings::BabysitProvider,
 ) -> Result<crate::babysit::BabysitModelCatalog, BabysitErrorPayload> {
     babysit
-        .fetch_model_catalog()
+        .fetch_model_catalog(provider)
         .await
         .map_err(BabysitErrorPayload::from)
 }
@@ -89,11 +90,12 @@ pub(crate) async fn explain_review_file_change(
             .read_file_change(&operation, &review_id, &snapshot_id, &path)
             .await
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
-        // 先通过后端权威 eligibility gate；不支持的文件不能触发 settings/PATH/Codex I/O。
+        // 先通过后端权威 eligibility gate；不支持的文件不能触发 provider runtime I/O。
         validate_explain_input(&babysit, &path, &content, detected_language.as_deref())?;
         let workspace_path = lifecycle
             .workspace_path(&review_id, &snapshot_id)
             .map_err(|error| BabysitErrorPayload::input_unavailable(error.to_string()))?;
+        // Provider 选择、模型解析和 readiness 在同一次应用调用内冻结，避免设置切换撕裂运行快照。
         babysit
             .explain_file(
                 BabysitFileRequest {

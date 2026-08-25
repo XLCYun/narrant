@@ -42,6 +42,7 @@ type ReviewReaderProps = {
     narrow: boolean;
     editorTheme: string;
     onOpenExternal: (url: string) => void;
+    onOpenApplicationSettings?: () => void;
   };
 };
 
@@ -127,6 +128,7 @@ export function ReviewReader(input: ReviewReaderProps) {
     reviewId: diffReviewId,
     snapshotId: diffSnapshotId,
     selectedPath,
+    onOpenApplicationSettings: appearance.onOpenApplicationSettings,
   });
   /** 当 Review 或 peer view 再次呈现时，把 lifecycle 保存的位置写回真实 DOM。 */
   useEffect(() => {
