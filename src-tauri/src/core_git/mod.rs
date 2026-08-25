@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+const WORKSPACE_INSPECT_TIMEOUT: Duration = Duration::from_secs(60);
+const WORKSPACE_MUTATION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 
 /// 产生超限输出的 Core Git 管道。
@@ -118,7 +121,8 @@ pub struct GitOutput {
 pub enum GitOperationClass {
     Query,
     Network,
-    Workspace,
+    WorkspaceInspect,
+    WorkspaceMutation,
 }
 
 /// 一次 Core Git 调用的仓库、参数数组与策略类别。

@@ -2,8 +2,8 @@
 
 use super::model_catalog::{CodexModelCapability, CodexModelCatalog, ModelListPage};
 use super::{
-    restricted_config, AppServerCommand, AppServerProcess, RpcFailure, CODEX_CLEANUP_TIMEOUT,
-    CODEX_CLIENT_NAME, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
+    restricted_config, AppServerCommand, AppServerProcess, RpcFailure, CODEX_CLIENT_NAME,
+    CODEX_FOREGROUND_CLEANUP_TIMEOUT, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
 use crate::babysit::{BabysitProviderRequest, CancellationSignal};
 use serde::Deserialize;
@@ -336,7 +336,7 @@ impl AppServerProcess {
         AccountReadResponse::decode(account)
             .and_then(AccountReadResponse::validate)
             .map_err(classify_initialize_error)?;
-        process.cleanup_marked_threads().await?;
+        process.cleanup_marked_threads(deadline).await?;
         Ok(process)
     }
 
@@ -415,7 +415,7 @@ impl AppServerProcess {
         self.request(
             "thread/delete",
             json!({"threadId": thread_id}),
-            Instant::now() + CODEX_CLEANUP_TIMEOUT,
+            Instant::now() + CODEX_FOREGROUND_CLEANUP_TIMEOUT,
             None,
         )
         .await
@@ -459,7 +459,7 @@ impl AppServerProcess {
                     .request(
                         "thread/delete",
                         json!({"threadId": response.thread_id()}),
-                        Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                        Instant::now() + CODEX_FOREGROUND_CLEANUP_TIMEOUT,
                         None,
                     )
                     .await;
@@ -472,7 +472,7 @@ impl AppServerProcess {
                     .request(
                         "thread/delete",
                         json!({"threadId": response.thread_id()}),
-                        Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                        Instant::now() + CODEX_FOREGROUND_CLEANUP_TIMEOUT,
                         None,
                     )
                     .await;
@@ -571,7 +571,7 @@ impl AppServerProcess {
     }
 
     /// 启动后删除上次异常退出遗留、且明确带 Narrant feature marker 的 thread。
-    async fn cleanup_marked_threads(&mut self) -> Result<(), RpcFailure> {
+    async fn cleanup_marked_threads(&mut self, deadline: Instant) -> Result<(), RpcFailure> {
         for archived in [false, true] {
             let mut cursor: Option<String> = None;
             loop {
@@ -583,12 +583,7 @@ impl AppServerProcess {
                     params["cursor"] = Value::String(cursor_value.to_owned());
                 }
                 let result = self
-                    .request(
-                        "thread/list",
-                        params,
-                        Instant::now() + CODEX_CLEANUP_TIMEOUT,
-                        None,
-                    )
+                    .request("thread/list", params, deadline, None)
                     .await
                     .map_err(classify_capability_probe_error)?;
                 let page =
@@ -602,7 +597,7 @@ impl AppServerProcess {
                     self.request(
                         "thread/delete",
                         json!({"threadId": thread_id}),
-                        Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                        deadline,
                         None,
                     )
                     .await

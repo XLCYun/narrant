@@ -24,7 +24,7 @@ impl GitProcessAdapter {
         std::fs::create_dir_all(parent).map_err(|error| {
             GitCommandError::new(format!("无法创建 Review Workspace 目录：{error}"))
         })?;
-        let creation = self.run_workspace(
+        let creation = self.run_workspace_mutation(
             [
                 OsStr::new("worktree"),
                 OsStr::new("add"),
@@ -137,7 +137,8 @@ impl GitProcessAdapter {
         expected_head_object_id: &str,
         cancellation: &CancellationSignal,
     ) -> Result<(), GitCommandError> {
-        let output = self.run_workspace(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+        let output =
+            self.run_workspace_inspect(["worktree", "list", "--porcelain", "-z"], cancellation)?;
         let canonical_workspace = workspace_path.canonicalize().map_err(|error| {
             GitCommandError::new(format!("无法验证 Review Workspace canonical path：{error}"))
         })?;
@@ -164,7 +165,7 @@ impl GitProcessAdapter {
         if !workspace_path.exists() && !self.is_registered_worktree(workspace_path, cancellation)? {
             return Ok(());
         }
-        self.run_workspace(
+        self.run_workspace_mutation(
             [
                 OsStr::new("worktree"),
                 OsStr::new("remove"),
@@ -248,7 +249,7 @@ impl GitProcessAdapter {
     ) -> Result<bool, GitCommandError> {
         let expected_workspace = canonicalize_with_missing_tail(workspace_path)?;
         let registered =
-            self.run_workspace(["worktree", "list", "--porcelain", "-z"], cancellation)?;
+            self.run_workspace_inspect(["worktree", "list", "--porcelain", "-z"], cancellation)?;
         Ok(registered
             .stdout
             .split(|byte| *byte == 0)
