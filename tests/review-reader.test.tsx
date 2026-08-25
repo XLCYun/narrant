@@ -2,6 +2,9 @@ import { useState } from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
+
 import { i18n } from "@/lib/i18n";
 import { ReviewReader } from "@/components/review-reader";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
@@ -34,6 +37,11 @@ const snapshot = {
   pullRequest: { owner: "octo-org", repository: "narrant", number: 42, title: "Review tabs", description: "Review context", authorUsername: "octocat", state: "open" as const, isDraft: false, webUrl: "https://github.com/octo-org/narrant/pull/42", baseRef: "main", headRef: "topic", synchronizedAtMillis: 1 },
 };
 
+const availableUpdate = {
+  currentBaseRevision: "base-1", currentHeadRevision: "head-1",
+  availableBaseRevision: "base-2", availableHeadRevision: "head-2",
+};
+
 /** 构造 Review Reader 测试所需的稳定 lifecycle binding。 */
 function reviewBinding(overrides: Partial<ReviewReaderBinding> = {}): ReviewReaderBinding {
   return {
@@ -55,6 +63,7 @@ function reviewBinding(overrides: Partial<ReviewReaderBinding> = {}): ReviewRead
     setFileViewState: vi.fn(),
     selectFileChange: vi.fn(),
     retryFileChange: vi.fn(),
+    checkForUpdate: vi.fn(),
     refresh: vi.fn(async () => ({ kind: "unchanged" as const })),
     close: vi.fn(async () => ({ kind: "closed" as const })),
     ...overrides,
@@ -74,10 +83,46 @@ function ReviewReaderHarness({ overrides = {} }: { overrides?: Partial<ReviewRea
   return <ReviewReader review={reviewBinding({ ...overrides, view, setView, diffMode, setDiffMode })} appearance={appearance} />;
 }
 
-beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
+beforeEach(async () => { vi.clearAllMocks(); await i18n.changeLanguage("zh-CN"); });
 afterEach(() => { cleanup(); monacoEditors.length = 0; });
 
 describe("ReviewReader", () => {
+  it("始终用同一个文字按钮呈现检查、无更新和发现更新状态", () => {
+    const checkForUpdate = vi.fn();
+    const { rerender } = render(<ReviewReader review={reviewBinding({ checkForUpdate })} appearance={appearance} />);
+    const check = screen.getByRole("button", { name: "检查更新" });
+    expect(check).toHaveTextContent("检查更新");
+    fireEvent.click(check);
+    expect(checkForUpdate).toHaveBeenCalledOnce();
+
+    rerender(<ReviewReader review={reviewBinding({ update: { kind: "checking" }, checkForUpdate })} appearance={appearance} />);
+    expect(screen.getByRole("button", { name: "正在检查更新" })).toBeDisabled();
+
+    rerender(<ReviewReader review={reviewBinding({ update: { kind: "current" }, checkForUpdate })} appearance={appearance} />);
+    expect(screen.getByText("已是最新")).toBeVisible();
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled();
+
+    rerender(<ReviewReader review={reviewBinding({ update: { kind: "available", update: availableUpdate }, checkForUpdate })} appearance={appearance} />);
+    expect(screen.getByText("有更新")).toBeVisible();
+    expect(screen.getByRole("button", { name: "刷新审核" })).toBeEnabled();
+  });
+
+  it("用 toast 反馈失败与刷新成功，同时把恢复动作留在主按钮", async () => {
+    const refresh = vi.fn(async () => ({ kind: "refreshed" as const, reviewId: "review-1", snapshotId: "snapshot-2" }));
+    const failure = { kind: "operation-failed" as const, detail: "network down", retryable: true };
+    const { rerender } = render(<ReviewReader review={reviewBinding({ update: { kind: "failed", failure } })} appearance={appearance} />);
+    expect(toast.error).toHaveBeenCalledWith("检查更新失败", { description: "network down" });
+    expect(screen.getByRole("button", { name: "重试检查" })).toBeEnabled();
+
+    rerender(<ReviewReader review={reviewBinding({ update: { kind: "refresh-failed", update: availableUpdate, failure }, refresh })} appearance={appearance} />);
+    expect(toast.error).toHaveBeenCalledWith("刷新失败，当前版本未改变", { description: "network down" });
+    fireEvent.click(screen.getByRole("button", { name: "重试刷新" }));
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith("Review 已刷新"));
+
+    rerender(<ReviewReader review={reviewBinding({ update: { kind: "confirmation-stale", failure: { ...failure, kind: "update-confirmation-stale" } } })} appearance={appearance} />);
+    expect(toast.warning).toHaveBeenCalledWith("上游版本已再次变化，请重新检查");
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeEnabled();
+  });
   it("默认展示概览，并通过标签切换到文件改动", () => {
     render(<ReviewReaderHarness />);
 

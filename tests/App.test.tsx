@@ -427,7 +427,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Refreshable/ }));
-    expect(await screen.findByText("检测到 PR 分支有更新")).toBeInTheDocument();
+    expect(await screen.findByText("有更新")).toBeInTheDocument();
     expect(screen.getByLabelText("审核阅读器")).not.toHaveTextContent("base-1 → head-1");
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", {
@@ -907,7 +907,7 @@ describe("App", () => {
     await openFileChanges();
     expect(await screen.findByRole("button", { name: /old.txt/ })).toBeInTheDocument();
 
-    expect(await screen.findByText("检测到所选分支有更新")).toBeInTheDocument();
+    expect(await screen.findByText("有更新")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /old.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new.txt/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));

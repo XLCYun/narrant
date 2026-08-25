@@ -11,6 +11,7 @@ import {
   ViewAgendaIcon,
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { BabysitDiffEditor } from "@/components/babysit-diff-editor";
@@ -95,6 +96,30 @@ export function ReviewReader(input: ReviewReaderProps) {
   const { t } = useTranslation(["common", "review"]);
   const { review, appearance } = input;
   const refreshing = review.transition.kind === "refreshing";
+  const checking = review.update.kind === "checking";
+  const updateAvailable = review.update.kind === "available" || review.update.kind === "refresh-failed";
+  const updateLabel = checking ? t("review:checkingUpdate")
+    : review.update.kind === "refresh-failed" ? t("review:retryRefresh")
+    : review.update.kind === "confirmation-stale" ? t("review:recheck")
+    : updateAvailable ? t("review:refresh")
+    : review.update.kind === "failed" ? t("review:retryCheck")
+    : t("review:checkUpdate");
+  const updateBusy = checking || refreshing;
+  const notifiedFailure = useRef<ReviewReaderBinding["update"]>();
+
+  useEffect(() => {
+    if (notifiedFailure.current === review.update) return;
+    notifiedFailure.current = review.update;
+    if (review.update.kind === "failed") toast.error(t("review:checkFailed"), { description: review.update.failure.detail });
+    if (review.update.kind === "refresh-failed") toast.error(t("review:refreshFailed"), { description: review.update.failure.detail });
+    if (review.update.kind === "confirmation-stale") toast.warning(t("review:confirmationStale"));
+  }, [review.update, t]);
+
+  /** 执行显式刷新，并在 Snapshot 成功切换后给出非阻断反馈。 */
+  async function refreshReview() {
+    const result = await review.refresh();
+    if (result.kind === "refreshed") toast.success(t("review:refreshed"));
+  }
   const props = {
     snapshot: review.snapshot,
     fileChange: review.fileChange.kind === "ready" ? review.fileChange.content : undefined,
@@ -104,11 +129,12 @@ export function ReviewReader(input: ReviewReaderProps) {
     firstFileChangePath: review.fileChange.kind === "failed" ? review.fileChange.path : undefined,
     navigationBusy: review.transition.kind !== "stable",
     ...appearance,
-    updateAction: review.update.kind === "available" ? <div role="status" className="flex items-center gap-2 text-sm">
-      <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t(review.snapshot.pullRequest ? "review:pullRequestBranchesUpdated" : "review:selectedBranchesUpdated")}</span>
-      <Button aria-label={refreshing ? t("review:refreshing") : t("review:refresh")} disabled={refreshing} aria-busy={refreshing || undefined} onClick={() => void review.refresh()}>{refreshing && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshing ? t("review:refreshing") : t("review:refresh")}</span></Button>
-    </div> : undefined,
-    notice: review.update.kind === "failed" ? <p role="alert" className="text-destructive">{review.update.failure.detail}</p> : undefined,
+    updateAction: <div role="status" className="flex min-w-0 items-center gap-2 text-sm">
+      {review.update.kind === "current" && <span className="text-muted-foreground">{t("review:latest")}</span>}
+      {updateAvailable && <span className="text-amber-700 dark:text-amber-300">{t("review:updateAvailable")}</span>}
+      <Button aria-label={refreshing ? t("review:refreshing") : updateLabel} disabled={updateBusy} aria-busy={updateBusy || undefined} onClick={() => updateAvailable ? void refreshReview() : review.checkForUpdate()}>{updateBusy && <Spinner aria-hidden />}<span>{refreshing ? t("review:refreshing") : updateLabel}</span></Button>
+    </div>,
+    notice: undefined,
     onSelectFile: review.selectFileChange,
     onRetryFile: review.retryFileChange,
     onClose: () => void review.close(),

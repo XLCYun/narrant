@@ -36,6 +36,12 @@ export type ReviewUpdate = {
   availableHeadRevision: string;
 };
 
+/** 刷新确认失效时跨 adapter 保留的稳定恢复语义。 */
+export type ReviewApplicationError = {
+  code: "update-confirmation-stale" | "operation-failed";
+  detail: string;
+};
+
 export type BranchSelectionUpdate = {
   changed: boolean;
   currentBaseRevision: string;

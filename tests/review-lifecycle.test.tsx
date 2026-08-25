@@ -82,6 +82,62 @@ function createAdapter(): ReviewApplicationAdapter & {
 }
 
 describe("Review lifecycle module", () => {
+  it("允许用户在无更新后再次检查，并忽略检查中的重复请求", async () => {
+    const adapter = createAdapter();
+    const checks: Array<{ resolve: (update: typeof availableUpdate | null) => void }> = [];
+    adapter.checkReviewUpdate = vi.fn(() => new Promise((resolve) => checks.push({ resolve })));
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await waitFor(() => expect(checks).toHaveLength(1));
+    act(() => checks[0].resolve(null));
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("current"));
+
+    act(() => {
+      result.current.reader?.checkForUpdate();
+      result.current.reader?.checkForUpdate();
+    });
+    await waitFor(() => expect(checks).toHaveLength(2));
+    expect(adapter.checkReviewUpdate).toHaveBeenCalledTimes(2);
+    act(() => checks[1].resolve(availableUpdate));
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
+  });
+
+  it("刷新成功后等待用户手动检查，并能发现第二次更新", async () => {
+    const adapter = createAdapter();
+    const checkReviewUpdate = vi.fn()
+      .mockResolvedValueOnce(availableUpdate)
+      .mockResolvedValueOnce({ ...availableUpdate, currentHeadRevision: "head-2", availableHeadRevision: "head-3" });
+    adapter.checkReviewUpdate = checkReviewUpdate;
+    adapter.refreshReview = async () => ({ kind: "refreshed", snapshot: { ...firstSnapshot, snapshotId: "snapshot-2", headRevision: "head-2" } });
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
+
+    await act(async () => { await result.current.reader!.refresh(); });
+    expect(checkReviewUpdate).toHaveBeenCalledOnce();
+    act(() => result.current.reader?.checkForUpdate());
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
+    expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("普通刷新失败保留确认供重试，确认过期则要求重新检查", async () => {
+    const adapter = createAdapter();
+    adapter.checkReviewUpdate = async () => availableUpdate;
+    adapter.refreshReview = vi.fn()
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockRejectedValueOnce({ code: "update-confirmation-stale", detail: "selection moved" });
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
+
+    await act(async () => { await result.current.reader!.refresh(); });
+    expect(result.current.reader?.update.kind).toBe("refresh-failed");
+    await act(async () => { await result.current.reader!.refresh(); });
+    expect(result.current.reader?.update.kind).toBe("confirmation-stale");
+    expect(adapter.refreshReview).toHaveBeenCalledTimes(2);
+  });
+
   it("打开 Review 后按稳定路径顺序选择第一个 File Change", async () => {
     const adapter = createAdapter();
     const { result } = renderHook(() => useReviewLifecycle(adapter));
