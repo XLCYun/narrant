@@ -11,7 +11,6 @@ import {
   ViewAgendaIcon,
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { BabysitDiffEditor } from "@/components/babysit-diff-editor";
@@ -24,6 +23,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBabysitReviewPresentation } from "@/components/use-babysit-review-presentation";
+import { useReviewUpdatePresentation } from "@/components/use-review-update-presentation";
 import { cn } from "@/lib/utils";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
@@ -95,31 +95,7 @@ function editorLanguage(path: string) {
 export function ReviewReader(input: ReviewReaderProps) {
   const { t } = useTranslation(["common", "review"]);
   const { review, appearance } = input;
-  const refreshing = review.transition.kind === "refreshing";
-  const checking = review.update.kind === "checking";
-  const updateAvailable = review.update.kind === "available" || review.update.kind === "refresh-failed";
-  const updateLabel = checking ? t("review:checkingUpdate")
-    : review.update.kind === "refresh-failed" ? t("review:retryRefresh")
-    : review.update.kind === "confirmation-stale" ? t("review:recheck")
-    : updateAvailable ? t("review:refresh")
-    : review.update.kind === "failed" ? t("review:retryCheck")
-    : t("review:checkUpdate");
-  const updateBusy = checking || review.transition.kind !== "stable";
-  const notifiedFailure = useRef<ReviewReaderBinding["update"]>();
-
-  useEffect(() => {
-    if (notifiedFailure.current === review.update) return;
-    notifiedFailure.current = review.update;
-    if (review.update.kind === "failed") toast.error(t("review:checkFailed"), { description: review.update.failure.detail });
-    if (review.update.kind === "refresh-failed") toast.error(t("review:refreshFailed"), { description: review.update.failure.detail });
-    if (review.update.kind === "confirmation-stale") toast.warning(t("review:confirmationStale"));
-  }, [review.update, t]);
-
-  /** 执行显式刷新，并在 Snapshot 成功切换后给出非阻断反馈。 */
-  async function refreshReview() {
-    const result = await review.refresh();
-    if (result.kind === "refreshed") toast.success(t("review:refreshed"));
-  }
+  const updatePresentation = useReviewUpdatePresentation(review);
   const props = {
     snapshot: review.snapshot,
     fileChange: review.fileChange.kind === "ready" ? review.fileChange.content : undefined,
@@ -130,9 +106,8 @@ export function ReviewReader(input: ReviewReaderProps) {
     navigationBusy: review.transition.kind !== "stable",
     ...appearance,
     updateAction: <div role="status" className="flex min-w-0 items-center gap-2 text-sm">
-      {review.update.kind === "current" && <span className="text-muted-foreground">{t("review:latest")}</span>}
-      {updateAvailable && <span className="text-amber-700 dark:text-amber-300">{t("review:updateAvailable")}</span>}
-      <Button aria-label={refreshing ? t("review:refreshing") : updateLabel} disabled={updateBusy} aria-busy={updateBusy || undefined} onClick={() => updateAvailable ? void refreshReview() : review.checkForUpdate()}>{updateBusy && <Spinner aria-hidden />}<span>{refreshing ? t("review:refreshing") : updateLabel}</span></Button>
+      {updatePresentation.statusLabel && <span className={updatePresentation.statusTone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}>{updatePresentation.statusLabel}</span>}
+      <Button aria-label={updatePresentation.label} disabled={updatePresentation.busy} aria-busy={updatePresentation.busy || undefined} onClick={updatePresentation.run}>{updatePresentation.busy && <Spinner aria-hidden />}<span>{updatePresentation.label}</span></Button>
     </div>,
     notice: undefined,
     onSelectFile: review.selectFileChange,
