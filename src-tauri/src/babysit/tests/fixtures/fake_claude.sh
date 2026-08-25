@@ -22,6 +22,22 @@ case "$scenario" in
   malformed)
     printf '%s\n' 'not json'
     ;;
+  malformed_then_success)
+    if [ "$count" -eq 1 ]; then
+      printf '%s\n' 'not json'
+    else
+      printf '%s\n' '{"type":"result","structured_output":{"before":{"1":"旧值初始化"},"after":{"1":"新值初始化"}}}'
+    fi
+    ;;
+  structural_budget_then_missing)
+    if [ "$count" -le 3 ]; then
+      printf '%s\n' 'not json'
+    elif [ "$count" -eq 4 ]; then
+      printf '%s\n' '{"type":"result","structured_output":{"before":{},"after":{"1":"新值初始化"}}}'
+    else
+      printf '%s\n' '{"type":"result","structured_output":{"before":{"1":"旧值初始化"},"after":{"1":"新值初始化"}}}'
+    fi
+    ;;
   repair)
     if [ "$count" -eq 1 ]; then
       printf '%s\n' '{"type":"result","structured_output":{"before":{},"after":{"1":"新值初始化"}}}'

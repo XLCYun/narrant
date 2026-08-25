@@ -166,11 +166,19 @@ pub(crate) struct BabysitModelCatalog {
 }
 
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
-pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v1";
-/// 对单个解释允许的最大 Unicode 字符数。
-pub const MAX_EXPLANATION_CHARS: usize = 240;
+pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v2";
 /// 同一个 provider 输出失败后允许的最大修复次数。
 pub const MAX_REPAIR_ATTEMPTS: u8 = 3;
+
+/// 把源码渲染为供 provider 阅读的带行号视图；编号仅属于 prompt，不改变 Review Snapshot。
+pub(crate) fn numbered_content(content: &str) -> String {
+    content
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| format!("{:04}|{line}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 /// 为 provider 私有运行状态分配进程内唯一身份，避免相同 File Change 的并发分析碰撞。
 static NEXT_ANALYSIS_RUN_ID: AtomicU64 = AtomicU64::new(1);
 /// Codex App Server 在 provider-independent 错误契约中的稳定 identity。
@@ -455,6 +463,27 @@ pub struct BabysitProviderRequest {
     pub reasoning_effort: String,
 }
 
+impl BabysitProviderRequest {
+    /// 从完整分析请求投影出一轮 Line Explanation Repair Patch 的目标 inventory。
+    fn repair_request(&self, failures: &[ValidationFailure]) -> Self {
+        let requested = failures
+            .iter()
+            .filter_map(|failure| match failure {
+                ValidationFailure::MissingLine { side, line_number }
+                | ValidationFailure::EmptyExplanation { side, line_number } => {
+                    Some((*side, *line_number))
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let mut repair = self.clone();
+        repair
+            .targets
+            .retain(|target| requested.contains(&(target.side, target.line_number)));
+        repair
+    }
+}
+
 /// Provider 与前端共用的紧凑 before/after 行解释结构。
 ///
 /// Provider 协议使用字符串行号，因为 JSON 对象的 key 必须是字符串；内部校验
@@ -567,8 +596,6 @@ pub enum ValidationFailure {
     UnexpectedLine { side: FileSide, line_number: String },
     InvalidLineNumber { side: FileSide, line_number: String },
     EmptyExplanation { side: FileSide, line_number: usize },
-    ExplanationTooLong { side: FileSide, line_number: usize },
-    UnsafeExplanation { side: FileSide, line_number: usize },
 }
 
 impl fmt::Display for ValidationFailure {
@@ -589,12 +616,6 @@ impl fmt::Display for ValidationFailure {
             }
             Self::EmptyExplanation { side, line_number } => {
                 write!(formatter, "{side:?} 第 {line_number} 行解释为空")
-            }
-            Self::ExplanationTooLong { side, line_number } => {
-                write!(formatter, "{side:?} 第 {line_number} 行解释过长")
-            }
-            Self::UnsafeExplanation { side, line_number } => {
-                write!(formatter, "{side:?} 第 {line_number} 行解释包含控制字符")
             }
         }
     }
@@ -853,12 +874,12 @@ pub trait BabysitAgentProvider: Send + Sync {
         request: BabysitProviderRequest,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError>;
-    /// 修复上一次被 Narrant 拒绝的完整输出；provider 可复用会话或启动自包含无状态轮次。
+    /// 只生成上一次结果中缺失或空白的目标行；provider 可复用会话或启动无状态轮次。
     async fn repair(
         &self,
         request: BabysitProviderRequest,
         previous: BabysitFileExplanations,
-        failure: ValidationFailure,
+        failures: Vec<ValidationFailure>,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError>;
     /// 上层在 repair 之间提前退出时，释放 provider 私有的 thread/run 状态。
@@ -1365,13 +1386,17 @@ impl BabysitApplication {
         let mut output = selected_provider
             .generate(provider_request.clone(), cancellation)
             .await?;
-        let mut failure = validate_response(&provider_request, &output).err();
+        let mut failures = normalize_and_collect_repairs(&provider_request, &mut output);
         let mut attempt = 0;
-        while let Some(current_failure) = failure.take() {
+        while !failures.is_empty() {
             if attempt >= MAX_REPAIR_ATTEMPTS {
                 selected_provider.abandon(&provider_request).await;
                 return Err(BabysitError::RepairExhausted {
-                    detail: current_failure.to_string(),
+                    detail: failures
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("；"),
                 });
             }
             attempt += 1;
@@ -1383,16 +1408,22 @@ impl BabysitApplication {
                 selected_provider.abandon(&provider_request).await;
                 return Err(error);
             }
-            output = selected_provider
+            let patch = selected_provider
                 .repair(
                     provider_request.clone(),
-                    output,
-                    current_failure,
+                    output.clone(),
+                    failures.clone(),
                     cancellation,
                 )
                 .await?;
-            failure = validate_response(&provider_request, &output).err();
+            merge_repair_patch(&mut output, patch, &failures);
+            failures = normalize_and_collect_repairs(&provider_request, &mut output);
         }
+        validate_response(&provider_request, &output).map_err(|failure| {
+            BabysitError::InvalidProviderOutput {
+                detail: failure.to_string(),
+            }
+        })?;
         ensure_not_cancelled(cancellation)?;
         notify(BabysitProgress::Completed)?;
         self.cache
@@ -1674,14 +1705,80 @@ fn validate_side(
         if explanation.trim().is_empty() {
             return Err(ValidationFailure::EmptyExplanation { side, line_number });
         }
-        if explanation.chars().count() > MAX_EXPLANATION_CHARS {
-            return Err(ValidationFailure::ExplanationTooLong { side, line_number });
-        }
-        if explanation.chars().any(char::is_control) {
-            return Err(ValidationFailure::UnsafeExplanation { side, line_number });
-        }
     }
     Ok(())
+}
+
+/// 丢弃 provider 自行添加的 key，并一次收集所有需要局部补写的目标行。
+fn normalize_and_collect_repairs(
+    request: &BabysitProviderRequest,
+    output: &mut BabysitFileExplanations,
+) -> Vec<ValidationFailure> {
+    let expected = request
+        .targets
+        .iter()
+        .map(|target| (target.side, target.line_number))
+        .collect::<HashSet<_>>();
+    output.before.retain(|key, _| {
+        key.parse::<usize>()
+            .ok()
+            .is_some_and(|line| expected.contains(&(FileSide::Before, line)))
+    });
+    output.after.retain(|key, _| {
+        key.parse::<usize>()
+            .ok()
+            .is_some_and(|line| expected.contains(&(FileSide::After, line)))
+    });
+    request
+        .targets
+        .iter()
+        .filter_map(|target| {
+            let explanations = match target.side {
+                FileSide::Before => &output.before,
+                FileSide::After => &output.after,
+            };
+            match explanations.get(&target.line_number.to_string()) {
+                None => Some(ValidationFailure::MissingLine {
+                    side: target.side,
+                    line_number: target.line_number,
+                }),
+                Some(value) if value.trim().is_empty() => {
+                    Some(ValidationFailure::EmptyExplanation {
+                        side: target.side,
+                        line_number: target.line_number,
+                    })
+                }
+                Some(_) => None,
+            }
+        })
+        .collect()
+}
+
+/// 只接受本轮明确请求的修复行，避免 patch 改写上一轮已经有效的解释。
+fn merge_repair_patch(
+    output: &mut BabysitFileExplanations,
+    patch: BabysitFileExplanations,
+    failures: &[ValidationFailure],
+) {
+    for failure in failures {
+        let (side, line_number) = match failure {
+            ValidationFailure::MissingLine { side, line_number }
+            | ValidationFailure::EmptyExplanation { side, line_number } => (*side, *line_number),
+            _ => continue,
+        };
+        let key = line_number.to_string();
+        let value = match side {
+            FileSide::Before => patch.before.get(&key),
+            FileSide::After => patch.after.get(&key),
+        };
+        if let Some(value) = value {
+            match side {
+                FileSide::Before => &mut output.before,
+                FileSide::After => &mut output.after,
+            }
+            .insert(key, value.clone());
+        }
+    }
 }
 
 /// Fake provider 的可预测错误脚本；用于契约和 repair loop 测试。
@@ -1800,11 +1897,11 @@ impl FakeBabysitProvider {
         output
     }
 
-    /// 按错误脚本删去一个 target，制造一个可被 repair 修复的 malformed output。
+    /// 按错误脚本删去全部 target 并加入垃圾 key，制造可被单轮局部 repair 修复的输出。
     fn scripted_output(&self, request: &BabysitProviderRequest) -> BabysitFileExplanations {
         let mut output = Self::complete_output(request);
         if self.invalid_rounds_remaining.load(Ordering::Acquire) > 0 {
-            if let Some(target) = request.targets.first() {
+            for target in &request.targets {
                 match target.side {
                     FileSide::Before => {
                         output.before.remove(&target.line_number.to_string());
@@ -1814,6 +1911,12 @@ impl FakeBabysitProvider {
                     }
                 }
             }
+            output
+                .after
+                .insert("not-a-line".to_owned(), "garbage".to_owned());
+            output
+                .after
+                .insert("999999".to_owned(), "garbage".to_owned());
         }
         output
     }
@@ -1861,13 +1964,26 @@ impl BabysitAgentProvider for FakeBabysitProvider {
     /// 按脚本修复上一轮完整响应，模拟同一 provider thread 的 repair。
     async fn repair(
         &self,
-        request: BabysitProviderRequest,
+        mut request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
-        _failure: ValidationFailure,
+        failures: Vec<ValidationFailure>,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         ensure_not_cancelled(cancellation)?;
         self.repair_calls.fetch_add(1, Ordering::AcqRel);
+        let requested = failures
+            .iter()
+            .filter_map(|failure| match failure {
+                ValidationFailure::MissingLine { side, line_number }
+                | ValidationFailure::EmptyExplanation { side, line_number } => {
+                    Some((*side, *line_number))
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        request
+            .targets
+            .retain(|target| requested.contains(&(target.side, target.line_number)));
         let output = self.scripted_output(&request);
         if self.invalid_rounds_remaining.load(Ordering::Acquire) > 0 {
             self.invalid_rounds_remaining.fetch_sub(1, Ordering::AcqRel);
