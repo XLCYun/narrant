@@ -114,7 +114,7 @@ where
         let remaining = deadline.saturating_duration_since(Instant::now());
         let wait = remaining.min(IO_POLL_INTERVAL);
         match tokio::time::timeout(wait, reader.fill_buf()).await {
-            Ok(Ok(buffer)) if buffer.is_empty() => {
+            Ok(Ok([])) => {
                 if line.is_empty() {
                     return Err(RpcFailure::ProcessExited);
                 }

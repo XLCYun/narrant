@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use super::workspace::worktree_field_matches_path;
 use super::*;
 use crate::operation::{OperationContext, TestCancellation};

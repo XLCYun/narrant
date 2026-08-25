@@ -46,7 +46,16 @@ pub fn run() {
                 option_env!("NARRANT_GITHUB_CLIENT_ID").unwrap_or_default(),
                 option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
                 oauth_client,
-                Arc::new(github::SystemCredentialStore),
+                {
+                    #[cfg(feature = "wdio")]
+                    {
+                        Arc::new(github::EphemeralCredentialStore::default())
+                    }
+                    #[cfg(not(feature = "wdio"))]
+                    {
+                        Arc::new(github::SystemCredentialStore)
+                    }
+                },
                 identity_provider,
             ));
             let store = Arc::new(persistence::ReviewStore::open(&database_path)?);

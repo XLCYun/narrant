@@ -1,5 +1,5 @@
 import { openFixtureRepository } from "./helpers/open-repository";
-import { activeReviewId, selectRef } from "./helpers/review-navigation";
+import { reviewIdForSelection, selectRef } from "./helpers/review-navigation";
 
 /** 通过真实 Tauri WebView 验证宝宝模式的首帧状态反馈。 */
 describe("宝宝模式", () => {
@@ -40,7 +40,7 @@ describe("宝宝模式", () => {
     });
     await expect($("[data-testid='babysit-footer']")).toHaveText(expect.stringContaining("正在生成逐行解释"));
     await $("button=取消宝宝模式").click();
-    const reviewId = await activeReviewId();
+    const reviewId = await reviewIdForSelection("refs/heads/base-ref", "refs/heads/head-ref");
     const exitReview = await $("button[aria-label='退出审核']");
     await exitReview.waitForClickable();
     await exitReview.click();

@@ -506,10 +506,8 @@ impl CodexAppServerProvider {
         cleanup_guard.mark_terminal_completed();
         let output = Self::parse_agent_output(text);
         let valid = validate_response(request, &output).is_ok();
-        if valid || delete_invalid {
-            if !self.delete_active_thread(process, key, run, false).await {
-                return Err(provider_error("Codex thread 清理失败，结果未保存。"));
-            }
+        if (valid || delete_invalid) && !self.delete_active_thread(process, key, run, false).await {
+            return Err(provider_error("Codex thread 清理失败，结果未保存。"));
         }
         // 无效且仍可 repair 时由 active map 接管；其它路径已确认 delete。
         cleanup_guard.disarm();

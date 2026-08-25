@@ -1365,10 +1365,7 @@ impl BabysitApplication {
         let mut output = selected_provider
             .generate(provider_request.clone(), cancellation)
             .await?;
-        let mut failure = match validate_response(&provider_request, &output) {
-            Ok(()) => None,
-            Err(failure) => Some(failure),
-        };
+        let mut failure = validate_response(&provider_request, &output).err();
         let mut attempt = 0;
         while let Some(current_failure) = failure.take() {
             if attempt >= MAX_REPAIR_ATTEMPTS {
@@ -1394,10 +1391,7 @@ impl BabysitApplication {
                     cancellation,
                 )
                 .await?;
-            failure = match validate_response(&provider_request, &output) {
-                Ok(()) => None,
-                Err(failure) => Some(failure),
-            };
+            failure = validate_response(&provider_request, &output).err();
         }
         ensure_not_cancelled(cancellation)?;
         notify(BabysitProgress::Completed)?;

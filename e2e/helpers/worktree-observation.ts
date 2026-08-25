@@ -58,7 +58,7 @@ async function stableTraceBytes(tracePath: string, offset: number, timeout = 500
 function parseInvocations(trace: Buffer): GitInvocation[] {
   const text = trace.toString("utf8");
   if (!text) return [];
-  const starts: Array<{ sid: string; argv: string[]; line: number }> = [];
+  const starts: Array<{ sid: string; argv: string[] }> = [];
   const worktrees = new Map<string, string>();
   text.trimEnd().split("\n").forEach((line, index) => {
     let event: { event?: unknown; sid?: unknown; argv?: unknown; worktree?: unknown };
@@ -71,7 +71,7 @@ function parseInvocations(trace: Buffer): GitInvocation[] {
       if (typeof event.sid !== "string" || !Array.isArray(event.argv) || !event.argv.every((part) => typeof part === "string")) {
         throw new Error(`Git trace 第 ${index + 1} 行缺少 start sid/argv`);
       }
-      starts.push({ sid: event.sid, argv: event.argv as string[], line: index + 1 });
+      starts.push({ sid: event.sid, argv: event.argv as string[] });
     } else if (event.event === "def_repo") {
       if (typeof event.sid !== "string" || typeof event.worktree !== "string") {
         throw new Error(`Git trace 第 ${index + 1} 行缺少 def_repo sid/worktree`);
@@ -79,7 +79,7 @@ function parseInvocations(trace: Buffer): GitInvocation[] {
       worktrees.set(event.sid, event.worktree);
     }
   });
-  return starts.map((start) => {
+  return starts.flatMap((start) => {
     const changeDirectory = start.argv.indexOf("-C");
     const helperName = basename(start.argv[0]).replace(/\.exe$/i, "");
     const repositoryHelper = ["git-upload-pack", "git-receive-pack", "git-upload-archive"]
@@ -88,8 +88,9 @@ function parseInvocations(trace: Buffer): GitInvocation[] {
       ?? (changeDirectory >= 0 ? start.argv[changeDirectory + 1] : undefined)
       // Git transport helper 不进入 repository setup；其最后一个参数就是被服务的 Repository。
       ?? repositoryHelper;
-    if (!cwd) throw new Error(`Git trace 第 ${start.line} 行的 start 缺少同 session def_repo：${JSON.stringify(start.argv)}`);
-    return { argv: start.argv, cwd };
+    // `git version` 等进程级探测不会进入 Repository，也不属于 Workspace 观测范围。
+    if (!cwd) return [];
+    return [{ argv: start.argv, cwd }];
   });
 }
 

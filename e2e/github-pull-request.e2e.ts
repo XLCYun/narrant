@@ -4,6 +4,9 @@ describe("公开 GitHub Pull Request", () => {
   it("通过真实 Tauri IPC 打开固定快照并按需读取 File Change", async () => {
     const repositoryPath = process.env.NARRANT_E2E_REPOSITORY!;
     await openFixtureRepository(repositoryPath);
+    const pullRequestsTab = $("[role='tab']=Pull Requests");
+    await pullRequestsTab.waitForClickable();
+    await pullRequestsTab.click();
     const pullRequest = $("button[aria-label*='#42']");
     await expect(pullRequest).toBeDisplayed();
     await pullRequest.click();

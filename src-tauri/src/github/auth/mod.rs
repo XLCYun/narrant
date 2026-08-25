@@ -7,7 +7,11 @@ use async_trait::async_trait;
 use secrecy::SecretString;
 use serde::Serialize;
 
-pub use credential_store::{CredentialStore, SystemCredentialStore};
+pub use credential_store::CredentialStore;
+#[cfg(feature = "wdio")]
+pub use credential_store::EphemeralCredentialStore;
+#[cfg(not(feature = "wdio"))]
+pub use credential_store::SystemCredentialStore;
 pub use identity::FileGitHubIdentityProvider;
 pub use oauth_client::{OAuthClient, OctocrabOAuthClient};
 pub use service::GitHubAuth;
