@@ -104,7 +104,7 @@ export function ReviewReader(input: ReviewReaderProps) {
     : updateAvailable ? t("review:refresh")
     : review.update.kind === "failed" ? t("review:retryCheck")
     : t("review:checkUpdate");
-  const updateBusy = checking || refreshing;
+  const updateBusy = checking || review.transition.kind !== "stable";
   const notifiedFailure = useRef<ReviewReaderBinding["update"]>();
 
   useEffect(() => {

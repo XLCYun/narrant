@@ -105,6 +105,12 @@ describe("ReviewReader", () => {
     rerender(<ReviewReader review={reviewBinding({ update: { kind: "available", update: availableUpdate }, checkForUpdate })} appearance={appearance} />);
     expect(screen.getByText("有更新")).toBeVisible();
     expect(screen.getByRole("button", { name: "刷新审核" })).toBeEnabled();
+
+    rerender(<ReviewReader review={reviewBinding({ transition: { kind: "switching", target: { kind: "saved-review", reviewId: "review-2" } }, checkForUpdate })} appearance={appearance} />);
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeDisabled();
+
+    rerender(<ReviewReader review={reviewBinding({ transition: { kind: "closing" }, checkForUpdate })} appearance={appearance} />);
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeDisabled();
   });
 
   it("用 toast 反馈失败与刷新成功，同时把恢复动作留在主按钮", async () => {
