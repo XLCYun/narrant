@@ -163,7 +163,7 @@ impl BabysitAgentProvider for InFlightModelProvider {
         &self,
         _request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
-        _failure: ValidationFailure,
+        _failures: Vec<ValidationFailure>,
         _cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         unreachable!("完整输出不会进入 repair")
@@ -587,6 +587,35 @@ async fn invalid_output_is_repaired_in_the_same_analysis_run() {
 }
 
 #[tokio::test]
+async fn all_missing_lines_are_repaired_by_one_partial_patch() {
+    let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(1));
+    let application = BabysitApplication::new(provider.clone());
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let output = application
+        .explain_file(
+            request("review-many", "snapshot-many", "src/example.ts"),
+            text_change(
+                "src/example.ts",
+                None,
+                Some("const first = 1;\nconst second = 2;\nconst third = 3;"),
+            ),
+            &cancellation,
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(provider.generate_calls(), 1);
+    assert_eq!(provider.repair_calls(), 1);
+    assert_eq!(output.after.len(), 3);
+    assert!(output
+        .after
+        .keys()
+        .all(|line| line.parse::<usize>().is_ok()));
+}
+
+#[tokio::test]
 async fn fake_provider_counts_invalid_generate_and_repair_rounds() {
     let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(2));
     let application = BabysitApplication::new(provider.clone());
@@ -638,7 +667,7 @@ async fn incomplete_output_fails_after_three_repairs_and_is_not_cached() {
 }
 
 #[test]
-fn response_validation_rejects_extra_missing_and_unsafe_lines() {
+fn response_validation_rejects_extra_and_missing_but_accepts_soft_text_limits() {
     let request = BabysitProviderRequest {
         analysis_run_id: 1,
         path: "src/example.ts".to_owned(),
@@ -665,13 +694,9 @@ fn response_validation_rejects_extra_missing_and_unsafe_lines() {
     let mut output = BabysitFileExplanations::default();
     output.before.insert("1".to_owned(), "ok".to_owned());
     output.after.insert("1".to_owned(), "bad\ntext".to_owned());
-    assert!(matches!(
-        validate_response(&request, &output),
-        Err(ValidationFailure::UnsafeExplanation {
-            side: FileSide::After,
-            line_number: 1
-        })
-    ));
+    assert!(validate_response(&request, &output).is_ok());
+    output.after.insert("1".to_owned(), "很长".repeat(200));
+    assert!(validate_response(&request, &output).is_ok());
 
     output.after.insert("2".to_owned(), "extra".to_owned());
     assert!(matches!(

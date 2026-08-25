@@ -54,10 +54,7 @@ fn structured_output_schema_requires_exact_target_lines() {
             serde_json::json!(["1"])
         );
         assert_eq!(schema["properties"][side]["additionalProperties"], false);
-        assert_eq!(
-            schema["properties"][side]["properties"]["1"]["maxLength"],
-            MAX_EXPLANATION_CHARS
-        );
+        assert!(schema["properties"][side]["properties"]["1"]["maxLength"].is_null());
     }
 }
 
@@ -132,6 +129,9 @@ async fn app_server_generates_structured_output_and_deletes_thread() {
     assert_eq!(output.before["1"], "before explanation");
     assert_eq!(output.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
+    assert!(events
+        .lines()
+        .any(|line| line == "numbered-content-in-input"));
     assert!(events.lines().any(|line| line == "account/read"));
     assert!(events.lines().any(|line| line == "initialize"));
     assert!(events.lines().any(|line| line == "initialize:experimental"));
@@ -205,10 +205,10 @@ async fn cancelled_repair_is_cleaned_before_provider_shutdown() {
             .repair(
                 request(),
                 first,
-                ValidationFailure::MissingLine {
+                vec![ValidationFailure::MissingLine {
                     side: FileSide::Before,
                     line_number: 1,
-                },
+                }],
                 &worker_cancellation,
             )
             .await
@@ -452,7 +452,7 @@ async fn restricted_policy_probe_returns_upgrade_recovery_category() {
 
 #[tokio::test]
 async fn malformed_structured_output_can_be_repaired_on_the_same_thread() {
-    let (provider, _temp, events) = provider("repair", CODEX_ANALYSIS_TIMEOUT);
+    let (provider, _temp, events) = provider("invalid-json-repair", CODEX_ANALYSIS_TIMEOUT);
     let cancellation = OperationContext::background().cancellation().clone();
     let request = request();
     let first = provider
@@ -469,16 +469,24 @@ async fn malformed_structured_output_can_be_repaired_on_the_same_thread() {
         .repair(
             request,
             first,
-            ValidationFailure::MissingLine {
-                side: FileSide::Before,
-                line_number: 1,
-            },
+            vec![
+                ValidationFailure::MissingLine {
+                    side: FileSide::Before,
+                    line_number: 1,
+                },
+                ValidationFailure::MissingLine {
+                    side: FileSide::After,
+                    line_number: 1,
+                },
+            ],
             &cancellation,
         )
         .await
         .unwrap();
     assert_eq!(repaired.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.lines().any(|line| line == "json-error-feedback"));
+    assert!(events.lines().any(|line| line == "repair-numbered-content"));
     assert_eq!(
         events
             .lines()
@@ -530,7 +538,7 @@ async fn third_invalid_repair_deletes_the_thread_without_partial_success() {
     for _ in 0..MAX_REPAIR_ATTEMPTS {
         let failure = validate_response(&request, &output).unwrap_err();
         output = provider
-            .repair(request.clone(), output, failure, &cancellation)
+            .repair(request.clone(), output, vec![failure], &cancellation)
             .await
             .unwrap();
     }
@@ -665,6 +673,7 @@ fn dropping_cleanup_guard_without_runtime_removes_ownership_and_poisons_generati
         turn_id: "turn-1".to_owned(),
         repair_attempts: 0,
         deadline: std::time::Instant::now() + Duration::from_secs(1),
+        malformed_output: false,
     };
     active.lock().unwrap().insert("key".to_owned(), run.clone());
 

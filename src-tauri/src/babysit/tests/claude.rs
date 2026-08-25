@@ -87,6 +87,36 @@ async fn structured_output_uses_non_persistent_read_only_claude_process() {
     assert_flag_value(&events, "--disallowedTools", "Bash,Write,Edit,Web,mcp__*");
     assert_flag_value(&events, "--permission-mode", "dontAsk");
     assert!(!events.contains("--resume"));
+    assert!(events.contains("0001|let old = 1;"));
+    assert!(events.contains("0001|let next = 2;"));
+}
+
+#[tokio::test]
+async fn complete_content_uses_four_digit_line_numbers_and_preserves_empty_lines() {
+    let (provider, temp, events) = provider("success", Duration::from_secs(5));
+    let mut request = request(temp.path().to_string_lossy().into_owned());
+    request.before = (1..=250)
+        .map(|line| {
+            if line == 2 {
+                String::new()
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    request.before.push('\n');
+
+    provider
+        .generate(request, OperationContext::background().cancellation())
+        .await
+        .unwrap();
+
+    let events = std::fs::read_to_string(events).unwrap();
+    assert!(events.contains("0001|line 1"));
+    assert!(events.contains("0002|\\n0003|line 3"));
+    assert!(events.contains("0250|line 250"));
+    assert!(events.contains("0251|"));
 }
 
 /// 构造指定 scenario 的确定性 provider 与事件文件。
@@ -116,10 +146,10 @@ async fn malformed_generation_is_repaired_by_a_fresh_self_contained_process() {
         .repair(
             request,
             previous,
-            super::super::ValidationFailure::MissingLine {
+            vec![super::super::ValidationFailure::MissingLine {
                 side: FileSide::Before,
                 line_number: 1,
-            },
+            }],
             &cancellation,
         )
         .await
@@ -131,8 +161,57 @@ async fn malformed_generation_is_repaired_by_a_fresh_self_contained_process() {
     assert_eq!(events.matches("--no-session-persistence").count(), 2);
     assert!(!events.contains("--resume"));
     assert!(events.contains("let old = 1;"));
-    assert!(events.contains("上一轮输出 JSON"));
+    assert!(!events.contains("上一轮输出 JSON"));
+    assert!(events.contains("只返回这些目标行"));
     assert!(events.contains("Before 缺少第 1 行解释"));
+    assert!(events.contains("0001|let old = 1;"));
+    assert!(
+        events.contains(r#""targets":[{"lineNumber":1,"side":"before","source":"let old = 1;"}]"#)
+    );
+    let repair_round = events.split("round:2").nth(1).unwrap();
+    assert!(
+        repair_round.contains(
+            r#""after":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}"#
+        ),
+        "repair round did not use a partial schema: {repair_round}"
+    );
+}
+
+#[tokio::test]
+async fn structural_and_partial_repairs_share_one_three_retry_budget() {
+    let (provider, temp, events) =
+        provider("structural_budget_then_missing", Duration::from_secs(5));
+    let cancellation = OperationContext::background().cancellation().clone();
+    let request = request(temp.path().to_string_lossy().into_owned());
+    let previous = provider
+        .generate(request.clone(), &cancellation)
+        .await
+        .unwrap();
+
+    let error = provider
+        .repair(
+            request,
+            previous,
+            vec![super::super::ValidationFailure::MissingLine {
+                side: FileSide::Before,
+                line_number: 1,
+            }],
+            &cancellation,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        super::super::BabysitError::RepairExhausted { .. }
+    ));
+    assert_eq!(
+        std::fs::read_to_string(events)
+            .unwrap()
+            .matches("round:")
+            .count(),
+        4
+    );
 }
 
 #[tokio::test]
@@ -151,6 +230,23 @@ async fn malformed_cli_json_returns_only_a_redacted_category() {
     assert!(!error
         .to_string()
         .contains(temp.path().to_string_lossy().as_ref()));
+}
+
+#[tokio::test]
+async fn malformed_cli_json_retries_the_complete_request_in_a_fresh_process() {
+    let (provider, temp, events) = provider("malformed_then_success", Duration::from_secs(5));
+    let output = provider
+        .generate(
+            request(temp.path().to_string_lossy().into_owned()),
+            OperationContext::background().cancellation(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(output.before["1"], "旧值初始化");
+    let events = std::fs::read_to_string(events).unwrap();
+    assert_eq!(events.matches("round:").count(), 2);
+    assert_eq!(events.matches("完整请求 JSON").count(), 2);
 }
 
 #[tokio::test]

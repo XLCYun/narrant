@@ -180,6 +180,11 @@ The automatic or explicit model and reasoning-effort selection retained independ
 for one Babysit agent provider and applied to that provider's future analyses.
 _Avoid_: Review model, account model, global Babysit model
 
+**Line Explanation Repair Patch**:
+A partial Babysit Agent Provider result containing explanations only for requested
+targets that were missing or blank in the preceding result.
+_Avoid_: Full response repair, regenerated explanation set
+
 ## Relationships
 
 - A **Pull Request** selects the base and head revisions for one repository-local
@@ -249,6 +254,7 @@ _Avoid_: Review model, account model, global Babysit model
 - **Babysit Mode** presents **Line Explanations** derived from one exact Review Snapshot
 - A **Line Explanation** does not modify the source text presented by its File Change
 - Every **Babysit Agent Provider** produces the same provider-independent Line Explanation contract
+- Narrant merges a **Line Explanation Repair Patch** into its preceding provider result
 - An **Installed Coding Agent Provider** reuses a reviewer-installed agent runtime and its authentication
 - A **Built-in Agent Provider** never grants its model service direct access to the Review Workspace
 - Narrant may keep multiple **Reviews** open while presenting exactly one **Presented Review**

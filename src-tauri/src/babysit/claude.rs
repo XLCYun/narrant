@@ -3,7 +3,7 @@
 use super::{
     parse_provider_response, validate_response, BabysitAgentProvider, BabysitError,
     BabysitFileExplanations, BabysitProviderRequest, CancellationSignal, FileSide,
-    ValidationFailure, MAX_EXPLANATION_CHARS, MAX_REPAIR_ATTEMPTS,
+    ValidationFailure, MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -213,10 +213,32 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
                     resolved_model: resolved_model.clone(),
                 },
             );
-        let prompt = generation_prompt(&request);
-        let result = self
-            .run_round(&request, prompt, &resolved_model, deadline, cancellation)
-            .await;
+        let mut structural_retries = 0;
+        let result = loop {
+            let result = self
+                .run_round(
+                    &request,
+                    generation_prompt(&request),
+                    &resolved_model,
+                    deadline,
+                    cancellation,
+                )
+                .await;
+            match result {
+                Err(error)
+                    if is_structured_output_error(&error)
+                        && structural_retries < MAX_REPAIR_ATTEMPTS =>
+                {
+                    structural_retries += 1;
+                }
+                result => break result,
+            }
+        };
+        if let Ok(mut runs) = self.runs.lock() {
+            if let Some(state) = runs.get_mut(&key) {
+                state.repair_attempts = structural_retries;
+            }
+        }
         if result
             .as_ref()
             .map_or(true, |output| validate_response(&request, output).is_ok())
@@ -226,12 +248,12 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
         result
     }
 
-    /// 用完整 request、previous output 与脱敏校验失败构造无状态 repair。
+    /// 用完整编号源码与问题行 inventory 构造无状态局部 repair。
     async fn repair(
         &self,
         request: BabysitProviderRequest,
-        previous: BabysitFileExplanations,
-        failure: ValidationFailure,
+        _previous: BabysitFileExplanations,
+        failures: Vec<ValidationFailure>,
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         let key = request_key(&request);
@@ -245,13 +267,19 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
                 repair_attempts: 0,
                 resolved_model: resolved_model_from_request(&request),
             });
+            if state.repair_attempts >= MAX_REPAIR_ATTEMPTS {
+                return Err(BabysitError::RepairExhausted {
+                    detail: "Claude Code 已用尽本次分析的结构与局部修复预算。".to_owned(),
+                });
+            }
             state.repair_attempts = state.repair_attempts.saturating_add(1);
             state.clone()
         };
-        let prompt = repair_prompt(&request, &previous, &failure);
+        let repair_request = request.repair_request(&failures);
+        let prompt = repair_prompt(&repair_request, &failures);
         let result = self
             .run_round(
-                &request,
+                &repair_request,
                 prompt,
                 &state.resolved_model,
                 state.deadline,
@@ -259,9 +287,9 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
             )
             .await;
         if state.repair_attempts >= MAX_REPAIR_ATTEMPTS
-            || result
-                .as_ref()
-                .map_or(true, |output| validate_response(&request, output).is_ok())
+            || result.as_ref().map_or(true, |output| {
+                validate_response(&repair_request, output).is_ok()
+            })
         {
             self.remove_run(&key);
         }
@@ -271,6 +299,17 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
     /// 提前退出 repair loop 时只清除内存中的 deadline/attempt 状态。
     async fn abandon(&self, request: &BabysitProviderRequest) {
         self.remove_run(&request_key(request));
+    }
+}
+
+/// 只有 provider 成功退出但结果无法形成契约 JSON 时才允许完整重试。
+fn is_structured_output_error(error: &BabysitError) -> bool {
+    match error {
+        BabysitError::InvalidProviderOutput { .. } => true,
+        BabysitError::Provider { detail } => {
+            detail.contains("invalid_json") || detail.contains("missing_structured_output")
+        }
+        _ => false,
     }
 }
 
@@ -303,12 +342,7 @@ fn output_schema(request: &BabysitProviderRequest) -> Value {
             .collect::<Vec<_>>();
         let properties = lines
             .iter()
-            .map(|line| {
-                (
-                    line.clone(),
-                    json!({"type":"string","minLength":1,"maxLength":MAX_EXPLANATION_CHARS}),
-                )
-            })
+            .map(|line| (line.clone(), json!({"type":"string","minLength":1})))
             .collect::<serde_json::Map<_, _>>();
         json!({"type":"object","properties":properties,"required":lines,"additionalProperties":false})
     };
@@ -317,10 +351,10 @@ fn output_schema(request: &BabysitProviderRequest) -> Value {
 
 /// 构造包含完整源内容与目标 inventory 的单批生成请求。
 fn generation_prompt(request: &BabysitProviderRequest) -> String {
+    let prompt_request = numbered_prompt_request(request);
     format!(
         "请只解释代码，不评价或建议。使用 locale {}。完整请求 JSON：{}",
-        request.locale,
-        serde_json::to_string(request).unwrap_or_default()
+        request.locale, prompt_request
     )
 }
 
@@ -338,18 +372,25 @@ fn resolved_model_from_request(request: &BabysitProviderRequest) -> ResolvedClau
     }
 }
 
-/// 构造自包含 repair；failure 文本只含 side/line/category，不含源代码或路径。
-fn repair_prompt(
-    request: &BabysitProviderRequest,
-    previous: &BabysitFileExplanations,
-    failure: &ValidationFailure,
-) -> String {
+/// 构造自包含 repair；附完整编号源码，但只请求缺失或空白的目标行。
+fn repair_prompt(request: &BabysitProviderRequest, failures: &[ValidationFailure]) -> String {
+    let prompt_request = numbered_prompt_request(request);
+    let requested = failures
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("；");
     format!(
-        "修复上一轮结构化输出。完整请求 JSON：{}\n上一轮输出 JSON：{}\n脱敏校验失败：{}",
-        serde_json::to_string(request).unwrap_or_default(),
-        serde_json::to_string(previous).unwrap_or_default(),
-        failure
+        "补充上一轮缺失或空白的逐行解释。完整编号源码请求 JSON：{prompt_request}\n只返回这些目标行：{requested}。不要重复已经有效的行；每条解释建议不超过 240 个 Unicode 字符。"
     )
+}
+
+/// 把 provider 请求序列化为 prompt 专用视图，只替换 before/after 的展示格式。
+fn numbered_prompt_request(request: &BabysitProviderRequest) -> Value {
+    let mut prompt_request = serde_json::to_value(request).unwrap_or_default();
+    prompt_request["before"] = Value::String(super::numbered_content(&request.before));
+    prompt_request["after"] = Value::String(super::numbered_content(&request.after));
+    prompt_request
 }
 
 /// 等待轮询式 cancellation，不向 provider 暴露 operation identity。

@@ -35,10 +35,10 @@ async fn repair_reuses_generation_resolved_model_preference() {
         .repair(
             changed,
             previous,
-            crate::babysit::ValidationFailure::MissingLine {
+            vec![crate::babysit::ValidationFailure::MissingLine {
                 side: FileSide::Before,
                 line_number: 1,
-            },
+            }],
             &cancellation,
         )
         .await
@@ -72,10 +72,10 @@ async fn identical_requests_keep_independent_resolved_model_preferences() {
         .repair(
             first,
             first_output,
-            crate::babysit::ValidationFailure::MissingLine {
+            vec![crate::babysit::ValidationFailure::MissingLine {
                 side: FileSide::Before,
                 line_number: 1,
-            },
+            }],
             &cancellation,
         )
         .await

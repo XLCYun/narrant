@@ -43,6 +43,9 @@ while IFS= read -r line; do
   if contains 'src/example.ts' || contains 'const old = 1;'; then
     record "source-in-input"
   fi
+  if contains '0001|const old = 1;' && contains '0001|const next = 2;'; then
+    record "numbered-content-in-input"
+  fi
 
   case "$method" in
     initialize)
@@ -149,6 +152,12 @@ while IFS= read -r line; do
       turn_count=$((turn_count + 1))
       if [ "$turn_count" -gt 1 ]; then
         record "turn/start:repair"
+        if contains '0001|const old = 1;' && contains '0001|const next = 2;'; then
+          record "repair-numbered-content"
+        fi
+      fi
+      if contains 'previous response was not valid Babysit JSON'; then
+        record "json-error-feedback"
       fi
       if [ "$mode" = "rejected-output-schema" ]; then
         printf '{"id":%s,"error":{"code":-32602,"message":"invalid field outputSchema"}}\n' "$request_id"
@@ -167,6 +176,8 @@ while IFS= read -r line; do
         { [ "$mode" = "repair" ] || [ "$mode" = "repair-hang" ]; } && [ "$turn_count" -eq 1 ];
       }; then
         text='"{}"'
+      elif [ "$mode" = "invalid-json-repair" ] && [ "$turn_count" -eq 1 ]; then
+        text='"not json"'
       else
         text='"{\"before\":{\"1\":\"before explanation\"},\"after\":{\"1\":\"after explanation\"}}"'
       fi
