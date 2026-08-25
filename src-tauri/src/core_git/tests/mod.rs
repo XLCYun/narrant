@@ -129,7 +129,7 @@ async fn core_git_process_preserves_failure_kind_when_context_is_added() {
 #[tokio::test]
 async fn core_git_process_classifies_the_stream_that_crosses_its_limit() {
     let fixture = repository();
-    let process = CoreGitProcess::with_limits(DEFAULT_TIMEOUT, 1);
+    let process = CoreGitProcess::with_limits(QUERY_TIMEOUT, 1);
     let invocation = GitInvocation::new(
         fixture.path(),
         ["rev-parse", "--git-dir"],
@@ -148,6 +148,26 @@ async fn core_git_process_classifies_the_stream_that_crosses_its_limit() {
             limit: 1,
         },
         "{error:?}"
+    );
+}
+
+#[test]
+fn core_git_operation_classes_use_their_expected_deadlines() {
+    assert_eq!(
+        super::process::policy_for(GitOperationClass::Query).0,
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        super::process::policy_for(GitOperationClass::WorkspaceInspect).0,
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        super::process::policy_for(GitOperationClass::WorkspaceMutation).0,
+        Duration::from_secs(15 * 60)
+    );
+    assert_eq!(
+        super::process::policy_for(GitOperationClass::Network).0,
+        Duration::from_secs(15 * 60)
     );
 }
 

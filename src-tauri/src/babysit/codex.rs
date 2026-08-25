@@ -33,8 +33,12 @@ pub(crate) use model_catalog::{CodexModelCatalog, ResolvedCodexModel};
 
 /// Babysit 一次完整分析（包括 repair）的总截止时间。
 pub const CODEX_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-/// 线程删除与 interrupt 使用的短清理截止时间，不应拖住前端取消反馈。
-const CODEX_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 前台取消后的 interrupt、终态等待与 thread 删除共享的总清理预算。
+const CODEX_FOREGROUND_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// 应用退出时等待运行任务、删除 thread 与关闭进程共享的总清理预算。
+const CODEX_SHUTDOWN_CLEANUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// 强制终止 App Server 后等待操作系统回收直接子进程的上限。
+const CODEX_PROCESS_REAP_TIMEOUT: Duration = Duration::from_secs(5);
 /// 首次启动与 capability probe 可能读取远程元数据，不复用短清理上限。
 const CODEX_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// 用于 Codex thread source 的稳定内部标记，不包含 Review 或源代码信息。
@@ -132,28 +136,25 @@ impl Drop for RunCleanupGuard {
         handle.spawn(async move {
             let mut process = process.lock().await;
             if let Some(process) = process.as_mut() {
+                let deadline = Instant::now() + CODEX_FOREGROUND_CLEANUP_TIMEOUT;
                 if !terminal_completed {
                     let _ = process
                         .request(
                             "turn/interrupt",
                             json!({"threadId": run.thread_id, "turnId": run.turn_id}),
-                            Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                            deadline,
                             None,
                         )
                         .await;
                     let _ = process
-                        .wait_for_terminal(
-                            &run.thread_id,
-                            &run.turn_id,
-                            Instant::now() + CODEX_CLEANUP_TIMEOUT,
-                        )
+                        .wait_for_terminal(&run.thread_id, &run.turn_id, deadline)
                         .await;
                 }
                 let deleted = process
                     .request(
                         "thread/delete",
                         json!({"threadId": run.thread_id}),
-                        Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                        deadline,
                         None,
                     )
                     .await;
@@ -384,28 +385,43 @@ impl CodexAppServerProvider {
         run: &ActiveThread,
         interrupt: bool,
     ) -> bool {
+        self.delete_active_thread_before(
+            process,
+            key,
+            run,
+            interrupt,
+            Instant::now() + CODEX_FOREGROUND_CLEANUP_TIMEOUT,
+        )
+        .await
+    }
+
+    /// 在调用方的共享截止时间内完成 interrupt、终态等待和 thread 删除。
+    async fn delete_active_thread_before(
+        &self,
+        process: &mut AppServerProcess,
+        key: &str,
+        run: &ActiveThread,
+        interrupt: bool,
+        deadline: Instant,
+    ) -> bool {
         if interrupt {
             let _ = process
                 .request(
                     "turn/interrupt",
                     json!({"threadId": run.thread_id, "turnId": run.turn_id}),
-                    Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                    deadline,
                     None,
                 )
                 .await;
             let _ = process
-                .wait_for_terminal(
-                    &run.thread_id,
-                    &run.turn_id,
-                    Instant::now() + CODEX_CLEANUP_TIMEOUT,
-                )
+                .wait_for_terminal(&run.thread_id, &run.turn_id, deadline)
                 .await;
         }
         let deleted = process
             .request(
                 "thread/delete",
                 json!({"threadId": run.thread_id}),
-                Instant::now() + CODEX_CLEANUP_TIMEOUT,
+                deadline,
                 None,
             )
             .await;
@@ -703,50 +719,58 @@ impl BabysitAgentProvider for CodexAppServerProvider {
 
     /// 应用退出时中断并删除所有仍归 Narrant 所有的 thread，再终止 App Server。
     async fn shutdown(&self) {
+        let shutdown_deadline = Instant::now() + CODEX_SHUTDOWN_CLEANUP_TIMEOUT;
         // 顶层 operation registry 已先广播取消。这里给正在等待 turn 的 future 一个
         // 有界清理窗口；删除得到服务端确认前，
         // active map 保持非空，避免退出流程抢走同一个 thread 的所有权。
-        let cleanup_finished = tokio::time::timeout(CODEX_CLEANUP_TIMEOUT, async {
-            loop {
-                let empty = self
-                    .active_threads
-                    .lock()
-                    .map(|active| active.is_empty())
-                    .unwrap_or(true);
-                if empty {
-                    break;
+        let cleanup_finished = tokio::time::timeout(
+            shutdown_deadline.saturating_duration_since(Instant::now()),
+            async {
+                loop {
+                    let empty = self
+                        .active_threads
+                        .lock()
+                        .map(|active| active.is_empty())
+                        .unwrap_or(true);
+                    if empty {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+            },
+        )
         .await
         .is_ok();
 
         // 正常 future 已释放 stream lock 后再接管 process；若仍有残留 ownership，
         // 这里用同一连接重试 interrupt/delete，确认后才从 active map 移除。
-        let mut process_guard =
-            match tokio::time::timeout(CODEX_CLEANUP_TIMEOUT, self.process.lock()).await {
-                Ok(guard) => guard,
-                Err(_) => {
-                    // 取消已发出但旧 future 仍占用 stream，标记 generation 失效；进程
-                    // 由后台 cleanup 接管 process lock 后负责最终 kill；在此之前不丢
-                    // active ownership，下一代会清 orphan。
-                    self.failed.store(true, Ordering::Release);
-                    let process = self.process.clone();
-                    let active_threads = self.active_threads.clone();
-                    tokio::spawn(async move {
-                        let mut process_guard = process.lock().await;
-                        if let Some(process) = process_guard.as_mut() {
-                            process.shutdown().await;
-                        }
-                        *process_guard = None;
-                        if let Ok(mut active) = active_threads.lock() {
-                            active.clear();
-                        }
-                    });
-                    return;
-                }
-            };
+        let mut process_guard = match tokio::time::timeout(
+            shutdown_deadline.saturating_duration_since(Instant::now()),
+            self.process.lock(),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(_) => {
+                // 取消已发出但旧 future 仍占用 stream，标记 generation 失效；进程
+                // 由后台 cleanup 接管 process lock 后负责最终 kill；在此之前不丢
+                // active ownership，下一代会清 orphan。
+                self.failed.store(true, Ordering::Release);
+                let process = self.process.clone();
+                let active_threads = self.active_threads.clone();
+                tokio::spawn(async move {
+                    let mut process_guard = process.lock().await;
+                    if let Some(process) = process_guard.as_mut() {
+                        process.shutdown().await;
+                    }
+                    *process_guard = None;
+                    if let Ok(mut active) = active_threads.lock() {
+                        active.clear();
+                    }
+                });
+                return;
+            }
+        };
         let mut cleanup_confirmed = cleanup_finished;
         if let Some(process) = process_guard.as_mut() {
             let runs = self
@@ -760,7 +784,10 @@ impl BabysitAgentProvider for CodexAppServerProvider {
                 })
                 .unwrap_or_default();
             for (key, run) in runs {
-                if !self.delete_active_thread(process, &key, &run, true).await {
+                if !self
+                    .delete_active_thread_before(process, &key, &run, true, shutdown_deadline)
+                    .await
+                {
                     cleanup_confirmed = false;
                 }
             }

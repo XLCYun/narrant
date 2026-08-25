@@ -146,6 +146,18 @@ async fn every_probe_step_has_a_bounded_timeout() {
     }
 }
 
+#[test]
+fn production_probe_timeouts_distinguish_local_metadata_from_authentication() {
+    assert_eq!(
+        PRODUCTION_LOCAL_PROBE_TIMEOUT,
+        std::time::Duration::from_secs(5)
+    );
+    assert_eq!(
+        PRODUCTION_AUTH_PROBE_TIMEOUT,
+        std::time::Duration::from_secs(30)
+    );
+}
+
 #[tokio::test]
 async fn actionable_candidate_error_is_not_shadowed_by_later_missing_candidate() {
     for (scenarios, expected) in [

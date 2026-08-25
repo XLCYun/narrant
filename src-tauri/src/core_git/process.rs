@@ -71,8 +71,8 @@ impl GitProcessAdapter {
         self.run_classified(arguments, GitOperationClass::Network, cancellation)
     }
 
-    /// 使用 workspace 操作策略执行 Core Git 参数数组。
-    pub(super) fn run_workspace<I, S>(
+    /// 使用 workspace 只读检查策略执行 Core Git 参数数组。
+    pub(super) fn run_workspace_inspect<I, S>(
         &self,
         arguments: I,
         cancellation: &CancellationSignal,
@@ -81,7 +81,24 @@ impl GitProcessAdapter {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.run_classified(arguments, GitOperationClass::Workspace, cancellation)
+        self.run_classified(arguments, GitOperationClass::WorkspaceInspect, cancellation)
+    }
+
+    /// 使用 workspace 变更策略执行可能创建或删除大量文件的 Core Git 命令。
+    pub(super) fn run_workspace_mutation<I, S>(
+        &self,
+        arguments: I,
+        cancellation: &CancellationSignal,
+    ) -> Result<GitOutput, GitCommandError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.run_classified(
+            arguments,
+            GitOperationClass::WorkspaceMutation,
+            cancellation,
+        )
     }
 
     /// 将同步仓库操作收敛到同一进程实现，并选择对应的限制策略。
@@ -271,11 +288,12 @@ pub(super) fn configure_non_interactive_credentials(command: &mut Command) {
         .env("GCM_INTERACTIVE", "Never");
 }
 
-fn policy_for(class: GitOperationClass) -> (Duration, usize) {
+pub(super) fn policy_for(class: GitOperationClass) -> (Duration, usize) {
     let timeout = match class {
-        GitOperationClass::Query => DEFAULT_TIMEOUT,
-        GitOperationClass::Network => Duration::from_secs(5 * 60),
-        GitOperationClass::Workspace => Duration::from_secs(2 * 60),
+        GitOperationClass::Query => QUERY_TIMEOUT,
+        GitOperationClass::Network => NETWORK_TIMEOUT,
+        GitOperationClass::WorkspaceInspect => WORKSPACE_INSPECT_TIMEOUT,
+        GitOperationClass::WorkspaceMutation => WORKSPACE_MUTATION_TIMEOUT,
     };
     (timeout, DEFAULT_OUTPUT_LIMIT)
 }
@@ -351,7 +369,7 @@ fn drain_reader_events(
     stderr: &mut Option<std::io::Result<Vec<u8>>>,
     failure: &mut Option<CoreGitFailure>,
 ) -> Result<(), CoreGitFailure> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while stdout.is_none() || stderr.is_none() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {

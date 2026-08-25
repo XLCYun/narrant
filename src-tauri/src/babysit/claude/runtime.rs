@@ -16,10 +16,16 @@ use tokio::process::Command;
 use super::discovery::candidate_paths;
 
 const PROVIDER_ID: &str = "claude-code";
+const PRODUCTION_LOCAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const PRODUCTION_AUTH_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(not(test))]
-const PROBE_STEP_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCAL_PROBE_TIMEOUT: Duration = PRODUCTION_LOCAL_PROBE_TIMEOUT;
 #[cfg(test)]
-const PROBE_STEP_TIMEOUT: Duration = Duration::from_millis(750);
+const LOCAL_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
+#[cfg(not(test))]
+const AUTH_PROBE_TIMEOUT: Duration = PRODUCTION_AUTH_PROBE_TIMEOUT;
+#[cfg(test)]
+const AUTH_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// Claude Code runtime；状态与 executable 设置均由 application 生命周期统一拥有。
 pub(crate) struct ClaudeRuntime {
@@ -129,7 +135,7 @@ impl ClaudeRuntime {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         crate::child_process::configure_tokio_command(&mut version_command);
-        let version = tokio::time::timeout(PROBE_STEP_TIMEOUT, version_command.status()).await;
+        let version = tokio::time::timeout(LOCAL_PROBE_TIMEOUT, version_command.status()).await;
         let version = match version {
             Ok(result) => result,
             Err(_) => {
@@ -154,7 +160,7 @@ impl ClaudeRuntime {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         crate::child_process::configure_tokio_command(&mut help_command);
-        let help = tokio::time::timeout(PROBE_STEP_TIMEOUT, help_command.output())
+        let help = tokio::time::timeout(LOCAL_PROBE_TIMEOUT, help_command.output())
             .await
             .map_err(|_| {
                 BabysitError::provider_setup(
@@ -195,7 +201,7 @@ impl ClaudeRuntime {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         crate::child_process::configure_tokio_command(&mut auth_command);
-        let auth = tokio::time::timeout(PROBE_STEP_TIMEOUT, auth_command.output())
+        let auth = tokio::time::timeout(AUTH_PROBE_TIMEOUT, auth_command.output())
             .await
             .map_err(|_| {
                 BabysitError::provider_setup(
