@@ -23,7 +23,7 @@ export type { ReviewApplicationAdapter, ReviewOpenTarget, ReviewUpdate } from "@
 
 /** Review lifecycle seam 返回的稳定失败投影。 */
 export type ReviewFailure = {
-  kind: "operation-failed" | "workspace-cleanup-failed" | "runtime-lost";
+  kind: "operation-failed" | "update-confirmation-stale" | "workspace-cleanup-failed" | "runtime-lost";
   detail: string;
   retryable: boolean;
 };
@@ -52,10 +52,13 @@ export type FileChangeBinding =
 const EMPTY_FILE_CHANGE: FileChangeBinding = { kind: "empty" };
 
 export type ReviewUpdateBinding =
+  | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "current" }
   | { kind: "available"; update: ReviewUpdate }
-  | { kind: "failed"; failure: ReviewFailure };
+  | { kind: "failed"; failure: ReviewFailure }
+  | { kind: "refresh-failed"; update: ReviewUpdate; failure: ReviewFailure }
+  | { kind: "confirmation-stale"; failure: ReviewFailure };
 
 export type { ReviewDiffMode, ReviewView } from "@/review/types";
 
@@ -110,6 +113,8 @@ export type ReviewReaderBinding = {
   setFileViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
   selectFileChange(path: string): void;
   retryFileChange(): void;
+  /** 显式重新解析当前 Review Selection，但不改变 Snapshot 或 Workspace。 */
+  checkForUpdate(): void;
   refresh(): Promise<ReviewRefreshResult>;
   close(): Promise<ReviewCloseResult>;
 };
@@ -129,6 +134,13 @@ export type ReviewLifecycleBinding = {
 
 /** 把任意 adapter failure 映射为不依赖字符串分支的稳定失败。 */
 function operationFailure(reason: unknown): ReviewFailure {
+  if (typeof reason === "object" && reason && "code" in reason && reason.code === "update-confirmation-stale") {
+    const detail = "detail" in reason && typeof reason.detail === "string" ? reason.detail : "上游版本已再次变化，请重新检查。";
+    return { kind: "update-confirmation-stale", detail, retryable: true };
+  }
+  if (typeof reason === "object" && reason && "detail" in reason && typeof reason.detail === "string") {
+    return { kind: "operation-failed", detail: reason.detail, retryable: true };
+  }
   return { kind: "operation-failed", detail: String(reason), retryable: true };
 }
 
@@ -240,6 +252,9 @@ export function useReviewLifecycle(
 
   /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
   const checkForUpdate = useCallback((current: ReviewSnapshot) => {
+    if (refreshOperation.current) return;
+    const running = updateOperation.current;
+    if (running?.reviewId === current.reviewId && running.snapshotId === current.snapshotId) return;
     cancelUpdateCheck();
     const abort = new AbortController();
     const reviewId = current.reviewId;
@@ -271,7 +286,7 @@ export function useReviewLifecycle(
     const entry: ReviewRuntimeEntry = previous ?? {
       snapshot: next,
       fileChange: { kind: "empty" },
-      update: { kind: "current" },
+      update: { kind: "idle" },
       view: existing?.view ?? "file-changes",
       diffMode: existing?.diffMode ?? initialDiffMode,
       treeWidth: existing?.treeWidth ?? initialTreeWidth,
@@ -293,7 +308,7 @@ export function useReviewLifecycle(
       ...entry,
       snapshot,
       fileChange: { kind: "empty" },
-      update: { kind: "current" },
+      update: { kind: "idle" },
     }));
     const firstPath = firstFileChangePath(snapshot);
     if (firstPath) selectFileChange(firstPath);
@@ -375,9 +390,12 @@ export function useReviewLifecycle(
 
   /** 显式刷新 Presented Review；只替换该 Review 的 Snapshot-scoped state。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
+    if (refreshOperation.current) return { kind: "unchanged" };
     const reviewId = activeReviewIdRef.current;
     const currentEntry = reviewId ? entries.current.get(reviewId) : undefined;
-    const confirmation = currentEntry?.update.kind === "available" ? currentEntry.update.update : undefined;
+    const confirmation = currentEntry?.update.kind === "available" || currentEntry?.update.kind === "refresh-failed"
+      ? currentEntry.update.update
+      : undefined;
     if (!reviewId || !currentEntry || !confirmation) return { kind: "unchanged" };
     invalidateBabysitSelection();
     const abort = new AbortController();
@@ -396,20 +414,26 @@ export function useReviewLifecycle(
       installSnapshot(result.snapshot, currentEntry);
       if (activeReviewIdRef.current === reviewId) {
         resetSnapshotReader(result.snapshot);
-        checkForUpdate(result.snapshot);
         setTransition({ kind: "stable" });
       }
       return { kind: "refreshed", reviewId: result.snapshot.reviewId, snapshotId: result.snapshot.snapshotId };
     } catch (reason) {
       if (activeReviewIdRef.current === reviewId) setTransition({ kind: "stable" });
       if (abort.signal.aborted) return { kind: "cancelled-by-switch" };
-      return { kind: "failed", failure: operationFailure(reason) };
+      const failure = operationFailure(reason);
+      updateEntry(reviewId, (entry) => ({
+        ...entry,
+        update: failure.kind === "update-confirmation-stale"
+          ? { kind: "confirmation-stale", failure }
+          : { kind: "refresh-failed", update: confirmation, failure },
+      }));
+      return { kind: "failed", failure };
     } finally {
       refreshOperation.current?.finish();
       if (refreshOperation.current?.abort === abort) refreshOperation.current = undefined;
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
     }
-  }, [adapter, checkForUpdate, clearBabysitSnapshot, installSnapshot, invalidateBabysitSelection, resetSnapshotReader]);
+  }, [adapter, clearBabysitSnapshot, installSnapshot, invalidateBabysitSelection, resetSnapshotReader, updateEntry]);
 
   /** 关闭当前 Presented Review；该内部 primitive 不由普通导航调用。 */
   const close = useCallback(async (): Promise<ReviewCloseResult> => {
@@ -546,9 +570,10 @@ export function useReviewLifecycle(
     setFileViewState,
     selectFileChange,
     retryFileChange,
+    checkForUpdate: () => checkForUpdate(activeEntry.snapshot),
     refresh,
     close,
-  } : null, [activeEntry, activeFilePath, babysit, close, refresh, retryFileChange, selectFileChange, setDiffMode, setFileViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
+  } : null, [activeEntry, activeFilePath, babysit, checkForUpdate, close, refresh, retryFileChange, selectFileChange, setDiffMode, setFileViewState, setScrollPosition, setTreeWidth, setView, toggleDirectory, transition]);
 
   return useMemo(() => ({
     open,

@@ -42,10 +42,10 @@ export type TauriCommandContract = {
   compare_local_refs: { args: { operationId: string; repositoryId: number; baseRef: string; headRef: string }; result: ReviewSnapshot };
   check_branch_review_updates: { args: { operationId: string; reviewId: string }; result: BranchSelectionUpdate };
   reopen_and_refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
-  refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot };
+  refresh_branch_review: { args: { operationId: string; reviewId: string; confirmation: BranchSelectionUpdate }; result: ReviewSnapshot; error: { code: "update-confirmation-stale" | "operation-failed"; detail: string } };
   open_pull_request_review: { args: { operationId: string; repositoryId: number; repository: GitHubRepository; number: number }; result: ReviewSnapshot };
   check_pull_request_review_update: { args: { operationId: string; reviewId: string }; result: PullRequestReviewUpdate };
-  refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot };
+  refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot; error: { code: "update-confirmation-stale" | "operation-failed"; detail: string } };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };

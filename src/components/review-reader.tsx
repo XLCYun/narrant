@@ -23,6 +23,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBabysitReviewPresentation } from "@/components/use-babysit-review-presentation";
+import { useReviewUpdatePresentation } from "@/components/use-review-update-presentation";
 import { cn } from "@/lib/utils";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
@@ -94,7 +95,7 @@ function editorLanguage(path: string) {
 export function ReviewReader(input: ReviewReaderProps) {
   const { t } = useTranslation(["common", "review"]);
   const { review, appearance } = input;
-  const refreshing = review.transition.kind === "refreshing";
+  const updatePresentation = useReviewUpdatePresentation(review);
   const props = {
     snapshot: review.snapshot,
     fileChange: review.fileChange.kind === "ready" ? review.fileChange.content : undefined,
@@ -104,11 +105,11 @@ export function ReviewReader(input: ReviewReaderProps) {
     firstFileChangePath: review.fileChange.kind === "failed" ? review.fileChange.path : undefined,
     navigationBusy: review.transition.kind !== "stable",
     ...appearance,
-    updateAction: review.update.kind === "available" ? <div role="status" className="flex items-center gap-2 text-sm">
-      <span className="hidden text-amber-700 sm:inline dark:text-amber-300">{t(review.snapshot.pullRequest ? "review:pullRequestBranchesUpdated" : "review:selectedBranchesUpdated")}</span>
-      <Button aria-label={refreshing ? t("review:refreshing") : t("review:refresh")} disabled={refreshing} aria-busy={refreshing || undefined} onClick={() => void review.refresh()}>{refreshing && <Spinner aria-hidden />}<span className="hidden sm:inline">{refreshing ? t("review:refreshing") : t("review:refresh")}</span></Button>
-    </div> : undefined,
-    notice: review.update.kind === "failed" ? <p role="alert" className="text-destructive">{review.update.failure.detail}</p> : undefined,
+    updateAction: <div role="status" className="flex min-w-0 items-center gap-2 text-sm">
+      {updatePresentation.statusLabel && <span className={updatePresentation.statusTone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}>{updatePresentation.statusLabel}</span>}
+      <Button aria-label={updatePresentation.label} disabled={updatePresentation.busy} aria-busy={updatePresentation.busy || undefined} onClick={updatePresentation.run}>{updatePresentation.busy && <Spinner aria-hidden />}<span>{updatePresentation.label}</span></Button>
+    </div>,
+    notice: undefined,
     onSelectFile: review.selectFileChange,
     onRetryFile: review.retryFileChange,
     onClose: () => void review.close(),
