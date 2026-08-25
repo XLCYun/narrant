@@ -49,6 +49,8 @@ where
 }
 
 /// 读取 immutable File Change，并由 Babysit 深模块返回唯一 eligibility 结论。
+// Tauri command 的参数由稳定 IPC 契约展开，不能合并为 Rust 私有参数对象。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub(crate) async fn check_babysit_file_eligibility(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,
@@ -71,6 +73,8 @@ pub(crate) async fn check_babysit_file_eligibility(
 }
 
 /// 按 immutable Review identity 读取完整 File Change，并运行一次 Babysit provider batch。
+// Tauri command 的参数由稳定 IPC 契约展开，不能合并为 Rust 私有参数对象。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub(crate) async fn explain_review_file_change(
     lifecycle: tauri::State<'_, review::ReviewLifecycle>,

@@ -146,18 +146,16 @@ impl ClaudeCodeProvider {
         });
         let deadline_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
         tokio::pin!(deadline_sleep);
-        let status = loop {
-            tokio::select! {
-                status = child.wait() => break status.map_err(|_| redacted_provider_error("wait_failed"))?,
-                () = &mut deadline_sleep => {
-                    terminate_process_tree(&mut child, process_id).await;
-                    return Err(redacted_provider_error("timeout"));
-                },
-                () = wait_for_cancellation(cancellation) => {
-                    terminate_process_tree(&mut child, process_id).await;
-                    return Err(BabysitError::Cancelled);
-                },
-            }
+        let status = tokio::select! {
+            status = child.wait() => status.map_err(|_| redacted_provider_error("wait_failed"))?,
+            () = &mut deadline_sleep => {
+                terminate_process_tree(&mut child, process_id).await;
+                return Err(redacted_provider_error("timeout"));
+            },
+            () = wait_for_cancellation(cancellation) => {
+                terminate_process_tree(&mut child, process_id).await;
+                return Err(BabysitError::Cancelled);
+            },
         };
         let _ = writer.await;
         let stdout = stdout_reader

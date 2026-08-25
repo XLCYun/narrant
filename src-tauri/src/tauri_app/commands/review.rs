@@ -113,6 +113,34 @@ pub(crate) struct ReviewUpdateResponse {
     available_head_revision: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+/// Review 刷新失败的稳定 IPC 分类；前端只据此选择恢复动作。
+pub(crate) struct ReviewRefreshError {
+    code: &'static str,
+    detail: String,
+}
+
+impl From<review::ReviewLifecycleError> for ReviewRefreshError {
+    /// 只把失效确认提升为特殊类别，其余失败保持统一操作错误。
+    fn from(error: review::ReviewLifecycleError) -> Self {
+        let code = if matches!(
+            error,
+            review::ReviewLifecycleError::StaleSnapshot
+                | review::ReviewLifecycleError::StaleCurrent
+                | review::ReviewLifecycleError::SelectionMismatch(_)
+        ) {
+            "update-confirmation-stale"
+        } else {
+            "operation-failed"
+        };
+        Self {
+            code,
+            detail: error.to_string(),
+        }
+    }
+}
+
 /// 将领域 File Change 状态映射到稳定 IPC 枚举。
 fn map_status(status: review::FileChangeStatus) -> FileChangeStatusResponse {
     match status {
@@ -223,6 +251,30 @@ where
         .map_err(|error| error.to_string())?
 }
 
+/// 运行 Review refresh 并保留确认失效这一项稳定恢复语义。
+async fn run_review_refresh_command<T, F, Fut>(
+    operations: &operation::CancellableOperations,
+    operation_id: String,
+    action: F,
+) -> Result<T, ReviewRefreshError>
+where
+    F: FnOnce(operation::OperationContext) -> Fut,
+    Fut: std::future::Future<Output = Result<T, review::ReviewLifecycleError>>,
+{
+    let id = operation::OperationId::new(operation_id).map_err(|error| ReviewRefreshError {
+        code: "operation-failed",
+        detail: error.to_string(),
+    })?;
+    operations
+        .run(id, action)
+        .await
+        .map_err(|error| ReviewRefreshError {
+            code: "operation-failed",
+            detail: error.to_string(),
+        })?
+        .map_err(ReviewRefreshError::from)
+}
+
 #[tauri::command]
 /// 从 Branch Selection 创建或重开 durable Review。
 pub(crate) async fn compare_local_refs(
@@ -283,11 +335,9 @@ pub(crate) async fn refresh_branch_review(
     operation_id: String,
     review_id: String,
     confirmation: ConfirmedBranchUpdate,
-) -> Result<ReviewSnapshotResponse, String> {
-    run_cancellable_command(&operations, operation_id, |operation| async move {
-        let previous_snapshot_id = lifecycle
-            .snapshot_id(&review_id)
-            .map_err(|error| error.to_string())?;
+) -> Result<ReviewSnapshotResponse, ReviewRefreshError> {
+    run_review_refresh_command(&operations, operation_id, |operation| async move {
+        let previous_snapshot_id = lifecycle.snapshot_id(&review_id)?;
         let presentation = lifecycle
             .refresh(
                 &operation,
@@ -299,8 +349,7 @@ pub(crate) async fn refresh_branch_review(
                     available_head_revision: confirmation.latest_head_revision,
                 },
             )
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         // Snapshot 已成功推进后删除旧 revision 的解释；清理失败不回滚已完成的 Review refresh。
         let _ = babysit.clear_snapshot(&review_id, &previous_snapshot_id);
         Ok(map_presentation(presentation))
@@ -400,11 +449,9 @@ pub(crate) async fn refresh_pull_request_review(
     operation_id: String,
     review_id: String,
     confirmation: ConfirmedPullRequestUpdate,
-) -> Result<ReviewSnapshotResponse, String> {
-    run_cancellable_command(&operations, operation_id, |operation| async move {
-        let previous_snapshot_id = lifecycle
-            .snapshot_id(&review_id)
-            .map_err(|error| error.to_string())?;
+) -> Result<ReviewSnapshotResponse, ReviewRefreshError> {
+    run_review_refresh_command(&operations, operation_id, |operation| async move {
+        let previous_snapshot_id = lifecycle.snapshot_id(&review_id)?;
         let presentation = lifecycle
             .refresh(
                 &operation,
@@ -416,8 +463,7 @@ pub(crate) async fn refresh_pull_request_review(
                     available_head_revision: confirmation.available_head_revision,
                 },
             )
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         let _ = babysit.clear_snapshot(&review_id, &previous_snapshot_id);
         Ok(map_presentation(presentation))
     })

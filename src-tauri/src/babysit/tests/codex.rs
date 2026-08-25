@@ -7,6 +7,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
+#[test]
+fn codex_deadlines_match_the_runtime_policy() {
+    assert_eq!(CODEX_ANALYSIS_TIMEOUT, Duration::from_secs(10 * 60));
+    assert_eq!(CODEX_FOREGROUND_CLEANUP_TIMEOUT, Duration::from_secs(10));
+    assert_eq!(CODEX_SHUTDOWN_CLEANUP_TIMEOUT, Duration::from_secs(15));
+    assert_eq!(CODEX_PROCESS_REAP_TIMEOUT, Duration::from_secs(5));
+    assert_eq!(CODEX_INITIALIZATION_TIMEOUT, Duration::from_secs(30));
+}
+
 /// 断言 Codex adapter 通过共享的 installed-provider setup 契约返回指定失败类别。
 fn assert_codex_setup_failure(error: &BabysitError, expected: BabysitProviderSetupFailure) {
     assert!(matches!(

@@ -198,6 +198,22 @@ the Review silently. A successful refresh:
 3. atomically advances the current Snapshot from the user's perspective;
 4. presents the new File Changes.
 
+The Review Reader keeps one user-visible update action available for every presented
+Branch or Pull Request Review. It checks once when a Review is first opened and then
+lets the user check again explicitly. The same action becomes the explicit refresh
+action when an update is available. Checking and refreshing disable that action for the
+operation's duration, and duplicate requests do not replace an operation already in
+flight. A successful refresh restores the manual check action without immediately
+checking again.
+
+A no-update result remains visible until the next check or Snapshot transition. Check
+and refresh failures use non-blocking notifications while the action retains the
+appropriate retry state. If the confirmed upstream revisions move before refresh, the
+confirmation is discarded and the action requires another check; other refresh failures
+retain the confirmation for retry. Switching Review Views preserves update state, while
+leaving the presented Review cancels an update check. Narrant performs no background
+polling.
+
 A failure before the core transition completes leaves the old Snapshot current.
 Language-server or AI-tool startup occurs afterward and may fail without rolling the
 Review back.

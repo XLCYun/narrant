@@ -268,14 +268,14 @@ const readerSnapshot: ReviewReaderSnapshot = {
 function ReviewReaderPreview({
   empty = false,
   merged = false,
-  update = false,
+  updateState = "current",
   initialView = "overview",
   shortContent = false,
   babysitKind,
 }: {
   empty?: boolean;
   merged?: boolean;
-  update?: boolean;
+  updateState?: "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes";
   shortContent?: boolean;
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out";
@@ -332,8 +332,10 @@ function ReviewReaderPreview({
     fileChange: selectedPath
       ? { kind: "ready", path: selectedPath, content: contents[selectedPath] }
       : { kind: "empty" },
-    update: update
+    update: updateState === "available"
       ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
+      : updateState === "checking" ? { kind: "checking" }
+      : updateState === "failed" ? { kind: "failed", failure: { kind: "operation-failed", detail: "无法连接上游，请稍后重试。", retryable: true } }
       : { kind: "current" },
     babysit: {
       eligibility: { kind: "resolved", result: { eligible: true, reason: null } },
@@ -357,6 +359,7 @@ function ReviewReaderPreview({
     setFileViewState: () => undefined,
     selectFileChange: setSelectedPath,
     retryFileChange: () => undefined,
+    checkForUpdate: () => undefined,
     refresh: async () => ({ kind: "unchanged" }),
     close: async () => ({ kind: "closed" }),
   };
@@ -498,7 +501,10 @@ const previews: Record<string, PreviewDefinition> = {
       "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="failed" /> },
       "babysit-claude-recovery": { label: "Claude Code 恢复", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-recovery" /> },
       "babysit-claude-signed-out": { label: "Claude Code 未登录", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-signed-out" /> },
-      update: { label: "检测到更新", render: () => <ReviewReaderPreview update /> },
+      "update-checking": { label: "正在检查更新", render: () => <ReviewReaderPreview updateState="checking" /> },
+      "update-current": { label: "已是最新", render: () => <ReviewReaderPreview updateState="current" /> },
+      "update-failed": { label: "检查失败", render: () => <ReviewReaderPreview updateState="failed" /> },
+      update: { label: "检测到更新", render: () => <ReviewReaderPreview updateState="available" /> },
       merged: { label: "已合并", render: () => <ReviewReaderPreview merged /> },
       empty: { label: "无变更", render: () => <ReviewReaderPreview empty /> },
     },

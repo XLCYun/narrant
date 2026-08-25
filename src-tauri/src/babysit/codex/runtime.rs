@@ -201,7 +201,7 @@ impl CodexRuntime {
             *status = result
                 .as_ref()
                 .map(|_| CodexRuntimeStatus::Ready)
-                .unwrap_or_else(|error| status_for_error(error));
+                .unwrap_or_else(status_for_error);
         }
         result
     }

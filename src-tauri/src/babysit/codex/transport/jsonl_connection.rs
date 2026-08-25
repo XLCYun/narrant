@@ -3,7 +3,7 @@
 //! 这个模块只处理进程 stdio、逐行 framing、受限 I/O 和生命周期。JSON-RPC
 //! request id、notification 队列以及 endpoint 语义由上层 transport 模块负责。
 
-use super::super::{AppServerCommand, RpcFailure};
+use super::super::{AppServerCommand, RpcFailure, CODEX_PROCESS_REAP_TIMEOUT};
 use crate::babysit::CancellationSignal;
 use serde_json::Value;
 use std::time::{Duration, Instant};
@@ -55,7 +55,12 @@ impl JsonlConnection {
     pub(super) async fn shutdown(&mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
-            let _ = child.wait().await;
+            if tokio::time::timeout(CODEX_PROCESS_REAP_TIMEOUT, child.wait())
+                .await
+                .is_err()
+            {
+                reap_child(child);
+            }
         }
     }
 
@@ -109,7 +114,7 @@ where
         let remaining = deadline.saturating_duration_since(Instant::now());
         let wait = remaining.min(IO_POLL_INTERVAL);
         match tokio::time::timeout(wait, reader.fill_buf()).await {
-            Ok(Ok(buffer)) if buffer.is_empty() => {
+            Ok(Ok([])) => {
                 if line.is_empty() {
                     return Err(RpcFailure::ProcessExited);
                 }

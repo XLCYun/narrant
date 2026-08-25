@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { openFixtureRepository } from "./helpers/open-repository";
 import { linkedWorktrees } from "./helpers/worktree-observation";
-import { activeReviewId, navigateHome, reviewIdForSelection, selectRef } from "./helpers/review-navigation";
+import { activeReviewId, navigateHome, reviewIdForSelection, selectRef, visibleBrandButton } from "./helpers/review-navigation";
 
 /** 返回 fixture 仓库当前注册的 worktree 数量，不依赖本地化输出。 */
 function worktreeCount(repositoryPath: string) {
@@ -66,9 +66,13 @@ describe("本地分支比较", () => {
   });
 
   it("在真实 Tauri CSP 下加载品牌 Logo", async () => {
-    const logo = await $("button[aria-label='纳言'] img");
-    await logo.waitForDisplayed();
-    await browser.waitUntil(async () => await logo.getProperty("naturalWidth") > 0, {
+    const brand = await visibleBrandButton();
+    await browser.waitUntil(async () => {
+      for (const logo of await brand.$$("img")) {
+        if (await logo.isDisplayed() && await logo.getProperty("naturalWidth") > 0) return true;
+      }
+      return false;
+    }, {
       timeoutMsg: "品牌 Logo 在真实 Tauri CSP 下没有成功加载",
     });
   });
