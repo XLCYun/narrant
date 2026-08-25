@@ -1,7 +1,29 @@
 
 # 1. 全量测试
+## 1.1 Rust 门禁
+```bash
+cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+cargo test --manifest-path src-tauri/Cargo.toml --doc
+```
+其中 Rust 测试应通过 `scripts/cargo-agent.sh` 获取仓库级全局锁；同一次发布只运行一次 Rust 全量测试。
 
-请先跑一次当前系统下的全量测试。
+## 1.2 TypeScript 门禁
+```bash
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm build
+pnpm test
+```
+
+## 1.3 真实 Tauri E2E
+
+分别在 macOS 和 Windows 环境准备本地 Git fixture，然后运行：
+```bash
+node e2e/fixtures/setup-local-repo.mjs "<临时目录>/narrant-fixture"
+pnpm test:e2e
+```
 
 # 2. 打新版本 release
 
