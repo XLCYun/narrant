@@ -1,7 +1,7 @@
 use keyring::Entry;
 
 /// 平台凭据管理器中的应用命名空间；与 Tauri bundle identifier 保持一致。
-const CREDENTIAL_SERVICE: &str = "com.narrant.app.github-auth";
+const CREDENTIAL_SERVICE: &str = "com.cyunlab.narrant.github-auth";
 
 /// 单账户策略下 GitHub.com 的固定凭据槽位。
 ///

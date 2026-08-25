@@ -16,6 +16,7 @@
     "prebuild": "pnpm generate:file-icons",
     "build": "tsc --noEmit && cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build",
     "build:macos": "pnpm tauri build --bundles dmg",
+    "build:macos:signed": "bash scripts/build-macos-signed.sh",
     "build:windows": "pnpm tauri build --bundles nsis",
     "lint": "eslint .",
     "test": "vitest run",
