@@ -102,7 +102,7 @@ describe("Settings application-shell UI", () => {
 
     expect(await screen.findByTestId("codex-preferences")).toBeInTheDocument();
     expect(screen.queryByText("C:\\claude.exe")).not.toBeInTheDocument();
-    await chooseSelect("Provider", "Claude Code");
+    await chooseSelect("使用的 Agent", "Claude Code");
     expect(await screen.findByTestId("claude-code-preferences")).toHaveTextContent("C:\\claude.exe");
     await chooseSelect("模型", "Haiku");
 
@@ -126,11 +126,11 @@ describe("Settings application-shell UI", () => {
     vi.mocked(settings.listBabysitModels).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCatalog = reject; }));
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "修改模型偏好" }));
+    expect(await screen.findByRole("combobox", { name: "模型" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("正在读取 Codex 模型目录");
     await act(async () => rejectCatalog(new Error("目录不可用")));
     expect(await screen.findByRole("button", { name: "重试获取模型" })).toBeInTheDocument();
-    expect(screen.getByText(/已保留当前保存值/)).toBeInTheDocument();
+    expect(screen.getByText("已保留当前保存值。")).toBeInTheDocument();
 
     vi.mocked(settings.listBabysitModels).mockResolvedValueOnce({ provider: "codex", revision: "empty", models: [] });
     fireEvent.click(screen.getByRole("button", { name: "重试获取模型" }));
@@ -168,10 +168,10 @@ describe("Settings application-shell UI", () => {
     render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
 
     expect(await screen.findByTestId("codex-preferences")).toHaveTextContent("C:\\codex.exe");
-    await chooseSelect("Provider", "Claude Code");
+    await chooseSelect("使用的 Agent", "Claude Code");
     expect(await screen.findByTestId("claude-code-preferences")).toHaveTextContent("C:\\claude.exe");
     expect(screen.getByRole("combobox", { name: "模型" })).toHaveTextContent("Sonnet");
-    await chooseSelect("Provider", "Codex");
+    await chooseSelect("使用的 Agent", "Codex");
     expect(await screen.findByTestId("codex-preferences")).toHaveTextContent("C:\\codex.exe");
     expect(settings.updateBabysitProvider).toHaveBeenCalledTimes(2);
   });

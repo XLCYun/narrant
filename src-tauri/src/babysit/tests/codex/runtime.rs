@@ -66,7 +66,7 @@ async fn file_settings_round_trip_preserves_unified_application_settings() {
     };
     std::fs::write(
         &path,
-        r#"{"version":1,"theme":"dark","codexExecutable":null,"babysitModel":{"mode":"automatic"}}"#,
+        r#"{"version":1,"theme":"dark","babysit":{"provider":"codex","codex":{"executable":null,"model":null,"reasoningEffort":null},"claudeCode":{"executable":null,"model":null,"reasoningEffort":null}}}"#,
     )
     .unwrap();
 
@@ -74,8 +74,9 @@ async fn file_settings_round_trip_preserves_unified_application_settings() {
 
     assert_eq!(settings.load().unwrap(), Some(executable));
     let serialized = std::fs::read_to_string(path).unwrap();
-    assert!(serialized.contains(r#""version":1"#));
-    assert!(serialized.contains(r#""theme":"dark""#));
+    let serialized: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(serialized["version"], 1);
+    assert_eq!(serialized["theme"], "dark");
 }
 
 #[test]
@@ -243,13 +244,14 @@ async fn restarted_process_is_probed_before_the_next_analysis() {
     drop(second_analysis);
 
     assert_ne!(provider.process_generation(), first_generation);
+    // 每个进程代际分别为模型目录和分析运行能力执行一次 thread/list 探针。
     assert_eq!(
         std::fs::read_to_string(events)
             .unwrap()
             .lines()
             .filter(|event| *event == "thread/list")
             .count(),
-        2
+        4
     );
     runtime.shutdown().await;
 }

@@ -828,7 +828,6 @@ fn codex_setup_failures_use_provider_codes_and_provider_recovery_actions() {
 
 /// 只记录 application lifecycle 调用的 provider-aware runtime fake。
 struct FakeInstalledRuntime {
-    provider_id: String,
     status: Mutex<BabysitProviderRuntimeStatus>,
     ready_calls: AtomicUsize,
     shutdown_calls: AtomicUsize,
@@ -836,9 +835,8 @@ struct FakeInstalledRuntime {
 
 impl FakeInstalledRuntime {
     /// 构造一个尚未探测的 installed provider runtime。
-    fn new(provider_id: &str) -> Self {
+    fn new() -> Self {
         Self {
-            provider_id: provider_id.to_owned(),
             status: Mutex::new(BabysitProviderRuntimeStatus::Unknown),
             ready_calls: AtomicUsize::new(0),
             shutdown_calls: AtomicUsize::new(0),
@@ -848,11 +846,6 @@ impl FakeInstalledRuntime {
 
 #[async_trait]
 impl InstalledProviderRuntime for FakeInstalledRuntime {
-    /// 返回测试 provider 的稳定 identity。
-    fn provider_id(&self) -> &str {
-        &self.provider_id
-    }
-
     /// 返回 fake runtime 保存的 provider-independent 状态。
     fn status(&self) -> BabysitProviderRuntimeStatus {
         self.status
@@ -879,7 +872,7 @@ impl InstalledProviderRuntime for FakeInstalledRuntime {
 #[tokio::test]
 async fn application_delegates_installed_provider_lifecycle_through_one_runtime_seam() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let runtime = Arc::new(FakeInstalledRuntime::new("fake"));
+    let runtime = Arc::new(FakeInstalledRuntime::new());
     let application = BabysitApplication::with_provider_runtime(provider, runtime.clone());
 
     application

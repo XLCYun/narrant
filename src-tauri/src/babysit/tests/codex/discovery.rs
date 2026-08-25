@@ -49,21 +49,25 @@ async fn selected_executable_is_version_checked_without_persisting_from_discover
 }
 
 #[tokio::test]
-async fn persisted_invalid_path_falls_back_to_process_candidates() {
+async fn persisted_invalid_path_is_authoritative_over_process_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let executable = version_fixture(directory.path(), true);
     let discovery = CodexExecutableDiscovery::with_candidates(vec![executable.clone()]);
 
-    let resolved = discovery
+    let error = discovery
         .resolve_all(Some(&directory.path().join("missing-codex")))
-        .await;
+        .await
+        .unwrap_err();
 
-    let resolved = resolved.unwrap().remove(0);
-    assert_eq!(resolved.path, executable.canonicalize().unwrap());
+    assert!(matches!(
+        error,
+        BabysitError::ProviderSetup { provider_id, failure: BabysitProviderSetupFailure::ExecutableInvalid }
+            if provider_id == "codex"
+    ));
 }
 
 #[tokio::test]
-async fn process_environment_candidate_precedes_a_valid_persisted_path() {
+async fn valid_persisted_path_is_authoritative_over_process_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let environment = version_fixture(directory.path(), true);
     let persisted_directory = tempfile::tempdir().unwrap();
@@ -75,7 +79,7 @@ async fn process_environment_candidate_precedes_a_valid_persisted_path() {
         .unwrap()
         .remove(0);
 
-    assert_eq!(resolved.path, environment.canonicalize().unwrap());
+    assert_eq!(resolved.path, persisted.canonicalize().unwrap());
 }
 
 #[test]

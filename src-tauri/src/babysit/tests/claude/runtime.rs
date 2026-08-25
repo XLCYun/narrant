@@ -54,7 +54,6 @@ async fn failed_candidate_does_not_shadow_later_authenticated_candidate() {
         .await
         .expect("later candidate should become ready");
 
-    assert_eq!(runtime.provider_id(), "claude-code");
     assert_eq!(runtime.status(), BabysitProviderRuntimeStatus::Ready);
     let invocations = std::fs::read_to_string(events).expect("read probe events");
     assert!(invocations.contains("invalid:--version"));

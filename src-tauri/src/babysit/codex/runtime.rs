@@ -5,9 +5,9 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
-use crate::application_settings::{
-    ApplicationSettingsApplication, BabysitModelPreference, BabysitProvider,
-};
+#[cfg(test)]
+use crate::application_settings::BabysitProvider;
+use crate::application_settings::{ApplicationSettingsApplication, BabysitModelPreference};
 use crate::babysit::{
     codex_setup_error, BabysitAgentProvider, BabysitError, BabysitProviderRuntimeStatus,
     BabysitProviderSetupFailure, InstalledProviderRuntime, CODEX_PROVIDER_ID,
@@ -46,6 +46,7 @@ impl ApplicationCodexSettings {
     }
 
     /// 通过统一 Application Settings 边界保存 executable 偏好。
+    #[cfg(test)]
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         let mut preference = self
             .application
@@ -80,6 +81,7 @@ impl CodexRuntime {
     }
 
     /// 每次新分析读取权威模型偏好，并用新鲜目录解析实际模型与思考强度。
+    #[cfg(test)]
     pub(crate) async fn prepare_analysis(
         &self,
         workspace_path: &Path,
@@ -205,6 +207,7 @@ impl CodexRuntime {
     }
 
     /// 通过生产设置边界验证并保存显式可执行文件偏好。
+    #[cfg(test)]
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
         let selected = self.validate_executable(path).await?;
         let resolved =
@@ -265,11 +268,6 @@ impl CodexRuntime {
 
 #[async_trait::async_trait]
 impl InstalledProviderRuntime for CodexRuntime {
-    /// 返回 Codex runtime 的稳定 provider identity。
-    fn provider_id(&self) -> &str {
-        CODEX_PROVIDER_ID
-    }
-
     /// 将 Codex 内部状态投影到 provider-independent runtime status。
     fn status(&self) -> BabysitProviderRuntimeStatus {
         match CodexRuntime::status(self) {

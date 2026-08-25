@@ -270,11 +270,6 @@ fn setup_error_priority(error: &BabysitError) -> u8 {
 
 #[async_trait]
 impl InstalledProviderRuntime for ClaudeRuntime {
-    /// 返回稳定 Claude Code provider identity。
-    fn provider_id(&self) -> &str {
-        PROVIDER_ID
-    }
-
     /// 返回最近一次懒探针结果。
     fn status(&self) -> BabysitProviderRuntimeStatus {
         self.status

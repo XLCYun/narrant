@@ -225,8 +225,6 @@ pub enum BabysitProviderRuntimeStatus {
 /// Installed Coding Agent provider runtime 的唯一 application lifecycle seam。
 #[async_trait]
 pub trait InstalledProviderRuntime: Send + Sync {
-    /// 返回稳定 provider identity；它会进入错误 payload 和 diagnostics 分类。
-    fn provider_id(&self) -> &str;
     /// 返回当前 runtime readiness，但不暴露 executable 路径或原始进程信息。
     #[allow(dead_code)]
     fn status(&self) -> BabysitProviderRuntimeStatus;
@@ -971,6 +969,7 @@ impl BabysitApplication {
     }
 
     /// 注入一个 provider 与 provider-aware runtime；发现和初始化仍保持懒加载。
+    #[cfg(test)]
     pub fn with_provider_runtime(
         provider: Arc<dyn BabysitAgentProvider>,
         runtime: Arc<dyn InstalledProviderRuntime>,
@@ -988,6 +987,7 @@ impl BabysitApplication {
     }
 
     /// 构造带有 application settings 路径的生产 Codex provider；发现仍保持懒加载。
+    #[cfg(test)]
     pub fn with_codex_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
         let settings_path = settings_path.into();
         let provider = Arc::new(CodexAppServerProvider::new("codex"));
@@ -1206,6 +1206,7 @@ impl BabysitApplication {
     }
 
     /// Codex executable 偏好变化后丢弃目录与缓存；旧进程由下一次能力调用安全切换。
+    #[cfg(test)]
     pub(crate) async fn invalidate_codex_executable(&self) {
         self.invalidate_provider_preferences();
     }
@@ -1248,17 +1249,8 @@ impl BabysitApplication {
         }
     }
 
-    /// 构造生产默认的 Claude Code provider；仅在首次启用 Babysit 时发现并探测。
-    pub fn with_claude_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
-        let provider = Arc::new(ClaudeCodeProvider::new("claude"));
-        let runtime = Arc::new(claude::runtime::ClaudeRuntime::new(
-            provider.clone(),
-            settings_path.into(),
-        ));
-        Self::with_provider_runtime(provider, runtime)
-    }
-
-    /// 将首次 provider 发现和握手保持在 Babysit 点击后的最高 application seam。
+    /// 测试旧式单 provider 装配时，将 runtime 准备保持在 application seam。
+    #[cfg(test)]
     pub async fn prepare_runtime(&self, workspace_path: &Path) -> Result<(), BabysitError> {
         if let Some(runtime) = &self.runtime {
             runtime.ensure_ready(workspace_path).await

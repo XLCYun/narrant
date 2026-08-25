@@ -38,7 +38,11 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
     : null);
-  const [babysit, setBabysit] = useState<BabysitSettings>({ provider: "codex", codex: { executable: codexExecutable, model: null, reasoningEffort: null }, claudeCode: { executable: null, model: null, reasoningEffort: null } });
+  const [babysit, setBabysit] = useState<BabysitSettings>({
+    provider: babysitSection ? "claude-code" : "codex",
+    codex: { executable: codexExecutable, model: null, reasoningEffort: null },
+    claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
+  });
   const snapshot = (theme: ThemePreference, value = babysit): ApplicationSettings => ({ version: 1, theme, babysit: value });
   const application: ApplicationSettingsApplication = {
     load: async () => snapshot(savedTheme),
