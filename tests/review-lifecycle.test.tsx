@@ -115,10 +115,33 @@ describe("Review lifecycle module", () => {
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
 
     await act(async () => { await result.current.reader!.refresh(); });
+    expect(result.current.reader?.update.kind).toBe("idle");
     expect(checkReviewUpdate).toHaveBeenCalledOnce();
     act(() => result.current.reader?.checkForUpdate());
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
     expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("刷新中的重复调用不会替换或并发执行既有刷新", async () => {
+    const adapter = createAdapter();
+    adapter.checkReviewUpdate = async () => availableUpdate;
+    let finishRefresh: (() => void) | undefined;
+    adapter.refreshReview = vi.fn(() => new Promise((resolve) => {
+      finishRefresh = () => resolve({ kind: "unchanged" });
+    }));
+    const { result } = renderHook(() => useReviewLifecycle(adapter));
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
+
+    let first: Promise<unknown>;
+    let duplicate: Promise<unknown>;
+    act(() => {
+      first = result.current.reader!.refresh();
+      duplicate = result.current.reader!.refresh();
+    });
+    await expect(duplicate!).resolves.toMatchObject({ kind: "unchanged" });
+    expect(adapter.refreshReview).toHaveBeenCalledOnce();
+    await act(async () => { finishRefresh?.(); await first!; });
   });
 
   it("普通刷新失败保留确认供重试，确认过期则要求重新检查", async () => {
@@ -355,14 +378,14 @@ describe("Review lifecycle module", () => {
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
     expect(checks).toHaveLength(2);
     expect(checks[1].signal.aborted).toBe(true);
-    expect(result.current.reader?.update.kind).toBe("current");
+    expect(result.current.reader?.update.kind).toBe("idle");
 
     act(() => result.current.unpresent());
     expect(result.current.reader).toBeNull();
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
     expect(checks).toHaveLength(2);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
-    expect(result.current.reader?.update.kind).toBe("current");
+    expect(result.current.reader?.update.kind).toBe("idle");
   });
 
   it("打开 C 失败后为仍 Presented 的 B 重启 update check，并隔离旧请求", async () => {

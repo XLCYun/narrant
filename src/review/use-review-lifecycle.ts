@@ -52,6 +52,7 @@ export type FileChangeBinding =
 const EMPTY_FILE_CHANGE: FileChangeBinding = { kind: "empty" };
 
 export type ReviewUpdateBinding =
+  | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "current" }
   | { kind: "available"; update: ReviewUpdate }
@@ -251,6 +252,7 @@ export function useReviewLifecycle(
 
   /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
   const checkForUpdate = useCallback((current: ReviewSnapshot) => {
+    if (refreshOperation.current) return;
     const running = updateOperation.current;
     if (running?.reviewId === current.reviewId && running.snapshotId === current.snapshotId) return;
     cancelUpdateCheck();
@@ -284,7 +286,7 @@ export function useReviewLifecycle(
     const entry: ReviewRuntimeEntry = previous ?? {
       snapshot: next,
       fileChange: { kind: "empty" },
-      update: { kind: "current" },
+      update: { kind: "idle" },
       view: existing?.view ?? "file-changes",
       diffMode: existing?.diffMode ?? initialDiffMode,
       treeWidth: existing?.treeWidth ?? initialTreeWidth,
@@ -306,7 +308,7 @@ export function useReviewLifecycle(
       ...entry,
       snapshot,
       fileChange: { kind: "empty" },
-      update: { kind: "current" },
+      update: { kind: "idle" },
     }));
     const firstPath = firstFileChangePath(snapshot);
     if (firstPath) selectFileChange(firstPath);
@@ -388,6 +390,7 @@ export function useReviewLifecycle(
 
   /** 显式刷新 Presented Review；只替换该 Review 的 Snapshot-scoped state。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {
+    if (refreshOperation.current) return { kind: "unchanged" };
     const reviewId = activeReviewIdRef.current;
     const currentEntry = reviewId ? entries.current.get(reviewId) : undefined;
     const confirmation = currentEntry?.update.kind === "available" || currentEntry?.update.kind === "refresh-failed"
