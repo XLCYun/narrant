@@ -1,4 +1,5 @@
 import { chooseRepositoryFolder, returnToHome, setE2ELocale } from "./helpers/open-repository";
+import { sameFilesystemPath } from "./helpers/worktree-observation";
 
 describe("Repository Persistence", () => {
   it("通过原生目录选择、首次信任并在再次选择时复用仓库", async () => {
@@ -37,7 +38,9 @@ describe("Repository Persistence", () => {
     const navigation = await browser.tauri.execute(
       ({ core }) => core.invoke<{ repositories: Array<{ canonicalPath: string }> }>("load_repository_navigation"),
     );
-    expect(navigation.repositories.filter((repository) => repository.canonicalPath === repositoryPath)).toHaveLength(1);
+    expect(navigation.repositories.filter((repository) => (
+      sameFilesystemPath(repository.canonicalPath, repositoryPath)
+    ))).toHaveLength(1);
 
     await returnToHome();
     await setE2ELocale("en");

@@ -5,5 +5,5 @@
   "identifier": "com.cyunlab.narrant",
   "build": { "beforeDevCommand": "pnpm dev", "beforeBuildCommand": "pnpm build", "devUrl": "http://localhost:1420", "frontendDist": "../dist" },
   "app": { "withGlobalTauri": true, "windows": [{ "title": "Narrant", "width": 1100, "height": 760, "minWidth": 900, "minHeight": 600, "visible": true, "titleBarStyle": "Overlay", "trafficLightPosition": { "x": 20, "y": 24 }, "hiddenTitle": true }], "security": { "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline';", "assetProtocol": { "enable": true, "scope": ["$APPDATA/github-identity/**"] } } },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico"] }
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico"], "windows": { "nsis": { "installerIcon": "icons/icon.ico", "uninstallerIcon": "icons/icon.ico" } } }
 }

@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 
 import { openFixtureRepository } from "./helpers/open-repository";
 import { activeReviewId, reviewIdForSelection, selectRef, visibleBrandButton } from "./helpers/review-navigation";
@@ -6,6 +6,7 @@ import {
   gitInvocationsSinceStable,
   invocationTouchesWorkspace,
   linkedWorktrees,
+  sameFilesystemPath,
   stableGitTraceOffset,
   workspaceMutationInvocations,
   workspaceOperationInvocations,
@@ -178,7 +179,7 @@ async function isolateReviewLifecycleBaseline(repositoryPath: string) {
   }
   await browser.waitUntil(() => {
     const worktrees = linkedWorktrees(repositoryPath);
-    return worktrees.length === 1 && worktrees[0] === repositoryPath;
+    return worktrees.length === 1 && sameFilesystemPath(worktrees[0], repositoryPath);
   });
 }
 
@@ -226,7 +227,7 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     expect(bInvocations.filter((invocation) => invocationTouchesWorkspace(invocation, workspaceA))).toEqual([]);
     const bMutations = workspaceMutationInvocations(bInvocations);
     if (!bMutations.some(({ argv }) => argv.includes("worktree") && argv.includes("add") && argv.some((argument) => {
-      try { return realpathSync(argument) === realpathSync(workspaceB); } catch { return false; }
+      return sameFilesystemPath(argument, workspaceB);
     }))) {
       throw new Error(`没有观测到 B Workspace 的 worktree add：${JSON.stringify({ workspaceB, bMutations })}`);
     }
@@ -280,7 +281,7 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
       command !== "reopen_review" && command !== "check_babysit_file_eligibility"
     ))).toEqual([]);
     expect(repositoryRestoreInvocations.every(({ argv, cwd }) => (
-      cwd === repositoryPath
+      sameFilesystemPath(cwd, repositoryPath)
       && argv.includes("cat-file")
       && (argv.includes("-s") || argv.includes("blob"))
     ))).toBe(true);

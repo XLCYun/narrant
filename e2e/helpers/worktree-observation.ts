@@ -1,11 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { basename } from "node:path";
 
 /** Git trace2 中与一次子进程启动相关的可验证字段。 */
 export type GitInvocation = {
   argv: string[];
   cwd: string;
 };
+
+/** 按操作系统文件身份比较路径，兼容 Windows 扩展路径前缀与分隔符。 */
+export function sameFilesystemPath(left: string, right: string): boolean {
+  const normalize = (path: string) => {
+    const canonical = realpathSync.native(path).replace(/^\\\\\?\\/, "").replaceAll("\\", "/");
+    return process.platform === "win32" ? canonical.toLocaleLowerCase("en-US") : canonical;
+  };
+  try {
+    return normalize(left) === normalize(right);
+  } catch {
+    return false;
+  }
+}
 
 /** 读取 fixture 仓库当前注册的 linked worktree 绝对路径。 */
 export function linkedWorktrees(repositoryPath: string): string[] {
@@ -67,8 +81,9 @@ function parseInvocations(trace: Buffer): GitInvocation[] {
   });
   return starts.map((start) => {
     const changeDirectory = start.argv.indexOf("-C");
+    const helperName = basename(start.argv[0]).replace(/\.exe$/i, "");
     const repositoryHelper = ["git-upload-pack", "git-receive-pack", "git-upload-archive"]
-      .includes(start.argv[0]) ? start.argv.at(-1) : undefined;
+      .includes(helperName) ? start.argv.at(-1) : undefined;
     const cwd = worktrees.get(start.sid)
       ?? (changeDirectory >= 0 ? start.argv[changeDirectory + 1] : undefined)
       // Git transport helper 不进入 repository setup；其最后一个参数就是被服务的 Repository。

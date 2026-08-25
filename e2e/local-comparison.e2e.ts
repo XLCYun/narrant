@@ -66,9 +66,13 @@ describe("本地分支比较", () => {
   });
 
   it("在真实 Tauri CSP 下加载品牌 Logo", async () => {
-    const logo = await $("button[aria-label='纳言'] img");
-    await logo.waitForDisplayed();
-    await browser.waitUntil(async () => await logo.getProperty("naturalWidth") > 0, {
+    const logos = await $$("button[aria-label='纳言'] img");
+    await browser.waitUntil(async () => {
+      for (const logo of logos) {
+        if (await logo.isDisplayed() && await logo.getProperty("naturalWidth") > 0) return true;
+      }
+      return false;
+    }, {
       timeoutMsg: "品牌 Logo 在真实 Tauri CSP 下没有成功加载",
     });
   });

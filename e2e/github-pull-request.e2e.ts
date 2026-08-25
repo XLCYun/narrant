@@ -9,10 +9,11 @@ describe("公开 GitHub Pull Request", () => {
     await pullRequest.click();
 
     await browser.waitUntil(async () => (
-      await $("[aria-label='审核阅读器']").isExisting() || await $("[role='alert']").isExisting()
+      await $("[aria-label='审核阅读器']").isExisting() || await $("p[role='alert']").isExisting()
     ));
-    if (await $("[role='alert']").isExisting()) {
-      throw new Error(await $("[role='alert']").getText());
+    if (await $("p[role='alert']").isExisting()) {
+      const alert = await $("p[role='alert']");
+      throw new Error(`GitHub Pull Request 打开失败：${await alert.getText()} ${await alert.getHTML()}`);
     }
     await $("[role='tab']=审核概览").click();
     await expect($("h2*=真实 Tauri 审核")).toBeDisplayed();
