@@ -2,6 +2,7 @@
 #[path = "tests/anthropic.rs"]
 mod tests;
 
+use crate::application_settings::CustomProviderEffort;
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
@@ -18,7 +19,7 @@ pub(crate) struct AnthropicAdapterConfig {
     base_url: String,
     api_key: Option<String>,
     model: String,
-    effort: String,
+    effort: CustomProviderEffort,
 }
 
 impl AnthropicAdapterConfig {
@@ -27,13 +28,13 @@ impl AnthropicAdapterConfig {
         base_url: impl Into<String>,
         api_key: Option<String>,
         model: impl Into<String>,
-        effort: impl Into<String>,
+        effort: CustomProviderEffort,
     ) -> Self {
         Self {
             base_url: base_url.into(),
             api_key,
             model: model.into(),
-            effort: effort.into(),
+            effort,
         }
     }
 }
@@ -67,6 +68,8 @@ impl AnthropicAdapterRequest {
 #[derive(Debug)]
 pub(crate) struct AnthropicAdapterResponse {
     pub(crate) output: Value,
+    /// 包含工具调用与结果的完整对话，可直接用于下一次 repair。
+    pub(crate) conversation: Vec<Message>,
 }
 
 /// 不携带 endpoint、credential 或模型内容的 Anthropic adapter 错误。
@@ -115,11 +118,14 @@ impl AnthropicAdapter {
             .build()
             .map_err(|_| AnthropicAdapterError::Client)?;
         let tools = request.repository_tools.rig_tools(&request.cancellation);
+        let cancellation = request.cancellation.clone();
+        let prompt = request.prompt;
+        let history = request.history;
         let agent = client
             .agent(&self.config.model)
             .additional_params(json!({
                 "thinking": {"type": "adaptive"},
-                "output_config": {"effort": self.config.effort},
+                "output_config": {"effort": self.config.effort.as_str()},
             }))
             .max_tokens(8_192)
             .output_schema::<LineExplanationOutput>()
@@ -128,16 +134,35 @@ impl AnthropicAdapter {
             .tool(tools.glob)
             .tool(tools.grep)
             .build();
-        let output = agent
-            .prompt(request.prompt)
-            .history(request.history)
-            .await
-            .map_err(|_| AnthropicAdapterError::Protocol)?;
-        if request.cancellation.is_cancelled() {
+        let completion = async move {
+            agent
+                .prompt(prompt)
+                .history(history)
+                .extended_details()
+                .await
+        };
+        tokio::pin!(completion);
+        let response = loop {
+            tokio::select! {
+                response = &mut completion => {
+                    break response.map_err(|_| AnthropicAdapterError::Protocol)?;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    if cancellation.is_cancelled() {
+                        return Err(AnthropicAdapterError::Cancelled);
+                    }
+                }
+            }
+        };
+        if cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }
-        let output = serde_json::from_str(&output).map_err(|_| AnthropicAdapterError::Protocol)?;
-        Ok(AnthropicAdapterResponse { output })
+        let output =
+            serde_json::from_str(&response.output).map_err(|_| AnthropicAdapterError::Protocol)?;
+        Ok(AnthropicAdapterResponse {
+            output,
+            conversation: response.messages.unwrap_or_default(),
+        })
     }
 }
 

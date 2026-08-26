@@ -1,6 +1,7 @@
 use super::super::{
     AnthropicAdapter, AnthropicAdapterConfig, AnthropicAdapterError, AnthropicAdapterRequest,
 };
+use crate::application_settings::CustomProviderEffort;
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use httpmock::prelude::*;
@@ -38,7 +39,27 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
                 .body_contains(r#""name":"read""#)
                 .body_contains(r#""name":"glob""#)
                 .body_contains(r#""name":"grep""#)
-                .body_contains(r#""name":"final_result""#);
+                .body_contains(r#""name":"final_result""#)
+                .matches(|request| {
+                    let body: serde_json::Value = serde_json::from_slice(
+                        request.body.as_deref().expect("request should have a body"),
+                    )
+                    .expect("request body should be JSON");
+                    let names = body["tools"]
+                        .as_array()
+                        .expect("tools should be an array")
+                        .iter()
+                        .map(|tool| tool["name"].as_str().unwrap())
+                        .collect::<std::collections::BTreeSet<_>>();
+                    names
+                        == std::collections::BTreeSet::from([
+                            "final_result",
+                            "glob",
+                            "grep",
+                            "read",
+                        ])
+                        && body["output_config"].get("format").is_none()
+                });
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(response);
@@ -52,7 +73,7 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
         server.base_url(),
         Some("fixture-key".to_owned()),
         "user-entered-model",
-        "low",
+        CustomProviderEffort::Low,
     ))
     .expect("fixture adapter should build");
 
@@ -74,11 +95,67 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
             "after": {"1": "Explain the after line."}
         })
     );
+    assert!(!result.conversation.is_empty());
+}
+
+#[tokio::test]
+async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages");
+            then.status(200)
+                .delay(std::time::Duration::from_secs(2))
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "late", "type": "message", "role": "assistant", "model": "model",
+                    "content": [{"type": "tool_use", "id": "late", "name": "final_result",
+                        "input": {"before": {}, "after": {}}}],
+                    "stop_reason": "tool_use", "stop_sequence": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("fixture workspace should be created");
+    let cancellation = crate::operation::TestCancellation::default();
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        None,
+        "model",
+        CustomProviderEffort::Medium,
+    ))
+    .unwrap();
+    let request = AnthropicAdapterRequest::new(
+        "prompt",
+        Vec::new(),
+        RepositoryTools::new(workspace.path()).unwrap(),
+        (*cancellation).clone(),
+    );
+    let task = tokio::spawn(async move { adapter.complete(request).await });
+    for _ in 0..50 {
+        if mock.hits_async().await == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(mock.hits_async().await, 1);
+    cancellation.cancel();
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        task.await.expect("adapter task should join"),
+        Err(AnthropicAdapterError::Cancelled),
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
 }
 
 #[tokio::test]
 async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
-    for effort in ["low", "medium", "high"] {
+    for effort in [
+        CustomProviderEffort::Low,
+        CustomProviderEffort::Medium,
+        CustomProviderEffort::High,
+    ] {
+        let effort_text = effort.as_str();
         let server = MockServer::start_async().await;
         let response = json!({
             "id": "msg_fixture", "type": "message", "role": "assistant", "model": "model",
@@ -92,7 +169,7 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
                 when.method(POST)
                     .path("/v1/messages")
                     .header("x-api-key", "")
-                    .body_contains(&format!(r#""output_config":{{"effort":"{effort}"}}"#));
+                    .body_contains(&format!(r#""output_config":{{"effort":"{effort_text}"}}"#));
                 then.status(200)
                     .header("content-type", "application/json")
                     .json_body(response);
@@ -135,7 +212,7 @@ async fn adapter_rejects_early_cancellation_without_contacting_anthropic() {
         server.base_url(),
         None,
         "model",
-        "medium",
+        CustomProviderEffort::Medium,
     ))
     .unwrap();
     let result = adapter
@@ -165,7 +242,7 @@ async fn adapter_redacts_http_and_protocol_error_content() {
         server.base_url(),
         Some(secret.to_owned()),
         "model",
-        "high",
+        CustomProviderEffort::High,
     ))
     .unwrap();
     let error = adapter
