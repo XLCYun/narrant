@@ -9,6 +9,7 @@
   },
   "scripts": {
     "generate:file-icons": "node scripts/generate-file-type-icons.mjs",
+    "release:prepare": "node scripts/release-prepare.mjs",
     "predev": "pnpm generate:file-icons",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "predev:preview": "pnpm generate:file-icons",
