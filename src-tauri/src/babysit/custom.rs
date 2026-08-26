@@ -1,5 +1,13 @@
 use super::*;
 
+mod anthropic;
+
+#[allow(unused_imports)]
+pub(crate) use anthropic::{
+    AnthropicAdapter, AnthropicAdapterConfig, AnthropicAdapterError, AnthropicAdapterRequest,
+    AnthropicAdapterResponse,
+};
+
 /// Custom provider 在 registry 中使用的稳定 identity。
 pub(crate) const PROVIDER_ID: &str = "custom";
 

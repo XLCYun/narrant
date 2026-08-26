@@ -3079,6 +3079,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rig",
  "rusqlite",
+ "schemars 1.2.1",
  "secrecy",
  "serde",
  "serde_json",
