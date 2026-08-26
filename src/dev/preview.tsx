@@ -18,7 +18,7 @@ import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
-import type { ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -32,16 +32,23 @@ type PreviewDefinition = {
   scenarios: Record<string, PreviewScenario>;
 };
 
+/** Settings Preview 中 Custom 连接的可交互状态集合。 */
+type CustomPreviewState = "empty" | "configured" | "revealed" | "failed";
+
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSection = false, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; babysitSection?: boolean; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
+function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSection = false, customState, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; babysitSection?: boolean; customState?: CustomPreviewState; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
     : null);
+  const [customConnection, setCustomConnection] = useState<CustomProviderConnection>(customState === "empty"
+    ? { protocol: "openai_chat_completions", baseUrl: "", apiKey: "", model: "", effort: "medium" }
+    : { protocol: "openai_chat_completions", baseUrl: "https://api.example.test/v1", apiKey: "sk-preview-key", model: "gpt-5-mini", effort: "medium" });
   const [babysit, setBabysit] = useState<BabysitSettings>({
-    provider: babysitSection ? "claude-code" : "codex",
+    provider: customState ? "custom" : babysitSection ? "claude-code" : "codex",
     codex: { executable: codexExecutable, model: null, reasoningEffort: null },
     claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
+    custom: { protocol: customConnection.protocol, baseUrl: customConnection.baseUrl, model: customConnection.model, effort: customConnection.effort },
   });
   const snapshot = (theme: ThemePreference, value = babysit): ApplicationSettings => ({ version: 1, theme, babysit: value });
   const application: ApplicationSettingsApplication = {
@@ -73,6 +80,14 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
       const key = provider === "codex" ? "codex" : "claudeCode";
       const next = { ...babysit, [key]: preference }; setCodexExecutable(next.codex.executable); setBabysit(next); return snapshot(savedTheme, next);
     },
+    loadCustomConnection: async () => customConnection,
+    saveCustomConnection: async (connection) => {
+      if (customState === "failed") throw new Error("预览中的 Custom 连接无法保存");
+      const next = { ...babysit, custom: { protocol: connection.protocol, baseUrl: connection.baseUrl, model: connection.model, effort: connection.effort } };
+      setCustomConnection(connection);
+      setBabysit(next);
+      return snapshot(savedTheme, next);
+    },
   };
   const githubIdentity: GitHubIdentityLifecycleBinding | undefined = githubState ? {
     status: { configured: true, signedIn: true, appInstallUrl: null, identity: { id: 42, login: "octocat", name: "Monalisa Octocat", avatarPath: null } },
@@ -83,7 +98,7 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || babysitSection || modelState !== "idle" ? "babysit" : "appearance"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || babysitSection || customState || modelState !== "idle" ? "babysit" : "appearance"} initialCustomApiKeyVisible={customState === "revealed"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
@@ -390,6 +405,10 @@ const previews: Record<string, PreviewDefinition> = {
       "model-loading": { label: "模型目录加载", render: () => <SettingsPreview modelState="loading" /> },
       "model-empty": { label: "模型目录为空", render: () => <SettingsPreview modelState="empty" /> },
       "model-error": { label: "模型目录失败", render: () => <SettingsPreview modelState="error" /> },
+      "custom-empty": { label: "Custom 空配置", render: () => <SettingsPreview customState="empty" /> },
+      "custom-configured": { label: "Custom 已配置", render: () => <SettingsPreview customState="configured" /> },
+      "custom-revealed": { label: "Custom 密钥已显示", render: () => <SettingsPreview customState="revealed" /> },
+      "custom-failed": { label: "Custom 保存失败", render: () => <SettingsPreview customState="failed" /> },
     },
   },
   "app-shell": {
