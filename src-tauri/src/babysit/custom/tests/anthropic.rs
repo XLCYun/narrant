@@ -149,6 +149,72 @@ async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
 }
 
 #[tokio::test]
+async fn adapter_converts_anthropic_tool_use_and_tool_result_round_trip() {
+    let server = MockServer::start_async().await;
+    let first = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages").matches(|request| {
+                request.body.as_deref().is_some_and(|body| {
+                    !String::from_utf8_lossy(body).contains(r#""type":"tool_result""#)
+                })
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "read_request", "type": "message", "role": "assistant", "model": "model",
+                    "content": [{"type": "tool_use", "id": "toolu_read_fixture", "name": "read",
+                        "input": {"path": "fixture.rs", "offset": 0}}],
+                    "stop_reason": "tool_use", "stop_sequence": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }));
+        })
+        .await;
+    let second = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/messages")
+                .body_contains(r#""type":"tool_result""#)
+                .body_contains(r#""tool_use_id":"toolu_read_fixture""#)
+                .body_contains("fixture source");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "final_response", "type": "message", "role": "assistant", "model": "model",
+                    "content": [{"type": "tool_use", "id": "final_fixture", "name": "final_result",
+                        "input": {"before": {}, "after": {"1": "Uses fixture source."}}}],
+                    "stop_reason": "tool_use", "stop_sequence": null,
+                    "usage": {"input_tokens": 2, "output_tokens": 2}
+                }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("fixture workspace should be created");
+    std::fs::write(workspace.path().join("fixture.rs"), "fixture source\n")
+        .expect("fixture file should be written");
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("fixture-key".to_owned()),
+        "model",
+        CustomProviderEffort::Medium,
+    ))
+    .unwrap();
+    let result = adapter
+        .complete(AnthropicAdapterRequest::new(
+            "inspect fixture",
+            Vec::new(),
+            RepositoryTools::new(workspace.path()).unwrap(),
+            CancellationSignal::default(),
+        ))
+        .await
+        .expect("tool loop should complete");
+    first.assert_async().await;
+    second.assert_async().await;
+    assert_eq!(result.output["after"]["1"], "Uses fixture source.");
+    let conversation = serde_json::to_string(&result.conversation).unwrap();
+    assert!(conversation.contains("toolu_read_fixture"));
+    assert!(conversation.contains("fixture source"));
+}
+
+#[tokio::test]
 async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
     for effort in [
         CustomProviderEffort::Low,

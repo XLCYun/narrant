@@ -128,6 +128,7 @@ impl AnthropicAdapter {
                 "output_config": {"effort": self.config.effort.as_str()},
             }))
             .max_tokens(8_192)
+            .default_max_turns(16)
             .output_schema::<LineExplanationOutput>()
             .output_mode(OutputMode::Tool)
             .tool(tools.read)
