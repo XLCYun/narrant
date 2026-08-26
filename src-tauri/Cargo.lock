@@ -2998,6 +2998,7 @@ dependencies = [
  "keyring",
  "libc",
  "octocrab",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "secrecy",
@@ -3012,6 +3013,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tempfile",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]

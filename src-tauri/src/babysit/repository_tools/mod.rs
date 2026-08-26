@@ -6,6 +6,9 @@ use std::fs::{self, File};
 use std::io::Read as IoRead;
 use std::path::{Path, PathBuf};
 
+mod glob;
+mod grep;
+
 /// 单次 Read 请求的最大输出字节数，防止模型上下文被一个文件耗尽。
 pub const READ_OUTPUT_LIMIT: usize = 64 * 1024;
 
@@ -325,7 +328,7 @@ impl RepositoryTools {
         self.read(input, cancellation)
     }
 
-    /// 通过统一 typed seam 执行 Read 或搜索工具；搜索业务暂由另一分片接管。
+    /// 通过统一 typed seam 执行 Read、Glob 或 Grep 工具。
     pub fn execute(
         &self,
         request: RepositoryToolRequest,
@@ -335,8 +338,13 @@ impl RepositoryTools {
             RepositoryToolRequest::Read(input) => self
                 .read(input, cancellation)
                 .map(RepositoryToolResponse::Read),
-            RepositoryToolRequest::Glob(_) | RepositoryToolRequest::Grep(_) => {
-                Err(RepositoryToolError::UnsupportedOperation)
+            RepositoryToolRequest::Glob(input) => {
+                glob::execute(&self.workspace_root, &input, cancellation)
+                    .map(RepositoryToolResponse::Glob)
+            }
+            RepositoryToolRequest::Grep(input) => {
+                grep::execute(&self.workspace_root, &input, cancellation)
+                    .map(RepositoryToolResponse::Grep)
             }
         }
     }
