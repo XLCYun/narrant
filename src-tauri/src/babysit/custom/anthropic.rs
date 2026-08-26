@@ -25,14 +25,16 @@ use std::path::{Path, PathBuf};
 struct OptionalAnthropicAuthClient {
     inner: http_client::ReqwestClient,
     omit_authentication: bool,
+    cancellation: CancellationSignal,
 }
 
 impl OptionalAnthropicAuthClient {
     /// 创建保留 Rig transport、仅按连接快照决定是否省略认证头的客户端。
-    fn new(omit_authentication: bool) -> Self {
+    fn new(omit_authentication: bool, cancellation: CancellationSignal) -> Self {
         Self {
             inner: http_client::ReqwestClient::default(),
             omit_authentication,
+            cancellation,
         }
     }
 
@@ -55,7 +57,18 @@ impl HttpClientExt for OptionalAnthropicAuthClient {
         T: Into<bytes::Bytes> + Send,
         U: From<bytes::Bytes> + Send + 'static,
     {
-        HttpClientExt::send(&self.inner, self.prepare(request))
+        let client = self.inner.clone();
+        let request = self.prepare(request);
+        let cancelled = self.cancellation.is_cancelled();
+        let (parts, body) = request.into_parts();
+        let request = Request::from_parts(parts, body.into());
+        async move {
+            if cancelled {
+                Err(http_client::Error::NoHeaders)
+            } else {
+                client.send(request).await
+            }
+        }
     }
 
     /// 转发 multipart 请求，并在空凭据时省略认证头。
@@ -66,7 +79,16 @@ impl HttpClientExt for OptionalAnthropicAuthClient {
     where
         U: From<bytes::Bytes> + Send + 'static,
     {
-        HttpClientExt::send_multipart(&self.inner, self.prepare(request))
+        let client = self.inner.clone();
+        let request = self.prepare(request);
+        let cancelled = self.cancellation.is_cancelled();
+        async move {
+            if cancelled {
+                Err(http_client::Error::NoHeaders)
+            } else {
+                client.send_multipart(request).await
+            }
+        }
     }
 
     /// 转发流式请求，并在空凭据时省略认证头。
@@ -77,7 +99,18 @@ impl HttpClientExt for OptionalAnthropicAuthClient {
     where
         T: Into<bytes::Bytes> + Send,
     {
-        HttpClientExt::send_streaming(&self.inner, self.prepare(request))
+        let client = self.inner.clone();
+        let request = self.prepare(request);
+        let cancelled = self.cancellation.is_cancelled();
+        let (parts, body) = request.into_parts();
+        let request = Request::from_parts(parts, body.into());
+        async move {
+            if cancelled {
+                Err(http_client::Error::NoHeaders)
+            } else {
+                client.send_streaming(request).await
+            }
+        }
     }
 }
 
@@ -137,6 +170,8 @@ pub(crate) struct AnthropicMessagesAdapter {
     connection: CustomConnectionSnapshot,
     adapter: AnthropicAdapter,
     workspace: PathBuf,
+    #[cfg(test)]
+    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
 }
 
 impl AnthropicMessagesAdapter {
@@ -169,7 +204,19 @@ impl AnthropicMessagesAdapter {
             connection,
             adapter,
             workspace: workspace.as_ref().to_path_buf(),
+            #[cfg(test)]
+            tool_boundary_cancellation: None,
         })
+    }
+
+    /// 测试专用：在 Rig 调用真实 repository tool 时触发指定取消信号。
+    #[cfg(test)]
+    pub(crate) fn with_tool_boundary_cancellation(
+        mut self,
+        cancellation: crate::operation::TestCancellation,
+    ) -> Self {
+        self.tool_boundary_cancellation = Some(cancellation);
+        self
     }
 }
 
@@ -194,6 +241,11 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                 self.connection.base_url(),
             ))
         })?;
+        #[cfg(test)]
+        let repository_tools = match self.tool_boundary_cancellation.clone() {
+            Some(cancellation) => repository_tools.with_execute_cancellation(cancellation),
+            None => repository_tools,
+        };
         let response = self
             .adapter
             .complete(AnthropicAdapterRequest {
@@ -292,7 +344,10 @@ impl AnthropicAdapter {
         let client = anthropic::Client::builder()
             .api_key(api_key.clone())
             .base_url(&self.config.base_url)
-            .http_client(OptionalAnthropicAuthClient::new(api_key.is_empty()))
+            .http_client(OptionalAnthropicAuthClient::new(
+                api_key.is_empty(),
+                request.cancellation.clone(),
+            ))
             .build()
             .map_err(|_| AnthropicAdapterError::Client)?;
         let tools = request.repository_tools.rig_tools(&request.cancellation);
@@ -324,6 +379,9 @@ impl AnthropicAdapter {
         let response = loop {
             tokio::select! {
                 response = &mut completion => {
+                    if cancellation.is_cancelled() {
+                        return Err(AnthropicAdapterError::Cancelled);
+                    }
                     break response.map_err(|_| AnthropicAdapterError::Protocol)?;
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {

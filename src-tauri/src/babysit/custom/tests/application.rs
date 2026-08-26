@@ -58,6 +58,16 @@ fn application_for_connection(
     protocol: CustomProviderProtocol,
     base_url: String,
 ) -> ConfiguredApplication {
+    application_for_connection_with_tool_cancellation(settings_path, protocol, base_url, None)
+}
+
+/// 构造可选 repository-tool 边界取消的真实 Custom capability。
+fn application_for_connection_with_tool_cancellation(
+    settings_path: impl Into<std::path::PathBuf>,
+    protocol: CustomProviderProtocol,
+    base_url: String,
+    tool_cancellation: Option<crate::operation::TestCancellation>,
+) -> ConfiguredApplication {
     let credentials = Arc::new(MemoryCredentials::default());
     let settings =
         ApplicationSettingsApplication::with_credential_adapter(settings_path.into(), credentials);
@@ -73,8 +83,14 @@ fn application_for_connection(
     settings
         .update_provider(BabysitProvider::Custom)
         .expect("选择 fixture Custom provider");
-    let bundle = Arc::new(CustomCapabilityBundle::new(settings.clone()))
-        as Arc<dyn BabysitProviderCapabilities>;
+    let bundle = match tool_cancellation {
+        Some(cancellation) => Arc::new(CustomCapabilityBundle::with_tool_boundary_cancellation(
+            settings.clone(),
+            cancellation,
+        )) as Arc<dyn BabysitProviderCapabilities>,
+        None => Arc::new(CustomCapabilityBundle::new(settings.clone()))
+            as Arc<dyn BabysitProviderCapabilities>,
+    };
     ConfiguredApplication {
         application: Arc::new(BabysitApplication::from_registry(
             [(BabysitProvider::Custom, bundle)].into_iter().collect(),
@@ -389,6 +405,69 @@ async fn both_custom_protocols_preserve_wire_contract_through_repository_tool_lo
         assert_eq!(read.hits_async().await, 1);
         assert_eq!(final_result.hits_async().await, 1);
         result.expect("repository tool loop 应完成");
+    }
+}
+
+/// 共享工具取消契约：在 Read execute 内取消后不得继续模型请求或写 completed cache。
+#[tokio::test]
+async fn both_custom_protocols_cancel_inside_repository_tool_without_cache() {
+    for protocol in [
+        CustomProviderProtocol::OpenaiChatCompletions,
+        CustomProviderProtocol::AnthropicMessages,
+    ] {
+        let server = MockServer::start_async().await;
+        let read = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .matches(omits_fixture_repository_result);
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(read_tool_response(protocol));
+            })
+            .await;
+        let final_result = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .body_contains("fixture repository context");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(final_response(protocol));
+            })
+            .await;
+        let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        std::fs::write(
+            workspace.path().join("fixture.rs"),
+            "fixture repository context\n",
+        )
+        .expect("写入 repository fixture");
+        let settings = tempfile::tempdir().expect("创建 fixture settings");
+        let cancellation = crate::operation::TestCancellation::default();
+        let configured = application_for_connection_with_tool_cancellation(
+            settings.path().join("settings.json"),
+            protocol,
+            base_url(protocol, &server),
+            Some(cancellation.clone()),
+        );
+        let (request, content) = fixture_input(workspace.path());
+
+        let cancelled = configured
+            .application
+            .explain_file(request.clone(), content.clone(), &cancellation, |_| Ok(()))
+            .await;
+        assert_eq!(cancelled, Err(crate::babysit::BabysitError::Cancelled));
+        assert_eq!(read.hits_async().await, 1);
+        assert_eq!(final_result.hits_async().await, 0);
+
+        let retry_cancellation = OperationContext::background().cancellation().clone();
+        configured
+            .application
+            .explain_file(request, content, &retry_cancellation, |_| Ok(()))
+            .await
+            .expect("tool 边界取消不应缓存，使用新 signal 的重试应完成");
+        assert_eq!(read.hits_async().await, 2);
+        assert_eq!(final_result.hits_async().await, 1);
     }
 }
 

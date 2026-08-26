@@ -16,7 +16,10 @@ use std::time::Duration;
 pub(crate) struct OpenAiChatCompletionsAdapter {
     connection: CustomConnectionSnapshot,
     client: CompletionsClient<OptionalAuthClient>,
+    http_client: OptionalAuthClient,
     workspace: PathBuf,
+    #[cfg(test)]
+    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
 }
 
 /// 复用 Rig 默认 HTTP backend，并在未配置 credential 时移除空 Bearer header。
@@ -24,6 +27,7 @@ pub(crate) struct OpenAiChatCompletionsAdapter {
 struct OptionalAuthClient {
     inner: rig::http_client::ReqwestClient,
     omit_authorization: bool,
+    cancellation: Arc<Mutex<Option<CancellationSignal>>>,
 }
 
 impl OptionalAuthClient {
@@ -32,7 +36,24 @@ impl OptionalAuthClient {
         Self {
             inner: rig::http_client::ReqwestClient::new(),
             omit_authorization,
+            cancellation: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 将当前 provider round 的共享取消信号绑定到每一次后续 HTTP dispatch。
+    fn bind_cancellation(&self, cancellation: &CancellationSignal) {
+        if let Ok(mut current) = self.cancellation.lock() {
+            *current = Some(cancellation.clone());
+        }
+    }
+
+    /// 工具或 repair 边界取消后，Rig 不得再发下一次 HTTP 请求。
+    fn dispatch_cancelled(&self) -> bool {
+        self.cancellation
+            .lock()
+            .ok()
+            .and_then(|current| current.clone())
+            .is_some_and(|cancellation| cancellation.is_cancelled())
     }
 
     /// 空 key 不能变成 `Authorization: Bearer `；非空 header 保持 Rig 原样。
@@ -56,7 +77,17 @@ impl HttpClientExt for OptionalAuthClient {
         U: From<bytes::Bytes> + WasmCompatSend + 'static,
     {
         self.strip_empty_authorization(&mut request);
-        self.inner.send(request)
+        let client = self.inner.clone();
+        let cancelled = self.dispatch_cancelled();
+        let (parts, body) = request.into_parts();
+        let request = http::Request::from_parts(parts, body.into());
+        async move {
+            if cancelled {
+                Err(rig::http_client::Error::NoHeaders)
+            } else {
+                client.send(request).await
+            }
+        }
     }
 
     /// 转发 multipart 请求，并保持与普通请求相同的可选认证语义。
@@ -70,7 +101,15 @@ impl HttpClientExt for OptionalAuthClient {
         U: From<bytes::Bytes> + WasmCompatSend + 'static,
     {
         self.strip_empty_authorization(&mut request);
-        self.inner.send_multipart(request)
+        let client = self.inner.clone();
+        let cancelled = self.dispatch_cancelled();
+        async move {
+            if cancelled {
+                Err(rig::http_client::Error::NoHeaders)
+            } else {
+                client.send_multipart(request).await
+            }
+        }
     }
 
     /// 转发流式请求，并在建立连接前移除无 credential 的认证 header。
@@ -82,7 +121,17 @@ impl HttpClientExt for OptionalAuthClient {
         T: Into<bytes::Bytes> + WasmCompatSend,
     {
         self.strip_empty_authorization(&mut request);
-        self.inner.send_streaming(request)
+        let client = self.inner.clone();
+        let cancelled = self.dispatch_cancelled();
+        let (parts, body) = request.into_parts();
+        let request = http::Request::from_parts(parts, body.into());
+        async move {
+            if cancelled {
+                Err(rig::http_client::Error::NoHeaders)
+            } else {
+                client.send_streaming(request).await
+            }
+        }
     }
 }
 
@@ -99,10 +148,11 @@ impl OpenAiChatCompletionsAdapter {
         }
         let base_url = connection.base_url().to_owned();
         let empty_key = connection.api_key().is_empty();
+        let http_client = OptionalAuthClient::new(empty_key);
         let client = CompletionsClient::builder()
             .base_url(&base_url)
             .api_key(connection.api_key().to_owned())
-            .http_client(OptionalAuthClient::new(empty_key))
+            .http_client(http_client.clone())
             .build()
             .map_err(|_| {
                 CustomAdapterError::Transport(CustomTransportFailure::new(
@@ -115,8 +165,21 @@ impl OpenAiChatCompletionsAdapter {
         Ok(Self {
             connection,
             client,
+            http_client,
             workspace: workspace.into(),
+            #[cfg(test)]
+            tool_boundary_cancellation: None,
         })
+    }
+
+    /// 测试专用：在 Rig 调用真实 repository tool 时触发指定取消信号。
+    #[cfg(test)]
+    pub(crate) fn with_tool_boundary_cancellation(
+        mut self,
+        cancellation: crate::operation::TestCancellation,
+    ) -> Self {
+        self.tool_boundary_cancellation = Some(cancellation);
+        self
     }
 
     /// 构造使用 Rig OutputMode::Tool 的 agent，供共享 runtime 保持会话与工具循环。
@@ -134,6 +197,11 @@ impl OpenAiChatCompletionsAdapter {
                 self.connection.base_url(),
             ))
         })?;
+        #[cfg(test)]
+        let tools = match self.tool_boundary_cancellation.clone() {
+            Some(cancellation) => tools.with_execute_cancellation(cancellation),
+            None => tools,
+        };
         let rig_tools = tools.rig_tools(cancellation);
         let preamble = preamble.into();
         Ok(self
@@ -169,6 +237,7 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
+        self.http_client.bind_cancellation(cancellation);
         let agent = self.agent_for_workspace(
             &self.workspace,
             cancellation,
@@ -187,6 +256,9 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
             }
             tokio::select! {
                 result = &mut future => {
+                    if cancellation.is_cancelled() {
+                        return Err(CustomAdapterError::Cancelled);
+                    }
                     let response = result.map_err(|_| {
                         CustomAdapterError::Transport(
                             CustomTransportFailure::new(

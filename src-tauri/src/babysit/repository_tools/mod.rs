@@ -241,6 +241,8 @@ impl std::error::Error for RepositoryToolError {}
 #[derive(Clone, Debug)]
 pub struct RepositoryTools {
     pub(super) workspace_root: PathBuf,
+    #[cfg(test)]
+    cancel_before_execute: Option<crate::operation::TestCancellation>,
 }
 
 /// 一次 Built-in provider 分析可直接注册的三个 Rig 工具。
@@ -284,7 +286,27 @@ impl RepositoryTools {
         }
         Ok(Self {
             workspace_root: canonical_root,
+            #[cfg(test)]
+            cancel_before_execute: None,
         })
+    }
+
+    /// 测试专用：在进入真实 repository tool 实现时触发指定取消信号。
+    #[cfg(test)]
+    pub(crate) fn with_execute_cancellation(
+        mut self,
+        cancellation: crate::operation::TestCancellation,
+    ) -> Self {
+        self.cancel_before_execute = Some(cancellation);
+        self
+    }
+
+    /// 测试专用：在 typed 或 Rig 工具进入真实实现前触发边界取消。
+    #[cfg(test)]
+    fn trigger_execute_cancellation(&self) {
+        if let Some(cancel) = &self.cancel_before_execute {
+            cancel.cancel();
+        }
     }
 
     /// 返回仅含 Read、Glob、Grep 且每项带输入 schema 的注册视图。
@@ -359,6 +381,8 @@ impl RepositoryTools {
         request: RepositoryToolRequest,
         cancellation: &CancellationSignal,
     ) -> Result<RepositoryToolResponse, RepositoryToolError> {
+        #[cfg(test)]
+        self.trigger_execute_cancellation();
         match request {
             RepositoryToolRequest::Read(input) => self
                 .read(input, cancellation)
@@ -422,6 +446,8 @@ impl rig::tool::Tool for RigReadTool {
         _context: &mut rig::tool::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        #[cfg(test)]
+        self.tools.trigger_execute_cancellation();
         self.tools.read(args, &self.cancellation)
     }
 }
@@ -448,6 +474,8 @@ impl rig::tool::Tool for RigGlobTool {
         _context: &mut rig::tool::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        #[cfg(test)]
+        self.tools.trigger_execute_cancellation();
         glob::execute(&self.tools.workspace_root, &args, &self.cancellation)
     }
 }
@@ -474,6 +502,8 @@ impl rig::tool::Tool for RigGrepTool {
         _context: &mut rig::tool::ToolContext,
         args: Self::Args,
     ) -> Result<Self::Output, Self::Error> {
+        #[cfg(test)]
+        self.tools.trigger_execute_cancellation();
         grep::execute(&self.tools.workspace_root, &args, &self.cancellation)
     }
 }

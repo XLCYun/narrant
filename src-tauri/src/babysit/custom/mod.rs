@@ -78,6 +78,8 @@ impl BabysitAgentProvider for CustomProvider {
 pub(crate) struct CustomCapabilityBundle {
     settings: crate::application_settings::ApplicationSettingsApplication,
     runtime: Arc<CustomRuntime>,
+    #[cfg(test)]
+    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
 }
 
 impl CustomCapabilityBundle {
@@ -88,6 +90,21 @@ impl CustomCapabilityBundle {
         Self {
             settings,
             runtime: Arc::new(CustomRuntime::new()),
+            #[cfg(test)]
+            tool_boundary_cancellation: None,
+        }
+    }
+
+    /// 测试专用：在真实 repository tool 边界注入一次共享取消信号。
+    #[cfg(test)]
+    pub(crate) fn with_tool_boundary_cancellation(
+        settings: crate::application_settings::ApplicationSettingsApplication,
+        cancellation: crate::operation::TestCancellation,
+    ) -> Self {
+        Self {
+            settings,
+            runtime: Arc::new(CustomRuntime::new()),
+            tool_boundary_cancellation: Some(cancellation),
         }
     }
 }
@@ -134,20 +151,30 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
         })?;
         let process_generation = snapshot.cache_identity();
         let adapter: Arc<dyn CustomProtocolAdapter> = match snapshot.protocol() {
-            CustomProtocol::OpenaiChatCompletions => Arc::new(
-                OpenAiChatCompletionsAdapter::new(snapshot.clone(), workspace_path).map_err(
-                    |error| BabysitError::Provider {
+            CustomProtocol::OpenaiChatCompletions => {
+                let adapter = OpenAiChatCompletionsAdapter::new(snapshot.clone(), workspace_path)
+                    .map_err(|error| BabysitError::Provider {
+                    detail: error.to_string(),
+                })?;
+                #[cfg(test)]
+                let adapter = match self.tool_boundary_cancellation.clone() {
+                    Some(cancellation) => adapter.with_tool_boundary_cancellation(cancellation),
+                    None => adapter,
+                };
+                Arc::new(adapter)
+            }
+            CustomProtocol::AnthropicMessages => {
+                let adapter = AnthropicMessagesAdapter::new(snapshot.clone(), workspace_path)
+                    .map_err(|error| BabysitError::Provider {
                         detail: error.to_string(),
-                    },
-                )?,
-            ),
-            CustomProtocol::AnthropicMessages => Arc::new(
-                AnthropicMessagesAdapter::new(snapshot.clone(), workspace_path).map_err(
-                    |error| BabysitError::Provider {
-                        detail: error.to_string(),
-                    },
-                )?,
-            ),
+                    })?;
+                #[cfg(test)]
+                let adapter = match self.tool_boundary_cancellation.clone() {
+                    Some(cancellation) => adapter.with_tool_boundary_cancellation(cancellation),
+                    None => adapter,
+                };
+                Arc::new(adapter)
+            }
         };
         let provider = Arc::new(CustomProvider::new(
             self.runtime.clone(),
