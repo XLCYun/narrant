@@ -114,18 +114,15 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
                 BabysitProviderSetupFailure::NotFound,
             ));
         }
-        let full_connection =
-            self.settings
-                .load_custom_connection()
-                .map_err(|_| BabysitError::Provider {
-                    detail: "Custom provider 连接不可用。".to_owned(),
-                })?;
-        let settings = self.settings.load().map_err(|_| BabysitError::Provider {
-            detail: "Custom provider 设置不可用。".to_owned(),
-        })?;
+        let (full_connection, credential_generation) = self
+            .settings
+            .load_custom_connection_with_generation()
+            .map_err(|_| BabysitError::Provider {
+                detail: "Custom provider 连接不可用。".to_owned(),
+            })?;
         let snapshot = CustomConnectionSnapshot::from_connection(
             full_connection,
-            settings.babysit.custom.credential_generation.to_string(),
+            credential_generation.to_string(),
         )
         .map_err(|error| match error {
             CustomAdapterError::UnsupportedProtocol(_) => {
