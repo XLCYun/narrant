@@ -6,7 +6,8 @@
 use super::{
     codex_setup_error, parse_provider_response, validate_response, BabysitAgentProvider,
     BabysitError, BabysitFileExplanations, BabysitProviderRequest, BabysitProviderSetupFailure,
-    CancellationSignal, FileSide, LineTarget, ValidationFailure, MAX_REPAIR_ATTEMPTS,
+    BabysitResolvedModel, CancellationSignal, FileSide, LineTarget, ValidationFailure,
+    MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -558,8 +559,8 @@ impl BabysitAgentProvider for CodexAppServerProvider {
     }
 
     /// 无 Runtime 的测试 provider 保留稳定默认值；生产模型解析由 Codex Capability 负责。
-    async fn resolve_analysis_model(&self) -> Result<ResolvedCodexModel, BabysitError> {
-        Ok(ResolvedCodexModel {
+    async fn resolve_analysis_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
+        Ok(BabysitResolvedModel {
             model: BABYSIT_CODEX_MODEL.to_owned(),
             reasoning_effort: BABYSIT_REASONING_EFFORT.to_owned(),
         })

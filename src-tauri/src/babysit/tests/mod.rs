@@ -124,7 +124,7 @@ async fn executable_invalidation_discards_catalog_and_analysis_cache() {
 
 /// 在 generate 中暂停的 provider，用于观察偏好变化不会改写已解析请求。
 struct InFlightModelProvider {
-    resolved: Mutex<codex::ResolvedCodexModel>,
+    resolved: Mutex<BabysitResolvedModel>,
     observed: Mutex<Vec<(String, String)>>,
     started: Notify,
     release: Notify,
@@ -141,7 +141,7 @@ impl BabysitAgentProvider for InFlightModelProvider {
         "generation-1".to_owned()
     }
     /// 在每次新分析开始时快照当前解析模型。
-    async fn resolve_analysis_model(&self) -> Result<codex::ResolvedCodexModel, BabysitError> {
+    async fn resolve_analysis_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
         Ok(self.resolved.lock().unwrap().clone())
     }
     /// 记录分析收到的模型组合，并暂停到测试显式释放。
@@ -343,7 +343,7 @@ async fn cache_isolated_by_resolved_model_and_reasoning_effort() {
 #[tokio::test]
 async fn preference_change_during_generate_keeps_the_active_resolved_model() {
     let provider = Arc::new(InFlightModelProvider {
-        resolved: Mutex::new(codex::ResolvedCodexModel {
+        resolved: Mutex::new(BabysitResolvedModel {
             model: "model-before".to_owned(),
             reasoning_effort: "low".to_owned(),
         }),
@@ -366,7 +366,7 @@ async fn preference_change_during_generate_keeps_the_active_resolved_model() {
         }
     });
     provider.started.notified().await;
-    *provider.resolved.lock().unwrap() = codex::ResolvedCodexModel {
+    *provider.resolved.lock().unwrap() = BabysitResolvedModel {
         model: "model-after".to_owned(),
         reasoning_effort: "high".to_owned(),
     };

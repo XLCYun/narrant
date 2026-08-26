@@ -38,11 +38,10 @@ impl BabysitProviderCapabilities for RecordingBundle {
             .push(preference.and_then(|settings| settings.model.clone()));
         Ok(PreparedBabysitAnalysis {
             provider: self.provider.clone(),
-            resolved: codex::ResolvedCodexModel {
+            resolved: BabysitResolvedModel {
                 model: "model".to_owned(),
                 reasoning_effort: "high".to_owned(),
-            }
-            .into(),
+            },
             process_generation: "generation".to_owned(),
             _lease: None,
         })
@@ -290,7 +289,7 @@ async fn in_flight_analysis_keeps_the_provider_snapshot_selected_at_start() {
     let settings_path = directory.path().join("settings.json");
     let settings = ApplicationSettingsApplication::new(settings_path.clone());
     let codex_provider = Arc::new(InFlightModelProvider {
-        resolved: Mutex::new(codex::ResolvedCodexModel {
+        resolved: Mutex::new(BabysitResolvedModel {
             model: "codex-model".to_owned(),
             reasoning_effort: "high".to_owned(),
         }),
