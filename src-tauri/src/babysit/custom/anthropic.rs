@@ -20,16 +20,16 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-/// 在空凭据场景移除 Rig Anthropic builder 产生的空认证头。
+/// Anthropic 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
 #[derive(Clone, Default)]
-struct OptionalAnthropicAuthClient {
+struct AnthropicRequestGuardClient {
     inner: http_client::ReqwestClient,
     omit_authentication: bool,
     cancellation: CancellationSignal,
 }
 
-impl OptionalAnthropicAuthClient {
-    /// 创建保留 Rig transport、仅按连接快照决定是否省略认证头的客户端。
+impl AnthropicRequestGuardClient {
+    /// 创建同时执行可选认证与 dispatch-time 取消检查的 Rig backend。
     fn new(omit_authentication: bool, cancellation: CancellationSignal) -> Self {
         Self {
             inner: http_client::ReqwestClient::default(),
@@ -47,8 +47,8 @@ impl OptionalAnthropicAuthClient {
     }
 }
 
-impl HttpClientExt for OptionalAnthropicAuthClient {
-    /// 转发普通请求，并在空凭据时省略认证头。
+impl HttpClientExt for AnthropicRequestGuardClient {
+    /// 普通请求发送前同时检查取消，并在空凭据时省略认证头。
     fn send<T, U>(
         &self,
         request: Request<T>,
@@ -71,7 +71,7 @@ impl HttpClientExt for OptionalAnthropicAuthClient {
         }
     }
 
-    /// 转发 multipart 请求，并在空凭据时省略认证头。
+    /// Multipart 请求发送前执行相同的取消与可选认证守卫。
     fn send_multipart<U>(
         &self,
         request: Request<MultipartForm>,
@@ -91,7 +91,7 @@ impl HttpClientExt for OptionalAnthropicAuthClient {
         }
     }
 
-    /// 转发流式请求，并在空凭据时省略认证头。
+    /// 流式请求建立连接前执行相同的取消与可选认证守卫。
     fn send_streaming<T>(
         &self,
         request: Request<T>,
@@ -344,7 +344,7 @@ impl AnthropicAdapter {
         let client = anthropic::Client::builder()
             .api_key(api_key.clone())
             .base_url(&self.config.base_url)
-            .http_client(OptionalAnthropicAuthClient::new(
+            .http_client(AnthropicRequestGuardClient::new(
                 api_key.is_empty(),
                 request.cancellation.clone(),
             ))

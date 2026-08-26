@@ -15,23 +15,23 @@ use std::time::Duration;
 #[derive(Clone)]
 pub(crate) struct OpenAiChatCompletionsAdapter {
     connection: CustomConnectionSnapshot,
-    client: CompletionsClient<OptionalAuthClient>,
-    http_client: OptionalAuthClient,
+    client: CompletionsClient<OpenAiRequestGuardClient>,
+    http_client: OpenAiRequestGuardClient,
     workspace: PathBuf,
     #[cfg(test)]
     tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
 }
 
-/// 复用 Rig 默认 HTTP backend，并在未配置 credential 时移除空 Bearer header。
+/// OpenAI 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
 #[derive(Clone, Debug, Default)]
-struct OptionalAuthClient {
+struct OpenAiRequestGuardClient {
     inner: rig::http_client::ReqwestClient,
     omit_authorization: bool,
     cancellation: Arc<Mutex<Option<CancellationSignal>>>,
 }
 
-impl OptionalAuthClient {
-    /// 创建只处理“无 credential”语义的透明 backend。
+impl OpenAiRequestGuardClient {
+    /// 创建同时执行可选认证与 dispatch-time 取消检查的 Rig backend。
     fn new(omit_authorization: bool) -> Self {
         Self {
             inner: rig::http_client::ReqwestClient::new(),
@@ -64,8 +64,8 @@ impl OptionalAuthClient {
     }
 }
 
-impl HttpClientExt for OptionalAuthClient {
-    /// 转发普通请求，并在无 credential 时移除空 Authorization header。
+impl HttpClientExt for OpenAiRequestGuardClient {
+    /// 普通请求发送前同时检查取消，并在无 credential 时移除空认证头。
     fn send<T, U>(
         &self,
         mut request: http::Request<T>,
@@ -90,7 +90,7 @@ impl HttpClientExt for OptionalAuthClient {
         }
     }
 
-    /// 转发 multipart 请求，并保持与普通请求相同的可选认证语义。
+    /// Multipart 请求发送前执行相同的取消与可选认证守卫。
     fn send_multipart<U>(
         &self,
         mut request: http::Request<MultipartForm>,
@@ -112,7 +112,7 @@ impl HttpClientExt for OptionalAuthClient {
         }
     }
 
-    /// 转发流式请求，并在建立连接前移除无 credential 的认证 header。
+    /// 流式请求建立连接前执行相同的取消与可选认证守卫。
     fn send_streaming<T>(
         &self,
         mut request: http::Request<T>,
@@ -148,7 +148,7 @@ impl OpenAiChatCompletionsAdapter {
         }
         let base_url = connection.base_url().to_owned();
         let empty_key = connection.api_key().is_empty();
-        let http_client = OptionalAuthClient::new(empty_key);
+        let http_client = OpenAiRequestGuardClient::new(empty_key);
         let client = CompletionsClient::builder()
             .base_url(&base_url)
             .api_key(connection.api_key().to_owned())
