@@ -8,6 +8,9 @@ use crate::application_settings::{
     CustomProviderProtocol,
 };
 use crate::babysit::{BabysitApplication, FakeBabysitProvider, TestBabysitApplication};
+use crate::babysit::{BabysitFileRequest, BabysitGenerationPolicy, ReviewIdentity};
+use crate::operation::OperationContext;
+use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
 use std::sync::{Arc, Mutex};
 
 /// 构造不连接外部 provider 的 typed command 测试边界。
@@ -103,8 +106,8 @@ fn provider_command_switches_the_authoritative_snapshot() {
     assert_eq!(settings.load().unwrap(), updated);
 }
 
-#[test]
-fn custom_typed_command_seam_round_trips_the_complete_connection() {
+#[tokio::test]
+async fn custom_typed_command_seam_round_trips_connection_and_invalidates_completed_results() {
     let directory = tempfile::tempdir().unwrap();
     let credentials = Arc::new(CommandCredentials::default());
     let settings = ApplicationSettingsApplication::with_credential_adapter(
@@ -119,15 +122,56 @@ fn custom_typed_command_seam_round_trips_the_complete_connection() {
         effort: CustomProviderEffort::High,
     };
 
-    let babysit = TestBabysitApplication::with_provider(Arc::new(FakeBabysitProvider::default()));
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let babysit = TestBabysitApplication::with_provider(provider.clone());
+    let request = BabysitFileRequest {
+        identity: ReviewIdentity {
+            review_id: "review".to_owned(),
+            snapshot_id: "snapshot".to_owned(),
+        },
+        path: "src/example.rs".to_owned(),
+        locale: "zh-CN".to_owned(),
+        workspace_path: directory.path().display().to_string(),
+        detected_language: Some("rust".to_owned()),
+        generation_policy: BabysitGenerationPolicy::ReuseCached,
+    };
+    let content = FileChangeContent {
+        path: request.path.clone(),
+        old_path: None,
+        status: FileChangeStatus::Modified,
+        before: Some(FileContent::Text {
+            size: 11,
+            text: "let x = 1;".to_owned(),
+        }),
+        after: Some(FileContent::Text {
+            size: 11,
+            text: "let x = 2;".to_owned(),
+        }),
+    };
+    let cancellation = OperationContext::background().cancellation().clone();
+    babysit
+        .explain_file(request.clone(), content.clone(), &cancellation, |_| Ok(()))
+        .await
+        .unwrap();
+    babysit
+        .explain_file(request.clone(), content.clone(), &cancellation, |_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(provider.generate_calls(), 1);
+
     let saved = save_custom_provider_connection(&settings, &babysit, connection.clone()).unwrap();
     let loaded = read_custom_provider_connection(&settings).unwrap();
+    babysit
+        .explain_file(request, content, &cancellation, |_| Ok(()))
+        .await
+        .unwrap();
 
     assert_eq!(saved.babysit.custom.protocol, connection.protocol);
     assert_eq!(saved.babysit.custom.base_url, connection.base_url);
     assert_eq!(saved.babysit.custom.model, connection.model);
     assert_eq!(saved.babysit.custom.effort, connection.effort);
     assert_eq!(loaded, connection);
+    assert_eq!(provider.generate_calls(), 2);
 }
 
 #[derive(Default)]
