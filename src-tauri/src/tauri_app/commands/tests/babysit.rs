@@ -22,7 +22,7 @@ fn markdown_change() -> FileChangeContent {
 fn explain_gate_rejects_ineligible_file_before_runtime_io() {
     let directory = tempfile::tempdir().unwrap();
     let settings = directory.path().join("babysit-settings.json");
-    let babysit = BabysitApplication::with_codex_provider_at(&settings);
+    let babysit = BabysitApplication::with_installed_provider_registry_at(&settings);
 
     let error =
         validate_explain_input(&babysit, "README.md", &markdown_change(), None).unwrap_err();

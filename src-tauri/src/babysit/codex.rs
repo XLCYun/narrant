@@ -44,11 +44,6 @@ const CODEX_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_THREAD_SOURCE: &str = "feature:narrant-babysit";
 /// 连接握手时发送的固定客户端身份，不包含用户路径或模型信息。
 const CODEX_CLIENT_NAME: &str = "narrant_babysit";
-/// Babysit 当前固定使用的高吞吐 Luna 模型，仅作用于 Babysit thread。
-pub(super) const BABYSIT_CODEX_MODEL: &str = "gpt-5.6-luna";
-/// 逐行解释属于低复杂度任务，使用最低 reasoning effort 缩短等待时间。
-pub(super) const BABYSIT_REASONING_EFFORT: &str = "low";
-
 /// 生产 Codex 启动命令与测试 fake JSONL fixture 共用的进程描述。
 #[derive(Clone, Debug)]
 struct AppServerCommand {
@@ -543,11 +538,6 @@ impl CodexAppServerProvider {
 
 #[async_trait]
 impl BabysitAgentProvider for CodexAppServerProvider {
-    /// 稳定 provider identity，供 cache 与 diagnostics 分类使用。
-    fn provider_id(&self) -> &str {
-        "codex"
-    }
-
     /// 返回当前真实 App Server 代际；每次成功 spawn 都生成新的缓存 identity。
     fn process_generation(&self) -> String {
         format!(
@@ -555,14 +545,6 @@ impl BabysitAgentProvider for CodexAppServerProvider {
             self.generation_prefix,
             self.generation.load(Ordering::Acquire)
         )
-    }
-
-    /// 无 Runtime 的测试 provider 保留稳定默认值；生产模型解析由 Codex Capability 负责。
-    async fn resolve_analysis_model(&self) -> Result<ResolvedCodexModel, BabysitError> {
-        Ok(ResolvedCodexModel {
-            model: BABYSIT_CODEX_MODEL.to_owned(),
-            reasoning_effort: BABYSIT_REASONING_EFFORT.to_owned(),
-        })
     }
 
     /// 启动一个 fresh marked thread，并把完整 File Change 作为一次 turn 提交。

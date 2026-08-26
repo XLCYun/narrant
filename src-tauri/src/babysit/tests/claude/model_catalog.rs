@@ -1,10 +1,10 @@
-use super::{BabysitAgentProvider, ClaudeCodeProvider, ClaudeModelCatalog, ResolvedClaudeModel};
+use super::{ClaudeModelCatalog, ResolvedClaudeModel};
 use crate::application_settings::BabysitProviderSettings;
 
 #[test]
 fn claude_code_uses_the_stable_provider_identity() {
     assert_eq!(
-        ClaudeCodeProvider::new("claude").provider_id(),
+        crate::application_settings::BabysitProvider::ClaudeCode.identity(),
         "claude-code"
     );
 }
