@@ -10,60 +10,84 @@ use std::fmt;
 /// Custom provider 在 registry 中使用的稳定 identity。
 pub(crate) const PROVIDER_ID: &str = "custom";
 
-/// 尚未接入 Rig transport 的 Custom provider；本切片只负责配置 readiness。
-pub(crate) struct CustomProvider;
+/// 已冻结连接的 Custom provider；请求编排委托给共享 runtime。
+pub(crate) struct CustomProvider {
+    runtime: Arc<CustomRuntime>,
+    adapter: Arc<dyn CustomProtocolAdapter>,
+    process_generation: String,
+}
 
 impl CustomProvider {
-    /// 构造无网络状态的 Custom provider，不读取 endpoint 或 credential。
-    pub(crate) fn new() -> Self {
-        Self
+    /// 将单一冻结 adapter 接入共享 runtime，不在构造阶段发出网络请求。
+    fn new(
+        runtime: Arc<CustomRuntime>,
+        adapter: Arc<dyn CustomProtocolAdapter>,
+        process_generation: String,
+    ) -> Self {
+        Self {
+            runtime,
+            adapter,
+            process_generation,
+        }
     }
 }
 
 #[async_trait]
 impl BabysitAgentProvider for CustomProvider {
-    /// 配置变化不应复用先前的 Custom 运行结果。
+    /// 冻结连接的非 secret identity 参与缓存隔离。
     fn process_generation(&self) -> String {
-        "custom-config-v1".to_owned()
+        self.process_generation.clone()
     }
 
-    /// 139B 不实现 Rig 请求；配置就绪后以稳定 setup failure 表示待后续切片接入。
+    /// 通过共享 runtime 生成完整 before/after 结果。
     async fn generate(
         &self,
-        _request: BabysitProviderRequest,
-        _cancellation: &CancellationSignal,
+        request: BabysitProviderRequest,
+        cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
-        Err(BabysitError::provider_setup(
-            PROVIDER_ID,
-            BabysitProviderSetupFailure::Incompatible,
-        ))
+        self.runtime
+            .generate(self.adapter.clone(), request, cancellation)
+            .await
     }
 
-    /// 139B 不创建模型会话，因此也不执行 repair 请求。
+    /// 在同一内存会话中执行 validation 指向的 repair。
     async fn repair(
         &self,
-        _request: BabysitProviderRequest,
-        _previous: BabysitFileExplanations,
-        _failures: Vec<ValidationFailure>,
-        _cancellation: &CancellationSignal,
+        request: BabysitProviderRequest,
+        previous: BabysitFileExplanations,
+        failures: Vec<ValidationFailure>,
+        cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
-        Err(BabysitError::provider_setup(
-            PROVIDER_ID,
-            BabysitProviderSetupFailure::Incompatible,
-        ))
+        self.runtime
+            .repair(request, previous, failures, cancellation)
+            .await
+    }
+
+    /// 取消、失败或完成后丢弃该分析在 runtime 中的单内存会话。
+    async fn abandon(&self, request: &BabysitProviderRequest) {
+        self.runtime.abandon(request.analysis_run_id);
+    }
+
+    /// 应用退出时清空 runtime 中尚未结束的 Custom 会话。
+    async fn shutdown(&self) {
+        self.runtime.shutdown();
     }
 }
 
-/// Custom capability bundle 只投影 settings readiness，不做 endpoint 探测。
+/// Custom capability bundle 负责读取完整连接并为每次分析冻结 adapter。
 pub(crate) struct CustomCapabilityBundle {
-    provider: Arc<CustomProvider>,
+    settings: crate::application_settings::ApplicationSettingsApplication,
+    runtime: Arc<CustomRuntime>,
 }
 
 impl CustomCapabilityBundle {
-    /// 创建空网络、空 credential ownership 的 Custom capability。
-    pub(crate) fn new() -> Self {
+    /// 创建不发起网络请求的 Custom capability，并共享进程内 runtime。
+    pub(crate) fn new(
+        settings: crate::application_settings::ApplicationSettingsApplication,
+    ) -> Self {
         Self {
-            provider: Arc::new(CustomProvider::new()),
+            settings,
+            runtime: Arc::new(CustomRuntime::new()),
         }
     }
 }
@@ -90,13 +114,56 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
                 BabysitProviderSetupFailure::NotFound,
             ));
         }
-        Ok(PreparedBabysitAnalysis {
-            provider: self.provider.clone(),
-            resolved: BabysitResolvedModel {
-                model: connection.model.trim().to_owned(),
-                reasoning_effort: connection.effort.as_str().to_owned(),
+        let full_connection =
+            self.settings
+                .load_custom_connection()
+                .map_err(|_| BabysitError::Provider {
+                    detail: "Custom provider 连接不可用。".to_owned(),
+                })?;
+        let settings = self.settings.load().map_err(|_| BabysitError::Provider {
+            detail: "Custom provider 设置不可用。".to_owned(),
+        })?;
+        let snapshot = CustomConnectionSnapshot::from_connection(
+            full_connection,
+            settings.babysit.custom.credential_generation.to_string(),
+        )
+        .map_err(|error| match error {
+            CustomAdapterError::UnsupportedProtocol(_) => {
+                BabysitError::provider_setup(PROVIDER_ID, BabysitProviderSetupFailure::Incompatible)
+            }
+            other => BabysitError::Provider {
+                detail: other.to_string(),
             },
-            process_generation: self.provider.process_generation(),
+        })?;
+        let process_generation = snapshot.cache_identity();
+        let adapter: Arc<dyn CustomProtocolAdapter> = match snapshot.protocol() {
+            CustomProtocol::OpenaiChatCompletions => Arc::new(
+                OpenAiChatCompletionsAdapter::new(snapshot.clone()).map_err(|error| {
+                    BabysitError::Provider {
+                        detail: error.to_string(),
+                    }
+                })?,
+            ),
+            // Anthropic wire shape 由后续 adapter slice 实现，此处只保留 capability 分类。
+            CustomProtocol::AnthropicMessages => {
+                return Err(BabysitError::provider_setup(
+                    PROVIDER_ID,
+                    BabysitProviderSetupFailure::Incompatible,
+                ));
+            }
+        };
+        let provider = Arc::new(CustomProvider::new(
+            self.runtime.clone(),
+            adapter,
+            process_generation,
+        ));
+        Ok(PreparedBabysitAnalysis {
+            provider,
+            resolved: BabysitResolvedModel {
+                model: snapshot.model().to_owned(),
+                reasoning_effort: snapshot.effort().as_str().to_owned(),
+            },
+            process_generation: snapshot.cache_identity(),
             _lease: None,
         })
     }
@@ -116,8 +183,10 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
         ))
     }
 
-    /// 当前 Custom capability 没有网络或子进程资源需要释放。
-    async fn shutdown(&self) {}
+    /// 清空共享 runtime，不持有网络线程或子进程。
+    async fn shutdown(&self) {
+        self.runtime.shutdown();
+    }
 }
 
 impl crate::application_settings::CustomProviderEffort {
@@ -133,11 +202,13 @@ impl crate::application_settings::CustomProviderEffort {
 
 mod final_tool;
 mod openai;
+mod runtime;
 
 pub(crate) use final_tool::{
     custom_tool_definitions, line_explanation_schema, FINAL_OUTPUT_TOOL_NAME,
 };
 pub(crate) use openai::OpenAiChatCompletionsAdapter;
+pub(crate) use runtime::CustomRuntime;
 
 /// Custom 协议适配器共享的单次模型调用上限。
 pub(crate) const MAX_MODEL_TURNS: usize = 16;
@@ -217,7 +288,7 @@ impl fmt::Debug for CustomConnectionSnapshot {
         formatter
             .debug_struct("CustomConnectionSnapshot")
             .field("protocol", &self.protocol)
-            .field("base_url", &self.base_url)
+            .field("origin_hash", &endpoint_origin_hash(&self.base_url))
             .field(
                 "api_key",
                 &(!self.api_key.expose_secret().is_empty()).then_some("<redacted>"),
@@ -292,6 +363,19 @@ impl CustomConnectionSnapshot {
     /// 返回不含 secret 的凭据 generation，用于冻结运行和缓存隔离。
     pub(crate) fn credential_generation(&self) -> &str {
         &self.credential_generation
+    }
+
+    /// 返回只由非 secret 连接字段组成的稳定缓存 identity。
+    pub(crate) fn cache_identity(&self) -> String {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.protocol.hash(&mut hasher);
+        self.base_url.hash(&mut hasher);
+        self.model.hash(&mut hasher);
+        self.effort.hash(&mut hasher);
+        self.credential_generation.hash(&mut hasher);
+        format!("custom-config-{:016x}", hasher.finish())
     }
 
     /// 仅供 adapter 构造 Rig client 时读取 secret。
