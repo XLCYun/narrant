@@ -93,6 +93,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             application_settings_commands::load_application_settings,
+            application_settings_commands::load_application_custom_connection,
+            application_settings_commands::save_application_custom_connection,
             application_settings_commands::update_application_theme,
             application_settings_commands::update_application_babysit_provider,
             application_settings_commands::update_application_babysit_preferences,
