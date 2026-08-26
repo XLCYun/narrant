@@ -181,6 +181,13 @@ impl fmt::Display for BabysitError {
             Self::ProviderSetup {
                 provider_id,
                 failure,
+            } if provider_id == "custom" && *failure == BabysitProviderSetupFailure::NotFound => {
+                formatter
+                    .write_str("Custom provider 尚未配置；请在 Application Settings 中完成设置")
+            }
+            Self::ProviderSetup {
+                provider_id,
+                failure,
             } => match failure {
                 BabysitProviderSetupFailure::NotFound => {
                     write!(formatter, "未找到 {provider_id} provider 可执行文件")

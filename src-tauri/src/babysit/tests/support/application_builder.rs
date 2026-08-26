@@ -20,7 +20,7 @@ impl BabysitProviderCapabilities for TestCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        _preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        _preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
         if let Some(runtime) = &self.runtime {
             runtime.ensure_ready(workspace_path).await?;

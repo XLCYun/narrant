@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 mod application;
 mod claude;
 mod codex;
+mod custom;
 mod eligibility;
 mod error;
 mod model_catalog;
@@ -123,7 +124,7 @@ pub trait BabysitProviderCapabilities: Send + Sync {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError>;
     /// 解析该 provider 当前可见的模型目录。
     async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError>;
@@ -153,9 +154,13 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
-        let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+        let Some(crate::application_settings::BabysitProviderPreference::Installed(preference)) =
+            preference
+        else {
+            return Err(BabysitError::ModelPreferenceInvalid);
+        };
         let (resolved, lease) = self
             .runtime
             .prepare_analysis_with_preference(workspace_path, preference)
@@ -208,9 +213,13 @@ impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
-        let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+        let Some(crate::application_settings::BabysitProviderPreference::Installed(preference)) =
+            preference
+        else {
+            return Err(BabysitError::ModelPreferenceInvalid);
+        };
         let resolved = Self::resolve_preference(preference)?;
         self.runtime.ensure_ready(workspace_path).await?;
         Ok(PreparedBabysitAnalysis {

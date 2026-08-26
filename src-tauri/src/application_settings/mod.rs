@@ -20,8 +20,10 @@ pub(crate) enum ThemePreference {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Hash, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum BabysitProvider {
-    /// 使用 Codex App Server。
+    /// 首次启动默认使用 Custom，避免未经用户选择消耗已安装 provider 的配额。
     #[default]
+    Custom,
+    /// 使用 Codex App Server。
     Codex,
     /// 使用本机 Claude Code。
     ClaudeCode,
@@ -33,8 +35,41 @@ impl BabysitProvider {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
+            Self::Custom => "custom",
         }
     }
+}
+
+/// Custom 直接连接的协议；协议必须由用户明确选择，不能根据 URL 推断。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CustomProviderProtocol {
+    /// OpenAI Chat Completions 兼容协议。
+    #[default]
+    OpenaiChatCompletions,
+    /// Anthropic Messages 兼容协议。
+    AnthropicMessages,
+}
+
+/// Custom 请求使用的有限 effort 档位。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CustomProviderEffort {
+    Low,
+    /// 新建 Custom 设置默认采用 medium。
+    #[default]
+    Medium,
+    High,
+}
+
+/// Custom 的非 secret 连接快照；API key 由 credential adapter 单独管理。
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CustomProviderSettings {
+    pub protocol: CustomProviderProtocol,
+    pub base_url: String,
+    pub model: String,
+    pub effort: CustomProviderEffort,
 }
 
 /// 单个 provider 独立保留的完整偏好组合。
@@ -56,17 +91,29 @@ pub(crate) struct BabysitSettings {
     pub provider: BabysitProvider,
     pub codex: BabysitProviderSettings,
     pub claude_code: BabysitProviderSettings,
+    /// Custom 连接的非 secret 快照；缺失时保持未配置状态。
+    #[serde(default)]
+    pub custom: CustomProviderSettings,
 }
 
 impl Default for BabysitSettings {
-    /// 首次启动默认选择 Codex，并为两个 provider 建立空配置。
+    /// 首次启动默认选择 Custom，并为三个 provider 建立独立配置。
     fn default() -> Self {
         Self {
-            provider: BabysitProvider::Codex,
+            provider: BabysitProvider::Custom,
             codex: BabysitProviderSettings::default(),
             claude_code: BabysitProviderSettings::default(),
+            custom: CustomProviderSettings::default(),
         }
     }
+}
+
+/// 一次分析从同一 Application Settings 快照借用的 provider 配置。
+pub(crate) enum BabysitProviderPreference<'a> {
+    /// Installed provider 的 executable/model/effort 组合。
+    Installed(&'a BabysitProviderSettings),
+    /// Custom 的协议、地址、模型与 effort 组合。
+    Custom(&'a CustomProviderSettings),
 }
 
 impl BabysitSettings {
@@ -75,6 +122,19 @@ impl BabysitSettings {
         match provider {
             BabysitProvider::Codex => &self.codex,
             BabysitProvider::ClaudeCode => &self.claude_code,
+            BabysitProvider::Custom => &self.codex,
+        }
+    }
+
+    /// 按稳定 provider identity 投影同一设置快照，避免应用层出现 provider 分支。
+    pub(crate) fn provider_preference(
+        &self,
+        provider: BabysitProvider,
+    ) -> BabysitProviderPreference<'_> {
+        match provider {
+            BabysitProvider::Codex => BabysitProviderPreference::Installed(&self.codex),
+            BabysitProvider::ClaudeCode => BabysitProviderPreference::Installed(&self.claude_code),
+            BabysitProvider::Custom => BabysitProviderPreference::Custom(&self.custom),
         }
     }
 }
@@ -178,6 +238,7 @@ impl ApplicationSettingsApplication {
                     BabysitProvider::ClaudeCode,
                     &settings.babysit.claude_code,
                 )?;
+                validate_custom_provider_settings(&settings.babysit.custom)?;
                 Ok(settings)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -209,11 +270,24 @@ impl ApplicationSettingsApplication {
         provider: BabysitProvider,
         preference: BabysitProviderSettings,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        if provider == BabysitProvider::Custom {
+            return Err(ApplicationSettingsError::InvalidProviderPreference);
+        }
         validate_provider_settings(provider, &preference)?;
         self.update(|settings| match provider {
             BabysitProvider::Codex => settings.babysit.codex = preference,
             BabysitProvider::ClaudeCode => settings.babysit.claude_code = preference,
+            BabysitProvider::Custom => unreachable!("Custom 已在入口拒绝 Installed 偏好"),
         })
+    }
+
+    /// 原子替换 Custom 的非 secret 完整连接；credential 由专用命令随后处理。
+    #[cfg(test)]
+    pub(crate) fn update_custom_provider_settings(
+        &self,
+        connection: CustomProviderSettings,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        self.update(|settings| settings.babysit.custom = connection)
     }
 
     /// 将 Codex runtime 的模型投影写回完整 provider 配置，同时保留 executable。
@@ -295,6 +369,13 @@ fn validate_provider_settings(
     {
         return Err(ApplicationSettingsError::InvalidProviderPreference);
     }
+    Ok(())
+}
+
+/// Custom 保存允许空地址或模型，以便读取时投影为可恢复的未配置状态。
+fn validate_custom_provider_settings(
+    _settings: &CustomProviderSettings,
+) -> Result<(), ApplicationSettingsError> {
     Ok(())
 }
 
