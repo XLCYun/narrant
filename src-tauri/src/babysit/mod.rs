@@ -17,6 +17,9 @@ mod custom;
 mod eligibility;
 mod error;
 mod model_catalog;
+// expand-first seam：#140 先交付可复用工具，后续 Built-in provider 再注册调用。
+#[allow(dead_code)]
+mod repository_tools;
 mod validation;
 
 use application::codex_setup_error;
@@ -39,6 +42,12 @@ pub use validation::{
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
+#[allow(unused_imports)]
+pub use repository_tools::{
+    GlobRequest, GlobResponse, GrepMatch, GrepRequest, GrepResponse, ReadContinuation, ReadInput,
+    ReadResponse, RepositoryToolError, RepositoryToolRegistration, RepositoryToolRegistrationView,
+    RepositoryToolRequest, RepositoryToolResponse, RepositoryTools,
+};
 // Provider-neutral model catalog types live in their own deep module.
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v2";
