@@ -1,17 +1,20 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft02Icon, CheckmarkCircle02Icon, ComputerIcon, GithubIcon, Moon02Icon, Settings02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
+import { ArrowLeft02Icon, CheckmarkCircle02Icon, ComputerIcon, GithubIcon, Moon02Icon, Settings02Icon, Sun03Icon, ViewIcon, ViewOffIcon } from "@hugeicons/core-free-icons";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { githubIdentityAvatarUrl } from "@/components/github-identity-entry";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
-import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitProvider, BabysitProviderPreference, BabysitSettings, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettingsApplication, BabysitModelCatalogEntry, BabysitProvider, BabysitProviderPreference, BabysitSettings, CustomProviderConnection, CustomProviderSettings, ThemePreference } from "@/settings/application-settings";
 import type { SettingsSection } from "@/settings/settings-section";
 import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
 import { cn } from "@/lib/utils";
+import "@/lib/i18n";
 
 const sections: Array<{ id: SettingsSection; label: string }> = [
   { id: "appearance", label: "外观" },
@@ -26,7 +29,7 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, initialCustomApiKeyVisible = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; initialCustomApiKeyVisible?: boolean; onBack(): void }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-[100rem] py-4 sm:py-8">
     <header className="mb-8 flex items-center gap-3 lg:mb-12">
@@ -51,16 +54,16 @@ export function SettingsPage({ theme, application, githubIdentity, initialSectio
         {section === "github" && (githubIdentity
           ? <GitHubSettings identity={githubIdentity} initiallyConfirming={initialGitHubSignOutConfirmation} />
           : <section><div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 className="font-heading text-xl font-semibold">GitHub</h2></div><p className="mt-4 text-sm text-muted-foreground">GitHub Identity 设置将在后续版本中提供。</p></section>)}
-        {section === "babysit" && <BabysitProviderSettings application={application} />}
+        {section === "babysit" && <BabysitProviderSettings application={application} initialCustomApiKeyVisible={initialCustomApiKeyVisible} />}
       </div>
     </div>
   </section>;
 }
 
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
-export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; onBack(): void }) {
+export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, initialCustomApiKeyVisible, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; initialCustomApiKeyVisible?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
-  return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} onBack={onBack} />;
+  return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} initialCustomApiKeyVisible={initialCustomApiKeyVisible} onBack={onBack} />;
 }
 
 const claudeModels = [
@@ -71,24 +74,57 @@ const claudeModels = [
 const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
 
 /** 通过公共设置端口呈现当前 provider，并对每次选择执行完整组合原子保存。 */
-function BabysitProviderSettings({ application }: { application: ApplicationSettingsApplication }) {
+function BabysitProviderSettings({ application, initialCustomApiKeyVisible = false }: { application: ApplicationSettingsApplication; initialCustomApiKeyVisible?: boolean }) {
+  const { t } = useTranslation("settings");
   const [saved, setSaved] = useState<BabysitSettings>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [customConnection, setCustomConnection] = useState<CustomProviderConnection>();
+  const [customLoading, setCustomLoading] = useState(false);
 
   useEffect(() => {
     let current = true;
     void application.load().then((settings) => {
       if (!current) return;
       setSaved(settings.babysit);
+      if (settings.babysit.provider === "custom") {
+        void loadCustomConnection(settings.babysit.custom);
+      }
     }).catch((reason) => current && setError(errorDetail(reason, "无法读取 Babysit 设置")));
     return () => { current = false; };
+  // 进入页面只读取一次设置；Custom 连接在选中时通过独立 seam 获取。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application]);
+
+  /** 组合非敏感快照与短暂 API key，兼容旧版本缺失 custom 字段。 */
+  function connectionFromSettings(settings?: Partial<CustomProviderSettings> | null): CustomProviderConnection {
+    return {
+      protocol: settings?.protocol === "anthropic_messages" ? "anthropic_messages" : "openai_chat_completions",
+      baseUrl: settings?.baseUrl ?? "",
+      apiKey: "",
+      model: settings?.model ?? "",
+      effort: settings?.effort === "low" || settings?.effort === "high" ? settings.effort : "medium",
+    };
+  }
+
+  /** 读取当前 Custom 完整连接；读取失败时保留编辑器可恢复的非敏感快照。 */
+  async function loadCustomConnection(settings?: CustomProviderSettings | null) {
+    setCustomLoading(true);
+    setCustomConnection(connectionFromSettings(settings));
+    try {
+      const connection = await application.loadCustomConnection();
+      setCustomConnection({ ...connectionFromSettings(connection), apiKey: connection.apiKey ?? "" });
+    } catch (reason) {
+      setError(errorDetail(reason, t("custom.loadFailed")));
+    } finally {
+      setCustomLoading(false);
+    }
+  }
 
   if (!saved) return <section aria-labelledby="babysit-title"><h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2><p role={error ? "alert" : "status"} className="mt-4 text-sm text-muted-foreground">{error ?? "正在读取设置…"}</p></section>;
   const provider = saved.provider;
-  const key = provider === "codex" ? "codex" : "claudeCode";
-  const preference = saved[key];
+  const key = provider === "codex" ? "codex" : provider === "claude-code" ? "claudeCode" : undefined;
+  const preference = key ? saved[key] : undefined;
 
   /** 乐观提交新快照，失败时恢复先前权威值并显示错误。 */
   async function commit(next: BabysitSettings, operation: () => Promise<{ babysit: BabysitSettings }>) {
@@ -106,6 +142,7 @@ function BabysitProviderSettings({ application }: { application: ApplicationSett
 
   /** 更新当前 provider 的完整偏好，避免产生中间不一致状态。 */
   function updatePreference(nextPreference: BabysitProviderPreference, revision: string | null = null) {
+    if (!key) return Promise.resolve();
     const next = { ...saved!, [key]: nextPreference };
     return commit(next, () => application.updateBabysitPreferences(provider, nextPreference, revision));
   }
@@ -118,17 +155,52 @@ function BabysitProviderSettings({ application }: { application: ApplicationSett
         <Select value={provider} disabled={saving} onValueChange={(value) => {
           if (!value) return;
           const nextProvider = value as BabysitProvider;
-          void commit({ ...saved, provider: nextProvider }, () => application.updateBabysitProvider(nextProvider));
-        }}><SelectTrigger aria-label="使用的 Agent" className="h-16! w-full rounded-2xl bg-background px-4 text-base"><SelectValue><ProviderIdentity provider={provider} /></SelectValue></SelectTrigger><SelectContent align="start" alignItemWithTrigger={false}><SelectItem value="codex"><ProviderIdentity provider="codex" /></SelectItem><SelectItem value="claude-code"><ProviderIdentity provider="claude-code" /></SelectItem></SelectContent></Select>
+          void commit({ ...saved, provider: nextProvider }, async () => {
+            const result = await application.updateBabysitProvider(nextProvider);
+            if (nextProvider === "custom") await loadCustomConnection(result.babysit.custom);
+            return result;
+          });
+        }}><SelectTrigger aria-label="使用的 Agent" className="h-16! w-full rounded-2xl bg-background px-4 text-base"><SelectValue><ProviderIdentity provider={provider} /></SelectValue></SelectTrigger><SelectContent align="start" alignItemWithTrigger={false}><SelectItem value="codex"><ProviderIdentity provider="codex" /></SelectItem><SelectItem value="claude-code"><ProviderIdentity provider="claude-code" /></SelectItem><SelectItem value="custom"><ProviderIdentity provider="custom" /></SelectItem></SelectContent></Select>
       </label>
-      {provider === "codex"
+      {provider === "codex" && preference
         ? <CodexProviderFields application={application} preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} onError={setError} />
-        : <ClaudeCodeProviderFields preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} />}
+        : provider === "claude-code" && preference
+          ? <ClaudeCodeProviderFields preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} />
+          : <CustomProviderFields
+            connection={customConnection ?? connectionFromSettings(saved.custom)}
+            loading={customLoading}
+            saving={saving}
+            initialApiKeyVisible={initialCustomApiKeyVisible}
+            onChange={setCustomConnection}
+            onSave={saveCustomConnection}
+          />}
     </div>
   </section>;
 
+  /** 保存 Custom 完整连接，并在失败时保留表单中的原始输入。 */
+  async function saveCustomConnection(connection: CustomProviderConnection): Promise<void> {
+    const next = normalizeCustomConnection(connection);
+    const validation = validateCustomConnection(next, t);
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    try {
+      const result = await application.saveCustomConnection(next);
+      setSaved(result.babysit);
+      setCustomConnection(next);
+    } catch (reason) {
+      setError(`${errorDetail(reason, t("custom.saveFailed"))} ${t("custom.saveFailedPreserved")}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   /** 选择并保存当前 provider 的 executable，失败时恢复加载得到的权威快照。 */
   async function chooseExecutable() {
+    if (!key || !preference) return;
     const previous = saved!;
     setSaving(true); setError(undefined);
     try {
@@ -141,14 +213,163 @@ function BabysitProviderSettings({ application }: { application: ApplicationSett
   }
 }
 
+/** 将后端返回的 Custom 快照收敛为表单需要的完整、可编辑值。 */
+function normalizeCustomConnection(connection: CustomProviderConnection): CustomProviderConnection {
+  return {
+    protocol: connection.protocol === "anthropic_messages" ? "anthropic_messages" : "openai_chat_completions",
+    baseUrl: connection.baseUrl.trim(),
+    apiKey: connection.apiKey ?? "",
+    model: connection.model.trim(),
+    effort: connection.effort === "low" || connection.effort === "high" ? connection.effort : "medium",
+  };
+}
+
+/** 在一次完整提交前校验 Custom 必填字段，避免产生半成品连接。 */
+function validateCustomConnection(connection: CustomProviderConnection, t: (key: string) => string): string | undefined {
+  const missing: string[] = [];
+  if (!connection.baseUrl) missing.push(t("custom.validationBaseUrl"));
+  if (!connection.model) missing.push(t("custom.validationModel"));
+  return missing.length > 0 ? missing.join(" ") : undefined;
+}
+
+/** Custom 编辑器的受控值、异步状态与完整保存 seam。 */
+type CustomProviderFieldsProps = {
+  connection: CustomProviderConnection;
+  loading: boolean;
+  saving: boolean;
+  initialApiKeyVisible?: boolean;
+  onChange(connection: CustomProviderConnection): void;
+  onSave(connection: CustomProviderConnection): Promise<void>;
+};
+
+/** 呈现 Custom 完整连接表单；API key 默认隐藏且只驻留组件状态。 */
+function CustomProviderFields({ connection, loading, saving, initialApiKeyVisible = false, onChange, onSave }: CustomProviderFieldsProps) {
+  const { t } = useTranslation("settings");
+  const [keyVisible, setKeyVisible] = useState(initialApiKeyVisible);
+  const disabled = loading || saving;
+  const update = <K extends keyof CustomProviderConnection>(field: K, value: CustomProviderConnection[K]) => {
+    onChange({ ...connection, [field]: value });
+  };
+
+  return <form
+    data-testid="custom-provider-editor"
+    className="grid min-w-0 gap-5"
+    onSubmit={(event) => {
+      event.preventDefault();
+      void onSave(connection);
+    }}
+  >
+    <div className="rounded-2xl border bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-heading text-lg font-semibold">{t("custom.title")}</h3>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("custom.description")}</p>
+        </div>
+        {loading && <p role="status" className="text-sm text-muted-foreground">{t("custom.loading")}</p>}
+      </div>
+      <div className="mt-5 grid min-w-0 gap-5 sm:grid-cols-2">
+        <label htmlFor="custom-protocol" className="grid min-w-0 gap-2 text-sm font-medium">
+          {t("custom.protocol")}
+          <Select value={connection.protocol} disabled={disabled} onValueChange={(value) => {
+            if (value === "openai_chat_completions" || value === "anthropic_messages") update("protocol", value);
+          }}>
+            <SelectTrigger id="custom-protocol" aria-label={t("custom.protocol")} className="h-11 w-full rounded-xl bg-background px-4">
+              <SelectValue>{connection.protocol === "anthropic_messages" ? t("custom.anthropicMessages") : t("custom.openAiChatCompletions")}</SelectValue>
+            </SelectTrigger>
+            <SelectContent align="start" alignItemWithTrigger={false}>
+              <SelectItem value="openai_chat_completions">{t("custom.openAiChatCompletions")}</SelectItem>
+              <SelectItem value="anthropic_messages">{t("custom.anthropicMessages")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <label htmlFor="custom-effort" className="grid min-w-0 gap-2 text-sm font-medium">
+          {t("custom.effort")}
+          <Select value={connection.effort} disabled={disabled} onValueChange={(value) => {
+            if (value === "low" || value === "medium" || value === "high") update("effort", value);
+          }}>
+            <SelectTrigger id="custom-effort" aria-label={t("custom.effort")} className="h-11 w-full rounded-xl bg-background px-4">
+              <SelectValue>{t(`custom.${connection.effort}`)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent align="start" alignItemWithTrigger={false}>
+              <SelectItem value="low">{t("custom.low")}</SelectItem>
+              <SelectItem value="medium">{t("custom.medium")}</SelectItem>
+              <SelectItem value="high">{t("custom.high")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <label htmlFor="custom-base-url" className="grid min-w-0 gap-2 text-sm font-medium sm:col-span-2">
+          {t("custom.baseUrl")}
+          <Input
+            id="custom-base-url"
+            aria-label={t("custom.baseUrl")}
+            value={connection.baseUrl}
+            placeholder={t("custom.baseUrlPlaceholder")}
+            autoComplete="url"
+            disabled={disabled}
+            onChange={(event) => update("baseUrl", event.target.value)}
+          />
+        </label>
+        <label htmlFor="custom-api-key" className="grid min-w-0 gap-2 text-sm font-medium sm:col-span-2">
+          {t("custom.apiKey")}
+          <div className="flex min-w-0 gap-2">
+            <Input
+              id="custom-api-key"
+              data-testid="custom-api-key"
+              aria-label={t("custom.apiKey")}
+              type={keyVisible ? "text" : "password"}
+              value={connection.apiKey}
+              placeholder={t("custom.apiKeyPlaceholder")}
+              autoComplete="new-password"
+              disabled={disabled}
+              onChange={(event) => update("apiKey", event.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={keyVisible ? t("custom.hideApiKey") : t("custom.showApiKey")}
+              aria-pressed={keyVisible}
+              disabled={disabled}
+              onClick={() => setKeyVisible((visible) => !visible)}
+            >
+              <Icon icon={keyVisible ? ViewOffIcon : ViewIcon} aria-hidden />
+            </Button>
+          </div>
+          <span className="text-xs font-normal text-muted-foreground">{t("custom.apiKeyHint")}</span>
+        </label>
+        <label htmlFor="custom-model" className="grid min-w-0 gap-2 text-sm font-medium sm:col-span-2">
+          {t("custom.model")}
+          <Input
+            id="custom-model"
+            aria-label={t("custom.model")}
+            value={connection.model}
+            placeholder={t("custom.modelPlaceholder")}
+            autoComplete="off"
+            disabled={disabled}
+            onChange={(event) => update("model", event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="mt-6 flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={disabled}>{saving ? t("custom.saving") : t("custom.save")}</Button>
+        {!loading && <p className="text-xs text-muted-foreground">{t("custom.saveHint")}</p>}
+      </div>
+    </div>
+  </form>;
+}
+
 /** 使用官方品牌资产呈现 Agent 身份，避免以通用图标混淆不同 provider。 */
 function ProviderIdentity({ provider }: { provider: BabysitProvider }) {
+  const { t } = useTranslation("settings");
   const codex = provider === "codex";
+  const custom = provider === "custom";
   return <span className="flex items-center gap-3">
     <span className="flex size-10 shrink-0 items-center justify-center" aria-hidden="true">
-      <img src={codex ? "/icons/agents/codex.svg" : "/icons/agents/claude-code.svg"} alt="" className={cn("size-10 max-w-none object-contain", codex && "size-14 dark:invert")} />
+      {custom
+        ? <Icon icon={Settings02Icon} className="size-7 text-primary" />
+        : <img src={codex ? "/icons/agents/codex.svg" : "/icons/agents/claude-code.svg"} alt="" className={cn("size-10 max-w-none object-contain", codex && "size-14 dark:invert")} />}
     </span>
-    <span>{codex ? "Codex" : "Claude Code"}</span>
+    <span>{codex ? "Codex" : custom ? t("provider.custom") : "Claude Code"}</span>
   </span>;
 }
 
