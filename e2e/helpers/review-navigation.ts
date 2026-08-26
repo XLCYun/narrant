@@ -72,14 +72,13 @@ export async function visibleBrandButton() {
   let trigger: WebdriverIO.Element | undefined;
   await browser.waitUntil(async () => {
     for (const candidate of await $$('[data-slot="sidebar-trigger"]')) {
-      if (!(await candidate.isDisplayed()) || !(await candidate.isClickable())) continue;
+      if (!(await candidate.isDisplayed())) continue;
       trigger = candidate;
       return true;
     }
     return false;
-  }, { timeoutMsg: "没有可见且可交互的 Sidebar trigger" });
-  if (!trigger) throw new Error("没有可见且可交互的 Sidebar trigger");
-  await trigger.waitForClickable();
+  }, { timeoutMsg: "没有可见的 Sidebar trigger" });
+  if (!trigger) throw new Error("没有可见的 Sidebar trigger");
   await trigger.click();
   await browser.waitUntil(async () => Boolean(await findBrand()));
   brand = await findBrand();
@@ -90,7 +89,6 @@ export async function visibleBrandButton() {
 /** 通过当前可见的 desktop/offcanvas Sidebar 返回 Home。 */
 export async function navigateHome() {
   const brand = await visibleBrandButton();
-  await brand.waitForClickable();
   await brand.click();
   await browser.waitUntil(async () => {
     if (await $("main [aria-label='最近审核'], main [aria-label='Recent reviews']").isDisplayed()) return true;

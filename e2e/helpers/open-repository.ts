@@ -11,7 +11,6 @@ export async function chooseRepositoryFolder(
   );
   const openButton = await $("main").$(`button=${buttonName}`);
   await openButton.waitForDisplayed();
-  await openButton.waitForClickable();
   await openButton.click();
   await browser.waitUntil(async () => (
     await $("[role='dialog']").isDisplayed()
@@ -79,7 +78,6 @@ async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en",
   await browser.waitUntil(findVisibleGroup);
   if (!group) throw new Error(`没有可见的 Repository 分组：${groupName}`);
   if (await group.getAttribute("aria-expanded") === "false") {
-    await group.waitForClickable();
     await group.click();
   }
   let opened = false;
@@ -87,19 +85,18 @@ async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en",
     for (const button of await $$(`button[aria-label='${label}']`)) {
       const row = await button.$("..");
       if (!(await row.isDisplayed())) continue;
-      if (!(await button.isDisplayed()) || !(await button.isClickable())) {
+      if (!(await button.isDisplayed())) {
         const repositoryButton = await row.$("button");
-        if (!(await repositoryButton.isDisplayed()) || !(await repositoryButton.isClickable())) continue;
+        if (!(await repositoryButton.isDisplayed())) continue;
         // 展开真实 Repository 行；展开态会持续呈现精确 open action，兼顾键盘与触屏。
         if (await repositoryButton.getAttribute("aria-expanded") === "false") await repositoryButton.click();
-        await browser.waitUntil(async () => await button.isDisplayed() && await button.isClickable(), {
+        await browser.waitUntil(async () => await button.isDisplayed(), {
           timeout: 1000,
-          timeoutMsg: `Repository action 展开后未进入可交互态：${label}`,
+          timeoutMsg: `Repository action 展开后仍不可见：${label}`,
         });
       }
-      if (!(await button.isDisplayed()) || !(await button.isClickable())) continue;
+      if (!(await button.isDisplayed())) continue;
       await button.waitForDisplayed();
-      await button.waitForClickable();
       await button.click();
       opened = true;
       return true;

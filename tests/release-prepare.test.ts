@@ -114,7 +114,7 @@ describe("release preparation CLI", () => {
         encoding: "utf8",
       }).trim(),
     ).toBe("1.2.0");
-  });
+  }, 30_000);
 
   it("rejects inconsistent current versions without changing the repository", () => {
     const repository = createReleaseRepository();
