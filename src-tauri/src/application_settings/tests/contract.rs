@@ -1,5 +1,6 @@
 use super::{
-    ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings, ThemePreference,
+    ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
+    CustomProviderSettings, ThemePreference,
 };
 
 #[test]
@@ -10,18 +11,19 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
     let settings = application.load().unwrap();
     assert_eq!(settings.version, 1);
     assert_eq!(settings.theme, ThemePreference::System);
-    assert_eq!(settings.babysit.provider, BabysitProvider::Codex);
+    assert_eq!(settings.babysit.provider, BabysitProvider::Custom);
     assert_eq!(settings.babysit.codex, BabysitProviderSettings::default());
     assert_eq!(
         settings.babysit.claude_code,
         BabysitProviderSettings::default()
     );
+    assert_eq!(settings.babysit.custom, CustomProviderSettings::default());
     assert!(!path.exists());
 }
 
 #[test]
 fn settings_v1_round_trip_uses_stable_provider_ids_and_explicit_substructures() {
-    let payload = serde_json::json!({"version":1,"theme":"dark","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null}}});
+    let payload = serde_json::json!({"version":1,"theme":"dark","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"","model":"","effort":"medium"}}});
     let settings: super::ApplicationSettings = serde_json::from_value(payload.clone()).unwrap();
     assert_eq!(settings.babysit.provider, BabysitProvider::ClaudeCode);
     assert_eq!(serde_json::to_value(settings).unwrap(), payload);
@@ -73,7 +75,7 @@ fn failed_atomic_write_retains_previous_snapshot() {
     std::fs::remove_dir(&path).unwrap();
     assert_eq!(
         application.load().unwrap().babysit.provider,
-        BabysitProvider::Codex
+        BabysitProvider::Custom
     );
 }
 
