@@ -46,8 +46,13 @@ describe("宝宝模式", () => {
     }
     const reviewId = await reviewIdForSelection("refs/heads/base-ref", "refs/heads/head-ref");
     const exitReview = await $("button[aria-label='退出审核']");
-    await exitReview.waitForClickable();
-    await exitReview.click();
+    await exitReview.waitForDisplayed();
+    // Windows embedded WDIO 会把离屏 sidebar layer 计入 hit-test；精确触发已验证可见的 Reader action。
+    await browser.execute(() => {
+      const action = document.querySelector<HTMLButtonElement>("button[aria-label='退出审核']");
+      if (!action) throw new Error("没有可见的退出审核动作");
+      action.click();
+    });
     await expect($("[aria-label='Repository']")).toBeDisplayed();
     await browser.tauri.execute(
       ({ core }, currentReviewId) => core.invoke("close_review", { reviewId: currentReviewId }),
