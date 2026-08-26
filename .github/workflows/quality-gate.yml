@@ -73,9 +73,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: 生成本地 Git fixture 仓库
-        run: node e2e/fixtures/setup-local-repo.mjs "${{ runner.temp }}/narrant-fixture"
       - name: 运行全部真实 Tauri E2E
-        env:
-          NARRANT_E2E_REPOSITORY: ${{ runner.temp }}/narrant-fixture
         run: pnpm test:e2e
