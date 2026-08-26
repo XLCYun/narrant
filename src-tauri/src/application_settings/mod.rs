@@ -82,6 +82,14 @@ pub(crate) struct CustomProviderSettings {
     pub model: String,
     /// 用户选择的低、中或高工作量级别。
     pub effort: CustomProviderEffort,
+    /// 凭据变更 generation；仅参与进程内缓存 identity，不携带 secret。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub credential_generation: u64,
+}
+
+/// 让旧 settings 文件继续保持稳定的最小 JSON 形状。
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl CustomProviderSettings {
@@ -158,6 +166,7 @@ impl From<&CustomProviderConnection> for CustomProviderSettings {
             base_url: value.base_url.clone(),
             model: value.model.clone(),
             effort: value.effort,
+            credential_generation: 0,
         }
     }
 }
@@ -427,6 +436,11 @@ impl ApplicationSettingsApplication {
         let preceding = self.load()?;
         let mut next = preceding.clone();
         next.babysit.custom = CustomProviderSettings::from(&connection);
+        next.babysit.custom.credential_generation = preceding
+            .babysit
+            .custom
+            .credential_generation
+            .saturating_add(1);
         self.persist(&next)?;
 
         let key = (!connection.api_key.is_empty()).then(|| connection.api_key.clone());
