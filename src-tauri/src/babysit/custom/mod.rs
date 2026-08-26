@@ -144,13 +144,13 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
                     },
                 )?,
             ),
-            // Anthropic wire shape 由后续 adapter slice 实现，此处只保留 capability 分类。
-            CustomProtocol::AnthropicMessages => {
-                return Err(BabysitError::provider_setup(
-                    PROVIDER_ID,
-                    BabysitProviderSetupFailure::Incompatible,
-                ));
-            }
+            CustomProtocol::AnthropicMessages => Arc::new(
+                AnthropicMessagesAdapter::new(snapshot.clone(), workspace_path).map_err(
+                    |error| BabysitError::Provider {
+                        detail: error.to_string(),
+                    },
+                )?,
+            ),
         };
         let provider = Arc::new(CustomProvider::new(
             self.runtime.clone(),
@@ -200,10 +200,16 @@ impl crate::application_settings::CustomProviderEffort {
     }
 }
 
+mod anthropic;
 mod final_tool;
 mod openai;
 mod runtime;
 
+pub(crate) use anthropic::AnthropicMessagesAdapter;
+#[cfg(test)]
+pub(crate) use anthropic::{
+    AnthropicAdapter, AnthropicAdapterConfig, AnthropicAdapterError, AnthropicAdapterRequest,
+};
 pub(crate) use final_tool::{
     custom_tool_definitions, line_explanation_schema, FINAL_OUTPUT_TOOL_NAME,
 };
