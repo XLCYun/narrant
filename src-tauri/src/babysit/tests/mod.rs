@@ -6,7 +6,8 @@ use tokio::sync::Notify;
 
 #[test]
 fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_session() {
-    let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
+    let application =
+        TestBabysitApplication::with_provider(Arc::new(FakeBabysitProvider::default()));
     application
         .remember_model_catalog(
             crate::application_settings::BabysitProvider::Codex,
@@ -70,7 +71,8 @@ fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_sessi
 
 #[test]
 fn model_catalog_revision_is_bound_to_its_provider() {
-    let application = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
+    let application =
+        TestBabysitApplication::with_provider(Arc::new(FakeBabysitProvider::default()));
     application
         .remember_model_catalog(
             crate::application_settings::BabysitProvider::ClaudeCode,
@@ -91,7 +93,7 @@ fn model_catalog_revision_is_bound_to_its_provider() {
 #[tokio::test]
 async fn executable_invalidation_discards_catalog_and_analysis_cache() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     application
         .remember_model_catalog(
             crate::application_settings::BabysitProvider::Codex,
@@ -115,7 +117,7 @@ async fn executable_invalidation_discards_catalog_and_analysis_cache() {
         BabysitFileExplanations::default(),
     );
 
-    application.invalidate_codex_executable().await;
+    application.invalidate_provider_preferences();
 
     assert!(application.model_catalogs.lock().unwrap().is_empty());
     assert!(application.cache.lock().unwrap().is_empty());
@@ -132,17 +134,9 @@ struct InFlightModelProvider {
 
 #[async_trait]
 impl BabysitAgentProvider for InFlightModelProvider {
-    /// 返回并发测试使用的稳定 provider identity。
-    fn provider_id(&self) -> &str {
-        "in-flight-model"
-    }
     /// 返回并发测试使用的稳定进程 generation。
     fn process_generation(&self) -> String {
         "generation-1".to_owned()
-    }
-    /// 在每次新分析开始时快照当前解析模型。
-    async fn resolve_analysis_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
-        Ok(self.resolved.lock().unwrap().clone())
     }
     /// 记录分析收到的模型组合，并暂停到测试显式释放。
     async fn generate(
@@ -167,6 +161,14 @@ impl BabysitAgentProvider for InFlightModelProvider {
         _cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         unreachable!("完整输出不会进入 repair")
+    }
+}
+
+#[async_trait]
+impl TestBabysitAgentProvider for InFlightModelProvider {
+    /// 在每次新分析开始时快照当前解析模型。
+    async fn resolve_test_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
+        Ok(self.resolved.lock().unwrap().clone())
     }
 }
 
@@ -220,7 +222,7 @@ fn request_with_locale(
 #[tokio::test]
 async fn fake_provider_generates_all_non_empty_lines_in_one_batch() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let mut progress = Vec::new();
 
     let result = application
@@ -257,7 +259,7 @@ async fn fake_provider_generates_all_non_empty_lines_in_one_batch() {
 #[tokio::test]
 async fn cache_reuses_only_the_exact_review_snapshot_identity() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change(
         "src/example.ts",
@@ -299,7 +301,7 @@ async fn cache_reuses_only_the_exact_review_snapshot_identity() {
 #[tokio::test]
 async fn cache_isolated_by_resolved_model_and_reasoning_effort() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change(
         "src/example.ts",
@@ -351,7 +353,7 @@ async fn preference_change_during_generate_keeps_the_active_resolved_model() {
         started: Notify::new(),
         release: Notify::new(),
     });
-    let application = Arc::new(BabysitApplication::new(provider.clone()));
+    let application = Arc::new(TestBabysitApplication::with_provider(provider.clone()));
     let task = tokio::spawn({
         let application = application.clone();
         async move {
@@ -391,7 +393,7 @@ fn settings_persistence_failure_has_stable_structured_payload() {
 #[tokio::test]
 async fn regeneration_bypasses_and_replaces_the_exact_cached_result() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change(
         "src/example.ts",
@@ -430,7 +432,7 @@ async fn regeneration_bypasses_and_replaces_the_exact_cached_result() {
 #[tokio::test]
 async fn cache_does_not_reuse_an_explanation_from_another_locale() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change(
         "src/example.ts",
@@ -465,7 +467,7 @@ async fn cache_does_not_reuse_an_explanation_from_another_locale() {
 #[tokio::test]
 async fn clearing_snapshot_and_review_cache_forces_only_the_requested_regeneration() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change(
         "src/example.ts",
@@ -522,7 +524,7 @@ async fn clearing_snapshot_and_review_cache_forces_only_the_requested_regenerati
 #[tokio::test]
 async fn shutdown_clears_cache_and_notifies_the_provider_once() {
     let provider = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change(
         "src/example.ts",
@@ -557,7 +559,7 @@ async fn shutdown_clears_cache_and_notifies_the_provider_once() {
 #[tokio::test]
 async fn invalid_output_is_repaired_in_the_same_analysis_run() {
     let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(1));
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let mut progress = Vec::new();
     let cancellation = OperationContext::background().cancellation().clone();
 
@@ -589,7 +591,7 @@ async fn invalid_output_is_repaired_in_the_same_analysis_run() {
 #[tokio::test]
 async fn all_missing_lines_are_repaired_by_one_partial_patch() {
     let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(1));
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
 
     let output = application
@@ -618,7 +620,7 @@ async fn all_missing_lines_are_repaired_by_one_partial_patch() {
 #[tokio::test]
 async fn fake_provider_counts_invalid_generate_and_repair_rounds() {
     let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(2));
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
 
     application
@@ -638,7 +640,7 @@ async fn fake_provider_counts_invalid_generate_and_repair_rounds() {
 #[tokio::test]
 async fn incomplete_output_fails_after_three_repairs_and_is_not_cached() {
     let provider = Arc::new(FakeBabysitProvider::with_invalid_rounds(5));
-    let application = BabysitApplication::new(provider.clone());
+    let application = TestBabysitApplication::with_provider(provider.clone());
     let cancellation = OperationContext::background().cancellation().clone();
     let content = text_change("src/example.ts", None, Some("const value = 1;"));
 
@@ -898,10 +900,15 @@ impl InstalledProviderRuntime for FakeInstalledRuntime {
 async fn application_delegates_installed_provider_lifecycle_through_one_runtime_seam() {
     let provider = Arc::new(FakeBabysitProvider::default());
     let runtime = Arc::new(FakeInstalledRuntime::new());
-    let application = BabysitApplication::with_provider_runtime(provider, runtime.clone());
+    let application = TestBabysitApplication::with_provider_runtime(provider, runtime.clone());
 
     application
-        .prepare_runtime(Path::new("/tmp/narrant-test-workspace"))
+        .explain_file(
+            request("review-runtime", "snapshot-runtime", "src/runtime.rs"),
+            text_change("src/runtime.rs", None, Some("fn runtime() {}\n")),
+            &OperationContext::background().cancellation().clone(),
+            |_| Ok(()),
+        )
         .await
         .unwrap();
     application.shutdown().await.unwrap();

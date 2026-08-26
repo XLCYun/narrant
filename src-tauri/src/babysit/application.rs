@@ -64,9 +64,6 @@ pub(super) struct CacheKey {
 
 /// 负责 eligibility、provider orchestration、校验和 process-local cache 的深模块。
 pub struct BabysitApplication {
-    provider: Arc<dyn BabysitAgentProvider>,
-    runtime: Option<Arc<dyn InstalledProviderRuntime>>,
-    codex_runtime: Option<Arc<codex::runtime::CodexRuntime>>,
     pub(super) model_catalogs: Mutex<
         VecDeque<(
             crate::application_settings::BabysitProvider,
@@ -87,60 +84,22 @@ pub(super) fn codex_setup_error(failure: BabysitProviderSetupFailure) -> Babysit
 }
 
 impl BabysitApplication {
-    /// 注入一个 provider，供模块测试验证 provider-independent 编排。
-    #[cfg(test)]
-    pub fn new(provider: Arc<dyn BabysitAgentProvider>) -> Self {
-        Self {
-            provider,
-            runtime: None,
-            codex_runtime: None,
-            model_catalogs: Mutex::new(VecDeque::new()),
-            next_model_catalog_revision: AtomicU64::new(1),
-            cache: Mutex::new(HashMap::new()),
-            registry: HashMap::new(),
-            settings: None,
-        }
-    }
-
-    /// 注入一个 provider 与 provider-aware runtime；发现和初始化仍保持懒加载。
-    #[cfg(test)]
-    pub fn with_provider_runtime(
-        provider: Arc<dyn BabysitAgentProvider>,
-        runtime: Arc<dyn InstalledProviderRuntime>,
+    /// 从唯一 provider registry seam 构造应用；测试可省略持久化设置并默认选择 Codex。
+    pub(super) fn from_registry(
+        registry: HashMap<
+            crate::application_settings::BabysitProvider,
+            Arc<dyn BabysitProviderCapabilities>,
+        >,
+        settings: Option<crate::application_settings::ApplicationSettingsApplication>,
     ) -> Self {
         Self {
-            provider,
-            runtime: Some(runtime),
-            codex_runtime: None,
             model_catalogs: Mutex::new(VecDeque::new()),
             next_model_catalog_revision: AtomicU64::new(1),
             cache: Mutex::new(HashMap::new()),
-            registry: HashMap::new(),
-            settings: None,
+            registry,
+            settings,
         }
     }
-
-    /// 构造带有 application settings 路径的生产 Codex provider；发现仍保持懒加载。
-    #[cfg(test)]
-    pub fn with_codex_provider_at(settings_path: impl Into<std::path::PathBuf>) -> Self {
-        let settings_path = settings_path.into();
-        let provider = Arc::new(CodexAppServerProvider::new("codex"));
-        let runtime = Arc::new(codex::runtime::CodexRuntime::new(
-            provider.clone(),
-            settings_path,
-        ));
-        Self {
-            provider,
-            runtime: Some(runtime.clone()),
-            codex_runtime: Some(runtime),
-            model_catalogs: Mutex::new(VecDeque::new()),
-            next_model_catalog_revision: AtomicU64::new(1),
-            cache: Mutex::new(HashMap::new()),
-            registry: HashMap::new(),
-            settings: None,
-        }
-    }
-
     /// 构造由 Application Settings 选择的生产 provider registry；此过程不探测任何 CLI。
     pub fn with_installed_provider_registry_at(
         settings_path: impl Into<std::path::PathBuf>,
@@ -151,7 +110,6 @@ impl BabysitApplication {
             codex_provider.clone(),
             settings_path.clone(),
         ));
-        let fallback_provider: Arc<dyn BabysitAgentProvider> = codex_provider.clone();
         let claude_provider = Arc::new(ClaudeCodeProvider::new("claude"));
         let claude_runtime = Arc::new(claude::runtime::ClaudeRuntime::new(
             claude_provider.clone(),
@@ -175,82 +133,10 @@ impl BabysitApplication {
         ]
         .into_iter()
         .collect();
-        Self {
-            provider: fallback_provider,
-            runtime: None,
-            codex_runtime: None,
-            model_catalogs: Mutex::new(VecDeque::new()),
-            next_model_catalog_revision: AtomicU64::new(1),
-            cache: Mutex::new(HashMap::new()),
+        Self::from_registry(
             registry,
-            settings: Some(
-                crate::application_settings::ApplicationSettingsApplication::new(settings_path),
-            ),
-        }
-    }
-
-    /// 注入由 Application Settings 选择的 provider registry，供公开应用 seam 的合同测试使用。
-    #[cfg(test)]
-    pub fn with_provider_registry_at<const N: usize, P>(
-        settings_path: impl Into<std::path::PathBuf>,
-        providers: [(crate::application_settings::BabysitProvider, Arc<P>); N],
-    ) -> Self
-    where
-        P: BabysitAgentProvider + 'static,
-    {
-        let registry: HashMap<_, Arc<dyn BabysitProviderCapabilities>> = providers
-            .into_iter()
-            .map(|(identity, provider)| {
-                let provider = provider as Arc<dyn BabysitAgentProvider>;
-                (
-                    identity,
-                    Arc::new(ProviderCapabilityBundle {
-                        identity: identity.identity().to_owned(),
-                        provider,
-                        runtime: None,
-                    }) as Arc<dyn BabysitProviderCapabilities>,
-                )
-            })
-            .collect();
-        Self {
-            provider: Arc::new(FakeBabysitProvider::default()),
-            runtime: None,
-            codex_runtime: None,
-            model_catalogs: Mutex::new(VecDeque::new()),
-            next_model_catalog_revision: AtomicU64::new(1),
-            cache: Mutex::new(HashMap::new()),
-            registry,
-            settings: Some(
-                crate::application_settings::ApplicationSettingsApplication::new(
-                    settings_path.into(),
-                ),
-            ),
-        }
-    }
-
-    /// 注入完整 capability bundles，验证 readiness 与运行快照等 registry 合同。
-    #[cfg(test)]
-    pub fn with_capability_registry_at<const N: usize>(
-        settings_path: impl Into<std::path::PathBuf>,
-        bundles: [(
-            crate::application_settings::BabysitProvider,
-            Arc<dyn BabysitProviderCapabilities>,
-        ); N],
-    ) -> Self {
-        Self {
-            provider: Arc::new(FakeBabysitProvider::default()),
-            runtime: None,
-            codex_runtime: None,
-            model_catalogs: Mutex::new(VecDeque::new()),
-            next_model_catalog_revision: AtomicU64::new(1),
-            cache: Mutex::new(HashMap::new()),
-            registry: bundles.into_iter().collect(),
-            settings: Some(
-                crate::application_settings::ApplicationSettingsApplication::new(
-                    settings_path.into(),
-                ),
-            ),
-        }
+            Some(crate::application_settings::ApplicationSettingsApplication::new(settings_path)),
+        )
     }
 
     /// 仅在 UI 明确请求修改时准备 runtime 并读取动态可见模型目录。
@@ -258,27 +144,17 @@ impl BabysitApplication {
         &self,
         provider: crate::application_settings::BabysitProvider,
     ) -> Result<BabysitModelCatalog, BabysitError> {
-        let catalog = if self.registry.is_empty() {
-            self.codex_runtime
-                .as_ref()
-                .ok_or_else(|| BabysitError::Provider {
-                    detail: "当前 provider 不支持动态模型目录。".to_owned(),
-                })?
-                .model_catalog()
-                .await?
-                .into()
-        } else {
-            self.registry
-                .get(&provider)
-                .ok_or_else(|| {
-                    BabysitError::provider_setup(
-                        provider.identity(),
-                        BabysitProviderSetupFailure::NotFound,
-                    )
-                })?
-                .model_catalog()
-                .await?
-        };
+        let catalog = self
+            .registry
+            .get(&provider)
+            .ok_or_else(|| {
+                BabysitError::provider_setup(
+                    provider.identity(),
+                    BabysitProviderSetupFailure::NotFound,
+                )
+            })?
+            .model_catalog()
+            .await?;
         let revision = format!(
             "{}:catalog-{}",
             provider.identity(),
@@ -339,38 +215,22 @@ impl BabysitApplication {
             .map_err(|_| BabysitError::ModelPreferenceInvalid)
     }
 
-    /// Codex executable 偏好变化后丢弃目录与缓存；旧进程由下一次能力调用安全切换。
-    #[cfg(test)]
-    pub(crate) async fn invalidate_codex_executable(&self) {
-        self.invalidate_provider_preferences();
-    }
-
     /// 校验 provider 对应 executable 并返回规范路径，全程不写 Application Settings。
     pub(crate) async fn validate_provider_executable(
         &self,
         provider: crate::application_settings::BabysitProvider,
         path: &Path,
     ) -> Result<std::path::PathBuf, BabysitError> {
-        if let Some(bundle) = self.registry.get(&provider) {
-            return bundle.validate_executable(path).await;
-        }
-        match provider {
-            crate::application_settings::BabysitProvider::Codex => {
-                self.codex_runtime
-                    .as_ref()
-                    .ok_or_else(|| {
-                        BabysitError::provider_setup(
-                            CODEX_PROVIDER_ID,
-                            BabysitProviderSetupFailure::NotFound,
-                        )
-                    })?
-                    .validate_executable(path)
-                    .await
-            }
-            crate::application_settings::BabysitProvider::ClaudeCode => {
-                claude::runtime::ClaudeRuntime::validate_executable(path).await
-            }
-        }
+        self.registry
+            .get(&provider)
+            .ok_or_else(|| {
+                BabysitError::provider_setup(
+                    provider.identity(),
+                    BabysitProviderSetupFailure::NotFound,
+                )
+            })?
+            .validate_executable(path)
+            .await
     }
 
     /// provider 或其偏好成功保存后丢弃目录 revision 与已完成缓存，不触碰运行中任务。
@@ -380,16 +240,6 @@ impl BabysitApplication {
         }
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
-        }
-    }
-
-    /// 测试旧式单 provider 装配时，将 runtime 准备保持在 application seam。
-    #[cfg(test)]
-    pub async fn prepare_runtime(&self, workspace_path: &Path) -> Result<(), BabysitError> {
-        if let Some(runtime) = &self.runtime {
-            runtime.ensure_ready(workspace_path).await
-        } else {
-            Ok(())
         }
     }
 
@@ -440,25 +290,23 @@ impl BabysitApplication {
             })?;
         let selected_identity = selected_settings
             .as_ref()
-            .map(|settings| settings.babysit.provider);
+            .map(|settings| settings.babysit.provider)
+            .unwrap_or(crate::application_settings::BabysitProvider::Codex);
         let selected_preference = selected_settings.as_ref().map(|settings| {
             settings
                 .babysit
                 .provider_settings(settings.babysit.provider)
         });
-        let selected_bundle: Arc<dyn BabysitProviderCapabilities> = match selected_identity {
-            Some(identity) => self.registry.get(&identity).cloned().ok_or_else(|| {
+        let selected_bundle = self
+            .registry
+            .get(&selected_identity)
+            .cloned()
+            .ok_or_else(|| {
                 BabysitError::provider_setup(
-                    identity.identity(),
+                    selected_identity.identity(),
                     BabysitProviderSetupFailure::NotFound,
                 )
-            })?,
-            None => Arc::new(ProviderCapabilityBundle {
-                identity: self.provider.provider_id().to_owned(),
-                provider: self.provider.clone(),
-                runtime: self.runtime.clone(),
-            }),
-        };
+            })?;
         let prepared = selected_bundle
             .prepare_analysis(Path::new(&request.workspace_path), selected_preference)
             .await?;
@@ -470,10 +318,7 @@ impl BabysitApplication {
             path: request.path.clone(),
             locale: request.locale.clone(),
             detected_language: request.detected_language.clone(),
-            provider_id: selected_identity
-                .map(crate::application_settings::BabysitProvider::identity)
-                .unwrap_or_else(|| selected_provider.provider_id())
-                .to_owned(),
+            provider_id: selected_identity.identity().to_owned(),
             process_generation: prepared.process_generation,
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
             model: resolved.model.clone(),
@@ -576,14 +421,8 @@ impl BabysitApplication {
     /// 应用退出时清空缓存并交给 provider 释放进程/线程资源。
     pub async fn shutdown(&self) -> Result<(), BabysitError> {
         let clear_result = self.clear();
-        if !self.registry.is_empty() {
-            for bundle in self.registry.values() {
-                bundle.shutdown().await;
-            }
-        } else if let Some(runtime) = &self.runtime {
-            runtime.shutdown().await;
-        } else {
-            self.provider.shutdown().await;
+        for bundle in self.registry.values() {
+            bundle.shutdown().await;
         }
         clear_result
     }

@@ -144,21 +144,9 @@ impl FakeBabysitProvider {
 #[async_trait]
 #[cfg(test)]
 impl BabysitAgentProvider for FakeBabysitProvider {
-    /// 返回 fake provider 的稳定缓存 identity。
-    fn provider_id(&self) -> &str {
-        "fake"
-    }
-
     /// 返回 fake 进程 generation，测试中保持固定以便验证缓存行为。
     fn process_generation(&self) -> String {
         "fake-process-v1".to_owned()
-    }
-
-    async fn resolve_analysis_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
-        self.resolved_model
-            .lock()
-            .map(|resolved| resolved.clone())
-            .map_err(|_| BabysitError::CacheUnavailable)
     }
 
     /// 一次生成完整 File Change 的所有解释，不拆分逐行调用。
@@ -213,5 +201,16 @@ impl BabysitAgentProvider for FakeBabysitProvider {
     /// Fake provider 没有子进程，但记录 shutdown 以覆盖应用生命周期 seam。
     async fn shutdown(&self) {
         self.shutdown_calls.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[async_trait]
+impl TestBabysitAgentProvider for FakeBabysitProvider {
+    /// 返回测试当前配置的 provider-neutral 模型结果。
+    async fn resolve_test_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
+        self.resolved_model
+            .lock()
+            .map(|resolved| resolved.clone())
+            .map_err(|_| BabysitError::CacheUnavailable)
     }
 }

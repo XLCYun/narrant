@@ -128,7 +128,7 @@ async fn new_analysis_routes_to_the_selected_provider_without_touching_the_other
         .unwrap();
     let codex = Arc::new(FakeBabysitProvider::default());
     let claude = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::with_provider_registry_at(
+    let application = TestBabysitApplication::with_providers_at(
         settings_path,
         [
             (BabysitProvider::Codex, codex.clone()),
@@ -171,7 +171,7 @@ async fn readiness_is_lazy_and_limited_to_the_selected_bundle() {
         .unwrap();
     let codex = Arc::new(RecordingBundle::new());
     let claude = Arc::new(RecordingBundle::new());
-    let application = BabysitApplication::with_capability_registry_at(
+    let application = TestBabysitApplication::with_capabilities_at(
         settings_path,
         [
             (
@@ -213,7 +213,7 @@ async fn missing_selected_registration_fails_without_touching_registered_bundles
         .update_provider(BabysitProvider::ClaudeCode)
         .unwrap();
     let codex = Arc::new(RecordingBundle::new());
-    let application = BabysitApplication::with_capability_registry_at(
+    let application = TestBabysitApplication::with_capabilities_at(
         settings_path,
         [(
             BabysitProvider::Codex,
@@ -247,7 +247,7 @@ async fn provider_switch_keeps_completed_cache_identities_isolated() {
     let settings = ApplicationSettingsApplication::new(settings_path.clone());
     let codex = Arc::new(FakeBabysitProvider::default());
     let claude = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::with_provider_registry_at(
+    let application = TestBabysitApplication::with_providers_at(
         settings_path,
         [
             (BabysitProvider::Codex, codex.clone()),
@@ -298,23 +298,16 @@ async fn in_flight_analysis_keeps_the_provider_snapshot_selected_at_start() {
         release: Notify::new(),
     });
     let claude_provider = Arc::new(FakeBabysitProvider::default());
-    let bundle = |identity: &str, provider: Arc<dyn BabysitAgentProvider>| {
-        Arc::new(ProviderCapabilityBundle {
-            identity: identity.to_owned(),
-            provider,
-            runtime: None,
-        }) as Arc<dyn BabysitProviderCapabilities>
-    };
-    let application = Arc::new(BabysitApplication::with_capability_registry_at(
+    let application = Arc::new(TestBabysitApplication::with_provider_objects_at(
         settings_path,
         [
             (
                 BabysitProvider::Codex,
-                bundle("codex", codex_provider.clone()),
+                codex_provider.clone() as Arc<dyn TestBabysitAgentProvider>,
             ),
             (
                 BabysitProvider::ClaudeCode,
-                bundle("claude-code", claude_provider.clone()),
+                claude_provider.clone() as Arc<dyn TestBabysitAgentProvider>,
             ),
         ],
     ));
@@ -351,7 +344,7 @@ async fn shutdown_visits_every_registered_provider_once() {
     let directory = tempfile::tempdir().unwrap();
     let codex = Arc::new(FakeBabysitProvider::default());
     let claude = Arc::new(FakeBabysitProvider::default());
-    let application = BabysitApplication::with_provider_registry_at(
+    let application = TestBabysitApplication::with_providers_at(
         directory.path().join("settings.json"),
         [
             (BabysitProvider::Codex, codex.clone()),

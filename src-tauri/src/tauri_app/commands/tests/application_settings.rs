@@ -2,7 +2,7 @@ use super::{update_babysit_preferences, update_babysit_provider};
 use crate::application_settings::{
     ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
 };
-use crate::babysit::{BabysitApplication, FakeBabysitProvider};
+use crate::babysit::{BabysitApplication, FakeBabysitProvider, TestBabysitApplication};
 use std::sync::Arc;
 
 /// 构造不连接外部 provider 的 typed command 测试边界。
@@ -13,7 +13,7 @@ fn command_seam() -> (
 ) {
     let directory = tempfile::tempdir().unwrap();
     let settings = ApplicationSettingsApplication::new(directory.path().join("settings.json"));
-    let babysit = BabysitApplication::new(Arc::new(FakeBabysitProvider::default()));
+    let babysit = TestBabysitApplication::with_provider(Arc::new(FakeBabysitProvider::default()));
     (directory, settings, babysit)
 }
 

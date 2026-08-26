@@ -141,60 +141,6 @@ pub struct PreparedBabysitAnalysis {
     _lease: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-/// 将现有 provider/runtime 组合适配为完整 registry capability bundle。
-struct ProviderCapabilityBundle {
-    identity: String,
-    provider: Arc<dyn BabysitAgentProvider>,
-    runtime: Option<Arc<dyn InstalledProviderRuntime>>,
-}
-
-#[async_trait]
-impl BabysitProviderCapabilities for ProviderCapabilityBundle {
-    /// 准备所选 runtime，并冻结本次分析使用的 provider、模型和生命周期 lease。
-    async fn prepare_analysis(
-        &self,
-        workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
-    ) -> Result<PreparedBabysitAnalysis, BabysitError> {
-        let _ = preference;
-        if let Some(runtime) = &self.runtime {
-            runtime.ensure_ready(workspace_path).await?;
-        }
-        let resolved = self.provider.resolve_analysis_model().await?;
-        Ok(PreparedBabysitAnalysis {
-            process_generation: self.provider.process_generation(),
-            provider: self.provider.clone(),
-            resolved,
-            _lease: None,
-        })
-    }
-
-    /// 通过 bundle 拥有的目录能力解析当前模型目录。
-    async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError> {
-        Err(BabysitError::Provider {
-            detail: "当前 provider 不支持模型目录。".to_owned(),
-        })
-    }
-
-    /// 使用 bundle 对应的 runtime 校验 executable，但不改写设置。
-    async fn validate_executable(&self, path: &Path) -> Result<std::path::PathBuf, BabysitError> {
-        let _ = path;
-        Err(BabysitError::provider_setup(
-            &self.identity,
-            BabysitProviderSetupFailure::ExecutableInvalid,
-        ))
-    }
-
-    /// 释放 bundle 拥有的 runtime；无 runtime 的测试 provider 直接关闭 provider。
-    async fn shutdown(&self) {
-        if let Some(runtime) = &self.runtime {
-            runtime.shutdown().await
-        } else {
-            self.provider.shutdown().await
-        }
-    }
-}
-
 /// Codex 的 capability adapter；Codex runtime 细节不会进入 application orchestration。
 struct CodexCapabilityBundle {
     provider: Arc<CodexAppServerProvider>,
@@ -363,17 +309,8 @@ impl BabysitProviderRequest {
 /// provider-independent 的 Installed/Built-in Agent 接口。
 #[async_trait]
 pub trait BabysitAgentProvider: Send + Sync {
-    /// 返回用于缓存隔离和诊断分类的稳定 provider identity。
-    fn provider_id(&self) -> &str;
     /// 返回本次 provider 进程 generation，进程重启后不得复用旧结果。
     fn process_generation(&self) -> String;
-    /// 为一次新分析解析并验证模型能力；返回值同时参与缓存身份。
-    async fn resolve_analysis_model(&self) -> Result<BabysitResolvedModel, BabysitError> {
-        Ok(BabysitResolvedModel {
-            model: "test-model".to_owned(),
-            reasoning_effort: "test-effort".to_owned(),
-        })
-    }
     /// 生成完整 before/after 解释；provider 不得拆成逐行请求。
     async fn generate(
         &self,
@@ -472,6 +409,11 @@ fn validate_target_inventory(targets: &[LineTarget]) -> Result<(), BabysitError>
 mod fake_provider;
 #[cfg(test)]
 pub(crate) use fake_provider::FakeBabysitProvider;
+#[cfg(test)]
+#[path = "tests/support/application_builder.rs"]
+mod application_builder;
+#[cfg(test)]
+pub(crate) use application_builder::{TestBabysitAgentProvider, TestBabysitApplication};
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

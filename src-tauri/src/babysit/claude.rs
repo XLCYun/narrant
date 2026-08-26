@@ -181,11 +181,6 @@ impl ClaudeCodeProvider {
 
 #[async_trait]
 impl BabysitAgentProvider for ClaudeCodeProvider {
-    /// 返回稳定 Claude provider identity。
-    fn provider_id(&self) -> &str {
-        "claude-code"
-    }
-
     /// 返回 executable/probe generation，供缓存隔离使用。
     fn process_generation(&self) -> String {
         self.generation.clone()
