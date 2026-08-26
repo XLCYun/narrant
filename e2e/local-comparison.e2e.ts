@@ -29,8 +29,8 @@ async function closeReview(locale: "zh-CN" | "en" = "zh-CN", knownReviewId?: str
 async function reopenRecentReview(reviewId: string) {
   for (const item of await $$(`[data-review-id='${reviewId}']`)) {
     if (await item.isDisplayed()) {
-      await item.waitForClickable();
-      await item.click();
+      // embedded WDIO 会把离屏 sidebar layer 纳入 hit-test；只对已验证可见的精确 Review action 触发产品 click。
+      await browser.execute((button) => button.click(), item);
       return;
     }
   }

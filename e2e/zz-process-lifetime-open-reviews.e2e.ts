@@ -293,10 +293,14 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     await waitForWorktrees(repositoryPath, afterB);
 
     // Home 导航同样不释放 retained Workspace；恢复时只允许 Repository Overview 的通用只读 probe。
+    const invokesBeforeLeavingForHome = (await invokeTrace()).length;
     await leaveToRepositoryOverview();
+    await browser.waitUntil(async () => (
+      (await invokeTrace()).slice(invokesBeforeLeavingForHome).includes("check_branch_review_updates")
+    ), { timeoutMsg: "返回 Repository 后 Branch Selection 检查没有完成调度" });
     const brand = await visibleBrandButton();
-    await brand.waitForClickable();
-    await brand.click();
+    // visibleBrandButton 已处理 responsive sidebar；原生 click 避免离屏 sidebar layer 干扰 hit-test。
+    await browser.execute((button) => button.click(), brand);
     await expect($("main [aria-label='最近审核']")).toBeDisplayed();
     await waitForWorktrees(repositoryPath, afterB);
 
