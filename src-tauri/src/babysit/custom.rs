@@ -77,7 +77,7 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
                 BabysitProviderSetupFailure::NotFound,
             ));
         };
-        if connection.base_url.trim().is_empty() || connection.model.trim().is_empty() {
+        if !connection.is_configured() {
             return Err(BabysitError::provider_setup(
                 PROVIDER_ID,
                 BabysitProviderSetupFailure::NotFound,

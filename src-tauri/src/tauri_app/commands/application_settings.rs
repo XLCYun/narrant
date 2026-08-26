@@ -24,9 +24,10 @@ pub(crate) fn load_application_custom_connection(
 #[tauri::command]
 pub(crate) fn save_application_custom_connection(
     application: State<'_, ApplicationSettingsApplication>,
+    babysit: State<'_, crate::babysit::BabysitApplication>,
     connection: CustomProviderConnection,
 ) -> Result<ApplicationSettings, String> {
-    save_custom_provider_connection(&application, connection)
+    save_custom_provider_connection(&application, &babysit, connection)
 }
 
 /// typed Custom read command 的可测试应用 seam。
@@ -41,11 +42,14 @@ fn read_custom_provider_connection(
 /// typed Custom save command 的可测试应用 seam；完整值只在本次调用内存中流转。
 fn save_custom_provider_connection(
     application: &ApplicationSettingsApplication,
+    babysit: &crate::babysit::BabysitApplication,
     connection: CustomProviderConnection,
 ) -> Result<ApplicationSettings, String> {
-    application
+    let settings = application
         .save_custom_connection(connection)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    babysit.invalidate_provider_preferences();
+    Ok(settings)
 }
 
 /// 原子更新主题偏好，并返回持久化后的完整设置快照。

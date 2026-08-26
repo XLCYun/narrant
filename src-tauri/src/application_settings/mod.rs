@@ -5,17 +5,6 @@ mod credential;
 
 use credential::default_custom_credential_adapter;
 pub(crate) use credential::CustomCredentialAdapter;
-#[allow(unused_imports)]
-pub(crate) use credential::CustomCredentialAdapter as CredentialAdapter;
-#[cfg(feature = "wdio")]
-#[allow(unused_imports)]
-pub(crate) use credential::EphemeralCustomCredentialAdapter;
-#[cfg(not(feature = "wdio"))]
-#[allow(unused_imports)]
-pub(crate) use credential::SystemCustomCredentialAdapter;
-#[cfg(not(feature = "wdio"))]
-#[allow(unused_imports)]
-pub(crate) use credential::SystemCustomCredentialAdapter as SystemCustomCredentialStore;
 
 const SETTINGS_VERSION: u32 = 1;
 
@@ -93,6 +82,13 @@ pub(crate) struct CustomProviderSettings {
     pub model: String,
     /// 用户选择的低、中或高工作量级别。
     pub effort: CustomProviderEffort,
+}
+
+impl CustomProviderSettings {
+    /// 判断非敏感快照是否足以启用 Custom provider，不执行任何网络探测。
+    pub(crate) fn is_configured(&self) -> bool {
+        !self.base_url.trim().is_empty() && !self.model.trim().is_empty()
+    }
 }
 
 /// Settings 编辑流程使用的完整 Custom 连接；API key 只在内存和 IPC 中存在。
@@ -211,16 +207,6 @@ pub(crate) enum BabysitProviderPreference<'a> {
 }
 
 impl BabysitSettings {
-    /// 返回指定 provider 的独立配置，供一次分析冻结完整偏好。
-    pub(crate) fn provider_settings(&self, provider: BabysitProvider) -> &BabysitProviderSettings {
-        match provider {
-            BabysitProvider::Codex => &self.codex,
-            BabysitProvider::ClaudeCode => &self.claude_code,
-            // Custom 使用不同的连接字段，调用方应通过 custom_settings 读取。
-            BabysitProvider::Custom => &self.codex,
-        }
-    }
-
     /// 返回 Custom 独有的非敏感连接配置，供 registry 冻结当前设置。
     pub(crate) fn custom_settings(&self) -> &CustomProviderSettings {
         &self.custom
@@ -376,7 +362,6 @@ impl ApplicationSettingsApplication {
                     BabysitProvider::ClaudeCode,
                     &settings.babysit.claude_code,
                 )?;
-                validate_custom_provider_settings(&settings.babysit.custom)?;
                 Ok(settings)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -417,15 +402,6 @@ impl ApplicationSettingsApplication {
             BabysitProvider::ClaudeCode => settings.babysit.claude_code = preference,
             BabysitProvider::Custom => unreachable!("Custom provider uses a distinct connection"),
         })
-    }
-
-    /// 原子替换 Custom 的非 secret 完整连接，供 registry 契约测试准备状态。
-    #[cfg(test)]
-    pub(crate) fn update_custom_provider_settings(
-        &self,
-        connection: CustomProviderSettings,
-    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        self.update(|settings| settings.babysit.custom = connection)
     }
 
     /// 读取完整 Custom 连接，并仅在返回值中临时携带当前 API key。
@@ -572,13 +548,6 @@ fn validate_custom_connection(
     if connection.base_url.trim().is_empty() || connection.model.trim().is_empty() {
         return Err(ApplicationSettingsError::InvalidCustomConnection);
     }
-    Ok(())
-}
-
-/// 允许读取尚未配置的 Custom 快照，方便设置页提供恢复动作。
-fn validate_custom_provider_settings(
-    _settings: &CustomProviderSettings,
-) -> Result<(), ApplicationSettingsError> {
     Ok(())
 }
 

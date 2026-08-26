@@ -119,7 +119,8 @@ fn custom_typed_command_seam_round_trips_the_complete_connection() {
         effort: CustomProviderEffort::High,
     };
 
-    let saved = save_custom_provider_connection(&settings, connection.clone()).unwrap();
+    let babysit = TestBabysitApplication::with_provider(Arc::new(FakeBabysitProvider::default()));
+    let saved = save_custom_provider_connection(&settings, &babysit, connection.clone()).unwrap();
     let loaded = read_custom_provider_connection(&settings).unwrap();
 
     assert_eq!(saved.babysit.custom.protocol, connection.protocol);
