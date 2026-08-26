@@ -18,6 +18,13 @@ pub const READ_TOOL_NAME: &str = "read";
 pub const GLOB_TOOL_NAME: &str = "glob";
 /// Narrant 拥有的只读 Repository 工具的稳定名称。
 pub const GREP_TOOL_NAME: &str = "grep";
+/// Read 在 Rig 和注册视图中共用的模型描述。
+const READ_TOOL_DESCRIPTION: &str =
+    "Read text files or directory entries inside the Review Workspace.";
+/// Glob 在 Rig 和注册视图中共用的模型描述。
+const GLOB_TOOL_DESCRIPTION: &str = "Find paths inside the Review Workspace.";
+/// Grep 在 Rig 和注册视图中共用的模型描述。
+const GREP_TOOL_DESCRIPTION: &str = "Search text inside the Review Workspace.";
 
 /// 一项带输入 schema 的 Repository 工具注册描述。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -310,18 +317,17 @@ impl RepositoryTools {
         vec![
             RepositoryToolRegistration {
                 name: READ_TOOL_NAME.to_owned(),
-                description: "Read text files or directory entries inside the Review Workspace."
-                    .to_owned(),
+                description: READ_TOOL_DESCRIPTION.to_owned(),
                 input_schema: read_input_schema(),
             },
             RepositoryToolRegistration {
                 name: GLOB_TOOL_NAME.to_owned(),
-                description: "Find paths inside the Review Workspace.".to_owned(),
+                description: GLOB_TOOL_DESCRIPTION.to_owned(),
                 input_schema: glob_input_schema(),
             },
             RepositoryToolRegistration {
                 name: GREP_TOOL_NAME.to_owned(),
-                description: "Search text inside the Review Workspace.".to_owned(),
+                description: GREP_TOOL_DESCRIPTION.to_owned(),
                 input_schema: grep_input_schema(),
             },
         ]
@@ -402,7 +408,7 @@ impl rig::tool::Tool for RigReadTool {
 
     /// 返回 Rig 暴露给模型的 Read 描述。
     fn description(&self) -> String {
-        "Read text files or directory entries inside the Review Workspace.".to_owned()
+        READ_TOOL_DESCRIPTION.to_owned()
     }
 
     /// 返回 Read 的有界输入 schema。
@@ -428,7 +434,7 @@ impl rig::tool::Tool for RigGlobTool {
 
     /// 返回 Rig 暴露给模型的 Glob 描述。
     fn description(&self) -> String {
-        "Find paths inside the Review Workspace.".to_owned()
+        GLOB_TOOL_DESCRIPTION.to_owned()
     }
 
     /// 返回 Glob 输入 schema。
@@ -454,7 +460,7 @@ impl rig::tool::Tool for RigGrepTool {
 
     /// 返回 Rig 暴露给模型的 Grep 描述。
     fn description(&self) -> String {
-        "Search text inside the Review Workspace.".to_owned()
+        GREP_TOOL_DESCRIPTION.to_owned()
     }
 
     /// 返回 Grep 输入 schema。

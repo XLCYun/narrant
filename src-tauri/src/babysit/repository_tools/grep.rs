@@ -138,13 +138,17 @@ fn read_text(
         if count == 0 {
             break;
         }
-        binary |= buffer[..count].contains(&0);
-        if super::validate_utf8_chunk(&buffer[..count], &mut utf8_tail).is_err() {
+        let remaining = MAX_FILE_BYTES.saturating_sub(bytes.len());
+        let captured = &buffer[..count.min(remaining)];
+        binary |= captured.contains(&0);
+        if super::validate_utf8_chunk(captured, &mut utf8_tail).is_err() {
             binary = true;
         }
-        let remaining = MAX_FILE_BYTES.saturating_sub(bytes.len());
-        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-        truncated |= count > remaining;
+        bytes.extend_from_slice(captured);
+        if count > remaining {
+            truncated = true;
+            break;
+        }
     }
     ensure_not_cancelled(cancellation)?;
     if binary || !utf8_tail.is_empty() {
