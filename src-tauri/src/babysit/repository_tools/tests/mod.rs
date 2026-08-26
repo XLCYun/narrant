@@ -453,6 +453,33 @@ fn grep_stops_after_the_per_file_budget_and_keeps_the_bounded_text_prefix() {
 }
 
 #[test]
+fn grep_keeps_valid_text_when_the_file_budget_splits_a_utf8_character() {
+    let root = workspace();
+    let mut content = b"needle\n".to_vec();
+    content.resize(1024 * 1024 - 1, b'x');
+    content.extend_from_slice("é".as_bytes());
+    fs::write(root.path().join("utf8.txt"), content).expect("写入 UTF-8 文件");
+    let tools = RepositoryTools::new(root.path()).expect("初始化工具");
+
+    let RepositoryToolResponse::Grep(result) = tools
+        .execute(
+            RepositoryToolRequest::Grep(GrepRequest {
+                pattern: "needle".to_owned(),
+                path: ".".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect("执行 Grep")
+    else {
+        panic!("Grep 返回了错误的响应类型");
+    };
+
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].line, "needle");
+    assert!(result.truncated);
+}
+
+#[test]
 fn grep_honors_cancellation_before_search() {
     let root = workspace();
     fs::write(root.path().join("inside.rs"), "needle\n").expect("写入文件");
