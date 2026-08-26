@@ -324,3 +324,37 @@ async fn adapter_redacts_http_and_protocol_error_content() {
     assert!(!diagnostic.contains(secret));
     assert!(!diagnostic.contains(&server.base_url()));
 }
+
+#[tokio::test]
+async fn adapter_redacts_a_malformed_success_response() {
+    let server = MockServer::start_async().await;
+    let secret = "malformed-never-print-this-secret";
+    server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(format!(r#"{{"content":"{secret}"}}"#));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("fixture workspace should be created");
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("key".to_owned()),
+        "model",
+        CustomProviderEffort::Low,
+    ))
+    .unwrap();
+    let error = adapter
+        .complete(AnthropicAdapterRequest::new(
+            "prompt",
+            Vec::new(),
+            RepositoryTools::new(workspace.path()).unwrap(),
+            CancellationSignal::default(),
+        ))
+        .await
+        .expect_err("malformed success response should fail");
+    let diagnostic = format!("{error} {error:?}");
+    assert!(!diagnostic.contains(secret));
+    assert!(!diagnostic.contains(&server.base_url()));
+}
