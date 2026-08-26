@@ -54,13 +54,29 @@ jobs:
       - name: 前端单元及组件测试
         run: pnpm test
 
-  e2e:
-    runs-on: ${{ matrix.os }}
+  windows-e2e:
+    needs: [rust, typescript]
+    runs-on: windows-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: 运行全部真实 Tauri E2E
+        run: pnpm test:e2e
+
+  macos-e2e:
+    needs: windows-e2e
+    runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
