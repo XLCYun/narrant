@@ -1,5 +1,15 @@
 use super::*;
 
+// expand-first seam：#143 会把两个协议 adapter 接入共享 Custom runtime。
+#[allow(dead_code)]
+mod anthropic;
+
+#[allow(unused_imports)]
+pub(crate) use anthropic::{
+    AnthropicAdapter, AnthropicAdapterConfig, AnthropicAdapterError, AnthropicAdapterRequest,
+    AnthropicAdapterResponse,
+};
+
 /// Custom provider 在 registry 中使用的稳定 identity。
 pub(crate) const PROVIDER_ID: &str = "custom";
 
