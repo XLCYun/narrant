@@ -44,6 +44,7 @@ impl OptionalAuthClient {
 }
 
 impl HttpClientExt for OptionalAuthClient {
+    /// 转发普通请求，并在无 credential 时移除空 Authorization header。
     fn send<T, U>(
         &self,
         mut request: http::Request<T>,
@@ -58,6 +59,7 @@ impl HttpClientExt for OptionalAuthClient {
         self.inner.send(request)
     }
 
+    /// 转发 multipart 请求，并保持与普通请求相同的可选认证语义。
     fn send_multipart<U>(
         &self,
         mut request: http::Request<MultipartForm>,
@@ -71,6 +73,7 @@ impl HttpClientExt for OptionalAuthClient {
         self.inner.send_multipart(request)
     }
 
+    /// 转发流式请求，并在建立连接前移除无 credential 的认证 header。
     fn send_streaming<T>(
         &self,
         mut request: http::Request<T>,
