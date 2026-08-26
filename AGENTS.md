@@ -45,3 +45,6 @@ Single-context layout. See `docs/agents/domain.md`.
 3. 每个 Issue 完成前只运行一次 Rust 全量测试；审查小修只重跑受影响测试，除非修改了共享契约或测试暴露全局回归。
 4. 不同分支保持各自的 `target`，不得让 divergent worktree 共享一个 `CARGO_TARGET_DIR`。
 5. Issue 合并且 worktree 不再使用后，清理该 worktree 的 `src-tauri/target`，避免生成物长期占用磁盘。
+
+## 不要手动触发 quality-gate
+不要手动触发 quality-gate.
