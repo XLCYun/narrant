@@ -115,5 +115,13 @@ async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en",
 export async function openFixtureRepository(repositoryPath: string, locale: "zh-CN" | "en" = "zh-CN") {
   await setE2ELocale(locale);
   await reloadRepositoryNavigation();
+  await visibleBrandButton();
+  const groupName = locale === "en" ? "Repositories" : "代码仓库";
+  await browser.waitUntil(async () => {
+    for (const group of await $$(`button=${groupName}`)) {
+      if (await group.isDisplayed()) return true;
+    }
+    return false;
+  }, { timeoutMsg: "Repository navigation 已加载但侧边栏投影尚未提交" });
   await openSeededFixture(repositoryPath, locale);
 }

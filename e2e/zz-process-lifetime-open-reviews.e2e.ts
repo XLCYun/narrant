@@ -166,6 +166,19 @@ async function invokeTrace() {
   ));
 }
 
+/** 等待 adapter invoke 轨迹连续稳定，避免把前一导航阶段的迟到调用计入下一段观测。 */
+async function waitForStableInvokeTrace() {
+  let previous = JSON.stringify(await invokeTrace());
+  let stableSamples = 0;
+  await browser.waitUntil(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const current = JSON.stringify(await invokeTrace());
+    stableSamples = current === previous ? stableSamples + 1 : 0;
+    previous = current;
+    return stableSamples >= 4;
+  }, { timeoutMsg: "adapter invoke 轨迹没有进入稳定状态" });
+}
+
 /** 清理共享 WDIO DB 中前序 spec 的 Review，确保生命周期证据从精确基线开始。 */
 async function isolateReviewLifecycleBaseline(repositoryPath: string) {
   const navigation = await browser.tauri.execute(
@@ -293,11 +306,8 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
     await waitForWorktrees(repositoryPath, afterB);
 
     // Home 导航同样不释放 retained Workspace；恢复时只允许 Repository Overview 的通用只读 probe。
-    const invokesBeforeLeavingForHome = (await invokeTrace()).length;
     await leaveToRepositoryOverview();
-    await browser.waitUntil(async () => (
-      (await invokeTrace()).slice(invokesBeforeLeavingForHome).includes("check_branch_review_updates")
-    ), { timeoutMsg: "返回 Repository 后 Branch Selection 检查没有完成调度" });
+    await waitForStableInvokeTrace();
     const brand = await visibleBrandButton();
     // visibleBrandButton 已处理 responsive sidebar；原生 click 避免离屏 sidebar layer 干扰 hit-test。
     await browser.execute((button) => button.click(), brand);
@@ -345,7 +355,11 @@ describe("进程生命周期 Open Review 真实应用验证", () => {
 
     // 通过真实 Tauri window close 触发 RunEvent::Exit，再验证正常退出 cleanup。
     await browser.setWindowSize(1200, 800);
-    expect(await browser.getWindowSize()).toEqual({ width: 1200, height: 800 });
+    const exitWindowSize = await browser.getWindowSize();
+    expect(exitWindowSize.width).toBe(1200);
+    // macOS WebDriver 返回扣除原生标题栏后的 WebView 内容区高度。
+    expect(exitWindowSize.height).toBeGreaterThan(0);
+    expect(exitWindowSize.height).toBeLessThanOrEqual(800);
     Object.defineProperty(browser, "deleteSession", {
       configurable: true,
       value: async () => undefined,

@@ -39,7 +39,11 @@ describe("宝宝模式", () => {
       timeoutMsg: "点击宝宝模式后 1 秒内没有在 viewport 内显示状态条",
     });
     await expect($("[data-testid='babysit-footer']")).toHaveText(expect.stringContaining("正在生成逐行解释"));
-    await $("button=取消宝宝模式").click();
+    const cancelBabysit = await $("button=取消宝宝模式");
+    // provider 可能在清理前已经完成；只取消仍在运行的请求，不把瞬时按钮当成场景结果。
+    if (await cancelBabysit.isExisting() && await cancelBabysit.isDisplayed()) {
+      await cancelBabysit.click();
+    }
     const reviewId = await reviewIdForSelection("refs/heads/base-ref", "refs/heads/head-ref");
     const exitReview = await $("button[aria-label='退出审核']");
     await exitReview.waitForClickable();
