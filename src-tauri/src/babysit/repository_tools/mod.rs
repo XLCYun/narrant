@@ -31,9 +31,6 @@ pub struct RepositoryToolRegistration {
     pub input_schema: Value,
 }
 
-/// 兼容调用方的注册项别名；注册视图和 Rig 适配器共享同一数据形状。
-pub type RepositoryToolDefinition = RepositoryToolRegistration;
-
 /// Repository 工具注册视图；只暴露 Read、Glob、Grep 三项工具。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RepositoryToolRegistrationView {
@@ -92,17 +89,7 @@ impl ReadInput {
         self.limit = Some(limit);
         self
     }
-
-    /// 一次设置 byte offset 与 limit，便于 continuation 原样传递。
-    pub fn with_offset_limit(mut self, offset: usize, limit: Option<usize>) -> Self {
-        self.offset = offset;
-        self.limit = limit;
-        self
-    }
 }
-
-/// Read 工具输入的稳定别名，方便与搜索请求统一命名。
-pub type ReadRequest = ReadInput;
 
 /// Glob 工具输入；业务实现由搜索工具分片接管。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -220,8 +207,6 @@ pub enum RepositoryToolError {
     InvalidPattern,
     /// 文件系统访问失败，但不向调用方泄漏系统诊断。
     Io,
-    /// 该工具由其他实现分片接管。
-    UnsupportedOperation,
     /// 请求在读取过程中被取消。
     Cancelled,
 }
@@ -238,7 +223,6 @@ impl fmt::Display for RepositoryToolError {
             Self::InvalidInput => "Repository 工具输入无效。",
             Self::InvalidPattern => "Repository 工具模式无效。",
             Self::Io => "Repository 工具无法读取 Workspace。",
-            Self::UnsupportedOperation => "Repository 工具暂不可用。",
             Self::Cancelled => "Repository 工具操作已取消。",
         })
     }
@@ -294,11 +278,6 @@ impl RepositoryTools {
         ]
     }
 
-    /// 返回与 `registrations` 等价的工具定义别名，便于适配器命名保持直观。
-    pub fn tool_definitions(&self) -> Vec<RepositoryToolRegistration> {
-        self.registrations()
-    }
-
     /// 执行 typed Read 请求；读取实现随后在同一个 public seam 中提供。
     pub fn read(
         &self,
@@ -317,15 +296,6 @@ impl RepositoryTools {
         } else {
             Err(RepositoryToolError::UnsupportedTarget)
         }
-    }
-
-    /// Read 的显式取消命名入口；与统一 `read` seam 共享实现。
-    pub fn read_with_cancellation(
-        &self,
-        input: ReadInput,
-        cancellation: &CancellationSignal,
-    ) -> Result<ReadResponse, RepositoryToolError> {
-        self.read(input, cancellation)
     }
 
     /// 通过统一 typed seam 执行 Read、Glob 或 Grep 工具。

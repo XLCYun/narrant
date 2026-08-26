@@ -324,27 +324,3 @@ fn execute_dispatches_typed_read_requests_through_the_shared_tool_seam() {
         })
     );
 }
-
-#[test]
-fn search_requests_have_a_stable_unsupported_result_until_the_search_slice_lands() {
-    let workspace = tempdir().unwrap();
-    let tools = RepositoryTools::new(workspace.path()).unwrap();
-    let cancellation = crate::operation::OperationContext::background();
-
-    let glob = tools.execute(
-        RepositoryToolRequest::Glob(GlobRequest {
-            pattern: "*.rs".to_owned(),
-        }),
-        cancellation.cancellation(),
-    );
-    let grep = tools.execute(
-        RepositoryToolRequest::Grep(GrepRequest {
-            pattern: "needle".to_owned(),
-            path: ".".to_owned(),
-        }),
-        cancellation.cancellation(),
-    );
-
-    assert_eq!(glob, Err(RepositoryToolError::UnsupportedOperation));
-    assert_eq!(grep, Err(RepositoryToolError::UnsupportedOperation));
-}
