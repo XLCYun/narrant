@@ -137,7 +137,59 @@ describe("Settings application-shell UI", () => {
     const reveal = screen.getByRole("button", { name: /显示 API|Show API/i });
     fireEvent.click(reveal);
     expect(key).toHaveAttribute("type", "text");
-    expect(screen.getByRole("button", { name: /隐藏 API|Hide API/i })).toHaveAttribute("aria-pressed", "true");
+    const hide = screen.getByRole("button", { name: /隐藏 API|Hide API/i });
+    expect(hide).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(hide);
+    expect(key).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: /显示 API|Show API/i })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("Custom 保存期间锁定完整编辑器并保留 saving 状态", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+      saveCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    let finishSave!: (value: Awaited<ReturnType<ApplicationSettingsApplication["load"]>>) => void;
+    settings.loadCustomConnection = vi.fn(async () => ({
+      protocol: "openai_chat_completions",
+      baseUrl: "https://models.example.test/v1",
+      apiKey: "local-secret",
+      model: "gpt-5-mini",
+      effort: "medium",
+    }));
+    settings.saveCustomConnection = vi.fn(() => new Promise((resolve) => { finishSave = resolve; }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "https://models.example.test/v1", model: "gpt-5-mini", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    fireEvent.click(screen.getByRole("button", { name: /保存自定义|Save custom/i }));
+
+    expect(await screen.findByRole("button", { name: /正在保存|Saving/i })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Base URL" })).toBeDisabled();
+    expect(screen.getByTestId("custom-api-key")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /协议|Protocol/ })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /思考强度|Reasoning effort/ })).toBeDisabled();
+
+    await act(async () => finishSave({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "https://models.example.test/v1", model: "gpt-5-mini", effort: "medium" },
+      },
+    }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /保存自定义|Save custom/i })).toBeEnabled());
   });
 
   it("Custom 保存前校验 Base URL 与模型，空表单不会调用保存 seam", async () => {

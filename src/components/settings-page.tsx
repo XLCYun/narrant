@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft02Icon, CheckmarkCircle02Icon, ComputerIcon, GithubIcon, Moon02Icon, Settings02Icon, Sun03Icon, ViewIcon, ViewOffIcon } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
@@ -29,7 +29,7 @@ const themes: Array<{ value: ThemePreference; label: string; description: string
 ];
 
 /** 独立 Application Settings 目的地，提供可扩展二级导航和主题偏好。 */
-export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, initialCustomApiKeyVisible = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; initialCustomApiKeyVisible?: boolean; onBack(): void }) {
+export function SettingsPage({ theme, application, githubIdentity, initialSection = "appearance", initialGitHubSignOutConfirmation = false, initialCustomApiKeyVisible = false, autoSaveCustomConnection = false, onBack }: { theme: ApplicationThemeBinding; application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; initialCustomApiKeyVisible?: boolean; autoSaveCustomConnection?: boolean; onBack(): void }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
   return <section aria-label="应用设置" className="mx-auto w-full max-w-[100rem] py-4 sm:py-8">
     <header className="mb-8 flex items-center gap-3 lg:mb-12">
@@ -54,16 +54,16 @@ export function SettingsPage({ theme, application, githubIdentity, initialSectio
         {section === "github" && (githubIdentity
           ? <GitHubSettings identity={githubIdentity} initiallyConfirming={initialGitHubSignOutConfirmation} />
           : <section><div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 className="font-heading text-xl font-semibold">GitHub</h2></div><p className="mt-4 text-sm text-muted-foreground">GitHub Identity 设置将在后续版本中提供。</p></section>)}
-        {section === "babysit" && <BabysitProviderSettings application={application} initialCustomApiKeyVisible={initialCustomApiKeyVisible} />}
+        {section === "babysit" && <BabysitProviderSettings application={application} initialCustomApiKeyVisible={initialCustomApiKeyVisible} autoSaveCustomConnection={autoSaveCustomConnection} />}
       </div>
     </div>
   </section>;
 }
 
 /** 为测试与 Preview 提供从公共 Application Settings 端口开始的完整目的地入口。 */
-export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, initialCustomApiKeyVisible, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; initialCustomApiKeyVisible?: boolean; onBack(): void }) {
+export function ApplicationSettingsDestination({ application, githubIdentity, initialSection, initialGitHubSignOutConfirmation, initialCustomApiKeyVisible, autoSaveCustomConnection, onBack }: { application: ApplicationSettingsApplication; githubIdentity?: GitHubIdentityLifecycleBinding; initialSection?: SettingsSection; initialGitHubSignOutConfirmation?: boolean; initialCustomApiKeyVisible?: boolean; autoSaveCustomConnection?: boolean; onBack(): void }) {
   const theme = useApplicationTheme(application);
-  return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} initialCustomApiKeyVisible={initialCustomApiKeyVisible} onBack={onBack} />;
+  return <SettingsPage theme={theme} application={application} githubIdentity={githubIdentity} initialSection={initialSection} initialGitHubSignOutConfirmation={initialGitHubSignOutConfirmation} initialCustomApiKeyVisible={initialCustomApiKeyVisible} autoSaveCustomConnection={autoSaveCustomConnection} onBack={onBack} />;
 }
 
 const claudeModels = [
@@ -74,13 +74,15 @@ const claudeModels = [
 const claudeEfforts = ["low", "medium", "high", "xhigh", "max"];
 
 /** 通过公共设置端口呈现当前 provider，并对每次选择执行完整组合原子保存。 */
-function BabysitProviderSettings({ application, initialCustomApiKeyVisible = false }: { application: ApplicationSettingsApplication; initialCustomApiKeyVisible?: boolean }) {
+function BabysitProviderSettings({ application, initialCustomApiKeyVisible = false, autoSaveCustomConnection = false }: { application: ApplicationSettingsApplication; initialCustomApiKeyVisible?: boolean; autoSaveCustomConnection?: boolean }) {
   const { t } = useTranslation("settings");
   const [saved, setSaved] = useState<BabysitSettings>();
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [customConnection, setCustomConnection] = useState<CustomProviderConnection>();
   const [customLoading, setCustomLoading] = useState(false);
+  const [customLoaded, setCustomLoaded] = useState(false);
+  const autoSaveStarted = useRef(false);
 
   useEffect(() => {
     let current = true;
@@ -110,6 +112,7 @@ function BabysitProviderSettings({ application, initialCustomApiKeyVisible = fal
   /** 读取当前 Custom 完整连接；读取失败时保留编辑器可恢复的非敏感快照。 */
   async function loadCustomConnection(settings?: CustomProviderSettings | null) {
     setCustomLoading(true);
+    setCustomLoaded(false);
     setCustomConnection(connectionFromSettings(settings));
     try {
       const connection = await application.loadCustomConnection();
@@ -118,8 +121,18 @@ function BabysitProviderSettings({ application, initialCustomApiKeyVisible = fal
       setError(errorDetail(reason, t("custom.loadFailed")));
     } finally {
       setCustomLoading(false);
+      setCustomLoaded(true);
     }
   }
+
+  /** Preview Harness 可选择在读取完连接后停留在真实 saving 状态，以便验收锁定行为。 */
+  useEffect(() => {
+    if (!autoSaveCustomConnection || autoSaveStarted.current || !saved || saved.provider !== "custom" || !customLoaded || !customConnection) return;
+    autoSaveStarted.current = true;
+    void saveCustomConnection(customConnection);
+  // 该 effect 是显式的 Preview seam，只在一次连接读取完成后触发自动保存。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSaveCustomConnection, customConnection, customLoaded, saved]);
 
   if (!saved) return <section aria-labelledby="babysit-title"><h2 id="babysit-title" className="font-heading text-xl font-semibold">宝宝模式</h2><p role={error ? "alert" : "status"} className="mt-4 text-sm text-muted-foreground">{error ?? "正在读取设置…"}</p></section>;
   const provider = saved.provider;
