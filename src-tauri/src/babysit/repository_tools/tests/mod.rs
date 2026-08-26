@@ -279,6 +279,8 @@ fn grep_skips_binary_and_invalid_utf8_files_without_partial_matches() {
     )
     .expect("写入二进制文件");
     fs::write(root.path().join("invalid.dat"), [0xff, 0xfe, 0xfd]).expect("写入非 UTF-8 文件");
+    fs::write(root.path().join("incomplete.dat"), b"needle\n\xc3")
+        .expect("写入末尾不完整的 UTF-8 文件");
     let tools = RepositoryTools::new(root.path()).expect("初始化工具");
 
     let result = tools

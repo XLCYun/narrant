@@ -151,7 +151,7 @@ fn read_text(
         }
     }
     ensure_not_cancelled(cancellation)?;
-    if binary {
+    if binary || (!truncated && !utf8_tail.is_empty()) {
         return Ok(None);
     }
     while std::str::from_utf8(&bytes).is_err() {
