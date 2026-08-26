@@ -1,0 +1,238 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 校验稳定版本标签与版本声明
+        id: version
+        env:
+          NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
+          NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${NARRANT_GITHUB_CLIENT_ID:?缺少 Actions Variable NARRANT_GITHUB_CLIENT_ID}"
+          : "${NARRANT_GITHUB_APP_SLUG:?缺少 Actions Variable NARRANT_GITHUB_APP_SLUG}"
+          tag="${GITHUB_REF_NAME}"
+          version="$(node scripts/release-version-check.mjs "$tag")"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+  quality-gate:
+    needs: validate
+    uses: ./.github/workflows/quality-gate.yml
+
+  macos:
+    needs: [validate, quality-gate]
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
+      NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - name: 导入 Developer ID 证书和公证密钥
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/narrant-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          api_key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$certificate"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" | openssl base64 -d -A -out "$api_key"
+          chmod 600 "$certificate" "$api_key"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" \
+            -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain" | grep -F "$APPLE_SIGNING_IDENTITY"
+          echo "APPLE_API_KEY_PATH=$api_key" >> "$GITHUB_ENV"
+      - name: 构建签名并公证的 Apple Silicon DMG
+        run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg
+      - name: 验证并公证 DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)
+          if (( ${#dmgs[@]} != 1 )); then
+            echo "期望一个 Apple Silicon DMG，实际找到 ${#dmgs[@]} 个。" >&2
+            exit 1
+          fi
+          dmg="${dmgs[0]}"
+          codesign --verify --strict --verbose=2 "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --key "$APPLE_API_KEY_PATH" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          mkdir -p release-assets
+          cp "$dmg" "release-assets/Narrant_${{ needs.validate.outputs.version }}_aarch64.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: narrant-macos-${{ needs.validate.outputs.version }}
+          path: release-assets/*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: [validate, quality-gate]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
+      NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - name: 构建未签名的 Windows x64 NSIS
+        run: pnpm build:windows
+      - name: 收集 Windows 安装包
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe")
+          if ($installers.Count -ne 1) {
+            throw "期望一个 Windows x64 NSIS 安装包，实际找到 $($installers.Count) 个。"
+          }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item $installers[0].FullName "release-assets/Narrant_${{ needs.validate.outputs.version }}_x64-setup.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: narrant-windows-${{ needs.validate.outputs.version }}
+          path: release-assets/*-setup.exe
+          if-no-files-found: error
+
+  draft-release:
+    needs: [validate, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
+      TARGET_REPOSITORY: cyunlab/narrant
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: narrant-*-${{ needs.validate.outputs.version }}
+          path: release-assets
+          merge-multiple: true
+      - name: 生成公开 Release Notes 和校验和
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t stable_tags < <(
+            git tag --list 'v*' --sort=-v:refname |
+              grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          )
+          previous_tag=""
+          for tag in "${stable_tags[@]}"; do
+            if [[ "$tag" != "$RELEASE_TAG" ]]; then
+              previous_tag="$tag"
+              break
+            fi
+          done
+
+          {
+            echo "## Narrant ${RELEASE_VERSION}"
+            echo
+            echo "### 版本变动"
+            if [[ -n "$previous_tag" ]]; then
+              git log --pretty='- %s' "${previous_tag}..${RELEASE_TAG}"
+            else
+              git log --pretty='- %s' "$RELEASE_TAG"
+            fi
+            echo
+            echo "> Windows x64 安装包当前未进行 Authenticode 签名。"
+          } > release-notes.md
+
+          cd release-assets
+          sha256sum * > SHA256SUMS
+      - name: 创建或更新 Draft Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if release_json="$(gh release view "$RELEASE_TAG" --repo "$TARGET_REPOSITORY" --json isDraft 2>/dev/null)"; then
+            if [[ "$(jq -r '.isDraft' <<< "$release_json")" != "true" ]]; then
+              echo "目标仓库中的 $RELEASE_TAG 已公开，自动化不会修改它。" >&2
+              exit 1
+            fi
+            while IFS= read -r asset; do
+              [[ -z "$asset" ]] || gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$TARGET_REPOSITORY" --yes
+            done < <(gh release view "$RELEASE_TAG" --repo "$TARGET_REPOSITORY" --json assets --jq '.assets[].name')
+            gh release edit "$RELEASE_TAG" \
+              --repo "$TARGET_REPOSITORY" \
+              --title "Narrant $RELEASE_VERSION" \
+              --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$TARGET_REPOSITORY" \
+              --draft \
+              --title "Narrant $RELEASE_VERSION" \
+              --notes-file release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --repo "$TARGET_REPOSITORY"
