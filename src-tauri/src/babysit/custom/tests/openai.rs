@@ -54,18 +54,14 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
             when.method(POST)
                 .path("/v1/chat/completions")
                 .header("authorization", "Bearer fixture-key")
+                .body_contains("\"name\":\"read\"")
+                .body_contains("\"name\":\"glob\"")
+                .body_contains("\"name\":\"grep\"")
+                .body_contains("\"name\":\"final_result\"")
                 .json_body_partial(
                     serde_json::to_string(&json!({
                         "model": "fixture-model",
                         "reasoning_effort": "high",
-                        "tools": expected_tools.iter().map(|tool| json!({
-                            "type": "function",
-                            "function": {
-                                "name": tool.name,
-                                "description": tool.description,
-                                "parameters": tool.parameters,
-                            }
-                        })).collect::<Vec<_>>(),
                     }))
                     .expect("序列化请求断言"),
                 );
@@ -103,7 +99,9 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
         "credential-1",
     )
     .expect("冻结连接");
-    let adapter = OpenAiChatCompletionsAdapter::new(connection).expect("创建 adapter");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
     let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, expected_tools)
         .expect("构造请求");
     let response = adapter
@@ -117,4 +115,65 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
         FINAL_OUTPUT_TOOL_NAME
     );
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn empty_key_omits_the_authorization_header() {
+    let server = MockServer::start_async().await;
+    let forbidden = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .header_exists("authorization");
+            then.status(401);
+        })
+        .await;
+    let success = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "id": "fixture-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "",
+        "fixture-model",
+        CustomEffort::Low,
+        "credential-1",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+
+    adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect("无认证请求");
+    assert_eq!(forbidden.hits_async().await, 0);
+    assert_eq!(success.hits_async().await, 1);
 }

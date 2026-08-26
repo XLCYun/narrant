@@ -108,6 +108,7 @@ fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult 
             provider_request_id: None,
         },
         finish_reason: Some(FinishReason::ToolCalls),
+        transcript: None,
     }
 }
 
@@ -182,7 +183,7 @@ async fn runtime_replays_repository_tool_results_in_one_memory_session() {
     assert_eq!(output.after.get("1"), Some(&"after explanation".to_owned()));
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].history().len(), 2);
+    assert_eq!(requests[1].history().len(), 3);
 }
 
 #[tokio::test]
@@ -222,6 +223,7 @@ async fn runtime_stops_after_shared_sixteen_turn_budget() {
                     provider_request_id: None,
                 },
                 finish_reason: Some(FinishReason::Length),
+                transcript: None,
             })
             .collect(),
     );
@@ -279,7 +281,7 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
     assert_eq!(repaired.before.get("1"), Some(&"旧行".to_owned()));
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].history().len(), 1);
+    assert_eq!(requests[1].history().len(), 2);
 }
 
 #[tokio::test]

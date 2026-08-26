@@ -97,7 +97,7 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
     /// 从同一 settings 快照投影配置状态，并冻结模型与 effort。
     async fn prepare_analysis(
         &self,
-        _workspace_path: &Path,
+        workspace_path: &Path,
         preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
         let Some(crate::application_settings::BabysitProviderPreference::Custom(connection)) =
@@ -138,11 +138,11 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
         let process_generation = snapshot.cache_identity();
         let adapter: Arc<dyn CustomProtocolAdapter> = match snapshot.protocol() {
             CustomProtocol::OpenaiChatCompletions => Arc::new(
-                OpenAiChatCompletionsAdapter::new(snapshot.clone()).map_err(|error| {
-                    BabysitError::Provider {
+                OpenAiChatCompletionsAdapter::new(snapshot.clone(), workspace_path).map_err(
+                    |error| BabysitError::Provider {
                         detail: error.to_string(),
-                    }
-                })?,
+                    },
+                )?,
             ),
             // Anthropic wire shape 由后续 adapter slice 实现，此处只保留 capability 分类。
             CustomProtocol::AnthropicMessages => {
@@ -461,6 +461,8 @@ pub(crate) struct CustomRoundResult {
     pub(crate) identity: ResponseIdentity,
     /// provider 归一化后的结束原因。
     pub(crate) finish_reason: Option<FinishReason>,
+    /// Rig Agent 在本轮内部工具循环后返回的完整会话记录。
+    pub(crate) transcript: Option<Vec<Message>>,
 }
 
 impl CustomRoundResult {
@@ -476,6 +478,7 @@ impl CustomRoundResult {
                 provider_request_id: response.provider_request_id,
             },
             finish_reason,
+            transcript: None,
         }
     }
 

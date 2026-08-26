@@ -1,30 +1,105 @@
 use super::*;
 use crate::operation::CancellationSignal;
-use rig::client::{AgentClientExt, CompletionClient};
-use rig::completion::CompletionModel;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::completion::{AssistantContent, FinishReason, ResponseIdentity};
+use rig::http_client::{HttpClientExt, LazyBody, MultipartForm, StreamingResponse};
 use rig::providers::openai::CompletionsClient;
-use std::path::Path;
+use rig::wasm_compat::WasmCompatSend;
+use std::future::Future;
+use std::future::IntoFuture;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// OpenAI Chat Completions 兼容协议的 Rig adapter。
 #[derive(Clone)]
 pub(crate) struct OpenAiChatCompletionsAdapter {
     connection: CustomConnectionSnapshot,
-    client: CompletionsClient,
+    client: CompletionsClient<OptionalAuthClient>,
+    workspace: PathBuf,
+}
+
+/// 复用 Rig 默认 HTTP backend，并在未配置 credential 时移除空 Bearer header。
+#[derive(Clone, Debug, Default)]
+struct OptionalAuthClient {
+    inner: rig::http_client::ReqwestClient,
+    omit_authorization: bool,
+}
+
+impl OptionalAuthClient {
+    /// 创建只处理“无 credential”语义的透明 backend。
+    fn new(omit_authorization: bool) -> Self {
+        Self {
+            inner: rig::http_client::ReqwestClient::new(),
+            omit_authorization,
+        }
+    }
+
+    /// 空 key 不能变成 `Authorization: Bearer `；非空 header 保持 Rig 原样。
+    fn strip_empty_authorization<T>(&self, request: &mut http::Request<T>) {
+        if self.omit_authorization {
+            request.headers_mut().remove(http::header::AUTHORIZATION);
+        }
+    }
+}
+
+impl HttpClientExt for OptionalAuthClient {
+    fn send<T, U>(
+        &self,
+        mut request: http::Request<T>,
+    ) -> impl Future<Output = rig::http_client::Result<http::Response<LazyBody<U>>>>
+           + WasmCompatSend
+           + 'static
+    where
+        T: Into<bytes::Bytes> + WasmCompatSend,
+        U: From<bytes::Bytes> + WasmCompatSend + 'static,
+    {
+        self.strip_empty_authorization(&mut request);
+        self.inner.send(request)
+    }
+
+    fn send_multipart<U>(
+        &self,
+        mut request: http::Request<MultipartForm>,
+    ) -> impl Future<Output = rig::http_client::Result<http::Response<LazyBody<U>>>>
+           + WasmCompatSend
+           + 'static
+    where
+        U: From<bytes::Bytes> + WasmCompatSend + 'static,
+    {
+        self.strip_empty_authorization(&mut request);
+        self.inner.send_multipart(request)
+    }
+
+    fn send_streaming<T>(
+        &self,
+        mut request: http::Request<T>,
+    ) -> impl Future<Output = rig::http_client::Result<StreamingResponse>> + WasmCompatSend
+    where
+        T: Into<bytes::Bytes> + WasmCompatSend,
+    {
+        self.strip_empty_authorization(&mut request);
+        self.inner.send_streaming(request)
+    }
 }
 
 impl OpenAiChatCompletionsAdapter {
     /// 从冻结连接创建 Rig client；endpoint、URL 拼接和认证均由 Rig 负责。
-    pub(crate) fn new(connection: CustomConnectionSnapshot) -> Result<Self, CustomAdapterError> {
+    pub(crate) fn new(
+        connection: CustomConnectionSnapshot,
+        workspace: impl Into<PathBuf>,
+    ) -> Result<Self, CustomAdapterError> {
         if connection.protocol() != CustomProtocol::OpenaiChatCompletions {
             return Err(CustomAdapterError::UnsupportedProtocol(
                 connection.protocol(),
             ));
         }
         let base_url = connection.base_url().to_owned();
-        let client: CompletionsClient = CompletionsClient::builder()
+        let empty_key = connection.api_key().is_empty();
+        let client = CompletionsClient::builder()
             .base_url(&base_url)
             .api_key(connection.api_key().to_owned())
+            .http_client(OptionalAuthClient::new(empty_key))
             .build()
             .map_err(|_| {
                 CustomAdapterError::Transport(CustomTransportFailure::new(
@@ -34,7 +109,11 @@ impl OpenAiChatCompletionsAdapter {
                     connection.base_url(),
                 ))
             })?;
-        Ok(Self { connection, client })
+        Ok(Self {
+            connection,
+            client,
+            workspace: workspace.into(),
+        })
     }
 
     /// 构造使用 Rig OutputMode::Tool 的 agent，供共享 runtime 保持会话与工具循环。
@@ -69,18 +148,13 @@ impl OpenAiChatCompletionsAdapter {
             .output_mode(rig::agent::OutputMode::Tool)
             .build())
     }
-
-    /// 返回 adapter 绑定的冻结模型服务连接。
-    pub(crate) fn connection_snapshot(&self) -> &CustomConnectionSnapshot {
-        &self.connection
-    }
 }
 
 #[async_trait]
 impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
     /// 返回本 adapter 冻结的连接快照。
     fn connection(&self) -> &CustomConnectionSnapshot {
-        self.connection_snapshot()
+        &self.connection
     }
 
     /// 发送一轮 Chat Completions 请求，并在取消时丢弃活动 HTTP future。
@@ -92,17 +166,17 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
-        let model = self
-            .client
-            .completion_model(self.connection.model().to_owned());
-        let future = model
-            .completion_request(request.prompt().clone())
-            .messages(request.history().iter().cloned())
-            .tools(request.tools().to_vec())
-            .additional_params(serde_json::json!({
-                "reasoning_effort": self.connection.effort().as_str()
-            }))
-            .send();
+        let agent = self.agent_for_workspace(
+            &self.workspace,
+            cancellation,
+            "Only use the registered read-only repository tools. Submit the final answer through the schema-bearing final_result tool.",
+        )?;
+        let future = agent
+            .prompt(request.prompt().clone())
+            .history(request.history().to_vec())
+            .max_turns(MAX_MODEL_TURNS)
+            .extended_details()
+            .into_future();
         tokio::pin!(future);
         loop {
             if cancellation.is_cancelled() {
@@ -110,19 +184,36 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
             }
             tokio::select! {
                 result = &mut future => {
-                    let response = result.map_err(|error| {
+                    let response = result.map_err(|_| {
                         CustomAdapterError::Transport(
-                            CustomTransportFailure::from_completion_error(
+                            CustomTransportFailure::new(
                                 self.connection.protocol(),
+                                CustomRequestPhase::Model,
+                                CustomStatusCategory::Unknown,
                                 self.connection.base_url(),
-                                error,
                             ),
                         )
                     })?;
                     if cancellation.is_cancelled() {
                         return Err(CustomAdapterError::Cancelled);
                     }
-                    return Ok(CustomRoundResult::from_response(response));
+                    let arguments = serde_json::from_str(&response.output)
+                        .unwrap_or(serde_json::Value::Null);
+                    return Ok(CustomRoundResult {
+                        choice: vec![AssistantContent::tool_call(
+                            "final-result",
+                            FINAL_OUTPUT_TOOL_NAME,
+                            arguments,
+                        )],
+                        usage: response.usage,
+                        identity: ResponseIdentity {
+                            message_id: None,
+                            response_id: None,
+                            provider_request_id: None,
+                        },
+                        finish_reason: Some(FinishReason::ToolCalls),
+                        transcript: response.messages,
+                    });
                 }
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {}
             }

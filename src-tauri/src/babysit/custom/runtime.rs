@@ -136,6 +136,7 @@ impl CustomRuntime {
                 custom_tool_definitions(&tools),
             )
             .map_err(adapter_error)?;
+            self.append_user(run_id, round.prompt().clone())?;
             let response = adapter
                 .complete(round, cancellation)
                 .await
@@ -198,10 +199,22 @@ impl CustomRuntime {
     ) -> Result<(), BabysitError> {
         let mut sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
         let session = sessions.get_mut(&run_id).ok_or_else(runtime_unavailable)?;
+        if let Some(transcript) = &response.transcript {
+            session.history = transcript.clone();
+            return Ok(());
+        }
         session.history.push(Message::Assistant {
             id: response.identity.message_id.clone(),
             content: response.choice.clone(),
         });
+        Ok(())
+    }
+
+    /// 在请求发出前保存当前 user prompt，使下一次工具轮或 repair 继承完整会话。
+    fn append_user(&self, run_id: u64, prompt: Message) -> Result<(), BabysitError> {
+        let mut sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
+        let session = sessions.get_mut(&run_id).ok_or_else(runtime_unavailable)?;
+        session.history.push(prompt);
         Ok(())
     }
 
