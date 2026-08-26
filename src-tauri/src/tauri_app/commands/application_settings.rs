@@ -1,6 +1,6 @@
 use crate::application_settings::{
     ApplicationSettings, ApplicationSettingsApplication, BabysitModelPreference, BabysitProvider,
-    BabysitProviderSettings, ThemePreference,
+    BabysitProviderSettings, CustomProviderConnection, ThemePreference,
 };
 use tauri::State;
 
@@ -10,6 +10,42 @@ pub(crate) fn load_application_settings(
     application: State<'_, ApplicationSettingsApplication>,
 ) -> Result<ApplicationSettings, String> {
     application.load().map_err(|error| error.to_string())
+}
+
+/// 读取完整 Custom 连接；API key 只通过本次内存 IPC 返回给设置编辑器。
+#[tauri::command]
+pub(crate) fn load_application_custom_connection(
+    application: State<'_, ApplicationSettingsApplication>,
+) -> Result<CustomProviderConnection, String> {
+    read_custom_provider_connection(&application)
+}
+
+/// 原子保存完整 Custom 连接，并由应用设置边界负责更新操作系统凭据。
+#[tauri::command]
+pub(crate) fn save_application_custom_connection(
+    application: State<'_, ApplicationSettingsApplication>,
+    connection: CustomProviderConnection,
+) -> Result<ApplicationSettings, String> {
+    save_custom_provider_connection(&application, connection)
+}
+
+/// typed Custom read command 的可测试应用 seam。
+fn read_custom_provider_connection(
+    application: &ApplicationSettingsApplication,
+) -> Result<CustomProviderConnection, String> {
+    application
+        .load_custom_connection()
+        .map_err(|error| error.to_string())
+}
+
+/// typed Custom save command 的可测试应用 seam；完整值只在本次调用内存中流转。
+fn save_custom_provider_connection(
+    application: &ApplicationSettingsApplication,
+    connection: CustomProviderConnection,
+) -> Result<ApplicationSettings, String> {
+    application
+        .save_custom_connection(connection)
+        .map_err(|error| error.to_string())
 }
 
 /// 原子更新主题偏好，并返回持久化后的完整设置快照。

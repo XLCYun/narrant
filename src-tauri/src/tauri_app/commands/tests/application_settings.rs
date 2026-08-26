@@ -1,9 +1,14 @@
-use super::{update_babysit_preferences, update_babysit_provider};
+use super::{
+    read_custom_provider_connection, save_custom_provider_connection, update_babysit_preferences,
+    update_babysit_provider,
+};
 use crate::application_settings::{
     ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
+    CustomCredentialAdapter, CustomProviderConnection, CustomProviderEffort,
+    CustomProviderProtocol,
 };
 use crate::babysit::{BabysitApplication, FakeBabysitProvider, TestBabysitApplication};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// 构造不连接外部 provider 的 typed command 测试边界。
 fn command_seam() -> (
@@ -96,4 +101,49 @@ fn provider_command_switches_the_authoritative_snapshot() {
 
     assert_eq!(updated.babysit.provider, BabysitProvider::ClaudeCode);
     assert_eq!(settings.load().unwrap(), updated);
+}
+
+#[test]
+fn custom_typed_command_seam_round_trips_the_complete_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(CommandCredentials::default());
+    let settings = ApplicationSettingsApplication::with_credential_adapter(
+        directory.path().join("settings.json"),
+        credentials,
+    );
+    let connection = CustomProviderConnection {
+        protocol: CustomProviderProtocol::AnthropicMessages,
+        base_url: "http://localhost:9000".to_owned(),
+        api_key: "fixture-key".to_owned(),
+        model: "fixture-model".to_owned(),
+        effort: CustomProviderEffort::High,
+    };
+
+    let saved = save_custom_provider_connection(&settings, connection.clone()).unwrap();
+    let loaded = read_custom_provider_connection(&settings).unwrap();
+
+    assert_eq!(saved.babysit.custom.protocol, connection.protocol);
+    assert_eq!(saved.babysit.custom.base_url, connection.base_url);
+    assert_eq!(saved.babysit.custom.model, connection.model);
+    assert_eq!(saved.babysit.custom.effort, connection.effort);
+    assert_eq!(loaded, connection);
+}
+
+#[derive(Default)]
+struct CommandCredentials(Mutex<Option<String>>);
+
+impl CustomCredentialAdapter for CommandCredentials {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn save(&self, value: &str) -> Result<(), String> {
+        *self.0.lock().unwrap() = Some(value.to_owned());
+        Ok(())
+    }
+
+    fn delete(&self) -> Result<(), String> {
+        *self.0.lock().unwrap() = None;
+        Ok(())
+    }
 }
