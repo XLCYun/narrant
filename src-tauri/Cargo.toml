@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+bytes = "1"
 async-trait = "0.1"
 http = "1"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }

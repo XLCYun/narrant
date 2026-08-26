@@ -2,7 +2,11 @@
 #[path = "tests/anthropic.rs"]
 mod tests;
 
-use crate::application_settings::CustomProviderEffort;
+use super::{
+    AssistantContent, CustomAdapterError, CustomConnectionSnapshot, CustomEffort, CustomProtocol,
+    CustomProtocolAdapter, CustomRequestPhase, CustomRoundRequest, CustomRoundResult,
+    CustomStatusCategory, CustomTransportFailure, FinishReason, ResponseIdentity,
+};
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
@@ -12,6 +16,7 @@ use rig::providers::anthropic;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// Anthropic Messages adapter 的冻结连接参数。
 #[derive(Clone, Debug)]
@@ -19,7 +24,7 @@ pub(crate) struct AnthropicAdapterConfig {
     base_url: String,
     api_key: Option<String>,
     model: String,
-    effort: CustomProviderEffort,
+    effort: CustomEffort,
 }
 
 impl AnthropicAdapterConfig {
@@ -28,20 +33,20 @@ impl AnthropicAdapterConfig {
         base_url: impl Into<String>,
         api_key: Option<String>,
         model: impl Into<String>,
-        effort: CustomProviderEffort,
+        effort: impl Into<CustomEffort>,
     ) -> Self {
         Self {
             base_url: base_url.into(),
             api_key,
             model: model.into(),
-            effort,
+            effort: effort.into(),
         }
     }
 }
 
 /// Anthropic adapter 一次 completion 所需的协议中立输入。
 pub(crate) struct AnthropicAdapterRequest {
-    prompt: String,
+    prompt: Message,
     history: Vec<Message>,
     repository_tools: RepositoryTools,
     cancellation: CancellationSignal,
@@ -56,11 +61,119 @@ impl AnthropicAdapterRequest {
         cancellation: CancellationSignal,
     ) -> Self {
         Self {
-            prompt: prompt.into(),
+            prompt: Message::user(prompt.into()),
             history,
             repository_tools,
             cancellation,
         }
+    }
+}
+
+/// 将 Anthropic Messages wire adapter 接入共享 Custom runtime 的窄封装。
+pub(crate) struct AnthropicMessagesAdapter {
+    connection: CustomConnectionSnapshot,
+    adapter: AnthropicAdapter,
+    workspace: PathBuf,
+}
+
+impl AnthropicMessagesAdapter {
+    /// 从冻结连接创建 adapter；URL 与认证 header 继续由 Rig 处理。
+    pub(crate) fn new(
+        connection: CustomConnectionSnapshot,
+        workspace: impl AsRef<Path>,
+    ) -> Result<Self, CustomAdapterError> {
+        if connection.protocol() != CustomProtocol::AnthropicMessages {
+            return Err(CustomAdapterError::UnsupportedProtocol(
+                connection.protocol(),
+            ));
+        }
+        let api_key = (!connection.api_key().is_empty()).then(|| connection.api_key().to_owned());
+        let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+            connection.base_url(),
+            api_key,
+            connection.model(),
+            connection.effort(),
+        ))
+        .map_err(|_| {
+            CustomAdapterError::Transport(CustomTransportFailure::new(
+                connection.protocol(),
+                CustomRequestPhase::Setup,
+                CustomStatusCategory::InvalidEndpoint,
+                connection.base_url(),
+            ))
+        })?;
+        Ok(Self {
+            connection,
+            adapter,
+            workspace: workspace.as_ref().to_path_buf(),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl CustomProtocolAdapter for AnthropicMessagesAdapter {
+    /// 返回本 adapter 冻结的连接快照。
+    fn connection(&self) -> &CustomConnectionSnapshot {
+        &self.connection
+    }
+
+    /// 将共享 round 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
+    async fn complete(
+        &self,
+        request: CustomRoundRequest,
+        cancellation: &CancellationSignal,
+    ) -> Result<CustomRoundResult, CustomAdapterError> {
+        let repository_tools = RepositoryTools::new(&self.workspace).map_err(|_| {
+            CustomAdapterError::Transport(CustomTransportFailure::new(
+                self.connection.protocol(),
+                CustomRequestPhase::Setup,
+                CustomStatusCategory::InvalidEndpoint,
+                self.connection.base_url(),
+            ))
+        })?;
+        let response = self
+            .adapter
+            .complete(AnthropicAdapterRequest {
+                prompt: request.prompt().clone(),
+                history: request.history().to_vec(),
+                repository_tools,
+                cancellation: cancellation.clone(),
+            })
+            .await
+            .map_err(|error| match error {
+                AnthropicAdapterError::Cancelled => CustomAdapterError::Cancelled,
+                AnthropicAdapterError::Client => {
+                    CustomAdapterError::Transport(CustomTransportFailure::new(
+                        self.connection.protocol(),
+                        CustomRequestPhase::Model,
+                        CustomStatusCategory::Network,
+                        self.connection.base_url(),
+                    ))
+                }
+                AnthropicAdapterError::Protocol => {
+                    CustomAdapterError::Transport(CustomTransportFailure::new(
+                        self.connection.protocol(),
+                        CustomRequestPhase::Response,
+                        CustomStatusCategory::InvalidResponse,
+                        self.connection.base_url(),
+                    ))
+                }
+            })?;
+        Ok(CustomRoundResult {
+            choice: vec![AssistantContent::tool_call(
+                "final-result",
+                super::FINAL_OUTPUT_TOOL_NAME,
+                response.output,
+            )],
+            usage: Default::default(),
+            identity: ResponseIdentity {
+                message_id: None,
+                response_id: None,
+                provider_request_id: None,
+            },
+            finish_reason: Some(FinishReason::ToolCalls),
+            transcript: Some(response.conversation),
+        })
     }
 }
 

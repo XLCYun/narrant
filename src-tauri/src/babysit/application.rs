@@ -105,6 +105,8 @@ impl BabysitApplication {
         settings_path: impl Into<std::path::PathBuf>,
     ) -> Self {
         let settings_path = settings_path.into();
+        let settings_application =
+            crate::application_settings::ApplicationSettingsApplication::new(settings_path.clone());
         let codex_provider = Arc::new(CodexAppServerProvider::new("codex"));
         let codex_runtime = Arc::new(codex::runtime::CodexRuntime::new(
             codex_provider.clone(),
@@ -115,8 +117,10 @@ impl BabysitApplication {
             claude_provider.clone(),
             settings_path.clone(),
         ));
-        // Custom capability 仅检查设置完整度；构造阶段绝不读取 endpoint 或 keychain。
-        let custom_bundle = Arc::new(custom::CustomCapabilityBundle::new());
+        // Custom capability 构造阶段只保存 settings ownership，绝不读取 endpoint 或 keychain。
+        let custom_bundle = Arc::new(custom::CustomCapabilityBundle::new(
+            settings_application.clone(),
+        ));
         let registry: HashMap<_, Arc<dyn BabysitProviderCapabilities>> = [
             (
                 crate::application_settings::BabysitProvider::Codex,
@@ -139,10 +143,7 @@ impl BabysitApplication {
         ]
         .into_iter()
         .collect();
-        Self::from_registry(
-            registry,
-            Some(crate::application_settings::ApplicationSettingsApplication::new(settings_path)),
-        )
+        Self::from_registry(registry, Some(settings_application))
     }
 
     /// 仅执行当前设置所选 provider 的 readiness，不生成分析或触碰未选中的 bundle。
@@ -366,13 +367,27 @@ impl BabysitApplication {
             merge_repair_patch(&mut output, patch, &failures);
             failures = normalize_and_collect_repairs(&provider_request, &mut output);
         }
-        validate_response(&provider_request, &output).map_err(|failure| {
-            BabysitError::InvalidProviderOutput {
+        if let Err(failure) = validate_response(&provider_request, &output) {
+            selected_provider.abandon(&provider_request).await;
+            return Err(BabysitError::InvalidProviderOutput {
                 detail: failure.to_string(),
-            }
-        })?;
-        ensure_not_cancelled(cancellation)?;
-        notify(BabysitProgress::Completed)?;
+            });
+        }
+        if let Err(error) = ensure_not_cancelled(cancellation) {
+            selected_provider.abandon(&provider_request).await;
+            return Err(error);
+        }
+        // 成功结果写入缓存前再检查一次取消，避免 notify 回调刚刚取消时落盘。
+        if let Err(error) = notify(BabysitProgress::Completed) {
+            selected_provider.abandon(&provider_request).await;
+            return Err(error);
+        }
+        if let Err(error) = ensure_not_cancelled(cancellation) {
+            selected_provider.abandon(&provider_request).await;
+            return Err(error);
+        }
+        // 完成后释放 Custom 单内存会话；缓存只保留 provider-neutral 结果。
+        selected_provider.abandon(&provider_request).await;
         self.cache
             .lock()
             .map_err(|_| BabysitError::CacheUnavailable)?
