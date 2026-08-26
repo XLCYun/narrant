@@ -115,6 +115,8 @@ impl BabysitApplication {
             claude_provider.clone(),
             settings_path.clone(),
         ));
+        // Custom capability 仅检查设置完整度；构造阶段绝不读取 endpoint 或 keychain。
+        let custom_bundle = Arc::new(custom::CustomCapabilityBundle::new());
         let registry: HashMap<_, Arc<dyn BabysitProviderCapabilities>> = [
             (
                 crate::application_settings::BabysitProvider::Codex,
@@ -130,6 +132,10 @@ impl BabysitApplication {
                     runtime: claude_runtime,
                 }) as Arc<dyn BabysitProviderCapabilities>,
             ),
+            (
+                crate::application_settings::BabysitProvider::Custom,
+                custom_bundle as Arc<dyn BabysitProviderCapabilities>,
+            ),
         ]
         .into_iter()
         .collect();
@@ -137,6 +143,16 @@ impl BabysitApplication {
             registry,
             Some(crate::application_settings::ApplicationSettingsApplication::new(settings_path)),
         )
+    }
+
+    /// 仅执行当前设置所选 provider 的 readiness，不生成分析或触碰未选中的 bundle。
+    pub async fn check_selected_provider_readiness(
+        &self,
+        workspace_path: &Path,
+    ) -> Result<(), BabysitError> {
+        let (_, prepared) = self.prepare_selected_analysis(workspace_path).await?;
+        drop(prepared);
+        Ok(())
     }
 
     /// 仅在 UI 明确请求修改时准备 runtime 并读取动态可见模型目录。
@@ -280,35 +296,8 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
-        let selected_settings = self
-            .settings
-            .as_ref()
-            .map(|settings| settings.load())
-            .transpose()
-            .map_err(|_| BabysitError::Provider {
-                detail: "Application Settings 不可用。".to_owned(),
-            })?;
-        let selected_identity = selected_settings
-            .as_ref()
-            .map(|settings| settings.babysit.provider)
-            .unwrap_or(crate::application_settings::BabysitProvider::Codex);
-        let selected_preference = selected_settings.as_ref().map(|settings| {
-            settings
-                .babysit
-                .provider_settings(settings.babysit.provider)
-        });
-        let selected_bundle = self
-            .registry
-            .get(&selected_identity)
-            .cloned()
-            .ok_or_else(|| {
-                BabysitError::provider_setup(
-                    selected_identity.identity(),
-                    BabysitProviderSetupFailure::NotFound,
-                )
-            })?;
-        let prepared = selected_bundle
-            .prepare_analysis(Path::new(&request.workspace_path), selected_preference)
+        let (selected_identity, prepared) = self
+            .prepare_selected_analysis(Path::new(&request.workspace_path))
             .await?;
         let selected_provider = prepared.provider;
         let resolved = prepared.resolved;
@@ -389,6 +378,48 @@ impl BabysitApplication {
             .map_err(|_| BabysitError::CacheUnavailable)?
             .insert(key, output.clone());
         Ok(output)
+    }
+
+    /// 从同一 Application Settings 快照解析 provider、偏好与 readiness ownership。
+    async fn prepare_selected_analysis(
+        &self,
+        workspace_path: &Path,
+    ) -> Result<
+        (
+            crate::application_settings::BabysitProvider,
+            PreparedBabysitAnalysis,
+        ),
+        BabysitError,
+    > {
+        let selected_settings = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.load())
+            .transpose()
+            .map_err(|_| BabysitError::Provider {
+                detail: "Application Settings 不可用。".to_owned(),
+            })?;
+        let selected_identity = selected_settings
+            .as_ref()
+            .map(|settings| settings.babysit.provider)
+            .unwrap_or(crate::application_settings::BabysitProvider::Codex);
+        let selected_preference = selected_settings
+            .as_ref()
+            .map(|settings| settings.babysit.provider_preference(selected_identity));
+        let selected_bundle = self
+            .registry
+            .get(&selected_identity)
+            .cloned()
+            .ok_or_else(|| {
+                BabysitError::provider_setup(
+                    selected_identity.identity(),
+                    BabysitProviderSetupFailure::NotFound,
+                )
+            })?;
+        let prepared = selected_bundle
+            .prepare_analysis(workspace_path, selected_preference.as_ref())
+            .await?;
+        Ok((selected_identity, prepared))
     }
 
     /// 暴露缓存清理 seam；Review 关闭和应用退出时由后续生命周期 issue 调用。
