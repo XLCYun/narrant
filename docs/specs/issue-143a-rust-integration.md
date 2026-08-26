@@ -33,4 +33,3 @@ both supported protocols through deterministic application-level fixtures.
 
 - Run only focused Rust checks/tests required to develop the slice, after drone approval.
 - Report exact commands, counts, residual risks, commit, and changed files.
-

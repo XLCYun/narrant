@@ -12,11 +12,74 @@ use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
 use rig::client::AgentClientExt;
 use rig::completion::{Message, Prompt};
+use rig::http_client::{self, HttpClientExt, MultipartForm, Request, Response, StreamingResponse};
 use rig::providers::anthropic;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+
+/// 在空凭据场景移除 Rig Anthropic builder 产生的空认证头。
+#[derive(Clone, Default)]
+struct OptionalAnthropicAuthClient {
+    inner: http_client::ReqwestClient,
+    omit_authentication: bool,
+}
+
+impl OptionalAnthropicAuthClient {
+    /// 创建保留 Rig transport、仅按连接快照决定是否省略认证头的客户端。
+    fn new(omit_authentication: bool) -> Self {
+        Self {
+            inner: http_client::ReqwestClient::default(),
+            omit_authentication,
+        }
+    }
+
+    /// 仅在用户没有提供凭据时移除 Anthropic 标准认证头。
+    fn prepare<T>(&self, mut request: Request<T>) -> Request<T> {
+        if self.omit_authentication {
+            request.headers_mut().remove("x-api-key");
+        }
+        request
+    }
+}
+
+impl HttpClientExt for OptionalAnthropicAuthClient {
+    /// 转发普通请求，并在空凭据时省略认证头。
+    fn send<T, U>(
+        &self,
+        request: Request<T>,
+    ) -> impl Future<Output = http_client::Result<Response<http_client::LazyBody<U>>>> + Send + 'static
+    where
+        T: Into<bytes::Bytes> + Send,
+        U: From<bytes::Bytes> + Send + 'static,
+    {
+        HttpClientExt::send(&self.inner, self.prepare(request))
+    }
+
+    /// 转发 multipart 请求，并在空凭据时省略认证头。
+    fn send_multipart<U>(
+        &self,
+        request: Request<MultipartForm>,
+    ) -> impl Future<Output = http_client::Result<Response<http_client::LazyBody<U>>>> + Send + 'static
+    where
+        U: From<bytes::Bytes> + Send + 'static,
+    {
+        HttpClientExt::send_multipart(&self.inner, self.prepare(request))
+    }
+
+    /// 转发流式请求，并在空凭据时省略认证头。
+    fn send_streaming<T>(
+        &self,
+        request: Request<T>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send
+    where
+        T: Into<bytes::Bytes> + Send,
+    {
+        HttpClientExt::send_streaming(&self.inner, self.prepare(request))
+    }
+}
 
 /// Anthropic Messages adapter 的冻结连接参数。
 #[derive(Clone, Debug)]
@@ -225,9 +288,11 @@ impl AnthropicAdapter {
         if request.cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }
+        let api_key = self.config.api_key.clone().unwrap_or_default();
         let client = anthropic::Client::builder()
-            .api_key(self.config.api_key.clone().unwrap_or_default())
+            .api_key(api_key.clone())
             .base_url(&self.config.base_url)
+            .http_client(OptionalAnthropicAuthClient::new(api_key.is_empty()))
             .build()
             .map_err(|_| AnthropicAdapterError::Client)?;
         let tools = request.repository_tools.rig_tools(&request.cancellation);

@@ -204,6 +204,35 @@ fn malformed_response(protocol: CustomProviderProtocol) -> Value {
     }
 }
 
+/// 返回要求读取 fixture.rs 的协议级工具调用。
+fn read_tool_response(protocol: CustomProviderProtocol) -> Value {
+    match protocol {
+        CustomProviderProtocol::OpenaiChatCompletions => json!({
+            "id": "fixture-read", "object": "chat.completion", "created": 1,
+            "model": "fixture-model", "choices": [{"index": 0, "message": {
+                "role": "assistant", "tool_calls": [{"id": "call-read", "type": "function",
+                    "function": {"name": "read", "arguments": "{\"path\":\"fixture.rs\",\"offset\":0}"}}]
+            }, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        }),
+        CustomProviderProtocol::AnthropicMessages => json!({
+            "id": "fixture-read", "type": "message", "role": "assistant",
+            "model": "fixture-model", "content": [{"type": "tool_use", "id": "call-read",
+                "name": "read", "input": {"path": "fixture.rs", "offset": 0}}],
+            "stop_reason": "tool_use", "stop_sequence": null,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }),
+    }
+}
+
+/// 区分首轮请求与已经携带 repository tool result 的后续请求。
+fn omits_fixture_repository_result(request: &HttpMockRequest) -> bool {
+    request
+        .body
+        .as_deref()
+        .is_some_and(|body| !String::from_utf8_lossy(body).contains("fixture repository context"))
+}
+
 /// 为指定协议计算 Rig 使用的 completion endpoint。
 fn endpoint_path(protocol: CustomProviderProtocol) -> &'static str {
     match protocol {
@@ -279,6 +308,87 @@ async fn both_custom_protocols_run_through_registry_and_completed_cache() {
                 BabysitProgress::Completed,
             ]
         );
+    }
+}
+
+/// 共享 wire 契约：registry 选出的两个协议都执行真实 Read 循环且只暴露四个工具。
+#[tokio::test]
+async fn both_custom_protocols_preserve_wire_contract_through_repository_tool_loop() {
+    for protocol in [
+        CustomProviderProtocol::OpenaiChatCompletions,
+        CustomProviderProtocol::AnthropicMessages,
+    ] {
+        let server = MockServer::start_async().await;
+        let authentication_header = match protocol {
+            CustomProviderProtocol::OpenaiChatCompletions => "authorization",
+            CustomProviderProtocol::AnthropicMessages => "x-api-key",
+        };
+        let forbidden_auth = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .header_exists(authentication_header);
+                then.status(401);
+            })
+            .await;
+        let read = server
+            .mock_async(|when, then| {
+                let when = when
+                    .method(POST)
+                    .path(endpoint_path(protocol))
+                    .body_contains(r#""name":"read""#)
+                    .body_contains(r#""name":"glob""#)
+                    .body_contains(r#""name":"grep""#)
+                    .body_contains(r#""name":"final_result""#)
+                    .matches(omits_fixture_repository_result);
+                match protocol {
+                    CustomProviderProtocol::OpenaiChatCompletions => {
+                        when.body_contains(r#""reasoning_effort":"high""#);
+                    }
+                    CustomProviderProtocol::AnthropicMessages => {
+                        when.body_contains(r#""thinking":{"type":"adaptive"}"#)
+                            .body_contains(r#""output_config":{"effort":"high"}"#);
+                    }
+                }
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(read_tool_response(protocol));
+            })
+            .await;
+        let final_result = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .body_contains("fixture repository context");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(final_response(protocol));
+            })
+            .await;
+        let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        std::fs::write(
+            workspace.path().join("fixture.rs"),
+            "fixture repository context\n",
+        )
+        .expect("写入 repository fixture");
+        let settings = tempfile::tempdir().expect("创建 fixture settings");
+        let configured = application_for_connection(
+            settings.path().join("settings.json"),
+            protocol,
+            base_url(protocol, &server),
+        );
+        let (request, content) = fixture_input(workspace.path());
+        let cancellation = OperationContext::background().cancellation().clone();
+
+        let result = configured
+            .application
+            .explain_file(request, content, &cancellation, |_| Ok(()))
+            .await;
+
+        assert_eq!(forbidden_auth.hits_async().await, 0);
+        assert_eq!(read.hits_async().await, 1);
+        assert_eq!(final_result.hits_async().await, 1);
+        result.expect("repository tool loop 应完成");
     }
 }
 
@@ -438,6 +548,79 @@ async fn both_custom_protocols_exhaust_repairs_without_completed_cache() {
             .expect_err("重复请求仍应在 repair 上限失败");
         assert_eq!(initial.hits_async().await, 2);
         assert_eq!(repairs.hits_async().await, 6);
+    }
+}
+
+/// 共享 repair 取消契约：Repairing 进度边界取消后不发下一轮请求也不写缓存。
+#[tokio::test]
+async fn both_custom_protocols_cancel_before_repair_dispatch_without_cache() {
+    for protocol in [
+        CustomProviderProtocol::OpenaiChatCompletions,
+        CustomProviderProtocol::AnthropicMessages,
+    ] {
+        let server = MockServer::start_async().await;
+        let initial = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .matches(|request| {
+                        request.body.as_deref().is_some_and(|body| {
+                            !String::from_utf8_lossy(body)
+                                .contains("Repair the previous Line Explanation result")
+                        })
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(malformed_response(protocol));
+            })
+            .await;
+        let repair = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .body_contains("Repair the previous Line Explanation result");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(final_response(protocol));
+            })
+            .await;
+        let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        let settings = tempfile::tempdir().expect("创建 fixture settings");
+        let configured = application_for_connection(
+            settings.path().join("settings.json"),
+            protocol,
+            base_url(protocol, &server),
+        );
+        let (request, content) = fixture_input(workspace.path());
+        let cancellation = crate::operation::TestCancellation::default();
+        let cancellation_at_repair = cancellation.clone();
+
+        let cancelled = configured
+            .application
+            .explain_file(
+                request.clone(),
+                content.clone(),
+                &cancellation,
+                |progress| {
+                    if matches!(progress, BabysitProgress::Repairing { attempt: 1 }) {
+                        cancellation_at_repair.cancel();
+                    }
+                    Ok(())
+                },
+            )
+            .await;
+        assert_eq!(cancelled, Err(crate::babysit::BabysitError::Cancelled));
+        assert_eq!(initial.hits_async().await, 1);
+        assert_eq!(repair.hits_async().await, 0);
+
+        let retry_cancellation = OperationContext::background().cancellation().clone();
+        configured
+            .application
+            .explain_file(request, content, &retry_cancellation, |_| Ok(()))
+            .await
+            .expect("取消的 repair 不应缓存，重试应完成");
+        assert_eq!(initial.hits_async().await, 2);
+        assert_eq!(repair.hits_async().await, 1);
     }
 }
 
