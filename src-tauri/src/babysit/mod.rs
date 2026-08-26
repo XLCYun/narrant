@@ -17,8 +17,6 @@ mod custom;
 mod eligibility;
 mod error;
 mod model_catalog;
-// expand-first seam：#140 先交付可复用工具，后续 Built-in provider 再注册调用。
-#[allow(dead_code)]
 mod repository_tools;
 mod validation;
 
@@ -30,7 +28,6 @@ pub use application::{
     BabysitGenerationPolicy, ReviewIdentity,
 };
 use eligibility::{eligibility, ensure_eligible};
-#[allow(unused_imports)]
 pub use error::{BabysitError, BabysitErrorCode, BabysitErrorPayload, BabysitRecoveryAction};
 pub(crate) use model_catalog::{
     BabysitModelCatalog, BabysitProviderModelCatalog, BabysitResolvedModel,
@@ -42,7 +39,6 @@ pub use validation::{
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
-#[allow(unused_imports)]
 pub use repository_tools::{
     GlobRequest, GlobResponse, GrepMatch, GrepRequest, GrepResponse, ReadContinuation, ReadInput,
     ReadResponse, RepositoryToolError, RepositoryToolRegistration, RepositoryToolRegistrationView,
@@ -75,8 +71,6 @@ const CODEX_PROVIDER_ID: &str = "codex";
 /// 一组 Codex-shaped enum variant。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-// expand-first seam：其余分类由后续 installed provider adapter 构造。
-#[allow(dead_code)]
 pub enum BabysitProviderSetupFailure {
     NotFound,
     ExecutableInvalid,
@@ -101,8 +95,6 @@ impl fmt::Display for BabysitProviderSetupFailure {
 /// Installed provider runtime 的 provider-independent readiness 状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-// expand-first seam：后续 provider-aware command 会把 readiness 投影到 IPC。
-#[allow(dead_code)]
 pub enum BabysitProviderRuntimeStatus {
     #[default]
     Unknown,
@@ -118,7 +110,6 @@ pub enum BabysitProviderRuntimeStatus {
 #[async_trait]
 pub trait InstalledProviderRuntime: Send + Sync {
     /// 返回当前 runtime readiness，但不暴露 executable 路径或原始进程信息。
-    #[allow(dead_code)]
     fn status(&self) -> BabysitProviderRuntimeStatus;
     /// 懒执行 discovery、认证检查、能力探针和 provider 进程初始化。
     async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError>;

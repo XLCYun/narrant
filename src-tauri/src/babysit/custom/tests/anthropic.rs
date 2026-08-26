@@ -230,11 +230,18 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
             "stop_reason": "tool_use", "stop_sequence": null,
             "usage": {"input_tokens": 1, "output_tokens": 1}
         });
+        let forbidden = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/messages")
+                    .header_exists("x-api-key");
+                then.status(401);
+            })
+            .await;
         let mock = server
             .mock_async(|when, then| {
                 when.method(POST)
                     .path("/v1/messages")
-                    .header("x-api-key", "")
                     .body_contains(&format!(r#""output_config":{{"effort":"{effort_text}"}}"#));
                 then.status(200)
                     .header("content-type", "application/json")
@@ -259,6 +266,7 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
             .await
             .expect("effort fixture should complete");
         mock.assert_async().await;
+        assert_eq!(forbidden.hits_async().await, 0);
     }
 }
 

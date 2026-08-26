@@ -26,20 +26,29 @@ impl CustomProtocolAdapter for CancelOnceAdapter {
         &self.connection
     }
 
-    /// 首次模拟 late response，第二次证明应用没有复用取消结果。
+    /// 首次在返回 Read 调用前触发取消，第二次证明应用没有 dispatch 或复用取消结果。
     async fn complete(
         &self,
         _request: CustomRoundRequest,
         _cancellation: &crate::operation::CancellationSignal,
     ) -> Result<CustomRoundResult, CustomAdapterError> {
-        if self.calls.fetch_add(1, Ordering::AcqRel) == 0 {
+        let first_call = self.calls.fetch_add(1, Ordering::AcqRel) == 0;
+        if first_call {
             self.first_cancellation.cancel();
         }
         Ok(CustomRoundResult {
             choice: vec![rig::completion::AssistantContent::tool_call(
                 "final",
-                FINAL_OUTPUT_TOOL_NAME,
-                json!({"before": {"1": "旧行"}, "after": {"1": "新行"}}),
+                if first_call {
+                    "read"
+                } else {
+                    FINAL_OUTPUT_TOOL_NAME
+                },
+                if first_call {
+                    json!({"path": "outside-workspace.rs"})
+                } else {
+                    json!({"before": {"1": "旧行"}, "after": {"1": "新行"}})
+                },
             )],
             usage: rig::completion::Usage::new(),
             identity: rig::completion::ResponseIdentity {
@@ -408,7 +417,7 @@ async fn custom_registry_http_generation_populates_and_reuses_completed_cache() 
 }
 
 #[tokio::test]
-async fn custom_registry_does_not_cache_a_late_response_after_cancellation() {
+async fn custom_registry_cancels_before_tool_dispatch_and_does_not_cache() {
     use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
 
     let workspace = tempfile::tempdir().expect("创建 workspace");

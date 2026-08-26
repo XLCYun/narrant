@@ -12,11 +12,107 @@ use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
 use rig::client::AgentClientExt;
 use rig::completion::{Message, Prompt};
+use rig::http_client::{self, HttpClientExt, MultipartForm, Request, Response, StreamingResponse};
 use rig::providers::anthropic;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+
+/// Anthropic 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
+#[derive(Clone, Default)]
+struct AnthropicRequestGuardClient {
+    inner: http_client::ReqwestClient,
+    omit_authentication: bool,
+    cancellation: CancellationSignal,
+}
+
+impl AnthropicRequestGuardClient {
+    /// 创建同时执行可选认证与 dispatch-time 取消检查的 Rig backend。
+    fn new(omit_authentication: bool, cancellation: CancellationSignal) -> Self {
+        Self {
+            inner: http_client::ReqwestClient::default(),
+            omit_authentication,
+            cancellation,
+        }
+    }
+
+    /// 仅在用户没有提供凭据时移除 Anthropic 标准认证头。
+    fn prepare<T>(&self, mut request: Request<T>) -> Request<T> {
+        if self.omit_authentication {
+            request.headers_mut().remove("x-api-key");
+        }
+        request
+    }
+}
+
+impl HttpClientExt for AnthropicRequestGuardClient {
+    /// 普通请求发送前同时检查取消，并在空凭据时省略认证头。
+    fn send<T, U>(
+        &self,
+        request: Request<T>,
+    ) -> impl Future<Output = http_client::Result<Response<http_client::LazyBody<U>>>> + Send + 'static
+    where
+        T: Into<bytes::Bytes> + Send,
+        U: From<bytes::Bytes> + Send + 'static,
+    {
+        let client = self.inner.clone();
+        let request = self.prepare(request);
+        let cancelled = self.cancellation.is_cancelled();
+        let (parts, body) = request.into_parts();
+        let request = Request::from_parts(parts, body.into());
+        async move {
+            if cancelled {
+                Err(http_client::Error::NoHeaders)
+            } else {
+                client.send(request).await
+            }
+        }
+    }
+
+    /// Multipart 请求发送前执行相同的取消与可选认证守卫。
+    fn send_multipart<U>(
+        &self,
+        request: Request<MultipartForm>,
+    ) -> impl Future<Output = http_client::Result<Response<http_client::LazyBody<U>>>> + Send + 'static
+    where
+        U: From<bytes::Bytes> + Send + 'static,
+    {
+        let client = self.inner.clone();
+        let request = self.prepare(request);
+        let cancelled = self.cancellation.is_cancelled();
+        async move {
+            if cancelled {
+                Err(http_client::Error::NoHeaders)
+            } else {
+                client.send_multipart(request).await
+            }
+        }
+    }
+
+    /// 流式请求建立连接前执行相同的取消与可选认证守卫。
+    fn send_streaming<T>(
+        &self,
+        request: Request<T>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send
+    where
+        T: Into<bytes::Bytes> + Send,
+    {
+        let client = self.inner.clone();
+        let request = self.prepare(request);
+        let cancelled = self.cancellation.is_cancelled();
+        let (parts, body) = request.into_parts();
+        let request = Request::from_parts(parts, body.into());
+        async move {
+            if cancelled {
+                Err(http_client::Error::NoHeaders)
+            } else {
+                client.send_streaming(request).await
+            }
+        }
+    }
+}
 
 /// Anthropic Messages adapter 的冻结连接参数。
 #[derive(Clone, Debug)]
@@ -74,6 +170,8 @@ pub(crate) struct AnthropicMessagesAdapter {
     connection: CustomConnectionSnapshot,
     adapter: AnthropicAdapter,
     workspace: PathBuf,
+    #[cfg(test)]
+    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
 }
 
 impl AnthropicMessagesAdapter {
@@ -106,7 +204,19 @@ impl AnthropicMessagesAdapter {
             connection,
             adapter,
             workspace: workspace.as_ref().to_path_buf(),
+            #[cfg(test)]
+            tool_boundary_cancellation: None,
         })
+    }
+
+    /// 测试专用：在 Rig 调用真实 repository tool 时触发指定取消信号。
+    #[cfg(test)]
+    pub(crate) fn with_tool_boundary_cancellation(
+        mut self,
+        cancellation: crate::operation::TestCancellation,
+    ) -> Self {
+        self.tool_boundary_cancellation = Some(cancellation);
+        self
     }
 }
 
@@ -131,6 +241,11 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                 self.connection.base_url(),
             ))
         })?;
+        #[cfg(test)]
+        let repository_tools = match self.tool_boundary_cancellation.clone() {
+            Some(cancellation) => repository_tools.with_execute_cancellation(cancellation),
+            None => repository_tools,
+        };
         let response = self
             .adapter
             .complete(AnthropicAdapterRequest {
@@ -225,9 +340,14 @@ impl AnthropicAdapter {
         if request.cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }
+        let api_key = self.config.api_key.clone().unwrap_or_default();
         let client = anthropic::Client::builder()
-            .api_key(self.config.api_key.clone().unwrap_or_default())
+            .api_key(api_key.clone())
             .base_url(&self.config.base_url)
+            .http_client(AnthropicRequestGuardClient::new(
+                api_key.is_empty(),
+                request.cancellation.clone(),
+            ))
             .build()
             .map_err(|_| AnthropicAdapterError::Client)?;
         let tools = request.repository_tools.rig_tools(&request.cancellation);
@@ -259,6 +379,9 @@ impl AnthropicAdapter {
         let response = loop {
             tokio::select! {
                 response = &mut completion => {
+                    if cancellation.is_cancelled() {
+                        return Err(AnthropicAdapterError::Cancelled);
+                    }
                     break response.map_err(|_| AnthropicAdapterError::Protocol)?;
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {

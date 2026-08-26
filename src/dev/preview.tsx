@@ -33,7 +33,7 @@ type PreviewDefinition = {
 };
 
 /** Settings Preview 中 Custom 连接的可交互状态集合。 */
-type CustomPreviewState = "empty" | "configured" | "revealed" | "failed";
+type CustomPreviewState = "empty" | "configured" | "invalid" | "saving" | "failed" | "revealed";
 
 /** 用公开端口提供可交互的主题设置与持久化失败预览。 */
 function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSection = false, customState, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; babysitSection?: boolean; customState?: CustomPreviewState; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
@@ -43,7 +43,9 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
     : null);
   const [customConnection, setCustomConnection] = useState<CustomProviderConnection>(customState === "empty"
     ? { protocol: "openai_chat_completions", baseUrl: "", apiKey: "", model: "", effort: "medium" }
-    : { protocol: "openai_chat_completions", baseUrl: "https://api.example.test/v1", apiKey: "sk-preview-key", model: "gpt-5-mini", effort: "medium" });
+    : customState === "invalid"
+      ? { protocol: "openai_chat_completions", baseUrl: "   ", apiKey: "sk-preview-key", model: "   ", effort: "medium" }
+      : { protocol: "openai_chat_completions", baseUrl: "https://api.example.test/v1", apiKey: "sk-preview-key", model: "gpt-5-mini", effort: "medium" });
   const [babysit, setBabysit] = useState<BabysitSettings>({
     provider: customState ? "custom" : babysitSection ? "claude-code" : "codex",
     codex: { executable: codexExecutable, model: null, reasoningEffort: null },
@@ -82,6 +84,7 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
     },
     loadCustomConnection: async () => customConnection,
     saveCustomConnection: async (connection) => {
+      if (customState === "saving") return new Promise<ApplicationSettings>(() => undefined);
       if (customState === "failed") throw new Error("预览中的 Custom 连接无法保存");
       const next = { ...babysit, custom: { protocol: connection.protocol, baseUrl: connection.baseUrl, model: connection.model, effort: connection.effort } };
       setCustomConnection(connection);
@@ -98,7 +101,7 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || babysitSection || customState || modelState !== "idle" ? "babysit" : "appearance"} initialCustomApiKeyVisible={customState === "revealed"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || babysitSection || customState || modelState !== "idle" ? "babysit" : "appearance"} initialCustomApiKeyVisible={customState === "revealed"} autoSaveCustomConnection={customState === "saving"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */
@@ -293,7 +296,7 @@ function ReviewReaderPreview({
   updateState?: "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes";
   shortContent?: boolean;
-  babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out";
+  babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
 }) {
   const fileChanges = shortContent
     ? readerSnapshot.fileChanges.slice(0, 2)
@@ -338,6 +341,8 @@ function ReviewReaderPreview({
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_not_found", detail: "Claude Code executable unavailable", providerId: "claude-code", recovery: "open_application_settings" } }
         : babysitKind === "claude-signed-out"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_signed_out", detail: "Claude Code authentication unavailable", providerId: "claude-code", recovery: "login_provider" } }
+        : babysitKind === "custom-recovery"
+          ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "provider_not_found", detail: "Custom provider is not configured", providerId: "custom", recovery: "open_application_settings" } }
         : babysitKind === "failed"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
@@ -407,6 +412,8 @@ const previews: Record<string, PreviewDefinition> = {
       "model-error": { label: "模型目录失败", render: () => <SettingsPreview modelState="error" /> },
       "custom-empty": { label: "Custom 空配置", render: () => <SettingsPreview customState="empty" /> },
       "custom-configured": { label: "Custom 已配置", render: () => <SettingsPreview customState="configured" /> },
+      "custom-invalid": { label: "Custom 本地校验失败", render: () => <SettingsPreview customState="invalid" /> },
+      "custom-saving": { label: "Custom 保存中", render: () => <SettingsPreview customState="saving" /> },
       "custom-revealed": { label: "Custom 密钥已显示", render: () => <SettingsPreview customState="revealed" /> },
       "custom-failed": { label: "Custom 保存失败", render: () => <SettingsPreview customState="failed" /> },
     },
@@ -520,6 +527,7 @@ const previews: Record<string, PreviewDefinition> = {
       "babysit-failed": { label: "宝宝模式失败", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="failed" /> },
       "babysit-claude-recovery": { label: "Claude Code 恢复", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-recovery" /> },
       "babysit-claude-signed-out": { label: "Claude Code 未登录", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="claude-signed-out" /> },
+      "babysit-custom-recovery": { label: "Custom 未配置恢复", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="custom-recovery" /> },
       "update-checking": { label: "正在检查更新", render: () => <ReviewReaderPreview updateState="checking" /> },
       "update-current": { label: "已是最新", render: () => <ReviewReaderPreview updateState="current" /> },
       "update-failed": { label: "检查失败", render: () => <ReviewReaderPreview updateState="failed" /> },

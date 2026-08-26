@@ -313,6 +313,33 @@ describe("Babysit Review Reader presentation", () => {
     expect(footer).not.toHaveTextContent("alice");
   });
 
+  it("Custom 未配置时引导应用设置且不回退到已安装 provider", () => {
+    const openApplicationSettings = vi.fn();
+    const review = makeReview({
+      kind: "failed",
+      retryable: true,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      error: {
+        code: "provider_not_found",
+        detail: "Custom provider is not configured",
+        providerId: "custom",
+        recovery: "open_application_settings",
+      },
+    });
+    render(<ReviewReader review={review} appearance={{ ...appearance, onOpenApplicationSettings: openApplicationSettings }} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+
+    const footer = screen.getByTestId("babysit-footer");
+    expect(footer).toHaveTextContent("逐行解释失败");
+    expect(within(footer).getByRole("button", { name: "打开应用设置" })).toBeInTheDocument();
+    expect(footer).not.toHaveTextContent("Codex");
+    expect(footer).not.toHaveTextContent("Claude Code");
+    expect(footer).not.toHaveTextContent("Custom provider is not configured");
+    fireEvent.click(within(footer).getByRole("button", { name: "打开应用设置" }));
+    expect(openApplicationSettings).toHaveBeenCalledOnce();
+  });
+
   it("把解释直接注入代码行尾且不包含变更前后行号标签", () => {
     const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(8).slice(0, 240);
     const review = makeReview({

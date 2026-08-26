@@ -417,6 +417,14 @@ impl ApplicationSettingsApplication {
     pub(crate) fn load_custom_connection(
         &self,
     ) -> Result<CustomProviderConnection, ApplicationSettingsError> {
+        self.load_custom_connection_with_generation()
+            .map(|(connection, _)| connection)
+    }
+
+    /// 读取同一非敏感设置快照及其凭据 generation，供运行开始时冻结连接 identity。
+    pub(crate) fn load_custom_connection_with_generation(
+        &self,
+    ) -> Result<(CustomProviderConnection, u64), ApplicationSettingsError> {
         let settings = self.load()?;
         let api_key = self
             .credential_adapter
@@ -424,7 +432,7 @@ impl ApplicationSettingsApplication {
             .map_err(ApplicationSettingsError::Credential)?;
         let mut connection = CustomProviderConnection::from(settings.babysit.custom_settings());
         connection.api_key = api_key.unwrap_or_default();
-        Ok(connection)
+        Ok((connection, settings.babysit.custom.credential_generation))
     }
 
     /// 校验并原子替换完整 Custom 连接，先写非敏感设置再更新系统凭据。
