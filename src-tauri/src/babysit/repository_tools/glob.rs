@@ -1,4 +1,6 @@
-use super::{GlobRequest, GlobResponse, RepositoryToolError};
+use super::{
+    ensure_not_cancelled, is_contained, path_string, GlobRequest, GlobResponse, RepositoryToolError,
+};
 use crate::operation::CancellationSignal;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -44,25 +46,6 @@ pub(super) fn execute(
     let truncated = paths.len() > MAX_RESULTS;
     paths.truncate(MAX_RESULTS);
     Ok(GlobResponse { paths, truncated })
-}
-
-/// 将 Glob 结果限制为 canonical workspace 的后代路径（根目录本身除外）。
-fn is_contained(workspace_root: &Path, candidate: &Path) -> bool {
-    candidate.strip_prefix(workspace_root).is_ok()
-}
-
-/// 把平台路径投影为工具协议中的 workspace-relative POSIX 路径。
-fn path_string(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace(std::path::MAIN_SEPARATOR, "/")
-}
-
-/// 返回取消状态，统一 Glob 的取消错误。
-fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), RepositoryToolError> {
-    cancellation
-        .is_cancelled()
-        .then_some(RepositoryToolError::Cancelled)
-        .map_or(Ok(()), Err)
 }
 
 /// 已解析的 Glob 模式；其根始终是 workspace 相对路径。

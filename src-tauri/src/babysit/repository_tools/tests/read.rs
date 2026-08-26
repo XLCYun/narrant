@@ -20,6 +20,32 @@ fn registration_exposes_only_the_bounded_repository_tool_set() {
 }
 
 #[test]
+fn rig_tools_expose_the_same_three_stable_names_and_schemas() {
+    use rig::tool::Tool;
+
+    let workspace = tempdir().unwrap();
+    let tools = RepositoryTools::new(workspace.path()).unwrap();
+    let cancellation = crate::operation::OperationContext::background();
+    let rig_tools = tools.rig_tools(cancellation.cancellation());
+
+    assert_eq!(RigReadTool::NAME, "read");
+    assert_eq!(RigGlobTool::NAME, "glob");
+    assert_eq!(RigGrepTool::NAME, "grep");
+    assert_eq!(
+        rig_tools.read.parameters(),
+        tools.registration().tool("read").unwrap().input_schema
+    );
+    assert_eq!(
+        rig_tools.glob.parameters(),
+        tools.registration().tool("glob").unwrap().input_schema
+    );
+    assert_eq!(
+        rig_tools.grep.parameters(),
+        tools.registration().tool("grep").unwrap().input_schema
+    );
+}
+
+#[test]
 fn read_returns_text_file_with_workspace_relative_identity() {
     let workspace = tempdir().unwrap();
     std::fs::create_dir_all(workspace.path().join("src")).unwrap();

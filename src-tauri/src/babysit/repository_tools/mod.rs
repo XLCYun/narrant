@@ -236,6 +236,37 @@ pub struct RepositoryTools {
     pub(super) workspace_root: PathBuf,
 }
 
+/// 一次 Built-in provider 分析可直接注册的三个 Rig 工具。
+pub struct RepositoryRigTools {
+    /// Rig Read 工具。
+    pub read: RigReadTool,
+    /// Rig Glob 工具。
+    pub glob: RigGlobTool,
+    /// Rig Grep 工具。
+    pub grep: RigGrepTool,
+}
+
+/// 绑定 Workspace 与本次 Babysit 取消信号的 Rig Read 工具。
+#[derive(Clone)]
+pub struct RigReadTool {
+    tools: RepositoryTools,
+    cancellation: CancellationSignal,
+}
+
+/// 绑定 Workspace 与本次 Babysit 取消信号的 Rig Glob 工具。
+#[derive(Clone)]
+pub struct RigGlobTool {
+    tools: RepositoryTools,
+    cancellation: CancellationSignal,
+}
+
+/// 绑定 Workspace 与本次 Babysit 取消信号的 Rig Grep 工具。
+#[derive(Clone)]
+pub struct RigGrepTool {
+    tools: RepositoryTools,
+    cancellation: CancellationSignal,
+}
+
 impl RepositoryTools {
     /// canonicalize 一次 Review Workspace，并拒绝非目录根。
     pub fn new(workspace_root: impl AsRef<Path>) -> Result<Self, RepositoryToolError> {
@@ -253,6 +284,24 @@ impl RepositoryTools {
     pub fn registration(&self) -> RepositoryToolRegistrationView {
         RepositoryToolRegistrationView {
             tools: self.registrations(),
+        }
+    }
+
+    /// 为一次可取消分析构造可直接交给 Rig agent builder 的工具。
+    pub fn rig_tools(&self, cancellation: &CancellationSignal) -> RepositoryRigTools {
+        RepositoryRigTools {
+            read: RigReadTool {
+                tools: self.clone(),
+                cancellation: cancellation.clone(),
+            },
+            glob: RigGlobTool {
+                tools: self.clone(),
+                cancellation: cancellation.clone(),
+            },
+            grep: RigGrepTool {
+                tools: self.clone(),
+                cancellation: cancellation.clone(),
+            },
         }
     }
 
@@ -345,13 +394,104 @@ impl RepositoryTools {
     }
 }
 
+impl rig::tool::Tool for RigReadTool {
+    type Args = ReadInput;
+    type Output = ReadResponse;
+    type Error = RepositoryToolError;
+    const NAME: &'static str = READ_TOOL_NAME;
+
+    /// 返回 Rig 暴露给模型的 Read 描述。
+    fn description(&self) -> String {
+        "Read text files or directory entries inside the Review Workspace.".to_owned()
+    }
+
+    /// 返回 Read 的有界输入 schema。
+    fn parameters(&self) -> Value {
+        read_input_schema()
+    }
+
+    /// 通过 Narrant 边界执行 Rig Read 调用。
+    async fn call(
+        &self,
+        _context: &mut rig::tool::ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
+        self.tools.read(args, &self.cancellation)
+    }
+}
+
+impl rig::tool::Tool for RigGlobTool {
+    type Args = GlobRequest;
+    type Output = GlobResponse;
+    type Error = RepositoryToolError;
+    const NAME: &'static str = GLOB_TOOL_NAME;
+
+    /// 返回 Rig 暴露给模型的 Glob 描述。
+    fn description(&self) -> String {
+        "Find paths inside the Review Workspace.".to_owned()
+    }
+
+    /// 返回 Glob 输入 schema。
+    fn parameters(&self) -> Value {
+        glob_input_schema()
+    }
+
+    /// 通过 Narrant 边界执行 Rig Glob 调用。
+    async fn call(
+        &self,
+        _context: &mut rig::tool::ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
+        glob::execute(&self.tools.workspace_root, &args, &self.cancellation)
+    }
+}
+
+impl rig::tool::Tool for RigGrepTool {
+    type Args = GrepRequest;
+    type Output = GrepResponse;
+    type Error = RepositoryToolError;
+    const NAME: &'static str = GREP_TOOL_NAME;
+
+    /// 返回 Rig 暴露给模型的 Grep 描述。
+    fn description(&self) -> String {
+        "Search text inside the Review Workspace.".to_owned()
+    }
+
+    /// 返回 Grep 输入 schema。
+    fn parameters(&self) -> Value {
+        grep_input_schema()
+    }
+
+    /// 通过 Narrant 边界执行 Rig Grep 调用。
+    async fn call(
+        &self,
+        _context: &mut rig::tool::ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
+        grep::execute(&self.tools.workspace_root, &args, &self.cancellation)
+    }
+}
+
 /// 检查共享取消 signal，并将取消统一映射为稳定工具错误。
-fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), RepositoryToolError> {
+pub(super) fn ensure_not_cancelled(
+    cancellation: &CancellationSignal,
+) -> Result<(), RepositoryToolError> {
     if cancellation.is_cancelled() {
         Err(RepositoryToolError::Cancelled)
     } else {
         Ok(())
     }
+}
+
+/// 以组件边界证明 canonical 候选路径位于 Review Workspace 内。
+pub(super) fn is_contained(workspace_root: &Path, candidate: &Path) -> bool {
+    candidate.strip_prefix(workspace_root).is_ok()
+}
+
+/// 把 workspace-relative 路径投影为工具协议的 POSIX 路径。
+pub(super) fn path_string(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 /// 读取普通文本文件，在扫描过程中维持 UTF-8 校验和 bounded 输出缓冲。

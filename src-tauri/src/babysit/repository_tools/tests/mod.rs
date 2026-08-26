@@ -398,6 +398,34 @@ fn grep_returns_deterministic_bounded_matching_lines_with_explicit_truncation() 
 }
 
 #[test]
+fn grep_bounds_a_single_extreme_line_and_reports_truncation() {
+    let root = workspace();
+    fs::write(
+        root.path().join("long.txt"),
+        format!("needle{}", "x".repeat(20_000)),
+    )
+    .expect("写入极长行");
+    let tools = RepositoryTools::new(root.path()).expect("初始化工具");
+
+    let RepositoryToolResponse::Grep(result) = tools
+        .execute(
+            RepositoryToolRequest::Grep(GrepRequest {
+                pattern: "needle".to_owned(),
+                path: ".".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect("执行 Grep")
+    else {
+        panic!("Grep 返回了错误的响应类型");
+    };
+
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].line.len(), 8 * 1024);
+    assert!(result.truncated);
+}
+
+#[test]
 fn grep_honors_cancellation_before_search() {
     let root = workspace();
     fs::write(root.path().join("inside.rs"), "needle\n").expect("写入文件");

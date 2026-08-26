@@ -1,4 +1,6 @@
-use super::{GrepRequest, GrepResponse, RepositoryToolError};
+use super::{
+    ensure_not_cancelled, is_contained, path_string, GrepRequest, GrepResponse, RepositoryToolError,
+};
 use crate::operation::CancellationSignal;
 use regex::Regex;
 use std::fs::File;
@@ -8,6 +10,10 @@ use walkdir::WalkDir;
 
 /// Grep 单次调用最多返回的匹配行数量。
 const MAX_RESULTS: usize = 500;
+/// 单个 Grep 文件参与匹配的最大文本字节数。
+const MAX_FILE_BYTES: usize = 1024 * 1024;
+/// 单条 Grep 输出行的最大 UTF-8 字节数。
+const MAX_LINE_BYTES: usize = 8 * 1024;
 
 /// 在一个已验证的文件或目录目标下搜索文本内容。
 pub(super) fn execute(
@@ -19,11 +25,13 @@ pub(super) fn execute(
     let pattern = Regex::new(&request.pattern).map_err(|_| RepositoryToolError::InvalidPattern)?;
     let target = resolve_target(workspace_root, &request.path)?;
     let mut matches = Vec::new();
+    let mut truncated = false;
 
     // 允许 workspace 内的 symlink 继续解析，但 filter_entry 先证明每个目录目标，
     // 因而指向外部的 symlink 不会把遍历带出 Review Workspace。
     let walker = WalkDir::new(&target)
         .follow_links(true)
+        .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
             !cancellation.is_cancelled()
@@ -46,14 +54,25 @@ pub(super) fn execute(
         if !metadata.is_file() {
             continue;
         }
-        let Some(text) = read_text(&canonical, cancellation)? else {
+        let Some((text, file_truncated)) = read_text(&canonical, cancellation)? else {
             continue;
         };
+        truncated |= file_truncated;
         let Some(relative_path) = workspace_relative(workspace_root, entry.path()) else {
             continue;
         };
-        let file_matches = matching_lines(&pattern, &text, &relative_path, cancellation)?;
+        let file_matches = matching_lines(
+            &pattern,
+            &text,
+            &relative_path,
+            cancellation,
+            &mut truncated,
+        )?;
         matches.extend(file_matches);
+        if matches.len() > MAX_RESULTS {
+            truncated = true;
+            break;
+        }
     }
 
     ensure_not_cancelled(cancellation)?;
@@ -64,7 +83,7 @@ pub(super) fn execute(
             .then(left.line.cmp(&right.line))
     });
     matches.dedup();
-    let truncated = matches.len() > MAX_RESULTS;
+    truncated |= matches.len() > MAX_RESULTS;
     matches.truncate(MAX_RESULTS);
     Ok(GrepResponse { matches, truncated })
 }
@@ -91,33 +110,26 @@ fn resolve_target(
     Ok(canonical)
 }
 
-/// 证明候选 canonical 路径位于 workspace 根或其后代，避免字符串前缀误判。
-fn is_contained(workspace_root: &Path, candidate: &Path) -> bool {
-    candidate.strip_prefix(workspace_root).is_ok()
-}
-
 /// 将已验证的遍历项投影为 workspace-relative POSIX 路径。
 fn workspace_relative(workspace_root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(workspace_root).ok()?;
     if relative.as_os_str().is_empty() {
         return None;
     }
-    Some(
-        relative
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/"),
-    )
+    Some(path_string(relative))
 }
 
 /// 逐块读取文本，避免一次不可取消的整文件系统调用。
 fn read_text(
     path: &Path,
     cancellation: &CancellationSignal,
-) -> Result<Option<String>, RepositoryToolError> {
+) -> Result<Option<(String, bool)>, RepositoryToolError> {
     let mut file = File::open(path).map_err(|_| RepositoryToolError::Io)?;
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 8192];
     let mut binary = false;
+    let mut utf8_tail = Vec::new();
+    let mut truncated = false;
     loop {
         ensure_not_cancelled(cancellation)?;
         let count = file
@@ -127,13 +139,22 @@ fn read_text(
             break;
         }
         binary |= buffer[..count].contains(&0);
-        bytes.extend_from_slice(&buffer[..count]);
+        if super::validate_utf8_chunk(&buffer[..count], &mut utf8_tail).is_err() {
+            binary = true;
+        }
+        let remaining = MAX_FILE_BYTES.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+        truncated |= count > remaining;
     }
     ensure_not_cancelled(cancellation)?;
-    if binary {
+    if binary || !utf8_tail.is_empty() {
         return Ok(None);
     }
-    Ok(String::from_utf8(bytes).ok())
+    while std::str::from_utf8(&bytes).is_err() {
+        bytes.pop();
+        truncated = true;
+    }
+    Ok(String::from_utf8(bytes).ok().map(|text| (text, truncated)))
 }
 
 /// 收集一个文本文件的匹配行，确保二进制文件永远不会产生部分结果。
@@ -142,25 +163,35 @@ fn matching_lines(
     text: &str,
     path: &str,
     cancellation: &CancellationSignal,
+    truncated: &mut bool,
 ) -> Result<Vec<super::GrepMatch>, RepositoryToolError> {
     let mut matches = Vec::new();
     for (index, line) in text.lines().enumerate() {
         ensure_not_cancelled(cancellation)?;
         if pattern.is_match(line) {
+            let rendered = bounded_line(line);
+            *truncated |= rendered.len() < line.len();
             matches.push(super::GrepMatch {
                 path: path.to_owned(),
                 line_number: index + 1,
-                line: line.to_owned(),
+                line: rendered,
             });
+            if matches.len() > MAX_RESULTS {
+                break;
+            }
         }
     }
     Ok(matches)
 }
 
-/// 返回取消状态，统一 Grep 的取消错误。
-fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), RepositoryToolError> {
-    cancellation
-        .is_cancelled()
-        .then_some(RepositoryToolError::Cancelled)
-        .map_or(Ok(()), Err)
+/// 在 UTF-8 边界上截断单条匹配行，防止极长行占满模型上下文。
+fn bounded_line(line: &str) -> String {
+    if line.len() <= MAX_LINE_BYTES {
+        return line.to_owned();
+    }
+    let mut end = MAX_LINE_BYTES;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end].to_owned()
 }
