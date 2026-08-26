@@ -1,5 +1,7 @@
 use super::*;
 
+// expand-first seam：#143 会把两个协议 adapter 接入共享 Custom runtime。
+#[allow(dead_code)]
 mod anthropic;
 
 #[allow(unused_imports)]
