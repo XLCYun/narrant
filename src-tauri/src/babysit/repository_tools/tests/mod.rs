@@ -30,6 +30,8 @@ fn registration_exposes_the_three_read_only_repository_tools() {
 fn glob_returns_matching_workspace_relative_paths() {
     let root = workspace();
     fs::create_dir_all(root.path().join("src/nested")).expect("创建目录");
+    fs::write(root.path().join("root.rs"), "root").expect("写入根目录文件");
+    fs::write(root.path().join("[literal].rs"), "literal").expect("写入含 Glob 元字符的文件");
     fs::write(root.path().join("src/b.rs"), "b").expect("写入文件");
     fs::write(root.path().join("src/nested/a.rs"), "a").expect("写入文件");
     let tools = RepositoryTools::new(root.path()).expect("初始化工具");
@@ -46,9 +48,47 @@ fn glob_returns_matching_workspace_relative_paths() {
     assert_eq!(
         result,
         RepositoryToolResponse::Glob(GlobResponse {
-            paths: vec!["src/b.rs".to_owned(), "src/nested/a.rs".to_owned()],
+            paths: vec![
+                "[literal].rs".to_owned(),
+                "root.rs".to_owned(),
+                "src/b.rs".to_owned(),
+                "src/nested/a.rs".to_owned(),
+            ],
             truncated: false,
         })
+    );
+
+    let literal = tools
+        .execute(
+            RepositoryToolRequest::Glob(GlobRequest {
+                pattern: "[literal].rs".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect("按字面量匹配未公开的 Glob 元字符");
+    assert_eq!(
+        literal,
+        RepositoryToolResponse::Glob(GlobResponse {
+            paths: vec!["[literal].rs".to_owned()],
+            truncated: false,
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn glob_skips_paths_with_non_utf8_components_instead_of_deleting_the_component() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    let invalid = OsString::from_vec(vec![0xff]);
+    let mut candidate = PathBuf::from("foo");
+    candidate.push(invalid);
+    candidate.push("bar.rs");
+
+    assert!(
+        !super::glob::matches_pattern_for_test("foo/bar.rs", &candidate).expect("编译 Glob 模式")
     );
 }
 

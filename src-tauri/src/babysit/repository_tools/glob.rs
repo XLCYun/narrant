@@ -2,6 +2,8 @@ use super::{
     ensure_not_cancelled, is_contained, path_string, GlobRequest, GlobResponse, RepositoryToolError,
 };
 use crate::operation::CancellationSignal;
+use globset::{GlobBuilder, GlobMatcher};
+use std::collections::BinaryHeap;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -16,7 +18,8 @@ pub(super) fn execute(
 ) -> Result<GlobResponse, RepositoryToolError> {
     ensure_not_cancelled(cancellation)?;
     let pattern = Pattern::parse(&request.pattern)?;
-    let mut paths = Vec::new();
+    let mut paths = BinaryHeap::with_capacity(MAX_RESULTS + 1);
+    let mut truncated = false;
 
     for entry in WalkDir::new(workspace_root).follow_links(false) {
         ensure_not_cancelled(cancellation)?;
@@ -37,84 +40,90 @@ pub(super) fn execute(
         if !is_contained(workspace_root, &canonical) {
             continue;
         }
-        paths.push(path_string(relative));
+        let relative = path_string(relative);
+        if paths.len() < MAX_RESULTS + 1 {
+            paths.push(relative);
+        } else if paths.peek().is_some_and(|largest| relative < *largest) {
+            paths.pop();
+            paths.push(relative);
+        }
+        if paths.len() > MAX_RESULTS {
+            truncated = true;
+        }
     }
 
     ensure_not_cancelled(cancellation)?;
+    let mut paths = paths.into_vec();
     paths.sort_unstable();
     paths.dedup();
-    let truncated = paths.len() > MAX_RESULTS;
+    truncated |= paths.len() > MAX_RESULTS;
     paths.truncate(MAX_RESULTS);
     Ok(GlobResponse { paths, truncated })
 }
 
 /// 已解析的 Glob 模式；其根始终是 workspace 相对路径。
 struct Pattern {
-    segments: Vec<String>,
+    matcher: GlobMatcher,
 }
 
 impl Pattern {
     /// 规范化分隔符并拒绝空模式，不将模式解释为主机绝对路径。
     fn parse(pattern: &str) -> Result<Self, RepositoryToolError> {
-        let normalized = pattern.replace('\\', "/");
-        let segments = normalized
+        let segments = pattern
+            .replace('\\', "/")
             .split('/')
             .filter(|segment| !segment.is_empty() && *segment != ".")
-            .map(str::to_owned)
+            .map(compile_segment)
             .collect::<Vec<_>>();
         if segments.is_empty() {
             return Err(RepositoryToolError::InvalidPattern);
         }
-        Ok(Self { segments })
+        let normalized = segments.join("/");
+        let matcher = GlobBuilder::new(&normalized)
+            .literal_separator(true)
+            .build()
+            .map_err(|_| RepositoryToolError::InvalidPattern)?
+            .compile_matcher();
+        Ok(Self { matcher })
     }
 
     /// 对 workspace-relative 候选路径执行 `*`、`?` 和完整段 `**` 匹配。
     fn matches(&self, path: &Path) -> bool {
-        let candidate = path
+        let Some(candidate) = path
             .components()
-            .filter_map(|component| component.as_os_str().to_str())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        matches_segments(&self.segments, &candidate)
+            .map(|component| component.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        self.matcher.is_match(candidate.join("/"))
     }
 }
 
-/// 用递归段匹配实现 `**` 可跨越零个或多个目录的 Glob 语义。
-fn matches_segments(pattern: &[String], candidate: &[String]) -> bool {
-    if pattern.is_empty() {
-        return candidate.is_empty();
+/// 仅保留公开契约中的 `*`、`?` 与完整段 `**`，其它 glob 元字符按字面量处理。
+fn compile_segment(segment: &str) -> String {
+    if segment == "**" {
+        return segment.to_owned();
     }
-    if pattern[0] == "**" {
-        return matches_segments(&pattern[1..], candidate)
-            || (!candidate.is_empty() && matches_segments(pattern, &candidate[1..]));
-    }
-    !candidate.is_empty()
-        && segment_matches(&pattern[0], &candidate[0])
-        && matches_segments(&pattern[1..], &candidate[1..])
-}
-
-/// 在一个路径段中匹配单字符问号和任意字符星号。
-fn segment_matches(pattern: &str, candidate: &str) -> bool {
-    let pattern = pattern.chars().collect::<Vec<_>>();
-    let candidate = candidate.chars().collect::<Vec<_>>();
-    let mut table = vec![vec![false; candidate.len() + 1]; pattern.len() + 1];
-    table[0][0] = true;
-    for (pattern_index, token) in pattern.iter().enumerate() {
-        let row = pattern_index + 1;
-        for candidate_index in 0..=candidate.len() {
-            table[row][candidate_index] = match token {
-                '*' => {
-                    table[row - 1][candidate_index]
-                        || (candidate_index > 0 && table[row][candidate_index - 1])
-                }
-                '?' => candidate_index > 0 && table[row - 1][candidate_index - 1],
-                literal => {
-                    candidate_index > 0
-                        && *literal == candidate[candidate_index - 1]
-                        && table[row - 1][candidate_index - 1]
-                }
-            };
+    let mut compiled = String::new();
+    let mut previous_star = false;
+    for character in segment.chars() {
+        match character {
+            '*' if !previous_star => compiled.push('*'),
+            '*' => {}
+            '?' => compiled.push('?'),
+            literal => compiled.push_str(&globset::escape(&literal.to_string())),
         }
+        previous_star = character == '*';
     }
-    table[pattern.len()][candidate.len()]
+    compiled
+}
+
+/// 测试模式匹配边界，不需要在文件系统中创建不可表示的路径。
+#[cfg(test)]
+pub(super) fn matches_pattern_for_test(
+    pattern: &str,
+    path: &Path,
+) -> Result<bool, RepositoryToolError> {
+    Pattern::parse(pattern).map(|pattern| pattern.matches(path))
 }
