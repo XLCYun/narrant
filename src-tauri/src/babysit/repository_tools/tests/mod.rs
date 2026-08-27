@@ -398,6 +398,67 @@ fn grep_reads_internal_symlinks_and_skips_external_symlinks() {
     assert!(!result.truncated);
 }
 
+#[cfg(unix)]
+#[test]
+fn grep_preserves_requested_file_and_directory_symlink_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let root = workspace();
+    fs::create_dir_all(root.path().join("real-dir")).expect("创建真实目录");
+    fs::write(root.path().join("real-file.rs"), "needle file\n").expect("写入真实文件");
+    fs::write(root.path().join("real-dir/lib.rs"), "needle dir\n").expect("写入目录文件");
+    symlink(
+        root.path().join("real-file.rs"),
+        root.path().join("file-alias.rs"),
+    )
+    .expect("创建文件 symlink");
+    symlink(root.path().join("real-dir"), root.path().join("dir-alias")).expect("创建目录 symlink");
+    let tools = RepositoryTools::new(root.path()).expect("初始化工具");
+
+    for (path, expected_path, expected_line) in [
+        ("file-alias.rs", "file-alias.rs", "needle file"),
+        ("dir-alias", "dir-alias/lib.rs", "needle dir"),
+    ] {
+        let RepositoryToolResponse::Grep(result) = tools
+            .execute(
+                RepositoryToolRequest::Grep(GrepRequest {
+                    pattern: "needle".to_owned(),
+                    path: path.to_owned(),
+                }),
+                &TestCancellation::default(),
+            )
+            .expect("通过 symlink alias 执行 Grep")
+        else {
+            panic!("Grep 返回了错误的响应类型");
+        };
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].path, expected_path);
+        assert_eq!(result.matches[0].line, expected_line);
+    }
+}
+
+#[test]
+fn grep_removes_only_one_line_terminator() {
+    let root = workspace();
+    fs::write(root.path().join("cr.txt"), "needle keeps cr\r\r\n").expect("写入带额外 CR 的文本");
+    let tools = RepositoryTools::new(root.path()).expect("初始化工具");
+
+    let RepositoryToolResponse::Grep(result) = tools
+        .execute(
+            RepositoryToolRequest::Grep(GrepRequest {
+                pattern: "needle".to_owned(),
+                path: ".".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect("执行 Grep")
+    else {
+        panic!("Grep 返回了错误的响应类型");
+    };
+
+    assert_eq!(result.matches[0].line, "needle keeps cr\r");
+}
+
 #[test]
 fn grep_returns_deterministic_bounded_matching_lines_with_explicit_truncation() {
     let root = workspace();
@@ -425,6 +486,7 @@ fn grep_returns_deterministic_bounded_matching_lines_with_explicit_truncation() 
     };
     assert_eq!(result.matches.len(), 500);
     assert!(result.truncated);
+    assert!(serde_json::to_vec(&result).expect("序列化 Grep 响应").len() <= 64 * 1024);
     assert_eq!(
         result.matches.first().map(|item| item.path.as_str()),
         Some("file-000.rs")
@@ -444,7 +506,7 @@ fn grep_bounds_a_single_extreme_line_and_reports_truncation() {
     let root = workspace();
     fs::write(
         root.path().join("long.txt"),
-        format!("needle{}", "x".repeat(20_000)),
+        format!("needle{}", "x".repeat(100_000)),
     )
     .expect("写入极长行");
     let tools = RepositoryTools::new(root.path()).expect("初始化工具");
@@ -463,12 +525,13 @@ fn grep_bounds_a_single_extreme_line_and_reports_truncation() {
     };
 
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].line.len(), 8 * 1024);
+    assert!(result.matches[0].line.len() > 60 * 1024);
+    assert!(serde_json::to_vec(&result).expect("序列化 Grep 响应").len() <= 64 * 1024);
     assert!(result.truncated);
 }
 
 #[test]
-fn grep_stops_after_the_per_file_budget_and_keeps_the_bounded_text_prefix() {
+fn grep_scans_past_one_mib_but_discards_the_whole_file_after_a_late_nul() {
     let root = workspace();
     let mut content = b"needle\n".to_vec();
     content.resize(1024 * 1024 + 16 * 1024, b'x');
@@ -489,17 +552,47 @@ fn grep_stops_after_the_per_file_budget_and_keeps_the_bounded_text_prefix() {
         panic!("Grep 返回了错误的响应类型");
     };
 
-    assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].line, "needle");
-    assert!(result.truncated);
+    assert!(result.matches.is_empty());
+    assert!(!result.truncated);
 }
 
 #[test]
-fn grep_keeps_valid_text_when_the_file_budget_splits_a_utf8_character() {
+fn grep_discards_files_with_binary_or_invalid_utf8_after_the_result_budget() {
+    let root = workspace();
+    let prefix = (0..501)
+        .map(|index| format!("needle {index}\n"))
+        .collect::<String>();
+    let mut binary = prefix.as_bytes().to_vec();
+    binary.extend_from_slice(b"\0binary tail");
+    fs::write(root.path().join("late-binary.dat"), binary).expect("写入后部二进制文件");
+    let mut invalid = prefix.into_bytes();
+    invalid.extend_from_slice(&[0xff, 0xfe]);
+    fs::write(root.path().join("late-invalid.dat"), invalid).expect("写入后部非法 UTF-8 文件");
+    let tools = RepositoryTools::new(root.path()).expect("初始化工具");
+
+    let RepositoryToolResponse::Grep(result) = tools
+        .execute(
+            RepositoryToolRequest::Grep(GrepRequest {
+                pattern: "needle".to_owned(),
+                path: ".".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect("执行 Grep")
+    else {
+        panic!("Grep 返回了错误的响应类型");
+    };
+
+    assert!(result.matches.is_empty());
+    assert!(!result.truncated);
+}
+
+#[test]
+fn grep_scans_complete_large_utf8_files() {
     let root = workspace();
     let mut content = b"needle\n".to_vec();
-    content.resize(1024 * 1024 - 1, b'x');
-    content.extend_from_slice("é".as_bytes());
+    content.resize(1024 * 1024 + 1, b'x');
+    content.extend_from_slice("\nneedle after one mib é\n".as_bytes());
     fs::write(root.path().join("utf8.txt"), content).expect("写入 UTF-8 文件");
     let tools = RepositoryTools::new(root.path()).expect("初始化工具");
 
@@ -516,9 +609,71 @@ fn grep_keeps_valid_text_when_the_file_budget_splits_a_utf8_character() {
         panic!("Grep 返回了错误的响应类型");
     };
 
-    assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].line, "needle");
-    assert!(result.truncated);
+    assert_eq!(result.matches.len(), 2);
+    assert_eq!(result.matches[1].line, "needle after one mib é");
+    assert!(!result.truncated);
+}
+
+#[test]
+fn grep_honors_workspace_ignore_files_but_searches_hidden_paths() {
+    let root = workspace();
+    let review = root.path().join("review");
+    fs::create_dir_all(&review).expect("创建 review workspace");
+    fs::write(root.path().join(".gitignore"), "parent-only.rs\n").expect("写入父级 gitignore");
+    fs::create_dir_all(review.join(".git/info")).expect("创建 git info 目录");
+    fs::write(review.join(".git/info/exclude"), "info-only.rs\n").expect("写入 git exclude");
+    fs::create_dir_all(review.join("ignored")).expect("创建 ignored 目录");
+    fs::create_dir_all(review.join("custom")).expect("创建 custom 目录");
+    fs::create_dir_all(review.join("nested/ignored")).expect("创建嵌套 ignored 目录");
+    fs::create_dir_all(review.join(".github")).expect("创建隐藏目录");
+    fs::write(review.join(".gitignore"), "ignored/\n").expect("写入 gitignore");
+    fs::write(review.join(".ignore"), "custom/\n").expect("写入 ignore");
+    fs::write(review.join("nested/.gitignore"), "ignored/\n").expect("写入嵌套 gitignore");
+    fs::write(review.join("ignored/a.rs"), "needle\n").expect("写入 ignored 文件");
+    fs::write(review.join("custom/b.rs"), "needle\n").expect("写入 custom 文件");
+    fs::write(review.join("nested/ignored/c.rs"), "needle\n").expect("写入嵌套 ignored 文件");
+    fs::write(review.join(".github/workflow.yml"), "needle\n").expect("写入隐藏文件");
+    fs::write(review.join("parent-only.rs"), "needle\n").expect("写入父级忽略候选");
+    fs::write(review.join("info-only.rs"), "needle\n").expect("写入 git exclude 候选");
+    let tools = RepositoryTools::new(&review).expect("初始化工具");
+
+    let RepositoryToolResponse::Grep(result) = tools
+        .execute(
+            RepositoryToolRequest::Grep(GrepRequest {
+                pattern: "needle".to_owned(),
+                path: ".".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect("执行 Grep")
+    else {
+        panic!("Grep 返回了错误的响应类型");
+    };
+
+    assert_eq!(
+        result
+            .matches
+            .iter()
+            .map(|item| item.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![".github/workflow.yml", "info-only.rs", "parent-only.rs"]
+    );
+}
+
+#[test]
+fn grep_rejects_patterns_larger_than_sixteen_kib() {
+    let root = workspace();
+    let tools = RepositoryTools::new(root.path()).expect("初始化工具");
+    let error = tools
+        .execute(
+            RepositoryToolRequest::Grep(GrepRequest {
+                pattern: "x".repeat(16 * 1024 + 1),
+                path: ".".to_owned(),
+            }),
+            &TestCancellation::default(),
+        )
+        .expect_err("超大 pattern 应失败");
+    assert_eq!(error, RepositoryToolError::InvalidPattern);
 }
 
 #[test]

@@ -108,8 +108,18 @@ Coding Agent Provider in Application Settings.
 - Read and Grep resolve actual filesystem paths with `canonicalize` and accept them only
   when `strip_prefix` proves they remain below the canonical Review Workspace. Glob
   starts at the workspace root and applies the same check to each match.
+- Grep uses ripgrep's `ignore`, `grep-regex`, and `grep-searcher` crates while Narrant
+  retains responsibility for canonical workspace containment, deterministic logical-path
+  ordering, and bounded output. It follows only `.gitignore` and `.ignore` rules within
+  the Review Workspace; parent and global ignore sources plus `.git/info/exclude` are
+  disabled, and hidden paths remain searchable unless a workspace rule ignores them.
+- Grep streams complete files. Detecting a NUL byte or invalid UTF-8 discards that file
+  and all provisionally buffered matches. Regex patterns are limited to 16 KiB and fixed
+  compilation, DFA, and nesting budgets.
 - Read returns at most 64 KiB per call with offset/limit continuation. Glob returns at
-  most 500 paths and Grep at most 500 matching lines. Every truncated result says so.
+  most 500 paths. Grep returns at most 500 matching lines or 64 KiB of final serialized
+  response data, whichever limit is reached first; an over-budget final line is cut at a
+  UTF-8 boundary. Every truncated result says so.
 - The final Line Explanations use Rig Tool output mode for both protocols. Narrant still
   parses, validates, and merges repair patches through its provider-independent contract.
 - Initial generation and up to three repairs reuse one in-memory Rig conversation. Each
@@ -138,7 +148,9 @@ Coding Agent Provider in Application Settings.
   secrets or repository content.
 - Repository tool tests use real temporary directory trees and cover canonical paths,
   `..`, absolute inputs, symlinks inside and outside the workspace, missing paths,
-  truncation, continuation, cancellation, and deterministic ordering.
+  workspace-local ignore behavior, hidden paths, binary and invalid-UTF-8 files,
+  count/byte truncation, oversized patterns, continuation, cancellation, and
+  deterministic logical-path ordering.
 - Provider tests cover complete output, final-tool schema errors, partial repair patches,
   three exhausted repairs, tool-loop limits, timeout, cancellation at model and tool
   boundaries, late responses, frozen connection identity, and completed-only caching.

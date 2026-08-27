@@ -1,19 +1,27 @@
 use super::{
-    ensure_not_cancelled, is_contained, path_string, GrepRequest, GrepResponse, RepositoryToolError,
+    ensure_not_cancelled, is_contained, path_string, GrepMatch, GrepRequest, GrepResponse,
+    RepositoryToolError,
 };
 use crate::operation::CancellationSignal;
-use regex::Regex;
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
+use ignore::WalkBuilder;
 use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use std::io::{self, Read};
+use std::path::{Component, Path, PathBuf};
 
 /// Grep 单次调用最多返回的匹配行数量。
 const MAX_RESULTS: usize = 500;
-/// 单个 Grep 文件参与匹配的最大文本字节数。
-const MAX_FILE_BYTES: usize = 1024 * 1024;
-/// 单条 Grep 输出行的最大 UTF-8 字节数。
-const MAX_LINE_BYTES: usize = 8 * 1024;
+/// Grep 最终 JSON 响应的最大 UTF-8 字节数。
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+/// Grep 接受的正则表达式最大 UTF-8 字节数。
+const MAX_PATTERN_BYTES: usize = 16 * 1024;
+/// 编译后正则程序的近似最大字节数。
+const REGEX_SIZE_LIMIT: usize = 2 * 1024 * 1024;
+/// 正则 DFA 每线程缓存的最大字节数。
+const REGEX_DFA_SIZE_LIMIT: usize = 2 * 1024 * 1024;
+/// 正则语法树允许的最大嵌套层数。
+const REGEX_NEST_LIMIT: u32 = 250;
 
 /// 在一个已验证的文件或目录目标下搜索文本内容。
 pub(super) fn execute(
@@ -22,73 +30,83 @@ pub(super) fn execute(
     cancellation: &CancellationSignal,
 ) -> Result<GrepResponse, RepositoryToolError> {
     ensure_not_cancelled(cancellation)?;
-    let pattern = Regex::new(&request.pattern).map_err(|_| RepositoryToolError::InvalidPattern)?;
+    let matcher = build_matcher(&request.pattern)?;
     let target = resolve_target(workspace_root, &request.path)?;
-    let mut matches = Vec::new();
-    let mut truncated = false;
-
-    // 允许 workspace 内的 symlink 继续解析，但 filter_entry 先证明每个目录目标，
-    // 因而指向外部的 symlink 不会把遍历带出 Review Workspace。
-    let walker = WalkDir::new(&target)
+    let mut response = GrepResponse {
+        matches: Vec::new(),
+        truncated: false,
+    };
+    let mut builder = WalkBuilder::new(&target);
+    let containment_root = workspace_root.to_path_buf();
+    let traversal_cancellation = cancellation.clone();
+    builder
         .follow_links(true)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_entry(|entry| {
-            !cancellation.is_cancelled()
+        .hidden(false)
+        .parents(false)
+        .ignore(true)
+        .git_ignore(true)
+        .require_git(false)
+        .git_global(false)
+        .git_exclude(false)
+        .filter_entry(move |entry| {
+            !traversal_cancellation.is_cancelled()
                 && entry
                     .path()
                     .canonicalize()
-                    .is_ok_and(|canonical| is_contained(workspace_root, &canonical))
-        });
-
-    for entry in walker {
+                    .is_ok_and(|canonical| is_contained(&containment_root, &canonical))
+        })
+        .sort_by_file_path(|left, right| left.cmp(right));
+    // 当搜索起点位于子目录时，显式加入 workspace 根规则；更深层规则仍由 walker 发现。
+    for ignore_file in [
+        workspace_root.join(".gitignore"),
+        workspace_root.join(".ignore"),
+    ] {
+        if ignore_file.is_file() {
+            let _ = builder.add_ignore(ignore_file);
+        }
+    }
+    for entry in builder.build() {
         ensure_not_cancelled(cancellation)?;
         let entry = entry.map_err(|_| RepositoryToolError::Io)?;
         let Ok(canonical) = entry.path().canonicalize() else {
             continue;
         };
-        if !is_contained(workspace_root, &canonical) {
+        if !is_contained(workspace_root, &canonical) || !canonical.is_file() {
             continue;
         }
-        let metadata = canonical.metadata().map_err(|_| RepositoryToolError::Io)?;
-        if !metadata.is_file() {
-            continue;
-        }
-        let Some((text, file_truncated)) = read_text(&canonical, cancellation)? else {
-            continue;
-        };
-        truncated |= file_truncated;
         let Some(relative_path) = workspace_relative(workspace_root, entry.path()) else {
             continue;
         };
-        let file_matches = matching_lines(
-            &pattern,
-            &text,
-            &relative_path,
-            cancellation,
-            &mut truncated,
-        )?;
-        matches.extend(file_matches);
-        if matches.len() > MAX_RESULTS {
-            truncated = true;
+        for candidate in search_file(&matcher, &canonical, &relative_path, cancellation)? {
+            if response.matches.len() >= MAX_RESULTS
+                || !push_within_budget(&mut response, candidate)
+            {
+                response.truncated = true;
+                break;
+            }
+        }
+        if response.truncated {
             break;
         }
     }
-
     ensure_not_cancelled(cancellation)?;
-    matches.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.line_number.cmp(&right.line_number))
-            .then(left.line.cmp(&right.line))
-    });
-    matches.dedup();
-    truncated |= matches.len() > MAX_RESULTS;
-    matches.truncate(MAX_RESULTS);
-    Ok(GrepResponse { matches, truncated })
+    Ok(response)
 }
 
-/// 把 Grep 的相对、绝对和 parent-component 目标解析为 workspace 内 canonical 路径。
+/// 使用 ripgrep 的正则引擎构建有资源上限的匹配器。
+fn build_matcher(pattern: &str) -> Result<RegexMatcher, RepositoryToolError> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(RepositoryToolError::InvalidPattern);
+    }
+    RegexMatcherBuilder::new()
+        .size_limit(REGEX_SIZE_LIMIT)
+        .dfa_size_limit(REGEX_DFA_SIZE_LIMIT)
+        .nest_limit(REGEX_NEST_LIMIT)
+        .build(pattern)
+        .map_err(|_| RepositoryToolError::InvalidPattern)
+}
+
+/// 把 Grep 目标解析为 workspace 内词法路径，并用 canonical identity 证明 containment。
 fn resolve_target(
     workspace_root: &Path,
     requested_path: &str,
@@ -97,7 +115,8 @@ fn resolve_target(
     let candidate = if requested_path.is_empty() || requested == Path::new(".") {
         workspace_root.to_path_buf()
     } else if requested.is_absolute() {
-        requested.to_path_buf()
+        rebase_absolute_to_workspace(workspace_root, requested)
+            .unwrap_or_else(|| requested.to_path_buf())
     } else {
         workspace_root.join(requested)
     };
@@ -107,7 +126,43 @@ fn resolve_target(
     if !is_contained(workspace_root, &canonical) {
         return Err(RepositoryToolError::OutsideWorkspace);
     }
-    Ok(canonical)
+    let mut traversal_target = normalize_lexical(&candidate);
+    if traversal_target.canonicalize().ok().as_ref() != Some(&canonical) {
+        let relative = canonical
+            .strip_prefix(workspace_root)
+            .map_err(|_| RepositoryToolError::OutsideWorkspace)?;
+        traversal_target = workspace_root.join(relative);
+    }
+    Ok(traversal_target)
+}
+
+/// 将可能使用平台 alias 拼写的绝对路径重挂到 canonical workspace，同时保留其内部逻辑后缀。
+fn rebase_absolute_to_workspace(workspace_root: &Path, requested: &Path) -> Option<PathBuf> {
+    for ancestor in requested.ancestors() {
+        if ancestor
+            .canonicalize()
+            .is_ok_and(|canonical| canonical == workspace_root)
+        {
+            let suffix = requested.strip_prefix(ancestor).ok()?;
+            return Some(workspace_root.join(suffix));
+        }
+    }
+    None
+}
+
+/// 在不解析 symlink 的前提下消除 `.` 与 `..`，保留请求使用的逻辑 alias。
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 /// 将已验证的遍历项投影为 workspace-relative POSIX 路径。
@@ -119,83 +174,165 @@ fn workspace_relative(workspace_root: &Path, path: &Path) -> Option<String> {
     Some(path_string(relative))
 }
 
-/// 逐块读取文本，避免一次不可取消的整文件系统调用。
-fn read_text(
+/// 使用 ripgrep searcher 流式收集单个已验证文本文件的匹配行。
+fn search_file(
+    matcher: &RegexMatcher,
     path: &Path,
+    relative_path: &str,
     cancellation: &CancellationSignal,
-) -> Result<Option<(String, bool)>, RepositoryToolError> {
-    let mut file = File::open(path).map_err(|_| RepositoryToolError::Io)?;
-    let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 8192];
-    let mut binary = false;
-    let mut utf8_tail = Vec::new();
-    let mut truncated = false;
-    loop {
-        ensure_not_cancelled(cancellation)?;
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| RepositoryToolError::Io)?;
-        if count == 0 {
-            break;
-        }
-        let remaining = MAX_FILE_BYTES.saturating_sub(bytes.len());
-        let captured = &buffer[..count.min(remaining)];
-        binary |= captured.contains(&0);
-        if super::validate_utf8_chunk(captured, &mut utf8_tail).is_err() {
-            binary = true;
-        }
-        bytes.extend_from_slice(captured);
-        if count > remaining {
-            truncated = true;
-            break;
-        }
-    }
-    ensure_not_cancelled(cancellation)?;
-    if binary || (!truncated && !utf8_tail.is_empty()) {
-        return Ok(None);
-    }
-    while std::str::from_utf8(&bytes).is_err() {
-        bytes.pop();
-        truncated = true;
-    }
-    Ok(String::from_utf8(bytes).ok().map(|text| (text, truncated)))
-}
-
-/// 收集一个文本文件的匹配行，确保二进制文件永远不会产生部分结果。
-fn matching_lines(
-    pattern: &Regex,
-    text: &str,
-    path: &str,
-    cancellation: &CancellationSignal,
-    truncated: &mut bool,
-) -> Result<Vec<super::GrepMatch>, RepositoryToolError> {
-    let mut matches = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        ensure_not_cancelled(cancellation)?;
-        if pattern.is_match(line) {
-            let rendered = bounded_line(line);
-            *truncated |= rendered.len() < line.len();
-            matches.push(super::GrepMatch {
-                path: path.to_owned(),
-                line_number: index + 1,
-                line: rendered,
-            });
-            if matches.len() > MAX_RESULTS {
-                break;
+) -> Result<Vec<GrepMatch>, RepositoryToolError> {
+    let mut searcher = SearcherBuilder::new()
+        .line_number(true)
+        .multi_line(false)
+        .binary_detection(BinaryDetection::quit(0))
+        .build();
+    let file = File::open(path).map_err(|_| RepositoryToolError::Io)?;
+    let mut reader = ValidatedReader {
+        inner: file,
+        cancellation,
+        utf8_tail: Vec::new(),
+        invalid_utf8: false,
+    };
+    let mut sink = MatchSink {
+        path: relative_path,
+        cancellation,
+        matches: Vec::new(),
+        binary: false,
+    };
+    searcher
+        .search_reader(matcher, &mut reader, &mut sink)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::Interrupted {
+                RepositoryToolError::Cancelled
+            } else if error.kind() == io::ErrorKind::InvalidData {
+                RepositoryToolError::NonTextContent
+            } else {
+                RepositoryToolError::Io
             }
-        }
+        })
+        .or_else(|error| {
+            if error == RepositoryToolError::NonTextContent {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
+    if sink.binary || reader.invalid_utf8 || !reader.utf8_tail.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(matches)
+    Ok(sink.matches)
 }
 
-/// 在 UTF-8 边界上截断单条匹配行，防止极长行占满模型上下文。
-fn bounded_line(line: &str) -> String {
-    if line.len() <= MAX_LINE_BYTES {
-        return line.to_owned();
+/// 在 ripgrep 每次读取时检查取消并验证完整 UTF-8 字节流。
+struct ValidatedReader<'a> {
+    inner: File,
+    cancellation: &'a CancellationSignal,
+    utf8_tail: Vec<u8>,
+    invalid_utf8: bool,
+}
+
+impl Read for ValidatedReader<'_> {
+    /// 读取下一块字节；非法 UTF-8 会使当前文件的暂存匹配整体回滚。
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.cancellation.is_cancelled() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        let count = self.inner.read(buffer)?;
+        if count == 0 {
+            if !self.utf8_tail.is_empty() {
+                self.invalid_utf8 = true;
+                return Err(io::Error::from(io::ErrorKind::InvalidData));
+            }
+            return Ok(0);
+        }
+        if super::validate_utf8_chunk(&buffer[..count], &mut self.utf8_tail).is_err() {
+            self.invalid_utf8 = true;
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        Ok(count)
     }
-    let mut end = MAX_LINE_BYTES;
-    while !line.is_char_boundary(end) {
-        end -= 1;
+}
+
+/// 把 ripgrep 匹配回调转换为稳定的 Repository Grep 结果。
+struct MatchSink<'a> {
+    path: &'a str,
+    cancellation: &'a CancellationSignal,
+    matches: Vec<GrepMatch>,
+    binary: bool,
+}
+
+impl Sink for MatchSink<'_> {
+    type Error = io::Error;
+    /// 接收一条完整匹配行，并在每次回调时检查取消状态。
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        matched: &SinkMatch<'_>,
+    ) -> Result<bool, Self::Error> {
+        if self.cancellation.is_cancelled() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        let line = std::str::from_utf8(matched.bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if self.matches.len() <= MAX_RESULTS {
+            self.matches.push(GrepMatch {
+                path: self.path.to_owned(),
+                line_number: matched.line_number().unwrap_or(1) as usize,
+                line: line.to_owned(),
+            });
+        }
+        // 即使结果预算已满也要读到文件末尾，才能保证后部二进制或非法 UTF-8 会回滚整文件。
+        Ok(true)
     }
-    line[..end].to_owned()
+
+    /// ripgrep 发现 NUL 时标记整份文件为二进制并停止搜索。
+    fn binary_data(
+        &mut self,
+        _searcher: &Searcher,
+        _binary_byte_offset: u64,
+    ) -> Result<bool, Self::Error> {
+        self.binary = true;
+        Ok(false)
+    }
+}
+
+/// 在最终 JSON 硬预算内加入匹配；必要时仅截断末条文本。
+fn push_within_budget(response: &mut GrepResponse, candidate: GrepMatch) -> bool {
+    response.matches.push(candidate);
+    if serialized_len(response) <= MAX_RESPONSE_BYTES {
+        return true;
+    }
+    let candidate = response.matches.pop().expect("刚加入的匹配必须存在");
+    let mut boundaries: Vec<usize> = candidate
+        .line
+        .char_indices()
+        .map(|(index, _)| index)
+        .collect();
+    boundaries.push(candidate.line.len());
+    let (mut low, mut high) = (0, boundaries.len());
+    while low + 1 < high {
+        let middle = (low + high) / 2;
+        let mut shortened = candidate.clone();
+        shortened.line.truncate(boundaries[middle]);
+        response.matches.push(shortened);
+        if serialized_len(response) <= MAX_RESPONSE_BYTES {
+            low = middle;
+        } else {
+            high = middle;
+        }
+        response.matches.pop();
+    }
+    if boundaries[low] > 0 {
+        let mut shortened = candidate;
+        shortened.line.truncate(boundaries[low]);
+        response.matches.push(shortened);
+    }
+    false
+}
+
+/// 计算调用方最终收到的 GrepResponse JSON UTF-8 字节数。
+fn serialized_len(response: &GrepResponse) -> usize {
+    serde_json::to_vec(response).map_or(usize::MAX, |json| json.len())
 }
