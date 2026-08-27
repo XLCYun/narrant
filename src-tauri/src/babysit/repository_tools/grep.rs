@@ -245,7 +245,7 @@ impl Read for ValidatedReader<'_> {
             }
             return Ok(0);
         }
-        if super::validate_utf8_chunk(&buffer[..count], &mut self.utf8_tail).is_err() {
+        if super::read::validate_utf8_chunk(&buffer[..count], &mut self.utf8_tail).is_err() {
             self.invalid_utf8 = true;
             return Err(io::Error::from(io::ErrorKind::InvalidData));
         }
