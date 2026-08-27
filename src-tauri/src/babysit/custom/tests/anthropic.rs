@@ -221,7 +221,7 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
         CustomProviderEffort::Medium,
         CustomProviderEffort::High,
     ] {
-        let effort_text = effort.as_str();
+        let effort_text = super::super::CustomEffort::from(effort).as_str();
         let server = MockServer::start_async().await;
         let response = json!({
             "id": "msg_fixture", "type": "message", "role": "assistant", "model": "model",

@@ -1,15 +1,20 @@
-use super::{
-    custom_tool_definitions, BabysitError, BabysitFileExplanations, BabysitProviderRequest,
-    CancellationSignal, CustomAdapterError, CustomProtocolAdapter, CustomRoundRequest,
-    CustomRoundResult, LineTarget, RepositoryToolError, RepositoryToolRequest, RepositoryTools,
-    ValidationFailure, FINAL_OUTPUT_TOOL_NAME, MAX_MODEL_TURNS, MAX_REPAIR_ATTEMPTS,
+use super::adapter::{CustomAdapterError, CustomProtocolAdapter};
+use super::final_tool::{custom_tool_definitions, FINAL_OUTPUT_TOOL_NAME};
+use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
+use crate::babysit::{
+    BabysitError, BabysitFileExplanations, BabysitProviderRequest, LineTarget, RepositoryToolError,
+    RepositoryToolRequest, RepositoryTools, ValidationFailure,
 };
+use crate::operation::CancellationSignal;
 use rig::completion::Message;
 use rig::message::ToolCall;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+/// Custom 运行允许的最大修复轮数；共享 runtime 负责具体 repair 编排。
+pub(super) const MAX_REPAIR_ATTEMPTS: u8 = 3;
 
 /// 一次 Custom 分析的单内存会话；generate 与 repair 共用这份 history。
 struct CustomSession {

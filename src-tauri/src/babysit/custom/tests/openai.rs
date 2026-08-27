@@ -1,4 +1,9 @@
 use super::super::*;
+use crate::babysit::{
+    BabysitAgentProvider, BabysitError, BabysitFileRequest, BabysitGenerationPolicy,
+    BabysitProviderCapabilities, BabysitProviderModelCatalog, BabysitProviderSetupFailure,
+    BabysitResolvedModel, PreparedBabysitAnalysis, RepositoryTools, ReviewIdentity,
+};
 use crate::operation::TestCancellation;
 use httpmock::prelude::*;
 use rig::completion::Message;

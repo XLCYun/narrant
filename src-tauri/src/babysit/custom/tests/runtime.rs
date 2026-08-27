@@ -1,4 +1,7 @@
 use super::super::*;
+use crate::babysit::{
+    BabysitError, BabysitProviderRequest, FileSide, LineTarget, ValidationFailure,
+};
 use crate::operation::TestCancellation;
 use rig::completion::{FinishReason, ResponseIdentity, Usage};
 use serde_json::json;

@@ -1,5 +1,13 @@
-use super::*;
+use super::adapter::{
+    CustomAdapterError, CustomProtocolAdapter, CustomRequestPhase, CustomStatusCategory,
+    CustomTransportFailure,
+};
+use super::connection::{CustomConnectionSnapshot, CustomProtocol};
+use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
+use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
+use crate::babysit::RepositoryTools;
 use crate::operation::CancellationSignal;
+use async_trait::async_trait;
 use rig::client::AgentClientExt;
 use rig::completion::Prompt;
 use rig::completion::{AssistantContent, FinishReason, ResponseIdentity};
@@ -9,6 +17,7 @@ use rig::wasm_compat::WasmCompatSend;
 use std::future::Future;
 use std::future::IntoFuture;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// OpenAI Chat Completions 兼容协议的 Rig adapter。

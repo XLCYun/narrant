@@ -2,16 +2,18 @@
 #[path = "tests/anthropic.rs"]
 mod tests;
 
-use super::{
-    AssistantContent, CustomAdapterError, CustomConnectionSnapshot, CustomEffort, CustomProtocol,
-    CustomProtocolAdapter, CustomRequestPhase, CustomRoundRequest, CustomRoundResult,
-    CustomStatusCategory, CustomTransportFailure, FinishReason, ResponseIdentity,
+use super::adapter::{
+    CustomAdapterError, CustomProtocolAdapter, CustomRequestPhase, CustomStatusCategory,
+    CustomTransportFailure,
 };
+use super::connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
+use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
+use super::round::{CustomRoundRequest, CustomRoundResult};
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
 use rig::client::AgentClientExt;
-use rig::completion::{Message, Prompt};
+use rig::completion::{AssistantContent, FinishReason, Message, Prompt, ResponseIdentity};
 use rig::http_client::{self, HttpClientExt, MultipartForm, Request, Response, StreamingResponse};
 use rig::providers::anthropic;
 use serde::{Deserialize, Serialize};
@@ -277,7 +279,7 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
         Ok(CustomRoundResult {
             choice: vec![AssistantContent::tool_call(
                 "final-result",
-                super::FINAL_OUTPUT_TOOL_NAME,
+                FINAL_OUTPUT_TOOL_NAME,
                 response.output,
             )],
             usage: Default::default(),
