@@ -28,10 +28,17 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
 
 #[test]
 fn settings_v1_round_trip_uses_stable_provider_ids_and_explicit_substructures() {
-    let payload = serde_json::json!({"version":1,"theme":"dark","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium"}}});
+    let payload = serde_json::json!({"version":1,"theme":"dark","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium","credentialGeneration":0}}});
     let settings: super::ApplicationSettings = serde_json::from_value(payload.clone()).unwrap();
     assert_eq!(settings.babysit.provider, BabysitProvider::ClaudeCode);
     assert_eq!(serde_json::to_value(settings).unwrap(), payload);
+}
+
+#[test]
+fn custom_settings_require_an_explicit_credential_generation() {
+    let payload = serde_json::json!({"version":1,"theme":"dark","babysit":{"provider":"custom","codex":{"executable":null,"model":null,"reasoningEffort":null},"claudeCode":{"executable":null,"model":null,"reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium"}}});
+
+    assert!(serde_json::from_value::<super::ApplicationSettings>(payload).is_err());
 }
 
 #[test]

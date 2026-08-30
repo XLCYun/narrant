@@ -24,7 +24,8 @@ fn write_custom_settings(path: &Path, base_url: &str, model: &str) {
                 "protocol": "openai_chat_completions",
                 "baseUrl": base_url,
                 "model": model,
-                "effort": "medium"
+                "effort": "medium",
+                "credentialGeneration": 0
             }
         }
     });
