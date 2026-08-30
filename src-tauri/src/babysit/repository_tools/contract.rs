@@ -25,11 +25,13 @@ pub struct RepositoryToolRegistration {
 }
 
 /// Repository 工具注册视图；只暴露 Read、Glob、Grep 三项工具。
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RepositoryToolRegistrationView {
     pub(super) tools: Vec<RepositoryToolRegistration>,
 }
 
+#[cfg(test)]
 impl RepositoryToolRegistrationView {
     /// 返回按稳定顺序排列的工具描述。
     pub fn tools(&self) -> &[RepositoryToolRegistration] {
@@ -59,6 +61,7 @@ pub struct ReadInput {
     pub limit: Option<usize>,
 }
 
+#[cfg(test)]
 impl ReadInput {
     /// 创建从内容开头读取的请求。
     pub fn new(path: impl Into<String>) -> Self {

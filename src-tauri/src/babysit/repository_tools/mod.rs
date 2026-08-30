@@ -56,6 +56,7 @@ impl RepositoryTools {
     }
 
     /// 返回仅含 Read、Glob、Grep 且每项带输入 schema 的注册视图。
+    #[cfg(test)]
     pub fn registration(&self) -> RepositoryToolRegistrationView {
         RepositoryToolRegistrationView {
             tools: self.registrations(),
