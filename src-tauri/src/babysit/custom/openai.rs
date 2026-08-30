@@ -10,7 +10,7 @@ use crate::operation::CancellationSignal;
 use async_trait::async_trait;
 use rig::client::AgentClientExt;
 use rig::completion::Prompt;
-use rig::completion::{AssistantContent, FinishReason, ResponseIdentity};
+use rig::completion::{AssistantContent, ResponseIdentity};
 use rig::http_client::{HttpClientExt, LazyBody, MultipartForm, StreamingResponse};
 use rig::providers::openai::CompletionsClient;
 use rig::wasm_compat::WasmCompatSend;
@@ -232,11 +232,6 @@ impl OpenAiChatCompletionsAdapter {
 
 #[async_trait]
 impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
-    /// 返回本 adapter 冻结的连接快照。
-    fn connection(&self) -> &CustomConnectionSnapshot {
-        &self.connection
-    }
-
     /// 发送一轮 Chat Completions 请求，并在取消时丢弃活动 HTTP future。
     async fn complete(
         &self,
@@ -289,13 +284,11 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
                             FINAL_OUTPUT_TOOL_NAME,
                             arguments,
                         )],
-                        usage: response.usage,
                         identity: ResponseIdentity {
                             message_id: None,
                             response_id: None,
                             provider_request_id: None,
                         },
-                        finish_reason: Some(FinishReason::ToolCalls),
                         transcript: response.messages,
                     });
                 }

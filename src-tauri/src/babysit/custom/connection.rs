@@ -143,10 +143,6 @@ impl CustomConnectionSnapshot {
     pub(crate) const fn effort(&self) -> CustomEffort {
         self.effort
     }
-    /// 返回不含 secret 的凭据 generation，用于冻结运行和缓存隔离。
-    pub(crate) fn credential_generation(&self) -> &str {
-        &self.credential_generation
-    }
     /// 返回只由非 secret 连接字段组成的稳定缓存 identity。
     pub(crate) fn cache_identity(&self) -> String {
         use std::hash::{Hash, Hasher};

@@ -28,7 +28,9 @@ pub use application::{
     BabysitGenerationPolicy, ReviewIdentity,
 };
 use eligibility::{eligibility, ensure_eligible};
-pub use error::{BabysitError, BabysitErrorCode, BabysitErrorPayload, BabysitRecoveryAction};
+pub use error::{BabysitError, BabysitErrorPayload};
+#[cfg(test)]
+pub use error::{BabysitErrorCode, BabysitRecoveryAction};
 pub(crate) use model_catalog::{
     BabysitModelCatalog, BabysitProviderModelCatalog, BabysitResolvedModel,
 };
@@ -40,9 +42,8 @@ pub use validation::{
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
 pub use repository_tools::{
-    GlobRequest, GlobResponse, GrepMatch, GrepRequest, GrepResponse, ReadContinuation, ReadInput,
-    ReadResponse, RepositoryToolError, RepositoryToolRegistration, RepositoryToolRegistrationView,
-    RepositoryToolRequest, RepositoryToolResponse, RepositoryTools,
+    GlobRequest, GrepRequest, ReadInput, RepositoryToolError, RepositoryToolRequest,
+    RepositoryTools,
 };
 // Provider-neutral model catalog types live in their own deep module.
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。

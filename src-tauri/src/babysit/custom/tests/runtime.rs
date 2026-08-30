@@ -3,14 +3,13 @@ use crate::babysit::{
     BabysitError, BabysitProviderRequest, FileSide, LineTarget, ValidationFailure,
 };
 use crate::operation::TestCancellation;
-use rig::completion::{FinishReason, ResponseIdentity, Usage};
+use rig::completion::ResponseIdentity;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
 /// 只在 runtime 契约测试中使用的可脚本化 provider-neutral adapter。
 #[derive(Clone)]
 struct FakeAdapter {
-    connection: CustomConnectionSnapshot,
     responses: Arc<Mutex<Vec<CustomRoundResult>>>,
     requests: Arc<Mutex<Vec<CustomRoundRequest>>>,
     cancel_before_return: Option<TestCancellation>,
@@ -20,34 +19,15 @@ impl FakeAdapter {
     /// 按预设顺序返回 round response，同时记录每轮 history。
     fn scripted(responses: Vec<CustomRoundResult>) -> Self {
         Self {
-            connection: CustomConnectionSnapshot::new(
-                CustomProtocol::OpenaiChatCompletions,
-                "https://provider.test/v1",
-                "test-secret",
-                "test-model",
-                CustomEffort::Medium,
-                "generation-1",
-            )
-            .expect("测试连接"),
             responses: Arc::new(Mutex::new(responses)),
             requests: Arc::new(Mutex::new(Vec::new())),
             cancel_before_return: None,
         }
     }
-
-    /// 返回已记录的 provider-neutral round 请求。
-    fn requests(&self) -> Vec<CustomRoundRequest> {
-        self.requests.lock().expect("请求锁").clone()
-    }
 }
 
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for FakeAdapter {
-    /// 返回测试用的冻结连接。
-    fn connection(&self) -> &CustomConnectionSnapshot {
-        &self.connection
-    }
-
     /// 从脚本取出 response；取消开关用于模拟 late response 边界。
     async fn complete(
         &self,
@@ -104,13 +84,11 @@ fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult 
         choice: vec![rig::completion::AssistantContent::tool_call(
             "call-1", name, arguments,
         )],
-        usage: Usage::new(),
         identity: ResponseIdentity {
             message_id: None,
             response_id: None,
             provider_request_id: None,
         },
-        finish_reason: Some(FinishReason::ToolCalls),
         transcript: None,
     }
 }
@@ -219,13 +197,11 @@ async fn runtime_stops_after_shared_sixteen_turn_budget() {
         (0..MAX_MODEL_TURNS)
             .map(|_| CustomRoundResult {
                 choice: vec![rig::completion::AssistantContent::text("继续")],
-                usage: Usage::new(),
                 identity: ResponseIdentity {
                     message_id: None,
                     response_id: None,
                     provider_request_id: None,
                 },
-                finish_reason: Some(FinishReason::Length),
                 transcript: None,
             })
             .collect(),

@@ -147,6 +147,7 @@ impl BabysitApplication {
     }
 
     /// 仅执行当前设置所选 provider 的 readiness，不生成分析或触碰未选中的 bundle。
+    #[cfg(test)]
     pub async fn check_selected_provider_readiness(
         &self,
         workspace_path: &Path,

@@ -13,7 +13,7 @@ use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
 use rig::client::AgentClientExt;
-use rig::completion::{AssistantContent, FinishReason, Message, Prompt, ResponseIdentity};
+use rig::completion::{AssistantContent, Message, Prompt, ResponseIdentity};
 use rig::http_client::{self, HttpClientExt, MultipartForm, Request, Response, StreamingResponse};
 use rig::providers::anthropic;
 use serde::{Deserialize, Serialize};
@@ -150,6 +150,7 @@ pub(crate) struct AnthropicAdapterRequest {
     cancellation: CancellationSignal,
 }
 
+#[cfg(test)]
 impl AnthropicAdapterRequest {
     /// 绑定 prompt、既有对话与请求级 Workspace 工具。
     pub(crate) fn new(
@@ -224,11 +225,6 @@ impl AnthropicMessagesAdapter {
 
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for AnthropicMessagesAdapter {
-    /// 返回本 adapter 冻结的连接快照。
-    fn connection(&self) -> &CustomConnectionSnapshot {
-        &self.connection
-    }
-
     /// 将共享 round 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
     async fn complete(
         &self,
@@ -282,13 +278,11 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                 FINAL_OUTPUT_TOOL_NAME,
                 response.output,
             )],
-            usage: Default::default(),
             identity: ResponseIdentity {
                 message_id: None,
                 response_id: None,
                 provider_request_id: None,
             },
-            finish_reason: Some(FinishReason::ToolCalls),
             transcript: Some(response.conversation),
         })
     }

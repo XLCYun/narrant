@@ -19,18 +19,12 @@ struct FrozenCustomCapability {
 
 /// 首次返回前触发取消、随后返回合法 final 的测试 adapter。
 struct CancelOnceAdapter {
-    connection: CustomConnectionSnapshot,
     calls: Arc<AtomicUsize>,
     first_cancellation: TestCancellation,
 }
 
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for CancelOnceAdapter {
-    /// 返回测试冻结连接。
-    fn connection(&self) -> &CustomConnectionSnapshot {
-        &self.connection
-    }
-
     /// 首次在返回 Read 调用前触发取消，第二次证明应用没有 dispatch 或复用取消结果。
     async fn complete(
         &self,
@@ -55,13 +49,11 @@ impl CustomProtocolAdapter for CancelOnceAdapter {
                     json!({"before": {"1": "旧行"}, "after": {"1": "新行"}})
                 },
             )],
-            usage: rig::completion::Usage::new(),
             identity: rig::completion::ResponseIdentity {
                 message_id: None,
                 response_id: None,
                 provider_request_id: None,
             },
-            finish_reason: Some(rig::completion::FinishReason::ToolCalls),
             transcript: None,
         })
     }
@@ -429,17 +421,7 @@ async fn custom_registry_cancels_before_tool_dispatch_and_does_not_cache() {
     let settings = tempfile::tempdir().expect("创建 settings 目录");
     let first_cancellation = TestCancellation::default();
     let calls = Arc::new(AtomicUsize::new(0));
-    let connection = CustomConnectionSnapshot::new(
-        CustomProtocol::OpenaiChatCompletions,
-        "https://provider.test/v1",
-        "",
-        "fixture-model",
-        CustomEffort::Medium,
-        "generation-1",
-    )
-    .expect("冻结连接");
     let adapter = Arc::new(CancelOnceAdapter {
-        connection,
         calls: calls.clone(),
         first_cancellation: first_cancellation.clone(),
     });
