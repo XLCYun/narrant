@@ -13,9 +13,11 @@ use std::sync::{Arc, Mutex};
 mod application;
 mod claude;
 mod codex;
+mod custom;
 mod eligibility;
 mod error;
 mod model_catalog;
+mod repository_tools;
 mod validation;
 
 use application::codex_setup_error;
@@ -26,7 +28,6 @@ pub use application::{
     BabysitGenerationPolicy, ReviewIdentity,
 };
 use eligibility::{eligibility, ensure_eligible};
-#[allow(unused_imports)]
 pub use error::{BabysitError, BabysitErrorCode, BabysitErrorPayload, BabysitRecoveryAction};
 pub(crate) use model_catalog::{
     BabysitModelCatalog, BabysitProviderModelCatalog, BabysitResolvedModel,
@@ -38,6 +39,11 @@ pub use validation::{
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
+pub use repository_tools::{
+    GlobRequest, GlobResponse, GrepMatch, GrepRequest, GrepResponse, ReadContinuation, ReadInput,
+    ReadResponse, RepositoryToolError, RepositoryToolRegistration, RepositoryToolRegistrationView,
+    RepositoryToolRequest, RepositoryToolResponse, RepositoryTools,
+};
 // Provider-neutral model catalog types live in their own deep module.
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v2";
@@ -65,8 +71,6 @@ const CODEX_PROVIDER_ID: &str = "codex";
 /// 一组 Codex-shaped enum variant。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-// expand-first seam：其余分类由后续 installed provider adapter 构造。
-#[allow(dead_code)]
 pub enum BabysitProviderSetupFailure {
     NotFound,
     ExecutableInvalid,
@@ -91,8 +95,6 @@ impl fmt::Display for BabysitProviderSetupFailure {
 /// Installed provider runtime 的 provider-independent readiness 状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-// expand-first seam：后续 provider-aware command 会把 readiness 投影到 IPC。
-#[allow(dead_code)]
 pub enum BabysitProviderRuntimeStatus {
     #[default]
     Unknown,
@@ -108,7 +110,6 @@ pub enum BabysitProviderRuntimeStatus {
 #[async_trait]
 pub trait InstalledProviderRuntime: Send + Sync {
     /// 返回当前 runtime readiness，但不暴露 executable 路径或原始进程信息。
-    #[allow(dead_code)]
     fn status(&self) -> BabysitProviderRuntimeStatus;
     /// 懒执行 discovery、认证检查、能力探针和 provider 进程初始化。
     async fn ensure_ready(&self, workspace_path: &Path) -> Result<(), BabysitError>;
@@ -123,7 +124,7 @@ pub trait BabysitProviderCapabilities: Send + Sync {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError>;
     /// 解析该 provider 当前可见的模型目录。
     async fn model_catalog(&self) -> Result<BabysitProviderModelCatalog, BabysitError>;
@@ -153,9 +154,13 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
-        let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+        let Some(crate::application_settings::BabysitProviderPreference::Installed(preference)) =
+            preference
+        else {
+            return Err(BabysitError::ModelPreferenceInvalid);
+        };
         let (resolved, lease) = self
             .runtime
             .prepare_analysis_with_preference(workspace_path, preference)
@@ -208,9 +213,13 @@ impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
     async fn prepare_analysis(
         &self,
         workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
-        let preference = preference.ok_or(BabysitError::ModelPreferenceInvalid)?;
+        let Some(crate::application_settings::BabysitProviderPreference::Installed(preference)) =
+            preference
+        else {
+            return Err(BabysitError::ModelPreferenceInvalid);
+        };
         let resolved = Self::resolve_preference(preference)?;
         self.runtime.ensure_ready(workspace_path).await?;
         Ok(PreparedBabysitAnalysis {

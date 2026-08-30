@@ -6,11 +6,13 @@ import { ApplicationSettingsDestination } from "@/components/settings-page";
 import type { ApplicationSettingsApplication } from "@/settings/application-settings";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
+import { i18n } from "@/lib/i18n";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   document.documentElement.classList.remove("dark");
   vi.unstubAllGlobals();
+  await i18n.changeLanguage("zh-CN");
 });
 
 function mockSystemTheme(initialDark: boolean) {
@@ -35,6 +37,7 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
     provider: "codex" as const,
     codex: { executable: null, model: null, reasoningEffort: null },
     claudeCode: { executable: null, model: null, reasoningEffort: null },
+    custom: { protocol: "openai_chat_completions" as const, baseUrl: "", model: "", effort: "medium" as const },
   };
   return {
     load: vi.fn(async () => ({ version: 1, theme, babysit })),
@@ -46,11 +49,13 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
     updateBabysitProvider: vi.fn(async (provider) => ({ version: 1, theme, babysit: { ...babysit, provider } })),
     chooseBabysitExecutable: vi.fn(async () => ({ version: 1, theme, babysit })),
     updateBabysitPreferences: vi.fn(async () => ({ version: 1, theme, babysit })),
+    loadCustomConnection: vi.fn(async () => ({ ...babysit.custom, apiKey: "" })),
+    saveCustomConnection: vi.fn(async (connection) => ({ version: 1, theme, babysit: { ...babysit, custom: { protocol: connection.protocol, baseUrl: connection.baseUrl, model: connection.model, effort: connection.effort } } })),
   };
 }
 
 /** 通过公开 combobox 语义选择一个动态设置项。 */
-async function chooseSelect(label: string, option: string | RegExp) {
+async function chooseSelect(label: string | RegExp, option: string | RegExp) {
   fireEvent.click(screen.getByRole("combobox", { name: label }));
   const item = await screen.findByRole("option", { name: option });
   fireEvent.pointerDown(item);
@@ -71,6 +76,258 @@ function githubIdentity(): GitHubIdentityLifecycleBinding {
 }
 
 describe("Settings application-shell UI", () => {
+  it("选择 Custom 后显示完整连接编辑器并读取当前连接", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    settings.loadCustomConnection = vi.fn(async () => ({
+      protocol: "openai_chat_completions",
+      baseUrl: "https://models.example.test/v1",
+      apiKey: "sk-preview",
+      model: "gpt-5-mini",
+      effort: "medium",
+    }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "codex",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "", model: "", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByRole("combobox", { name: "使用的 Agent" });
+    await chooseSelect("使用的 Agent", /Custom|自定义/);
+
+    expect(await screen.findByTestId("custom-provider-editor")).toBeInTheDocument();
+    expect(settings.loadCustomConnection).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("https://models.example.test/v1");
+    expect(screen.getByRole("textbox", { name: /模型|Model/ })).toHaveValue("gpt-5-mini");
+  });
+
+  it("Custom API key 默认隐藏，并通过有名称的按钮切换显示", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    settings.loadCustomConnection = vi.fn(async () => ({
+      protocol: "anthropic_messages",
+      baseUrl: "http://localhost:4000",
+      apiKey: "local-secret",
+      model: "local-model",
+      effort: "low",
+    }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "anthropic_messages", baseUrl: "http://localhost:4000", model: "local-model", effort: "low" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    const key = await screen.findByTestId("custom-api-key");
+    expect(key).toHaveAttribute("type", "password");
+    const reveal = screen.getByRole("button", { name: /显示 API|Show API/i });
+    fireEvent.click(reveal);
+    expect(key).toHaveAttribute("type", "text");
+    const hide = screen.getByRole("button", { name: /隐藏 API|Hide API/i });
+    expect(hide).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(hide);
+    expect(key).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: /显示 API|Show API/i })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("Custom 保存期间锁定完整编辑器并保留 saving 状态", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+      saveCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    let finishSave!: (value: Awaited<ReturnType<ApplicationSettingsApplication["load"]>>) => void;
+    settings.loadCustomConnection = vi.fn(async () => ({
+      protocol: "openai_chat_completions",
+      baseUrl: "https://models.example.test/v1",
+      apiKey: "local-secret",
+      model: "gpt-5-mini",
+      effort: "medium",
+    }));
+    settings.saveCustomConnection = vi.fn(() => new Promise((resolve) => { finishSave = resolve; }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "https://models.example.test/v1", model: "gpt-5-mini", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    fireEvent.click(screen.getByRole("button", { name: /保存自定义|Save custom/i }));
+
+    expect(await screen.findByRole("button", { name: /正在保存|Saving/i })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Base URL" })).toBeDisabled();
+    expect(screen.getByTestId("custom-api-key")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /协议|Protocol/ })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /思考强度|Reasoning effort/ })).toBeDisabled();
+
+    await act(async () => finishSave({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "https://models.example.test/v1", model: "gpt-5-mini", effort: "medium" },
+      },
+    }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /保存自定义|Save custom/i })).toBeEnabled());
+  });
+
+  it("Custom 保存前校验 Base URL 与模型，空表单不会调用保存 seam", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      saveCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    settings.saveCustomConnection = vi.fn();
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "", model: "", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    fireEvent.click(screen.getByRole("button", { name: /保存自定义|Save custom/i }));
+
+    expect(settings.saveCustomConnection).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Base URL/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/模型|model/i);
+  });
+
+  it("Custom 将协议、URL、密钥、模型与 effort 一次提交", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+      saveCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    settings.loadCustomConnection = vi.fn(async () => ({ protocol: "openai_chat_completions", baseUrl: "", apiKey: "", model: "", effort: "medium" }));
+    settings.saveCustomConnection = vi.fn(async (connection) => ({
+      version: 1,
+      theme: "system" as const,
+      babysit: {
+        provider: "custom" as const,
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: connection.protocol, baseUrl: connection.baseUrl, model: connection.model, effort: connection.effort },
+      },
+    }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "", model: "", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    fireEvent.change(screen.getByRole("textbox", { name: "Base URL" }), { target: { value: "https://api.example.test/v1" } });
+    fireEvent.change(screen.getByTestId("custom-api-key"), { target: { value: "secret" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /模型|Model/ }), { target: { value: "vendor/model" } });
+    await chooseSelect(/协议|Protocol/, "Anthropic Messages");
+    await chooseSelect(/思考强度|Reasoning effort/, /高|High/i);
+    fireEvent.click(screen.getByRole("button", { name: /保存自定义|Save custom/i }));
+
+    await waitFor(() => expect(settings.saveCustomConnection).toHaveBeenCalledTimes(1));
+    expect(settings.saveCustomConnection).toHaveBeenCalledWith({
+      protocol: "anthropic_messages",
+      baseUrl: "https://api.example.test/v1",
+      apiKey: "secret",
+      model: "vendor/model",
+      effort: "high",
+    });
+  });
+
+  it("Custom 保存失败时保留表单输入并显示清晰错误", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+      saveCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    let rejectSave!: (reason: Error) => void;
+    settings.loadCustomConnection = vi.fn(async () => ({
+      protocol: "openai_chat_completions",
+      baseUrl: "https://old.example.test/v1",
+      apiKey: "old-secret",
+      model: "old-model",
+      effort: "medium",
+    }));
+    settings.saveCustomConnection = vi.fn(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "https://old.example.test/v1", model: "old-model", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    const baseUrl = screen.getByRole("textbox", { name: "Base URL" });
+    const model = screen.getByRole("textbox", { name: /模型|Model/ });
+    fireEvent.change(baseUrl, { target: { value: "https://edited.example.test/v1" } });
+    fireEvent.change(model, { target: { value: "edited-model" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存自定义|Save custom/i }));
+    await waitFor(() => expect(settings.saveCustomConnection).toHaveBeenCalledTimes(1));
+    await act(async () => rejectSave(new Error("credential store unavailable")));
+
+    expect(baseUrl).toHaveValue("https://edited.example.test/v1");
+    expect(model).toHaveValue("edited-model");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/credential store unavailable/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/保留|kept/i);
+  });
+
+  it("Custom 编辑器随界面 locale 显示英文标签", async () => {
+    await i18n.changeLanguage("en");
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    settings.loadCustomConnection = vi.fn(async () => ({ protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", apiKey: "", model: "model", effort: "medium" }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", model: "model", effort: "medium" },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    expect(await screen.findByRole("heading", { name: "Custom model service" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Protocol" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Model" })).toHaveValue("model");
+    expect(screen.getByRole("button", { name: "Save custom connection" })).toBeInTheDocument();
+  });
+
   it("typed adapter 原样提交 provider 与完整偏好组合", async () => {
     const invoke = vi.fn(async () => undefined);
     const adapter = createTauriApplicationSettingsAdapter({ invoke } as never, vi.fn(async () => "C:\\Tools\\claude.exe"));
@@ -78,10 +335,14 @@ describe("Settings application-shell UI", () => {
     await adapter.updateBabysitProvider("claude-code");
     await adapter.chooseBabysitExecutable("claude-code", { executable: null, model: "sonnet", reasoningEffort: "high" });
     await adapter.updateBabysitPreferences("claude-code", { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, "claude-catalog-1");
+    await adapter.loadCustomConnection();
+    await adapter.saveCustomConnection({ protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", apiKey: "secret", model: "model", effort: "medium" });
 
     expect(invoke).toHaveBeenNthCalledWith(1, "update_application_babysit_provider", { provider: "claude-code" });
     expect(invoke).toHaveBeenNthCalledWith(2, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "sonnet", reasoningEffort: "high" }, catalogRevision: null });
     expect(invoke).toHaveBeenNthCalledWith(3, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, catalogRevision: "claude-catalog-1" });
+    expect(invoke).toHaveBeenNthCalledWith(4, "load_application_custom_connection", {});
+    expect(invoke).toHaveBeenNthCalledWith(5, "save_application_custom_connection", { connection: { protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", apiKey: "secret", model: "model", effort: "medium" } });
   });
 
   it("只呈现当前 provider，并即时保存完整组合且失败时回滚", async () => {

@@ -4,7 +4,26 @@ export type ThemePreference = "system" | "light" | "dark";
 export type ReasoningEffort = string;
 
 /** Babysit 支持的设备级 Agent Provider。 */
-export type BabysitProvider = "codex" | "claude-code";
+export type BabysitProvider = "codex" | "claude-code" | "custom";
+
+/** Custom 内置 provider 支持的显式模型服务协议。 */
+export type CustomProviderProtocol = "openai_chat_completions" | "anthropic_messages";
+
+/** Custom 连接使用的受支持思考强度。 */
+export type CustomProviderEffort = "low" | "medium" | "high";
+
+/** Custom 设置中可持久化的非敏感连接字段。 */
+export type CustomProviderSettings = {
+  protocol: CustomProviderProtocol;
+  baseUrl: string;
+  model: string;
+  effort: CustomProviderEffort;
+};
+
+/** Custom 编辑器一次读写的完整连接快照；API key 只在内存中传递。 */
+export type CustomProviderConnection = CustomProviderSettings & {
+  apiKey: string;
+};
 
 /** 一个 provider 独立保存的完整偏好组合。 */
 export type BabysitProviderPreference = {
@@ -30,6 +49,7 @@ export type BabysitSettings = {
   provider: BabysitProvider;
   codex: BabysitProviderPreference;
   claudeCode: BabysitProviderPreference;
+  custom: CustomProviderSettings;
 };
 
 /** 前端消费的设备级 Application Settings 公共投影。 */
@@ -53,4 +73,8 @@ export interface ApplicationSettingsApplication {
   chooseBabysitExecutable(provider: BabysitProvider, preference: BabysitProviderPreference): Promise<ApplicationSettings | null>;
   /** 原子保存指定 provider 的完整 executable/model/effort 组合。 */
   updateBabysitPreferences(provider: BabysitProvider, preference: BabysitProviderPreference, catalogRevision?: string | null): Promise<ApplicationSettings>;
+  /** 读取 Custom 的完整连接；API key 只供设置编辑器短暂使用。 */
+  loadCustomConnection(): Promise<CustomProviderConnection>;
+  /** 原子保存 Custom 的完整连接并返回新的非敏感设置快照。 */
+  saveCustomConnection(connection: CustomProviderConnection): Promise<ApplicationSettings>;
 }

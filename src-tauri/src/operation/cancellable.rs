@@ -41,7 +41,7 @@ impl CancellationSignal {
 }
 
 /// 仅供操作 registry 持有的取消触发权。
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct CancellationSource(CancellationSignal);
 
 impl CancellationSource {
@@ -59,7 +59,7 @@ impl CancellationSource {
 
 /// 仅测试使用的取消触发器，避免向生产调用链暴露取消权限。
 #[cfg(test)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct TestCancellationController(CancellationSource);
 
 #[cfg(test)]
@@ -79,7 +79,7 @@ pub(crate) fn test_cancellation_signal() -> (TestCancellationController, Cancell
 
 /// 机制层测试可用的取消配对，同时保持生产 API 只读。
 #[cfg(test)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct TestCancellation {
     controller: TestCancellationController,
     signal: CancellationSignal,

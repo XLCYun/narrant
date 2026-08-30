@@ -3,6 +3,83 @@ use crate::application_settings::{ApplicationSettingsApplication, BabysitProvide
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+/// 将 Custom 的非 secret 设置写成应用契约使用的 JSON fixture。
+fn write_custom_settings(path: &Path, base_url: &str, model: &str) {
+    let payload = serde_json::json!({
+        "version": 1,
+        "theme": "system",
+        "babysit": {
+            "provider": "custom",
+            "codex": {
+                "executable": null,
+                "model": null,
+                "reasoningEffort": null
+            },
+            "claudeCode": {
+                "executable": null,
+                "model": null,
+                "reasoningEffort": null
+            },
+            "custom": {
+                "protocol": "openai_chat_completions",
+                "baseUrl": base_url,
+                "model": model,
+                "effort": "medium",
+                "credentialGeneration": 0
+            }
+        }
+    });
+    std::fs::write(path, serde_json::to_vec(&payload).unwrap()).unwrap();
+}
+
+/// 已配置 Custom 的 readiness 必须经过 Custom capability，且构造过程不探测 endpoint。
+#[tokio::test]
+async fn configured_custom_selection_is_registered_without_network_probing() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    write_custom_settings(&settings_path, "http://127.0.0.1:9/v1", "custom-model");
+
+    let application = BabysitApplication::with_installed_provider_registry_at(settings_path);
+    let readiness = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        application.check_selected_provider_readiness(Path::new("/tmp/narrant-custom-workspace")),
+    )
+    .await
+    .expect("Custom readiness must not perform unbounded I/O");
+    assert!(readiness.is_ok());
+}
+
+/// 未配置 Custom 必须返回设置恢复错误，不能静默改用已安装 provider。
+#[tokio::test]
+async fn unconfigured_custom_selection_fails_with_settings_recovery_without_fallback() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    write_custom_settings(&settings_path, "", "");
+
+    let application = BabysitApplication::with_installed_provider_registry_at(settings_path);
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        application.check_selected_provider_readiness(Path::new("/tmp/narrant-custom-workspace")),
+    )
+    .await
+    .expect("Custom readiness must not perform unbounded I/O")
+    .unwrap_err();
+
+    assert!(matches!(
+        &error,
+        BabysitError::ProviderSetup {
+            provider_id,
+            failure: BabysitProviderSetupFailure::NotFound,
+        } if provider_id == "custom"
+    ));
+    let payload = BabysitErrorPayload::from(error);
+    assert_eq!(payload.provider_id.as_deref(), Some("custom"));
+    assert_eq!(
+        payload.recovery,
+        Some(BabysitRecoveryAction::OpenApplicationSettings)
+    );
+}
+
 /// 记录完整 capability seam 调用的确定性 bundle。
 struct RecordingBundle {
     provider: Arc<FakeBabysitProvider>,
@@ -29,13 +106,20 @@ impl BabysitProviderCapabilities for RecordingBundle {
     async fn prepare_analysis(
         &self,
         _workspace_path: &Path,
-        preference: Option<&crate::application_settings::BabysitProviderSettings>,
+        preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
         self.prepare_calls.fetch_add(1, Ordering::AcqRel);
         self.observed_models
             .lock()
             .unwrap()
-            .push(preference.and_then(|settings| settings.model.clone()));
+            .push(preference.and_then(|settings| match settings {
+                crate::application_settings::BabysitProviderPreference::Installed(settings) => {
+                    settings.model.clone()
+                }
+                crate::application_settings::BabysitProviderPreference::Custom(settings) => {
+                    Some(settings.model.clone())
+                }
+            }));
         Ok(PreparedBabysitAnalysis {
             provider: self.provider.clone(),
             resolved: BabysitResolvedModel {
@@ -245,6 +329,7 @@ async fn provider_switch_keeps_completed_cache_identities_isolated() {
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
     let settings = ApplicationSettingsApplication::new(settings_path.clone());
+    settings.update_provider(BabysitProvider::Codex).unwrap();
     let codex = Arc::new(FakeBabysitProvider::default());
     let claude = Arc::new(FakeBabysitProvider::default());
     let application = TestBabysitApplication::with_providers_at(
@@ -288,6 +373,7 @@ async fn in_flight_analysis_keeps_the_provider_snapshot_selected_at_start() {
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
     let settings = ApplicationSettingsApplication::new(settings_path.clone());
+    settings.update_provider(BabysitProvider::Codex).unwrap();
     let codex_provider = Arc::new(InFlightModelProvider {
         resolved: Mutex::new(BabysitResolvedModel {
             model: "codex-model".to_owned(),

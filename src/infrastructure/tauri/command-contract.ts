@@ -15,7 +15,7 @@ import type {
   RepositoryOverview,
   RepositoryReviewList,
 } from "@/repository/repository-application";
-import type { ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -36,6 +36,8 @@ export type TauriCommandContract = {
   list_babysit_models: { args: { provider: BabysitProvider }; result: BabysitModelCatalog; error: { code: string; detail: string } };
   update_application_babysit_provider: { args: { provider: BabysitProvider }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_preferences: { args: { provider: BabysitProvider; preference: BabysitProviderPreference; catalogRevision: string | null }; result: ApplicationSettings; error: { code: string; detail: string } };
+  load_application_custom_connection: { args: EmptyArgs; result: CustomProviderConnection; error: { code: string; detail: string } };
+  save_application_custom_connection: { args: { connection: CustomProviderConnection }; result: ApplicationSettings; error: { code: string; detail: string } };
   set_e2e_repository_directory: { args: { path: string }; result: void };
   choose_e2e_repository_directory: { args: EmptyArgs; result: string };
   cancel_operation: { args: { operationId: string }; result: void };
@@ -95,6 +97,8 @@ export const TAURI_COMMAND_NAMES = [
   "list_babysit_models",
   "update_application_babysit_provider",
   "update_application_babysit_preferences",
+  "load_application_custom_connection",
+  "save_application_custom_connection",
   "set_e2e_repository_directory",
   "choose_e2e_repository_directory",
   "register_repository",

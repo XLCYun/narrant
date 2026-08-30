@@ -66,7 +66,7 @@ async fn file_settings_round_trip_preserves_unified_application_settings() {
     };
     std::fs::write(
         &path,
-        r#"{"version":1,"theme":"dark","babysit":{"provider":"codex","codex":{"executable":null,"model":null,"reasoningEffort":null},"claudeCode":{"executable":null,"model":null,"reasoningEffort":null}}}"#,
+        r#"{"version":1,"theme":"dark","babysit":{"provider":"codex","codex":{"executable":null,"model":null,"reasoningEffort":null},"claudeCode":{"executable":null,"model":null,"reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"","model":"","effort":"medium","credentialGeneration":0}}}"#,
     )
     .unwrap();
 
