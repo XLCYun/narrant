@@ -106,6 +106,7 @@ describe("Settings application-shell UI", () => {
     expect(settings.loadCustomConnection).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("https://models.example.test/v1");
     expect(screen.getByRole("textbox", { name: /模型|Model/ })).toHaveValue("gpt-5-mini");
+    expect(screen.queryByText("所有字段会作为一个完整连接一起保存。")).not.toBeInTheDocument();
   });
 
   it("Custom API key 默认隐藏，并通过有名称的按钮切换显示", async () => {

@@ -61,7 +61,7 @@ export function CustomProviderFields({ connection, loading, saving, initialApiKe
           <Input id="custom-model" aria-label={t("custom.model")} value={connection.model} placeholder={t("custom.modelPlaceholder")} autoComplete="off" disabled={disabled} onChange={(event) => update("model", event.target.value)} />
         </label>
       </div>
-      <div className="mt-6 flex flex-wrap items-center gap-3"><Button type="submit" disabled={disabled}>{saving ? t("custom.saving") : t("custom.save")}</Button>{!loading && <p className="text-xs text-muted-foreground">{t("custom.saveHint")}</p>}</div>
+      <div className="mt-6"><Button type="submit" disabled={disabled}>{saving ? t("custom.saving") : t("custom.save")}</Button></div>
     </div>
   </form>;
 }
