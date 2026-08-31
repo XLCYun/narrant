@@ -49,6 +49,7 @@ async function prepareE2EEnvironment() {
     process.env.NARRANT_E2E_REPOSITORY = await realpath(repositoryPath);
     process.env.NARRANT_E2E_TRUST_REPOSITORY = await realpath(trustRepositoryPath);
     process.env.NARRANT_DATABASE_PATH = join(localFixtureRoot, "narrant.sqlite3");
+    process.env.NARRANT_E2E_SETTINGS_PATH = join(localFixtureRoot, "settings.json");
     // Git trace2 由真实应用进程写入；E2E 用它验证 A→B→A 没有重新执行 workspace 命令。
     const gitTracePath = join(localFixtureRoot, "git-trace2.json");
     process.env.NARRANT_E2E_GIT_TRACE = gitTracePath;

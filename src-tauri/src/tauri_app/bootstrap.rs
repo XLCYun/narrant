@@ -26,6 +26,12 @@ pub fn run() {
         .setup(move |app| {
             let application_data = app.path().app_data_dir()?;
             #[cfg(feature = "wdio")]
+            let settings_path = std::env::var_os("NARRANT_E2E_SETTINGS_PATH")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| application_data.join("settings.json"));
+            #[cfg(not(feature = "wdio"))]
+            let settings_path = application_data.join("settings.json");
+            #[cfg(feature = "wdio")]
             let database_path = std::env::var_os("NARRANT_DATABASE_PATH")
                 .map(std::path::PathBuf::from)
                 .unwrap_or(application_data.join("narrant.sqlite3"));
@@ -81,14 +87,14 @@ pub fn run() {
             app.manage(lifecycle);
             app.manage(repository_application);
             app.manage(auth);
-            let application_settings =
-                ApplicationSettingsApplication::new(application_data.join("settings.json"));
-            app.manage(application_settings);
+            let application_settings = ApplicationSettingsApplication::new(settings_path.clone());
             app.manage(
-                babysit::BabysitApplication::with_installed_provider_registry_at(
-                    application_data.join("settings.json"),
+                babysit::BabysitApplication::with_installed_provider_registry(
+                    settings_path,
+                    application_settings.clone(),
                 ),
             );
+            app.manage(application_settings);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

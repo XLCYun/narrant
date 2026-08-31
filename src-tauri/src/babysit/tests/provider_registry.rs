@@ -1,5 +1,7 @@
 use super::*;
-use crate::application_settings::{ApplicationSettingsApplication, BabysitProvider};
+use crate::application_settings::{
+    ApplicationSettingsApplication, BabysitProvider, CustomCredentialAdapter,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -30,6 +32,63 @@ fn write_custom_settings(path: &Path, base_url: &str, model: &str) {
         }
     });
     std::fs::write(path, serde_json::to_vec(&payload).unwrap()).unwrap();
+}
+
+/// 记录 registry 是否确实复用了 UI 注入的同一个凭据边界。
+struct RecordingCredentials {
+    loads: AtomicUsize,
+    value: Mutex<Option<String>>,
+}
+
+impl RecordingCredentials {
+    /// 构造携带 fixture key、尚未被 runtime 读取的凭据边界。
+    fn with_value(value: &str) -> Self {
+        Self {
+            loads: AtomicUsize::new(0),
+            value: Mutex::new(Some(value.to_owned())),
+        }
+    }
+}
+
+impl CustomCredentialAdapter for RecordingCredentials {
+    /// 记录 Custom runtime 的凭据快照读取。
+    fn load(&self) -> Result<Option<String>, String> {
+        self.loads.fetch_add(1, Ordering::AcqRel);
+        Ok(self.value.lock().unwrap().clone())
+    }
+
+    /// 替换 fixture key。
+    fn save(&self, value: &str) -> Result<(), String> {
+        *self.value.lock().unwrap() = Some(value.to_owned());
+        Ok(())
+    }
+
+    /// 清除 fixture key。
+    fn delete(&self) -> Result<(), String> {
+        *self.value.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
+/// UI 与 Babysit registry 必须共享同一设置应用，避免进程内凭据保存后 runtime 仍读旧实例。
+#[tokio::test]
+async fn installed_registry_reuses_the_injected_settings_credential_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    write_custom_settings(&settings_path, "http://127.0.0.1:9/v1", "custom-model");
+    let credentials = Arc::new(RecordingCredentials::with_value("fixture-key"));
+    let settings = ApplicationSettingsApplication::with_credential_adapter(
+        settings_path.clone(),
+        credentials.clone(),
+    );
+    let application = BabysitApplication::with_installed_provider_registry(settings_path, settings);
+
+    application
+        .check_selected_provider_readiness(Path::new("/tmp/narrant-custom-workspace"))
+        .await
+        .unwrap();
+
+    assert_eq!(credentials.loads.load(Ordering::Acquire), 1);
 }
 
 /// 已配置 Custom 的 readiness 必须经过 Custom capability，且构造过程不探测 endpoint。

@@ -15,12 +15,25 @@ export async function activeReviewId() {
 
 /** 通过真实 shadcn/Base UI Combobox 精确选择 canonical ref。 */
 export async function selectRef(label: "Base Ref" | "Head Ref", canonicalRef: string) {
-  const triggers = await $$("[role='combobox']");
-  const trigger = triggers[label === "Head Ref" ? 0 : 1];
-  if (!trigger) throw new Error(`分支选择器数量不足：${triggers.length}`);
+  const expectedLabels = label === "Head Ref"
+    ? new Set(["Head 分支", "Head branch"])
+    : new Set(["Base 分支", "Base branch"]);
+  let trigger: WebdriverIO.Element | undefined;
+  for (const candidate of await $$("[role='combobox'][aria-labelledby]")) {
+    if (!(await candidate.isDisplayed())) continue;
+    const labelledBy = await candidate.getAttribute("aria-labelledby");
+    const visibleLabel = await browser.execute(
+      (id) => id ? document.getElementById(id)?.textContent?.trim() : undefined,
+      labelledBy,
+    );
+    if (!visibleLabel || !expectedLabels.has(visibleLabel)) continue;
+    trigger = candidate;
+    break;
+  }
+  if (!trigger) throw new Error(`没有找到可见的 ${label} 分支选择器`);
   await trigger.waitForDisplayed();
   if (await trigger.isClickable()) await trigger.click();
-  else await browser.execute((index) => document.querySelectorAll<HTMLElement>("[role='combobox']")[index]?.click(), label === "Head Ref" ? 0 : 1);
+  else await browser.execute((element) => element.click(), trigger);
   const branch = shortBranchName(canonicalRef);
   const search = await $("input[aria-label^='搜索分支'], input[aria-label^='Search branches']");
   await search.waitForDisplayed();

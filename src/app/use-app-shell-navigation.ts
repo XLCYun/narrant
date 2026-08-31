@@ -57,10 +57,6 @@ export type AppShellNavigationBinding = {
   dismissTrust(): void;
 };
 
-type Options = {
-  waitForPaint?: () => Promise<void>;
-};
-
 function reviewKey(target: ReviewOpenTarget) {
   if (target.kind === "saved-review") return `review:${target.reviewId}`;
   if (target.kind === "branch-selection") return `branch:${target.baseRef}:${target.headRef}`;
@@ -104,7 +100,6 @@ function initialDestination(
 export function useAppShellNavigation(
   repository: RepositoryOverviewBinding,
   review: ReviewLifecycleBinding,
-  options: Options = {},
 ): AppShellNavigationBinding {
   const [destination, setDestination] = useState<AppDestination>(() => initialDestination(repository, review));
   const [transition, setTransition] = useState<AppNavigationTransition>({ kind: "stable" });
@@ -113,9 +108,6 @@ export function useAppShellNavigation(
   const [navigationError, setNavigationError] = useState<string>();
   const settingsReturnDestination = useRef<Exclude<AppDestination, { kind: "settings" }>>({ kind: "home" });
   const navigating = useRef(false);
-  const waitForPaint = useMemo(() => options.waitForPaint ?? (() => new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
-  })), [options.waitForPaint]);
 
   const restoreRepository = useCallback(async (repositoryId?: number) => {
     if (repositoryId === undefined) {
@@ -202,7 +194,6 @@ export function useAppShellNavigation(
       }
 
       setTransition({ kind: "opening-review", repositoryId: intent.repositoryId, key: reviewKey(intent.target) });
-      await waitForPaint();
       let overview = repository.current;
       if (intent.repositoryId === 0 && !overview) {
         const result = await review.open(intent.target);
@@ -245,7 +236,7 @@ export function useAppShellNavigation(
     } finally {
       navigating.current = false;
     }
-  }, [commitReview, destination, repository, review, waitForPaint]);
+  }, [commitReview, destination, repository, review]);
 
   /** 离开 Application Settings，并恢复进入前已提交的应用目的地。 */
   const returnFromSettings = useCallback(async (): Promise<AppNavigationResult> => {

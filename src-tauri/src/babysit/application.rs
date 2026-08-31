@@ -101,12 +101,22 @@ impl BabysitApplication {
         }
     }
     /// 构造由 Application Settings 选择的生产 provider registry；此过程不探测任何 CLI。
+    #[cfg(test)]
     pub fn with_installed_provider_registry_at(
         settings_path: impl Into<std::path::PathBuf>,
     ) -> Self {
         let settings_path = settings_path.into();
         let settings_application =
             crate::application_settings::ApplicationSettingsApplication::new(settings_path.clone());
+        Self::with_installed_provider_registry(settings_path, settings_application)
+    }
+
+    /// 使用已装配的设置应用构造生产 provider registry，让 UI 与 runtime 共享同一凭据边界。
+    pub(crate) fn with_installed_provider_registry(
+        settings_path: impl Into<std::path::PathBuf>,
+        settings_application: crate::application_settings::ApplicationSettingsApplication,
+    ) -> Self {
+        let settings_path = settings_path.into();
         let codex_provider = Arc::new(CodexAppServerProvider::new("codex"));
         let codex_runtime = Arc::new(codex::runtime::CodexRuntime::new(
             codex_provider.clone(),

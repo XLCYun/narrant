@@ -71,7 +71,7 @@ function renderNavigation(repositoryAdapter: RepositoryApplicationAdapter, revie
   return renderHook(() => {
     const repository = useRepositoryOverview(repositoryAdapter, { enabled: true });
     const review = useReviewLifecycle(reviewAdapter);
-    return useAppShellNavigation(repository, review, { waitForPaint: async () => undefined });
+    return useAppShellNavigation(repository, review);
   });
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@monaco-editor/react", () => ({
   loader: { config: () => undefined, init: () => Promise.resolve({}) },
@@ -93,11 +93,6 @@ async function openOverview() {
 describe("App", () => {
   it("打开 Review Snapshot 时在入口显示 Loading 图标并保留来源页面", async () => {
     mockSystemTheme(false);
-    const paintFrames: FrameRequestCallback[] = [];
-    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      paintFrames.push(callback);
-      return paintFrames.length;
-    });
     let resolveComparison!: (value: unknown) => void;
     const comparison = new Promise((resolve) => { resolveComparison = resolve; });
     invoke.mockImplementation((command: string) => {
@@ -118,13 +113,6 @@ describe("App", () => {
     expect(openButton).toHaveAttribute("aria-busy", "true");
     expect(openButton.querySelector(".animate-spin")).toBeInTheDocument();
     expect(screen.getByLabelText("选择本地仓库")).toBeInTheDocument();
-    expect(invoke).not.toHaveBeenCalledWith("compare_local_refs", expect.anything());
-    const firstPaintFrames = paintFrames.splice(0);
-    await act(async () => { firstPaintFrames.forEach((frame) => frame(0)); });
-    await waitFor(() => expect(paintFrames.length).toBeGreaterThan(0));
-    expect(invoke).not.toHaveBeenCalledWith("compare_local_refs", expect.anything());
-    const secondPaintFrames = paintFrames.splice(0);
-    await act(async () => { secondPaintFrames.forEach((frame) => frame(16)); });
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("compare_local_refs", expect.anything()));
     resolveComparison({
       reviewId: "review-loading", snapshotId: "snapshot-loading", baseRef: "base",
@@ -133,7 +121,6 @@ describe("App", () => {
     });
     await openFileChanges();
     expect(await screen.findByText("没有文件改动")).toBeInTheDocument();
-    animationFrame.mockRestore();
   });
 
   it("读取 File Change 时在 Diff 区域同时显示 Spinner 与 Skeleton", async () => {

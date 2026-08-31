@@ -5,8 +5,8 @@
 
 ## CI 边界与数据安全
 
-- CI 只运行 deterministic fixture、前端测试和 Preview Harness；任何 CI job、`package.json` script
-  或自动化 e2e 都不得调用本节的真实 endpoint probe。
+- CI 只运行 deterministic fixture、前端测试和 Preview Harness；默认测试命令不得调用本节的真实
+  endpoint probe。`test:e2e:custom-live` 仅供 reviewer 已明确授权后的本机 opt-in 验证，禁止加入 CI。
 - 只有 reviewer 明确同意一次本机 probe 后，才可以在 Application Settings 中填写其自己的
   OpenAI-compatible 或 Anthropic-compatible endpoint。不要在 shell 命令行、环境变量导出、
   issue、PR、日志、录屏或截图中放入 key 或完整 endpoint URL。
@@ -40,6 +40,18 @@
 
 执行前先取得 reviewer 对可能产生费用和发送代码内容的明确同意，并使用无敏感信息的 disposable
 Review Workspace。整个 probe 只观察状态，不保存或分享任何模型输入输出。
+
+本地 Debug 已经通过设置页保存连接时，可运行 `pnpm test:e2e:custom-live`。该 wrapper 直接读取应用
+数据目录中的 `settings.json` 与 `custom-provider-credential.dev.json`，把值仅传给本次子进程，并用
+隔离的 E2E settings/database 控制真实 Tauri UI；它不会打印 key 或完整 endpoint。用例必须完成
+设置保存、打开 disposable fixture、启动宝宝模式，并确认 Diff 中出现非空逐行解释。文件名使用
+`.smoke.ts`，因此默认 `test:e2e` 的 `*.e2e.ts` glob 不会运行它。
+
+该命令是本地当前 OpenAI Chat Completions 配置的窄回归，只覆盖一次生成与真实渲染；不替代下面的
+完整人工发布 smoke。无鉴权 endpoint 可以没有 `custom-provider-credential.dev.json`。WDIO 结束时会
+删除本次隔离的 settings、database 与 fixture，不修改本地正式连接。
+
+## 完整人工发布 smoke
 
 对每个协议各执行一次以下流程：
 
