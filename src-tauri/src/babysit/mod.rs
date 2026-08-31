@@ -28,7 +28,7 @@ pub use application::{
     BabysitGenerationPolicy, ReviewIdentity,
 };
 use eligibility::{eligibility, ensure_eligible};
-pub use error::{BabysitError, BabysitErrorPayload};
+pub use error::{BabysitError, BabysitErrorPayload, BabysitProviderDiagnostic};
 #[cfg(test)]
 pub use error::{BabysitErrorCode, BabysitRecoveryAction};
 pub(crate) use model_catalog::{

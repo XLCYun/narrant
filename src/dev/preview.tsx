@@ -42,9 +42,9 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
     : null);
   const [customConnection, setCustomConnection] = useState<CustomProviderConnection>(customState === "empty"
-    ? { protocol: "openai_chat_completions", baseUrl: "", apiKey: "", model: "", effort: "medium" }
+    ? { protocol: "openai_chat_completions", baseUrl: "", apiKey: "", model: "", effort: "provider_default" }
     : customState === "invalid"
-      ? { protocol: "openai_chat_completions", baseUrl: "   ", apiKey: "sk-preview-key", model: "   ", effort: "medium" }
+      ? { protocol: "openai_chat_completions", baseUrl: "   ", apiKey: "sk-preview-key", model: "   ", effort: "provider_default" }
       : { protocol: "openai_chat_completions", baseUrl: "https://api.example.test/v1", apiKey: "sk-preview-key", model: "gpt-5-mini", effort: "medium" });
   const [babysit, setBabysit] = useState<BabysitSettings>({
     provider: customState ? "custom" : babysitSection ? "claude-code" : "codex",

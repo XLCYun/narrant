@@ -19,6 +19,11 @@ pub enum BabysitError {
     Provider {
         detail: String,
     },
+    /// provider 失败附带经过白名单约束的诊断字段，不包含原始请求、响应或 endpoint。
+    ProviderDiagnostic {
+        detail: String,
+        diagnostic: BabysitProviderDiagnostic,
+    },
     ProgressClosed,
     CacheUnavailable,
     /// 任意 Installed provider 共享的 setup failure；provider identity 不参与 enum 形状。
@@ -30,6 +35,40 @@ pub enum BabysitError {
     ModelPreferenceInvalid,
     /// 模型偏好已通过能力验证，但统一设置文件无法原子保存。
     SettingsPersistenceFailed,
+}
+
+/// 允许跨 Tauri IPC 与剪贴板传递的 Custom provider 脱敏诊断。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BabysitProviderDiagnostic {
+    provider_id: String,
+    protocol: String,
+    phase: String,
+    status: String,
+    reason: String,
+    error_category: String,
+    origin_hash: String,
+}
+
+impl BabysitProviderDiagnostic {
+    /// 从 Custom transport 的稳定枚举和值构造白名单诊断。
+    pub(crate) fn custom_transport(
+        protocol: impl Into<String>,
+        phase: impl Into<String>,
+        status: impl Into<String>,
+        reason: impl Into<String>,
+        origin_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider_id: "custom".to_owned(),
+            protocol: protocol.into(),
+            phase: phase.into(),
+            status: status.into(),
+            reason: reason.into(),
+            error_category: "transport".to_owned(),
+            origin_hash: origin_hash.into(),
+        }
+    }
 }
 
 impl BabysitError {
@@ -98,6 +137,9 @@ pub struct BabysitErrorPayload {
     pub provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<BabysitRecoveryAction>,
+    /// 仅包含白名单分类的 provider 诊断；不得放入 detail、URL 或 provider body。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<BabysitProviderDiagnostic>,
 }
 
 impl BabysitErrorPayload {
@@ -109,6 +151,7 @@ impl BabysitErrorPayload {
             detail: "Review File Change 内容不可用。".to_owned(),
             provider_id: None,
             recovery: None,
+            diagnostic: None,
         }
     }
 
@@ -125,6 +168,7 @@ impl BabysitErrorPayload {
             detail: error.to_string(),
             provider_id: None,
             recovery: None,
+            diagnostic: None,
         }
     }
 }
@@ -137,7 +181,9 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::InvalidProviderOutput { .. } => BabysitErrorCode::InvalidProviderOutput,
             BabysitError::RepairExhausted { .. } => BabysitErrorCode::RepairExhausted,
             BabysitError::Cancelled => BabysitErrorCode::Cancelled,
-            BabysitError::Provider { .. } => BabysitErrorCode::Provider,
+            BabysitError::Provider { .. } | BabysitError::ProviderDiagnostic { .. } => {
+                BabysitErrorCode::Provider
+            }
             BabysitError::ProgressClosed => BabysitErrorCode::ProgressClosed,
             BabysitError::CacheUnavailable => BabysitErrorCode::CacheUnavailable,
             BabysitError::ProviderSetup { failure, .. } => setup_error_code(*failure),
@@ -150,17 +196,23 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::SettingsPersistenceFailed => None,
             BabysitError::RepairExhausted { .. }
             | BabysitError::Provider { .. }
+            | BabysitError::ProviderDiagnostic { .. }
             | BabysitError::InvalidProviderOutput { .. }
             | BabysitError::Cancelled
             | BabysitError::ProgressClosed
             | BabysitError::CacheUnavailable
             | BabysitError::UnsupportedFile { .. } => None,
         };
+        let diagnostic = match &error {
+            BabysitError::ProviderDiagnostic { diagnostic, .. } => Some(diagnostic.clone()),
+            _ => None,
+        };
         Self {
             code,
             detail: error.to_string(),
             provider_id: error.provider_id().map(str::to_owned),
             recovery,
+            diagnostic,
         }
     }
 }
@@ -176,6 +228,9 @@ impl fmt::Display for BabysitError {
             Self::RepairExhausted { detail } => write!(formatter, "宝宝模式连续修复失败：{detail}"),
             Self::Cancelled => formatter.write_str("宝宝模式分析已取消"),
             Self::Provider { detail } => write!(formatter, "宝宝模式 provider 失败：{detail}"),
+            Self::ProviderDiagnostic { detail, .. } => {
+                write!(formatter, "宝宝模式 provider 失败：{detail}")
+            }
             Self::ProgressClosed => formatter.write_str("宝宝模式进度通道已关闭"),
             Self::CacheUnavailable => formatter.write_str("宝宝模式缓存不可用"),
             Self::ProviderSetup {

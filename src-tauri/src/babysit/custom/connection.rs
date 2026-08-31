@@ -11,9 +11,21 @@ pub(crate) enum CustomProtocol {
     AnthropicMessages,
 }
 
+impl CustomProtocol {
+    /// 返回可安全写入诊断与 IPC 的稳定协议标识。
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiChatCompletions => "openai_chat_completions",
+            Self::AnthropicMessages => "anthropic_messages",
+        }
+    }
+}
+
 /// Custom 请求使用的 provider-neutral effort 值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CustomEffort {
+    /// 不向模型服务发送推理强度覆盖。
+    ProviderDefault,
     /// 低工作量。
     Low,
     /// 中等工作量。
@@ -26,9 +38,20 @@ impl CustomEffort {
     /// 返回各协议共享的稳定 effort 文本。
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::ProviderDefault => "provider_default",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+        }
+    }
+
+    /// 返回需要显式发送给模型服务的 effort；Provider 默认值不产生 wire 参数。
+    pub(crate) const fn wire_value(self) -> Option<&'static str> {
+        match self {
+            Self::ProviderDefault => None,
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
         }
     }
 }
@@ -51,6 +74,9 @@ impl From<crate::application_settings::CustomProviderEffort> for CustomEffort {
     /// 将 settings effort 投影为协议中立值。
     fn from(value: crate::application_settings::CustomProviderEffort) -> Self {
         match value {
+            crate::application_settings::CustomProviderEffort::ProviderDefault => {
+                Self::ProviderDefault
+            }
             crate::application_settings::CustomProviderEffort::Low => Self::Low,
             crate::application_settings::CustomProviderEffort::Medium => Self::Medium,
             crate::application_settings::CustomProviderEffort::High => Self::High,

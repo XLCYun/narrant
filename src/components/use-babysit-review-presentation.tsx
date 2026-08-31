@@ -95,10 +95,14 @@ function BabysitFooter({ state, onCancel, onRetry, onOpenApplicationSettings, la
               ? providerLabels.initializationFailed
               : labels.failed;
   const diagnostics = state.kind === "failed"
-    ? JSON.stringify({ category: "babysit", code: state.error.code })
+    ? JSON.stringify({
+      category: "babysit",
+      code: state.error.code,
+      ...(state.error.diagnostic ? { provider: state.error.diagnostic } : {}),
+    })
     : "";
 
-  /** 复制只包含稳定错误类别与 code 的脱敏诊断，不复制路径或 provider detail。 */
+  /** 复制稳定错误类别与 provider 白名单诊断，不复制路径或 provider detail。 */
   function copyDiagnostics() {
     if (!diagnostics) return;
     setCopied(true);

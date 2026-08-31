@@ -98,6 +98,64 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
     assert!(!result.conversation.is_empty());
 }
 
+/// Provider 默认值保留 Anthropic tools，但不发送 Narrant 的 thinking/effort 覆盖。
+#[tokio::test]
+async fn adapter_provider_default_omits_thinking_configuration() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages").matches(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body.as_deref().expect("请求应包含 JSON body"))
+                        .expect("请求 body 应为 JSON");
+                body.get("thinking").is_none()
+                    && body.get("output_config").is_none()
+                    && body["tools"]
+                        .as_array()
+                        .is_some_and(|tools| !tools.is_empty())
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "msg_fixture",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "fixture-model",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "final_fixture",
+                        "name": "final_result",
+                        "input": {"before": {}, "after": {}}
+                    }],
+                    "stop_reason": "tool_use",
+                    "stop_sequence": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+    let repository_tools = RepositoryTools::new(workspace.path()).expect("绑定 repository tools");
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("fixture-key".to_owned()),
+        "fixture-model",
+        CustomProviderEffort::ProviderDefault,
+    ))
+    .expect("创建 adapter");
+
+    adapter
+        .complete(AnthropicAdapterRequest::new(
+            "review",
+            Vec::new(),
+            repository_tools,
+            CancellationSignal::default(),
+        ))
+        .await
+        .expect("Provider 默认值请求应成功");
+
+    mock.assert_async().await;
+}
+
 #[tokio::test]
 async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
     let server = MockServer::start_async().await;

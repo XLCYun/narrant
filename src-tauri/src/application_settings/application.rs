@@ -69,7 +69,8 @@ pub(crate) struct ApplicationSettingsApplication {
 impl ApplicationSettingsApplication {
     /// 为首版统一设置文件建立应用边界，不读取或迁移旧文件。
     pub(crate) fn new(settings_path: PathBuf) -> Self {
-        Self::with_credential_adapter(settings_path, default_custom_credential_adapter())
+        let credential_adapter = default_custom_credential_adapter(&settings_path);
+        Self::with_credential_adapter(settings_path, credential_adapter)
     }
 
     /// 使用注入的凭据适配器建立设置应用，供 E2E 与契约测试隔离系统钥匙串。

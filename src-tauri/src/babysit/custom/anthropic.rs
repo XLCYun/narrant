@@ -23,21 +23,36 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 /// Anthropic 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AnthropicRequestGuardClient {
     inner: http_client::ReqwestClient,
     omit_authentication: bool,
     cancellation: CancellationSignal,
 }
 
+impl Default for AnthropicRequestGuardClient {
+    /// 满足 Rig 泛型 client 的构造约束，并始终建立显式 rustls backend。
+    fn default() -> Self {
+        Self::new(false, CancellationSignal::default())
+            .expect("Rig rustls HTTP client should be constructible")
+    }
+}
+
 impl AnthropicRequestGuardClient {
     /// 创建同时执行可选认证与 dispatch-time 取消检查的 Rig backend。
-    fn new(omit_authentication: bool, cancellation: CancellationSignal) -> Self {
-        Self {
-            inner: http_client::ReqwestClient::default(),
+    fn new(
+        omit_authentication: bool,
+        cancellation: CancellationSignal,
+    ) -> Result<Self, AnthropicAdapterError> {
+        let inner = http_client::ReqwestClient::builder()
+            .use_rustls_tls()
+            .build()
+            .map_err(|_| AnthropicAdapterError::Client)?;
+        Ok(Self {
+            inner,
             omit_authentication,
             cancellation,
-        }
+        })
     }
 
     /// 仅在用户没有提供凭据时移除 Anthropic 标准认证头。
@@ -337,26 +352,28 @@ impl AnthropicAdapter {
             return Err(AnthropicAdapterError::Cancelled);
         }
         let api_key = self.config.api_key.clone().unwrap_or_default();
+        // 显式构造 rustls client，确保 Anthropic-compatible HTTPS endpoint 可用。
+        let http_client =
+            AnthropicRequestGuardClient::new(api_key.is_empty(), request.cancellation.clone())?;
         let client = anthropic::Client::builder()
             .api_key(api_key.clone())
             .base_url(&self.config.base_url)
-            .http_client(AnthropicRequestGuardClient::new(
-                api_key.is_empty(),
-                request.cancellation.clone(),
-            ))
+            .http_client(http_client)
             .build()
             .map_err(|_| AnthropicAdapterError::Client)?;
         let tools = request.repository_tools.rig_tools(&request.cancellation);
         let cancellation = request.cancellation.clone();
         let prompt = request.prompt;
         let history = request.history;
-        let agent = client
-            .agent(&self.config.model)
-            .additional_params(json!({
+        let builder = client.agent(&self.config.model).max_tokens(8_192);
+        let builder = match self.config.effort.wire_value() {
+            Some(effort) => builder.additional_params(json!({
                 "thinking": {"type": "adaptive"},
-                "output_config": {"effort": self.config.effort.as_str()},
-            }))
-            .max_tokens(8_192)
+                "output_config": {"effort": effort},
+            })),
+            None => builder,
+        };
+        let agent = builder
             .default_max_turns(16)
             .output_schema::<LineExplanationOutput>()
             .output_mode(OutputMode::Tool)

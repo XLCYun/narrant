@@ -20,6 +20,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// 一次 Rig prompt 的内部失败，保留取消、构造与 provider 错误边界。
+enum OpenAiPromptAttemptError {
+    /// 请求在模型返回前被取消。
+    Cancelled,
+    /// agent 或 Workspace 工具无法构造。
+    Adapter(CustomAdapterError),
+    /// provider 或 Rig prompt loop 返回失败。
+    Prompt(rig::completion::PromptError),
+}
+
 /// OpenAI Chat Completions 兼容协议的 Rig adapter。
 #[derive(Clone)]
 pub(crate) struct OpenAiChatCompletionsAdapter {
@@ -32,21 +42,32 @@ pub(crate) struct OpenAiChatCompletionsAdapter {
 }
 
 /// OpenAI 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct OpenAiRequestGuardClient {
     inner: rig::http_client::ReqwestClient,
     omit_authorization: bool,
     cancellation: Arc<Mutex<Option<CancellationSignal>>>,
 }
 
+impl Default for OpenAiRequestGuardClient {
+    /// 满足 Rig 泛型 client 的构造约束，并始终建立显式 rustls backend。
+    fn default() -> Self {
+        Self::new(false).expect("Rig rustls HTTP client should be constructible")
+    }
+}
+
 impl OpenAiRequestGuardClient {
     /// 创建同时执行可选认证与 dispatch-time 取消检查的 Rig backend。
-    fn new(omit_authorization: bool) -> Self {
-        Self {
-            inner: rig::http_client::ReqwestClient::new(),
+    fn new(omit_authorization: bool) -> Result<Self, ()> {
+        let inner = rig::http_client::ReqwestClient::builder()
+            .use_rustls_tls()
+            .build()
+            .map_err(|_| ())?;
+        Ok(Self {
+            inner,
             omit_authorization,
             cancellation: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
     /// 将当前 provider round 的共享取消信号绑定到每一次后续 HTTP dispatch。
@@ -157,7 +178,15 @@ impl OpenAiChatCompletionsAdapter {
         }
         let base_url = connection.base_url().to_owned();
         let empty_key = connection.api_key().is_empty();
-        let http_client = OpenAiRequestGuardClient::new(empty_key);
+        // 显式构造 rustls client，让 Custom 的 HTTPS 能力不依赖 Rig 的隐式默认 feature。
+        let http_client = OpenAiRequestGuardClient::new(empty_key).map_err(|_| {
+            CustomAdapterError::Transport(CustomTransportFailure::new(
+                connection.protocol(),
+                CustomRequestPhase::Setup,
+                CustomStatusCategory::Network,
+                connection.base_url(),
+            ))
+        })?;
         let client = CompletionsClient::builder()
             .base_url(&base_url)
             .api_key(connection.api_key().to_owned())
@@ -192,7 +221,7 @@ impl OpenAiChatCompletionsAdapter {
     }
 
     /// 构造使用 Rig OutputMode::Tool 的 agent，供共享 runtime 保持会话与工具循环。
-    pub(crate) fn agent_for_workspace(
+    fn agent_for_workspace(
         &self,
         workspace: impl AsRef<Path>,
         cancellation: &CancellationSignal,
@@ -213,13 +242,17 @@ impl OpenAiChatCompletionsAdapter {
         };
         let rig_tools = tools.rig_tools(cancellation);
         let preamble = preamble.into();
-        Ok(self
+        let builder = self
             .client
             .agent(self.connection.model().to_owned())
-            .preamble(&preamble)
-            .additional_params(serde_json::json!({
-                "reasoning_effort": self.connection.effort().as_str()
-            }))
+            .preamble(&preamble);
+        let builder = match self.connection.effort().wire_value() {
+            Some(effort) => builder.additional_params(serde_json::json!({
+                "reasoning_effort": effort
+            })),
+            None => builder,
+        };
+        Ok(builder
             .default_max_turns(MAX_MODEL_TURNS)
             .tool(rig_tools.read)
             .tool(rig_tools.glob)
@@ -227,6 +260,57 @@ impl OpenAiChatCompletionsAdapter {
             .output_schema_raw(line_explanation_schema())
             .output_mode(rig::agent::OutputMode::Tool)
             .build())
+    }
+
+    /// 运行一次完整 Rig agent loop，并把取消与 provider 错误保留为可判定的内部结果。
+    async fn run_prompt_attempt(
+        &self,
+        request: &CustomRoundRequest,
+        cancellation: &CancellationSignal,
+    ) -> Result<rig::agent::PromptResponse, OpenAiPromptAttemptError> {
+        let agent = self
+            .agent_for_workspace(
+                &self.workspace,
+                cancellation,
+                "Only use the registered read-only repository tools. Submit the final answer through the schema-bearing final_result tool.",
+            )
+            .map_err(OpenAiPromptAttemptError::Adapter)?;
+        let future = agent
+            .prompt(request.prompt().clone())
+            .history(request.history().to_vec())
+            .max_turns(MAX_MODEL_TURNS)
+            .extended_details()
+            .into_future();
+        tokio::pin!(future);
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(OpenAiPromptAttemptError::Cancelled);
+            }
+            tokio::select! {
+                result = &mut future => {
+                    if cancellation.is_cancelled() {
+                        return Err(OpenAiPromptAttemptError::Cancelled);
+                    }
+                    return result.map_err(OpenAiPromptAttemptError::Prompt);
+                }
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    }
+
+    /// 将内部尝试错误投影成 adapter 的稳定脱敏错误。
+    fn map_attempt_error(&self, error: OpenAiPromptAttemptError) -> CustomAdapterError {
+        match error {
+            OpenAiPromptAttemptError::Cancelled => CustomAdapterError::Cancelled,
+            OpenAiPromptAttemptError::Adapter(error) => error,
+            OpenAiPromptAttemptError::Prompt(error) => {
+                CustomAdapterError::Transport(CustomTransportFailure::from_prompt_error(
+                    self.connection.protocol(),
+                    self.connection.base_url(),
+                    error,
+                ))
+            }
+        }
     }
 }
 
@@ -242,58 +326,26 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
             return Err(CustomAdapterError::Cancelled);
         }
         self.http_client.bind_cancellation(cancellation);
-        let agent = self.agent_for_workspace(
-            &self.workspace,
-            cancellation,
-            "Only use the registered read-only repository tools. Submit the final answer through the schema-bearing final_result tool.",
-        )?;
-        let future = agent
-            .prompt(request.prompt().clone())
-            .history(request.history().to_vec())
-            .max_turns(MAX_MODEL_TURNS)
-            .extended_details()
-            .into_future();
-        tokio::pin!(future);
-        loop {
-            if cancellation.is_cancelled() {
-                return Err(CustomAdapterError::Cancelled);
-            }
-            tokio::select! {
-                result = &mut future => {
-                    if cancellation.is_cancelled() {
-                        return Err(CustomAdapterError::Cancelled);
-                    }
-                    let response = result.map_err(|_| {
-                        CustomAdapterError::Transport(
-                            CustomTransportFailure::new(
-                                self.connection.protocol(),
-                                CustomRequestPhase::Model,
-                                CustomStatusCategory::Unknown,
-                                self.connection.base_url(),
-                            ),
-                        )
-                    })?;
-                    if cancellation.is_cancelled() {
-                        return Err(CustomAdapterError::Cancelled);
-                    }
-                    let arguments = serde_json::from_str(&response.output)
-                        .unwrap_or(serde_json::Value::Null);
-                    return Ok(CustomRoundResult {
-                        choice: vec![AssistantContent::tool_call(
-                            "final-result",
-                            FINAL_OUTPUT_TOOL_NAME,
-                            arguments,
-                        )],
-                        identity: ResponseIdentity {
-                            message_id: None,
-                            response_id: None,
-                            provider_request_id: None,
-                        },
-                        transcript: response.messages,
-                    });
-                }
-                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-            }
+        let response = self
+            .run_prompt_attempt(&request, cancellation)
+            .await
+            .map_err(|error| self.map_attempt_error(error))?;
+        if cancellation.is_cancelled() {
+            return Err(CustomAdapterError::Cancelled);
         }
+        let arguments = serde_json::from_str(&response.output).unwrap_or(serde_json::Value::Null);
+        Ok(CustomRoundResult {
+            choice: vec![AssistantContent::tool_call(
+                "final-result",
+                FINAL_OUTPUT_TOOL_NAME,
+                arguments,
+            )],
+            identity: ResponseIdentity {
+                message_id: None,
+                response_id: None,
+                provider_request_id: None,
+            },
+            transcript: response.messages,
+        })
     }
 }

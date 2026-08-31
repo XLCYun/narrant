@@ -25,7 +25,10 @@ state; protocol-specific request construction remains in the OpenAI adapter.
   diagnostics.
 - Construct the Rig OpenAI Chat Completions client from the exact saved base URL, key,
   and model. Empty key remains empty and URL behavior is Rig's default.
-- Map effort to the wire `reasoning_effort` value `low`, `medium`, or `high`.
+- When effort is explicitly `low`, `medium`, or `high`, map it to the matching wire
+  `reasoning_effort` value. When the preference is `provider_default`, omit
+  `reasoning_effort` while retaining tools. Do not retry a rejected explicit effort with
+  a different request shape or change the selected provider or model.
 - Register exactly Read, Glob, Grep, and one internal schema-bearing final-output tool.
   The final tool uses Rig `OutputMode::Tool`; no shell, write, edit, Web, MCP, native
   structured-output format, or additional model tool is available.
@@ -46,10 +49,10 @@ state; protocol-specific request construction remains in the OpenAI adapter.
 
 - Use deterministic local HTTP fixtures; no paid or live endpoint.
 - Assert request path, model, optional authentication behavior, `reasoning_effort`,
-  exact registered tool names, and final-tool schema.
+  exact registered tool names, and final-tool schema. Cover direct omission for Provider
+  default and prove a rejected explicit effort produces only one provider request.
 - Cover a repository-tool loop, complete output, malformed final output followed by
   same-conversation repair, three exhausted repairs, 16-turn exhaustion, cancellation
   before/during model and tool work, late output rejection, and redacted failures.
 - Run the reusable provider contract through the highest practical Babysit application
   seam and prove completed-cache isolation by frozen non-secret connection identity.
-

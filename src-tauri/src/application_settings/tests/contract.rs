@@ -23,6 +23,16 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
         settings.babysit.custom,
         super::CustomProviderSettings::default()
     );
+    assert_eq!(
+        settings.babysit.custom.effort,
+        CustomProviderEffort::ProviderDefault
+    );
+    assert_eq!(
+        serde_json::to_value(&settings.babysit.custom)
+            .unwrap()
+            .get("effort"),
+        Some(&serde_json::json!("provider_default"))
+    );
     assert!(!path.exists());
 }
 

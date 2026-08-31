@@ -9,8 +9,8 @@ export type BabysitProvider = "codex" | "claude-code" | "custom";
 /** Custom 内置 provider 支持的显式模型服务协议。 */
 export type CustomProviderProtocol = "openai_chat_completions" | "anthropic_messages";
 
-/** Custom 连接使用的受支持思考强度。 */
-export type CustomProviderEffort = "low" | "medium" | "high";
+/** Custom 连接使用的 Provider 默认值或显式思考强度。 */
+export type CustomProviderEffort = "provider_default" | "low" | "medium" | "high";
 
 /** Custom 设置中可持久化的非敏感连接字段。 */
 export type CustomProviderSettings = {

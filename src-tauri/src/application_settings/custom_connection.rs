@@ -13,14 +13,16 @@ pub(crate) enum CustomProviderProtocol {
     AnthropicMessages,
 }
 
-/// Custom provider 请求使用的工作量级别。
+/// Custom provider 请求使用的推理参数策略。
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CustomProviderEffort {
+    /// 不覆盖模型服务自己的推理默认值。
+    #[default]
+    ProviderDefault,
     /// 尽快完成请求。
     Low,
-    /// 在质量和成本之间使用默认平衡。
-    #[default]
+    /// 在质量和成本之间使用平衡强度。
     Medium,
     /// 优先请求更高质量的推理。
     High,
@@ -36,7 +38,7 @@ pub(crate) struct CustomProviderSettings {
     pub base_url: String,
     /// 用户输入的模型标识。
     pub model: String,
-    /// 用户选择的低、中或高工作量级别。
+    /// 用户选择 Provider 默认值或显式低、中、高工作量级别。
     pub effort: CustomProviderEffort,
     /// 凭据变更 generation；参与进程内缓存 identity，不携带 secret。
     pub credential_generation: u64,
@@ -61,7 +63,7 @@ pub(crate) struct CustomProviderConnection {
     pub api_key: String,
     /// 用户输入的模型标识。
     pub model: String,
-    /// 用户选择的低、中或高工作量级别。
+    /// 用户选择 Provider 默认值或显式低、中、高工作量级别。
     pub effort: CustomProviderEffort,
 }
 

@@ -49,7 +49,7 @@ export function BabysitProviderSettings({ application, initialCustomApiKeyVisibl
       baseUrl: settings?.baseUrl ?? "",
       apiKey: "",
       model: settings?.model ?? "",
-      effort: settings?.effort === "low" || settings?.effort === "high" ? settings.effort : "medium",
+      effort: settings?.effort === "low" || settings?.effort === "medium" || settings?.effort === "high" ? settings.effort : "provider_default",
     };
   }
 
@@ -164,7 +164,7 @@ function normalizeCustomConnection(connection: CustomProviderConnection): Custom
     baseUrl: connection.baseUrl.trim(),
     apiKey: connection.apiKey ?? "",
     model: connection.model.trim(),
-    effort: connection.effort === "low" || connection.effort === "high" ? connection.effort : "medium",
+    effort: connection.effort === "low" || connection.effort === "medium" || connection.effort === "high" ? connection.effort : "provider_default",
   };
 }
 

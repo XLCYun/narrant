@@ -332,10 +332,20 @@ fn parse_args<T: DeserializeOwned>(arguments: &Value) -> Result<T, RepositoryToo
     serde_json::from_value(arguments.clone()).map_err(|_| RepositoryToolError::InvalidInput)
 }
 
-/// 适配器取消错误保持公共 Babysit cancelled 语义，其余错误只携带脱敏文本。
+/// 适配器取消错误保持公共语义；transport 失败额外保留白名单诊断字段。
 fn adapter_error(error: CustomAdapterError) -> BabysitError {
     match error {
         CustomAdapterError::Cancelled => BabysitError::Cancelled,
+        CustomAdapterError::Transport(failure) => BabysitError::ProviderDiagnostic {
+            detail: CustomAdapterError::Transport(failure.clone()).to_string(),
+            diagnostic: crate::babysit::BabysitProviderDiagnostic::custom_transport(
+                failure.protocol().as_str(),
+                failure.phase().as_str(),
+                failure.status().as_str(),
+                failure.reason().as_str(),
+                failure.origin_hash(),
+            ),
+        },
         other => BabysitError::Provider {
             detail: other.to_string(),
         },

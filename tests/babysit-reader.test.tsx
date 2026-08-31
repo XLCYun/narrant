@@ -255,6 +255,49 @@ describe("Babysit Review Reader presentation", () => {
     expect(writeText.mock.calls[0]?.[0]).not.toContain("raw provider output");
   });
 
+  it("复制 Custom transport 失败时保留脱敏协议分类", () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const failedReview = makeReview({
+      kind: "failed",
+      retryable: true,
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      error: {
+        code: "provider",
+        detail: "不得进入剪贴板的 provider 原文",
+        diagnostic: {
+          providerId: "custom",
+          protocol: "openai_chat_completions",
+          phase: "model",
+          status: "client",
+          reason: "reasoning_tools_incompatible",
+          errorCategory: "transport",
+          originHash: "0123456789abcdef",
+        },
+      },
+    });
+
+    render(<ReviewReader review={failedReview} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    fireEvent.click(within(screen.getByTestId("babysit-footer")).getByRole("button", { name: "复制诊断" }));
+
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify({
+      category: "babysit",
+      code: "provider",
+      provider: {
+        providerId: "custom",
+        protocol: "openai_chat_completions",
+        phase: "model",
+        status: "client",
+        reason: "reasoning_tools_incompatible",
+        errorCategory: "transport",
+        originHash: "0123456789abcdef",
+      },
+    }));
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("provider 原文");
+  });
+
   it("禁用不支持的文件并在 Tooltip 触发器上保留具体原因", () => {
     const unsupported = { ...content, path: "pnpm-lock.yaml" };
     const review = makeReview({ kind: "idle" }, { eligibility: { kind: "resolved", result: { eligible: false, reason: "lock_minified_or_snapshot" } } });

@@ -12,7 +12,7 @@ that provider's quota without an explicit choice.
 Narrant adds a Built-in Agent Provider displayed as Custom. It uses Rig inside the
 backend to call one user-configured OpenAI Chat Completions-compatible or Anthropic
 Messages-compatible endpoint. The reviewer supplies a base URL, optional API key,
-model identifier, and effort preference. Custom implements the existing whole-File-
+model identifier, and reasoning-parameter preference. Custom implements the existing whole-File-
 Change Babysit contract, explores only the active Review Workspace through bounded
 Narrant-owned Read, Glob, and Grep tools, validates a schema-bearing final tool result,
 and keeps all analysis state in memory.
@@ -33,8 +33,8 @@ Coding Agent Provider in Application Settings.
    endpoints remain usable.
 5. As a reviewer, I want to enter the model identifier myself, so that Custom does not
    depend on an optional model-listing API.
-6. As a reviewer, I want low, medium, or high effort, so that I can choose the expected
-   quality and cost level.
+6. As a reviewer, I want to use the provider default or explicitly request low, medium,
+   or high effort, so that I can choose whether Narrant overrides the service's default.
 7. As a reviewer, I want the complete saved Custom connection loaded into its settings
    form, so that I can view and edit every field together.
 8. As a reviewer, I want the API key hidden by default and revealable with a password
@@ -63,9 +63,12 @@ Coding Agent Provider in Application Settings.
     Narrant validation.
 18. As a reviewer, I want connection changes to invalidate completed Custom results but
     not mutate an in-flight request, so that each analysis uses one frozen identity.
-19. As a security-conscious reviewer, I want the API key persisted only by the operating
-    system credential store, so that it never enters settings.json or SQLite.
-20. As a maintainer, I want Rig hidden behind the existing Babysit provider seam, so
+19. As a security-conscious reviewer, I want release builds to persist the API key only
+    in the operating-system credential store, so that it never enters settings.json or
+    SQLite.
+20. As a developer, I want Debug builds to use a separate local credential document, so
+    that repeated test runs do not require interactive keychain authorization.
+21. As a maintainer, I want Rig hidden behind the existing Babysit provider seam, so
     that replacing the library does not change settings identity or Review behavior.
 
 ## Implementation Decisions
@@ -80,6 +83,9 @@ Coding Agent Provider in Application Settings.
 - The URL is a base URL. Narrant passes it to the selected Rig client without a scheme,
   host, redirect, proxy, or endpoint allowlist. Rig owns endpoint path construction and
   its default HTTP behavior.
+- Narrant enables Rig's Reqwest and Rustls features explicitly and constructs Rustls
+  clients for both supported protocols, so HTTPS remains available while Rig default
+  features are disabled.
 - The key is passed to the selected Rig client, which owns the standard protocol
   authentication header. An empty key represents no credential.
 - A dedicated typed settings read returns the full connection, including the current
@@ -91,15 +97,24 @@ Coding Agent Provider in Application Settings.
 - Non-secret settings are saved first, followed by credential replacement. If the
   credential operation fails, the backend restores the preceding non-secret settings
   and reports one failed save.
+- Release builds persist credentials through the operating-system credential store.
+  Debug builds persist them in `custom-provider-credential.dev.json` next to
+  `settings.json`; this file remains separate from the non-secret settings schema and
+  uses mode `0600` on Unix. Debug reads never access the keychain unless
+  `NARRANT_DEV_IMPORT_CUSTOM_PROVIDER_KEYCHAIN=true` explicitly requests a one-time
+  migration while the development credential file is absent.
 - Fresh Application Settings select Custom. Missing URL or model leaves Custom
   unavailable, never falls back, and returns an explicit user-triggered settings
   recovery action.
 - The user enters an arbitrary non-empty model identifier. Custom does not fetch or
   validate a model catalog when settings are saved.
-- Effort is `low`, `medium`, or `high`, defaults to `medium`, and is part of the frozen
-  analysis and cache identity. OpenAI Chat Completions maps it to `reasoning_effort`.
-  Anthropic Messages maps it to `output_config.effort` and also requests adaptive
-  thinking.
+- The reasoning-parameter preference is `provider_default`, `low`, `medium`, or `high`,
+  defaults to `provider_default`, and is part of the frozen analysis and cache identity.
+  Provider default omits all protocol-specific reasoning controls while retaining the
+  registered tools; the model service may still reason according to its own default.
+  Explicit OpenAI Chat Completions effort maps to `reasoning_effort`. Explicit Anthropic
+  Messages effort maps to `output_config.effort` and also requests adaptive thinking.
+  Narrant does not retry a rejected explicit effort with a different request shape.
 - Saving settings performs local validation only. Protocol, authentication, model, tool,
   and schema compatibility errors surface on the first real analysis request.
 - Rig registers only Narrant-owned Read, Glob, and Grep repository tools plus an
@@ -143,9 +158,14 @@ Coding Agent Provider in Application Settings.
 - Custom connection tests exercise the typed settings read/save seam with an in-memory
   credential adapter, including complete round trips, empty credentials, default Custom,
   rollback after credential failure, and cache invalidation.
+- Debug credential tests cover local-file round trips, owner-only Unix permissions,
+  local precedence over keychain migration, one-time migration persistence, and a
+  deletion sentinel that prevents accidental re-import.
 - Rig transport tests use an injectable recording HTTP backend or deterministic local
   server and assert the final OpenAI and Anthropic request shapes without recording
-  secrets or repository content.
+  secrets or repository content. They prove Provider default omits reasoning controls
+  while retaining tools, explicit efforts use protocol-native fields, and rejected
+  explicit efforts do not trigger a second request.
 - Repository tool tests use real temporary directory trees and cover canonical paths,
   `..`, absolute inputs, symlinks inside and outside the workspace, missing paths,
   workspace-local ignore behavior, hidden paths, binary and invalid-UTF-8 files,
@@ -154,8 +174,9 @@ Coding Agent Provider in Application Settings.
 - Provider tests cover complete output, final-tool schema errors, partial repair patches,
   three exhausted repairs, tool-loop limits, timeout, cancellation at model and tool
   boundaries, late responses, frozen connection identity, and completed-only caching.
-- React behavior tests cover selecting Custom, the full form, password visibility,
-  validation, save failure, unconfigured recovery, and absence of silent fallback.
+- React behavior tests cover selecting Custom, the full form, Provider default semantics,
+  password visibility, validation, save failure, unconfigured recovery, and absence of
+  silent fallback.
 - The Preview Harness is inspected in explicit wide and narrow viewports with empty,
   configured, invalid, saving, failed, and password-revealed states.
 - CI performs no live model request. A documented opt-in smoke procedure may exercise

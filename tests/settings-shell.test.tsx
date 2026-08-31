@@ -264,6 +264,49 @@ describe("Settings application-shell UI", () => {
     });
   });
 
+  it("Custom 可显式选择 Provider 默认值并说明不会发送推理参数", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      loadCustomConnection: ReturnType<typeof vi.fn>;
+      saveCustomConnection: ReturnType<typeof vi.fn>;
+    };
+    settings.loadCustomConnection = vi.fn(async () => ({
+      protocol: "openai_chat_completions",
+      baseUrl: "https://models.example.test/v1",
+      apiKey: "",
+      model: "fixture-model",
+      effort: "medium",
+    }));
+    vi.mocked(settings.load).mockResolvedValue({
+      version: 1,
+      theme: "system",
+      babysit: {
+        provider: "custom",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: {
+          protocol: "openai_chat_completions",
+          baseUrl: "https://models.example.test/v1",
+          model: "fixture-model",
+          effort: "medium",
+        },
+      },
+    });
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    await screen.findByTestId("custom-provider-editor");
+    await chooseSelect(/思考强度|Reasoning effort/, /Provider 默认值|Provider default/i);
+    expect(screen.getByText(/不会发送推理控制参数|does not send reasoning controls/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /保存自定义|Save custom/i }));
+
+    await waitFor(() => expect(settings.saveCustomConnection).toHaveBeenCalledWith({
+      protocol: "openai_chat_completions",
+      baseUrl: "https://models.example.test/v1",
+      apiKey: "",
+      model: "fixture-model",
+      effort: "provider_default",
+    }));
+  });
+
   it("Custom 保存失败时保留表单输入并显示清晰错误", async () => {
     const settings = application() as ApplicationSettingsApplication & {
       loadCustomConnection: ReturnType<typeof vi.fn>;

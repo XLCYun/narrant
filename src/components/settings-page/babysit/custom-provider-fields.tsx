@@ -44,8 +44,9 @@ export function CustomProviderFields({ connection, loading, saving, initialApiKe
         </label>
         <label htmlFor="custom-effort" className="grid min-w-0 gap-2 text-sm font-medium">{t("custom.effort")}
           <Select value={connection.effort} disabled={disabled} onValueChange={(value) => {
-            if (value === "low" || value === "medium" || value === "high") update("effort", value);
-          }}><SelectTrigger id="custom-effort" aria-label={t("custom.effort")} className="h-11 w-full rounded-xl bg-background px-4"><SelectValue>{t(`custom.${connection.effort}`)}</SelectValue></SelectTrigger><SelectContent align="start" alignItemWithTrigger={false}><SelectItem value="low">{t("custom.low")}</SelectItem><SelectItem value="medium">{t("custom.medium")}</SelectItem><SelectItem value="high">{t("custom.high")}</SelectItem></SelectContent></Select>
+            if (value === "provider_default" || value === "low" || value === "medium" || value === "high") update("effort", value);
+          }}><SelectTrigger id="custom-effort" aria-label={t("custom.effort")} className="h-11 w-full rounded-xl bg-background px-4"><SelectValue>{connection.effort === "provider_default" ? t("custom.providerDefault") : t(`custom.${connection.effort}`)}</SelectValue></SelectTrigger><SelectContent align="start" alignItemWithTrigger={false}><SelectItem value="provider_default">{t("custom.providerDefault")}</SelectItem><SelectItem value="low">{t("custom.low")}</SelectItem><SelectItem value="medium">{t("custom.medium")}</SelectItem><SelectItem value="high">{t("custom.high")}</SelectItem></SelectContent></Select>
+          <span className="text-xs font-normal text-muted-foreground">{t("custom.effortHint")}</span>
         </label>
         <label htmlFor="custom-base-url" className="grid min-w-0 gap-2 text-sm font-medium sm:col-span-2">{t("custom.baseUrl")}
           <Input id="custom-base-url" aria-label={t("custom.baseUrl")} value={connection.baseUrl} placeholder={t("custom.baseUrlPlaceholder")} autoComplete="url" disabled={disabled} onChange={(event) => update("baseUrl", event.target.value)} />

@@ -1,3 +1,4 @@
+use super::super::adapter::{CustomFailureReason, CustomRequestPhase, CustomStatusCategory};
 use super::super::*;
 use crate::babysit::{
     BabysitAgentProvider, BabysitError, BabysitFileRequest, BabysitGenerationPolicy,
@@ -218,6 +219,140 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     mock.assert_async().await;
 }
 
+/// Provider 默认值仍使用标准 tools，但不得发送 OpenAI 推理强度覆盖。
+#[tokio::test]
+async fn openai_provider_default_omits_reasoning_effort() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .matches(|request| {
+                    let body: serde_json::Value = serde_json::from_slice(
+                        request.body.as_deref().expect("请求应包含 JSON body"),
+                    )
+                    .expect("请求 body 应为 JSON");
+                    body.get("reasoning_effort").is_none()
+                        && body["tools"]
+                            .as_array()
+                            .is_some_and(|tools| !tools.is_empty())
+                });
+            then.status(200).json_body(json!({
+                "id": "fixture-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-1",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+
+    adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect("Provider 默认值请求应成功");
+
+    mock.assert_async().await;
+}
+
+/// 显式 effort 被 provider 拒绝时必须保留错误，不能静默降级或产生第二次请求。
+#[tokio::test]
+async fn openai_explicit_effort_failure_does_not_retry_without_it() {
+    let server = MockServer::start_async().await;
+    let rejected = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .body_contains(r#""reasoning_effort":"medium""#);
+            then.status(400).json_body(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "fixture rejects this parameter combination"
+                }
+            }));
+        })
+        .await;
+    let unexpected_fallback = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "id": "unexpected-fallback",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::Medium,
+        "credential-1",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+
+    let error = adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect_err("显式 effort 被拒绝时应直接返回错误");
+
+    assert!(matches!(error, CustomAdapterError::Transport(_)));
+    assert_eq!(rejected.hits_async().await, 1);
+    assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
 #[tokio::test]
 async fn empty_key_omits_the_authorization_header() {
     let server = MockServer::start_async().await;
@@ -277,6 +412,101 @@ async fn empty_key_omits_the_authorization_header() {
         .expect("无认证请求");
     assert_eq!(forbidden.hits_async().await, 0);
     assert_eq!(success.hits_async().await, 1);
+}
+
+/// OpenAI-compatible 网关的 4xx 必须保留为脱敏 client 分类，不能坍缩成 unknown。
+#[tokio::test]
+async fn openai_http_client_failure_keeps_redacted_transport_classification() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(400).json_body(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Function tools with reasoning_effort are not supported"
+                }
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::Medium,
+        "credential-1",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+
+    let error = adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect_err("fixture 4xx 应返回 transport failure");
+    let CustomAdapterError::Transport(failure) = error else {
+        panic!("应返回脱敏 transport failure");
+    };
+    assert_eq!(failure.protocol(), CustomProtocol::OpenaiChatCompletions);
+    assert_eq!(failure.phase(), CustomRequestPhase::Model);
+    assert_eq!(failure.status(), CustomStatusCategory::Client);
+    assert_eq!(
+        failure.reason(),
+        CustomFailureReason::ReasoningToolsIncompatible
+    );
+    assert!(!format!("{failure:?}").contains("reasoning_effort"));
+    assert_eq!(mock.hits_async().await, 1);
+}
+
+#[tokio::test]
+async fn openai_success_status_error_envelope_is_invalid_response() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "error": {
+                        "code": "model_not_found",
+                        "message": "fixture provider error",
+                        "param": "model",
+                        "type": "invalid_request_error"
+                    }
+                }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::Medium,
+        "credential-1",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+    let error = adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect_err("2xx error envelope 应返回 transport failure");
+
+    let CustomAdapterError::Transport(failure) = error else {
+        panic!("应返回脱敏 transport failure");
+    };
+    assert_eq!(failure.phase(), CustomRequestPhase::Model);
+    assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
+    assert_eq!(failure.reason(), CustomFailureReason::ModelNotFound);
+    assert!(!format!("{failure:?}").contains("fixture provider error"));
+    mock.assert_async().await;
 }
 
 #[tokio::test]

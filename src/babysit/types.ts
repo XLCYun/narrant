@@ -44,6 +44,17 @@ export type BabysitRecoveryAction =
   | "open_application_settings"
   | "retry";
 
+/** Custom transport 失败允许跨 IPC 与剪贴板传递的白名单诊断。 */
+export type BabysitProviderDiagnostic = {
+  providerId: "custom";
+  protocol: "openai_chat_completions" | "anthropic_messages";
+  phase: "setup" | "model" | "response";
+  status: "network" | "invalid_endpoint" | "unauthorized" | "client" | "server" | "rate_limited" | "invalid_response" | "unknown";
+  reason: "model_not_found" | "reasoning_tools_incompatible" | "tools_unsupported" | "parameter_unsupported" | "error_envelope" | "unknown";
+  errorCategory: "transport";
+  originHash: string;
+};
+
 /** Babysit command 失败的结构化 payload；detail 不参与业务分支。 */
 export type BabysitError =
   | {
@@ -52,10 +63,12 @@ export type BabysitError =
     /** setup failure 必须标明所属 provider，UI 不从错误码猜测 provider。 */
     providerId: string;
     recovery?: BabysitRecoveryAction;
+    diagnostic?: never;
   }
   | {
     code: Exclude<BabysitErrorCode, BabysitProviderSetupErrorCode>;
     detail: string;
+    diagnostic?: BabysitProviderDiagnostic;
     providerId?: never;
     recovery?: never;
   };
@@ -94,6 +107,29 @@ const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
   "open_application_settings",
   "retry",
 ]);
+const babysitProviderDiagnosticProtocols = new Set(["openai_chat_completions", "anthropic_messages"]);
+const babysitProviderDiagnosticPhases = new Set(["setup", "model", "response"]);
+const babysitProviderDiagnosticStatuses = new Set(["network", "invalid_endpoint", "unauthorized", "client", "server", "rate_limited", "invalid_response", "unknown"]);
+const babysitProviderDiagnosticReasons = new Set(["model_not_found", "reasoning_tools_incompatible", "tools_unsupported", "parameter_unsupported", "error_envelope", "unknown"]);
+
+/** 验证 provider 诊断只包含固定白名单字段和值。 */
+function isBabysitProviderDiagnostic(value: unknown): value is BabysitProviderDiagnostic {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return candidate.providerId === "custom"
+    && typeof candidate.protocol === "string"
+    && babysitProviderDiagnosticProtocols.has(candidate.protocol)
+    && typeof candidate.phase === "string"
+    && babysitProviderDiagnosticPhases.has(candidate.phase)
+    && typeof candidate.status === "string"
+    && babysitProviderDiagnosticStatuses.has(candidate.status)
+    && typeof candidate.reason === "string"
+    && babysitProviderDiagnosticReasons.has(candidate.reason)
+    && candidate.errorCategory === "transport"
+    && typeof candidate.originHash === "string"
+    && /^[0-9a-f]{16}$/.test(candidate.originHash)
+    && Object.keys(candidate).every((key) => ["providerId", "protocol", "phase", "status", "reason", "errorCategory", "originHash"].includes(key));
+}
 
 /** 判断 Tauri reject 值是否符合 provider-independent Babysit error shape。 */
 export function isBabysitError(value: unknown): value is BabysitError {
@@ -110,7 +146,10 @@ export function isBabysitError(value: unknown): value is BabysitError {
         || (typeof candidate.recovery === "string"
           && babysitRecoveryActions.has(candidate.recovery as BabysitRecoveryAction)));
   }
-  return candidate.providerId === undefined && candidate.recovery === undefined;
+  return candidate.providerId === undefined
+    && candidate.recovery === undefined
+    && (candidate.diagnostic === undefined
+      || (candidate.code === "provider" && isBabysitProviderDiagnostic(candidate.diagnostic)));
 }
 
 /** 一次 File Change 的完整 before/after Line Explanation 结果。 */

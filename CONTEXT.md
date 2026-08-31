@@ -189,7 +189,8 @@ _Avoid_: Embedded model, hosted provider, installed agent
 **Model Service Connection**:
 The device-local configuration a Built-in Agent Provider uses to reach one model
 service. It selects the OpenAI Chat Completions or Anthropic Messages protocol and
-contains a base URL, model identifier, effort preference, and optional credential.
+contains a base URL, model identifier, reasoning-parameter preference, and optional
+credential.
 _Avoid_: Provider account, installed provider, model preference
 
 **Line Explanation Repair Patch**:

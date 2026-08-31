@@ -753,6 +753,37 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 }
 
 #[test]
+fn custom_transport_payload_serializes_only_whitelisted_diagnostics() {
+    let payload = BabysitErrorPayload::from(BabysitError::ProviderDiagnostic {
+        detail: "脱敏 provider 失败".to_owned(),
+        diagnostic: BabysitProviderDiagnostic::custom_transport(
+            "openai_chat_completions",
+            "model",
+            "client",
+            "unknown",
+            "0123456789abcdef",
+        ),
+    });
+
+    assert_eq!(
+        serde_json::to_value(payload).unwrap(),
+        serde_json::json!({
+            "code": "provider",
+            "detail": "宝宝模式 provider 失败：脱敏 provider 失败",
+            "diagnostic": {
+                "providerId": "custom",
+                "protocol": "openai_chat_completions",
+                "phase": "model",
+                "status": "client",
+                "reason": "unknown",
+                "errorCategory": "transport",
+                "originHash": "0123456789abcdef"
+            }
+        })
+    );
+}
+
+#[test]
 fn provider_setup_payload_carries_identity_without_exposing_runtime_details() {
     let payload = BabysitErrorPayload::from(BabysitError::provider_setup(
         "claude-code",
