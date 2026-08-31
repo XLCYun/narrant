@@ -4,7 +4,9 @@
 
 ## 结论
 
-当前最值得优化的不是 Rust 测试函数本身，而是多个 Agent 各自冷启动 Cargo、各自生成完整 `target`，并在 8 核/8 GiB 机器上同时运行默认并发的编译任务。当前工作区的观测结果是：8 个 worktree 的 `src-tauri/target` 合计约 32.9 GiB，磁盘只剩约 4.4 GiB；本机没有 `sccache`、`cargo-nextest` 或 `mold`，仓库也没有 `.cargo/config.toml`。
+调研时最值得优化的不是 Rust 测试函数本身，而是多个 Agent 各自冷启动 Cargo、各自生成完整 `target`，并在 8 核/8 GiB 机器上同时运行默认并发的编译任务。当时工作区的观测结果是：8 个 worktree 的 `src-tauri/target` 合计约 32.9 GiB，磁盘只剩约 4.4 GiB；本机尚未安装 `sccache`、`cargo-nextest` 或 `mold`。
+
+2026-08-31 已采纳“独立 incremental target + 共享 sccache + 仓库级 Cargo 锁”的组合，见 [ADR-0027](../adr/0027-use-isolated-incremental-targets-with-sccache.md) 和 [Agent 构建指南](../agents/rust-build-cache.md)。下文的机器状态和 A/B 数字保留为采纳前基线。
 
 建议按下面的顺序处理：
 
@@ -79,7 +81,7 @@ Cargo 的 `test` profile 继承 `dev` profile；默认 `dev` 使用 `opt-level=0
 
 - 不要先改成 release、开启 LTO 或降低 `codegen-units`；这些很可能增加测试编译时间。
 - 反复在同一个 worktree 编辑时保留 incremental 有价值。
-- 一次性 CI/Agent 冷构建如果使用 sccache，应关闭 incremental，因为 sccache 官方 Rust 文档说明增量编译结果不能缓存；这是“共享 sccache”配置与“同一 worktree 增量开发”配置的取舍。[sccache Rust caveats](https://github.com/mozilla/sccache/blob/main/docs/Rust.md)
+- 一次性 CI 冷构建如果使用 sccache，可以关闭 incremental，因为 sccache 官方 Rust 文档说明增量编译结果不能缓存；但仍会反复修改和验证的 Agent worktree 与 main 一样保留 incremental。[sccache Rust caveats](https://github.com/mozilla/sccache/blob/main/docs/Rust.md)
 
 ### 4. sccache 适合本场景，但不能替代 target 隔离
 
@@ -140,7 +142,7 @@ CI 方面可做的低风险调整是给 Rust 命令加 `--locked`，并记录 ca
 | P0 | Agent Cargo 跨 worktree 互斥 | 高：减少 swap、失败重编译和等待，同时保留单次构建吞吐 | 低/低 | 统一通过 `scripts/cargo-agent.sh` 获取 common git dir 中的锁；不要固定 `CARGO_BUILD_JOBS` |
 | P0 | worktree target 生命周期 | 高：立即释放约 33 GiB 级别空间，避免磁盘满 | 低/中 | 只清理已完成且已交接的 worktree target；worktree 移除时同步移除 target；给临时 target 加 TTL。不要共享不同分支的 target |
 | P0 | 分层测试门禁 | 高：实现期单轮从全量降到秒级/小分钟级 | 低/低 | `check → targeted test → Issue 完成一次 full targets + doc`；审查小修只跑受影响模块测试 |
-| P1 | 独立 target + sccache | 中到高：后续冷 worktree 的依赖编译可复用 | 中/中 | `RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0`；设置 `SCCACHE_BASEDIRS` 覆盖各 checkout 根；缓存上限先设 1–2 GiB，观察 `sccache --show-stats` |
+| P1 | 独立 target + sccache | 中到高：后续冷 worktree 的依赖编译可复用 | 中/中 | 已采纳：开发 worktree 保留 incremental；仓库脚本设置 `RUSTC_WRAPPER=sccache` 和 2 GiB 上限，观察 `sccache --show-stats` |
 | P1 | CI 记录和复用缓存指标 | 中：减少 CI 冷启动和定位时间 | 低/低 | 保留 `Swatinem/rust-cache`，加 `--locked`；记录 cache hit、wall time、top compile units 和 target 大小 |
 | P2 | cargo-nextest A/B | 低到中：只影响 test runtime | 中/中 | 先安装在用户/CI 环境，不立即改默认命令；warm target 下与 `cargo test --all-targets` 做 3 次中位数比较，保留 doctest lane |
 | P2 | ld64.lld 实验 | 低到中：仅在 linker 占比高时 | 中到高/高 | `cargo test --timings` 证明链接瓶颈后，单独配置 Darwin target linker；验证 Tauri debug build、E2E、签名和发布包后再决定 |
@@ -171,7 +173,7 @@ CI 方面可做的低风险调整是给 Rust 命令加 `--locked`，并记录 ca
 | Narrant package rebuild | 默认 jobs 12.36 秒 | jobs=2 25.66 秒 | jobs=2 慢约 108%，拒绝 |
 | 磁盘 | 已完成 worktree target 重复占用十余 GiB，可用空间约 5.2 GiB | 清理 #74–#77 的可再生成 target 后可用空间 21 GiB | 将 target 清理纳入 issue 收尾 |
 
-最终落地组合是：修复 build-script invalidation；用 `scripts/cargo-agent.sh` 在 linked worktree 间互斥 Cargo；单个 Cargo 保持默认 jobs；实现期运行 check/聚焦测试，Issue 交付前再运行一次全量门禁；合并后的 worktree 及时清理 target。
+最终落地组合是：修复 build-script invalidation；用 `scripts/cargo-agent.sh` 在 linked worktree 间互斥 Cargo；单个 Cargo 保持默认 jobs；各开发 worktree 保留独立 target 和 incremental，并通过 sccache 共享可缓存的 rustc 结果；实现期运行 check/聚焦测试，Issue 交付前再运行一次全量门禁；合并后的 worktree 及时清理 target。
 
 ## 建议的基准实验
 

@@ -23,8 +23,11 @@
     "test": "vitest run",
     "test:components": "vitest run",
     "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts",
-    "tauri": "tauri",
-    "clean:tauri": "cargo clean --manifest-path src-tauri/Cargo.toml",
+    "tauri": "node scripts/rust-cache.mjs run tauri",
+    "clean:tauri": "scripts/cargo-agent.sh clean --manifest-path src-tauri/Cargo.toml",
+    "rust:cache:status": "node scripts/rust-cache.mjs status",
+    "rust:cache:clean": "node scripts/rust-cache.mjs clean",
+    "test:scripts": "node --test scripts/tests/*.test.mjs",
     "td": "pnpm tauri dev"
   },
   "dependencies": {
