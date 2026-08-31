@@ -218,16 +218,8 @@ pub(super) fn normalize_and_collect_repairs(
         .iter()
         .map(|target| (target.side, target.line_number))
         .collect::<HashSet<_>>();
-    output.before.retain(|key, _| {
-        key.parse::<usize>()
-            .ok()
-            .is_some_and(|line| expected.contains(&(FileSide::Before, line)))
-    });
-    output.after.retain(|key, _| {
-        key.parse::<usize>()
-            .ok()
-            .is_some_and(|line| expected.contains(&(FileSide::After, line)))
-    });
+    canonicalize_requested_line_keys(&mut output.before, FileSide::Before, &expected);
+    canonicalize_requested_line_keys(&mut output.after, FileSide::After, &expected);
     request
         .targets
         .iter()
@@ -251,6 +243,36 @@ pub(super) fn normalize_and_collect_repairs(
             }
         })
         .collect()
+}
+
+/// 把 provider 从编号源码抄回的 `0001` 归一化为契约使用的 `1`。
+///
+/// 同一行若同时出现多个等价 key，则丢弃这组歧义结果，让既有 repair 流程重新生成，
+/// 避免静默选择其中一条解释。
+fn canonicalize_requested_line_keys(
+    explanations: &mut BTreeMap<String, String>,
+    side: FileSide,
+    expected: &HashSet<(FileSide, usize)>,
+) {
+    let mut canonical = BTreeMap::new();
+    let mut seen = HashSet::new();
+    let mut ambiguous = HashSet::new();
+    for (key, value) in std::mem::take(explanations) {
+        let Some(line_number) = key.parse::<usize>().ok().filter(|line| *line > 0) else {
+            continue;
+        };
+        if !expected.contains(&(side, line_number)) || ambiguous.contains(&line_number) {
+            continue;
+        }
+        let canonical_key = line_number.to_string();
+        if seen.insert(line_number) {
+            canonical.insert(canonical_key, value);
+        } else {
+            canonical.remove(&canonical_key);
+            ambiguous.insert(line_number);
+        }
+    }
+    *explanations = canonical;
 }
 
 /// 只接受本轮明确请求的修复行，避免 patch 改写上一轮已经有效的解释。

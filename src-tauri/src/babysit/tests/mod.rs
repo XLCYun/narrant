@@ -720,6 +720,46 @@ fn response_validation_rejects_extra_and_missing_but_accepts_soft_text_limits() 
 }
 
 #[test]
+fn provider_output_canonicalizes_zero_padded_requested_line_keys_before_repair() {
+    let request = BabysitProviderRequest {
+        analysis_run_id: 1,
+        path: "src/example.ts".to_owned(),
+        locale: "zh-CN".to_owned(),
+        workspace_path: "/tmp/narrant-test-workspace".to_owned(),
+        before: "const value = 1;".to_owned(),
+        after: "const value = 2;".to_owned(),
+        targets: vec![
+            LineTarget {
+                side: FileSide::Before,
+                line_number: 1,
+                source: "const value = 1;".to_owned(),
+            },
+            LineTarget {
+                side: FileSide::After,
+                line_number: 1,
+                source: "const value = 2;".to_owned(),
+            },
+        ],
+        model: "test-model".to_owned(),
+        reasoning_effort: "provider_default".to_owned(),
+    };
+    let mut output = BabysitFileExplanations::default();
+    output
+        .before
+        .insert("0001".to_owned(), "旧行解释".to_owned());
+    output
+        .after
+        .insert("0001".to_owned(), "新行解释".to_owned());
+
+    let failures = normalize_and_collect_repairs(&request, &mut output);
+
+    assert!(failures.is_empty());
+    assert_eq!(output.before.get("1"), Some(&"旧行解释".to_owned()));
+    assert_eq!(output.after.get("1"), Some(&"新行解释".to_owned()));
+    assert!(validate_response(&request, &output).is_ok());
+}
+
+#[test]
 fn provider_json_parser_rejects_duplicate_keys() {
     let duplicate_line = r#"{"before":{"1":"first","1":"second"},"after":{}}"#;
     assert!(matches!(

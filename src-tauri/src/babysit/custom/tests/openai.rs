@@ -1,4 +1,6 @@
-use super::super::adapter::{CustomFailureReason, CustomRequestPhase, CustomStatusCategory};
+use super::super::adapter::{
+    CustomFailureReason, CustomRequestPhase, CustomStatusCategory, CustomTransportFailure,
+};
 use super::super::*;
 use crate::babysit::{
     BabysitAgentProvider, BabysitError, BabysitFileRequest, BabysitGenerationPolicy,
@@ -145,6 +147,23 @@ fn round_request_rejects_turns_after_the_shared_budget() {
             limit: MAX_MODEL_TURNS
         }
     );
+}
+
+#[test]
+fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
+    let failure = CustomTransportFailure::from_prompt_error(
+        CustomProtocol::OpenaiChatCompletions,
+        "https://model.example/v1",
+        rig::completion::PromptError::MaxTurnsError {
+            max_turns: MAX_MODEL_TURNS,
+            chat_history: Box::default(),
+            prompt: Box::new(Message::user("continue")),
+        },
+    );
+
+    assert_eq!(failure.phase(), CustomRequestPhase::Model);
+    assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
+    assert_eq!(failure.reason(), CustomFailureReason::ModelTurnLimit);
 }
 
 #[tokio::test]

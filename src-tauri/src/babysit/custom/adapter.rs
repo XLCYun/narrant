@@ -75,6 +75,10 @@ pub(crate) enum CustomFailureReason {
     ParameterUnsupported,
     /// 2xx 响应实际承载了 provider 错误信封。
     ErrorEnvelope,
+    /// 模型在固定调用预算内没有提交最终结果。
+    ModelTurnLimit,
+    /// 模型调用了当前回合没有注册或不允许的工具。
+    UnknownToolCall,
     /// 错误正文没有命中任何白名单原因。
     Unknown,
 }
@@ -88,6 +92,8 @@ impl CustomFailureReason {
             Self::ToolsUnsupported => "tools_unsupported",
             Self::ParameterUnsupported => "parameter_unsupported",
             Self::ErrorEnvelope => "error_envelope",
+            Self::ModelTurnLimit => "model_turn_limit",
+            Self::UnknownToolCall => "unknown_tool_call",
             Self::Unknown => "unknown",
         }
     }
@@ -144,6 +150,9 @@ impl CustomTransportFailure {
                 rig::completion::PromptError::UnknownToolCall { .. } => {
                     CustomStatusCategory::InvalidResponse
                 }
+                rig::completion::PromptError::MaxTurnsError { .. } => {
+                    CustomStatusCategory::InvalidResponse
+                }
                 _ => CustomStatusCategory::Unknown,
             });
         Self {
@@ -178,6 +187,15 @@ fn classify_failure_reason(
     error: &rig::completion::PromptError,
     response_status: Option<u16>,
 ) -> CustomFailureReason {
+    match error {
+        rig::completion::PromptError::MaxTurnsError { .. } => {
+            return CustomFailureReason::ModelTurnLimit;
+        }
+        rig::completion::PromptError::UnknownToolCall { .. } => {
+            return CustomFailureReason::UnknownToolCall;
+        }
+        _ => {}
+    }
     let response = error
         .provider_response_json()
         .ok()
