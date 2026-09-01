@@ -404,7 +404,7 @@ export function validateUpdaterManifest(manifest, options) {
   assertManifest(manifest, { tag, version, notes, names, signatures: signatureMap });
 }
 
-/** 统一拒绝把私有仓库身份、完整源码 SHA 或 allowlist 外目标写入公开元数据。 */
+/** 统一拒绝把私有仓库身份、7–40 位源码 SHA 或 allowlist 外目标写入公开元数据。 */
 export function assertPublicReleaseMetadata(options) {
   const {
     title,
