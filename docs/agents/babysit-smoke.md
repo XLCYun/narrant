@@ -3,6 +3,9 @@
 默认验证全部使用仓库内的确定性 fixture，不需要 provider 登录，也不会访问模型服务。
 真实 endpoint probe 是明确 opt-in 的人工步骤，绝不属于 CI 或默认开发命令。
 
+开发观测的 Venator 安装、启动、显式 feature 命令、OTLP endpoint 覆盖和 CI 边界见
+[开发观测：Venator](dev-observability.md)。
+
 ## CI 边界与数据安全
 
 - CI 只运行 deterministic fixture、前端测试和 Preview Harness；默认测试命令不得调用本节的真实
