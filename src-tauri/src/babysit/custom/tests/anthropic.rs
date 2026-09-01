@@ -1,4 +1,8 @@
 use super::super::{
+    adapter::{CustomFailureReason, CustomStatusCategory},
+    MAX_MODEL_TURNS,
+};
+use super::super::{
     AnthropicAdapter, AnthropicAdapterConfig, AnthropicAdapterError, AnthropicAdapterRequest,
 };
 use crate::application_settings::CustomProviderEffort;
@@ -278,6 +282,65 @@ async fn adapter_propagates_max_tokens_rejection_without_retrying() {
     assert!(matches!(result, Err(AnthropicAdapterError::Transport(_))));
     assert_eq!(rejected.hits_async().await, 1);
     assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
+/// 连续工具调用必须由真实 Rig agent 在共享轮次预算处停止，而不是由 Narrant 再套一层循环。
+#[tokio::test]
+async fn adapter_stops_continuous_tool_calls_at_shared_turn_limit() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages").matches(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body.as_deref().expect("请求应包含 JSON body"))
+                        .expect("请求 body 应为 JSON");
+                body["max_tokens"] == json!(65_536)
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "continuous-tool-use",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "fixture-model",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "loop-read",
+                        "name": "read",
+                        "input": {"path": "fixture.rs", "offset": 0}
+                    }],
+                    "stop_reason": "tool_use",
+                    "stop_sequence": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+    std::fs::write(workspace.path().join("fixture.rs"), "fixture source\n")
+        .expect("写入 fixture 文件");
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("fixture-key".to_owned()),
+        "fixture-model",
+        CustomProviderEffort::ProviderDefault,
+    ))
+    .expect("创建 adapter");
+
+    let result = adapter
+        .complete(AnthropicAdapterRequest::new(
+            "keep inspecting the fixture",
+            Vec::new(),
+            RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
+            CancellationSignal::default(),
+        ))
+        .await;
+
+    let Err(AnthropicAdapterError::Transport(failure)) = result else {
+        panic!("连续工具调用应以 Rig MaxTurnsError 稳定失败");
+    };
+    assert_eq!(failure.reason(), CustomFailureReason::ModelTurnLimit);
+    assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
+    assert_eq!(mock.hits_async().await, MAX_MODEL_TURNS);
 }
 
 #[tokio::test]
