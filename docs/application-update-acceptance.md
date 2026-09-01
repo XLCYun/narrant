@@ -17,8 +17,12 @@ Task 7 的 Preview Harness 路由修复。
   执行。发布必须先通过 `.github/workflows/update-smoke.yml` 的 `native-smoke` 两目标 matrix 和
   `aggregate` job，再由 `.github/workflows/promote-stable.yml` 的 `promote` job 在受保护
   `stable-promotion` Environment 中复核 evidence 后发布。
-- Rust 全量测试：Task 7 worker 没有运行。它保留给父任务在 fresh 浏览器验收和修复稳定后，按
-  Issue 规则恰好运行一次。
+- Rust 全量测试：父任务在 fresh 浏览器验收和 Preview 修复稳定后恰好运行一次。473 个 lib
+  测试中 472 个通过；唯一失败是 2026-08-07 已存在的 Core Git 输出上限测试用瞬时
+  `rev-parse` 模拟进程树终止，在全量并发下偶发先退出并令 macOS `killpg` 返回 `EPERM`。
+  Task 7 将该测试夹具改为先输出越界字节、再保持存活，未修改生产进程实现；修后该测试
+  50 次聚焦重复与相邻三个 Core Git process 测试均通过。依仓库“全量只运行一次”的节奏，
+  没有再次运行全量。
 
 ## 15 条标准的证据矩阵
 
@@ -38,7 +42,7 @@ Task 7 的 Preview Harness 路由修复。
 | 12 | 本机脚本测试通过 | `scripts/tests/update-smoke-evidence.test.mjs`：`evidence set 拒绝重复、缺少、额外目标与跨 target Draft 漂移`、`freshness、future、checkpoint 和 source SHA 均 fail closed`、`normal evidence 绑定源码、Draft 八资产、previous package/signature 与真实 checkpoints`；`scripts/tests/promote-stable-release.test.mjs`：`evidence、Stable manifest 或 Draft asset 漂移时 PATCH 永不发生`；`scripts/tests/update-workflows.test.mjs` 固定 exactly-two matrix 和 protected Environment。 |
 | 13 | 工作流门禁存在；本机未执行真实原生升级 | `scripts/tests/native-update-smoke-driver.test.mjs`：normal 与 bootstrap 的 checkpoint 顺序、durable staging 和 bootstrap recovery；`scripts/tests/promote-stable-release.test.mjs`：bootstrap exact tag、normal/bootstrap 隔离、历史 updater Stable 永久关闭 bootstrap。真实执行门禁是 `update-smoke.yml` 的 `native-smoke` matrix（`macos-15`/`darwin-aarch64` 与 `windows-2025`/`windows-x86_64`）及依赖它的 `aggregate`；promotion 必须下载该 run 的 attested exact-two evidence。Task 7 没有 dispatch 工作流，也没有远程运行记录。 |
 | 14 | 文档通过 | [application-update-operations.md](./application-update-operations.md) 的“GitHub 配置”“正常发布流程”“一次性 first-updater bootstrap”“失败与恢复”“Updater 私钥备份、丢失与轮换”“每次发布检查表”分别覆盖密钥备份/丢失/泄露、old-key-signed A→B→C bridge、Draft 审批、失败恢复、bootstrap 和 immutable releases 未启用。 |
-| 15 | worker 门禁与 fresh 浏览器通过；Rust 全量待父任务收尾 | 本轮运行 `pnpm test`、`pnpm test:scripts`、`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm build`、`scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`、聚焦 Rust 测试和 `git diff --check`，父任务也已完成下述 fresh 应用内浏览器验收。随后仍须恰好一次运行 `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml`；不得手动触发 quality-gate。 |
+| 15 | 全部门禁已执行；全量中的既有测试夹具已聚焦稳定化 | 本轮运行 `pnpm test`、`pnpm test:scripts`、`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm build`、`scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`、聚焦 Rust 测试、fresh 应用内浏览器和 `git diff --check`。父任务恰好一次运行 `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml`：472/473 通过，唯一失败是既有 Core Git 瞬时测试夹具；夹具稳定化后 50 次聚焦重复和相邻 3 个 process 测试通过。没有第二次全量运行，也没有手动触发 quality-gate。 |
 
 ## Fresh 浏览器证据（父任务执行）
 
@@ -88,7 +92,7 @@ Task 7 本机运行没有 GitHub Release、secret、Environment 或 workflow dis
 
 ## 本轮实际执行
 
-以下结果由 Task 7 worker 在 2026-09-02 本机执行；Rust 全量测试与 fresh 浏览器不在此列表中。
+以下结果由 Task 7 worker 与父任务在 2026-09-02 本机执行：
 
 - `pnpm exec vitest run tests/preview-routing.test.ts`：3 passed。
 - `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update -- --nocapture`：
@@ -103,8 +107,21 @@ Task 7 本机运行没有 GitHub Release、secret、Environment 或 workflow dis
 - `pnpm lint`：passed。
 - `pnpm build`：passed，2032 modules transformed；Vite 报告既有大 chunk 提示。
 - `scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`：passed。
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml`：按 Issue 规则恰好运行一次；
+  473 个 lib 测试中 472 passed、1 failed。失败测试为既有
+  `core_git_process_classifies_the_stream_that_crosses_its_limit`，自动更新、共享停止和 Babysit
+  相关测试在该运行中均通过。
+- 将上述测试的瞬时 `rev-parse` 夹具改为确定性的“输出越界后保持存活”后，聚焦重复 50 次
+  全部通过；`core_git::tests::core_git_process_` 三项聚焦测试随后 3/3 passed。
+- `scripts/cargo-agent.sh fmt --check --manifest-path src-tauri/Cargo.toml`：passed。
 - `git diff --check`：passed（Preview 修复后的聚焦执行；提交前将再执行）。
 - `quality-gate`：未触发。
 
 本机 Node 为 `v26.5.0`，高于仓库声明的 `<26` engine 上限；pnpm 给出 warning，但上述命令
 全部成功。正式 CI 仍应使用仓库支持的 Node 版本。
+
+诊断 Core Git 测试夹具时，额外的 20 次模块压力循环在第 14 次暴露了既有
+`cancelled_workspace_creation_removes_its_partial_worktree` 清理竞态：取消恰好落在 Git 的
+`locked initializing` 阶段时，测试可观察到临时 worktree 注册尚未被清理。它没有出现在本次
+唯一全量运行，不由 Application Update 改动引入，也未在本需求中扩大为 Core Git 生产修复；
+后续应由 Cancellable Core Git Operations 的 owning work 单独处理。
