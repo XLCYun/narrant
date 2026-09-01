@@ -8,6 +8,7 @@ mod persistence;
 mod repository;
 mod review;
 mod tauri_app;
+pub(crate) mod telemetry;
 
 /// 启动 Narrant 桌面应用。
 pub fn run() {
