@@ -88,6 +88,66 @@ describe("Application Language UI", () => {
     expect(screen.getByRole("radio", { name: "简体中文" })).toHaveAttribute("aria-checked", "true");
   });
 
+  it("blocks theme submission while language persistence is in flight", async () => {
+    const settings = application("en-US");
+    let resolveSave!: (settings: ApplicationSettings) => void;
+    vi.mocked(settings.updateLanguage).mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
+    await screen.findByRole("radio", { name: "English" });
+
+    fireEvent.click(screen.getByRole("radio", { name: "简体中文" }));
+    await waitFor(() => expect(settings.updateLanguage).toHaveBeenCalledWith("zh-CN"));
+
+    const dark = screen.getByRole("radio", { name: /^深色/ });
+    expect(dark).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("radio", { name: "English" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(dark);
+    expect(settings.updateTheme).not.toHaveBeenCalled();
+
+    resolveSave({
+      version: 1,
+      theme: "system",
+      language: "zh-CN",
+      babysit: {
+        provider: "codex",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "", model: "", effort: "medium" },
+      },
+    });
+    await waitFor(() => expect(screen.getByRole("radio", { name: "简体中文" })).toHaveAttribute("aria-checked", "true"));
+  });
+
+  it("blocks language submission while theme persistence is in flight", async () => {
+    const settings = application("en-US");
+    let resolveSave!: (settings: ApplicationSettings) => void;
+    vi.mocked(settings.updateTheme).mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+    render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
+    await screen.findByRole("radio", { name: "English" });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^深色/ }));
+    await waitFor(() => expect(settings.updateTheme).toHaveBeenCalledWith("dark"));
+
+    const chinese = screen.getByRole("radio", { name: "简体中文" });
+    expect(chinese).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("radio", { name: /^深色/ })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(chinese);
+    expect(settings.updateLanguage).not.toHaveBeenCalled();
+
+    resolveSave({
+      version: 1,
+      theme: "dark",
+      language: "en-US",
+      babysit: {
+        provider: "codex",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "", model: "", effort: "medium" },
+      },
+    });
+    await waitFor(() => expect(screen.getByRole("radio", { name: /^深色/ })).toHaveAttribute("aria-checked", "true"));
+  });
+
   it("language persistence failure restores the previous i18n and document language", async () => {
     const settings = application("en-US");
     vi.mocked(settings.updateLanguage).mockRejectedValueOnce(new Error("settings.json is read-only"));

@@ -84,7 +84,7 @@ export function useApplicationSettings(application: ApplicationSettingsApplicati
 
   /** 先提交视觉选择，再保存；失败时恢复原偏好与相同的有效主题。 */
   const choose = useCallback(async (next: ThemePreference) => {
-    if (savingRef.current || next === preference) return;
+    if (savingRef.current || languageSavingRef.current || next === preference) return;
     savingRef.current = true;
     setSaving(true);
     const previous = preference;
@@ -107,7 +107,7 @@ export function useApplicationSettings(application: ApplicationSettingsApplicati
 
   /** 只有语言持久化成功后才切换界面；失败时全程保持旧语言并展示错误。 */
   const chooseLanguage = useCallback(async (next: ApplicationLanguage) => {
-    if (languageSavingRef.current || next === language) return;
+    if (languageSavingRef.current || savingRef.current || next === language) return;
     languageSavingRef.current = true;
     setLanguageSaving(true);
     const previous = language;

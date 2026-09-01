@@ -19,6 +19,7 @@ const languages: Array<{ value: ApplicationLanguage; label: string; description:
 
 /** 外观设置消费完整应用设置 binding，并呈现主题与语言选择。 */
 export function AppearanceSettings({ settings }: { settings: ApplicationSettingsBinding }) {
+  const saving = settings.saving || settings.languageSaving;
   return <section aria-labelledby="appearance-title">
     <div className="flex items-center gap-3"><Icon icon={Settings02Icon} className="size-5" /><h2 id="appearance-title" className="font-heading text-xl font-semibold">外观</h2></div>
     <p className="mt-1 text-sm text-muted-foreground">主题会同时应用到应用框架、代码阅读器与品牌图像。</p>
@@ -26,12 +27,12 @@ export function AppearanceSettings({ settings }: { settings: ApplicationSettings
     <RadioGroup
       value={settings.preference}
       onValueChange={(value) => void settings.choose(value as ThemePreference)}
-      disabled={!settings.loaded || settings.saving}
+      disabled={!settings.loaded || saving}
       aria-label="主题"
-      aria-busy={!settings.loaded || undefined}
+      aria-busy={!settings.loaded || saving || undefined}
       className="mt-6 grid gap-3 sm:grid-cols-3"
     >
-      {themes.map((item) => <label key={item.value} className={cn("relative block cursor-pointer rounded-xl border p-4 text-left outline-none transition-colors hover:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring", settings.preference === item.value && "border-primary bg-primary/5 ring-1 ring-primary", (!settings.loaded || settings.saving) && "pointer-events-none opacity-50")}>
+      {themes.map((item) => <label key={item.value} className={cn("relative block cursor-pointer rounded-xl border p-4 text-left outline-none transition-colors hover:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring", settings.preference === item.value && "border-primary bg-primary/5 ring-1 ring-primary", (!settings.loaded || saving) && "pointer-events-none opacity-50")}>
         <RadioGroupItem value={item.value} aria-labelledby={`theme-${item.value}-label`} aria-describedby={`theme-${item.value}-description`} className="absolute top-4 right-4" />
         <span className="pointer-events-none block pr-7"><Icon icon={item.icon} className="mb-3 size-5" /><strong id={`theme-${item.value}-label`} className="block text-sm">{item.label}</strong><span id={`theme-${item.value}-description`} className="mt-1 block text-xs text-muted-foreground">{item.description}</span></span>
       </label>)}
@@ -42,12 +43,12 @@ export function AppearanceSettings({ settings }: { settings: ApplicationSettings
       <RadioGroup
         value={settings.language}
         onValueChange={(value) => void settings.chooseLanguage(value as ApplicationLanguage)}
-        disabled={!settings.loaded || settings.languageSaving}
+        disabled={!settings.loaded || saving}
         aria-label="语言"
-        aria-busy={!settings.loaded || undefined}
+        aria-busy={!settings.loaded || saving || undefined}
         className="mt-4 grid gap-3 sm:grid-cols-2"
       >
-        {languages.map((item) => <label key={item.value} className={cn("relative block cursor-pointer rounded-xl border p-4 text-left outline-none transition-colors hover:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring", settings.language === item.value && "border-primary bg-primary/5 ring-1 ring-primary", (!settings.loaded || settings.languageSaving) && "pointer-events-none opacity-50")}>
+        {languages.map((item) => <label key={item.value} className={cn("relative block cursor-pointer rounded-xl border p-4 text-left outline-none transition-colors hover:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring", settings.language === item.value && "border-primary bg-primary/5 ring-1 ring-primary", (!settings.loaded || saving) && "pointer-events-none opacity-50")}>
           <RadioGroupItem value={item.value} aria-labelledby={`language-${item.value}-label`} aria-describedby={`language-${item.value}-description`} className="absolute top-4 right-4" />
           <span className="pointer-events-none block pr-7"><strong id={`language-${item.value}-label`} className="block text-sm">{item.label}</strong><span id={`language-${item.value}-description`} className="mt-1 block text-xs text-muted-foreground">{item.description}</span></span>
         </label>)}
