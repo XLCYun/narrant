@@ -68,11 +68,154 @@ fn macos_original_path_replacement_rolls_back_when_candidate_move_fails() {
         Path::new("/tmp/failed-candidate.app"),
         || Ok(()),
     );
-    assert_eq!(result, Err(ReplaceTransactionError::RolledBack));
+    assert_eq!(
+        result,
+        Err(ReplaceTransactionError::CandidateMoveRolledBack(
+            io::ErrorKind::Other
+        ))
+    );
     assert_eq!(rename.calls.len(), 3);
     assert_eq!(
         rename.calls[2].1,
         PathBuf::from("/Applications/Narrant.app")
+    );
+}
+
+#[test]
+fn macos_permission_denied_replacement_selects_authorized_fallback() {
+    assert!(macos_authorization_required(
+        &ReplaceTransactionError::OriginalMoveFailed(io::ErrorKind::PermissionDenied)
+    ));
+    assert!(macos_authorization_required(
+        &ReplaceTransactionError::CandidateMoveRolledBack(io::ErrorKind::PermissionDenied)
+    ));
+    assert!(!macos_authorization_required(
+        &ReplaceTransactionError::CandidateMoveRolledBack(io::ErrorKind::Other)
+    ));
+    assert!(!macos_authorization_required(
+        &ReplaceTransactionError::PostReplaceRolledBack
+    ));
+    assert!(macos_work_creation_requires_authorization(&io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "parent denied"
+    )));
+    assert!(!macos_work_creation_requires_authorization(
+        &io::Error::new(io::ErrorKind::StorageFull, "disk full")
+    ));
+}
+
+#[test]
+fn macos_authorized_script_quotes_paths_and_keeps_old_app_until_commit() {
+    let script = build_macos_authorization_script(
+        Path::new("/tmp/new candidate's.app"),
+        Path::new("/Applications/Narrant user's.app"),
+        Path::new("/Applications/.narrant update work"),
+    )
+    .expect("script");
+    assert!(script.contains("'/tmp/new candidate'\\''s.app'"));
+    assert!(script.contains("'/Applications/Narrant user'\\''s.app'"));
+    assert!(!script.contains("rm -rf '/Applications/Narrant user"));
+    let move_old = script
+        .find("/bin/mv '/Applications/Narrant user")
+        .expect("old app move");
+    let delete_backup = script
+        .find("/bin/rm -rf '/Applications/.narrant update work/previous.app'")
+        .expect("backup cleanup");
+    assert!(move_old < delete_backup);
+}
+
+#[cfg(unix)]
+#[test]
+fn macos_authorized_script_rejects_non_utf8_and_control_character_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let non_utf8 = PathBuf::from(OsString::from_vec(b"/tmp/invalid-\xff.app".to_vec()));
+    assert!(build_macos_authorization_script(
+        &non_utf8,
+        Path::new("/Applications/Narrant.app"),
+        Path::new("/Applications/.narrant-update")
+    )
+    .is_err());
+    assert!(build_macos_authorization_script(
+        Path::new("/tmp/candidate\n.app"),
+        Path::new("/Applications/Narrant.app"),
+        Path::new("/Applications/.narrant-update")
+    )
+    .is_err());
+}
+
+/// 记录提权脚本并返回预设的系统授权结果。
+struct ScriptedAuthorization {
+    outcome: Option<io::Result<MacosAuthorizationOutcome>>,
+    scripts: Vec<String>,
+}
+
+impl MacosAuthorizationBoundary for ScriptedAuthorization {
+    fn run(&mut self, script: &str) -> io::Result<MacosAuthorizationOutcome> {
+        self.scripts.push(script.to_owned());
+        self.outcome.take().expect("single authorization call")
+    }
+}
+
+#[test]
+fn macos_authorization_reports_success_denial_and_preserved_backup() {
+    let source = Path::new("/tmp/Narrant.app");
+    let destination = Path::new("/Applications/Narrant.app");
+    let work = Path::new("/Applications/.narrant-update-test");
+    let mut success = ScriptedAuthorization {
+        outcome: Some(Ok(MacosAuthorizationOutcome::Succeeded)),
+        scripts: Vec::new(),
+    };
+    assert!(install_macos_with_authorization(source, destination, work, &mut success).is_ok());
+    assert_eq!(success.scripts.len(), 1);
+
+    let mut denied = ScriptedAuthorization {
+        outcome: Some(Ok(MacosAuthorizationOutcome::Denied)),
+        scripts: Vec::new(),
+    };
+    let error = install_macos_with_authorization(source, destination, work, &mut denied)
+        .expect_err("denied");
+    assert_eq!(error.message(), "系统管理员授权被拒绝");
+
+    let mut rollback_failed = ScriptedAuthorization {
+        outcome: Some(Ok(MacosAuthorizationOutcome::FailedBackupPreserved)),
+        scripts: Vec::new(),
+    };
+    let error = install_macos_with_authorization(source, destination, work, &mut rollback_failed)
+        .expect_err("rollback failure");
+    assert_eq!(error.message(), "提权安装回滚失败，已保留恢复副本");
+
+    let mut unavailable = ScriptedAuthorization {
+        outcome: Some(Err(io::Error::new(io::ErrorKind::NotFound, "osascript"))),
+        scripts: Vec::new(),
+    };
+    let error = install_macos_with_authorization(source, destination, work, &mut unavailable)
+        .expect_err("authorization unavailable");
+    assert_eq!(error.message(), "无法请求系统管理员授权");
+}
+
+#[test]
+fn macos_authorization_markers_distinguish_denial_rollback_and_unknown_failure() {
+    assert_eq!(
+        parse_macos_authorization_marker("NARRANT_UPDATE_OK"),
+        MacosAuthorizationOutcome::Succeeded
+    );
+    assert_eq!(
+        parse_macos_authorization_marker("NARRANT_UPDATE_ERROR:-128"),
+        MacosAuthorizationOutcome::Denied
+    );
+    assert_eq!(
+        parse_macos_authorization_marker("NARRANT_UPDATE_ERROR:43"),
+        MacosAuthorizationOutcome::FailedAndRolledBack
+    );
+    assert_eq!(
+        parse_macos_authorization_marker("NARRANT_UPDATE_ERROR:44"),
+        MacosAuthorizationOutcome::FailedBackupPreserved
+    );
+    assert_eq!(
+        parse_macos_authorization_marker("unexpected"),
+        MacosAuthorizationOutcome::UnknownFailure
     );
 }
 
@@ -99,7 +242,12 @@ fn macos_real_filesystem_restores_old_app_after_candidate_or_post_failure() {
         &failed,
         || Ok(()),
     );
-    assert_eq!(result, Err(ReplaceTransactionError::RolledBack));
+    assert_eq!(
+        result,
+        Err(ReplaceTransactionError::CandidateMoveRolledBack(
+            io::ErrorKind::NotFound
+        ))
+    );
     assert_eq!(
         std::fs::read_to_string(destination.join("version")).unwrap(),
         "old"
@@ -115,7 +263,7 @@ fn macos_real_filesystem_restores_old_app_after_candidate_or_post_failure() {
         &failed,
         || Err(io::Error::other("post replace failed")),
     );
-    assert_eq!(result, Err(ReplaceTransactionError::RolledBack));
+    assert_eq!(result, Err(ReplaceTransactionError::PostReplaceRolledBack));
     assert_eq!(
         std::fs::read_to_string(destination.join("version")).unwrap(),
         "old"
@@ -123,6 +271,32 @@ fn macos_real_filesystem_restores_old_app_after_candidate_or_post_failure() {
     assert_eq!(
         std::fs::read_to_string(failed.join("version")).unwrap(),
         "new"
+    );
+}
+
+#[test]
+fn macos_rollback_failure_leaves_backup_at_recovery_path() {
+    let mut rename = ScriptedRename::new([
+        Ok(()),
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, "candidate")),
+        Err(io::Error::other("rollback")),
+    ]);
+    let backup = Path::new("/Applications/.narrant-update/previous.app");
+    let result = replace_with_rollback(
+        &mut rename,
+        Path::new("/Applications/Narrant.app"),
+        Path::new("/Applications/.narrant-update/candidate.app"),
+        backup,
+        Path::new("/Applications/.narrant-update/failed.app"),
+        || Ok(()),
+    );
+    assert_eq!(result, Err(ReplaceTransactionError::RollbackFailed));
+    assert_eq!(rename.calls[0].1, backup);
+    assert_eq!(rename.calls.len(), 3);
+    assert_eq!(rename.calls[2].0, backup);
+    assert_eq!(
+        rename.calls[2].1,
+        PathBuf::from("/Applications/Narrant.app")
     );
 }
 

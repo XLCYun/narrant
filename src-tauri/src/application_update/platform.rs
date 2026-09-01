@@ -95,10 +95,12 @@ fn replace_with_rollback(
 ) -> Result<(), ReplaceTransactionError> {
     rename
         .rename(destination, backup)
-        .map_err(|_| ReplaceTransactionError::OriginalMoveFailed)?;
-    if rename.rename(candidate, destination).is_err() {
+        .map_err(|error| ReplaceTransactionError::OriginalMoveFailed(error.kind()))?;
+    if let Err(error) = rename.rename(candidate, destination) {
         return match rename.rename(backup, destination) {
-            Ok(()) => Err(ReplaceTransactionError::RolledBack),
+            Ok(()) => Err(ReplaceTransactionError::CandidateMoveRolledBack(
+                error.kind(),
+            )),
             Err(_) => Err(ReplaceTransactionError::RollbackFailed),
         };
     }
@@ -107,7 +109,7 @@ fn replace_with_rollback(
             return Err(ReplaceTransactionError::RollbackFailed);
         }
         return match rename.rename(backup, destination) {
-            Ok(()) => Err(ReplaceTransactionError::RolledBack),
+            Ok(()) => Err(ReplaceTransactionError::PostReplaceRolledBack),
             Err(_) => Err(ReplaceTransactionError::RollbackFailed),
         };
     }
@@ -133,29 +135,209 @@ impl RenameBoundary for FileSystemRename {
 /// 描述原路径替换失败及旧版本能否恢复。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplaceTransactionError {
-    OriginalMoveFailed,
-    RolledBack,
+    OriginalMoveFailed(std::io::ErrorKind),
+    CandidateMoveRolledBack(std::io::ErrorKind),
+    PostReplaceRolledBack,
     RollbackFailed,
+}
+
+/// 仅在直接移动因权限不足且旧应用仍安全可用时请求系统管理员授权。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+fn macos_authorization_required(error: &ReplaceTransactionError) -> bool {
+    matches!(
+        error,
+        ReplaceTransactionError::OriginalMoveFailed(std::io::ErrorKind::PermissionDenied)
+            | ReplaceTransactionError::CandidateMoveRolledBack(
+                std::io::ErrorKind::PermissionDenied
+            )
+    )
+}
+
+/// 只有相邻工作目录因权限不足无法创建时才升级为管理员授权路径。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+fn macos_work_creation_requires_authorization(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+/// 表示系统授权对话框与提权替换事务的脱敏结果。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosAuthorizationOutcome {
+    Succeeded,
+    Denied,
+    FailedBeforeReplacement,
+    FailedAndRolledBack,
+    FailedBackupPreserved,
+    UnknownFailure,
+}
+
+/// 把 AppleScript 管理员授权收敛为可注入的单次命令边界。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+trait MacosAuthorizationBoundary {
+    /// 使用固定 AppleScript 包装执行已经安全引用的本地替换命令。
+    fn run(&mut self, command: &str) -> std::io::Result<MacosAuthorizationOutcome>;
+}
+
+/// 生产环境通过系统 `osascript` 展示标准管理员授权对话框。
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+struct SystemMacosAuthorization;
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+impl MacosAuthorizationBoundary for SystemMacosAuthorization {
+    /// shell command 作为 AppleScript argv 传入，避免再经过 AppleScript 字符串插值。
+    fn run(&mut self, command: &str) -> std::io::Result<MacosAuthorizationOutcome> {
+        const APPLE_SCRIPT: &str = r#"on run argv
+try
+  do shell script (item 1 of argv) with administrator privileges
+  return "NARRANT_UPDATE_OK"
+on error errorMessage number errorNumber
+  return "NARRANT_UPDATE_ERROR:" & (errorNumber as text)
+end try
+end run"#;
+        let output = std::process::Command::new("/usr/bin/osascript")
+            .args(["-e", APPLE_SCRIPT, command])
+            .output()?;
+        if !output.status.success() {
+            return Ok(MacosAuthorizationOutcome::UnknownFailure);
+        }
+        let marker = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_macos_authorization_marker(marker.trim()))
+    }
+}
+
+/// 把 osascript 的固定结果 marker 映射为不暴露系统输出的安装结果。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+fn parse_macos_authorization_marker(marker: &str) -> MacosAuthorizationOutcome {
+    match marker {
+        "NARRANT_UPDATE_OK" => MacosAuthorizationOutcome::Succeeded,
+        "NARRANT_UPDATE_ERROR:-128" => MacosAuthorizationOutcome::Denied,
+        "NARRANT_UPDATE_ERROR:40" | "NARRANT_UPDATE_ERROR:41" | "NARRANT_UPDATE_ERROR:42" => {
+            MacosAuthorizationOutcome::FailedBeforeReplacement
+        }
+        "NARRANT_UPDATE_ERROR:43" => MacosAuthorizationOutcome::FailedAndRolledBack,
+        "NARRANT_UPDATE_ERROR:44" => MacosAuthorizationOutcome::FailedBackupPreserved,
+        _ => MacosAuthorizationOutcome::UnknownFailure,
+    }
+}
+
+/// 为受信本地绝对路径生成无插值的 POSIX shell 单引号参数。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+fn macos_shell_quote(path: &Path) -> Result<String, InstallError> {
+    if !path.is_absolute() {
+        return Err(InstallError::new("提权安装路径无效"));
+    }
+    let value = path
+        .to_str()
+        .ok_or_else(|| InstallError::new("提权安装路径无法安全表示"))?;
+    if value.chars().any(char::is_control) {
+        return Err(InstallError::new("提权安装路径无法安全表示"));
+    }
+    Ok(format!("'{}'", value.replace('\'', "'\\''")))
+}
+
+/// 构造保留旧应用直至新应用完成替换的提权 shell 事务。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+fn build_macos_authorization_script(
+    source: &Path,
+    destination: &Path,
+    work: &Path,
+) -> Result<String, InstallError> {
+    let candidate = work.join("candidate.app");
+    let backup = work.join("previous.app");
+    let failed_candidate = work.join("failed-candidate.app");
+    let source = macos_shell_quote(source)?;
+    let destination = macos_shell_quote(destination)?;
+    let work = macos_shell_quote(work)?;
+    let candidate = macos_shell_quote(&candidate)?;
+    let backup = macos_shell_quote(&backup)?;
+    let failed_candidate = macos_shell_quote(&failed_candidate)?;
+    Ok(format!(
+        "set -u; umask 077; \
+         /bin/mkdir {work} || exit 40; \
+         if ! /usr/bin/ditto {source} {candidate}; then /bin/rm -rf {work}; exit 41; fi; \
+         if ! /bin/mv {destination} {backup}; then /bin/rm -rf {work}; exit 42; fi; \
+         if /bin/mv {candidate} {destination}; then \
+           if /usr/bin/touch {destination}; then /bin/rm -rf {backup} {work}; exit 0; fi; \
+           if ! /bin/mv {destination} {failed_candidate}; then exit 44; fi; \
+         fi; \
+         if /bin/mv {backup} {destination}; then /bin/rm -rf {work}; exit 43; fi; \
+         exit 44"
+    ))
+}
+
+/// 请求系统管理员权限并把授权、回滚和未知失败分别投影为清晰错误。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+fn install_macos_with_authorization(
+    source: &Path,
+    destination: &Path,
+    work: &Path,
+    authorization: &mut impl MacosAuthorizationBoundary,
+) -> Result<(), InstallError> {
+    let command = build_macos_authorization_script(source, destination, work)?;
+    match authorization.run(&command) {
+        Ok(MacosAuthorizationOutcome::Succeeded) => Ok(()),
+        Ok(MacosAuthorizationOutcome::Denied) => Err(InstallError::new("系统管理员授权被拒绝")),
+        Ok(MacosAuthorizationOutcome::FailedBeforeReplacement) => {
+            Err(InstallError::new("提权安装失败，当前应用未被替换"))
+        }
+        Ok(MacosAuthorizationOutcome::FailedAndRolledBack) => {
+            Err(InstallError::new("提权安装失败，已恢复旧版本"))
+        }
+        Ok(MacosAuthorizationOutcome::FailedBackupPreserved) => {
+            Err(InstallError::new("提权安装回滚失败，已保留恢复副本"))
+        }
+        Ok(MacosAuthorizationOutcome::UnknownFailure) => {
+            Err(InstallError::new("提权安装状态无法确认"))
+        }
+        Err(_) => Err(InstallError::new("无法请求系统管理员授权")),
+    }
+}
+
+/// 生成由提权事务独占创建的相邻恢复目录路径，避免复用外部输入名称。
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn fresh_macos_authorized_work_path(parent: &Path) -> Result<std::path::PathBuf, InstallError> {
+    let name_source = tempfile::Builder::new()
+        .prefix(".narrant-update-authorized-")
+        .tempdir()
+        .map_err(|_| InstallError::new("无法准备提权安装"))?;
+    let name = name_source
+        .path()
+        .file_name()
+        .ok_or_else(|| InstallError::new("无法准备提权安装"))?;
+    Ok(parent.join(name))
 }
 
 /// 从签名后的 `.app.tar.gz` 解包唯一应用，再执行 rollback-safe 原路径替换。
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn install_macos_archive(package: &Path) -> Result<(), InstallError> {
-    use std::fs;
-
     let executable = std::env::current_exe().map_err(|_| InstallError::new("无法定位当前应用"))?;
     let destination = tauri_plugin_updater::extract_path_from_executable(&executable)
         .map_err(|_| InstallError::new("无法定位当前应用"))?;
     let parent = destination
         .parent()
         .ok_or_else(|| InstallError::new("无法定位当前应用"))?;
-    let work = tempfile::Builder::new()
+    let work = match tempfile::Builder::new()
         .prefix("narrant-update-")
         .tempdir_in(parent)
-        .map_err(|_| InstallError::new("无法创建更新临时目录"))?;
-    let extracted_root = work.path().join("extracted");
-    fs::create_dir(&extracted_root).map_err(|_| InstallError::new("无法创建更新临时目录"))?;
-    let candidate = extract_macos_archive(package, &extracted_root)?;
+    {
+        Ok(work) => work,
+        Err(error) if macos_work_creation_requires_authorization(&error) => {
+            let fallback = tempfile::Builder::new()
+                .prefix("narrant-update-extracted-")
+                .tempdir()
+                .map_err(|_| InstallError::new("无法创建更新临时目录"))?;
+            let candidate = extract_macos_candidate(package, fallback.path())?;
+            let elevated_work = fresh_macos_authorized_work_path(parent)?;
+            return install_macos_with_authorization(
+                &candidate,
+                &destination,
+                &elevated_work,
+                &mut SystemMacosAuthorization,
+            );
+        }
+        Err(_) => return Err(InstallError::new("无法创建更新临时目录")),
+    };
+    let candidate = extract_macos_candidate(package, work.path())?;
     let backup = work.path().join("previous.app");
     let failed_candidate = work.path().join("failed-candidate.app");
     let result = replace_with_rollback(
@@ -179,12 +361,32 @@ fn install_macos_archive(package: &Path) -> Result<(), InstallError> {
     );
     match result {
         Ok(()) => Ok(()),
+        Err(error) if macos_authorization_required(&error) => {
+            let elevated_work = fresh_macos_authorized_work_path(parent)?;
+            install_macos_with_authorization(
+                &candidate,
+                &destination,
+                &elevated_work,
+                &mut SystemMacosAuthorization,
+            )
+        }
         Err(ReplaceTransactionError::RollbackFailed) => {
             let _preserved = work.keep();
             Err(InstallError::new("应用更新回滚失败，已保留恢复副本"))
         }
         Err(_) => Err(InstallError::new("应用更新替换失败，已恢复旧版本")),
     }
+}
+
+/// 在指定本地工作目录中安全解包候选应用，并返回唯一 `.app` 根目录。
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn extract_macos_candidate(
+    package: &Path,
+    work: &Path,
+) -> Result<std::path::PathBuf, InstallError> {
+    let extracted_root = work.join("extracted");
+    std::fs::create_dir(&extracted_root).map_err(|_| InstallError::new("无法创建更新临时目录"))?;
+    extract_macos_archive(package, &extracted_root)
 }
 
 /// 逐 entry 验证并解包唯一、无链接且不能逃逸的 `.app` 目录树。
