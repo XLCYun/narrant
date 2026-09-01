@@ -4,8 +4,9 @@ use super::super::adapter::{
 use super::super::*;
 use crate::babysit::{
     BabysitAgentProvider, BabysitError, BabysitFileRequest, BabysitGenerationPolicy,
-    BabysitProviderCapabilities, BabysitProviderModelCatalog, BabysitProviderSetupFailure,
-    BabysitResolvedModel, PreparedBabysitAnalysis, RepositoryTools, ReviewIdentity,
+    BabysitProgress, BabysitProviderCapabilities, BabysitProviderModelCatalog,
+    BabysitProviderSetupFailure, BabysitResolvedModel, PreparedBabysitAnalysis, RepositoryTools,
+    ReviewIdentity,
 };
 use crate::operation::TestCancellation;
 use httpmock::prelude::*;
@@ -114,6 +115,32 @@ fn fixture_tools() -> Vec<rig::completion::ToolDefinition> {
     custom_tool_definitions(&tools)
 }
 
+/// 构造只返回 Read 调用的 deterministic OpenAI response，让 Rig 自己推进工具循环。
+fn repeated_read_response() -> serde_json::Value {
+    json!({
+        "id": "fixture-read-turn",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "fixture-model",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call-read",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": "{\"path\":\"fixture.rs\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    })
+}
+
 #[test]
 fn final_tool_is_schema_bearing_and_tool_set_is_bounded() {
     let tools = fixture_tools();
@@ -170,6 +197,45 @@ fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     let debug = format!("{failure:?}");
     assert!(!debug.contains("origin"));
     assert!(!debug.contains("endpoint"));
+}
+
+/// 连续工具调用必须由 Rig 消耗 16 次模型预算，runtime 不得再发第 17 次请求。
+#[tokio::test]
+async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
+    let server = MockServer::start_async().await;
+    let model = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(repeated_read_response());
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    std::fs::write(workspace.path().join("fixture.rs"), "fn fixture() {}\n").expect("写入 fixture");
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-rig-turn-limit",
+    )
+    .expect("冻结连接");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+
+    let error = adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect_err("持续工具调用应在 Rig 16-turn 上限失败");
+
+    let CustomAdapterError::Transport(failure) = error else {
+        panic!("Rig 16-turn exhaustion 应投影为脱敏 transport failure");
+    };
+    assert_eq!(failure.phase(), CustomRequestPhase::Model);
+    assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
+    assert_eq!(failure.reason(), CustomFailureReason::ModelTurnLimit);
+    assert_eq!(model.hits_async().await, MAX_MODEL_TURNS);
 }
 
 #[tokio::test]
@@ -508,6 +574,117 @@ async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
     assert!(matches!(error, CustomAdapterError::Transport(_)));
     assert_eq!(rejected.hits_async().await, 1);
     assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
+/// application/provider seam 遇到 length 时直接失败，不能进入 validation repair。
+#[tokio::test]
+async fn custom_application_surfaces_openai_output_limit_without_repair() {
+    use crate::operation::OperationContext;
+    use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
+
+    let server = MockServer::start_async().await;
+    let model = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "id": "fixture-application-length",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "length"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 65536, "total_tokens": 65537}
+            }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let settings = tempfile::tempdir().expect("创建 settings 目录");
+    let snapshot = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-application-length",
+    )
+    .expect("冻结连接");
+    let adapter = Arc::new(
+        OpenAiChatCompletionsAdapter::new(snapshot, workspace.path()).expect("创建 adapter"),
+    );
+    let provider = Arc::new(CustomProvider::new(
+        Arc::new(CustomRuntime::new()),
+        adapter,
+        "custom-application-length".to_owned(),
+    ));
+    let capability = Arc::new(FrozenCustomCapability {
+        provider,
+        process_generation: Arc::new(AtomicUsize::new(1)),
+    }) as Arc<dyn BabysitProviderCapabilities>;
+    let application = crate::babysit::TestBabysitApplication::with_capabilities_at(
+        settings.path().join("settings.json"),
+        [(
+            crate::application_settings::BabysitProvider::Custom,
+            capability,
+        )],
+    );
+    let request = BabysitFileRequest {
+        identity: ReviewIdentity {
+            review_id: "length-review".to_owned(),
+            snapshot_id: "snapshot".to_owned(),
+        },
+        path: "src/example.rs".to_owned(),
+        locale: "zh-CN".to_owned(),
+        workspace_path: workspace.path().to_string_lossy().into_owned(),
+        detected_language: Some("rust".to_owned()),
+        generation_policy: BabysitGenerationPolicy::Regenerate,
+    };
+    let content = FileChangeContent {
+        path: request.path.clone(),
+        old_path: None,
+        status: FileChangeStatus::Modified,
+        before: Some(FileContent::Text {
+            text: "old();".to_owned(),
+            size: 6,
+        }),
+        after: Some(FileContent::Text {
+            text: "new();".to_owned(),
+            size: 6,
+        }),
+    };
+    let cancellation = OperationContext::background().cancellation().clone();
+    let repair_requests = Arc::new(AtomicUsize::new(0));
+    let repair_requests_for_notify = repair_requests.clone();
+
+    let result = application
+        .explain_file(request, content, &cancellation, move |progress| {
+            if matches!(progress, BabysitProgress::Repairing { .. }) {
+                repair_requests_for_notify.fetch_add(1, Ordering::AcqRel);
+            }
+            Ok(())
+        })
+        .await;
+
+    assert_eq!(
+        result,
+        Err(BabysitError::OutputLimit {
+            limit: MAX_OUTPUT_TOKENS,
+        })
+    );
+    assert_eq!(repair_requests.load(Ordering::Acquire), 0);
+    assert_eq!(model.hits_async().await, 1);
 }
 
 #[tokio::test]
