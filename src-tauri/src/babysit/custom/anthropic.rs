@@ -374,6 +374,8 @@ impl AnthropicAdapter {
             None => builder,
         };
         let agent = builder
+            // 与 OpenAI-compatible adapter 保持一致，禁止 Rig 记录模型内容。
+            .record_content_telemetry(false)
             .default_max_turns(16)
             .output_schema::<LineExplanationOutput>()
             .output_mode(OutputMode::Tool)

@@ -66,3 +66,5 @@ walkdir = "2"
 [dev-dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 httpmock = "0.7"
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace", "logs"] }
+prost = "0.14"

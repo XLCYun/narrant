@@ -31,6 +31,19 @@ pub(crate) const LOG_MAX_QUEUE_SIZE: usize = 256;
 pub(crate) const LOG_MAX_EXPORT_BATCH_SIZE: usize = 64;
 #[cfg(any(feature = "dev-observability", test))]
 const OTLP_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
+/// Narrant 自己产生的 lifecycle event target；其他库的 event 不进入遥测 logs。
+#[cfg(any(feature = "dev-observability", test))]
+pub(crate) const LIFECYCLE_TARGET: &str = "narrant::babysit";
+/// lifecycle event 唯一允许的静态字段；内容字段永远不在 allowlist 中。
+#[cfg(any(feature = "dev-observability", test))]
+const LIFECYCLE_EVENT_FIELDS: &[&str] = &[
+    "analysis_run_id",
+    "provider",
+    "protocol",
+    "phase",
+    "attempt",
+    "error_category",
+];
 
 /// 应用生命周期持有的 telemetry owner。
 ///
@@ -82,20 +95,14 @@ impl Telemetry {
                 return;
             };
 
-            // SDK 的 provider shutdown 是阻塞方法；分别放到 blocking pool 后再
-            // 并行等待，保证 traces + logs 的总墙钟时间不超过统一上限。
+            // SDK 的 provider shutdown 是阻塞方法；放到 blocking pool 后等待，
+            // 具体的两类 provider 关闭逻辑与 EnabledTelemetry 共用同一个 helper。
             let tracer_provider = inner.tracer_provider.clone();
             let logger_provider = inner.logger_provider.clone();
-            let trace_shutdown = tokio::task::spawn_blocking(move || {
-                let _ = tracer_provider.shutdown_with_timeout(OTLP_SHUTDOWN_TIMEOUT);
+            let shutdown = tokio::task::spawn_blocking(move || {
+                shutdown_providers(tracer_provider, logger_provider, OTLP_SHUTDOWN_TIMEOUT);
             });
-            let log_shutdown = tokio::task::spawn_blocking(move || {
-                let _ = logger_provider.shutdown_with_timeout(OTLP_SHUTDOWN_TIMEOUT);
-            });
-            let _ = tokio::time::timeout(OTLP_SHUTDOWN_TIMEOUT, async {
-                let _ = tokio::join!(trace_shutdown, log_shutdown);
-            })
-            .await;
+            let _ = tokio::time::timeout(OTLP_SHUTDOWN_TIMEOUT, shutdown).await;
         }
     }
 }
@@ -155,34 +162,58 @@ impl EndpointConfig {
 pub(crate) fn is_sensitive_field(name: &str) -> bool {
     matches!(
         name,
-        "prompt"
+        "message"
+            | "error"
+            | "body"
+            | "request_body"
+            | "response_body"
+            | "prompt"
             | "source"
             | "explanation"
             | "line_explanation"
             | "tool_args"
             | "tool_arguments"
+            | "tool.args"
+            | "tool.arguments"
             | "tool_result"
             | "tool_results"
             | "tool_output"
             | "tool_outputs"
+            | "tool.result"
+            | "tool.results"
             | "content"
             | "input"
             | "output"
             | "gen_ai.input.messages"
             | "gen_ai.output.messages"
             | "gen_ai.system_instructions"
+            | "gen_ai.prompt"
             | "gen_ai.completion"
+            | "gen_ai.tool.call.arguments"
+            | "gen_ai.tool.call.result"
     )
 }
 
 #[cfg(feature = "dev-observability")]
-/// 判断一个调用点是否可以进入 traces、logs 与终端 fmt layer。
-fn is_public_callsite(metadata: &tracing::Metadata<'_>) -> bool {
-    !metadata.is_event()
-        || !metadata
-            .fields()
-            .iter()
-            .any(|field| is_sensitive_field(field.name()))
+/// 判断 event 是否属于 Narrant 明确声明的安全 lifecycle allowlist。
+fn is_lifecycle_event(metadata: &tracing::Metadata<'_>) -> bool {
+    metadata.is_event()
+        && metadata.target() == LIFECYCLE_TARGET
+        && metadata.fields().iter().all(|field| {
+            LIFECYCLE_EVENT_FIELDS.contains(&field.name()) && !is_sensitive_field(field.name())
+        })
+}
+
+#[cfg(feature = "dev-observability")]
+/// trace 保留全部 span（包括 Rig GenAI），但只保留安全 lifecycle span-events。
+fn is_trace_callsite(metadata: &tracing::Metadata<'_>) -> bool {
+    !metadata.is_event() || is_lifecycle_event(metadata)
+}
+
+#[cfg(feature = "dev-observability")]
+/// logs 与终端 fmt 不接收任意 provider/Rig event，只接收 lifecycle allowlist。
+fn is_lifecycle_callsite(metadata: &tracing::Metadata<'_>) -> bool {
+    is_lifecycle_event(metadata)
 }
 
 #[cfg(feature = "dev-observability")]
@@ -272,24 +303,9 @@ impl EnabledTelemetry {
     /// 将 provider 绑定到 tracing subscriber；只在进程首次初始化时调用。
     fn install_layers(&self) -> Result<(), ()> {
         use opentelemetry::global;
-        use opentelemetry::trace::TracerProvider;
-        use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-        use tracing_subscriber::layer::{Layer, SubscriberExt};
         use tracing_subscriber::util::SubscriberInitExt;
 
-        let tracer = self.tracer_provider.tracer("narrant");
-        let trace_layer = tracing_opentelemetry::layer()
-            .with_tracer(tracer)
-            .with_filter(tracing_subscriber::filter::filter_fn(is_public_callsite));
-        let log_layer = OpenTelemetryTracingBridge::new(&self.logger_provider)
-            .with_filter(tracing_subscriber::filter::filter_fn(is_public_callsite));
-        let fmt_layer = tracing_subscriber::fmt::layer()
-            .with_filter(tracing_subscriber::filter::filter_fn(is_public_callsite));
-        let subscriber = tracing_subscriber::registry()
-            .with(trace_layer)
-            .with(log_layer)
-            .with(fmt_layer);
-        subscriber.try_init().map_err(|_| ())?;
+        self.subscriber().try_init().map_err(|_| ())?;
 
         // Rig 的 tracing span 与其他 instrumentation 共用这个 global provider。
         global::set_tracer_provider(self.tracer_provider.clone());
@@ -298,9 +314,55 @@ impl EnabledTelemetry {
 
     /// 在 subscriber 安装失败等异常路径中，以指定上限停止两个 processor。
     fn shutdown_with_timeout(&self, timeout: Duration) {
-        let _ = self.tracer_provider.shutdown_with_timeout(timeout);
-        let _ = self.logger_provider.shutdown_with_timeout(timeout);
+        shutdown_providers(
+            self.tracer_provider.clone(),
+            self.logger_provider.clone(),
+            timeout,
+        );
     }
+
+    /// 构造可注入到测试 task 的局部 subscriber；不修改 tracing 全局 dispatch。
+    fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync {
+        use opentelemetry::trace::TracerProvider;
+        use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+        use tracing_subscriber::layer::{Layer, SubscriberExt};
+
+        let tracer = self.tracer_provider.tracer("narrant");
+        let trace_layer = tracing_opentelemetry::layer()
+            // Lifecycle span-events have an explicit field allowlist; automatic source
+            // location attributes would otherwise be appended to every exported event.
+            .with_location(false)
+            .with_tracer(tracer)
+            .with_filter(tracing_subscriber::filter::filter_fn(is_trace_callsite));
+        let log_layer = OpenTelemetryTracingBridge::new(&self.logger_provider)
+            .with_filter(tracing_subscriber::filter::filter_fn(is_lifecycle_callsite));
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_filter(tracing_subscriber::filter::filter_fn(is_lifecycle_callsite));
+        tracing_subscriber::registry()
+            .with(trace_layer)
+            .with(log_layer)
+            .with(fmt_layer)
+    }
+}
+
+#[cfg(feature = "dev-observability")]
+/// 统一 traces/logs provider shutdown，确保正常退出与异常路径使用同一契约。
+fn shutdown_providers(
+    tracer_provider: opentelemetry_sdk::trace::SdkTracerProvider,
+    logger_provider: opentelemetry_sdk::logs::SdkLoggerProvider,
+    timeout: Duration,
+) {
+    // 两个 processor 必须并行 flush，避免各自等待 timeout 后把退出上限翻倍。
+    std::thread::scope(|scope| {
+        let trace_shutdown = scope.spawn(|| {
+            let _ = tracer_provider.shutdown_with_timeout(timeout);
+        });
+        let log_shutdown = scope.spawn(|| {
+            let _ = logger_provider.shutdown_with_timeout(timeout);
+        });
+        let _ = trace_shutdown.join();
+        let _ = log_shutdown.join();
+    });
 }
 
 #[cfg(feature = "dev-observability")]
