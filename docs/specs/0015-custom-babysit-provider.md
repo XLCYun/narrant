@@ -137,18 +137,32 @@ Coding Agent Provider in Application Settings.
   UTF-8 boundary. Every truncated result says so.
 - The final Line Explanations use Rig Tool output mode for both protocols. Narrant still
   parses, validates, and merges repair patches through its provider-independent contract.
-- Initial generation and up to three repairs reuse one in-memory Rig conversation. Each
-  generation or repair permits at most 16 model turns, while the whole File Change run
-  retains the existing ten-minute deadline.
+- Rig alone owns the model-and-tool agent loop. Initial generation and up to three repairs
+  reuse one in-memory Rig conversation, and each generation or repair gives Rig at most
+  16 model turns. Narrant does not wrap a Rig run in another model-turn or repository-tool
+  dispatch loop; the whole File Change run retains the existing ten-minute deadline.
+- Every model turn uses a 65,536-token output budget for both protocols. Narrant does not
+  split targets into output batches, silently retry with a smaller budget, or delegate the
+  budget to a provider default. A service that rejects the budget fails explicitly, and a
+  response that ends at the output limit produces a distinct output-limit failure rather
+  than entering malformed-output repair.
 - Cancellation drops the active HTTP future, stops further local tool dispatch, rejects
   late output, and prevents incomplete caching. Remote termination and billing are best
   effort rather than a product guarantee.
 - A connection snapshot freezes protocol, URL, model, effort, and credential generation
   for an in-flight run. A successful connection change invalidates completed Custom
   caches; the credential itself never enters a cache key.
-- Diagnostics include only Custom identity, protocol, phase, HTTP status category,
-  redacted Rig error category, and an irreversible endpoint-origin hash. They exclude
-  URL, key, request/response bodies, prompts, source, Line Explanations, and tool output.
+- Diagnostics include only Custom identity, protocol, phase, HTTP status category, and
+  redacted Rig error category. They contain no endpoint fingerprint and exclude URL, key,
+  request/response bodies, prompts, source, Line Explanations, and tool output.
+- An explicitly enabled `dev-observability` build exports OpenTelemetry traces and logs
+  over OTLP HTTP/protobuf. Rig supplies OpenTelemetry GenAI semantic-convention spans;
+  Narrant adds analysis-lifecycle spans and structured events without duplicating Rig's
+  model or tool instrumentation. The endpoint defaults to Venator at
+  `http://127.0.0.1:8362` and honors `OTEL_EXPORTER_OTLP_ENDPOINT`. An unavailable
+  dashboard does not fail or block analysis, exporter queues are bounded, terminal logs
+  remain enabled, and application shutdown waits at most two seconds to flush. Telemetry
+  never captures prompts, source, Line Explanations, tool arguments, or tool results.
 
 ## Testing Decisions
 
@@ -171,9 +185,16 @@ Coding Agent Provider in Application Settings.
   workspace-local ignore behavior, hidden paths, binary and invalid-UTF-8 files,
   count/byte truncation, oversized patterns, continuation, cancellation, and
   deterministic logical-path ordering.
-- Provider tests cover complete output, final-tool schema errors, partial repair patches,
-  three exhausted repairs, tool-loop limits, timeout, cancellation at model and tool
-  boundaries, late responses, frozen connection identity, and completed-only caching.
+- Provider tests cover complete output, the fixed 65,536-token request budget, rejected
+  budgets, distinct output-limit failures, final-tool schema errors, partial repair
+  patches, three exhausted repairs, Rig-owned tool-loop limits, timeout, cancellation at
+  model and tool boundaries, late responses, frozen connection identity, and
+  completed-only caching.
+- Development-observability tests capture Rig GenAI spans and correlated Narrant logs
+  through a local OTLP fixture, prove the Venator default and standard endpoint override,
+  and show that an unavailable receiver neither blocks nor fails analysis. They also pin
+  bounded shutdown and the absence of prompts, source, explanations, tool arguments, and
+  tool results from exported telemetry.
 - React behavior tests cover selecting Custom, the full form, Provider default semantics,
   password visibility, validation, save failure, unconfigured recovery, and absence of
   silent fallback.

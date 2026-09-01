@@ -21,6 +21,13 @@ the final Line Explanations. Tool output keeps the provider-independent validati
 three-round repair contract while avoiding incompatible native structured-output shapes
 between the two supported protocols.
 
+Rig is the only owner of the model-and-tool agent loop. Each initial generation or repair
+run gives Rig at most 16 model turns and a 65,536-token output budget; Narrant does not
+wrap that run in another turn loop, split one result into batches, silently reduce the
+budget, or repair a response that ended because it reached the output limit. Narrant
+retains only the cross-run responsibilities: the shared transcript, up to three repairs,
+the ten-minute analysis deadline, validation, cancellation, and completed-result caching.
+
 ## Consequences
 
 - The stable provider identity is `custom`; `rig` remains an implementation detail.
@@ -47,3 +54,17 @@ between the two supported protocols.
   does not promise that the selected model disables reasoning.
 - Narrant does not retry a failed request with different reasoning parameters. A service
   that rejects an explicit effort returns one redacted provider error for that request.
+- A service that rejects the 65,536-token output budget fails explicitly. A response that
+  reaches that limit produces a distinct output-limit failure instead of malformed-output
+  repair.
+- Custom diagnostics retain stable protocol, phase, status, and redacted provider-error
+  categories but no endpoint fingerprint. URL, key, bodies, prompts, source, Line
+  Explanations, and repository-tool content remain excluded.
+- An explicitly enabled `dev-observability` build installs OpenTelemetry traces and logs
+  without changing the production default. Rig supplies its OpenTelemetry GenAI semantic
+  convention spans; Narrant adds only analysis-lifecycle spans and structured events.
+  OTLP HTTP/protobuf defaults to Venator on `http://127.0.0.1:8362` and honors
+  `OTEL_EXPORTER_OTLP_ENDPOINT`. An absent collector never fails or blocks analysis;
+  exporter queues are bounded, terminal formatting remains available, and shutdown waits
+  at most two seconds to flush. Telemetry never records prompts, source, explanations,
+  tool arguments, or tool results.
