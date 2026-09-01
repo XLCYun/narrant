@@ -9,6 +9,15 @@ pub(crate) const MAX_MODEL_TURNS: usize = 16;
 /// Custom 协议适配器共享的单次模型输出上限。
 pub(crate) const MAX_OUTPUT_TOKENS: u64 = 65_536;
 
+/// 判断 Rig agent run 是否有任一模型请求因固定输出预算结束。
+pub(crate) fn reached_output_limit(calls: &[rig::agent::CompletionCall]) -> bool {
+    calls.iter().any(|call| {
+        call.finish_reason
+            .as_ref()
+            .is_some_and(|reason| matches!(reason, rig::completion::FinishReason::Length))
+    })
+}
+
 /// 单次模型请求的 provider-neutral 输入；不含任何协议 wire 类型。
 #[derive(Clone, Debug)]
 pub(crate) struct CustomRoundRequest {

@@ -8,7 +8,9 @@ use super::adapter::{
 };
 use super::connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
 use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
-use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
+use super::round::{
+    reached_output_limit, CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
+};
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
@@ -21,9 +23,6 @@ use serde_json::{json, Value};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-
-/// Anthropic 每次模型请求固定使用的最大输出 token 数。
-const ANTHROPIC_MAX_OUTPUT_TOKENS: u64 = 65_536;
 
 /// Anthropic 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
 #[derive(Clone)]
@@ -380,7 +379,7 @@ impl AnthropicAdapter {
         let history = request.history;
         let builder = client
             .agent(&self.config.model)
-            .max_tokens(ANTHROPIC_MAX_OUTPUT_TOKENS);
+            .max_tokens(MAX_OUTPUT_TOKENS);
         let builder = match self.config.effort.wire_value() {
             Some(effort) => builder.additional_params(json!({
                 "thinking": {"type": "adaptive"},
@@ -429,13 +428,9 @@ impl AnthropicAdapter {
         if cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }
-        if response.completion_calls().iter().any(|call| {
-            call.finish_reason
-                .as_ref()
-                .is_some_and(|reason| matches!(reason, rig::completion::FinishReason::Length))
-        }) {
+        if reached_output_limit(response.completion_calls()) {
             return Err(AnthropicAdapterError::OutputLimit {
-                limit: ANTHROPIC_MAX_OUTPUT_TOKENS,
+                limit: MAX_OUTPUT_TOKENS,
             });
         }
         let output =

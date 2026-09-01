@@ -4,7 +4,9 @@ use super::adapter::{
 };
 use super::connection::{CustomConnectionSnapshot, CustomProtocol};
 use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
-use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS};
+use super::round::{
+    reached_output_limit, CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
+};
 use crate::babysit::RepositoryTools;
 use crate::operation::CancellationSignal;
 use async_trait::async_trait;
@@ -327,11 +329,7 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
-        if response.completion_calls.iter().any(|call| {
-            call.finish_reason
-                .as_ref()
-                .is_some_and(|reason| matches!(reason, rig::completion::FinishReason::Length))
-        }) {
+        if reached_output_limit(&response.completion_calls) {
             // Rig 已保留每次 completion 的 finish_reason；长度截断不能伪装成 malformed output。
             return Err(CustomAdapterError::OutputLimit {
                 limit: MAX_OUTPUT_TOKENS,
