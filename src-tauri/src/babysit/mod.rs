@@ -354,6 +354,7 @@ fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), Babysit
 fn build_provider_request(
     request: &BabysitFileRequest,
     content: &FileChangeContent,
+    locale: String,
 ) -> Result<BabysitProviderRequest, BabysitError> {
     let before = content
         .before
@@ -371,7 +372,7 @@ fn build_provider_request(
     Ok(BabysitProviderRequest {
         analysis_run_id: NEXT_ANALYSIS_RUN_ID.fetch_add(1, Ordering::Relaxed),
         path: request.path.clone(),
-        locale: request.locale.clone(),
+        locale,
         workspace_path: request.workspace_path.clone(),
         before: before.to_owned(),
         after: after.to_owned(),

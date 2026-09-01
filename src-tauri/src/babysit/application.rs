@@ -21,7 +21,6 @@ pub enum BabysitGenerationPolicy {
 pub struct BabysitFileRequest {
     pub identity: ReviewIdentity,
     pub path: String,
-    pub locale: String,
     /// 当前 Review Workspace 的绝对路径，不进入前端 identity 或缓存 key。
     pub workspace_path: String,
     pub detected_language: Option<String>,
@@ -162,7 +161,7 @@ impl BabysitApplication {
         &self,
         workspace_path: &Path,
     ) -> Result<(), BabysitError> {
-        let (_, prepared) = self.prepare_selected_analysis(workspace_path).await?;
+        let (_, prepared, _) = self.prepare_selected_analysis(workspace_path).await?;
         drop(prepared);
         Ok(())
     }
@@ -308,7 +307,7 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
-        let (selected_identity, prepared) = self
+        let (selected_identity, prepared, locale) = self
             .prepare_selected_analysis(Path::new(&request.workspace_path))
             .await?;
         let selected_provider = prepared.provider;
@@ -317,7 +316,8 @@ impl BabysitApplication {
             review_id: request.identity.review_id.clone(),
             snapshot_id: request.identity.snapshot_id.clone(),
             path: request.path.clone(),
-            locale: request.locale.clone(),
+            // 语言和 provider/model/effort 一样来自本次启动快照，不能读取调用方输入。
+            locale: locale.clone(),
             detected_language: request.detected_language.clone(),
             provider_id: selected_identity.identity().to_owned(),
             process_generation: prepared.process_generation,
@@ -339,7 +339,7 @@ impl BabysitApplication {
         }
 
         notify(BabysitProgress::Generating)?;
-        let mut provider_request = build_provider_request(&request, &content)?;
+        let mut provider_request = build_provider_request(&request, &content, locale)?;
         provider_request.model = resolved.model;
         provider_request.reasoning_effort = resolved.reasoning_effort;
         let mut output = selected_provider
@@ -414,6 +414,7 @@ impl BabysitApplication {
         (
             crate::application_settings::BabysitProvider,
             PreparedBabysitAnalysis,
+            String,
         ),
         BabysitError,
     > {
@@ -422,16 +423,33 @@ impl BabysitApplication {
             .as_ref()
             .map(|settings| settings.load())
             .transpose()
-            .map_err(|_| BabysitError::Provider {
-                detail: "Application Settings 不可用。".to_owned(),
-            })?;
-        let selected_identity = selected_settings
-            .as_ref()
-            .map(|settings| settings.babysit.provider)
-            .unwrap_or(crate::application_settings::BabysitProvider::Codex);
-        let selected_preference = selected_settings
-            .as_ref()
-            .map(|settings| settings.babysit.provider_preference(selected_identity));
+            // 语言是 provider request 的权威输入；无法读取设置时必须在 provider 启动前失败。
+            .map_err(|_| BabysitError::SettingsPersistenceFailed)?;
+        let (selected_identity, selected_preference, locale) = match selected_settings.as_ref() {
+            Some(settings) => {
+                let selected_identity = settings.babysit.provider;
+                (
+                    selected_identity,
+                    Some(settings.babysit.provider_preference(selected_identity)),
+                    settings.language.as_str().to_owned(),
+                )
+            }
+            None => {
+                // 省略设置的构造入口仅供既有 provider 单元测试；生产实例不能隐式回退语言。
+                #[cfg(test)]
+                {
+                    (
+                        crate::application_settings::BabysitProvider::Codex,
+                        None,
+                        "en-US".to_owned(),
+                    )
+                }
+                #[cfg(not(test))]
+                {
+                    return Err(BabysitError::SettingsPersistenceFailed);
+                }
+            }
+        };
         let selected_bundle = self
             .registry
             .get(&selected_identity)
@@ -445,7 +463,7 @@ impl BabysitApplication {
         let prepared = selected_bundle
             .prepare_analysis(workspace_path, selected_preference.as_ref())
             .await?;
-        Ok((selected_identity, prepared))
+        Ok((selected_identity, prepared, locale))
     }
 
     /// 暴露缓存清理 seam；Review 关闭和应用退出时由后续生命周期 issue 调用。
