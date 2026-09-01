@@ -241,8 +241,8 @@ impl AnthropicMessagesAdapter {
 
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for AnthropicMessagesAdapter {
-    /// 将共享 round 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
-    async fn complete(
+    /// 将共享 agent run 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
+    async fn run_agent(
         &self,
         request: CustomRunRequest,
         cancellation: &CancellationSignal,
@@ -261,7 +261,7 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
         };
         let response = self
             .adapter
-            .complete(AnthropicAdapterRequest {
+            .run_agent(AnthropicAdapterRequest {
                 prompt: request.prompt().clone(),
                 history: request.history().to_vec(),
                 repository_tools,
@@ -356,7 +356,7 @@ impl AnthropicAdapter {
     }
 
     /// 执行一次允许仓库只读工具与 final-output tool 的 Messages 对话。
-    pub(crate) async fn complete(
+    pub(crate) async fn run_agent(
         &self,
         request: AnthropicAdapterRequest,
     ) -> Result<AnthropicAdapterResponse, AnthropicAdapterError> {

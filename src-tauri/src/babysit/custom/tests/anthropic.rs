@@ -89,7 +89,7 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
     .expect("fixture adapter should build");
 
     let result = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "Explain this changed line.",
             Vec::new(),
             repository_tools,
@@ -155,7 +155,7 @@ async fn adapter_provider_default_omits_thinking_configuration() {
     .expect("创建 adapter");
 
     adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "review",
             Vec::new(),
             repository_tools,
@@ -203,7 +203,7 @@ async fn adapter_rejects_anthropic_max_tokens_stop_reason() {
     .expect("创建 adapter");
 
     let result = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "review",
             Vec::new(),
             RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
@@ -271,7 +271,7 @@ async fn adapter_propagates_max_tokens_rejection_without_retrying() {
     .expect("创建 adapter");
 
     let result = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "review",
             Vec::new(),
             RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
@@ -327,7 +327,7 @@ async fn adapter_stops_continuous_tool_calls_at_shared_turn_limit() {
     .expect("创建 adapter");
 
     let result = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "keep inspecting the fixture",
             Vec::new(),
             RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
@@ -376,7 +376,7 @@ async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
         RepositoryTools::new(workspace.path()).unwrap(),
         (*cancellation).clone(),
     );
-    let task = tokio::spawn(async move { adapter.complete(request).await });
+    let task = tokio::spawn(async move { adapter.run_agent(request).await });
     for _ in 0..50 {
         if mock.hits_async().await == 1 {
             break;
@@ -455,7 +455,7 @@ async fn adapter_converts_anthropic_tool_use_and_tool_result_round_trip() {
     ))
     .unwrap();
     let result = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "inspect fixture",
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
@@ -514,7 +514,7 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
         ))
         .expect("fixture adapter should build");
         adapter
-            .complete(AnthropicAdapterRequest::new(
+            .run_agent(AnthropicAdapterRequest::new(
                 "prompt",
                 Vec::new(),
                 RepositoryTools::new(workspace.path()).unwrap(),
@@ -547,7 +547,7 @@ async fn adapter_rejects_early_cancellation_without_contacting_anthropic() {
     ))
     .unwrap();
     let result = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "secret prompt",
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
@@ -577,7 +577,7 @@ async fn adapter_redacts_http_and_protocol_error_content() {
     ))
     .unwrap();
     let error = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             secret,
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
@@ -611,7 +611,7 @@ async fn adapter_redacts_a_malformed_success_response() {
     ))
     .unwrap();
     let error = adapter
-        .complete(AnthropicAdapterRequest::new(
+        .run_agent(AnthropicAdapterRequest::new(
             "prompt",
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),

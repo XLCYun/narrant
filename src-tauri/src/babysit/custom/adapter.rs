@@ -300,7 +300,7 @@ impl std::error::Error for CustomAdapterError {}
 #[async_trait::async_trait]
 pub(crate) trait CustomProtocolAdapter: Send + Sync {
     /// 执行一次 provider-neutral Rig run 并返回归一化结果；内部模型/工具轮由 adapter 持有。
-    async fn complete(
+    async fn run_agent(
         &self,
         request: CustomRunRequest,
         cancellation: &CancellationSignal,

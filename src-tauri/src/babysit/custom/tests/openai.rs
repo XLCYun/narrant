@@ -29,7 +29,7 @@ struct CancelOnceAdapter {
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for CancelOnceAdapter {
     /// 首次在返回 Read 调用前触发取消，第二次证明应用没有 dispatch 或复用取消结果。
-    async fn complete(
+    async fn run_agent(
         &self,
         _request: CustomRunRequest,
         _cancellation: &crate::operation::CancellationSignal,
@@ -181,7 +181,7 @@ async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("持续工具调用应在 Rig 16-turn 上限失败");
 
@@ -253,7 +253,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
     let response = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect("fixture response");
 
@@ -311,7 +311,7 @@ async fn openai_length_finish_reason_is_an_output_limit_error() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("length 不能进入 malformed repair");
 
@@ -381,7 +381,7 @@ async fn openai_provider_default_omits_reasoning_effort() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect("Provider 默认值请求应成功");
 
@@ -447,7 +447,7 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("显式 effort 被拒绝时应直接返回错误");
 
@@ -517,7 +517,7 @@ async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("固定输出预算被拒绝时应直接失败");
 
@@ -690,7 +690,7 @@ async fn empty_key_omits_the_authorization_header() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect("无认证请求");
     assert_eq!(forbidden.hits_async().await, 0);
@@ -727,7 +727,7 @@ async fn openai_http_client_failure_keeps_redacted_transport_classification() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("fixture 4xx 应返回 transport failure");
     let CustomAdapterError::Transport(failure) = error else {
@@ -776,7 +776,7 @@ async fn openai_success_status_error_envelope_is_invalid_response() {
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("2xx error envelope 应返回 transport failure");
 

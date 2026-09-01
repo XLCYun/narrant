@@ -72,7 +72,7 @@ impl OpenAiRequestGuardClient {
         })
     }
 
-    /// 将当前 provider round 的共享取消信号绑定到每一次后续 HTTP dispatch。
+    /// 将当前 agent run 的共享取消信号绑定到每一次后续 HTTP dispatch。
     fn bind_cancellation(&self, cancellation: &CancellationSignal) {
         if let Ok(mut current) = self.cancellation.lock() {
             *current = Some(cancellation.clone());
@@ -313,7 +313,7 @@ impl OpenAiChatCompletionsAdapter {
 #[async_trait]
 impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
     /// 执行一次完整 Rig agent run，并在取消时丢弃活动 HTTP future。
-    async fn complete(
+    async fn run_agent(
         &self,
         request: CustomRunRequest,
         cancellation: &CancellationSignal,

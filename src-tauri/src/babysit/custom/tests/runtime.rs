@@ -17,7 +17,7 @@ struct FakeAdapter {
 }
 
 impl FakeAdapter {
-    /// 按预设顺序返回 round response，同时记录每轮 history。
+    /// 按预设顺序返回 agent run response，同时记录每次 run 的 history。
     fn scripted(responses: Vec<CustomRunResult>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
@@ -30,7 +30,7 @@ impl FakeAdapter {
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for FakeAdapter {
     /// 从脚本取出 response；取消开关用于模拟 late response 边界。
-    async fn complete(
+    async fn run_agent(
         &self,
         request: CustomRunRequest,
         cancellation: &crate::operation::CancellationSignal,
@@ -178,7 +178,7 @@ fn frozen_connection_debug_excludes_endpoint_fingerprint_and_secret() {
 }
 
 #[tokio::test]
-async fn runtime_delegates_tool_dispatch_to_the_adapter_without_a_second_round() {
+async fn runtime_delegates_tool_dispatch_without_a_second_narrant_loop() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     std::fs::write(workspace.path().join("example.rs"), "fn example() {}\n").expect("写入 fixture");
     let adapter = FakeAdapter::scripted(vec![tool_response("read", json!({"path": "example.rs"}))]);

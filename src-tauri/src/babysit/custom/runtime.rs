@@ -55,7 +55,7 @@ impl CustomRuntime {
             );
 
         let result = self
-            .run_round(run_id, request, generation_prompt, cancellation)
+            .execute_agent_run(run_id, request, generation_prompt, cancellation)
             .await;
         if result.is_err() {
             self.remove_session(run_id);
@@ -84,7 +84,7 @@ impl CustomRuntime {
             session.repair_attempts += 1;
         }
         let result = self
-            .run_round(
+            .execute_agent_run(
                 run_id,
                 request,
                 |request| repair_prompt(request, &failures),
@@ -110,7 +110,7 @@ impl CustomRuntime {
     }
 
     /// 执行一次 generate/repair 的 Rig agent loop，并严格在边界检查取消状态。
-    async fn run_round<F>(
+    async fn execute_agent_run<F>(
         &self,
         run_id: u64,
         request: BabysitProviderRequest,
@@ -125,7 +125,7 @@ impl CustomRuntime {
         let prompt = Message::user(prompt(&request));
         let run = CustomRunRequest::from_prompt(prompt.clone(), history.clone());
         let response = adapter
-            .complete(run, cancellation)
+            .run_agent(run, cancellation)
             .await
             .map_err(adapter_error)?;
         // Rig future 即使刚刚完成，也不能在取消之后接受 final 或继续写入 transcript。
