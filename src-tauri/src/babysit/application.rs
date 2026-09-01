@@ -1,3 +1,4 @@
+use super::observability::AnalysisLifecycle;
 use super::*;
 
 // Babysit 的请求 identity、缓存和 provider 编排集中在这一深模块中。
@@ -297,6 +298,35 @@ impl BabysitApplication {
         request: BabysitFileRequest,
         content: FileChangeContent,
         cancellation: &CancellationSignal,
+        notify: F,
+    ) -> Result<BabysitFileExplanations, BabysitError>
+    where
+        F: FnMut(BabysitProgress) -> Result<(), BabysitError>,
+    {
+        let analysis_run_id = next_analysis_run_id();
+        let lifecycle = AnalysisLifecycle::new(analysis_run_id);
+        let result = lifecycle
+            .in_scope(self.explain_file_inner(
+                request,
+                content,
+                cancellation,
+                analysis_run_id,
+                &lifecycle,
+                notify,
+            ))
+            .await;
+        lifecycle.finish(&result);
+        result
+    }
+
+    /// 执行一次分析的业务编排；生命周期观测由外层 guard 统一收口。
+    async fn explain_file_inner<F>(
+        &self,
+        request: BabysitFileRequest,
+        content: FileChangeContent,
+        cancellation: &CancellationSignal,
+        analysis_run_id: u64,
+        lifecycle: &AnalysisLifecycle,
         mut notify: F,
     ) -> Result<BabysitFileExplanations, BabysitError>
     where
@@ -311,6 +341,7 @@ impl BabysitApplication {
         let (selected_identity, prepared) = self
             .prepare_selected_analysis(Path::new(&request.workspace_path))
             .await?;
+        lifecycle.bind(selected_identity.identity(), prepared.protocol);
         let selected_provider = prepared.provider;
         let resolved = prepared.resolved;
         let key = CacheKey {
@@ -333,13 +364,15 @@ impl BabysitApplication {
                 .get(&key)
                 .cloned()
             {
+                lifecycle.cache_hit();
                 notify(BabysitProgress::Completed)?;
                 return Ok(result);
             }
         }
 
+        lifecycle.generation();
         notify(BabysitProgress::Generating)?;
-        let mut provider_request = build_provider_request(&request, &content)?;
+        let mut provider_request = build_provider_request(&request, &content, analysis_run_id)?;
         provider_request.model = resolved.model;
         provider_request.reasoning_effort = resolved.reasoning_effort;
         let mut output = selected_provider
@@ -363,6 +396,7 @@ impl BabysitApplication {
                 selected_provider.abandon(&provider_request).await;
                 return Err(error);
             }
+            lifecycle.repair(attempt);
             if let Err(error) = notify(BabysitProgress::Repairing { attempt }) {
                 selected_provider.abandon(&provider_request).await;
                 return Err(error);
