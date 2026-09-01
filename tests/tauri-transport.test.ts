@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
+import type { BabysitProgress } from "@/babysit/types";
 import { TAURI_COMMAND_NAMES } from "@/infrastructure/tauri/command-contract";
 import { createTauriTransport } from "@/infrastructure/tauri/transport";
+import type { Channel } from "@tauri-apps/api/core";
 
 describe("Typed Tauri transport", () => {
   it("覆盖 Rust invoke handler 注册的全部 command", () => {
@@ -29,6 +31,30 @@ describe("Typed Tauri transport", () => {
     });
 
     expect(rawInvoke).toHaveBeenCalledWith("load_repository_navigation", {});
+  });
+
+  it("explain command transport 不会把 locale 注入 invoke payload", async () => {
+    const rawInvoke = vi.fn().mockResolvedValue({ before: {}, after: {} });
+    const transport = createTauriTransport(rawInvoke);
+
+    await transport.invokeCancellable("explain_review_file_change", {
+      reviewId: "review-1",
+      snapshotId: "snapshot-1",
+      path: "src/example.ts",
+      detectedLanguage: "typescript",
+      generationPolicy: "reuse_cached",
+      progress: {} as Channel<BabysitProgress>,
+    }, new AbortController().signal);
+
+    const payload = rawInvoke.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      reviewId: "review-1",
+      snapshotId: "snapshot-1",
+      path: "src/example.ts",
+      detectedLanguage: "typescript",
+      generationPolicy: "reuse_cached",
+    });
+    expect(payload).not.toHaveProperty("locale");
   });
 
   it("为可取消 command 分配 operation identity 并在 abort 时通知后端", async () => {
