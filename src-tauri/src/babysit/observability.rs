@@ -193,6 +193,7 @@ fn error_category(error: &BabysitError) -> &'static str {
         BabysitError::UnsupportedFile { .. } => "unsupported_file",
         BabysitError::InvalidProviderOutput { .. } => "invalid_provider_output",
         BabysitError::RepairExhausted { .. } => "repair_exhausted",
+        BabysitError::OutputLimit { .. } => "output_limit",
         BabysitError::Cancelled => "cancelled",
         BabysitError::Provider { .. } => "provider",
         BabysitError::ProviderDiagnostic { .. } => "provider_diagnostic",

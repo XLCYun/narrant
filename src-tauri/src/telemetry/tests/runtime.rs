@@ -120,6 +120,11 @@ fn terminal_fallback_rejects_sensitive_warn_and_error_events() {
     use tracing::{Event, Subscriber};
     use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
+    let _subscriber_guard = TELEMETRY_SUBSCRIBER_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("telemetry subscriber test lock");
+
     /// 只统计经过 fallback filter 的 event，不保留任何字段内容。
     struct CountEvents(Arc<AtomicUsize>);
 

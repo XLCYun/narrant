@@ -131,6 +131,10 @@ fn lifecycle_failure_and_cancellation_are_redacted_and_classified() {
         let cancelled = AnalysisLifecycle::new(8);
         cancelled.bind("custom", Some("anthropic_messages"));
         cancelled.finish(&Err::<(), _>(BabysitError::Cancelled));
+
+        let output_limit = AnalysisLifecycle::new(9);
+        output_limit.bind("custom", Some("anthropic_messages"));
+        output_limit.finish(&Err::<(), _>(BabysitError::OutputLimit { limit: 65_536 }));
     });
 
     assert_eq!(field(&events[0], "phase"), Some("failed"));
@@ -138,6 +142,9 @@ fn lifecycle_failure_and_cancellation_are_redacted_and_classified() {
     assert_eq!(field(&events[0], "analysis_run_id"), Some("7"));
     assert_eq!(field(&events[1], "phase"), Some("cancelled"));
     assert_eq!(field(&events[1], "analysis_run_id"), Some("8"));
+    assert_eq!(field(&events[2], "phase"), Some("failed"));
+    assert_eq!(field(&events[2], "error_category"), Some("output_limit"));
+    assert_eq!(field(&events[2], "analysis_run_id"), Some("9"));
     assert!(events.iter().all(|event| {
         event.fields.iter().all(|(_, value)| {
             !value.contains("secret.example")
