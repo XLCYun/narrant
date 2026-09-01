@@ -230,7 +230,6 @@ describe("Tauri Babysit application adapter", () => {
           reviewId: "review-1",
           snapshotId: "snapshot-1",
           path: "Cargo.lock",
-          locale: "zh-CN",
         },
         generationPolicy: "reuse_cached",
       },
@@ -243,11 +242,11 @@ describe("Tauri Babysit application adapter", () => {
         reviewId: "review-1",
         snapshotId: "snapshot-1",
         path: "Cargo.lock",
-        locale: "zh-CN",
         generationPolicy: "reuse_cached",
       }),
       expect.any(AbortSignal),
     );
+    expect(invokeCancellable.mock.calls[0]?.[1]).not.toHaveProperty("locale");
   });
 
   it("把 Snapshot/Review 生命周期清理映射到 typed cache commands", async () => {

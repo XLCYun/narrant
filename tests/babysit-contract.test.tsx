@@ -262,7 +262,7 @@ describe("Babysit contract spine", () => {
     expect(result.current.reader).toBeNull();
   });
 
-  it("uses the current UI locale in the typed analysis request", async () => {
+  it("does not include the UI locale in the typed analysis request", async () => {
     await i18n.changeLanguage("en");
     const provider = createAdapter();
     const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
@@ -273,7 +273,58 @@ describe("Babysit contract spine", () => {
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
     act(() => result.current.reader?.babysit?.explain());
 
-    expect(provider.requested()?.request.locale).toBe("en");
+    expect(provider.requested()?.request).not.toHaveProperty("locale");
+  });
+
+  it("切换界面语言时保留已完成结果且不自动调用 explain", async () => {
+    const provider = createAdapter();
+    const explainFile = vi.spyOn(provider.babysitAdapter, "explainFile");
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    act(() => result.current.reader?.babysit?.explain());
+    await act(async () => {
+      provider.resolve({ before: { "1": "旧解释" }, after: { "1": "新解释" } });
+    });
+    await waitFor(() => expect(result.current.reader?.babysit?.state.kind).toBe("completed"));
+    const completed = result.current.reader?.babysit?.state;
+
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+
+    expect(result.current.reader?.babysit?.state).toBe(completed);
+    expect(explainFile).toHaveBeenCalledOnce();
+  });
+
+  it("生成中切换界面语言时不取消在途请求也不触发新 explain", async () => {
+    const provider = createAdapter();
+    const explainFile = vi.spyOn(provider.babysitAdapter, "explainFile");
+    const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
+
+    await act(async () => {
+      await result.current.open({ kind: "saved-review", reviewId: "review-1" });
+    });
+    await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
+    act(() => result.current.reader?.babysit?.explain());
+    const request = provider.requested();
+    expect(request).toBeDefined();
+
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+
+    expect(request?.signal.aborted).toBe(false);
+    expect(result.current.reader?.babysit?.state.kind).toBe("generating");
+    expect(explainFile).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      provider.resolve({ before: { "1": "旧解释" }, after: { "1": "新解释" } });
+    });
+    await waitFor(() => expect(result.current.reader?.babysit?.state.kind).toBe("completed"));
   });
 
   it("extensionless Python shebang 对 eligibility 与 explain 使用同一 detectedLanguage", async () => {

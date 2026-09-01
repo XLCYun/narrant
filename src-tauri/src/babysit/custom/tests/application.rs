@@ -143,7 +143,6 @@ fn fixture_input(workspace: &Path) -> (BabysitFileRequest, FileChangeContent) {
                 snapshot_id: "snapshot".to_owned(),
             },
             path: path.clone(),
-            locale: "zh-CN".to_owned(),
             workspace_path: workspace.to_string_lossy().into_owned(),
             detected_language: Some("rust".to_owned()),
             generation_policy: BabysitGenerationPolicy::ReuseCached,

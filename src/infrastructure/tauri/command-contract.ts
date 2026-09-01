@@ -15,7 +15,7 @@ import type {
   RepositoryOverview,
   RepositoryReviewList,
 } from "@/repository/repository-application";
-import type { ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationLanguage, ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -33,6 +33,7 @@ type EmptyArgs = Record<string, never>;
 export type TauriCommandContract = {
   load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
   update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
+  update_application_language: { args: { language: ApplicationLanguage }; result: ApplicationSettings };
   list_babysit_models: { args: { provider: BabysitProvider }; result: BabysitModelCatalog; error: { code: string; detail: string } };
   update_application_babysit_provider: { args: { provider: BabysitProvider }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_preferences: { args: { provider: BabysitProvider; preference: BabysitProviderPreference; catalogRevision: string | null }; result: ApplicationSettings; error: { code: string; detail: string } };
@@ -50,7 +51,7 @@ export type TauriCommandContract = {
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot; error: { code: "update-confirmation-stale" | "operation-failed"; detail: string } };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
-  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; locale: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
+  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
   clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
@@ -94,6 +95,7 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 export const TAURI_COMMAND_NAMES = [
   "load_application_settings",
   "update_application_theme",
+  "update_application_language",
   "list_babysit_models",
   "update_application_babysit_provider",
   "update_application_babysit_preferences",

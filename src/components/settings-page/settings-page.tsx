@@ -6,7 +6,7 @@ import { Icon } from "@/components/ui/icon";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { ApplicationSettingsApplication } from "@/settings/application-settings";
 import type { SettingsSection } from "@/settings/settings-section";
-import { useApplicationTheme, type ApplicationThemeBinding } from "@/settings/use-application-theme";
+import { useApplicationSettings, type ApplicationSettingsBinding } from "@/settings/use-application-settings";
 
 import { AppearanceSettings } from "./appearance-settings";
 import { BabysitProviderSettings } from "./babysit/babysit-provider-settings";
@@ -20,7 +20,7 @@ const sections: Array<{ id: SettingsSection; label: string }> = [
 
 /** Application Settings 页面稳定 interface。 */
 export type SettingsPageProps = {
-  theme: ApplicationThemeBinding;
+  settings: ApplicationSettingsBinding;
   application: ApplicationSettingsApplication;
   githubIdentity?: GitHubIdentityLifecycleBinding;
   initialSection?: SettingsSection;
@@ -32,7 +32,7 @@ export type SettingsPageProps = {
 
 /** 独立 Application Settings 目的地，负责页面布局和分区编排。 */
 export function SettingsPage({
-  theme,
+  settings,
   application,
   githubIdentity,
   initialSection = "appearance",
@@ -52,7 +52,7 @@ export function SettingsPage({
         {sections.map((item) => <Button key={item.id} role="tab" aria-selected={section === item.id} variant={section === item.id ? "secondary" : "ghost"} className="h-11 shrink-0 justify-start text-base" onClick={() => setSection(item.id)}>{item.label}</Button>)}
       </nav>
       <div className="min-w-0 rounded-2xl border bg-card p-5 text-card-foreground sm:p-7 lg:min-h-[40rem] lg:p-9">
-        {section === "appearance" && <AppearanceSettings theme={theme} />}
+        {section === "appearance" && <AppearanceSettings settings={settings} />}
         {section === "github" && (githubIdentity
           ? <GitHubSettings identity={githubIdentity} initiallyConfirming={initialGitHubSignOutConfirmation} />
           : <section><div className="flex items-center gap-3"><Icon icon={GithubIcon} className="size-5" /><h2 className="font-heading text-xl font-semibold">GitHub</h2></div><p className="mt-4 text-sm text-muted-foreground">GitHub Identity 设置将在后续版本中提供。</p></section>)}
@@ -63,10 +63,10 @@ export function SettingsPage({
 }
 
 /** Preview 与测试从公共 Application Settings port 启动完整设置目的地。 */
-export type ApplicationSettingsDestinationProps = Omit<SettingsPageProps, "theme">;
+export type ApplicationSettingsDestinationProps = Omit<SettingsPageProps, "settings">;
 
-/** 从 Application Settings port 构造主题 binding，再呈现设置页。 */
+/** 从 Application Settings port 构造应用设置 binding，再呈现设置页。 */
 export function ApplicationSettingsDestination(props: ApplicationSettingsDestinationProps) {
-  const theme = useApplicationTheme(props.application);
-  return <SettingsPage theme={theme} {...props} />;
+  const settings = useApplicationSettings(props.application);
+  return <SettingsPage settings={settings} {...props} />;
 }

@@ -1,4 +1,3 @@
-import type { SupportedLocale } from "@/lib/i18n";
 import type { ReviewIdentity } from "@/review/types";
 
 /** 与 Rust BabysitProgress 对齐的 provider-independent 进度事件。 */
@@ -160,10 +159,9 @@ export type BabysitFileExplanations = {
 /** 控制同 identity 的分析复用现有结果，或明确请求一套新解释。 */
 export type BabysitGenerationPolicy = "reuse_cached" | "regenerate";
 
-/** 绑定精确 Review Snapshot、File Change path 与界面语言的请求 identity。 */
+/** 绑定精确 Review Snapshot 与 File Change path 的请求 identity。 */
 export type BabysitFileRequest = ReviewIdentity & {
   path: string;
-  locale: SupportedLocale;
   detectedLanguage?: string;
 };
 
@@ -210,7 +208,7 @@ export function isBabysitRunning(
 export interface BabysitApplicationAdapter {
   /** 由后端读取固定 Snapshot 并给出唯一 eligibility 结论。 */
   checkEligibility(
-    request: Omit<BabysitFileRequest, "locale">,
+    request: Pick<BabysitFileRequest, "reviewId" | "snapshotId" | "path">,
     detectedLanguage: string | undefined,
     signal: AbortSignal,
   ): Promise<BabysitEligibility>;

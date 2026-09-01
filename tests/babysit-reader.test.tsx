@@ -120,7 +120,7 @@ describe("Babysit Review Reader presentation", () => {
   it("默认只显示改变行，并可切换到全部非空行而不重新请求", () => {
     const review = makeReview({
       kind: "completed",
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       explanations: {
         before: { "1": "声明旧值。", "2": "返回旧值。" },
         after: { "1": "声明新值。", "2": "返回新值。" },
@@ -151,7 +151,7 @@ describe("Babysit Review Reader presentation", () => {
   it("在关闭宝宝模式右侧提供独立的重新生成动作", () => {
     const review = makeReview({
       kind: "completed",
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       explanations: { before: { "2": "旧解释" }, after: { "2": "旧解释" } },
     });
     render(<ReviewReader review={review} appearance={appearance} />);
@@ -175,7 +175,7 @@ describe("Babysit Review Reader presentation", () => {
     const added = { ...content, status: "added" as const, before: null, beforeSize: null };
     const review = makeReview({
       kind: "completed",
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: added.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: added.path },
       explanations: { before: {}, after: { "1": "声明新值。", "2": "返回新值。" } },
     });
     review.fileChange = { kind: "ready", path: added.path, content: added };
@@ -188,7 +188,7 @@ describe("Babysit Review Reader presentation", () => {
     expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
   });
 
-  it("宝宝模式保持打开时，locale 变化会重新 arm 当前文件分析", async () => {
+  it("宝宝模式保持打开时，locale 变化不会重新调用当前文件分析", async () => {
     const review = makeReview({ kind: "idle" });
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
@@ -198,7 +198,7 @@ describe("Babysit Review Reader presentation", () => {
     await act(async () => {
       await i18n.changeLanguage("en");
     });
-    expect(review.babysit?.explain).toHaveBeenCalledTimes(2);
+    expect(review.babysit?.explain).toHaveBeenCalledTimes(1);
   });
 
   it("首次打开在点击事件内立即启动当前文件分析", () => {
@@ -218,7 +218,7 @@ describe("Babysit Review Reader presentation", () => {
     const runningReview = makeReview({
       kind: "repairing",
       attempt: 2,
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
     });
     render(<ReviewReader review={runningReview} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
@@ -235,7 +235,7 @@ describe("Babysit Review Reader presentation", () => {
     const failedReview = makeReview({
       kind: "failed",
       retryable: true,
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       error: { code: "repair_exhausted", detail: "/Users/alice/repo/src/example.ts source=const secret='token'; stderr=raw provider output" },
     });
     render(<ReviewReader review={failedReview} appearance={appearance} />);
@@ -261,7 +261,7 @@ describe("Babysit Review Reader presentation", () => {
     const failedReview = makeReview({
       kind: "failed",
       retryable: true,
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       error: {
         code: "provider",
         detail: "不得进入剪贴板的 provider 原文",
@@ -313,7 +313,7 @@ describe("Babysit Review Reader presentation", () => {
     const review = makeReview({
       kind: "failed",
       retryable: true,
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       error: {
         code: "provider_not_found",
         detail: "/Users/alice/.local/bin/codex",
@@ -334,7 +334,7 @@ describe("Babysit Review Reader presentation", () => {
     const review = makeReview({
       kind: "failed",
       retryable: true,
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       error: {
         code: "provider_not_found",
         detail: "C:\\Users\\alice\\.local\\bin\\claude.exe",
@@ -359,7 +359,7 @@ describe("Babysit Review Reader presentation", () => {
     const review = makeReview({
       kind: "failed",
       retryable: true,
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       error: {
         code: "provider_not_found",
         detail: "Custom provider is not configured",
@@ -385,7 +385,7 @@ describe("Babysit Review Reader presentation", () => {
     const longExplanation = "这是一段足够长的解释，用来说明当前代码如何读取配置、校验输入并把结果交给后续流程。".repeat(8).slice(0, 240);
     const review = makeReview({
       kind: "completed",
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       explanations: { before: { "2": longExplanation }, after: { "2": longExplanation } },
     });
     render(<ReviewReader review={review} appearance={appearance} />);
@@ -404,7 +404,7 @@ describe("Babysit Review Reader presentation", () => {
   it("同一 Review 切换文件时保留 changed/all 过滤选择", () => {
     const state: BabysitBinding["state"] = {
       kind: "completed",
-      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path, locale: "zh-CN" },
+      request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
       explanations: { before: { "2": "旧" }, after: { "2": "新" } },
     };
     const review = makeReview(state);

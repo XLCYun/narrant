@@ -362,6 +362,7 @@ fn build_provider_request(
     request: &BabysitFileRequest,
     content: &FileChangeContent,
     analysis_run_id: u64,
+    locale: String,
 ) -> Result<BabysitProviderRequest, BabysitError> {
     let before = content
         .before
@@ -379,7 +380,7 @@ fn build_provider_request(
     Ok(BabysitProviderRequest {
         analysis_run_id,
         path: request.path.clone(),
-        locale: request.locale.clone(),
+        locale,
         workspace_path: request.workspace_path.clone(),
         before: before.to_owned(),
         after: after.to_owned(),
