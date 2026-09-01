@@ -253,6 +253,9 @@ impl OpenAiChatCompletionsAdapter {
             None => builder,
         };
         Ok(builder
+            // Rig 的 content telemetry 会把 prompt、tool args/results 写入 span；
+            // Custom provider 的安全契约固定关闭该选项，只保留结构与 token usage。
+            .record_content_telemetry(false)
             .default_max_turns(MAX_MODEL_TURNS)
             .tool(rig_tools.read)
             .tool(rig_tools.glob)

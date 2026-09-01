@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 /// Narrant 自己产生的 Babysit lifecycle telemetry target；模型与工具由 Rig 单独负责。
 #[cfg(feature = "dev-observability")]
-const TELEMETRY_TARGET: &str = "narrant::babysit";
+use crate::telemetry::LIFECYCLE_TARGET as TELEMETRY_TARGET;
 
 /// 尚未完成 provider 解析时使用的安全上下文占位值。
 #[cfg(feature = "dev-observability")]
@@ -36,16 +36,17 @@ impl AnalysisLifecycle {
     pub(super) fn new(analysis_run_id: u64) -> Self {
         #[cfg(feature = "dev-observability")]
         {
+            let span = tracing::info_span!(
+                target: TELEMETRY_TARGET,
+                "babysit.analysis",
+                analysis_run_id,
+                provider = UNKNOWN_CONTEXT,
+                protocol = UNKNOWN_CONTEXT,
+                phase = "started",
+            );
             return Self {
                 analysis_run_id,
-                span: tracing::info_span!(
-                    target: TELEMETRY_TARGET,
-                    "babysit.analysis",
-                    analysis_run_id,
-                    provider = UNKNOWN_CONTEXT,
-                    protocol = UNKNOWN_CONTEXT,
-                    phase = "started",
-                ),
+                span,
                 context: Mutex::new(LifecycleContext {
                     provider: UNKNOWN_CONTEXT,
                     protocol: UNKNOWN_CONTEXT,
@@ -135,6 +136,10 @@ impl AnalysisLifecycle {
                 .map(|context| (context.provider, context.protocol))
                 .unwrap_or((UNKNOWN_CONTEXT, UNKNOWN_CONTEXT));
             self.span.record("phase", phase);
+
+            // tracing 宏的四个静态字段形状必须分别保留，避免把不存在的
+            // `attempt`/`error_category` 序列化成空值；事件本身不附带 message，
+            // 由 telemetry 层的 target+字段 allowlist 再做一次边界校验。
             match (attempt, error_category) {
                 (Some(attempt), Some(error_category)) => tracing::info!(
                     target: TELEMETRY_TARGET,
@@ -144,8 +149,7 @@ impl AnalysisLifecycle {
                     protocol,
                     phase,
                     attempt,
-                    error_category,
-                    "babysit analysis lifecycle"
+                    error_category
                 ),
                 (Some(attempt), None) => tracing::info!(
                     target: TELEMETRY_TARGET,
@@ -154,8 +158,7 @@ impl AnalysisLifecycle {
                     provider,
                     protocol,
                     phase,
-                    attempt,
-                    "babysit analysis lifecycle"
+                    attempt
                 ),
                 (None, Some(error_category)) => tracing::info!(
                     target: TELEMETRY_TARGET,
@@ -164,8 +167,7 @@ impl AnalysisLifecycle {
                     provider,
                     protocol,
                     phase,
-                    error_category,
-                    "babysit analysis lifecycle"
+                    error_category
                 ),
                 (None, None) => tracing::info!(
                     target: TELEMETRY_TARGET,
@@ -173,8 +175,7 @@ impl AnalysisLifecycle {
                     analysis_run_id = self.analysis_run_id,
                     provider,
                     protocol,
-                    phase,
-                    "babysit analysis lifecycle"
+                    phase
                 ),
             }
         }
