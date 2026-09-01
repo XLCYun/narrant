@@ -255,12 +255,14 @@ fn generation_prompt(request: &BabysitProviderRequest) -> String {
 Before ({path}):\n{before}\n\
 After ({path}):\n{after}\n\
 Requested targets:\n{targets}\n\
+Write every line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN.\n\
 Use read, glob, and grep only inside the Review Workspace when more context is needed.\n\
 When finished, call final_result with both before and after maps.",
         path = request.path,
         before = crate::babysit::numbered_content(&request.before),
         after = crate::babysit::numbered_content(&request.after),
         targets = format_targets(&request.targets),
+        locale = request.locale,
     )
 }
 
@@ -271,10 +273,12 @@ fn repair_prompt(request: &BabysitProviderRequest, failures: &[ValidationFailure
 File ({path}) before:\n{before}\n\
 File ({path}) after:\n{after}\n\
 Only these validation failures require new explanations:\n{failures}\n\
+Write every repaired line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN.\n\
 Return the complete result by calling final_result; preserve valid prior explanations.",
         path = request.path,
         before = crate::babysit::numbered_content(&request.before),
         after = crate::babysit::numbered_content(&request.after),
+        locale = request.locale,
         failures = failures
             .iter()
             .map(ToString::to_string)

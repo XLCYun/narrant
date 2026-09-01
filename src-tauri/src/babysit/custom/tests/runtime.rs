@@ -3,7 +3,8 @@ use crate::babysit::{
     BabysitError, BabysitProviderRequest, FileSide, LineTarget, ValidationFailure,
 };
 use crate::operation::TestCancellation;
-use rig::completion::ResponseIdentity;
+use rig::completion::{Message, ResponseIdentity};
+use rig::message::UserContent;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -93,6 +94,17 @@ fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult 
     }
 }
 
+/// 从测试捕获的 provider-neutral user message 中读取唯一文本块。
+fn user_message_text(message: &Message) -> &str {
+    let Message::User { content } = message else {
+        panic!("预期 user message");
+    };
+    let [UserContent::Text(text)] = content.as_slice() else {
+        panic!("预期唯一文本块");
+    };
+    &text.text
+}
+
 /// 冻结连接的缓存 identity 只包含非 secret 字段与 credential generation。
 #[test]
 fn frozen_connection_identity_excludes_key_but_includes_generation_and_connection_fields() {
@@ -165,6 +177,7 @@ async fn runtime_replays_repository_tool_results_in_one_memory_session() {
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].history().len(), 3);
+    assert!(user_message_text(requests[0].prompt()).contains("zh-CN"));
 }
 
 #[tokio::test]
@@ -261,6 +274,7 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].history().len(), 2);
+    assert!(user_message_text(requests[1].prompt()).contains("zh-CN"));
 }
 
 #[tokio::test]
