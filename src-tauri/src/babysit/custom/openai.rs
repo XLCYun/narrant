@@ -2,9 +2,11 @@ use super::adapter::{
     CustomAdapterError, CustomProtocolAdapter, CustomRequestPhase, CustomStatusCategory,
     CustomTransportFailure,
 };
+use super::agent_run::{
+    reached_output_limit, CustomRunRequest, CustomRunResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
+};
 use super::connection::{CustomConnectionSnapshot, CustomProtocol};
 use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
-use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
 use crate::babysit::RepositoryTools;
 use crate::operation::CancellationSignal;
 use async_trait::async_trait;
@@ -70,7 +72,7 @@ impl OpenAiRequestGuardClient {
         })
     }
 
-    /// 将当前 provider round 的共享取消信号绑定到每一次后续 HTTP dispatch。
+    /// 将当前 agent run 的共享取消信号绑定到每一次后续 HTTP dispatch。
     fn bind_cancellation(&self, cancellation: &CancellationSignal) {
         if let Ok(mut current) = self.cancellation.lock() {
             *current = Some(cancellation.clone());
@@ -184,7 +186,6 @@ impl OpenAiChatCompletionsAdapter {
                 connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::Network,
-                connection.base_url(),
             ))
         })?;
         let client = CompletionsClient::builder()
@@ -197,7 +198,6 @@ impl OpenAiChatCompletionsAdapter {
                     connection.protocol(),
                     CustomRequestPhase::Setup,
                     CustomStatusCategory::InvalidEndpoint,
-                    connection.base_url(),
                 ))
             })?;
         Ok(Self {
@@ -220,7 +220,7 @@ impl OpenAiChatCompletionsAdapter {
         self
     }
 
-    /// 构造使用 Rig OutputMode::Tool 的 agent，供共享 runtime 保持会话与工具循环。
+    /// 构造使用 Rig OutputMode::Tool 的 agent，由 Rig 独占会话内模型与工具循环。
     fn agent_for_workspace(
         &self,
         workspace: impl AsRef<Path>,
@@ -232,7 +232,6 @@ impl OpenAiChatCompletionsAdapter {
                 self.connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::InvalidEndpoint,
-                self.connection.base_url(),
             ))
         })?;
         #[cfg(test)]
@@ -254,6 +253,7 @@ impl OpenAiChatCompletionsAdapter {
         };
         Ok(builder
             .default_max_turns(MAX_MODEL_TURNS)
+            .max_tokens(MAX_OUTPUT_TOKENS)
             .tool(rig_tools.read)
             .tool(rig_tools.glob)
             .tool(rig_tools.grep)
@@ -265,7 +265,7 @@ impl OpenAiChatCompletionsAdapter {
     /// 运行一次完整 Rig agent loop，并把取消与 provider 错误保留为可判定的内部结果。
     async fn run_prompt_attempt(
         &self,
-        request: &CustomRoundRequest,
+        request: &CustomRunRequest,
         cancellation: &CancellationSignal,
     ) -> Result<rig::agent::PromptResponse, OpenAiPromptAttemptError> {
         let agent = self
@@ -303,25 +303,21 @@ impl OpenAiChatCompletionsAdapter {
         match error {
             OpenAiPromptAttemptError::Cancelled => CustomAdapterError::Cancelled,
             OpenAiPromptAttemptError::Adapter(error) => error,
-            OpenAiPromptAttemptError::Prompt(error) => {
-                CustomAdapterError::Transport(CustomTransportFailure::from_prompt_error(
-                    self.connection.protocol(),
-                    self.connection.base_url(),
-                    error,
-                ))
-            }
+            OpenAiPromptAttemptError::Prompt(error) => CustomAdapterError::Transport(
+                CustomTransportFailure::from_prompt_error(self.connection.protocol(), error),
+            ),
         }
     }
 }
 
 #[async_trait]
 impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
-    /// 发送一轮 Chat Completions 请求，并在取消时丢弃活动 HTTP future。
-    async fn complete(
+    /// 执行一次完整 Rig agent run，并在取消时丢弃活动 HTTP future。
+    async fn run_agent(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
@@ -333,8 +329,14 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
+        if reached_output_limit(&response.completion_calls) {
+            // Rig 已保留每次 completion 的 finish_reason；长度截断不能伪装成 malformed output。
+            return Err(CustomAdapterError::OutputLimit {
+                limit: MAX_OUTPUT_TOKENS,
+            });
+        }
         let arguments = serde_json::from_str(&response.output).unwrap_or(serde_json::Value::Null);
-        Ok(CustomRoundResult {
+        Ok(CustomRunResult {
             choice: vec![AssistantContent::tool_call(
                 "final-result",
                 FINAL_OUTPUT_TOOL_NAME,

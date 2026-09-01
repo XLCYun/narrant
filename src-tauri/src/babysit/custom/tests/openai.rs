@@ -4,8 +4,8 @@ use super::super::adapter::{
 use super::super::*;
 use crate::babysit::{
     BabysitAgentProvider, BabysitError, BabysitFileRequest, BabysitGenerationPolicy,
-    BabysitProviderCapabilities, BabysitProviderModelCatalog, BabysitProviderSetupFailure,
-    BabysitResolvedModel, PreparedBabysitAnalysis, RepositoryTools, ReviewIdentity,
+    BabysitProgress, BabysitProviderCapabilities, BabysitProviderModelCatalog,
+    BabysitProviderSetupFailure, BabysitResolvedModel, PreparedBabysitAnalysis, ReviewIdentity,
 };
 use crate::operation::TestCancellation;
 use httpmock::prelude::*;
@@ -29,16 +29,16 @@ struct CancelOnceAdapter {
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for CancelOnceAdapter {
     /// 首次在返回 Read 调用前触发取消，第二次证明应用没有 dispatch 或复用取消结果。
-    async fn complete(
+    async fn run_agent(
         &self,
-        _request: CustomRoundRequest,
+        _request: CustomRunRequest,
         _cancellation: &crate::operation::CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         let first_call = self.calls.fetch_add(1, Ordering::AcqRel) == 0;
         if first_call {
             self.first_cancellation.cancel();
         }
-        Ok(CustomRoundResult {
+        Ok(CustomRunResult {
             choice: vec![rig::completion::AssistantContent::tool_call(
                 "final",
                 if first_call {
@@ -108,52 +108,36 @@ impl BabysitProviderCapabilities for FrozenCustomCapability {
     }
 }
 
-fn fixture_tools() -> Vec<rig::completion::ToolDefinition> {
-    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
-    let tools = RepositoryTools::new(workspace.path()).expect("创建 repository tools");
-    custom_tool_definitions(&tools)
-}
-
-#[test]
-fn final_tool_is_schema_bearing_and_tool_set_is_bounded() {
-    let tools = fixture_tools();
-    assert_eq!(
-        tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>(),
-        ["read", "glob", "grep", FINAL_OUTPUT_TOOL_NAME]
-    );
-    let final_tool = tools
-        .iter()
-        .find(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME)
-        .expect("final tool");
-    assert_eq!(final_tool.parameters, line_explanation_schema().to_value());
-    assert_eq!(final_tool.parameters["additionalProperties"], json!(false));
-}
-
-#[test]
-fn round_request_rejects_turns_after_the_shared_budget() {
-    let error = CustomRoundRequest::new(
-        Message::user("review"),
-        Vec::new(),
-        MAX_MODEL_TURNS + 1,
-        fixture_tools(),
-    )
-    .expect_err("超过预算的请求应在本地拒绝");
-    assert_eq!(
-        error,
-        CustomAdapterError::TurnLimitExceeded {
-            limit: MAX_MODEL_TURNS
-        }
-    );
+/// 构造只返回 Read 调用的 deterministic OpenAI response，让 Rig 自己推进工具循环。
+fn repeated_read_response() -> serde_json::Value {
+    json!({
+        "id": "fixture-read-turn",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "fixture-model",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call-read",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": "{\"path\":\"fixture.rs\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    })
 }
 
 #[test]
 fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     let failure = CustomTransportFailure::from_prompt_error(
         CustomProtocol::OpenaiChatCompletions,
-        "https://model.example/v1",
         rig::completion::PromptError::MaxTurnsError {
             max_turns: MAX_MODEL_TURNS,
             chat_history: Box::default(),
@@ -164,12 +148,55 @@ fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     assert_eq!(failure.phase(), CustomRequestPhase::Model);
     assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
     assert_eq!(failure.reason(), CustomFailureReason::ModelTurnLimit);
+    let debug = format!("{failure:?}");
+    assert!(!debug.contains("hash"));
+    assert!(!debug.contains("endpoint"));
+    assert!(!debug.contains("https://model.example/v1"));
+    assert!(!debug.contains("origin"));
+}
+
+/// 连续工具调用必须由 Rig 消耗 16 次模型预算，runtime 不得再发第 17 次请求。
+#[tokio::test]
+async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
+    let server = MockServer::start_async().await;
+    let model = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(repeated_read_response());
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    std::fs::write(workspace.path().join("fixture.rs"), "fn fixture() {}\n").expect("写入 fixture");
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-rig-turn-limit",
+    )
+    .expect("冻结连接");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+
+    let error = adapter
+        .run_agent(request, &TestCancellation::default())
+        .await
+        .expect_err("持续工具调用应在 Rig 16-turn 上限失败");
+
+    let CustomAdapterError::Transport(failure) = error else {
+        panic!("Rig 16-turn exhaustion 应投影为脱敏 transport failure");
+    };
+    assert_eq!(failure.phase(), CustomRequestPhase::Model);
+    assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
+    assert_eq!(failure.reason(), CustomFailureReason::ModelTurnLimit);
+    assert_eq!(model.hits_async().await, MAX_MODEL_TURNS);
 }
 
 #[tokio::test]
 async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() {
     let server = MockServer::start_async().await;
-    let expected_tools = fixture_tools();
     let mock = server
         .mock_async(|when, then| {
             when.method(POST)
@@ -179,6 +206,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
                 .body_contains("\"name\":\"glob\"")
                 .body_contains("\"name\":\"grep\"")
                 .body_contains("\"name\":\"final_result\"")
+                .body_contains("\"max_tokens\":65536")
                 .json_body_partial(
                     serde_json::to_string(&json!({
                         "model": "fixture-model",
@@ -223,10 +251,9 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, expected_tools)
-        .expect("构造请求");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
     let response = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect("fixture response");
 
@@ -234,6 +261,65 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     assert_eq!(
         response.tool_calls()[0].function.name,
         FINAL_OUTPUT_TOOL_NAME
+    );
+    mock.assert_async().await;
+}
+
+/// 模型以 length 结束时应返回独立输出上限错误，不得伪装成 malformed output。
+#[tokio::test]
+async fn openai_length_finish_reason_is_an_output_limit_error() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "id": "fixture-length",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "length"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 65536, "total_tokens": 65537}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-length",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+
+    let error = adapter
+        .run_agent(request, &TestCancellation::default())
+        .await
+        .expect_err("length 不能进入 malformed repair");
+
+    assert_eq!(
+        error,
+        CustomAdapterError::OutputLimit {
+            limit: MAX_OUTPUT_TOKENS,
+        }
     );
     mock.assert_async().await;
 }
@@ -292,11 +378,10 @@ async fn openai_provider_default_omits_reasoning_effort() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect("Provider 默认值请求应成功");
 
@@ -359,17 +444,197 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("显式 effort 被拒绝时应直接返回错误");
 
     assert!(matches!(error, CustomAdapterError::Transport(_)));
     assert_eq!(rejected.hits_async().await, 1);
     assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
+/// provider 拒绝固定输出预算时必须显式失败，不能退回较小预算重试。
+#[tokio::test]
+async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
+    let server = MockServer::start_async().await;
+    let rejected = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .body_contains(r#""max_tokens":65536"#);
+            then.status(400).json_body(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "fixture rejects the fixed output budget"
+                }
+            }));
+        })
+        .await;
+    let unexpected_fallback = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .body_contains(r#""max_tokens":8192"#);
+            then.status(200).json_body(json!({
+                "id": "unexpected-fallback",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-budget-rejection",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+
+    let error = adapter
+        .run_agent(request, &TestCancellation::default())
+        .await
+        .expect_err("固定输出预算被拒绝时应直接失败");
+
+    assert!(matches!(error, CustomAdapterError::Transport(_)));
+    assert_eq!(rejected.hits_async().await, 1);
+    assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
+/// application/provider seam 遇到 length 时直接失败，不能进入 validation repair。
+#[tokio::test]
+async fn custom_application_surfaces_openai_output_limit_without_repair() {
+    use crate::operation::OperationContext;
+    use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
+
+    let server = MockServer::start_async().await;
+    let model = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "id": "fixture-application-length",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "length"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 65536, "total_tokens": 65537}
+            }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let settings = tempfile::tempdir().expect("创建 settings 目录");
+    let snapshot = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-application-length",
+    )
+    .expect("冻结连接");
+    let adapter = Arc::new(
+        OpenAiChatCompletionsAdapter::new(snapshot, workspace.path()).expect("创建 adapter"),
+    );
+    let provider = Arc::new(CustomProvider::new(
+        Arc::new(CustomRuntime::new()),
+        adapter,
+        "custom-application-length".to_owned(),
+    ));
+    let capability = Arc::new(FrozenCustomCapability {
+        provider,
+        process_generation: Arc::new(AtomicUsize::new(1)),
+    }) as Arc<dyn BabysitProviderCapabilities>;
+    let application = crate::babysit::TestBabysitApplication::with_capabilities_at(
+        settings.path().join("settings.json"),
+        [(
+            crate::application_settings::BabysitProvider::Custom,
+            capability,
+        )],
+    );
+    let request = BabysitFileRequest {
+        identity: ReviewIdentity {
+            review_id: "length-review".to_owned(),
+            snapshot_id: "snapshot".to_owned(),
+        },
+        path: "src/example.rs".to_owned(),
+        locale: "zh-CN".to_owned(),
+        workspace_path: workspace.path().to_string_lossy().into_owned(),
+        detected_language: Some("rust".to_owned()),
+        generation_policy: BabysitGenerationPolicy::Regenerate,
+    };
+    let content = FileChangeContent {
+        path: request.path.clone(),
+        old_path: None,
+        status: FileChangeStatus::Modified,
+        before: Some(FileContent::Text {
+            text: "old();".to_owned(),
+            size: 6,
+        }),
+        after: Some(FileContent::Text {
+            text: "new();".to_owned(),
+            size: 6,
+        }),
+    };
+    let cancellation = OperationContext::background().cancellation().clone();
+    let repair_requests = Arc::new(AtomicUsize::new(0));
+    let repair_requests_for_notify = repair_requests.clone();
+
+    let result = application
+        .explain_file(request, content, &cancellation, move |progress| {
+            if matches!(progress, BabysitProgress::Repairing { .. }) {
+                repair_requests_for_notify.fetch_add(1, Ordering::AcqRel);
+            }
+            Ok(())
+        })
+        .await;
+
+    assert_eq!(
+        result,
+        Err(BabysitError::OutputLimit {
+            limit: MAX_OUTPUT_TOKENS,
+        })
+    );
+    assert_eq!(repair_requests.load(Ordering::Acquire), 0);
+    assert_eq!(model.hits_async().await, 1);
 }
 
 #[tokio::test]
@@ -422,11 +687,10 @@ async fn empty_key_omits_the_authorization_header() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect("无认证请求");
     assert_eq!(forbidden.hits_async().await, 0);
@@ -460,11 +724,10 @@ async fn openai_http_client_failure_keeps_redacted_transport_classification() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("fixture 4xx 应返回 transport failure");
     let CustomAdapterError::Transport(failure) = error else {
@@ -511,10 +774,9 @@ async fn openai_success_status_error_envelope_is_invalid_response() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
     let error = adapter
-        .complete(request, &TestCancellation::default())
+        .run_agent(request, &TestCancellation::default())
         .await
         .expect_err("2xx error envelope 应返回 transport failure");
 

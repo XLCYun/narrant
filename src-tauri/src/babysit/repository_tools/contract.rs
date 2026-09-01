@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 use std::fmt;
 
@@ -13,6 +14,7 @@ pub const GLOB_TOOL_NAME: &str = "glob";
 pub const GREP_TOOL_NAME: &str = "grep";
 
 /// 一项带输入 schema 的 Repository 工具注册描述。
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryToolRegistration {
@@ -102,6 +104,7 @@ pub struct GrepRequest {
 }
 
 /// 统一工具执行请求；Read 与搜索都通过此 typed seam 调度。
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "tool")]
 pub enum RepositoryToolRequest {
@@ -146,6 +149,7 @@ pub struct GrepResponse {
 }
 
 /// 统一工具执行响应。
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "tool")]
 pub enum RepositoryToolResponse {

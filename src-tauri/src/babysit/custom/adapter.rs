@@ -1,5 +1,5 @@
-use super::connection::{endpoint_origin_hash, CustomProtocol};
-use super::round::{CustomRoundRequest, CustomRoundResult};
+use super::agent_run::{CustomRunRequest, CustomRunResult};
+use super::connection::CustomProtocol;
 use crate::operation::CancellationSignal;
 use std::fmt;
 
@@ -99,14 +99,13 @@ impl CustomFailureReason {
     }
 }
 
-/// 只包含协议、阶段、状态、白名单原因与 endpoint origin hash 的脱敏传输失败。
+/// 只包含协议、阶段、状态和白名单原因的脱敏传输失败。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CustomTransportFailure {
     protocol: CustomProtocol,
     phase: CustomRequestPhase,
     status: CustomStatusCategory,
     reason: CustomFailureReason,
-    origin_hash: String,
 }
 
 impl CustomTransportFailure {
@@ -115,20 +114,17 @@ impl CustomTransportFailure {
         protocol: CustomProtocol,
         phase: CustomRequestPhase,
         status: CustomStatusCategory,
-        base_url: &str,
     ) -> Self {
         Self {
             protocol,
             phase,
             status,
             reason: CustomFailureReason::Unknown,
-            origin_hash: endpoint_origin_hash(base_url),
         }
     }
     /// 将 Rig agent 错误降级为状态类别，丢弃 provider body 与原始错误文本。
     pub(super) fn from_prompt_error(
         protocol: CustomProtocol,
-        base_url: &str,
         error: rig::completion::PromptError,
     ) -> Self {
         let response_status = error.provider_response_status();
@@ -157,7 +153,7 @@ impl CustomTransportFailure {
             });
         Self {
             reason,
-            ..Self::new(protocol, CustomRequestPhase::Model, status, base_url)
+            ..Self::new(protocol, CustomRequestPhase::Model, status)
         }
     }
     /// 返回脱敏协议字段。
@@ -175,10 +171,6 @@ impl CustomTransportFailure {
     /// 返回从 provider 错误信封归一化出的白名单原因。
     pub(crate) const fn reason(&self) -> CustomFailureReason {
         self.reason
-    }
-    /// 返回不可逆 endpoint origin hash。
-    pub(crate) fn origin_hash(&self) -> &str {
-        &self.origin_hash
     }
 }
 
@@ -272,10 +264,8 @@ pub(crate) enum CustomAdapterError {
     InvalidConnection,
     /// 调用了与 adapter 协议不匹配的 implementation。
     UnsupportedProtocol(CustomProtocol),
-    /// 工具集合不是严格的三项 repository 工具加 final tool。
-    InvalidToolSet,
-    /// 请求超出共享模型轮次预算。
-    TurnLimitExceeded { limit: usize },
+    /// provider 已经在固定输出预算处截断了模型回复；不能交给 malformed repair。
+    OutputLimit { limit: u64 },
     /// 调用方在 transport 返回前取消了请求。
     Cancelled,
     /// provider/transport 失败的脱敏投影。
@@ -291,15 +281,14 @@ impl fmt::Display for CustomAdapterError {
                 formatter,
                 "Custom 协议不受当前 adapter 支持：{protocol:?}。"
             ),
-            Self::InvalidToolSet => formatter.write_str("Custom 工具集合不符合固定契约。"),
-            Self::TurnLimitExceeded { limit } => {
-                write!(formatter, "Custom 模型轮次已达到上限 {limit}。")
+            Self::OutputLimit { limit } => {
+                write!(formatter, "Custom 模型输出已达到固定上限 {limit}。")
             }
             Self::Cancelled => formatter.write_str("Custom 请求已取消。"),
             Self::Transport(failure) => write!(
                 formatter,
-                "Custom {:?} 请求在 {:?} 阶段失败（状态 {:?}，origin {}）。",
-                failure.protocol, failure.phase, failure.status, failure.origin_hash
+                "Custom {:?} 请求在 {:?} 阶段失败（状态 {:?}）。",
+                failure.protocol, failure.phase, failure.status
             ),
         }
     }
@@ -307,13 +296,13 @@ impl fmt::Display for CustomAdapterError {
 
 impl std::error::Error for CustomAdapterError {}
 
-/// OpenAI 与 Anthropic 共用的单轮协议适配器 seam。
+/// OpenAI 与 Anthropic 共用的单次 Rig generation/repair run 适配器 seam。
 #[async_trait::async_trait]
 pub(crate) trait CustomProtocolAdapter: Send + Sync {
-    /// 发送一轮 provider-neutral 模型请求并返回归一化结果。
-    async fn complete(
+    /// 执行一次 provider-neutral Rig run 并返回归一化结果；内部模型/工具轮由 adapter 持有。
+    async fn run_agent(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError>;
+    ) -> Result<CustomRunResult, CustomAdapterError>;
 }
