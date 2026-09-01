@@ -10,7 +10,7 @@ use fs2::FileExt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -165,6 +165,23 @@ impl StagingFaultInjector for FailAtMany {
     /// 命中任一目标提交点时返回稳定存储错误。
     fn checkpoint(&self, point: StagingCommitPoint) -> Result<(), StagingError> {
         if self.0.contains(&point) {
+            Err(StagingError::StorageFailed)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// 可在 repository 打开后才启用的单点故障注入器。
+struct ArmedFailAt {
+    point: StagingCommitPoint,
+    armed: Arc<AtomicBool>,
+}
+
+impl StagingFaultInjector for ArmedFailAt {
+    /// 只有测试显式 armed 后才在目标边界返回存储错误。
+    fn checkpoint(&self, point: StagingCommitPoint) -> Result<(), StagingError> {
+        if point == self.point && self.armed.load(Ordering::SeqCst) {
             Err(StagingError::StorageFailed)
         } else {
             Ok(())
@@ -474,7 +491,7 @@ fn post_pointer_outcome_matches_new_generation() {
     }
 }
 
-/// 首次 staging 的 unknown identity 跨实例恢复，确认前 Controller 与安装器都不会误用。
+/// 首次 staging 的 unknown 在确认前拒绝替换、Controller 发布与安装器消费。
 #[test]
 fn first_staging_requires_durability_confirmation_before_publish_and_install() {
     let cache = tempfile::tempdir().unwrap();
@@ -517,6 +534,21 @@ fn first_staging_requires_durability_confirmation_before_publish_and_install() {
         panic!("pointer 后同步故障必须产生 unknown identity");
     };
     assert_eq!(repository.snapshot(), None);
+    let current_before = fs::read(cache.path().join("application-update/current")).unwrap();
+    assert_eq!(generation_count(cache.path()), 1);
+    assert_eq!(
+        repository.stage(candidate("2.2.0", "new"), "new".as_bytes()),
+        Err(StagingError::DurabilityUnconfirmed)
+    );
+    assert_eq!(
+        fs::read(cache.path().join("application-update/current")).unwrap(),
+        current_before
+    );
+    assert_eq!(generation_count(cache.path()), 1);
+    assert!(!cache
+        .path()
+        .join("application-update/pending-durability")
+        .exists());
     assert!(controller
         .handle(UpdateInput::RequestUpdateRestart)
         .unwrap()
@@ -535,34 +567,104 @@ fn first_staging_requires_durability_confirmation_before_publish_and_install() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-    // 新实例必须从 marker 保守重建 unknown，而不是把可读 pointer 当作 durable。
-    drop(repository);
-    let mut recovered =
-        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
-    assert_eq!(recovered.snapshot(), None);
-    assert_eq!(
-        recovered.install_with(&installer, InstallIntent::UpdateRestart),
-        Err(InstallAttemptError::Staging(
-            StagingError::DurabilityUnconfirmed
-        ))
-    );
-    let authoritative = recovered.confirm_durability(&pending).unwrap();
+    let authoritative = repository.confirm_durability(&pending).unwrap();
     assert_eq!(authoritative.version(), "2.1.0");
     let published = controller
         .handle(UpdateInput::DownloadSucceeded {
             operation_id: download_id,
+            staged: authoritative,
         })
         .unwrap();
     assert_eq!(published.snapshot.state, UpdateState::Staged);
     assert_eq!(published.snapshot.candidate.unwrap().version, "2.1.0");
-    assert_eq!(recovered.snapshot().unwrap().version(), "2.1.0");
+    assert_eq!(repository.snapshot().unwrap().version(), "2.1.0");
     assert_eq!(
-        recovered
+        repository
             .install_with(&installer, InstallIntent::UpdateRestart)
             .unwrap(),
         InstallExecutionOutcome::HandedOff
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// 预先打开的第二实例先确认 G1 磁盘视图，G2 pointer 前失败也只能保留 G1。
+#[test]
+fn second_repository_barriers_unknown_before_attempting_higher_generation() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut first = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        FailAt(StagingCommitPoint::AfterPointerCommit),
+    )
+    .unwrap();
+    let mut second = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        FailAt(StagingCommitPoint::BeforePointerCommit),
+    )
+    .unwrap();
+    assert!(matches!(
+        first
+            .stage(candidate("2.1.0", "old"), "old".as_bytes())
+            .unwrap(),
+        StageCommitOutcome::DurabilityUnknown(_)
+    ));
+    assert_eq!(
+        second.stage(candidate("2.2.0", "new"), "new".as_bytes()),
+        Err(StagingError::StorageFailed)
+    );
+    assert_eq!(second.snapshot().unwrap().version(), "2.1.0");
+    assert_eq!(generation_count(cache.path()), 1);
+    drop(first);
+    drop(second);
+    let recovered =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    assert_eq!(recovered.snapshot().unwrap().version(), "2.1.0");
+}
+
+/// 第二实例的 refresh barrier 失败时隐藏 G1，且不得开始写入 G2。
+#[test]
+fn second_repository_refresh_failure_keeps_unknown_hidden_and_untouched() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut first = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        FailAt(StagingCommitPoint::AfterPointerCommit),
+    )
+    .unwrap();
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut second = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        ArmedFailAt {
+            point: StagingCommitPoint::RefreshDurabilitySync,
+            armed: armed.clone(),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        first
+            .stage(candidate("2.1.0", "old"), "old".as_bytes())
+            .unwrap(),
+        StageCommitOutcome::DurabilityUnknown(_)
+    ));
+    let pointer = fs::read(cache.path().join("application-update/current")).unwrap();
+    armed.store(true, Ordering::SeqCst);
+    assert_eq!(
+        second.stage(candidate("2.2.0", "new"), "new".as_bytes()),
+        Err(StagingError::StorageFailed)
+    );
+    assert_eq!(second.snapshot(), None);
+    assert_eq!(second.pending_durability().unwrap().version(), "2.1.0");
+    assert_eq!(
+        fs::read(cache.path().join("application-update/current")).unwrap(),
+        pointer
+    );
+    assert_eq!(generation_count(cache.path()), 1);
 }
 
 /// durability barrier 自身失败时保持不可安装，并给出稳定仓储诊断。
@@ -604,6 +706,100 @@ fn failed_durability_confirmation_remains_non_installable() {
         ))
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+/// unknown 进程退出后，新实例只有完成恢复 root barrier 才能产生 durable proof。
+#[test]
+fn recovery_barrier_fails_closed_before_promoting_unknown_pointer() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut repository = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        FailAt(StagingCommitPoint::AfterPointerCommit),
+    )
+    .unwrap();
+    assert!(matches!(
+        repository
+            .stage(candidate("2.1.0", "package-v2"), "package-v2".as_bytes())
+            .unwrap(),
+        StageCommitOutcome::DurabilityUnknown(_)
+    ));
+    drop(repository);
+
+    assert!(matches!(
+        StagingRepository::open_with_faults(
+            cache.path(),
+            context("2.0.15"),
+            DeterministicVerifier,
+            FailAt(StagingCommitPoint::RecoveryDurabilitySync),
+        ),
+        Err(StagingError::StorageFailed)
+    ));
+    let recovered =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    let proof = recovered.snapshot().unwrap();
+    assert_eq!(proof.version(), "2.1.0");
+    let mut controller = UpdateController::new("2.0.15", FixedClock, EnabledPreferences).unwrap();
+    let restored = controller
+        .handle(UpdateInput::RecoverStaged { staged: proof })
+        .unwrap();
+    assert_eq!(restored.snapshot.state, UpdateState::Staged);
+}
+
+/// malformed/mismatched 旧 marker 必须先经过 root barrier，清理后才可恢复 durable proof。
+#[test]
+fn malformed_and_mismatched_legacy_markers_never_fail_open() {
+    for marker in ["../malformed", "generation-mismatched"] {
+        let cache = tempfile::tempdir().unwrap();
+        let mut initial =
+            StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier)
+                .unwrap();
+        initial
+            .stage(candidate("2.1.0", "package-v2"), "package-v2".as_bytes())
+            .unwrap();
+        drop(initial);
+        let marker_path = cache.path().join("application-update/pending-durability");
+        fs::write(&marker_path, marker).unwrap();
+
+        assert!(matches!(
+            StagingRepository::open_with_faults(
+                cache.path(),
+                context("2.0.15"),
+                DeterministicVerifier,
+                FailAt(StagingCommitPoint::RecoveryDurabilitySync),
+            ),
+            Err(StagingError::StorageFailed)
+        ));
+        assert!(marker_path.exists());
+        let recovered =
+            StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier)
+                .unwrap();
+        assert_eq!(recovered.snapshot().unwrap().version(), "2.1.0");
+        assert!(!marker_path.exists());
+    }
+}
+
+/// 旧 marker 无法删除时，每次恢复仍先做 barrier，不会把 durable current 反向降级。
+#[test]
+fn legacy_marker_cleanup_failure_cannot_downgrade_durable_current() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut initial =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    initial
+        .stage(candidate("2.1.0", "package-v2"), "package-v2".as_bytes())
+        .unwrap();
+    drop(initial);
+    let marker_path = cache.path().join("application-update/pending-durability");
+    fs::create_dir(&marker_path).unwrap();
+
+    for _ in 0..2 {
+        let recovered =
+            StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier)
+                .unwrap();
+        assert_eq!(recovered.snapshot().unwrap().version(), "2.1.0");
+        assert!(marker_path.is_dir());
+    }
 }
 
 /// 两个先后打开的仓储都在锁内重读 pointer，并以 SemVer CAS 防止降级。

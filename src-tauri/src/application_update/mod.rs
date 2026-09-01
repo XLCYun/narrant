@@ -40,20 +40,20 @@ pub(crate) use ports::{
 };
 #[cfg_attr(not(test), allow(unused_imports, reason = "Task 3 将创建文件偏好仓储"))]
 pub(crate) use preference::{FilePreferenceStore, PreferenceError, PreferenceStore};
+#[allow(
+    unused_imports,
+    reason = "Task 3 的 adapter 将消费暂存结果与稳定错误分类；接线后删除"
+)]
+pub(crate) use staging::StagingError;
 #[cfg_attr(
     not(test),
     allow(unused_imports, reason = "Task 3 将消费 staging 事务入口")
 )]
 pub(crate) use staging::{
-    InstallAttemptError, InstallCleanupDisposition, InstallExecutionOutcome, InstallKind,
-    MinisignVerifier, PendingStagedUpdate, StageCandidate, StageCommitOutcome, StagingContext,
-    StagingRepository, VerifiedStagedPackage,
+    DurableStagedUpdate, InstallAttemptError, InstallCleanupDisposition, InstallExecutionOutcome,
+    InstallKind, MinisignVerifier, PendingStagedUpdate, StageCandidate, StageCommitOutcome,
+    StagingContext, StagingRepository, VerifiedStagedPackage,
 };
-#[allow(
-    unused_imports,
-    reason = "Task 3 的 adapter 将消费暂存结果与稳定错误分类；接线后删除"
-)]
-pub(crate) use staging::{StagedUpdate, StagingError};
 #[cfg(test)]
 pub(crate) use staging::{StagingCommitPoint, StagingFaultInjector};
 #[cfg_attr(not(test), allow(unused_imports, reason = "Task 3 将消费状态机入口"))]

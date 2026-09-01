@@ -1,4 +1,4 @@
-use super::{Clock, InstallIntent, PreferenceError, PreferenceStore};
+use super::{Clock, DurableStagedUpdate, InstallIntent, PreferenceError, PreferenceStore};
 use semver::Version;
 use serde::Serialize;
 use std::fmt;
@@ -363,8 +363,7 @@ pub(crate) enum UpdateEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateInput {
     RecoverStaged {
-        version: String,
-        release_notes: String,
+        staged: DurableStagedUpdate,
     },
     Ready,
     PeriodicCheckDue,
@@ -387,6 +386,7 @@ pub(crate) enum UpdateInput {
     },
     DownloadSucceeded {
         operation_id: UpdateOperationId,
+        staged: DurableStagedUpdate,
     },
     DownloadFailed {
         operation_id: UpdateOperationId,
@@ -503,10 +503,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
     pub(crate) fn handle(&mut self, input: UpdateInput) -> Result<UpdateOutput, UpdateDomainError> {
         let mut effects = Vec::new();
         let accepted = match input {
-            UpdateInput::RecoverStaged {
-                version,
-                release_notes,
-            } => self.recover_staged(version, release_notes)?,
+            UpdateInput::RecoverStaged { staged } => self.recover_staged(staged)?,
             UpdateInput::Ready if !self.ready => {
                 self.ready = true;
                 if self.active.is_none() {
@@ -548,7 +545,10 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 operation_id,
                 progress,
             } => self.advance_download(operation_id, progress),
-            UpdateInput::DownloadSucceeded { operation_id } => self.finish_download(operation_id),
+            UpdateInput::DownloadSucceeded {
+                operation_id,
+                staged,
+            } => self.finish_download(operation_id, staged),
             UpdateInput::DownloadFailed {
                 operation_id,
                 failure,
@@ -572,20 +572,17 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
     }
 
     /// 在启动 Ready 前恢复严格高于运行版本的可信 staging 摘要。
-    fn recover_staged(
-        &mut self,
-        version: String,
-        release_notes: String,
-    ) -> Result<bool, UpdateDomainError> {
+    fn recover_staged(&mut self, staged: DurableStagedUpdate) -> Result<bool, UpdateDomainError> {
         if self.ready || self.active.is_some() {
             return Ok(false);
         }
+        let version = staged.version().to_owned();
         let parsed = Version::parse(&version)
             .map_err(|_| UpdateDomainError::InvalidReleaseVersion(version.clone()))?;
         if !parsed.pre.is_empty() || parsed <= self.current_version {
             return Ok(false);
         }
-        let candidate = UpdateCandidate::new(version, release_notes);
+        let candidate = UpdateCandidate::new(version, staged.release_notes());
         self.staged_candidate = Some(candidate.clone());
         self.snapshot.state = UpdateState::Staged;
         self.snapshot.candidate = Some(candidate);
@@ -778,17 +775,28 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
         true
     }
 
-    /// 仅接受当前下载 identity 的一次成功完成，并把新候选提升为 staged。
-    fn finish_download(&mut self, operation_id: UpdateOperationId) -> bool {
+    /// 仅接受当前下载 identity 与精确 durable proof，并把可信候选提升为 staged。
+    fn finish_download(
+        &mut self,
+        operation_id: UpdateOperationId,
+        staged: DurableStagedUpdate,
+    ) -> bool {
         if !self.active_is_download(operation_id) {
             return false;
         }
         let Some(release) = self.current_release.clone() else {
             return false;
         };
+        if staged.version() != release.version()
+            || staged.release_notes() != release.release_notes()
+            || staged.target() != release.package().target()
+            || staged.install_kind() != release.package().install_kind()
+        {
+            return false;
+        }
         self.active = None;
         self.pending_retry = None;
-        let candidate = release.candidate();
+        let candidate = UpdateCandidate::new(staged.version(), staged.release_notes());
         self.staged_candidate = Some(candidate.clone());
         self.snapshot.state = UpdateState::Staged;
         self.snapshot.candidate = Some(candidate);

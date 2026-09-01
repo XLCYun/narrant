@@ -1,7 +1,8 @@
 use crate::application_update::{
-    Clock, DownloadProgress, InstallIntent, InstallKind, PreferenceError, PreferenceStore,
-    ReleasePackage, StableRelease, UpdateController, UpdateDomainError, UpdateEffect,
-    UpdateFailure, UpdateFailureCategory, UpdateInput, UpdateOperationId, UpdateState,
+    Clock, DownloadProgress, DurableStagedUpdate, InstallIntent, InstallKind, PreferenceError,
+    PreferenceStore, ReleasePackage, StableRelease, UpdateController, UpdateDomainError,
+    UpdateEffect, UpdateFailure, UpdateFailureCategory, UpdateInput, UpdateOperationId,
+    UpdateState,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -62,6 +63,16 @@ fn release_with_notes(version: &str, notes: &str) -> StableRelease {
             InstallKind::MacosAppArchive,
         )
         .unwrap(),
+    )
+}
+
+/// 创建只在测试构建可用、与 Stable target 一致的 durable staging proof。
+fn durable(version: &str, notes: &str) -> DurableStagedUpdate {
+    DurableStagedUpdate::test_fixture(
+        version,
+        notes,
+        "darwin-aarch64",
+        InstallKind::MacosAppArchive,
     )
 }
 
@@ -264,8 +275,7 @@ fn higher_candidate_failure_keeps_old_staging_installable() {
         let mut controller = controller(None);
         controller
             .handle(UpdateInput::RecoverStaged {
-                version: "2.1.0".into(),
-                release_notes: "旧版说明".into(),
+                staged: durable("2.1.0", "旧版说明"),
             })
             .unwrap();
         let check = controller.handle(UpdateInput::ManualCheck).unwrap();
@@ -334,8 +344,36 @@ fn progress_and_completion_are_identity_scoped() {
             }
         }
     );
+    for invalid_proof in [
+        durable("2.2.0", "说明"),
+        durable("2.1.0", "不同说明"),
+        DurableStagedUpdate::test_fixture(
+            "2.1.0",
+            "说明",
+            "windows-x86_64",
+            InstallKind::MacosAppArchive,
+        ),
+        DurableStagedUpdate::test_fixture(
+            "2.1.0",
+            "说明",
+            "darwin-aarch64",
+            InstallKind::WindowsNsis,
+        ),
+    ] {
+        let rejected = controller
+            .handle(UpdateInput::DownloadSucceeded {
+                operation_id: id,
+                staged: invalid_proof,
+            })
+            .unwrap();
+        assert_eq!(rejected.snapshot.sequence, advanced.snapshot.sequence);
+        assert_eq!(rejected.snapshot.state, advanced.snapshot.state);
+    }
     let staged = controller
-        .handle(UpdateInput::DownloadSucceeded { operation_id: id })
+        .handle(UpdateInput::DownloadSucceeded {
+            operation_id: id,
+            staged: durable("2.1.0", "说明"),
+        })
         .unwrap();
     assert_eq!(staged.snapshot.state, UpdateState::Staged);
     assert_eq!(staged.snapshot.candidate.unwrap().release_notes, "说明");
@@ -355,7 +393,10 @@ fn progress_and_completion_are_identity_scoped() {
     );
     assert_eq!(
         controller
-            .handle(UpdateInput::DownloadSucceeded { operation_id: id })
+            .handle(UpdateInput::DownloadSucceeded {
+                operation_id: id,
+                staged: durable("2.1.0", "说明"),
+            })
             .unwrap()
             .snapshot
             .sequence,
@@ -369,8 +410,7 @@ fn candidate_and_notes_survive_failure_and_recovery() {
     let mut recovered_controller = controller(None);
     recovered_controller
         .handle(UpdateInput::RecoverStaged {
-            version: "2.1.0".into(),
-            release_notes: "离线说明".into(),
+            staged: durable("2.1.0", "离线说明"),
         })
         .unwrap();
     let recovered = recovered_controller.snapshot();
@@ -416,8 +456,7 @@ fn same_staged_version_backfills_release_notes() {
     let mut controller = controller(None);
     controller
         .handle(UpdateInput::RecoverStaged {
-            version: "2.1.0".into(),
-            release_notes: String::new(),
+            staged: durable("2.1.0", ""),
         })
         .unwrap();
     let check = controller.handle(UpdateInput::ManualCheck).unwrap();
@@ -545,7 +584,10 @@ fn disabling_auto_cancels_inflight_automatic_download() {
     let sequence = cancelled.snapshot.sequence;
     assert_eq!(
         controller
-            .handle(UpdateInput::DownloadSucceeded { operation_id: id })
+            .handle(UpdateInput::DownloadSucceeded {
+                operation_id: id,
+                staged: durable("2.1.0", "修复启动问题"),
+            })
             .unwrap()
             .snapshot
             .sequence,
@@ -629,8 +671,7 @@ fn update_restart_requires_staged_state() {
         .is_empty());
     controller
         .handle(UpdateInput::RecoverStaged {
-            version: "2.1.0".into(),
-            release_notes: String::new(),
+            staged: durable("2.1.0", ""),
         })
         .unwrap();
     assert_eq!(
