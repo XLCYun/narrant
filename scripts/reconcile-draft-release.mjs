@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { Buffer } from "node:buffer";
+import { openAsBlob as openBlobFromDisk } from "node:fs";
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
+import { TextDecoder } from "node:util";
 
 import {
   assertDraftArtifactPaths,
@@ -11,6 +15,7 @@ import {
 } from "./release-assets.mjs";
 
 const PUBLIC_REPOSITORY = "cyunlab/narrant";
+const MAX_UPLOAD_RESPONSE_BYTES = 256 * 1024;
 
 /** 要求 gh 命令成功，并把安全的标准错误传给调用方。 */
 async function requireSuccess(resultPromise, context) {
@@ -83,12 +88,141 @@ function assertUploadedDraft(release, tag, releaseId, expectedNames) {
   assertExactNameSet(actualNames, expectedNames, "上传后 Draft 资产集合");
 }
 
+/** 验证 uploads.github.com 对单个二进制资产返回的固定仓库、名称和下载身份。 */
+function parseUploadedAsset(asset, { repository, tag, name }) {
+  if (
+    !asset ||
+    !Number.isSafeInteger(asset.id) ||
+    asset.id <= 0 ||
+    asset.name !== name ||
+    asset.state !== "uploaded" ||
+    asset.content_type !== "application/octet-stream" ||
+    !Number.isSafeInteger(asset.size) ||
+    asset.size <= 0
+  ) {
+    throw new Error(`上传资产 ${name} 返回无效 asset identity`);
+  }
+  const expectedApiUrl = `https://api.github.com/repos/${repository}/releases/assets/${asset.id}`;
+  const expectedDownloadUrl = `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}`;
+  if (
+    asset.url !== expectedApiUrl ||
+    asset.browser_download_url !== expectedDownloadUrl
+  ) {
+    throw new Error(`上传资产 ${name} 返回错误仓库或下载 URL`);
+  }
+  return asset;
+}
+
+/** 在固定上限内读取上传响应，避免错误端点返回的无界内容耗尽内存。 */
+async function readBoundedUploadResponse(response, name) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsedLength = Number(contentLength);
+    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) {
+      throw new Error(`上传资产 ${name} 返回无效 Content-Length`);
+    }
+    if (parsedLength > MAX_UPLOAD_RESPONSE_BYTES) {
+      throw new Error(`上传资产 ${name} 的响应超过安全上限`);
+    }
+  }
+  if (!response.body || typeof response.body.getReader !== "function") {
+    throw new Error(`上传资产 ${name} 缺少可读取响应体`);
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_UPLOAD_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error(`上传资产 ${name} 的响应超过安全上限`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new Error(`上传资产 ${name} 返回无效 UTF-8`);
+  }
+}
+
+/** 直连官方 release-ID endpoint 上传一个资产；令牌只进入 Authorization header。 */
+export async function uploadReleaseAsset(options, dependencies = {}) {
+  const { repository, tag, releaseId, artifact, token } = options;
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  const openBlob = dependencies.openBlob ?? openBlobFromDisk;
+  if (repository !== PUBLIC_REPOSITORY || !Number.isSafeInteger(releaseId) || releaseId <= 0) {
+    throw new Error("上传资产的仓库或 Release ID 无效");
+  }
+  if (typeof token !== "string" || token.length === 0 || token.trim() !== token) {
+    throw new Error("上传 Draft 资产需要有效 GH_TOKEN");
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new Error("当前 Node 运行时不支持安全上传");
+  }
+
+  const name = basename(artifact);
+  const endpoint = `https://uploads.github.com/repos/${repository}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`;
+  let body;
+  try {
+    body = await openBlob(artifact, { type: "application/octet-stream" });
+  } catch {
+    throw new Error(`无法读取待上传资产 ${name}`);
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/octet-stream",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body,
+    });
+  } catch {
+    throw new Error(`上传 Draft 资产 ${name} 的网络请求失败`);
+  }
+  if (response.redirected) {
+    throw new Error(`上传 Draft 资产 ${name} 拒绝重定向响应`);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`上传 Draft 资产 ${name} 失败（HTTP ${response.status}）`);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
+    throw new Error(`上传资产 ${name} 返回错误 Content-Type`);
+  }
+
+  const responseText = await readBoundedUploadResponse(response, name);
+  let asset;
+  try {
+    asset = JSON.parse(responseText);
+  } catch {
+    throw new Error(`上传资产 ${name} 返回无效 JSON`);
+  }
+  return parseUploadedAsset(asset, { repository, tag, name });
+}
+
 /**
  * 创建或完整替换一个公开 Draft；所有远端状态变化都隐藏在可注入的 gh adapter 后。
  * 已发布 Release、非 404 查询错误和上传后集合偏差都会 fail closed。
  */
 export async function reconcileDraftRelease(options, dependencies = {}) {
   const runGh = dependencies.runGh ?? runGhCommand;
+  const uploadAsset = dependencies.uploadAsset ?? uploadReleaseAsset;
+  const token = dependencies.token ?? process.env.GH_TOKEN;
   const { repository, tag, version, title, notesFile, artifacts } = options;
   if (repository !== PUBLIC_REPOSITORY) {
     throw new Error(`只允许协调公开仓库 ${PUBLIC_REPOSITORY}`);
@@ -158,12 +292,13 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
     outcome = "created";
   }
 
-  await readDraftById(runGh, repository, tag, releaseId, "上传前");
-  await requireSuccess(
-    runGh(["release", "upload", tag, ...artifacts, "--repo", repository, "--clobber"]),
-    "上传 Draft 资产",
-  );
-  const uploaded = await readDraftById(runGh, repository, tag, releaseId, "上传后");
+  for (const artifact of artifacts) {
+    const name = basename(artifact);
+    await readDraftById(runGh, repository, tag, releaseId, `上传 ${name} 前`);
+    await uploadAsset({ repository, tag, releaseId, artifact, token });
+    await readDraftById(runGh, repository, tag, releaseId, `上传 ${name} 后`);
+  }
+  const uploaded = await readDraftById(runGh, repository, tag, releaseId, "全部上传后");
   assertUploadedDraft(
     uploaded,
     tag,

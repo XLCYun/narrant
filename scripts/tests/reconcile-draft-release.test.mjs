@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { Blob, Buffer } from "node:buffer";
 import { EventEmitter } from "node:events";
+import { ReadableStream } from "node:stream/web";
 import test from "node:test";
 import { setImmediate as waitImmediate } from "node:timers/promises";
 
@@ -7,6 +9,7 @@ import { releaseAssetNames } from "../release-assets.mjs";
 import {
   reconcileDraftRelease,
   runGhCommand,
+  uploadReleaseAsset,
 } from "../reconcile-draft-release.mjs";
 
 /** 返回当前版本八个经过本地预验的虚拟上传路径。 */
@@ -36,7 +39,12 @@ function options() {
   };
 }
 
-/** 创建有状态的内存 gh adapter，覆盖查询、创建、编辑、删除和上传语义。 */
+/** 判断一条 fake adapter 调用是否命中固定 release-ID 上传边界。 */
+function isAssetUploadCall(call) {
+  return call[0] === "uploadAsset";
+}
+
+/** 创建有状态的内存 adapter，覆盖查询、创建、编辑、删除和上传语义。 */
 function createGhAdapter(initialRelease, hooks = {}) {
   let release = initialRelease ? JSON.parse(JSON.stringify(initialRelease)) : undefined;
   let nextAssetId = 100;
@@ -79,23 +87,78 @@ function createGhAdapter(initialRelease, hooks = {}) {
       if (hooks.publishAfterEdit) release.draft = false;
       return { exitCode: 0, stdout: "", stderr: "" };
     }
-    if (arguments_[0] === "release" && arguments_[1] === "upload") {
-      const repositoryFlag = arguments_.indexOf("--repo");
-      const paths = arguments_.slice(3, repositoryFlag);
-      release.assets = paths.map((path) => ({ id: nextAssetId += 1, name: path.split("/").at(-1) }));
-      if (hooks.afterUpload) {
-        hooks.afterUpload(release);
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
     throw new Error(`测试 gh adapter 收到未知命令：${arguments_.join(" ")}`);
   };
-  return { runGh, calls, release: () => release, idReadCount: () => idReadCount };
+  const uploadAsset = async (uploadOptions) => {
+    calls.push(["uploadAsset", uploadOptions]);
+    const name = uploadOptions.artifact.split(/[\\/]/).at(-1);
+    hooks.beforeUpload?.(release, name, uploadOptions);
+    if (release.assets.some((asset) => asset.name === name)) {
+      throw new Error("duplicate asset (HTTP 422)");
+    }
+    const asset = {
+      id: nextAssetId += 1,
+      name,
+      state: "uploaded",
+      content_type: "application/octet-stream",
+      size: 123,
+      url: `https://api.github.com/repos/cyunlab/narrant/releases/assets/${nextAssetId}`,
+      browser_download_url: `https://github.com/cyunlab/narrant/releases/download/${release.tag_name}/${encodeURIComponent(name)}`,
+    };
+    release.assets.push(asset);
+    hooks.afterUpload?.(release, asset, uploadOptions);
+    return asset;
+  };
+  return { runGh, uploadAsset, calls, release: () => release, idReadCount: () => idReadCount };
+}
+
+/** 为协调测试注入内存 gh/upload adapter 和不会离开进程的测试 token。 */
+function adapterDependencies(adapter) {
+  return { runGh: adapter.runGh, uploadAsset: adapter.uploadAsset, token: "test-token" };
+}
+
+/** 构造符合 GitHub upload asset schema 的成功响应对象。 */
+function uploadedAsset(name, tag = "v2.3.4") {
+  return {
+    id: 101,
+    name,
+    state: "uploaded",
+    content_type: "application/octet-stream",
+    size: 6,
+    url: "https://api.github.com/repos/cyunlab/narrant/releases/assets/101",
+    browser_download_url: `https://github.com/cyunlab/narrant/releases/download/${tag}/${encodeURIComponent(name)}`,
+  };
+}
+
+/** 构造可分块、可声明错误边界的 fetch 响应，全程不访问网络。 */
+function uploadResponse(body, settings = {}) {
+  const bytes = Buffer.isBuffer(body)
+    ? body
+    : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
+  const chunks = settings.chunks ?? [bytes];
+  const contentLength = settings.contentLength === undefined ? bytes.length : settings.contentLength;
+  return {
+    status: settings.status ?? 201,
+    redirected: settings.redirected ?? false,
+    headers: {
+      get: (name) => {
+        if (name.toLowerCase() === "content-type") return settings.contentType ?? "application/json; charset=utf-8";
+        if (name.toLowerCase() === "content-length") return contentLength === null ? null : String(contentLength);
+        return null;
+      },
+    },
+    body: new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+  };
 }
 
 test("不存在时创建 Draft、上传八文件并通过 API 回读精确集合", async () => {
   const gh = createGhAdapter();
-  const result = await reconcileDraftRelease(options(), { runGh: gh.runGh });
+  const result = await reconcileDraftRelease(options(), adapterDependencies(gh));
 
   assert.deepEqual(result, { outcome: "created", releaseId: 42 });
   assert.deepEqual(
@@ -103,6 +166,11 @@ test("不存在时创建 Draft、上传八文件并通过 API 回读精确集合
     artifactPaths().map((path) => path.split("/").at(-1)).sort(),
   );
   assert.equal(gh.calls.some((call) => call[1] === "create" && call.includes("--draft")), true);
+  const uploads = gh.calls.filter(isAssetUploadCall);
+  assert.equal(uploads.length, 8);
+  assert.equal(uploads.every((call) => call[1].releaseId === 42), true);
+  assert.equal(uploads.every((call) => call[1].tag === "v2.3.4"), true);
+  assert.equal(uploads.every((call) => call[1].token === "test-token"), true);
 });
 
 test("已有 Draft 被完整替换，失败后的同 tag 重试保持幂等", async () => {
@@ -112,8 +180,8 @@ test("已有 Draft 被完整替换，失败后的同 tag 重试保持幂等", as
     tag_name: "v2.3.4",
     assets: [{ id: 7, name: "partial.bin" }, { id: 8, name: "latest.json" }],
   });
-  const first = await reconcileDraftRelease(options(), { runGh: gh.runGh });
-  const second = await reconcileDraftRelease(options(), { runGh: gh.runGh });
+  const first = await reconcileDraftRelease(options(), adapterDependencies(gh));
+  const second = await reconcileDraftRelease(options(), adapterDependencies(gh));
 
   assert.equal(first.outcome, "updated");
   assert.equal(second.outcome, "updated");
@@ -127,7 +195,7 @@ test("已有 Draft 被完整替换，失败后的同 tag 重试保持幂等", as
 test("非 404 的 API 查找错误不会被误判为新 Draft", async () => {
   const gh = createGhAdapter(undefined, { lookupError: "gh: rate limited (HTTP 403)" });
   await assert.rejects(
-    reconcileDraftRelease(options(), { runGh: gh.runGh }),
+    reconcileDraftRelease(options(), adapterDependencies(gh)),
     /无法检查 Release.*403/,
   );
   assert.equal(gh.calls.some((call) => call[1] === "create"), false);
@@ -141,7 +209,7 @@ test("发现 published Release 时拒绝任何修改和上传", async () => {
     assets: [{ id: 7, name: "published.exe" }],
   });
   await assert.rejects(
-    reconcileDraftRelease(options(), { runGh: gh.runGh }),
+    reconcileDraftRelease(options(), adapterDependencies(gh)),
     /拒绝修改已发布/,
   );
   assert.equal(gh.calls.length, 1);
@@ -150,11 +218,11 @@ test("发现 published Release 时拒绝任何修改和上传", async () => {
 test("create 后先回读 Draft 身份，published 时不会进入 upload", async () => {
   const gh = createGhAdapter(undefined, { publishAfterCreate: true });
   await assert.rejects(
-    reconcileDraftRelease(options(), { runGh: gh.runGh }),
+    reconcileDraftRelease(options(), adapterDependencies(gh)),
     /创建后拒绝修改已发布/,
   );
   assert.equal(
-    gh.calls.some((call) => call[0] === "release" && call[1] === "upload"),
+    gh.calls.some(isAssetUploadCall),
     false,
   );
 });
@@ -174,7 +242,7 @@ test("release-ID guard 拒绝 ID 或 tag 身份漂移", async (context) => {
         onIdRead: (release, count) => { if (count === 1) mutation(release); },
       });
       await assert.rejects(
-        reconcileDraftRelease(options(), { runGh: gh.runGh }),
+        reconcileDraftRelease(options(), adapterDependencies(gh)),
         /Release ID\/tag 已变化/,
       );
       assert.equal(gh.calls.some((call) => call.includes("PATCH")), false);
@@ -200,19 +268,47 @@ test("delete、edit、upload 各 mutation 边界在 published 切换后均先停
       name: "upload 前",
       release: { id: 42, draft: true, tag_name: "v2.3.4", assets: [] },
       publishOnIdRead: 3,
-      forbidden: (call) => call[0] === "release" && call[1] === "upload",
+      forbidden: isAssetUploadCall,
     },
   ];
   for (const fixture of cases) {
     await context.test(fixture.name, async () => {
       const gh = createGhAdapter(fixture.release, { publishOnIdRead: fixture.publishOnIdRead });
       await assert.rejects(
-        reconcileDraftRelease(options(), { runGh: gh.runGh }),
+        reconcileDraftRelease(options(), adapterDependencies(gh)),
         /拒绝修改已发布/,
       );
       assert.equal(gh.calls.some(fixture.forbidden), false);
     });
   }
+});
+
+test("upload 边界的 tag identity drift 会停止，guard 后 retag 仍只命中固定 release ID", async () => {
+  const beforeUpload = createGhAdapter({
+    id: 42,
+    draft: true,
+    tag_name: "v2.3.4",
+    assets: [],
+  }, {
+    onIdRead: (release, count) => { if (count === 3) release.tag_name = "v9.9.9"; },
+  });
+  await assert.rejects(
+    reconcileDraftRelease(options(), adapterDependencies(beforeUpload)),
+    /Release ID\/tag 已变化/,
+  );
+  assert.equal(beforeUpload.calls.some(isAssetUploadCall), false);
+
+  const afterGuard = createGhAdapter(undefined, {
+    beforeUpload: (release) => { release.tag_name = "v9.9.9"; },
+  });
+  await assert.rejects(
+    reconcileDraftRelease(options(), adapterDependencies(afterGuard)),
+    /Release ID\/tag 已变化/,
+  );
+  const uploadCalls = afterGuard.calls.filter(isAssetUploadCall);
+  assert.equal(uploadCalls.length, 1);
+  assert.equal(uploadCalls[0][1].releaseId, 42);
+  assert.equal(uploadCalls[0][1].tag, "v2.3.4");
 });
 
 test("每个 mutation 后立即回读，published 切换会阻止下一类 mutation", async () => {
@@ -223,7 +319,7 @@ test("每个 mutation 后立即回读，published 切换会阻止下一类 mutat
     assets: [{ id: 7, name: "old.bin" }],
   }, { publishAfterDelete: true });
   await assert.rejects(
-    reconcileDraftRelease(options(), { runGh: afterDelete.runGh }),
+    reconcileDraftRelease(options(), adapterDependencies(afterDelete)),
     /删除旧资产后拒绝修改已发布/,
   );
   assert.equal(afterDelete.calls.some((call) => call.includes("PATCH")), false);
@@ -235,11 +331,11 @@ test("每个 mutation 后立即回读，published 切换会阻止下一类 mutat
     assets: [],
   }, { publishAfterEdit: true });
   await assert.rejects(
-    reconcileDraftRelease(options(), { runGh: afterEdit.runGh }),
+    reconcileDraftRelease(options(), adapterDependencies(afterEdit)),
     /更新元数据后拒绝修改已发布/,
   );
   assert.equal(
-    afterEdit.calls.some((call) => call[0] === "release" && call[1] === "upload"),
+    afterEdit.calls.some(isAssetUploadCall),
     false,
   );
 
@@ -247,8 +343,8 @@ test("每个 mutation 后立即回读，published 切换会阻止下一类 mutat
     afterUpload: (release) => { release.draft = false; },
   });
   await assert.rejects(
-    reconcileDraftRelease(options(), { runGh: afterUpload.runGh }),
-    /上传后拒绝修改已发布/,
+    reconcileDraftRelease(options(), adapterDependencies(afterUpload)),
+    /上传 .* 后拒绝修改已发布/,
   );
 });
 
@@ -262,28 +358,219 @@ test("上传后回读缺少、意外或重复资产时 fail closed", async (cont
     await context.test(mutate.toString().slice(0, 40), async () => {
       const gh = createGhAdapter(undefined, { afterUpload: mutate });
       await assert.rejects(
-        reconcileDraftRelease(options(), { runGh: gh.runGh }),
+        reconcileDraftRelease(options(), adapterDependencies(gh)),
         /上传后 Draft 资产集合不精确/,
       );
     });
   }
 });
 
+test("release-ID endpoint 遇到重复名直接失败且不使用 clobber", async () => {
+  const gh = createGhAdapter(undefined, {
+    beforeUpload: (release, name) => {
+      release.assets.push({ id: 999, name });
+    },
+  });
+  await assert.rejects(
+    reconcileDraftRelease(options(), adapterDependencies(gh)),
+    /duplicate asset.*422/,
+  );
+  assert.equal(gh.calls.some((call) => call.includes("--clobber")), false);
+});
+
 test("协调接口拒绝错误仓库、tag/version 和非精确上传集合", async () => {
   const gh = createGhAdapter();
   await assert.rejects(
-    reconcileDraftRelease({ ...options(), repository: "private/source" }, { runGh: gh.runGh }),
+    reconcileDraftRelease({ ...options(), repository: "private/source" }, adapterDependencies(gh)),
     /只允许协调公开仓库/,
   );
   await assert.rejects(
-    reconcileDraftRelease({ ...options(), version: "2.3.5" }, { runGh: gh.runGh }),
+    reconcileDraftRelease({ ...options(), version: "2.3.5" }, adapterDependencies(gh)),
     /不匹配/,
   );
   await assert.rejects(
-    reconcileDraftRelease({ ...options(), artifacts: artifactPaths().slice(1) }, { runGh: gh.runGh }),
+    reconcileDraftRelease({ ...options(), artifacts: artifactPaths().slice(1) }, adapterDependencies(gh)),
     /缺少/,
   );
   assert.equal(gh.calls.length, 0);
+});
+
+test("生产上传 adapter 固定 release-ID endpoint、仅以 header 携 token 并流式发送 Blob", async () => {
+  const token = "secret-token-never-log";
+  const artifact = "/tmp/Narrant package.dmg";
+  const requestBody = new Blob([Buffer.from("binary")], { type: "application/octet-stream" });
+  let observed;
+  const result = await uploadReleaseAsset({
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact,
+    token,
+  }, {
+    openBlob: async (path, settings) => {
+      assert.equal(path, artifact);
+      assert.deepEqual(settings, { type: "application/octet-stream" });
+      return requestBody;
+    },
+    fetchImpl: async (url, request) => {
+      observed = { url, request };
+      return uploadResponse(uploadedAsset("Narrant package.dmg"));
+    },
+  });
+
+  assert.equal(observed.url, "https://uploads.github.com/repos/cyunlab/narrant/releases/42/assets?name=Narrant%20package.dmg");
+  assert.equal(observed.url.includes(token), false);
+  assert.equal(observed.request.method, "POST");
+  assert.equal(observed.request.redirect, "error");
+  assert.equal(observed.request.headers.Authorization, `Bearer ${token}`);
+  assert.equal(observed.request.headers["Content-Type"], "application/octet-stream");
+  assert.equal(observed.request.body, requestBody);
+  assert.equal(Buffer.from(await observed.request.body.arrayBuffer()).toString(), "binary");
+  assert.equal(result.name, "Narrant package.dmg");
+});
+
+test("生产上传 adapter 在 token 缺失时不会读取文件或发起请求", async (context) => {
+  for (const token of [undefined, "", " token", "token "]) {
+    await context.test(String(token), async () => {
+      let touched = false;
+      await assert.rejects(
+        uploadReleaseAsset({
+          repository: "cyunlab/narrant",
+          tag: "v2.3.4",
+          releaseId: 42,
+          artifact: "/tmp/file.bin",
+          token,
+        }, {
+          openBlob: async () => { touched = true; },
+          fetchImpl: async () => { touched = true; },
+        }),
+        /需要有效 GH_TOKEN/,
+      );
+      assert.equal(touched, false);
+    });
+  }
+});
+
+test("生产上传 adapter 拒绝网络、redirect、非 2xx 与不可信响应 framing", async (context) => {
+  const base = {
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact: "/tmp/file.bin",
+    token: "never-leak-this-token",
+  };
+  const openBlob = async () => new Blob(["binary"]);
+  const fixtures = [
+    {
+      name: "network",
+      fetchImpl: async () => { throw new Error(base.token); },
+      pattern: /网络请求失败/,
+    },
+    {
+      name: "redirect",
+      fetchImpl: async () => uploadResponse(uploadedAsset("file.bin"), { redirected: true }),
+      pattern: /拒绝重定向/,
+    },
+    {
+      name: "non-2xx",
+      fetchImpl: async () => uploadResponse({ message: base.token }, { status: 422 }),
+      pattern: /HTTP 422/,
+    },
+    {
+      name: "content-type",
+      fetchImpl: async () => uploadResponse(uploadedAsset("file.bin"), { contentType: "text/html" }),
+      pattern: /错误 Content-Type/,
+    },
+    {
+      name: "invalid content-length",
+      fetchImpl: async () => uploadResponse(uploadedAsset("file.bin"), { contentLength: "NaN" }),
+      pattern: /无效 Content-Length/,
+    },
+    {
+      name: "declared oversize",
+      fetchImpl: async () => uploadResponse(uploadedAsset("file.bin"), { contentLength: 256 * 1024 + 1 }),
+      pattern: /超过安全上限/,
+    },
+    {
+      name: "stream oversize",
+      fetchImpl: async () => uploadResponse("", {
+        contentLength: null,
+        chunks: [Buffer.alloc(128 * 1024), Buffer.alloc(128 * 1024 + 1)],
+      }),
+      pattern: /超过安全上限/,
+    },
+    {
+      name: "invalid utf8",
+      fetchImpl: async () => uploadResponse(Buffer.from([0xff])),
+      pattern: /无效 UTF-8/,
+    },
+    {
+      name: "invalid json",
+      fetchImpl: async () => uploadResponse("not-json"),
+      pattern: /无效 JSON/,
+    },
+  ];
+  for (const fixture of fixtures) {
+    await context.test(fixture.name, async () => {
+      await assert.rejects(
+        uploadReleaseAsset(base, { openBlob, fetchImpl: fixture.fetchImpl }),
+        (error) => {
+          assert.match(error.message, fixture.pattern);
+          assert.equal(error.message.includes(base.token), false);
+          return true;
+        },
+      );
+    });
+  }
+
+  await assert.rejects(
+    uploadReleaseAsset(base, {
+      openBlob: async () => { throw new Error(base.token); },
+      fetchImpl: async () => { throw new Error("不应调用"); },
+    }),
+    (error) => {
+      assert.match(error.message, /无法读取待上传资产/);
+      assert.equal(error.message.includes(base.token), false);
+      return true;
+    },
+  );
+});
+
+test("生产上传 adapter 对每个 asset response identity 与 exact API URL fail closed", async (context) => {
+  const base = {
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact: "/tmp/file.bin",
+    token: "test-token",
+  };
+  const mutations = [
+    (asset) => { delete asset.id; },
+    (asset) => { asset.id = 1.5; },
+    (asset) => { asset.name = "wrong.bin"; },
+    (asset) => { asset.state = "starter"; },
+    (asset) => { asset.content_type = "text/plain"; },
+    (asset) => { asset.size = 0; },
+    (asset) => { asset.url = "https://api.github.com:443/repos/cyunlab/narrant/releases/assets/101"; },
+    (asset) => { asset.url += "?private=1"; },
+    (asset) => { asset.url += "#fragment"; },
+    (asset) => { asset.url = "https://user@api.github.com/repos/cyunlab/narrant/releases/assets/101"; },
+    (asset) => { asset.url = "https://api.github.com/repos/other/repo/releases/assets/101"; },
+    (asset) => { asset.browser_download_url = "https://github.com/other/repo/file"; },
+  ];
+  for (const mutation of mutations) {
+    await context.test(mutation.toString(), async () => {
+      const asset = uploadedAsset("file.bin");
+      mutation(asset);
+      await assert.rejects(
+        uploadReleaseAsset(base, {
+          openBlob: async () => new Blob(["binary"]),
+          fetchImpl: async () => uploadResponse(asset),
+        }),
+        /无效 asset identity|错误仓库或下载 URL/,
+      );
+    });
+  }
 });
 
 test("gh runner 等到 close 才返回 exit 后追加的完整 stdout/stderr", async () => {

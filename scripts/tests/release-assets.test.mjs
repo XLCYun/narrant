@@ -60,6 +60,12 @@ function encodeCanonicalFixture(lines) {
   return Buffer.from(adjusted.join("\n")).toString("base64");
 }
 
+/** 解码后变换 minisign inner text，再重新包成 canonical outer-base64。 */
+function rewriteCanonicalOuter(encoded, transform) {
+  const inner = Buffer.from(encoded, "base64").toString("utf8");
+  return Buffer.from(transform(inner)).toString("base64");
+}
+
 /** 创建与客户端 prehashed ED minisign 语义兼容的本地 Ed25519 fixture。 */
 function createSigningFixture(packages, options = {}) {
   const algorithm = options.algorithm ?? "ED";
@@ -196,6 +202,40 @@ test("updater 验签只接受 canonical prehashed ED，并拒绝 legacy/非 cano
     () => verifyTauriUpdaterSignature(packageBytes, signature, signing.publicKey.replace(/=+$/, "")),
     /canonical base64/,
   );
+  for (const mutateInner of [
+    (inner) => `${inner} `,
+    (inner) => `${inner}\n`,
+    (inner) => inner.replaceAll("\n", "\r\n"),
+    (inner) => {
+      const lines = inner.split("\n");
+      lines[2] += " ";
+      return lines.join("\n");
+    },
+  ]) {
+    assert.throws(
+      () => verifyTauriUpdaterSignature(
+        packageBytes,
+        rewriteCanonicalOuter(signature, mutateInner),
+        signing.publicKey,
+      ),
+      /inner text|canonical base64/,
+    );
+  }
+  for (const mutatePublicInner of [
+    (inner) => `${inner} `,
+    (inner) => `${inner}\n`,
+    (inner) => inner.replaceAll("\n", "\r\n"),
+    (inner) => inner.replace("\n", " \n"),
+  ]) {
+    assert.throws(
+      () => verifyTauriUpdaterSignature(
+        packageBytes,
+        signature,
+        rewriteCanonicalOuter(signing.publicKey, mutatePublicInner),
+      ),
+      /inner text|canonical base64/,
+    );
+  }
   const other = createSigningFixture(new Map([["other.exe", packageBytes]]));
   assert.throws(
     () => verifyTauriUpdaterSignature(packageBytes, signature, other.publicKey),
@@ -292,8 +332,8 @@ test("SHA256SUMS 只覆盖七文件且按公开名称稳定排序", (context) =>
   assert.equal(covered.includes("SHA256SUMS"), false);
 });
 
-test("公开元数据拒绝任意完整 SHA 和 allowlist 外 URL，但允许公开仓库链接", (context) => {
-  const fixtures = Array.from({ length: 7 }, () => createNativeAssetFixture());
+test("公开元数据逐个拒绝任意 SHA 和 delimiter 拼接的 allowlist 外 URL", (context) => {
+  const fixtures = Array.from({ length: 21 }, () => createNativeAssetFixture());
   context.after(() => fixtures.forEach((fixture) => rmSync(fixture.directory, { recursive: true, force: true })));
   assert.throws(() => prepareFixture(fixtures[0], { notes: "cyunlab/narrant-private" }), /私有/);
   assert.throws(() => prepareFixture(fixtures[1], { notes: "b".repeat(40) }), /完整 Git SHA/);
@@ -315,5 +355,40 @@ test("公开元数据拒绝任意完整 SHA 和 allowlist 外 URL，但允许公
   );
   assert.doesNotThrow(() => prepareFixture(fixtures[6], {
     notes: "公开说明（https://github.com/cyunlab/narrant/issues/42）。",
+  }));
+  const publicUrl = "https://github.com/cyunlab/narrant/issues/42";
+  for (const [fixture, notes] of [
+    [fixtures[7], `${publicUrl},https://internal.example/secret`],
+    [fixtures[8], `${publicUrl};https://github.com/private/repo/issues/1`],
+    [fixtures[9], `${publicUrl}https://internal.example/adjacent`],
+    [fixtures[10], `[公开](${publicUrl}) 与 [私有](https://internal.example/md)`],
+    [fixtures[11], `https://,${publicUrl}`],
+  ]) {
+    assert.throws(() => prepareFixture(fixture, { notes }), /未允许 URL|无效 URL/);
+  }
+  assert.doesNotThrow(() => prepareFixture(fixtures[12], {
+    notes: `[公开 issue](${publicUrl}), 另见 ${publicUrl};`,
+  }));
+  for (const [fixture, notes] of [
+    [fixtures[13], `<a href="https://internal.example/admin">private</a>`],
+    [fixtures[14], `<img src='//internal.example/image.png'>`],
+    [fixtures[15], `参见 //internal.example/runbook`],
+    [fixtures[16], `[联系](mailto:private@example.com)`],
+    [fixtures[17], `custom-tool://internal/secret`],
+  ]) {
+    assert.throws(
+      () => prepareFixture(fixture, { notes }),
+      /未允许 URL|无效 URL|protocol-relative|URI scheme/,
+    );
+  }
+  assert.doesNotThrow(() => prepareFixture(fixtures[18], {
+    notes: `fix: 保留 conventional subject；[公开](${publicUrl})。`,
+  }));
+  assert.throws(
+    () => prepareFixture(fixtures[19], { notes: "参见 //localhost/internal" }),
+    /protocol-relative/,
+  );
+  assert.doesNotThrow(() => prepareFixture(fixtures[20], {
+    notes: `<a href="${publicUrl}">公开 issue</a>`,
   }));
 });

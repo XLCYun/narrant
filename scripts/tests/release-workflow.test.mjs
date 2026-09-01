@@ -4,6 +4,10 @@ import test from "node:test";
 import { URL } from "node:url";
 
 const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+const reconciliation = readFileSync(
+  new URL("../reconcile-draft-release.mjs", import.meta.url),
+  "utf8",
+);
 const endpoint = "https://github.com/cyunlab/narrant/releases/latest/download/latest.json";
 
 /** 统计工作流中固定文本出现次数，避免只配置了单个平台。 */
@@ -75,6 +79,18 @@ test("公开 Draft 使用跨仓库 token，且完整本地预验严格早于远�
   assert.ok(prepare > 0);
   assert.ok(prepare < reconcile);
   assert.match(workflow, /release-assets\/\*/);
+});
+
+test("Draft 二进制上传固定 uploads.github.com release-ID endpoint，不解析 tag 或 clobber", () => {
+  assert.match(reconciliation, /https:\/\/uploads\.github\.com\/repos\/\$\{repository\}\/releases\/\$\{releaseId\}\/assets\?name=\$\{encodeURIComponent\(name\)\}/);
+  assert.match(reconciliation, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(reconciliation, /"Content-Type": "application\/octet-stream"/);
+  assert.match(reconciliation, /redirect: "error"/);
+  assert.match(reconciliation, /openAsBlob/);
+  assert.match(reconciliation, /MAX_UPLOAD_RESPONSE_BYTES/);
+  assert.doesNotMatch(reconciliation, /"release",\s*"upload"/);
+  assert.doesNotMatch(reconciliation, /--hostname/);
+  assert.doesNotMatch(reconciliation, /--clobber/);
 });
 
 test("Task 5 工作流不包含发布、latest promotion 或 release.published 触发器", () => {

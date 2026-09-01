@@ -87,10 +87,18 @@ function decodeTauriText(value, label) {
 
 /** 解析 Tauri updater 公钥 packet。 */
 function parsePublicKey(encoded) {
-  const lines = decodeTauriText(encoded, "updater 公钥").trim().split(/\r?\n/);
+  const decoded = decodeTauriText(encoded, "updater 公钥");
+  const lines = decoded.split("\n");
+  if (
+    decoded.includes("\r") ||
+    lines.length !== 2 ||
+    lines.some((line) => /\s$/.test(line))
+  ) {
+    throw new Error("updater 公钥 inner text 必须精确两行且 comment 无尾随空白");
+  }
   const packet = decodeCanonicalBase64(lines[1] ?? "", "updater 公钥 packet");
   const algorithm = packet.subarray(0, 2).toString("ascii");
-  if (lines.length !== 2 || packet.length !== 42 || !["Ed", "ED"].includes(algorithm)) {
+  if (packet.length !== 42 || !["Ed", "ED"].includes(algorithm)) {
     throw new Error("updater 公钥结构无效");
   }
   return { id: packet.subarray(2, 10), key: packet.subarray(10) };
@@ -98,12 +106,19 @@ function parsePublicKey(encoded) {
 
 /** 解析 Tauri `.sig` 中的 minisign packet 与可信注释。 */
 function parseUpdaterSignature(encoded) {
-  const lines = decodeTauriText(encoded, "updater 签名").trim().split(/\r?\n/);
+  const decoded = decodeTauriText(encoded, "updater 签名");
+  const lines = decoded.split("\n");
+  if (
+    decoded.includes("\r") ||
+    lines.length !== 4 ||
+    lines.some((line) => /\s$/.test(line))
+  ) {
+    throw new Error("updater 签名 inner text 必须精确四行且 comment 无尾随空白");
+  }
   const packet = decodeCanonicalBase64(lines[1] ?? "", "updater 签名 packet");
   const global = decodeCanonicalBase64(lines[3] ?? "", "updater 全局签名");
   const algorithm = packet.subarray(0, 2).toString("ascii");
   if (
-    lines.length !== 4 ||
     !lines[2].startsWith("trusted comment: ") ||
     packet.length !== 74 ||
     global.length !== 64 ||
@@ -118,6 +133,102 @@ function parseUpdaterSignature(encoded) {
     comment: lines[2].slice("trusted comment: ".length),
     global,
   };
+}
+
+/**
+ * 扫描每一个 http(s) scheme，并以 Markdown/自然语言标点或下一个 scheme 作为 token 终点。
+ * 任何 scheme 都会产生一个独立候选，避免私有 URL 被拼进公开 URL path 后漏检。
+ */
+function extractHttpUrlCandidates(text) {
+  const schemes = [...text.matchAll(/https?:\/\//gi)];
+  return schemes.map((match, index) => {
+    const start = match.index;
+    const nextScheme = schemes[index + 1]?.index ?? text.length;
+    let end = nextScheme;
+    for (let cursor = start; cursor < nextScheme; cursor += 1) {
+      if (/[\s\\<>"'`,;()[\]{}，；（）]/.test(text[cursor])) {
+        end = cursor;
+        break;
+      }
+    }
+    return text.slice(start, end).replace(/[.!。！？]+$/g, "");
+  });
+}
+
+/** 提取 Markdown inline link 的第一个 destination token；不完整语法 fail closed。 */
+function extractMarkdownDestinations(text) {
+  const destinations = [];
+  let cursor = 0;
+  while ((cursor = text.indexOf("](", cursor)) !== -1) {
+    const start = cursor + 2;
+    const end = text.indexOf(")", start);
+    if (end === -1) throw new Error("公开发布元数据包含不完整 Markdown link destination");
+    const body = text.slice(start, end).trim();
+    const bracketed = body.startsWith("<") && body.includes(">")
+      ? body.slice(1, body.indexOf(">"))
+      : body.split(/\s/, 1)[0];
+    if (!bracketed) throw new Error("公开发布元数据包含空 Markdown link destination");
+    destinations.push(bracketed);
+    cursor = end + 1;
+  }
+  return destinations;
+}
+
+/** 提取 HTML 中会产生导航或资源请求的 URL attribute。 */
+function extractHtmlAttributeDestinations(text) {
+  const destinations = [];
+  const pattern = /\b(?:href|src|srcset|action|formaction|poster|cite|data|background|longdesc|manifest|usemap)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"'\\]+))/gi;
+  for (const match of text.matchAll(pattern)) {
+    destinations.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  return destinations;
+}
+
+/** 要求一个 link destination 是 canonical 的 Narrant 公开仓库 HTTPS URL。 */
+function assertAllowedPublicUrl(candidate) {
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error(`公开发布元数据包含无效 URL：${candidate}`);
+  }
+  const publicPath = url.pathname === "/cyunlab/narrant" ||
+    url.pathname.startsWith("/cyunlab/narrant/");
+  if (
+    url.href !== candidate ||
+    url.protocol !== "https:" ||
+    url.hostname !== "github.com" ||
+    url.port ||
+    url.username ||
+    url.password ||
+    !publicPath ||
+    url.pathname.includes("/actions/")
+  ) {
+    throw new Error(`公开发布元数据包含未允许 URL：${candidate}`);
+  }
+}
+
+/** 检查 raw URL、Markdown/HTML destination、protocol-relative 和明确 URI scheme。 */
+function assertAllowedPublicLinks(text) {
+  const candidates = [
+    ...extractHttpUrlCandidates(text),
+    ...extractMarkdownDestinations(text),
+    ...extractHtmlAttributeDestinations(text),
+  ];
+  for (const candidate of candidates) {
+    assertAllowedPublicUrl(candidate);
+  }
+  if (/(?:^|[^A-Za-z0-9+.-:])\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?=[:/?#]|$)/im.test(text)) {
+    throw new Error("公开发布元数据包含 protocol-relative URL");
+  }
+  if (/\b(?:mailto|data|javascript|file|ftp|ssh|git|tel|sms):[^\s<>"'`]*/i.test(text)) {
+    throw new Error("公开发布元数据包含未允许 URI scheme");
+  }
+  for (const match of text.matchAll(/\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g)) {
+    if (!/^https$/i.test(match[1])) {
+      throw new Error(`公开发布元数据包含未允许 URI scheme：${match[1]}`);
+    }
+  }
 }
 
 /** 使用 Node 内置 Ed25519 验证 Tauri updater 包与可信注释。 */
@@ -247,29 +358,7 @@ function assertPublicMetadata({ title, notes, manifestText, assetNames, privateR
   if (/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/i.test(publicText)) {
     throw new Error("公开发布元数据包含完整 Git SHA");
   }
-  const rawUrls = publicText.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
-  for (const rawUrl of rawUrls) {
-    const candidate = rawUrl.replace(/[),.;:\\}\]]+$/g, "");
-    let url;
-    try {
-      url = new URL(candidate);
-    } catch {
-      throw new Error(`公开发布元数据包含无效 URL：${candidate}`);
-    }
-    const publicPath = url.pathname === "/cyunlab/narrant" ||
-      url.pathname.startsWith("/cyunlab/narrant/");
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== "github.com" ||
-      url.port ||
-      url.username ||
-      url.password ||
-      !publicPath ||
-      url.pathname.includes("/actions/")
-    ) {
-      throw new Error(`公开发布元数据包含未允许 URL：${candidate}`);
-    }
-  }
+  assertAllowedPublicLinks(publicText);
 }
 
 /** 生成稳定排序、只覆盖七个非校验和文件的 SHA256SUMS。 */
