@@ -152,6 +152,7 @@ function parseArguments(arguments_) {
   return values;
 }
 
+/** 解析 workflow 参数并运行当前 hosted target 的真实原生升级证据流程。 */
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const result = await runNativeUpdateSmoke(options);

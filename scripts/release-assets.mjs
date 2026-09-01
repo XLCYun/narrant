@@ -404,11 +404,21 @@ export function validateUpdaterManifest(manifest, options) {
   assertManifest(manifest, { tag, version, notes, names, signatures: signatureMap });
 }
 
-/** 拒绝把私有仓库身份、完整源码 SHA 或 Actions 链接写入公开元数据。 */
-function assertPublicMetadata({ title, notes, manifestText, assetNames, privateRepository }) {
+/** 统一拒绝把私有仓库身份、完整源码 SHA 或 allowlist 外目标写入公开元数据。 */
+export function assertPublicReleaseMetadata(options) {
+  const {
+    title,
+    notes,
+    manifestText = "",
+    assetNames = [],
+    privateRepository,
+  } = options;
   const publicText = [title, notes, manifestText, ...assetNames].join("\n");
   const privateIdentity = String(privateRepository ?? "").trim();
-  if (privateIdentity && publicText.toLowerCase().includes(privateIdentity.toLowerCase())) {
+  if (!privateIdentity) {
+    throw new Error("公开发布元数据校验缺少私有仓库身份");
+  }
+  if (publicText.toLowerCase().includes(privateIdentity.toLowerCase())) {
     throw new Error("公开发布元数据包含私有仓库身份");
   }
   if (/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/i.test(publicText)) {
@@ -514,7 +524,7 @@ export function prepareDraftAssetDirectory(options) {
   };
   assertManifest(manifest, { tag, version, notes, names, signatures });
   const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
-  assertPublicMetadata({
+  assertPublicReleaseMetadata({
     title: `Narrant ${version}`,
     notes,
     manifestText,

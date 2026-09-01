@@ -381,6 +381,7 @@ export async function runEvidenceVerifierCli(
   });
 }
 
+/** 执行 aggregate evidence CLI，并只输出不含敏感值的验证结果。 */
 async function main() {
   const result = await runEvidenceVerifierCli();
   process.stdout.write(`已验证 ${result.mode} evidence（${result.targets.length} 个 targets）。\n`);

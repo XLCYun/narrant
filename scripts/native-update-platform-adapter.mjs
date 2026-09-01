@@ -277,12 +277,11 @@ async function installPreviousStable(target, packagePath, version, temporary, co
   return inspectMacApplication(path.join(installRoot, apps[0]), version, command, environment);
 }
 
-/** 编译并预检 macOS exact-window helper 的 Accessibility trust。 */
+/** 编译无需 Accessibility 权限的 macOS exact-application terminate helper。 */
 async function compileMacCloseHelper(temporary, command, environment) {
   const output = path.join(temporary, "close-narrant-window");
-  await command("swiftc", ["-parse-as-library", "-framework", "AppKit", "-framework", "ApplicationServices", MAC_CLOSE_HELPER, "-o", output], { environment });
+  await command("swiftc", ["-parse-as-library", "-framework", "AppKit", MAC_CLOSE_HELPER, "-o", output], { environment });
   await chmod(output, 0o700);
-  await command(output, ["--probe-trust"], { environment, timeoutMilliseconds: 10_000 });
   return output;
 }
 

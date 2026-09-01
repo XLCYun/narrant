@@ -240,6 +240,7 @@ function parseArguments(arguments_) {
   return values;
 }
 
+/** 从受保护 workflow 环境读取 promotion 输入并发布固定 public Release。 */
 async function main() {
   const values = parseArguments(process.argv.slice(2));
   const result = await promoteStableRelease({

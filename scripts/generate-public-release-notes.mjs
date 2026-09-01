@@ -3,7 +3,9 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
+import { assertPublicReleaseMetadata } from "./release-assets.mjs";
 import { VERSION_PATTERN } from "./release-version.mjs";
 
 /** 运行只读 Git 查询并保留提交主题原始顺序。 */
@@ -14,21 +16,24 @@ function git(arguments_) {
   }).trim();
 }
 
-/** 生成不含私有 commit 身份字段的公开 Release Notes。 */
-function main() {
-  const [tag, output] = process.argv.slice(2);
+/** 生成、校验并写入公开 Release Notes；测试可在 git/write seam 注入内存 adapter。 */
+export function generatePublicReleaseNotes(options, dependencies = {}) {
+  const { tag, output, privateRepository } = options;
+  const runGit = dependencies.git ?? git;
+  const writeFile = dependencies.writeFile ?? writeFileSync;
   const version = tag?.startsWith("v") ? tag.slice(1) : "";
   if (!VERSION_PATTERN.test(version) || !output) {
     throw new Error("用法：node scripts/generate-public-release-notes.mjs <vVERSION> <output>");
   }
-  const previousTag = git(["tag", "--list", "v*", "--sort=-v:refname"])
+  const previousTag = runGit(["tag", "--list", "v*", "--sort=-v:refname"])
     .split("\n")
     .find((candidate) => candidate !== tag && VERSION_PATTERN.test(candidate.slice(1)));
   const range = previousTag ? `${previousTag}..${tag}` : tag;
-  const subjects = git(["log", "--pretty=%s", range]);
+  const subjects = runGit(["log", "--pretty=%s", range]);
   const changes = subjects ? subjects.split("\n").map((subject) => `- ${subject}`).join("\n") : "- 本次发布没有用户可见变动。";
+  const title = `Narrant ${version}`;
   const notes = [
-    `## Narrant ${version}`,
+    `## ${title}`,
     "",
     "### 版本变动",
     changes,
@@ -36,13 +41,27 @@ function main() {
     "> Windows x64 安装包当前未进行 Authenticode 签名。",
     "",
   ].join("\n");
-  writeFileSync(output, notes);
+  assertPublicReleaseMetadata({ title, notes, privateRepository });
+  writeFile(output, notes);
+  return { title, notes, range };
 }
 
-try {
-  main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`错误：${message}\n`);
-  process.exitCode = 1;
+/** 从 Actions 环境读取发布身份并调用公开 Notes 生成模块。 */
+function main() {
+  const [tag, output] = process.argv.slice(2);
+  generatePublicReleaseNotes({
+    tag,
+    output,
+    privateRepository: process.env.GITHUB_REPOSITORY,
+  });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`错误：${message}\n`);
+    process.exitCode = 1;
+  }
 }
