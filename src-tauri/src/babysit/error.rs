@@ -15,6 +15,10 @@ pub enum BabysitError {
     RepairExhausted {
         detail: String,
     },
+    /// 模型明确因固定输出预算结束；该失败不能进入格式修复流程。
+    OutputLimit {
+        limit: u64,
+    },
     Cancelled,
     Provider {
         detail: String,
@@ -96,6 +100,7 @@ pub enum BabysitErrorCode {
     UnsupportedFile,
     InvalidProviderOutput,
     RepairExhausted,
+    OutputLimit,
     Cancelled,
     Provider,
     ProgressClosed,
@@ -177,6 +182,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::UnsupportedFile { .. } => BabysitErrorCode::UnsupportedFile,
             BabysitError::InvalidProviderOutput { .. } => BabysitErrorCode::InvalidProviderOutput,
             BabysitError::RepairExhausted { .. } => BabysitErrorCode::RepairExhausted,
+            BabysitError::OutputLimit { .. } => BabysitErrorCode::OutputLimit,
             BabysitError::Cancelled => BabysitErrorCode::Cancelled,
             BabysitError::Provider { .. } | BabysitError::ProviderDiagnostic { .. } => {
                 BabysitErrorCode::Provider
@@ -192,6 +198,7 @@ impl From<BabysitError> for BabysitErrorPayload {
             BabysitError::ModelPreferenceInvalid => None,
             BabysitError::SettingsPersistenceFailed => None,
             BabysitError::RepairExhausted { .. }
+            | BabysitError::OutputLimit { .. }
             | BabysitError::Provider { .. }
             | BabysitError::ProviderDiagnostic { .. }
             | BabysitError::InvalidProviderOutput { .. }
@@ -223,6 +230,9 @@ impl fmt::Display for BabysitError {
                 write!(formatter, "宝宝模式返回格式无效：{detail}")
             }
             Self::RepairExhausted { detail } => write!(formatter, "宝宝模式连续修复失败：{detail}"),
+            Self::OutputLimit { limit } => {
+                write!(formatter, "宝宝模式模型输出已达到固定上限 {limit}")
+            }
             Self::Cancelled => formatter.write_str("宝宝模式分析已取消"),
             Self::Provider { detail } => write!(formatter, "宝宝模式 provider 失败：{detail}"),
             Self::ProviderDiagnostic { detail, .. } => {

@@ -793,6 +793,19 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 }
 
 #[test]
+fn output_limit_payload_uses_a_distinct_non_repairable_code() {
+    let payload = BabysitErrorPayload::from(BabysitError::OutputLimit { limit: 65_536 });
+
+    assert_eq!(
+        serde_json::to_value(payload).unwrap(),
+        serde_json::json!({
+            "code": "output_limit",
+            "detail": "宝宝模式模型输出已达到固定上限 65536"
+        })
+    );
+}
+
+#[test]
 fn custom_transport_payload_serializes_only_whitelisted_diagnostics() {
     let payload = BabysitErrorPayload::from(BabysitError::ProviderDiagnostic {
         detail: "脱敏 provider 失败".to_owned(),

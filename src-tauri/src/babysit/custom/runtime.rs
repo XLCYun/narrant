@@ -247,6 +247,7 @@ fn parse_final_result(call: &ToolCall) -> BabysitFileExplanations {
 fn adapter_error(error: CustomAdapterError) -> BabysitError {
     match error {
         CustomAdapterError::Cancelled => BabysitError::Cancelled,
+        CustomAdapterError::OutputLimit { limit } => BabysitError::OutputLimit { limit },
         CustomAdapterError::Transport(failure) => BabysitError::ProviderDiagnostic {
             detail: CustomAdapterError::Transport(failure.clone()).to_string(),
             diagnostic: crate::babysit::BabysitProviderDiagnostic::custom_transport(

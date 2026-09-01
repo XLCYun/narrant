@@ -414,7 +414,6 @@ impl AnthropicAdapter {
                         AnthropicAdapterError::Transport(
                             CustomTransportFailure::from_prompt_error(
                                 CustomProtocol::AnthropicMessages,
-                                &self.config.base_url,
                                 error,
                             ),
                         )

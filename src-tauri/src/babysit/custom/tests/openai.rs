@@ -167,8 +167,9 @@ fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     assert!(!debug.contains("hash"));
     assert!(!debug.contains("endpoint"));
     assert!(!debug.contains("https://model.example/v1"));
-    assert!(!failure.to_string().contains("origin"));
-    assert!(!failure.to_string().contains("endpoint"));
+    let debug = format!("{failure:?}");
+    assert!(!debug.contains("origin"));
+    assert!(!debug.contains("endpoint"));
 }
 
 #[tokio::test]

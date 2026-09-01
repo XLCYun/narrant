@@ -12,6 +12,7 @@ export type BabysitErrorCode =
   | "unsupported_file"
   | "invalid_provider_output"
   | "repair_exhausted"
+  | "output_limit"
   | "cancelled"
   | "provider"
   | "progress_closed"
@@ -77,6 +78,7 @@ const babysitErrorCodes: ReadonlySet<BabysitErrorCode> = new Set([
   "unsupported_file",
   "invalid_provider_output",
   "repair_exhausted",
+  "output_limit",
   "cancelled",
   "provider",
   "progress_closed",
