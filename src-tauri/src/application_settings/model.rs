@@ -17,6 +17,35 @@ pub(crate) enum ThemePreference {
     Dark,
 }
 
+/// 设备级 Application Language 的稳定取值。
+#[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq, Serialize)]
+pub(crate) enum ApplicationLanguage {
+    /// 使用简体中文界面与后续解释语言。
+    #[serde(rename = "zh-CN")]
+    SimplifiedChinese,
+    /// 使用英文界面与后续解释语言。
+    #[serde(rename = "en-US")]
+    English,
+}
+
+impl ApplicationLanguage {
+    /// 返回用于持久化与跨边界传输的稳定 BCP-47 language tag。
+    #[allow(dead_code, reason = "供后续 Babysit 语言快照消费稳定 tag")]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::SimplifiedChinese => "zh-CN",
+            Self::English => "en-US",
+        }
+    }
+}
+
+impl Default for ApplicationLanguage {
+    /// 为无法访问系统 locale 的静态反序列化场景提供稳定回退值。
+    fn default() -> Self {
+        Self::English
+    }
+}
+
 /// Babysit Mode 支持的稳定 provider 身份。
 #[derive(Clone, Copy, Debug, Default, Deserialize, Hash, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -109,6 +138,9 @@ impl BabysitSettings {
 pub(crate) struct ApplicationSettings {
     pub version: u32,
     pub theme: ThemePreference,
+    /// 当前设备级语言；旧 settings v1 缺少该字段时由应用边界补出。
+    #[serde(default)]
+    pub language: ApplicationLanguage,
     pub babysit: BabysitSettings,
 }
 
@@ -118,6 +150,7 @@ impl Default for ApplicationSettings {
         Self {
             version: SETTINGS_VERSION,
             theme: ThemePreference::System,
+            language: ApplicationLanguage::English,
             babysit: BabysitSettings::default(),
         }
     }

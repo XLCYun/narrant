@@ -3,10 +3,53 @@ use super::custom_connection::{CustomProviderConnection, CustomProviderSettings}
 #[cfg(test)]
 use super::model::BabysitModelPreference;
 use super::model::{
-    ApplicationSettings, BabysitProvider, BabysitProviderSettings, ThemePreference,
-    SETTINGS_VERSION,
+    ApplicationLanguage, ApplicationSettings, BabysitProvider, BabysitProviderSettings,
+    ThemePreference, SETTINGS_VERSION,
 };
 use std::{fmt, io::Write, path::PathBuf, sync::Arc};
+
+/// 为旧 settings v1 缺少语言字段时提供系统 locale 的可注入边界。
+pub(crate) trait SystemLocaleResolver: Send + Sync {
+    /// 返回系统当前 locale；无法识别的值由应用边界映射为英文。
+    fn resolve(&self) -> String;
+}
+
+impl<F> SystemLocaleResolver for F
+where
+    F: Fn() -> String + Send + Sync,
+{
+    /// 允许契约测试直接注入闭包而不暴露文件或平台实现。
+    fn resolve(&self) -> String {
+        self()
+    }
+}
+
+impl<T> SystemLocaleResolver for Arc<T>
+where
+    T: SystemLocaleResolver + ?Sized,
+{
+    /// 保持已擦除 resolver 的共享所有权，同时保留注入式 seam。
+    fn resolve(&self) -> String {
+        (**self).resolve()
+    }
+}
+
+/// 生产环境从操作系统约定的 locale 变量取得当前语言提示。
+struct EnvironmentSystemLocaleResolver;
+
+impl SystemLocaleResolver for EnvironmentSystemLocaleResolver {
+    /// 按 POSIX locale 优先级读取进程继承的系统 locale。
+    fn resolve(&self) -> String {
+        ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or_else(|| "en-US".to_owned())
+    }
+}
 
 /// Application Settings 读取或持久化失败。
 pub(crate) enum ApplicationSettingsError {
@@ -64,23 +107,53 @@ impl std::error::Error for ApplicationSettingsError {}
 pub(crate) struct ApplicationSettingsApplication {
     settings_path: PathBuf,
     credential_adapter: Arc<dyn CustomCredentialAdapter>,
+    locale_resolver: Arc<dyn SystemLocaleResolver>,
 }
 
 impl ApplicationSettingsApplication {
     /// 为首版统一设置文件建立应用边界，不读取或迁移旧文件。
     pub(crate) fn new(settings_path: PathBuf) -> Self {
         let credential_adapter = default_custom_credential_adapter(&settings_path);
-        Self::with_credential_adapter(settings_path, credential_adapter)
+        Self::with_dependencies(
+            settings_path,
+            credential_adapter,
+            Arc::new(EnvironmentSystemLocaleResolver),
+        )
     }
 
     /// 使用注入的凭据适配器建立设置应用，供 E2E 与契约测试隔离系统钥匙串。
+    #[allow(dead_code, reason = "供契约测试注入凭据边界")]
     pub(crate) fn with_credential_adapter(
         settings_path: PathBuf,
         credential_adapter: Arc<dyn CustomCredentialAdapter>,
     ) -> Self {
+        Self::with_dependencies(
+            settings_path,
+            credential_adapter,
+            Arc::new(EnvironmentSystemLocaleResolver),
+        )
+    }
+
+    /// 使用注入的系统 locale resolver 建立设置应用，供公开契约测试固定默认语言。
+    #[allow(dead_code, reason = "供契约测试注入系统 locale 边界")]
+    pub(crate) fn with_locale_resolver<R>(settings_path: PathBuf, resolver: R) -> Self
+    where
+        R: SystemLocaleResolver + 'static,
+    {
+        let credential_adapter = default_custom_credential_adapter(&settings_path);
+        Self::with_dependencies(settings_path, credential_adapter, Arc::new(resolver))
+    }
+
+    /// 组装设置边界依赖，确保所有构造入口共享同一 resolver 生命周期。
+    fn with_dependencies(
+        settings_path: PathBuf,
+        credential_adapter: Arc<dyn CustomCredentialAdapter>,
+        locale_resolver: Arc<dyn SystemLocaleResolver>,
+    ) -> Self {
         Self {
             settings_path,
             credential_adapter,
+            locale_resolver,
         }
     }
 
@@ -88,8 +161,13 @@ impl ApplicationSettingsApplication {
     pub(crate) fn load(&self) -> Result<ApplicationSettings, ApplicationSettingsError> {
         match std::fs::read_to_string(&self.settings_path) {
             Ok(contents) => {
-                let settings: ApplicationSettings =
+                let document: serde_json::Value =
                     serde_json::from_str(&contents).map_err(ApplicationSettingsError::Malformed)?;
+                let mut settings: ApplicationSettings = serde_json::from_value(document.clone())
+                    .map_err(ApplicationSettingsError::Malformed)?;
+                if document.get("language").is_none() {
+                    settings.language = self.resolve_system_language();
+                }
                 if settings.version != SETTINGS_VERSION {
                     return Err(ApplicationSettingsError::UnsupportedVersion(
                         settings.version,
@@ -103,7 +181,7 @@ impl ApplicationSettingsApplication {
                 Ok(settings)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(ApplicationSettings::default())
+                Ok(self.default_settings())
             }
             Err(error) => Err(ApplicationSettingsError::Io(error)),
         }
@@ -115,6 +193,14 @@ impl ApplicationSettingsApplication {
         theme: ThemePreference,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
         self.update(|settings| settings.theme = theme)
+    }
+
+    /// 原子保存 Application Language，并仅在落盘成功后返回新权威快照。
+    pub(crate) fn update_language(
+        &self,
+        language: ApplicationLanguage,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        self.update(|settings| settings.language = language)
     }
 
     /// 原子切换 future analyses 使用的 provider，保留三套 provider 配置。
@@ -242,6 +328,29 @@ impl ApplicationSettingsApplication {
         change(&mut settings);
         self.persist(&settings)?;
         Ok(settings)
+    }
+
+    /// 以当前系统 locale 解析无持久化语言时的完整设备级默认快照。
+    fn default_settings(&self) -> ApplicationSettings {
+        ApplicationSettings {
+            language: self.resolve_system_language(),
+            ..ApplicationSettings::default()
+        }
+    }
+
+    /// 将 locale family 映射为 Application Language 白名单中的一个稳定值。
+    fn resolve_system_language(&self) -> ApplicationLanguage {
+        let locale = self.locale_resolver.resolve();
+        let family = locale
+            .trim()
+            .split(['-', '_', '.'])
+            .next()
+            .unwrap_or_default();
+        if family.eq_ignore_ascii_case("zh") {
+            ApplicationLanguage::SimplifiedChinese
+        } else {
+            ApplicationLanguage::English
+        }
     }
 
     /// 通过同目录临时文件同步落盘并原子替换正式设置文件。

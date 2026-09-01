@@ -1,5 +1,5 @@
 use super::{
-    ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
+    ApplicationLanguage, ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
     CustomProviderConnection, CustomProviderEffort, CustomProviderProtocol, ThemePreference,
 };
 use crate::application_settings::{ApplicationSettingsError, CustomCredentialAdapter};
@@ -9,10 +9,12 @@ use std::sync::{Arc, Mutex};
 fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
-    let application = ApplicationSettingsApplication::new(path.clone());
+    let application =
+        ApplicationSettingsApplication::with_locale_resolver(path.clone(), || "en-US".to_owned());
     let settings = application.load().unwrap();
     assert_eq!(settings.version, 1);
     assert_eq!(settings.theme, ThemePreference::System);
+    assert_eq!(settings.language, ApplicationLanguage::English);
     assert_eq!(settings.babysit.provider, BabysitProvider::Custom);
     assert_eq!(settings.babysit.codex, BabysitProviderSettings::default());
     assert_eq!(
@@ -37,8 +39,118 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
 }
 
 #[test]
+fn missing_settings_resolve_language_from_a_chinese_system_locale_without_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application = ApplicationSettingsApplication::with_locale_resolver(path.clone(), || {
+        "zh-Hans-CN".to_owned()
+    });
+
+    let settings = application.load().unwrap();
+
+    assert_eq!(settings.language, ApplicationLanguage::SimplifiedChinese);
+    assert!(!path.exists());
+}
+
+#[test]
+fn missing_language_uses_non_chinese_system_default_and_preserves_the_existing_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let payload = serde_json::json!({
+        "version": 1,
+        "theme": "dark",
+        "babysit": {
+            "provider": "claude-code",
+            "codex": {"executable": null, "model": "gpt-5", "reasoningEffort": "high"},
+            "claudeCode": {"executable": null, "model": "sonnet", "reasoningEffort": null},
+            "custom": {
+                "protocol": "openai_chat_completions",
+                "baseUrl": "https://example.test/v1",
+                "model": "fixture-model",
+                "effort": "medium",
+                "credentialGeneration": 0
+            }
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+    let application =
+        ApplicationSettingsApplication::with_locale_resolver(path, || "ja-JP".to_owned());
+
+    let settings = application.load().unwrap();
+
+    assert_eq!(settings.language, ApplicationLanguage::English);
+    assert_eq!(settings.theme, ThemePreference::Dark);
+    assert_eq!(settings.babysit.provider, BabysitProvider::ClaudeCode);
+    assert_eq!(settings.babysit.codex.model.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn explicit_application_language_round_trips_and_overrides_the_system_resolver() {
+    for (language, serialized) in [
+        (ApplicationLanguage::SimplifiedChinese, "zh-CN"),
+        (ApplicationLanguage::English, "en-US"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let application =
+            ApplicationSettingsApplication::with_locale_resolver(path.clone(), || {
+                "zh-CN".to_owned()
+            });
+
+        let saved = application.update_language(language).unwrap();
+        let reloaded =
+            ApplicationSettingsApplication::with_locale_resolver(path, || "zh-CN".to_owned())
+                .load()
+                .unwrap();
+
+        assert_eq!(saved.language, language);
+        assert_eq!(reloaded.language, language);
+        assert_eq!(
+            serde_json::to_value(&reloaded).unwrap()["language"],
+            serde_json::json!(serialized)
+        );
+        assert_eq!(language.as_str(), serialized);
+    }
+}
+
+#[test]
+fn unknown_explicit_application_language_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let mut payload = serde_json::to_value(super::ApplicationSettings::default()).unwrap();
+    payload["language"] = serde_json::json!("fr-FR");
+    std::fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+    let application =
+        ApplicationSettingsApplication::with_locale_resolver(path, || "en-US".to_owned());
+
+    assert!(application.load().is_err());
+}
+
+#[test]
+fn failed_language_write_keeps_the_previous_authoritative_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application =
+        ApplicationSettingsApplication::with_locale_resolver(path.clone(), || "zh-CN".to_owned());
+    application
+        .update_language(ApplicationLanguage::SimplifiedChinese)
+        .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+
+    assert!(application
+        .update_language(ApplicationLanguage::English)
+        .is_err());
+    std::fs::remove_dir(&path).unwrap();
+    assert_eq!(
+        application.load().unwrap().language,
+        ApplicationLanguage::SimplifiedChinese
+    );
+}
+
+#[test]
 fn settings_v1_round_trip_uses_stable_provider_ids_and_explicit_substructures() {
-    let payload = serde_json::json!({"version":1,"theme":"dark","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium","credentialGeneration":0}}});
+    let payload = serde_json::json!({"version":1,"theme":"dark","language":"en-US","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium","credentialGeneration":0}}});
     let settings: super::ApplicationSettings = serde_json::from_value(payload.clone()).unwrap();
     assert_eq!(settings.babysit.provider, BabysitProvider::ClaudeCode);
     assert_eq!(serde_json::to_value(settings).unwrap(), payload);
