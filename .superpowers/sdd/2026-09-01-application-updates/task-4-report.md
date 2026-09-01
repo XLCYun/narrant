@@ -103,8 +103,9 @@ Preview command: `pnpm dev:preview`; target: the reusable `preview.html` harness
 ### Progress, failure, staging and settings
 
 - Determinate, viewport 1000 x 800: `aria-valuenow=7340032`, `aria-valuemax=12582912`, accessible
-  label “更新已下载 58%”; no body overflow.
-  - `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/downloading-determinate.png`
+  label “更新已下载 58%”; the actual dialog is visible at 672 x 416, initial focus is Later, and
+  body `scrollWidth === clientWidth` (985 px).
+  - `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/downloading-determinate-real.png`
 - Indeterminate, viewport 1000 x 800: no fake progressbar; status label says total size is unknown and
   reports 3.0 MB downloaded.
   - `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/downloading-indeterminate.png`
@@ -113,15 +114,82 @@ Preview command: `pnpm dev:preview`; target: the reusable `preview.html` harness
   - `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/failed-retry.png`
 - Staged: Later and Restart and Update are present; Retry is absent; dialog is 672 x 356 with no overflow.
   - `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/staged-restart.png`
-- Settings: Application Update region, current version, up-to-date status, named Switch and manual check
-  are present. Switch changed true to false; manual check exposed checking status and disabled action.
-  - `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/settings-up-to-date.png`
+- Settings uses the real `ApplicationSettingsDestination` with all four tabs and the responsive settings
+  shell. The Application Update tab can be reached from Appearance and exposes current version,
+  up-to-date status, the named Switch, and manual check.
+  - Wide 1440 x 900: settings shell 1361 x 812, update region 1007 x 302, tablist 240 x 640,
+    body `scrollWidth === clientWidth` (1425 px).
+    `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/settings-real-wide.png`
+  - Narrow 800 x 844: update region 414 x 322, body 800 / 800 with no horizontal overflow.
+    `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/settings-real-narrow.png`
+  - Phone 390 x 844: settings shell 335 x 624, update region 293 x 386, horizontal tablist
+    335 x 48 (`scrollWidth=339`), body 375 / 375 with no horizontal overflow.
+    `/Users/lizhanfa/projects/narrant/.worktrees/application-updates/.superpowers/sdd/2026-09-01-application-updates/task-4-browser/settings-real-phone.png`
 
 ### Keyboard and focus
 
 - Enter on the focused attention icon opens the dialog and moves focus to Later.
 - Escape closes after the dialog transition and restores focus to the attention icon.
 - Later closes the surface without sending restart; the close icon has accessible name “关闭”.
+
+## Fix round 1 (2026-09-02)
+
+Implementation commit: `d33798d` (`fix: harden application update UI recovery`).
+
+### Review finding mapping
+
+- Preference authority and command races:
+  - Preference requests now carry a monotonic frontend request token in addition to the Rust snapshot
+    sequence. An older command resolve/reject cannot overwrite a later request.
+  - A rejected command sets the “not saved and restored” error only when the same baseline sequence and
+    optimistic value are still current and an actual rollback occurs. If a higher-sequence event has
+    already been accepted, its `automaticDownload` and `preferenceWarning` remain authoritative.
+  - Deferred tests cover event-first/reject, event-first/late resolve, and multiple request results that
+    complete out of order.
+- Retry and Restart command failures:
+  - The update dialog now exposes localized retry/restart command failures with `role="alert"` and
+    `aria-live="assertive"`. Starting the next action clears the old failure, while rejection re-enables
+    the focused button.
+  - Controller/surface integration tests cover both rejects and prove both commands still receive no
+    frontend payload.
+- Real Settings preview and visual evidence:
+  - The reusable Application Update fixture is injected into the real `ApplicationSettingsDestination`
+    with `initialSection="application-update"`; the preview no longer bypasses the real fourth tab or
+    responsive settings shell.
+  - The three Settings screenshots and measurements above replace the former isolated-card evidence.
+    The real determinate dialog screenshot also replaces the previous image that did not show a dialog.
+  - The existing 390 x 844 long-notes evidence remains valid and unchanged.
+- Load recovery and lifecycle:
+  - The hook exposes `reload`, which tears down an existing listener, re-subscribes, and reloads the
+    snapshot. Both empty and previously loaded failure states show an executable Reconnect action.
+  - Tests cover subscribe rejection then recovery, snapshot rejection then recovery, listener cleanup,
+    and StrictMode duplicate mount/unmount without double listeners or stale async writes.
+- Keyboard behavior:
+  - Real WebView acceptance showed that the Base UI button did not reliably synthesize click from
+    Enter/Space. The attention button therefore keeps a narrow explicit key handler; `preventDefault`
+    prevents native double activation, and tests assert exactly one open for Enter and Space.
+
+### Round 1 automated verification
+
+- Final affected Vitest command (same eight files listed above): 8 files, 113 tests passed.
+- Final focused keyboard/component run: 1 file, 22 tests passed.
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm lint`: passed with zero warnings/errors (apart from the repository Node engine notice).
+- `pnpm build`: passed; 2032 modules transformed.
+- `git diff --check`: passed.
+- `quality-gate` was not triggered.
+
+### Round 1 browser verification
+
+- The worker task's in-app browser backend was unavailable, so the main task used its in-app browser
+  binding against the same running `pnpm dev:preview` harness and supplied the evidence recorded here.
+- Real Settings navigation and responsive layout passed at 1440 x 900, 800 x 844, and 390 x 844; the
+  accessibility DOM exposed the actual four-tab tablist and the selected Application Update region.
+- The determinate scenario rendered a real 672 x 416 dialog at 1000 x 800 with the correct progress DOM,
+  visible 58% value, initial Later focus, and no body overflow.
+- At 1440 x 900, focused attention Enter and Space each opened the dialog exactly once and moved focus to
+  Later. Escape closed it and restored focus to the attention button named “有应用更新可用”.
+- The viewport override was reset and the browser tab was closed after acceptance.
 
 ## Residual risks
 
