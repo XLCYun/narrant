@@ -209,7 +209,7 @@ fn generation_prompt(request: &BabysitProviderRequest) -> String {
 Before ({path}):\n{before}\n\
 After ({path}):\n{after}\n\
 Requested targets:\n{targets}\n\
-Write every line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN.\n\
+Write every line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN. Keep every explanation to one or two short sentences and at most 240 Unicode characters.\n\
 The complete before/after content is already provided and is normally sufficient. Do not explore the repository by default.\n\
 Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate line explanation. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available.\n\
 When finished, call final_result with both before and after maps.",
@@ -228,7 +228,7 @@ fn repair_prompt(request: &BabysitProviderRequest, failures: &[ValidationFailure
 File ({path}) before:\n{before}\n\
 File ({path}) after:\n{after}\n\
 Only these validation failures require new explanations:\n{failures}\n\
-Write every repaired line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN.\n\
+Write every repaired line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN. Keep every repaired explanation preferably within 240 Unicode characters.\n\
 The supplied file content and existing conversation are normally sufficient. Do not explore the repository by default.\n\
 Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate repair. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available.\n\
 Return the complete result by calling final_result; preserve valid prior explanations.",

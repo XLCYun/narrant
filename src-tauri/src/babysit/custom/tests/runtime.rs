@@ -201,6 +201,8 @@ async fn runtime_delegates_tool_dispatch_without_a_second_narrant_loop() {
     assert!(prompt.contains("Do not explore the repository by default"));
     assert!(prompt.contains("one specific unresolved symbol or behavior"));
     assert!(prompt.contains("do not repeat or broaden a query"));
+    assert!(prompt.contains("one or two short sentences"));
+    assert!(prompt.contains("at most 240 Unicode characters"));
 }
 
 #[tokio::test]
@@ -368,6 +370,7 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
     assert!(repair_prompt.contains("zh-CN"));
     assert!(repair_prompt.contains("Do not explore the repository by default"));
     assert!(repair_prompt.contains("do not repeat or broaden a query"));
+    assert!(repair_prompt.contains("preferably within 240 Unicode characters"));
 }
 
 #[tokio::test]

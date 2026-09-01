@@ -346,7 +346,7 @@ fn output_schema(request: &BabysitProviderRequest) -> Value {
 fn generation_prompt(request: &BabysitProviderRequest) -> String {
     let prompt_request = numbered_prompt_request(request);
     format!(
-        "请只解释代码，不评价或建议。当前请求已经提供完整的 before/after 内容，通常足以完成解释；默认不要探索仓库。只有某个具体且尚未解析的符号或行为会阻碍准确的逐行解释时，才在当前 Review Workspace 内查询最小必要范围；获得所需信息后，不要重复查询或扩大搜索范围。使用 locale {}。完整请求 JSON：{}",
+        "请只解释代码，不评价或建议。每条解释使用一到两个短句，并且最多 240 个 Unicode 字符。当前请求已经提供完整的 before/after 内容，通常足以完成解释；默认不要探索仓库。只有某个具体且尚未解析的符号或行为会阻碍准确的逐行解释时，才在当前 Review Workspace 内查询最小必要范围；获得所需信息后，不要重复查询或扩大搜索范围。使用 locale {}。完整请求 JSON：{}",
         request.locale, prompt_request
     )
 }

@@ -91,6 +91,8 @@ async fn structured_output_uses_non_persistent_read_only_claude_process() {
     assert!(events.contains("0001|let next = 2;"));
     assert!(events.contains("默认不要探索仓库"));
     assert!(events.contains("不要重复查询或扩大搜索范围"));
+    assert!(events.contains("一到两个短句"));
+    assert!(events.contains("最多 240 个 Unicode 字符"));
 }
 
 #[tokio::test]
