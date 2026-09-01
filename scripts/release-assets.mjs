@@ -10,6 +10,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
+import { URL } from "node:url";
+import { TextDecoder } from "node:util";
 import { gunzipSync } from "node:zlib";
 
 const PUBLIC_REPOSITORY = "cyunlab/narrant";
@@ -54,24 +56,39 @@ function publicDownloadUrl(tag, name) {
   return `https://github.com/${PUBLIC_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(name)}`;
 }
 
-/** 将 Tauri 配置使用的外层 base64 解码为 minisign 文本。 */
-function decodeTauriText(value, label) {
-  const input = String(value ?? "").trim();
+/** 严格解码带 padding、无空白且可逐字节 round-trip 的 standard base64。 */
+function decodeCanonicalBase64(value, label) {
+  const input = String(value ?? "");
   if (!input) {
     throw new Error(`${label} 为空`);
   }
-  const decoded = Buffer.from(input, "base64").toString("utf8");
-  const roundTrip = Buffer.from(decoded).toString("base64").replace(/=+$/, "");
-  if (roundTrip !== input.replace(/=+$/, "")) {
-    throw new Error(`${label} 不是有效 base64`);
+  if (
+    input.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input)
+  ) {
+    throw new Error(`${label} 不是 canonical base64`);
+  }
+  const decoded = Buffer.from(input, "base64");
+  if (decoded.toString("base64") !== input) {
+    throw new Error(`${label} 不是 canonical base64`);
   }
   return decoded;
+}
+
+/** 将 Tauri 配置使用的 canonical outer-base64 解码为 minisign 文本。 */
+function decodeTauriText(value, label) {
+  const decoded = decodeCanonicalBase64(value, label);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(decoded);
+  } catch {
+    throw new Error(`${label} 不是有效 UTF-8`);
+  }
 }
 
 /** 解析 Tauri updater 公钥 packet。 */
 function parsePublicKey(encoded) {
   const lines = decodeTauriText(encoded, "updater 公钥").trim().split(/\r?\n/);
-  const packet = Buffer.from(lines[1] ?? "", "base64");
+  const packet = decodeCanonicalBase64(lines[1] ?? "", "updater 公钥 packet");
   const algorithm = packet.subarray(0, 2).toString("ascii");
   if (lines.length !== 2 || packet.length !== 42 || !["Ed", "ED"].includes(algorithm)) {
     throw new Error("updater 公钥结构无效");
@@ -82,17 +99,17 @@ function parsePublicKey(encoded) {
 /** 解析 Tauri `.sig` 中的 minisign packet 与可信注释。 */
 function parseUpdaterSignature(encoded) {
   const lines = decodeTauriText(encoded, "updater 签名").trim().split(/\r?\n/);
-  const packet = Buffer.from(lines[1] ?? "", "base64");
-  const global = Buffer.from(lines[3] ?? "", "base64");
+  const packet = decodeCanonicalBase64(lines[1] ?? "", "updater 签名 packet");
+  const global = decodeCanonicalBase64(lines[3] ?? "", "updater 全局签名");
   const algorithm = packet.subarray(0, 2).toString("ascii");
   if (
     lines.length !== 4 ||
     !lines[2].startsWith("trusted comment: ") ||
     packet.length !== 74 ||
     global.length !== 64 ||
-    !["Ed", "ED"].includes(algorithm)
+    algorithm !== "ED"
   ) {
-    throw new Error("updater 签名结构无效");
+    throw new Error("updater 签名必须使用 prehashed ED 模式");
   }
   return {
     algorithm,
@@ -118,9 +135,7 @@ export function verifyTauriUpdaterSignature(packageBytes, signatureText, publicK
     format: "der",
     type: "spki",
   });
-  const message = signature.algorithm === "ED"
-    ? createHash("blake2b512").update(packageBytes).digest()
-    : packageBytes;
+  const message = createHash("blake2b512").update(packageBytes).digest();
   if (!verifySignature(null, message, key, signature.signature)) {
     throw new Error("updater 包签名无效");
   }
@@ -134,7 +149,7 @@ export function verifyTauriUpdaterSignature(packageBytes, signatureText, publicK
 }
 
 /** 要求资产列表与期望集合完全相等，并单独报告重复、缺少和意外名称。 */
-function assertExactNames(actualNames, expectedNames, label) {
+export function assertExactNameSet(actualNames, expectedNames, label) {
   const counts = new Map();
   for (const name of actualNames) {
     counts.set(name, (counts.get(name) ?? 0) + 1);
@@ -195,7 +210,7 @@ function assertManifest(manifest, { tag, version, notes, names, signatures }) {
   if (manifest.version !== version || manifest.notes !== notes || Object.hasOwn(manifest, "pub_date")) {
     throw new Error("latest.json 版本错误或 Draft 不应包含 pub_date");
   }
-  assertExactNames(Object.keys(manifest.platforms ?? {}), TARGETS, "manifest 目标集合");
+  assertExactNameSet(Object.keys(manifest.platforms ?? {}), TARGETS, "manifest 目标集合");
   const mappings = [
     ["darwin-aarch64", names.updater.darwin],
     ["windows-x86_64", names.updater.windows],
@@ -223,22 +238,43 @@ export function validateUpdaterManifest(manifest, options) {
 }
 
 /** 拒绝把私有仓库身份、完整源码 SHA 或 Actions 链接写入公开元数据。 */
-function assertPublicMetadata({ title, notes, manifestText, assetNames, privateRepository, sourceSha }) {
+function assertPublicMetadata({ title, notes, manifestText, assetNames, privateRepository }) {
   const publicText = [title, notes, manifestText, ...assetNames].join("\n");
-  const forbidden = [privateRepository, sourceSha]
-    .map((value) => String(value ?? "").trim())
-    .filter(Boolean);
-  if (forbidden.some((value) => publicText.toLowerCase().includes(value.toLowerCase()))) {
-    throw new Error("公开发布元数据包含私有仓库身份或完整源码 SHA");
+  const privateIdentity = String(privateRepository ?? "").trim();
+  if (privateIdentity && publicText.toLowerCase().includes(privateIdentity.toLowerCase())) {
+    throw new Error("公开发布元数据包含私有仓库身份");
   }
-  if (/https:\/\/github\.com\/[^\s)]+\/actions\/(?:runs|workflows)\//i.test(publicText)) {
-    throw new Error("公开发布元数据包含 Actions 运行链接");
+  if (/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/i.test(publicText)) {
+    throw new Error("公开发布元数据包含完整 Git SHA");
+  }
+  const rawUrls = publicText.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
+  for (const rawUrl of rawUrls) {
+    const candidate = rawUrl.replace(/[),.;:\\}\]]+$/g, "");
+    let url;
+    try {
+      url = new URL(candidate);
+    } catch {
+      throw new Error(`公开发布元数据包含无效 URL：${candidate}`);
+    }
+    const publicPath = url.pathname === "/cyunlab/narrant" ||
+      url.pathname.startsWith("/cyunlab/narrant/");
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== "github.com" ||
+      url.port ||
+      url.username ||
+      url.password ||
+      !publicPath ||
+      url.pathname.includes("/actions/")
+    ) {
+      throw new Error(`公开发布元数据包含未允许 URL：${candidate}`);
+    }
   }
 }
 
 /** 生成稳定排序、只覆盖七个非校验和文件的 SHA256SUMS。 */
 function createChecksums(assets, expectedNames) {
-  assertExactNames(assets.map(({ name }) => name), expectedNames, "校验和输入资产集合");
+  assertExactNameSet(assets.map(({ name }) => name), expectedNames, "校验和输入资产集合");
   return [...assets]
     .sort((left, right) => comparePublicNames(left.name, right.name))
     .map(({ name, bytes }) => `${createHash("sha256").update(bytes).digest("hex")}  ${name}\n`)
@@ -267,7 +303,6 @@ export function prepareDraftAssetDirectory(options) {
     notes,
     publicKey,
     privateRepository,
-    sourceSha,
   } = options;
   parseReleaseIdentity(tag, version);
   if (!String(notes ?? "").trim()) {
@@ -283,7 +318,7 @@ export function prepareDraftAssetDirectory(options) {
     `${names.updater.windows}.sig`,
   ];
   const existing = readAssetDirectory(directory);
-  assertExactNames(existing.map(({ name }) => name), nativeNames, "原生产物集合");
+  assertExactNameSet(existing.map(({ name }) => name), nativeNames, "原生产物集合");
   const byName = new Map(existing.map((asset) => [asset.name, asset]));
   for (const name of [
     names.installer.darwin,
@@ -330,7 +365,6 @@ export function prepareDraftAssetDirectory(options) {
     manifestText,
     assetNames: [...nativeNames, names.manifest, names.checksums],
     privateRepository,
-    sourceSha,
   });
   writeFileSync(join(directory, names.manifest), manifestText);
 
@@ -340,7 +374,7 @@ export function prepareDraftAssetDirectory(options) {
   writeFileSync(join(directory, names.checksums), checksums);
   const finalAssets = readAssetDirectory(directory);
   const finalNames = [...sevenNames, names.checksums];
-  assertExactNames(finalAssets.map(({ name }) => name), finalNames, "最终 Draft 资产集合");
+  assertExactNameSet(finalAssets.map(({ name }) => name), finalNames, "最终 Draft 资产集合");
   return {
     title: `Narrant ${version}`,
     names: [...finalNames].sort(comparePublicNames),
@@ -362,5 +396,5 @@ export function assertDraftArtifactPaths(paths, version) {
     names.manifest,
     names.checksums,
   ];
-  assertExactNames(paths.map((path) => basename(path)), expected, "上传资产集合");
+  assertExactNameSet(paths.map((path) => basename(path)), expected, "上传资产集合");
 }

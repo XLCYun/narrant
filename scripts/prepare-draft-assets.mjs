@@ -18,7 +18,6 @@ function main() {
     notes: readFileSync(notesFile, "utf8"),
     publicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
     privateRepository: process.env.GITHUB_REPOSITORY,
-    sourceSha: process.env.GITHUB_SHA,
   });
   process.stdout.write(`已验证 ${result.names.length} 个 Draft 资产。\n`);
 }

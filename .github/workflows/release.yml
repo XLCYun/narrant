@@ -168,7 +168,12 @@ jobs:
           dmg_directory="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
           dmg_path="$dmg_directory/Narrant_${{ needs.validate.outputs.version }}_aarch64.dmg"
           mkdir -p "$dmg_directory"
-          hdiutil create -volname Narrant -srcfolder "$app_path" -ov -format UDZO "$dmg_path"
+          dmg_staging="$(mktemp -d "$RUNNER_TEMP/narrant-dmg-root.XXXXXX")"
+          ditto "$app_path" "$dmg_staging/Narrant.app"
+          ln -s /Applications "$dmg_staging/Applications"
+          test -d "$dmg_staging/Narrant.app"
+          [[ "$(readlink "$dmg_staging/Applications")" == "/Applications" ]]
+          hdiutil create -volname Narrant -srcfolder "$dmg_staging" -ov -format UDZO "$dmg_path"
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg_path"
           codesign --verify --strict --verbose=2 "$dmg_path"
           xcrun notarytool submit "$dmg_path" \
@@ -179,6 +184,46 @@ jobs:
           xcrun stapler staple "$dmg_path"
           xcrun stapler validate "$dmg_path"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+
+          dmg_mount="$(mktemp -d "$RUNNER_TEMP/narrant-dmg-mount.XXXXXX")"
+          dmg_device=""
+          dmg_attached=0
+          # 无论布局或盘内签名验证在哪一步失败，都尝试安全卸载只读镜像。
+          detach_dmg() {
+            local detach_target
+            if (( dmg_attached == 0 )); then
+              return
+            fi
+            detach_target="${dmg_device:-$dmg_mount}"
+            hdiutil detach "$detach_target" || hdiutil detach -force "$detach_target"
+            dmg_attached=0
+          }
+          trap detach_dmg EXIT
+          attach_output="$(hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$dmg_mount")"
+          dmg_attached=1
+          dmg_device="$(awk '$1 ~ /^\/dev\// { device=$1 } END { print device }' <<< "$attach_output")"
+          [[ -n "$dmg_device" ]] || {
+            echo "最终 DMG 已挂载但无法识别设备。" >&2
+            exit 1
+          }
+          mounted_apps=("$dmg_mount"/*.app)
+          [[ ${#mounted_apps[@]} -eq 1 ]] || {
+            echo "最终 DMG 卷根必须只包含唯一 Narrant.app。" >&2
+            exit 1
+          }
+          [[ "$(basename "${mounted_apps[0]}")" == "Narrant.app" ]] || {
+            echo "最终 DMG 卷根的唯一 app 必须命名为 Narrant.app。" >&2
+            exit 1
+          }
+          [[ -L "$dmg_mount/Applications" && "$(readlink "$dmg_mount/Applications")" == "/Applications" ]] || {
+            echo "最终 DMG 缺少指向 /Applications 的安装快捷方式。" >&2
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 "$dmg_mount/Narrant.app"
+          xcrun stapler validate "$dmg_mount/Narrant.app"
+          spctl --assess --type execute --verbose=4 "$dmg_mount/Narrant.app"
+          detach_dmg
+          trap - EXIT
 
           mkdir -p release-assets
           cp "$dmg_path" "release-assets/Narrant_${{ needs.validate.outputs.version }}_aarch64.dmg"

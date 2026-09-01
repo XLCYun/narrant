@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import {
+  createHash,
   generateKeyPairSync,
   sign,
 } from "node:crypto";
@@ -50,34 +51,46 @@ function createAppArchiveFixture() {
   return gzipSync(tar);
 }
 
-/** 创建与 Tauri minisign 外层 base64 格式兼容的本地 Ed25519 fixture。 */
-function createSigningFixture(packages) {
+/** 生成带 padding 的 canonical outer-base64，便于覆盖缺 padding 的拒绝路径。 */
+function encodeCanonicalFixture(lines) {
+  const adjusted = [...lines];
+  while (Buffer.byteLength(adjusted.join("\n")) % 3 === 0) {
+    adjusted[0] += "x";
+  }
+  return Buffer.from(adjusted.join("\n")).toString("base64");
+}
+
+/** 创建与客户端 prehashed ED minisign 语义兼容的本地 Ed25519 fixture。 */
+function createSigningFixture(packages, options = {}) {
+  const algorithm = options.algorithm ?? "ED";
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const rawPublicKey = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
   const id = Buffer.from("0102030405060708", "hex");
   const publicPacket = Buffer.concat([Buffer.from("Ed"), id, rawPublicKey]);
-  const publicText = [
+  const encodedPublicKey = encodeCanonicalFixture([
     "untrusted comment: narrant test key",
     publicPacket.toString("base64"),
-  ].join("\n");
-  const encodedPublicKey = Buffer.from(publicText).toString("base64");
+  ]);
   const signatures = new Map();
   for (const [name, bytes] of packages) {
-    const packageSignature = sign(null, bytes, privateKey);
+    const message = algorithm === "ED"
+      ? createHash("blake2b512").update(bytes).digest()
+      : bytes;
+    const packageSignature = sign(null, message, privateKey);
     const comment = `fixture ${name}`;
     const globalSignature = sign(
       null,
       Buffer.concat([packageSignature, Buffer.from(comment)]),
       privateKey,
     );
-    const signaturePacket = Buffer.concat([Buffer.from("Ed"), id, packageSignature]);
-    const signatureText = [
+    const signaturePacket = Buffer.concat([Buffer.from(algorithm), id, packageSignature]);
+    const signatureText = encodeCanonicalFixture([
       "untrusted comment: narrant test signature",
       signaturePacket.toString("base64"),
       `trusted comment: ${comment}`,
       globalSignature.toString("base64"),
-    ].join("\n");
-    signatures.set(name, `${Buffer.from(signatureText).toString("base64")}\n`);
+    ]);
+    signatures.set(name, signatureText);
   }
   return { publicKey: encodedPublicKey, signatures };
 }
@@ -109,7 +122,6 @@ function prepareFixture(fixture, overrides = {}) {
     notes: "发布说明\n保留换行。\n",
     publicKey: fixture.publicKey,
     privateRepository: "cyunlab/narrant-private",
-    sourceSha: "a".repeat(40),
     ...overrides,
   });
 }
@@ -123,7 +135,7 @@ test("稳定 tag/version 解析严格且可重复", () => {
   assert.throws(() => parseReleaseIdentity("v2.3.5", "2.3.4"), /不匹配/);
 });
 
-test("完整准备生成固定两目标 manifest 并字面保留签名文本", (context) => {
+test("完整准备生成固定两目标 manifest 并字面保留 canonical ED 签名文件", (context) => {
   const fixture = createNativeAssetFixture();
   context.after(() => rmSync(fixture.directory, { recursive: true, force: true }));
   const result = prepareFixture(fixture);
@@ -132,10 +144,14 @@ test("完整准备生成固定两目标 manifest 并字面保留签名文本", (
   assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64", "windows-x86_64"]);
   assert.equal(manifest.pub_date, undefined);
   assert.equal(manifest.notes, "发布说明\n保留换行。\n");
-  assert.equal(
-    manifest.platforms["darwin-aarch64"].signature,
-    fixture.signatures.get(fixture.names.updater.darwin),
+  const signatureFile = readFileSync(
+    join(fixture.directory, `${fixture.names.updater.darwin}.sig`),
+    "utf8",
   );
+  assert.equal(manifest.platforms["darwin-aarch64"].signature, signatureFile);
+  assert.equal(signatureFile, fixture.signatures.get(fixture.names.updater.darwin));
+  assert.doesNotMatch(signatureFile, /\s/);
+  assert.equal(Buffer.from(signatureFile, "base64").toString("base64"), signatureFile);
   assert.match(
     manifest.platforms["windows-x86_64"].url,
     /cyunlab\/narrant\/releases\/download\/v2\.3\.4\/narrant-windows-x86_64-updater\.exe$/,
@@ -143,7 +159,7 @@ test("完整准备生成固定两目标 manifest 并字面保留签名文本", (
   assert.equal(result.names.length, 8);
 });
 
-test("updater 验签接受有效签名并拒绝包篡改、签名损坏和错误公钥", () => {
+test("updater 验签只接受 canonical prehashed ED，并拒绝 legacy/非 canonical/篡改", () => {
   const packageBytes = createPeFixture(5);
   const signing = createSigningFixture(new Map([["updater.exe", packageBytes]]));
   const signature = signing.signatures.get("updater.exe");
@@ -158,6 +174,27 @@ test("updater 验签接受有效签名并拒绝包篡改、签名损坏和错误
   assert.throws(
     () => verifyTauriUpdaterSignature(packageBytes, "not-base64", signing.publicKey),
     /签名/,
+  );
+  const legacy = createSigningFixture(new Map([["legacy.exe", packageBytes]]), { algorithm: "Ed" });
+  assert.throws(
+    () => verifyTauriUpdaterSignature(packageBytes, legacy.signatures.get("legacy.exe"), legacy.publicKey),
+    /prehashed ED/,
+  );
+  assert.throws(
+    () => verifyTauriUpdaterSignature(packageBytes, `${signature}\n`, signing.publicKey),
+    /canonical base64/,
+  );
+  assert.throws(
+    () => verifyTauriUpdaterSignature(packageBytes, signature.replace(/=+$/, ""), signing.publicKey),
+    /canonical base64/,
+  );
+  assert.throws(
+    () => verifyTauriUpdaterSignature(packageBytes, signature, `${signing.publicKey} `),
+    /canonical base64/,
+  );
+  assert.throws(
+    () => verifyTauriUpdaterSignature(packageBytes, signature, signing.publicKey.replace(/=+$/, "")),
+    /canonical base64/,
   );
   const other = createSigningFixture(new Map([["other.exe", packageBytes]]));
   assert.throws(
@@ -255,13 +292,28 @@ test("SHA256SUMS 只覆盖七文件且按公开名称稳定排序", (context) =>
   assert.equal(covered.includes("SHA256SUMS"), false);
 });
 
-test("公开元数据拒绝私有仓库、完整源码 SHA 和 Actions 链接", (context) => {
-  const fixtures = [createNativeAssetFixture(), createNativeAssetFixture(), createNativeAssetFixture()];
+test("公开元数据拒绝任意完整 SHA 和 allowlist 外 URL，但允许公开仓库链接", (context) => {
+  const fixtures = Array.from({ length: 7 }, () => createNativeAssetFixture());
   context.after(() => fixtures.forEach((fixture) => rmSync(fixture.directory, { recursive: true, force: true })));
   assert.throws(() => prepareFixture(fixtures[0], { notes: "cyunlab/narrant-private" }), /私有/);
-  assert.throws(() => prepareFixture(fixtures[1], { notes: "a".repeat(40) }), /私有/);
+  assert.throws(() => prepareFixture(fixtures[1], { notes: "b".repeat(40) }), /完整 Git SHA/);
   assert.throws(
-    () => prepareFixture(fixtures[2], { notes: "https://github.com/org/repo/actions/runs/123" }),
-    /Actions/,
+    () => prepareFixture(fixtures[2], { notes: "https://github.com/other/private/issues/7" }),
+    /未允许 URL/,
   );
+  assert.throws(
+    () => prepareFixture(fixtures[3], { notes: "https://git.internal.example/review/42" }),
+    /未允许 URL/,
+  );
+  assert.throws(
+    () => prepareFixture(fixtures[4], { notes: "http://github.com/cyunlab/narrant/issues/1" }),
+    /未允许 URL/,
+  );
+  assert.throws(
+    () => prepareFixture(fixtures[5], { notes: "https://github.com/cyunlab/narrant/actions/runs/123" }),
+    /未允许 URL/,
+  );
+  assert.doesNotThrow(() => prepareFixture(fixtures[6], {
+    notes: "公开说明（https://github.com/cyunlab/narrant/issues/42）。",
+  }));
 });

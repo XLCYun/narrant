@@ -6,6 +6,7 @@ import process from "node:process";
 
 import {
   assertDraftArtifactPaths,
+  assertExactNameSet,
   parseReleaseIdentity,
 } from "./release-assets.mjs";
 
@@ -28,10 +29,25 @@ function parseRelease(result, context) {
   } catch {
     throw new Error(`${context}返回无效 JSON`);
   }
-  if (!release || typeof release.id !== "number" || typeof release.draft !== "boolean") {
+  if (
+    !release ||
+    typeof release.id !== "number" ||
+    typeof release.draft !== "boolean" ||
+    typeof release.tag_name !== "string"
+  ) {
     throw new Error(`${context}缺少 Release 身份字段`);
   }
   return release;
+}
+
+/** 要求回读对象仍是同一个 tag、同一个 ID 且保持 Draft。 */
+function assertDraftIdentity(release, tag, expectedId, context) {
+  if (release.id !== expectedId || release.tag_name !== tag) {
+    throw new Error(`${context}的 Release ID/tag 已变化`);
+  }
+  if (!release.draft) {
+    throw new Error(`${context}拒绝修改已发布 Release ${tag}`);
+  }
 }
 
 /** 读取指定 tag 的 Release；只有明确的 HTTP 404 才表示尚未创建。 */
@@ -49,31 +65,22 @@ async function lookupRelease(runGh, repository, tag) {
   throw new Error(`无法检查 Release ${tag}：${result.stderr.trim() || `gh 退出码 ${result.exitCode}`}`);
 }
 
+/** 以 immutable release ID 紧邻 mutation 回读并复核 Draft 身份。 */
+async function readDraftById(runGh, repository, tag, releaseId, context) {
+  const result = await requireSuccess(
+    runGh(["api", `repos/${repository}/releases/${releaseId}`]),
+    `${context}回读 Draft`,
+  );
+  const release = parseRelease(result, `${context}回读 Draft`);
+  assertDraftIdentity(release, tag, releaseId, context);
+  return release;
+}
+
 /** 要求 API 回读的 Release 仍是目标 Draft 且资产名集合完全一致。 */
-function assertUploadedDraft(release, tag, expectedNames) {
-  if (!release.draft) {
-    throw new Error(`拒绝接受已发布 Release ${tag}`);
-  }
-  if (release.tag_name !== tag) {
-    throw new Error(`Release tag 回读不匹配：${release.tag_name ?? "<missing>"}`);
-  }
+function assertUploadedDraft(release, tag, releaseId, expectedNames) {
+  assertDraftIdentity(release, tag, releaseId, "上传后");
   const actualNames = (release.assets ?? []).map((asset) => asset.name);
-  const counts = new Map();
-  for (const name of actualNames) {
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  const duplicates = [...counts].filter(([, count]) => count > 1).map(([name]) => name);
-  const expected = new Set(expectedNames);
-  const missing = expectedNames.filter((name) => !counts.has(name));
-  const unexpected = [...counts.keys()].filter((name) => !expected.has(name));
-  if (duplicates.length || missing.length || unexpected.length) {
-    throw new Error([
-      "上传后 Draft 资产集合不精确",
-      duplicates.length ? `重复：${duplicates.sort().join(", ")}` : "",
-      missing.length ? `缺少：${missing.sort().join(", ")}` : "",
-      unexpected.length ? `意外：${unexpected.sort().join(", ")}` : "",
-    ].filter(Boolean).join("；"));
-  }
+  assertExactNameSet(actualNames, expectedNames, "上传后 Draft 资产集合");
 }
 
 /**
@@ -94,34 +101,36 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
 
   const current = await lookupRelease(runGh, repository, tag);
   let outcome;
+  let releaseId;
   if (current) {
-    if (!current.draft) {
-      throw new Error(`拒绝修改已发布 Release ${tag}`);
-    }
+    assertDraftIdentity(current, tag, current.id, "初始查询");
+    releaseId = current.id;
     for (const asset of current.assets ?? []) {
       if (typeof asset.id !== "number") {
         throw new Error("Draft 资产缺少可验证的 asset id");
       }
+      await readDraftById(runGh, repository, tag, releaseId, "删除旧资产前");
       await requireSuccess(
         runGh(["api", "--method", "DELETE", `repos/${repository}/releases/assets/${asset.id}`]),
         `删除 Draft 旧资产 ${asset.name ?? asset.id}`,
       );
+      await readDraftById(runGh, repository, tag, releaseId, "删除旧资产后");
     }
+    await readDraftById(runGh, repository, tag, releaseId, "更新元数据前");
     await requireSuccess(
       runGh([
-        "release",
-        "edit",
-        tag,
-        "--repo",
-        repository,
-        "--draft",
-        "--title",
-        title,
-        "--notes-file",
-        notesFile,
+        "api",
+        "--method",
+        "PATCH",
+        `repos/${repository}/releases/${releaseId}`,
+        "-f",
+        `name=${title}`,
+        "-F",
+        `body=@${notesFile}`,
       ]),
       "更新 Draft 元数据",
     );
+    await readDraftById(runGh, repository, tag, releaseId, "更新元数据后");
     outcome = "updated";
   } else {
     await requireSuccess(
@@ -139,34 +148,62 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
       ]),
       "创建 Draft",
     );
+    const created = await lookupRelease(runGh, repository, tag);
+    if (!created) {
+      throw new Error("创建后无法回读 Draft Release");
+    }
+    assertDraftIdentity(created, tag, created.id, "创建后");
+    releaseId = created.id;
+    await readDraftById(runGh, repository, tag, releaseId, "创建后身份确认");
     outcome = "created";
   }
 
+  await readDraftById(runGh, repository, tag, releaseId, "上传前");
   await requireSuccess(
     runGh(["release", "upload", tag, ...artifacts, "--repo", repository, "--clobber"]),
     "上传 Draft 资产",
   );
-  const uploaded = await lookupRelease(runGh, repository, tag);
-  if (!uploaded) {
-    throw new Error("上传后无法回读 Draft Release");
-  }
-  assertUploadedDraft(uploaded, tag, artifacts.map((artifact) => artifact.split(/[\\/]/).at(-1)));
+  const uploaded = await readDraftById(runGh, repository, tag, releaseId, "上传后");
+  assertUploadedDraft(
+    uploaded,
+    tag,
+    releaseId,
+    artifacts.map((artifact) => artifact.split(/[\\/]/).at(-1)),
+  );
   return { outcome, releaseId: uploaded.id };
 }
 
 /** 不经 shell 启动 gh，避免 tag、路径或标题被二次解释。 */
-export function runGhCommand(arguments_) {
+export function runGhCommand(arguments_, dependencies = {}) {
+  const spawnProcess = dependencies.spawnProcess ?? spawn;
   return new Promise((resolve) => {
-    const child = spawn("gh", arguments_, {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    let child;
+    try {
+      child = spawnProcess("gh", arguments_, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolve({ exitCode: -1, stdout: "", stderr: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     let stdout = "";
     let stderr = "";
+    let processError;
+    let settled = false;
+    const settleOnClose = (code) => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        exitCode: processError ? -1 : code ?? -1,
+        stdout,
+        stderr: processError ? [stderr, processError.message].filter(Boolean).join("\n") : stderr,
+      });
+    };
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.once("error", (error) => resolve({ exitCode: -1, stdout, stderr: error.message }));
-    child.once("exit", (code) => resolve({ exitCode: code ?? -1, stdout, stderr }));
+    child.once("error", (error) => { processError = error; });
+    child.once("close", settleOnClose);
   });
 }
 
