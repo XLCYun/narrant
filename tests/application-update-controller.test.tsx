@@ -42,6 +42,8 @@ function Harness({ application: port }: { application: ApplicationUpdateApplicat
   const update = useApplicationUpdate(port);
   return <>
     <output aria-label="sequence">{update.snapshot?.sequence}</output>
+    <output aria-label="pending">{update.pending}</output>
+    <output aria-label="command error">{update.commandError}</output>
     <button onClick={() => void update.setAutomaticDownload(false)}>force off</button>
     <button onClick={() => void update.setAutomaticDownload(true)}>force on</button>
     <ApplicationUpdateSettings update={update} />
@@ -111,6 +113,25 @@ describe("Application Update controller", () => {
     expect(screen.getByText(/持久保存尚未确认/)).toHaveAttribute("role", "status");
   });
 
+  it("偏好 reject 错误会被较晚的权威 warning event 清理", async () => {
+    const fixture = application(snapshot(1, true));
+    vi.mocked(fixture.port.setAutomaticDownload).mockRejectedValue(new Error("rejected"));
+    render(<Harness application={fixture.port} />);
+    const toggle = await screen.findByRole("switch", { name: "自动下载更新" });
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getByLabelText("command error")).toHaveTextContent("preference"));
+    act(() => fixture.emit({
+      ...snapshot(2, false),
+      preferenceWarning: { kind: "durability_unknown", category: "storage", message: "event" },
+    }));
+
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("2");
+    expect(screen.getByLabelText("command error")).toBeEmptyDOMElement();
+    expect(screen.getByText(/持久保存尚未确认/)).toHaveAttribute("role", "status");
+  });
+
   it("权威事件先到而偏好 IPC 后拒绝时不回滚也不留下过时错误", async () => {
     const fixture = application(snapshot(1, true));
     const command = deferred<ApplicationUpdateSnapshot>();
@@ -147,7 +168,7 @@ describe("Application Update controller", () => {
     expect(screen.queryByText(/未能保存/)).not.toBeInTheDocument();
   });
 
-  it("多个偏好请求乱序完成时旧结果不能覆盖后发意图", async () => {
+  it("A(false) 与 B(true) 都 reject 时回滚到唯一权威值而非另一个乐观值", async () => {
     const fixture = application(snapshot(1, true));
     const first = deferred<ApplicationUpdateSnapshot>();
     const second = deferred<ApplicationUpdateSnapshot>();
@@ -161,11 +182,133 @@ describe("Application Update controller", () => {
     fireEvent.click(screen.getByRole("button", { name: "force on" }));
     expect(fixture.port.setAutomaticDownload).toHaveBeenNthCalledWith(1, false);
     expect(fixture.port.setAutomaticDownload).toHaveBeenNthCalledWith(2, true);
-    await act(async () => second.resolve(snapshot(4, true)));
-    await act(async () => first.resolve(snapshot(3, false)));
+    expect(screen.getByLabelText("pending")).toHaveTextContent("preference");
+    await act(async () => second.reject(new Error("B rejected")));
+    await act(async () => first.reject(new Error("A rejected")));
 
     expect(screen.getByRole("switch", { name: "自动下载更新" })).toBeChecked();
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("1");
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("command error")).toHaveTextContent("preference");
+  });
+
+  it("当前 B reject 后旧请求 A 的更高 sequence 成功会清理错误并成为权威", async () => {
+    const fixture = application(snapshot(1, true));
+    const first = deferred<ApplicationUpdateSnapshot>();
+    const second = deferred<ApplicationUpdateSnapshot>();
+    vi.mocked(fixture.port.setAutomaticDownload)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    render(<Harness application={fixture.port} />);
+    await screen.findByRole("switch", { name: "自动下载更新" });
+
+    fireEvent.click(screen.getByRole("button", { name: "force off" }));
+    fireEvent.click(screen.getByRole("button", { name: "force on" }));
+    await act(async () => second.reject(new Error("B rejected")));
+    expect(screen.getByLabelText("command error")).toHaveTextContent("preference");
+
+    await act(async () => first.resolve({
+      ...snapshot(5, false),
+      preferenceWarning: { kind: "state_unknown", category: "storage", message: "A" },
+    }));
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).not.toBeChecked();
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("5");
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("command error")).toBeEmptyDOMElement();
+    expect(screen.getByText(/无法确认自动下载偏好的当前值/)).toHaveAttribute("role", "status");
+  });
+
+  it("B sequence 4 先成功而旧 token A sequence 5 后成功时仍接受最新权威 sequence", async () => {
+    const fixture = application(snapshot(1, true));
+    const first = deferred<ApplicationUpdateSnapshot>();
+    const second = deferred<ApplicationUpdateSnapshot>();
+    vi.mocked(fixture.port.setAutomaticDownload)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    render(<Harness application={fixture.port} />);
+    await screen.findByRole("switch", { name: "自动下载更新" });
+
+    fireEvent.click(screen.getByRole("button", { name: "force off" }));
+    fireEvent.click(screen.getByRole("button", { name: "force on" }));
+    await act(async () => second.resolve(snapshot(4, true)));
     expect(screen.getByLabelText("sequence")).toHaveTextContent("4");
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).toBeChecked();
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+
+    await act(async () => first.resolve(snapshot(5, false)));
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("5");
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).not.toBeChecked();
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("command error")).toBeEmptyDOMElement();
+  });
+
+  it("双 reject 期间插入权威 warning event 时显示意图，settle 后回到该权威值", async () => {
+    const fixture = application(snapshot(1, true));
+    const first = deferred<ApplicationUpdateSnapshot>();
+    const second = deferred<ApplicationUpdateSnapshot>();
+    vi.mocked(fixture.port.setAutomaticDownload)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    render(<Harness application={fixture.port} />);
+    await screen.findByRole("switch", { name: "自动下载更新" });
+
+    fireEvent.click(screen.getByRole("button", { name: "force off" }));
+    fireEvent.click(screen.getByRole("button", { name: "force on" }));
+    act(() => fixture.emit({
+      ...snapshot(2, false),
+      preferenceWarning: { kind: "durability_unknown", category: "storage", message: "redacted" },
+    }));
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).toBeChecked();
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("2");
+    expect(screen.getByLabelText("pending")).toHaveTextContent("preference");
+    expect(screen.getByText(/持久保存尚未确认/)).toHaveAttribute("role", "status");
+
+    await act(async () => second.reject(new Error("B rejected")));
+    await act(async () => first.reject(new Error("A rejected")));
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).not.toBeChecked();
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("2");
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("command error")).toBeEmptyDOMElement();
+    expect(screen.getByText(/持久保存尚未确认/)).toHaveAttribute("role", "status");
+  });
+
+  it("event/warning 与 B4/A5 交错时逐 sequence 收敛并保留各自权威 warning", async () => {
+    const fixture = application(snapshot(1, true));
+    const first = deferred<ApplicationUpdateSnapshot>();
+    const second = deferred<ApplicationUpdateSnapshot>();
+    vi.mocked(fixture.port.setAutomaticDownload)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    render(<Harness application={fixture.port} />);
+    await screen.findByRole("switch", { name: "自动下载更新" });
+
+    fireEvent.click(screen.getByRole("button", { name: "force off" }));
+    fireEvent.click(screen.getByRole("button", { name: "force on" }));
+    act(() => fixture.emit({
+      ...snapshot(2, false),
+      preferenceWarning: { kind: "durability_unknown", category: "storage", message: "event" },
+    }));
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).toBeChecked();
+    expect(screen.getByText(/持久保存尚未确认/)).toBeVisible();
+
+    await act(async () => second.resolve({
+      ...snapshot(4, true),
+      preferenceWarning: { kind: "durability_unknown", category: "storage", message: "B" },
+    }));
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("4");
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).toBeChecked();
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+    expect(screen.getByText(/持久保存尚未确认/)).toBeVisible();
+
+    await act(async () => first.resolve({
+      ...snapshot(5, false),
+      preferenceWarning: { kind: "state_unknown", category: "storage", message: "A" },
+    }));
+    expect(screen.getByLabelText("sequence")).toHaveTextContent("5");
+    expect(screen.getByRole("switch", { name: "自动下载更新" })).not.toBeChecked();
+    expect(screen.getByLabelText("pending")).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("command error")).toBeEmptyDOMElement();
+    expect(screen.getByText(/无法确认自动下载偏好的当前值/)).toHaveAttribute("role", "status");
   });
 
   it("订阅失败后可显式重新连接并成功读取快照", async () => {
