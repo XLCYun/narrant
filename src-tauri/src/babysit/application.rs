@@ -61,6 +61,16 @@ pub(super) struct CacheKey {
     pub(super) reasoning_effort: String,
 }
 
+/// 一次分析启动时从同一 Application Settings 快照冻结的 provider/runtime/language 组合。
+struct FrozenBabysitAnalysis {
+    /// 当前分析实际选中的稳定 provider identity，参与缓存隔离。
+    provider_identity: crate::application_settings::BabysitProvider,
+    /// 已完成 readiness、模型与 effort 解析的 provider 能力快照。
+    prepared: PreparedBabysitAnalysis,
+    /// 生成开始时读取的设备级 Application Language；运行期间不再重读设置。
+    language: crate::application_settings::ApplicationLanguage,
+}
+
 /// 负责 eligibility、provider orchestration、校验和 process-local cache 的深模块。
 pub struct BabysitApplication {
     pub(super) model_catalogs: Mutex<
@@ -161,8 +171,8 @@ impl BabysitApplication {
         &self,
         workspace_path: &Path,
     ) -> Result<(), BabysitError> {
-        let (_, prepared, _) = self.prepare_selected_analysis(workspace_path).await?;
-        drop(prepared);
+        let frozen = self.prepare_selected_analysis(workspace_path).await?;
+        drop(frozen);
         Ok(())
     }
 
@@ -307,7 +317,11 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
-        let (selected_identity, prepared, locale) = self
+        let FrozenBabysitAnalysis {
+            provider_identity,
+            prepared,
+            language,
+        } = self
             .prepare_selected_analysis(Path::new(&request.workspace_path))
             .await?;
         let selected_provider = prepared.provider;
@@ -317,9 +331,9 @@ impl BabysitApplication {
             snapshot_id: request.identity.snapshot_id.clone(),
             path: request.path.clone(),
             // 语言和 provider/model/effort 一样来自本次启动快照，不能读取调用方输入。
-            locale: locale.clone(),
+            locale: language.as_str().to_owned(),
             detected_language: request.detected_language.clone(),
-            provider_id: selected_identity.identity().to_owned(),
+            provider_id: provider_identity.identity().to_owned(),
             process_generation: prepared.process_generation,
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
             model: resolved.model.clone(),
@@ -339,7 +353,12 @@ impl BabysitApplication {
         }
 
         notify(BabysitProgress::Generating)?;
-        let mut provider_request = build_provider_request(&request, &content, locale)?;
+        let mut provider_request = build_provider_request(
+            &request,
+            &content,
+            // Provider transport 只在边界处接收稳定 BCP-47 tag 的 owned String。
+            language.as_str().to_owned(),
+        )?;
         provider_request.model = resolved.model;
         provider_request.reasoning_effort = resolved.reasoning_effort;
         let mut output = selected_provider
@@ -410,14 +429,7 @@ impl BabysitApplication {
     async fn prepare_selected_analysis(
         &self,
         workspace_path: &Path,
-    ) -> Result<
-        (
-            crate::application_settings::BabysitProvider,
-            PreparedBabysitAnalysis,
-            String,
-        ),
-        BabysitError,
-    > {
+    ) -> Result<FrozenBabysitAnalysis, BabysitError> {
         let selected_settings = self
             .settings
             .as_ref()
@@ -425,13 +437,13 @@ impl BabysitApplication {
             .transpose()
             // 语言是 provider request 的权威输入；无法读取设置时必须在 provider 启动前失败。
             .map_err(|_| BabysitError::SettingsPersistenceFailed)?;
-        let (selected_identity, selected_preference, locale) = match selected_settings.as_ref() {
+        let (selected_identity, selected_preference, language) = match selected_settings.as_ref() {
             Some(settings) => {
                 let selected_identity = settings.babysit.provider;
                 (
                     selected_identity,
                     Some(settings.babysit.provider_preference(selected_identity)),
-                    settings.language.as_str().to_owned(),
+                    settings.language,
                 )
             }
             None => {
@@ -441,7 +453,7 @@ impl BabysitApplication {
                     (
                         crate::application_settings::BabysitProvider::Codex,
                         None,
-                        "en-US".to_owned(),
+                        crate::application_settings::ApplicationLanguage::English,
                     )
                 }
                 #[cfg(not(test))]
@@ -463,7 +475,11 @@ impl BabysitApplication {
         let prepared = selected_bundle
             .prepare_analysis(workspace_path, selected_preference.as_ref())
             .await?;
-        Ok((selected_identity, prepared, locale))
+        Ok(FrozenBabysitAnalysis {
+            provider_identity: selected_identity,
+            prepared,
+            language,
+        })
     }
 
     /// 暴露缓存清理 seam；Review 关闭和应用退出时由后续生命周期 issue 调用。
