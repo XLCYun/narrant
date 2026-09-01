@@ -73,7 +73,9 @@ test("private identity、SHA、issue/PR URL 与 GFM autolink 均在写文件前 
     ["private repository URL", "fix: https://github.com/cyunlab/narrant-private/issues/7", /私有仓库身份/],
     ["private issue URL", "fix: https://github.com/other/private/issues/8", /未允许 URL/],
     ["private PR Markdown", "fix: [内部 PR](https://github.com/other/private/pull/9)", /未允许 URL/],
-    ["full SHA", `fix: ${"a".repeat(40)}`, /完整 Git SHA/],
+    ["abbreviated SHA", "fix: leaked commit deadbeef", /Git SHA/],
+    ["shortest abbreviated SHA", "fix: leaked commit 0a1b2c3", /Git SHA/],
+    ["full SHA", `fix: ${"a".repeat(40)}`, /Git SHA/],
     ["GFM bare www", "fix: www.internal.example/runbook", /未允许 URL/],
     ["GFM email autolink", "fix: private@example.com", /未允许 URL/],
   ];

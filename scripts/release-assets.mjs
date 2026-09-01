@@ -421,8 +421,8 @@ export function assertPublicReleaseMetadata(options) {
   if (publicText.toLowerCase().includes(privateIdentity.toLowerCase())) {
     throw new Error("公开发布元数据包含私有仓库身份");
   }
-  if (/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/i.test(publicText)) {
-    throw new Error("公开发布元数据包含完整 Git SHA");
+  if (/(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])/i.test(publicText)) {
+    throw new Error("公开发布元数据包含 7–40 位 Git SHA");
   }
   for (const document of [title, notes, manifestText, ...assetNames]) {
     assertAllowedPublicLinks(document);

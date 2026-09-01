@@ -20,6 +20,7 @@ import { gzipSync } from "node:zlib";
 
 import {
   assertDraftArtifactPaths,
+  assertPublicReleaseMetadata,
   parseReleaseIdentity,
   prepareDraftAssetDirectory,
   releaseAssetNames,
@@ -144,6 +145,24 @@ test("稳定 tag/version 解析严格且可重复", () => {
   });
   assert.throws(() => parseReleaseIdentity("2.3.4", "2.3.4"), /不匹配/);
   assert.throws(() => parseReleaseIdentity("v2.3.5", "2.3.4"), /不匹配/);
+});
+
+test("canonical metadata validator 拒绝独立 7–40 位 SHA 且不截取版本号或普通单词", () => {
+  const options = {
+    title: "Narrant 2.3.4",
+    notes: "fix: safe public metadata",
+    privateRepository: "cyunlab/narrant-private",
+  };
+  for (const sha of ["0a1b2c3", "deadbeef", "abcdef123456", "a".repeat(40)]) {
+    assert.throws(
+      () => assertPublicReleaseMetadata({ ...options, notes: `fix: leaked ${sha}` }),
+      /7–40 位 Git SHA/,
+    );
+  }
+  assert.doesNotThrow(() => assertPublicReleaseMetadata({
+    ...options,
+    notes: "fix: feedback 文案；版本 v1.2.3 / 2026.09.02；短 token abc123",
+  }));
 });
 
 test("完整准备生成固定两目标 manifest 并字面保留 canonical ED 签名文件", (context) => {
@@ -432,7 +451,7 @@ test("公开元数据逐个拒绝任意 SHA 和 delimiter 拼接的 allowlist �
   const fixtures = Array.from({ length: 28 }, () => createNativeAssetFixture());
   context.after(() => fixtures.forEach((fixture) => rmSync(fixture.directory, { recursive: true, force: true })));
   assert.throws(() => prepareFixture(fixtures[0], { notes: "cyunlab/narrant-private" }), /私有/);
-  assert.throws(() => prepareFixture(fixtures[1], { notes: "b".repeat(40) }), /完整 Git SHA/);
+  assert.throws(() => prepareFixture(fixtures[1], { notes: "b".repeat(40) }), /Git SHA/);
   assert.throws(
     () => prepareFixture(fixtures[2], { notes: "https://github.com/other/private/issues/7" }),
     /未允许 URL/,
