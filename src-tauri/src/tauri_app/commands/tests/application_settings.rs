@@ -146,7 +146,6 @@ async fn custom_typed_command_seam_round_trips_connection_and_invalidates_comple
             snapshot_id: "snapshot".to_owned(),
         },
         path: "src/example.rs".to_owned(),
-        locale: "zh-CN".to_owned(),
         workspace_path: directory.path().display().to_string(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::ReuseCached,

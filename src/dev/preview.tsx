@@ -331,7 +331,7 @@ function ReviewReaderPreview({
   const [view, setView] = useState<"overview" | "file-changes">(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
   const babysitRequest = selectedPath
-    ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" as const, detectedLanguage: "typescript" }
+    ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, detectedLanguage: "typescript" }
     : undefined;
   const babysitExplanations: BabysitFileExplanations = {
     before: selectedContent?.before ? { "1": "定义当前文件的旧实现入口。", "2": "返回修改前的阅读器结果。" } : {},

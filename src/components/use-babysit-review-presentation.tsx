@@ -126,7 +126,7 @@ function BabysitFooter({ state, onCancel, onRetry, onOpenApplicationSettings, la
 
 /** 收拢 Babysit 的启动、筛选和状态 UI，让 Review Reader 只消费展示投影。 */
 export function useBabysitReviewPresentation(input: BabysitReviewPresentationInput): BabysitReviewPresentation {
-  const { t, i18n } = useTranslation(["common", "review"]);
+  const { t } = useTranslation(["common", "review"]);
   const { babysit, reviewId, snapshotId, selectedPath, onOpenApplicationSettings } = input;
   const state = babysit?.state;
   const running = state ? isBabysitRunning(state) : false;
@@ -136,7 +136,6 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   const reasonId = useId();
   const eligibility = babysit?.eligibility;
   const enabled = eligibility?.kind === "resolved" && Boolean(eligibility.result?.eligible);
-  const locale = i18n.resolvedLanguage ?? i18n.language;
   const eligibilityLabels: Record<BabysitEligibilityReason, string> = {
     non_text: t("review:babysitUnsupportedBinary"),
     generated_or_vendored: t("review:babysitUnsupportedGenerated"),
@@ -150,11 +149,11 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   /** 对当前文件只启动一次分析，首次点击与后续换文件共用同一入口。 */
   const start = useCallback(() => {
     if (!babysit || !enabled || !selectedPath || state?.kind !== "idle") return;
-    const identity = `${reviewId}:${snapshotId}:${selectedPath}:${locale}`;
+    const identity = `${reviewId}:${snapshotId}:${selectedPath}`;
     if (explainedIdentity.current === identity) return;
     explainedIdentity.current = identity;
     babysit.explain();
-  }, [babysit, enabled, locale, reviewId, selectedPath, snapshotId, state?.kind]);
+  }, [babysit, enabled, reviewId, selectedPath, snapshotId, state?.kind]);
 
   useEffect(() => {
     if (!visible) {

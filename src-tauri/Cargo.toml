@@ -51,3 +51,4 @@ walkdir = "2"
 [dev-dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 httpmock = "0.7"
+tauri = { version = "2", features = ["test"] }
