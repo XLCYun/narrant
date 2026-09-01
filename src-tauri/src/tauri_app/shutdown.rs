@@ -1,8 +1,10 @@
 use crate::{babysit, operation, review, telemetry};
+use std::future::Future;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
-use tokio::sync::OnceCell;
+use tokio::sync::Notify;
 
 const APPLICATION_STOP_DEADLINE: Duration = Duration::from_secs(15);
 const EXIT_IDLE: u8 = 0;
@@ -46,7 +48,7 @@ enum ExitRequestDecision {
 
 /// Tauri-managed 的幂等应用停止边界与最终退出协调器。
 pub(crate) struct ApplicationShutdown {
-    outcome: OnceCell<ApplicationStopOutcome>,
+    execution: OnceLock<Arc<ApplicationStopExecution>>,
     deadline: Duration,
     exit_phase: AtomicU8,
 }
@@ -62,7 +64,7 @@ impl ApplicationShutdown {
     /// 创建使用指定总 deadline 的停止边界；生产装配固定传入十五秒。
     fn with_deadline(deadline: Duration) -> Self {
         Self {
-            outcome: OnceCell::new(),
+            execution: OnceLock::new(),
             deadline,
             exit_phase: AtomicU8::new(EXIT_IDLE),
         }
@@ -74,26 +76,38 @@ impl ApplicationShutdown {
         app: &tauri::AppHandle<R>,
         intent: ApplicationStopIntent,
     ) -> ApplicationStopOutcome {
-        let steps = TauriApplicationStopSteps { app };
+        let steps = Arc::new(TauriApplicationStopSteps { app: app.clone() });
         self.stop_once_with_steps(intent, &steps).await
     }
 
-    /// 以窄步骤接口执行唯一停止流程，便于确定性验证 deadline 与顺序。
-    async fn stop_once_with_steps<S: ApplicationStopSteps>(
+    /// 以 owned 窄步骤接口启动唯一停止任务，调用方取消不会中止该任务。
+    async fn stop_once_with_steps<S: ApplicationStopSteps + 'static>(
         &self,
         intent: ApplicationStopIntent,
-        steps: &S,
+        steps: &Arc<S>,
     ) -> ApplicationStopOutcome {
-        *self
-            .outcome
-            .get_or_init(|| async move {
+        let execution = self
+            .execution
+            .get_or_init(|| {
+                let execution = Arc::new(ApplicationStopExecution::default());
+                let task_execution = execution.clone();
+                let deadline = self.deadline;
+                let task_steps = steps.clone();
                 let _ = intent;
-                match tokio::time::timeout(self.deadline, run_stop_steps(steps)).await {
-                    Ok(outcome) => outcome,
-                    Err(_) => ApplicationStopOutcome::TimedOut,
-                }
+                tauri::async_runtime::spawn(async move {
+                    let outcome =
+                        match tokio::time::timeout(deadline, run_stop_steps(task_steps.as_ref()))
+                            .await
+                        {
+                            Ok(outcome) => outcome,
+                            Err(_) => ApplicationStopOutcome::TimedOut,
+                        };
+                    task_execution.complete(outcome);
+                });
+                execution
             })
-            .await
+            .clone();
+        execution.wait().await
     }
 
     /// 合并重复的系统退出/主窗口关闭事件，并只为首个事件启动异步清理。
@@ -127,13 +141,48 @@ impl ApplicationShutdown {
     }
 }
 
+/// 独立停止任务的共享完成状态；等待者取消不会影响任务所有权。
+#[derive(Default)]
+struct ApplicationStopExecution {
+    outcome: Mutex<Option<ApplicationStopOutcome>>,
+    completed: Notify,
+}
+
+impl ApplicationStopExecution {
+    /// 保存唯一结果并唤醒全部当前等待者。
+    fn complete(&self, outcome: ApplicationStopOutcome) {
+        *self
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+        self.completed.notify_waiters();
+    }
+
+    /// 等待独立任务发布结果，并在检查前注册通知以避免丢失唤醒。
+    async fn wait(&self) -> ApplicationStopOutcome {
+        loop {
+            let completed = self.completed.notified();
+            tokio::pin!(completed);
+            completed.as_mut().enable();
+            if let Some(outcome) = *self
+                .outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            {
+                return outcome;
+            }
+            completed.await;
+        }
+    }
+}
+
 /// 将应用现有生命周期 owner 投影为停止流程需要的窄步骤接口。
-struct TauriApplicationStopSteps<'a, R: tauri::Runtime> {
-    app: &'a tauri::AppHandle<R>,
+struct TauriApplicationStopSteps<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
 }
 
 #[async_trait::async_trait]
-trait ApplicationStopSteps: Sync {
+trait ApplicationStopSteps: Send + Sync {
     /// 关闭新操作入口、取消运行操作并等待注册归零。
     async fn close_operations(&self) -> Result<(), String>;
 
@@ -148,7 +197,7 @@ trait ApplicationStopSteps: Sync {
 }
 
 #[async_trait::async_trait]
-impl<R: tauri::Runtime> ApplicationStopSteps for TauriApplicationStopSteps<'_, R> {
+impl<R: tauri::Runtime> ApplicationStopSteps for TauriApplicationStopSteps<R> {
     /// 使用共享 operation registry 执行 cancel/drain。
     async fn close_operations(&self) -> Result<(), String> {
         self.app
@@ -247,17 +296,50 @@ pub(super) fn handle_run_event<R: tauri::Runtime>(
 
 /// 在 Tauri 异步 runtime 上完成停止后请求一次最终退出，绝不阻塞事件循环。
 fn spawn_final_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    tauri::async_runtime::spawn(async move {
-        let outcome = app
+    let stop_app = app.clone();
+    let stop = async move {
+        stop_app
             .state::<ApplicationShutdown>()
-            .stop_once(&app, ApplicationStopIntent::OrdinaryExit)
-            .await;
+            .stop_once(&stop_app, ApplicationStopIntent::OrdinaryExit)
+            .await
+    };
+    let _ = spawn_final_exit_with(stop, Arc::new(TauriFinalExit { app }));
+}
+
+/// 最终退出动作的可注入窄 seam；生产实现调用 Tauri `app.exit(0)`。
+trait FinalExit: Send + Sync {
+    /// 记录清理结果、放行内部退出并结束应用。
+    fn exit(&self, outcome: ApplicationStopOutcome);
+}
+
+/// Tauri 最终退出 adapter，确保内部 ExitRequested 不再重复清理。
+struct TauriFinalExit<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
+}
+
+impl<R: tauri::Runtime> FinalExit for TauriFinalExit<R> {
+    /// 标记最终阶段后请求 Tauri 退出事件循环。
+    fn exit(&self, _outcome: ApplicationStopOutcome) {
+        self.app.state::<ApplicationShutdown>().mark_final_exit();
+        self.app.exit(0);
+    }
+}
+
+/// 在独立任务中等待停止结果，并无条件调用一次最终退出 seam。
+fn spawn_final_exit_with<F>(
+    stop: F,
+    final_exit: Arc<dyn FinalExit>,
+) -> tauri::async_runtime::JoinHandle<()>
+where
+    F: Future<Output = ApplicationStopOutcome> + Send + 'static,
+{
+    tauri::async_runtime::spawn(async move {
+        let outcome = stop.await;
         if outcome != ApplicationStopOutcome::Completed {
             tracing::warn!(target: "narrant::shutdown", ?outcome, "应用清理未完整完成，仍继续退出");
         }
-        app.state::<ApplicationShutdown>().mark_final_exit();
-        app.exit(0);
-    });
+        final_exit.exit(outcome);
+    })
 }
 
 #[cfg(test)]
