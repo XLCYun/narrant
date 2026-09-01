@@ -602,7 +602,7 @@ describe("Settings application-shell UI", () => {
     fireEvent.click(screen.getByRole("radio", { name: /^跟随系统/ }));
 
     expect(settings.updateTheme).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("radio", { name: /^跟随系统/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^跟随系统/ })).toHaveAttribute("aria-disabled", "true");
     await act(async () => finishSave());
     expect(screen.getByRole("radio", { name: /^深色/ })).toHaveAttribute("aria-checked", "true");
   });

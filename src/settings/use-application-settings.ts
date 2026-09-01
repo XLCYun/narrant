@@ -28,8 +28,8 @@ function languageFromSettings(settings: ApplicationSettings, fallback: Applicati
   return settings.language ?? fallback;
 }
 
-/** 用一个设置快照加载并同步主题和语言；任一偏好保存失败时可见地恢复旧值。 */
-export function useApplicationTheme(application: ApplicationSettingsApplication, enabled = true) {
+/** 用一个设置快照加载并同步主题和语言，向设置页提供完整的应用设置 binding。 */
+export function useApplicationSettings(application: ApplicationSettingsApplication, enabled = true) {
   const media = useRef<MediaQueryList>();
   const [preference, setPreference] = useState<ThemePreference>("system");
   const [language, setLanguage] = useState<ApplicationLanguage>(() => (
@@ -105,16 +105,13 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
     }
   }, [application, preference, sync]);
 
-  /** 先切换界面语言，再原子保存；失败时恢复原语言和文档标记。 */
+  /** 只有语言持久化成功后才切换界面；失败时全程保持旧语言并展示错误。 */
   const chooseLanguage = useCallback(async (next: ApplicationLanguage) => {
     if (languageSavingRef.current || next === language) return;
     languageSavingRef.current = true;
     setLanguageSaving(true);
     const previous = language;
     setError(undefined);
-    languageRef.current = next;
-    setLanguage(next);
-    applyLanguage(next);
     try {
       const saved = await application.updateLanguage(next);
       const savedLanguage = languageFromSettings(saved, next);
@@ -135,4 +132,4 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
   return { preference, language, loaded, saving, languageSaving, error, editorTheme, choose, chooseLanguage };
 }
 
-export type ApplicationThemeBinding = ReturnType<typeof useApplicationTheme>;
+export type ApplicationSettingsBinding = ReturnType<typeof useApplicationSettings>;

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { ApplicationSettingsDestination } from "@/components/settings-page";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
 import { i18n } from "@/lib/i18n";
-import type { ApplicationSettingsApplication } from "@/settings/application-settings";
+import type { ApplicationSettings, ApplicationSettingsApplication } from "@/settings/application-settings";
 
 afterEach(async () => {
   cleanup();
@@ -55,14 +55,34 @@ describe("Application Language UI", () => {
     expect(settings.load).toHaveBeenCalledTimes(1);
   });
 
-  it("selects Simplified Chinese immediately and persists the Application Language", async () => {
+  it("persists the Application Language before applying Simplified Chinese", async () => {
     const settings = application("en-US");
+    let resolveSave!: (settings: ApplicationSettings) => void;
+    const pendingSave = new Promise<ApplicationSettings>((resolve) => { resolveSave = resolve; });
+    vi.mocked(settings.updateLanguage).mockReturnValueOnce(pendingSave);
     render(<ApplicationSettingsDestination application={settings} onBack={() => undefined} />);
     await screen.findByRole("radio", { name: "English" });
 
     fireEvent.click(screen.getByRole("radio", { name: "简体中文" }));
 
     await waitFor(() => expect(settings.updateLanguage).toHaveBeenCalledWith("zh-CN"));
+    expect(i18n.resolvedLanguage).toBe("en");
+    expect(document.documentElement.lang).toBe("en-US");
+    expect(screen.getByRole("radio", { name: "English" })).toHaveAttribute("aria-checked", "true");
+
+    resolveSave({
+      version: 1,
+      theme: "system",
+      language: "zh-CN",
+      babysit: {
+        provider: "codex",
+        codex: { executable: null, model: null, reasoningEffort: null },
+        claudeCode: { executable: null, model: null, reasoningEffort: null },
+        custom: { protocol: "openai_chat_completions", baseUrl: "", model: "", effort: "medium" },
+      },
+    });
+
+    await waitFor(() => expect(i18n.resolvedLanguage).toBe("zh-CN"));
     expect(i18n.resolvedLanguage).toBe("zh-CN");
     expect(document.documentElement.lang).toBe("zh-CN");
     expect(screen.getByRole("radio", { name: "简体中文" })).toHaveAttribute("aria-checked", "true");
@@ -75,8 +95,8 @@ describe("Application Language UI", () => {
     await screen.findByRole("radio", { name: "English" });
 
     fireEvent.click(screen.getByRole("radio", { name: "简体中文" }));
-    expect(i18n.resolvedLanguage).toBe("zh-CN");
-    expect(document.documentElement.lang).toBe("zh-CN");
+    expect(i18n.resolvedLanguage).toBe("en");
+    expect(document.documentElement.lang).toBe("en-US");
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("settings.json is read-only"));
 
     expect(i18n.resolvedLanguage).toBe("en");
