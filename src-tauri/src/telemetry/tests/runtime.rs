@@ -11,8 +11,6 @@ use std::sync::Arc;
 
 /// 进程环境是全局可变状态；所有 endpoint 覆盖测试共用锁并在结束时恢复原值。
 static OTEL_ENDPOINT_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-/// tracing callsite interest 是进程级缓存；局部 subscriber 集成测试必须串行。
-static TELEMETRY_SUBSCRIBER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const OTEL_ENDPOINT_ENV_NAME: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
 /// 测试修改 endpoint 环境变量时自动恢复原值，即使断言 panic 也不污染其他测试。
@@ -120,15 +118,13 @@ fn terminal_fallback_rejects_sensitive_warn_and_error_events() {
     use tracing::{Event, Subscriber};
     use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
-    let _subscriber_guard = TELEMETRY_SUBSCRIBER_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("telemetry subscriber test lock");
+    let _subscriber_guard = lock_test_subscriber();
 
     /// 只统计经过 fallback filter 的 event，不保留任何字段内容。
     struct CountEvents(Arc<AtomicUsize>);
 
     impl<S: Subscriber> Layer<S> for CountEvents {
+        /// 记录通过隐私 allowlist 的 event 数量。
         fn on_event(&self, _event: &Event<'_>, _context: Context<'_, S>) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
@@ -168,10 +164,7 @@ async fn custom_analysis_exports_correlated_safe_otel_signals() {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("OTLP endpoint environment lock");
-    let _subscriber_guard = TELEMETRY_SUBSCRIBER_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("telemetry subscriber test lock");
+    let _subscriber_guard = lock_test_subscriber();
     const SECRET_PROMPT: &str = "SECRET_PROMPT_158";
     const SECRET_SOURCE: &str = "SECRET_SOURCE_158";
     const SECRET_EXPLANATION: &str = "SECRET_EXPLANATION_158";
@@ -357,10 +350,7 @@ async fn custom_analysis_exports_correlated_safe_otel_signals() {
 async fn custom_analysis_result_is_unchanged_without_otlp_receiver() {
     use httpmock::prelude::*;
 
-    let _subscriber_guard = TELEMETRY_SUBSCRIBER_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("telemetry subscriber test lock");
+    let _subscriber_guard = lock_test_subscriber();
     let model_server = MockServer::start_async().await;
     let model_mock = model_server
         .mock_async(|when, then| {
@@ -450,6 +440,7 @@ fn custom_application(
         CustomProviderConnection, CustomProviderEffort, CustomProviderProtocol,
     };
 
+    /// 集成测试使用的空凭据存储。
     struct Credentials;
 
     impl CustomCredentialAdapter for Credentials {

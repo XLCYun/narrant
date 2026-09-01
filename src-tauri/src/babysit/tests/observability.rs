@@ -65,6 +65,7 @@ where
 
 /// 在局部 subscriber 中执行生命周期动作并返回捕获的结构化 events。
 fn capture(run: impl FnOnce()) -> Vec<CapturedEvent> {
+    let _subscriber_guard = crate::telemetry::lock_test_subscriber();
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(CaptureLayer {
         events: events.clone(),

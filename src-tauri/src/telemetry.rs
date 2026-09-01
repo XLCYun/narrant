@@ -45,6 +45,16 @@ const LIFECYCLE_EVENT_FIELDS: &[&str] = &[
     "error_category",
 ];
 
+/// 串行所有安装局部 tracing subscriber 的测试，避免进程级 callsite
+/// interest 缓存在 Rust 并行测试间相互干扰。
+#[cfg(test)]
+pub(crate) fn lock_test_subscriber() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("telemetry subscriber test lock")
+}
+
 /// 应用生命周期持有的 telemetry owner。
 ///
 /// 即使未启用 feature，也保留相同的 `init`/`shutdown` seam，让 Tauri bootstrap
