@@ -36,6 +36,23 @@ impl PreferenceStore for MemoryPreferences {
     }
 }
 
+/// 测试用的只读偏好真相，所有保存请求都稳定失败。
+struct FailingPreferences {
+    automatic_download: bool,
+}
+
+impl PreferenceStore for FailingPreferences {
+    /// 返回磁盘中原有的偏好真相。
+    fn load_automatic_download(&self) -> Result<Option<bool>, PreferenceError> {
+        Ok(Some(self.automatic_download))
+    }
+
+    /// 模拟原子替换偏好文件失败。
+    fn save_automatic_download(&mut self, _enabled: bool) -> Result<(), PreferenceError> {
+        Err(PreferenceError::Storage)
+    }
+}
+
 /// 创建可控制时钟的测试领域控制器。
 fn controller(preference: Option<bool>) -> UpdateController<TestClock, MemoryPreferences> {
     UpdateController::new(
@@ -44,6 +61,35 @@ fn controller(preference: Option<bool>) -> UpdateController<TestClock, MemoryPre
         MemoryPreferences(Rc::new(Cell::new(preference))),
     )
     .unwrap()
+}
+
+/// 创建保存必然失败、但读取值稳定的领域控制器。
+fn failing_controller(automatic_download: bool) -> UpdateController<TestClock, FailingPreferences> {
+    UpdateController::new(
+        "2.0.15",
+        TestClock(Rc::new(Cell::new(Duration::from_secs(10)))),
+        FailingPreferences { automatic_download },
+    )
+    .unwrap()
+}
+
+/// 按 runtime 的输入特定策略把偏好保存错误收敛为可并存 warning。
+fn fail_preference_save(
+    controller: &mut UpdateController<TestClock, FailingPreferences>,
+    enabled: bool,
+) -> crate::application_update::UpdateOutput {
+    assert_eq!(
+        controller.handle(UpdateInput::SetAutomaticDownload(enabled)),
+        Err(UpdateDomainError::Preference(PreferenceError::Storage))
+    );
+    controller
+        .handle(UpdateInput::PreferenceSaveFailed {
+            failure: UpdateFailure::new(
+                UpdateFailureCategory::Storage,
+                "/private/path/application-update.json",
+            ),
+        })
+        .unwrap()
 }
 
 /// 创建用于检查结果的可信 Stable 发布。
@@ -262,6 +308,124 @@ fn automatic_download_preference_persists_and_resumes_candidate() {
         .snapshot()
         .automatic_download
     );
+}
+
+/// 偏好保存失败与 durable staged 候选并存，且仍能发出安装意图。
+#[test]
+fn preference_save_failure_keeps_staged_candidate_installable_and_truthful() {
+    let mut controller = failing_controller(true);
+    controller
+        .handle(UpdateInput::RecoverStaged {
+            staged: durable("2.1.0", "已验证版本"),
+        })
+        .unwrap();
+    let before = controller.snapshot().clone();
+
+    let failed = fail_preference_save(&mut controller, false);
+
+    assert_eq!(failed.snapshot.sequence, before.sequence + 1);
+    assert_eq!(failed.snapshot.state, UpdateState::Staged);
+    assert!(failed.snapshot.automatic_download);
+    assert_eq!(failed.snapshot.candidate, before.candidate);
+    assert!(failed.snapshot.failure.is_none());
+    assert_eq!(
+        failed.snapshot.preference_warning.unwrap().category,
+        UpdateFailureCategory::Storage
+    );
+    assert_eq!(
+        controller
+            .handle(UpdateInput::RequestUpdateRestart)
+            .unwrap()
+            .effects,
+        vec![UpdateEffect::RequestInstall {
+            intent: InstallIntent::UpdateRestart,
+            version: "2.1.0".into(),
+        }]
+    );
+}
+
+/// 无候选时偏好保存失败保持原状态与磁盘真值，并公开脱敏 warning。
+#[test]
+fn preference_save_failure_without_candidate_is_ordered_and_safe() {
+    let mut controller = failing_controller(true);
+
+    let failed = fail_preference_save(&mut controller, false);
+
+    assert_eq!(failed.snapshot.sequence, 1);
+    assert_eq!(failed.snapshot.state, UpdateState::Idle);
+    assert!(failed.snapshot.automatic_download);
+    assert!(failed.snapshot.candidate.is_none());
+    assert!(failed.snapshot.failure.is_none());
+    let serialized = serde_json::to_string(&failed.snapshot).unwrap();
+    assert!(serialized.contains("preferenceWarning"));
+    assert!(serialized.contains("storage"));
+    assert!(!serialized.contains("/private/path"));
+    assert!(!serialized.contains("application-update.json"));
+}
+
+/// 偏好保存失败不会清掉当前 check identity，迟到防护仍接受原结果。
+#[test]
+fn preference_save_failure_does_not_interrupt_active_check() {
+    let mut controller = failing_controller(true);
+    let checking = controller.handle(UpdateInput::ManualCheck).unwrap();
+    let operation_id = check_id(&checking.effects);
+
+    let failed = fail_preference_save(&mut controller, false);
+
+    assert_eq!(failed.snapshot.state, UpdateState::Checking);
+    assert!(failed.effects.is_empty());
+    let completed = controller
+        .handle(UpdateInput::CheckSucceeded {
+            operation_id,
+            release: None,
+        })
+        .unwrap();
+    assert_eq!(completed.snapshot.state, UpdateState::UpToDate);
+    assert!(completed.snapshot.preference_warning.is_some());
+}
+
+/// 偏好保存失败不会取消当前 download identity 或丢失其进度。
+#[test]
+fn preference_save_failure_does_not_interrupt_active_download() {
+    let mut controller = failing_controller(true);
+    let checking = controller.handle(UpdateInput::ManualCheck).unwrap();
+    let discovered = controller
+        .handle(UpdateInput::CheckSucceeded {
+            operation_id: check_id(&checking.effects),
+            release: Some(release("2.1.0")),
+        })
+        .unwrap();
+    let operation_id = download_id(&discovered.effects);
+    controller
+        .handle(UpdateInput::DownloadStarted { operation_id })
+        .unwrap();
+
+    let failed = fail_preference_save(&mut controller, false);
+
+    assert!(matches!(
+        failed.snapshot.state,
+        UpdateState::Downloading { .. }
+    ));
+    assert!(failed.effects.is_empty());
+    let advanced = controller
+        .handle(UpdateInput::DownloadAdvanced {
+            operation_id,
+            progress: DownloadProgress::KnownTotal {
+                downloaded_bytes: 1,
+                total_bytes: 2,
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        advanced.snapshot.state,
+        UpdateState::Downloading {
+            progress: DownloadProgress::KnownTotal {
+                downloaded_bytes: 1,
+                total_bytes: 2,
+            },
+        }
+    );
+    assert!(advanced.snapshot.preference_warning.is_some());
 }
 
 /// 更高候选下载、验签或存储失败时，旧可信 staging 仍可安装。

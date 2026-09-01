@@ -142,6 +142,44 @@ fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure
     assert!(!diagnostics.contains("beta"));
 }
 
+#[test]
+fn runtime_preference_save_failure_keeps_disk_truth_and_emits_redacted_warning() {
+    let cache = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths(
+        data.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        "1.0.0",
+        trusted_config(),
+    )
+    .unwrap();
+    assert!(startup.is_none());
+    let preference_path = data.path().join("application-update.json");
+    std::fs::create_dir(&preference_path).unwrap();
+
+    let failed = runtime
+        .transition(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+
+    assert_eq!(failed.snapshot.sequence, 1);
+    assert_eq!(failed.snapshot.state, super::super::UpdateState::Idle);
+    assert!(failed.snapshot.automatic_download);
+    assert!(failed.snapshot.failure.is_none());
+    assert_eq!(
+        failed.snapshot.preference_warning.unwrap().category,
+        UpdateFailureCategory::Storage
+    );
+    let serialized = serde_json::to_string(&runtime.snapshot()).unwrap();
+    assert!(serialized.contains("preferenceWarning"));
+    assert!(serialized.contains("storage"));
+    assert!(!serialized.contains(data.path().to_string_lossy().as_ref()));
+    assert!(!serialized.contains("application-update.json"));
+    let diagnostics = std::fs::read_to_string(runtime.diagnostics.path()).unwrap();
+    assert!(diagnostics.contains("storage"));
+    assert!(!diagnostics.contains(data.path().to_string_lossy().as_ref()));
+    assert!(!diagnostics.contains("application-update.json"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_download_cancel_before_eof_leaves_disk_and_core_unstaged_and_releases_raii() {
     let (_cache, _data, runtime, operation_id, release) = downloading_runtime();

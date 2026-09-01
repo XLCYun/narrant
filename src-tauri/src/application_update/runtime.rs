@@ -170,9 +170,12 @@ impl ApplicationUpdateRuntime {
                     domain_failure_context(&input_for_failure, &error);
                 let failure = UpdateFailure::new(category, diagnostic);
                 self.diagnostics.record_failure(operation_id, &failure);
-                controller
-                    .handle(UpdateInput::RuntimeDomainFailed { operation, failure })
-                    .ok()?
+                let convergence = if matches!(error, super::UpdateDomainError::Preference(_)) {
+                    UpdateInput::PreferenceSaveFailed { failure }
+                } else {
+                    UpdateInput::ContractDomainFailed { operation, failure }
+                };
+                controller.handle(convergence).ok()?
             }
         };
         self.diagnostics.record_snapshot(&output.snapshot);

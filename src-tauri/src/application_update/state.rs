@@ -282,6 +282,24 @@ pub(crate) struct UpdateRecoveryWarning {
     pub(crate) message: String,
 }
 
+/// 自动下载偏好未能持久化的安全 warning，不改变更新包或活动操作真相。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdatePreferenceWarning {
+    pub(crate) category: UpdateFailureCategory,
+    pub(crate) message: String,
+}
+
+impl UpdatePreferenceWarning {
+    /// 从偏好存储失败构造只含稳定分类与安全文本的投影。
+    fn from_failure(failure: &UpdateFailure) -> Self {
+        Self {
+            category: failure.category(),
+            message: failure.category().safe_message().to_owned(),
+        }
+    }
+}
+
 impl UpdateRecoveryWarning {
     /// 从恢复失败事实构造不含路径、签名或 adapter 文本的稳定投影。
     fn from_failure(failure: &UpdateFailure) -> Self {
@@ -332,6 +350,7 @@ pub(crate) struct UpdateSnapshot {
     pub(crate) candidate: Option<UpdateCandidate>,
     pub(crate) failure: Option<UpdateFailureSnapshot>,
     pub(crate) recovery_warning: Option<UpdateRecoveryWarning>,
+    pub(crate) preference_warning: Option<UpdatePreferenceWarning>,
     #[serde(skip)]
     pub(crate) next_check_at: Option<Duration>,
 }
@@ -390,8 +409,11 @@ pub(crate) enum UpdateInput {
     StartupRecoveryFailed {
         failure: UpdateFailure,
     },
-    RuntimeDomainFailed {
+    ContractDomainFailed {
         operation: UpdateOperation,
+        failure: UpdateFailure,
+    },
+    PreferenceSaveFailed {
         failure: UpdateFailure,
     },
     RecoverStaged {
@@ -519,6 +541,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 candidate: None,
                 failure: None,
                 recovery_warning: None,
+                preference_warning: None,
                 next_check_at: None,
             },
             pending_retry: None,
@@ -552,7 +575,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 true
             }
             UpdateInput::StartupRecoveryFailed { .. } => false,
-            UpdateInput::RuntimeDomainFailed { operation, failure } => {
+            UpdateInput::ContractDomainFailed { operation, failure } => {
                 if let Some(active) = self.active.take() {
                     if matches!(
                         active.phase,
@@ -567,6 +590,11 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 self.snapshot.state = UpdateState::Failed;
                 self.snapshot.failure =
                     Some(UpdateFailureSnapshot::from_failure(operation, &failure));
+                true
+            }
+            UpdateInput::PreferenceSaveFailed { failure } => {
+                self.snapshot.preference_warning =
+                    Some(UpdatePreferenceWarning::from_failure(&failure));
                 true
             }
             UpdateInput::RecoverStaged { staged } => self.recover_staged(staged)?,
@@ -756,6 +784,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
         self.preferences.save_automatic_download(enabled)?;
         let was_enabled = self.snapshot.automatic_download;
         self.snapshot.automatic_download = enabled;
+        self.snapshot.preference_warning = None;
         if !enabled {
             if self
                 .pending_retry
