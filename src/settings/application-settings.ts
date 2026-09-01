@@ -1,5 +1,8 @@
 export type ThemePreference = "system" | "light" | "dark";
 
+/** Application Settings 支持的稳定界面语言；后端和文档语言都使用这些 BCP-47 值。 */
+export type ApplicationLanguage = "zh-CN" | "en-US";
+
 /** App Server 动态公布的思考强度标识；前端不维护封闭枚举。 */
 export type ReasoningEffort = string;
 
@@ -56,6 +59,7 @@ export type BabysitSettings = {
 export type ApplicationSettings = {
   version: number;
   theme: ThemePreference;
+  language: ApplicationLanguage;
   babysit: BabysitSettings;
 };
 
@@ -65,6 +69,8 @@ export interface ApplicationSettingsApplication {
   load(): Promise<ApplicationSettings>;
   /** 原子更新主题偏好。 */
   updateTheme(theme: ThemePreference): Promise<ApplicationSettings>;
+  /** 原子更新应用界面语言偏好。 */
+  updateLanguage(language: ApplicationLanguage): Promise<ApplicationSettings>;
   /** 仅在用户进入修改态时获取当前完整模型目录。 */
   listBabysitModels(provider: BabysitProvider): Promise<BabysitModelCatalog>;
   /** 立即原子保存未来分析使用的 provider。 */

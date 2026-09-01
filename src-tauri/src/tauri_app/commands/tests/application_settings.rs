@@ -1,9 +1,9 @@
 use super::{
     read_custom_provider_connection, save_custom_provider_connection, update_babysit_preferences,
-    update_babysit_provider,
+    update_babysit_provider, update_language,
 };
 use crate::application_settings::{
-    ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
+    ApplicationLanguage, ApplicationSettingsApplication, BabysitProvider, BabysitProviderSettings,
     CustomCredentialAdapter, CustomProviderConnection, CustomProviderEffort,
     CustomProviderProtocol,
 };
@@ -20,7 +20,10 @@ fn command_seam() -> (
     BabysitApplication,
 ) {
     let directory = tempfile::tempdir().unwrap();
-    let settings = ApplicationSettingsApplication::new(directory.path().join("settings.json"));
+    let settings = ApplicationSettingsApplication::with_locale_resolver(
+        directory.path().join("settings.json"),
+        || "en-US".to_owned(),
+    );
     let babysit = TestBabysitApplication::with_provider(Arc::new(FakeBabysitProvider::default()));
     (directory, settings, babysit)
 }
@@ -104,6 +107,19 @@ fn provider_command_switches_the_authoritative_snapshot() {
 
     assert_eq!(updated.babysit.provider, BabysitProvider::ClaudeCode);
     assert_eq!(settings.load().unwrap(), updated);
+}
+
+#[test]
+fn language_command_maps_typed_language_to_the_authoritative_settings_snapshot() {
+    let (_directory, settings, _babysit) = command_seam();
+
+    let updated = update_language(&settings, ApplicationLanguage::English).unwrap();
+
+    assert_eq!(updated.language, ApplicationLanguage::English);
+    assert_eq!(
+        settings.load().unwrap().language,
+        ApplicationLanguage::English
+    );
 }
 
 #[tokio::test]

@@ -102,6 +102,7 @@ pub fn run() {
             application_settings_commands::load_application_custom_connection,
             application_settings_commands::save_application_custom_connection,
             application_settings_commands::update_application_theme,
+            application_settings_commands::update_application_language,
             application_settings_commands::update_application_babysit_provider,
             application_settings_commands::update_application_babysit_preferences,
             #[cfg(feature = "wdio")]

@@ -1,6 +1,7 @@
 use crate::application_settings::{
-    ApplicationSettings, ApplicationSettingsApplication, BabysitModelPreference, BabysitProvider,
-    BabysitProviderSettings, CustomProviderConnection, ThemePreference,
+    ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication,
+    BabysitModelPreference, BabysitProvider, BabysitProviderSettings, CustomProviderConnection,
+    ThemePreference,
 };
 use tauri::State;
 
@@ -60,6 +61,25 @@ pub(crate) fn update_application_theme(
 ) -> Result<ApplicationSettings, String> {
     application
         .update_theme(theme)
+        .map_err(|error| error.to_string())
+}
+
+/// 原子更新 Application Language，并返回持久化后的完整设置快照。
+#[tauri::command]
+pub(crate) fn update_application_language(
+    application: State<'_, ApplicationSettingsApplication>,
+    language: ApplicationLanguage,
+) -> Result<ApplicationSettings, String> {
+    update_language(&application, language)
+}
+
+/// typed language command 的可测试应用 seam。
+fn update_language(
+    application: &ApplicationSettingsApplication,
+    language: ApplicationLanguage,
+) -> Result<ApplicationSettings, String> {
+    application
+        .update_language(language)
         .map_err(|error| error.to_string())
 }
 

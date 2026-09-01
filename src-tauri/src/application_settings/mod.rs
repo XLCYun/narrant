@@ -14,8 +14,8 @@ pub(crate) use custom_connection::{
     CustomProviderConnection, CustomProviderEffort, CustomProviderProtocol,
 };
 pub(crate) use model::{
-    ApplicationSettings, BabysitModelPreference, BabysitProvider, BabysitProviderPreference,
-    BabysitProviderSettings, ThemePreference,
+    ApplicationLanguage, ApplicationSettings, BabysitModelPreference, BabysitProvider,
+    BabysitProviderPreference, BabysitProviderSettings, ThemePreference,
 };
 
 #[cfg(test)]
