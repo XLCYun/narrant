@@ -165,6 +165,11 @@ The device-local preferences that shape Narrant's appearance, external identitie
 and Babysit Mode integration for the current operating-system user.
 _Avoid_: Repository Settings, Review Settings
 
+**Application Language**:
+The device-local choice between Simplified Chinese and English that shapes Narrant's
+user interface and the language of future Line Explanations.
+_Avoid_: UI Locale, Babysit Language, Comment Language
+
 **Babysit Agent Provider Preference**:
 The device-local choice of agent provider that future Babysit Mode analyses use.
 It does not belong to a Repository, Review, or individual analysis request.
