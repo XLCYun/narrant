@@ -40,17 +40,18 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
     custom: { protocol: "openai_chat_completions" as const, baseUrl: "", model: "", effort: "medium" as const },
   };
   return {
-    load: vi.fn(async () => ({ version: 1, theme, babysit })),
-    updateTheme: vi.fn(async (nextTheme) => ({ version: 1, theme: nextTheme, babysit })),
+    load: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
+    updateTheme: vi.fn(async (nextTheme) => ({ version: 1, theme: nextTheme, language: "zh-CN" as const, babysit })),
+    updateLanguage: vi.fn(async (language) => ({ version: 1, theme, language, babysit })),
     listBabysitModels: vi.fn(async (provider) => ({ provider, revision: "catalog-1", models: [
       { id: "gpt-5.4", name: "GPT-5.4", isDefault: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
       { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
     ] })),
-    updateBabysitProvider: vi.fn(async (provider) => ({ version: 1, theme, babysit: { ...babysit, provider } })),
-    chooseBabysitExecutable: vi.fn(async () => ({ version: 1, theme, babysit })),
-    updateBabysitPreferences: vi.fn(async () => ({ version: 1, theme, babysit })),
+    updateBabysitProvider: vi.fn(async (provider) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, provider } })),
+    chooseBabysitExecutable: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
+    updateBabysitPreferences: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
     loadCustomConnection: vi.fn(async () => ({ ...babysit.custom, apiKey: "" })),
-    saveCustomConnection: vi.fn(async (connection) => ({ version: 1, theme, babysit: { ...babysit, custom: { protocol: connection.protocol, baseUrl: connection.baseUrl, model: connection.model, effort: connection.effort } } })),
+    saveCustomConnection: vi.fn(async (connection) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, custom: { protocol: connection.protocol, baseUrl: connection.baseUrl, model: connection.model, effort: connection.effort } } })),
   };
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
+import { i18n, type SupportedLocale } from "@/lib/i18n";
+import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
 
 const SYSTEM_DARK_THEME_QUERY = "(prefers-color-scheme: dark)";
 
@@ -11,14 +12,36 @@ function applyTheme(preference: ThemePreference, systemDark: boolean) {
   return dark;
 }
 
-/** 加载、即时应用并持久化主题；保存失败时可见地恢复上一偏好。 */
+/** 将持久化语言值映射到现有离线 i18n 资源的 key。 */
+function localeForLanguage(language: ApplicationLanguage): SupportedLocale {
+  return language === "en-US" ? "en" : "zh-CN";
+}
+
+/** 把一个 Application Language 同步到 i18n 实例与根文档可访问语言标记。 */
+function applyLanguage(language: ApplicationLanguage) {
+  document.documentElement.lang = language;
+  void i18n.changeLanguage(localeForLanguage(language));
+}
+
+/** 兼容旧 settings v1 的暂时缺字段快照；正式快照由 Rust 负责补出语言。 */
+function languageFromSettings(settings: ApplicationSettings, fallback: ApplicationLanguage): ApplicationLanguage {
+  return settings.language ?? fallback;
+}
+
+/** 用一个设置快照加载并同步主题和语言；任一偏好保存失败时可见地恢复旧值。 */
 export function useApplicationTheme(application: ApplicationSettingsApplication, enabled = true) {
   const media = useRef<MediaQueryList>();
   const [preference, setPreference] = useState<ThemePreference>("system");
+  const [language, setLanguage] = useState<ApplicationLanguage>(() => (
+    i18n.resolvedLanguage?.toLowerCase().startsWith("en") ? "en-US" : "zh-CN"
+  ));
+  const languageRef = useRef(language);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const [languageSaving, setLanguageSaving] = useState(false);
+  const languageSavingRef = useRef(false);
   const [editorTheme, setEditorTheme] = useState<"light" | "vs-dark">("light");
 
   const sync = useCallback((next: ThemePreference, systemDark = media.current?.matches ?? false) => {
@@ -46,6 +69,10 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
       if (!current) return;
       setPreference(settings.theme);
       sync(settings.theme);
+      const nextLanguage = languageFromSettings(settings, languageRef.current);
+      languageRef.current = nextLanguage;
+      setLanguage(nextLanguage);
+      applyLanguage(nextLanguage);
       setLoaded(true);
     }).catch((reason) => {
       if (!current) return;
@@ -66,8 +93,8 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
     sync(next);
     try {
       const saved = await application.updateTheme(next);
-      setPreference(saved.theme);
-      sync(saved.theme);
+      setPreference(saved.theme ?? next);
+      sync(saved.theme ?? next);
     } catch (reason) {
       setPreference(previous);
       sync(previous);
@@ -78,7 +105,34 @@ export function useApplicationTheme(application: ApplicationSettingsApplication,
     }
   }, [application, preference, sync]);
 
-  return { preference, loaded, saving, error, editorTheme, choose };
+  /** 先切换界面语言，再原子保存；失败时恢复原语言和文档标记。 */
+  const chooseLanguage = useCallback(async (next: ApplicationLanguage) => {
+    if (languageSavingRef.current || next === language) return;
+    languageSavingRef.current = true;
+    setLanguageSaving(true);
+    const previous = language;
+    setError(undefined);
+    languageRef.current = next;
+    setLanguage(next);
+    applyLanguage(next);
+    try {
+      const saved = await application.updateLanguage(next);
+      const savedLanguage = languageFromSettings(saved, next);
+      languageRef.current = savedLanguage;
+      setLanguage(savedLanguage);
+      applyLanguage(savedLanguage);
+    } catch (reason) {
+      languageRef.current = previous;
+      setLanguage(previous);
+      applyLanguage(previous);
+      setError(`未能保存语言设置：${String(reason)}。请重试。`);
+    } finally {
+      languageSavingRef.current = false;
+      setLanguageSaving(false);
+    }
+  }, [application, language]);
+
+  return { preference, language, loaded, saving, languageSaving, error, editorTheme, choose, chooseLanguage };
 }
 
 export type ApplicationThemeBinding = ReturnType<typeof useApplicationTheme>;

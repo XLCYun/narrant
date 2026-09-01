@@ -1,6 +1,6 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-import type { ApplicationSettingsApplication, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationLanguage, ApplicationSettingsApplication, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
 
 type CodexExecutablePicker = () => Promise<string | string[] | null>;
@@ -13,6 +13,7 @@ export function createTauriApplicationSettingsAdapter(
   return {
     load: () => transport.invoke("load_application_settings", {}),
     updateTheme: (theme: ThemePreference) => transport.invoke("update_application_theme", { theme }),
+    updateLanguage: (language: ApplicationLanguage) => transport.invoke("update_application_language", { language }),
     listBabysitModels: (provider: BabysitProvider) => transport.invoke("list_babysit_models", { provider }),
     updateBabysitProvider: (provider: BabysitProvider) => transport.invoke("update_application_babysit_provider", { provider }),
     async chooseBabysitExecutable(provider: BabysitProvider, preference: BabysitProviderPreference) {
