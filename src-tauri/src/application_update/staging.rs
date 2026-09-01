@@ -1,17 +1,21 @@
+use fs2::FileExt;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 const STAGING_DIRECTORY: &str = "application-update";
+const LOCK_FILE: &str = ".lock";
+const COMMIT_POINTER: &str = "current";
+const GENERATION_PREFIX: &str = "generation-";
+const POINTER_TEMP_PREFIX: &str = ".current-";
 const METADATA_FILE: &str = "metadata.json";
-const METADATA_TEMP_FILE: &str = ".metadata.json.tmp";
 const PACKAGE_FILE: &str = "package.bin";
-const PACKAGE_TEMP_FILE: &str = ".package.bin.tmp";
-const METADATA_SCHEMA_VERSION: u32 = 1;
+const METADATA_SCHEMA_VERSION: u32 = 2;
 const MAX_METADATA_BYTES: u64 = 64 * 1024;
+const MAX_POINTER_BYTES: u64 = 256;
 
 /// 选择受信平台安装实现的持久化分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,15 +69,17 @@ pub(crate) struct StageCandidate {
     signature: String,
     target: String,
     install_kind: InstallKind,
+    release_notes: String,
 }
 
 impl StageCandidate {
-    /// 校验并创建绑定版本、签名、目标与安装类型的候选。
+    /// 校验并创建绑定版本、签名、目标、安装类型与有界 Release Notes 的候选。
     pub(crate) fn new(
         version: &str,
         signature: impl Into<String>,
         target: impl Into<String>,
         install_kind: InstallKind,
+        release_notes: impl AsRef<str>,
     ) -> Result<Self, StagingError> {
         let version = Version::parse(version).map_err(|_| StagingError::InvalidCandidate)?;
         let signature = signature.into();
@@ -86,6 +92,7 @@ impl StageCandidate {
             signature,
             target,
             install_kind,
+            release_notes: super::bounded_release_notes(release_notes.as_ref()),
         })
     }
 }
@@ -99,6 +106,7 @@ impl fmt::Debug for StageCandidate {
             .field("signature", &"[redacted]")
             .field("target", &self.target)
             .field("install_kind", &self.install_kind)
+            .field("release_notes_bytes", &self.release_notes.len())
             .finish()
     }
 }
@@ -107,6 +115,7 @@ impl fmt::Debug for StageCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StagedUpdate {
     version: String,
+    release_notes: String,
 }
 
 impl StagedUpdate {
@@ -114,11 +123,17 @@ impl StagedUpdate {
     pub(crate) fn version(&self) -> &str {
         &self.version
     }
+
+    /// 返回与暂存候选一起持久化的有界 Release Notes。
+    pub(crate) fn release_notes(&self) -> &str {
+        &self.release_notes
+    }
 }
 
 /// 通过安装前复验、可交给受信安装适配器的包句柄。
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct VerifiedStagedPackage {
+    generation: String,
     version: String,
     path: PathBuf,
     target: String,
@@ -148,7 +163,7 @@ impl VerifiedStagedPackage {
 }
 
 impl fmt::Debug for VerifiedStagedPackage {
-    /// 输出安装句柄身份并隐藏本机包路径。
+    /// 输出安装句柄身份并隐藏 generation 与本机包路径。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VerifiedStagedPackage")
@@ -171,8 +186,36 @@ pub(crate) enum StagingError {
     NoStagedUpdate,
 }
 
+/// generation 提交协议中可注入故障的持久化边界。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StagingCommitPoint {
+    AfterPackageSync,
+    AfterVerification,
+    AfterMetadataSync,
+    AfterGenerationSync,
+    BeforePointerCommit,
+    AfterPointerCommit,
+    AfterPointerSync,
+}
+
+/// 为真实文件系统测试提供确定性崩溃/失败点，不参与业务决策。
+pub(crate) trait StagingFaultInjector: Send + Sync {
+    /// 在指定提交点返回存储失败以模拟进程中断或系统调用失败。
+    fn checkpoint(&self, point: StagingCommitPoint) -> Result<(), StagingError>;
+}
+
+/// 生产 staging 使用的不注入故障实现。
+pub(crate) struct NoStagingFaults;
+
+impl StagingFaultInjector for NoStagingFaults {
+    /// 生产路径在所有提交点继续执行。
+    fn checkpoint(&self, _point: StagingCommitPoint) -> Result<(), StagingError> {
+        Ok(())
+    }
+}
+
 /// 磁盘上的私有暂存元数据。
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredMetadata {
     schema_version: u32,
@@ -180,43 +223,77 @@ struct StoredMetadata {
     signature: String,
     target: String,
     install_kind: InstallKind,
+    #[serde(default)]
+    release_notes: String,
 }
 
-/// 负责单个已验证更新包持久化、恢复、复验和清理的仓储。
-pub(crate) struct StagingRepository<V> {
+/// 一个由 commit pointer 原子选中的完整 generation。
+#[derive(Clone)]
+struct CommittedGeneration {
+    name: String,
+    metadata: StoredMetadata,
+}
+
+/// 负责单个已验证更新 generation 持久化、恢复、复验和清理的仓储。
+pub(crate) struct StagingRepository<V, F = NoStagingFaults> {
     root: PathBuf,
     verifier: V,
+    faults: F,
     context: StagingContext,
-    staged: Option<StoredMetadata>,
+    staged: Option<CommittedGeneration>,
     recovery_failure: Option<StagingError>,
 }
 
-impl<V: MinisignVerifier> StagingRepository<V> {
-    /// 在注入的缓存根下打开仓储并恢复与当前进程匹配的已验证包。
+impl<V: MinisignVerifier> StagingRepository<V, NoStagingFaults> {
+    /// 使用生产无故障协议打开仓储。
     pub(crate) fn open(
         cache_root: impl AsRef<Path>,
         context: StagingContext,
         verifier: V,
     ) -> Result<Self, StagingError> {
-        let root = cache_root.as_ref().join(STAGING_DIRECTORY);
-        fs::create_dir_all(&root).map_err(|_| StagingError::StorageFailed)?;
-        remove_if_exists(&root.join(PACKAGE_TEMP_FILE))?;
-        remove_if_exists(&root.join(METADATA_TEMP_FILE))?;
+        Self::open_inner(cache_root, context, verifier, NoStagingFaults)
+    }
+}
 
-        let recovery = recover_metadata(&root, &context, &verifier)?;
-        Ok(Self {
-            root,
-            verifier,
-            context,
-            staged: recovery.metadata,
-            recovery_failure: recovery.discarded,
-        })
+impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
+    /// 使用注入故障点打开仓储，供真实文件系统事务测试复现崩溃窗口。
+    #[cfg(test)]
+    pub(crate) fn open_with_faults(
+        cache_root: impl AsRef<Path>,
+        context: StagingContext,
+        verifier: V,
+        faults: F,
+    ) -> Result<Self, StagingError> {
+        Self::open_inner(cache_root, context, verifier, faults)
     }
 
-    /// 返回不含文件路径与签名的当前暂存快照。
+    /// 建立仓储并在文件锁内完成首次恢复，生产与故障测试共享同一实现。
+    fn open_inner(
+        cache_root: impl AsRef<Path>,
+        context: StagingContext,
+        verifier: V,
+        faults: F,
+    ) -> Result<Self, StagingError> {
+        let root = cache_root.as_ref().join(STAGING_DIRECTORY);
+        fs::create_dir_all(&root).map_err(|_| StagingError::StorageFailed)?;
+        let mut repository = Self {
+            root,
+            verifier,
+            faults,
+            context,
+            staged: None,
+            recovery_failure: None,
+        };
+        let _lock = lock_root(&repository.root)?;
+        repository.refresh_locked()?;
+        Ok(repository)
+    }
+
+    /// 返回不含文件路径与签名的当前进程暂存快照。
     pub(crate) fn snapshot(&self) -> Option<StagedUpdate> {
-        self.staged.as_ref().map(|metadata| StagedUpdate {
-            version: metadata.version.clone(),
+        self.staged.as_ref().map(|generation| StagedUpdate {
+            version: generation.metadata.version.clone(),
+            release_notes: generation.metadata.release_notes.clone(),
         })
     }
 
@@ -225,109 +302,90 @@ impl<V: MinisignVerifier> StagingRepository<V> {
         self.recovery_failure
     }
 
-    /// 将输入流复制到临时文件，fsync 并验签后原子晋级为唯一暂存包与元数据。
+    /// 在跨进程锁内流式写入唯一 generation，并以单一 pointer 原子提交更高候选。
     pub(crate) fn stage(
         &mut self,
         candidate: StageCandidate,
         mut package: impl Read,
     ) -> Result<StagedUpdate, StagingError> {
+        let _lock = lock_root(&self.root)?;
+        self.refresh_locked()?;
         self.validate_candidate(&candidate)?;
-        let package_temp = self.root.join(PACKAGE_TEMP_FILE);
-        let metadata_temp = self.root.join(METADATA_TEMP_FILE);
-        remove_if_exists(&package_temp)?;
-        remove_if_exists(&metadata_temp)?;
-
-        let result = (|| {
-            let mut output =
-                File::create(&package_temp).map_err(|_| StagingError::StorageFailed)?;
-            io::copy(&mut package, &mut output).map_err(|_| StagingError::StorageFailed)?;
-            output.sync_all().map_err(|_| StagingError::StorageFailed)?;
-            self.verifier
-                .verify(&package_temp, &candidate.signature)
-                .map_err(|_| StagingError::VerificationFailed)?;
-
-            let metadata = StoredMetadata {
-                schema_version: METADATA_SCHEMA_VERSION,
-                version: candidate.version.to_string(),
-                signature: candidate.signature,
-                target: candidate.target,
-                install_kind: candidate.install_kind,
-            };
-            write_metadata_temp(&metadata_temp, &metadata)?;
-            atomic_replace_file(&package_temp, &self.root.join(PACKAGE_FILE))
-                .map_err(|_| StagingError::StorageFailed)?;
-            atomic_replace_file(&metadata_temp, &self.root.join(METADATA_FILE))
-                .map_err(|_| StagingError::StorageFailed)?;
-            sync_directory(&self.root)?;
-            Ok(metadata)
-        })();
-
-        if let Err(error) = result {
-            let _ = remove_if_exists(&package_temp);
-            let _ = remove_if_exists(&metadata_temp);
-            let recovered = recover_metadata(&self.root, &self.context, &self.verifier)?;
-            self.staged = recovered.metadata;
-            self.recovery_failure = recovered.discarded;
-            return Err(error);
+        let result = self.commit_generation_locked(candidate, &mut package);
+        if result.is_err() {
+            // 无论失败发生在 pointer 前后，都按唯一 pointer 恢复；旧或新 generation 至少一个可用。
+            self.refresh_locked()?;
         }
-
-        let metadata = result.expect("successful staging result must contain metadata");
-        let staged = StagedUpdate {
-            version: metadata.version.clone(),
-        };
-        self.staged = Some(metadata);
-        self.recovery_failure = None;
-        Ok(staged)
+        result
     }
 
-    /// 在安装前重验版本、目标、安装类型与签名，失败时关闭信任并清除暂存。
-    pub(crate) fn verify_for_install(&mut self) -> Result<VerifiedStagedPackage, StagingError> {
-        let Some(metadata) = &self.staged else {
-            return Err(StagingError::NoStagedUpdate);
+    /// 在同一锁内原子回填同版本 Release Notes，不修改已验证包或 commit pointer。
+    pub(crate) fn update_release_notes(
+        &mut self,
+        version: &str,
+        release_notes: &str,
+    ) -> Result<bool, StagingError> {
+        let _lock = lock_root(&self.root)?;
+        self.refresh_locked()?;
+        let Some(committed) = &mut self.staged else {
+            return Ok(false);
         };
-        let metadata_path = self.root.join(METADATA_FILE);
-        let disk_metadata = read_metadata(&metadata_path);
-        let validation = disk_metadata.and_then(|disk_metadata| {
-            if &disk_metadata != metadata {
-                return Err(StagingError::VerificationFailed);
-            }
-            validate_metadata(&disk_metadata, &self.context)?;
-            Ok(disk_metadata)
-        });
-        if let Err(error) = validation {
-            self.clear()?;
-            return Err(error);
+        if committed.metadata.version != version {
+            return Ok(false);
         }
-        let metadata = validation.expect("validated metadata must be available");
-        let package = self.root.join(PACKAGE_FILE);
-        if self.verifier.verify(&package, &metadata.signature).is_err() {
-            self.clear()?;
-            return Err(StagingError::VerificationFailed);
+        let notes = super::bounded_release_notes(release_notes);
+        if committed.metadata.release_notes == notes {
+            return Ok(false);
         }
+        let mut metadata = committed.metadata.clone();
+        metadata.release_notes = notes;
+        let generation_path = self.root.join(&committed.name);
+        write_metadata_atomic(&generation_path, &metadata)?;
+        committed.metadata = metadata;
+        Ok(true)
+    }
+
+    /// 在安装前锁内重读 pointer，并重验版本、目标、安装类型与包签名。
+    pub(crate) fn verify_for_install(&mut self) -> Result<VerifiedStagedPackage, StagingError> {
+        let _lock = lock_root(&self.root)?;
+        self.refresh_locked()?;
+        let Some(committed) = &self.staged else {
+            return Err(self
+                .recovery_failure
+                .unwrap_or(StagingError::NoStagedUpdate));
+        };
+        let package = self.root.join(&committed.name).join(PACKAGE_FILE);
+        self.verifier
+            .verify(&package, &committed.metadata.signature)
+            .map_err(|_| StagingError::VerificationFailed)?;
         Ok(VerifiedStagedPackage {
-            version: metadata.version,
+            generation: committed.name.clone(),
+            version: committed.metadata.version.clone(),
             path: package,
-            target: metadata.target,
-            install_kind: metadata.install_kind,
+            target: committed.metadata.target.clone(),
+            install_kind: committed.metadata.install_kind,
         })
     }
 
-    /// 在受信安装适配器确认原路径替换后清除与句柄对应的暂存更新。
+    /// 在受信安装适配器确认原路径替换后，仅清除句柄对应的 committed generation。
     pub(crate) fn complete_install(
         &mut self,
         installed: &VerifiedStagedPackage,
     ) -> Result<(), StagingError> {
-        let Some(metadata) = &self.staged else {
+        let _lock = lock_root(&self.root)?;
+        self.refresh_locked()?;
+        let Some(committed) = &self.staged else {
             return Err(StagingError::NoStagedUpdate);
         };
-        if installed.version != metadata.version
-            || installed.path != self.root.join(PACKAGE_FILE)
-            || installed.target != metadata.target
-            || installed.install_kind != metadata.install_kind
+        if installed.generation != committed.name
+            || installed.version != committed.metadata.version
+            || installed.path != self.root.join(&committed.name).join(PACKAGE_FILE)
+            || installed.target != committed.metadata.target
+            || installed.install_kind != committed.metadata.install_kind
         {
             return Err(StagingError::InvalidCandidate);
         }
-        self.clear()
+        self.clear_committed_locked()
     }
 
     /// 在新进程版本达到暂存版本后确认 installer handoff 成功并清理。
@@ -335,41 +393,81 @@ impl<V: MinisignVerifier> StagingRepository<V> {
         &mut self,
         current_version: &str,
     ) -> Result<bool, StagingError> {
-        let Some(metadata) = &self.staged else {
-            return Ok(false);
-        };
         let current =
             Version::parse(current_version).map_err(|_| StagingError::InvalidCandidate)?;
-        let staged =
-            Version::parse(&metadata.version).map_err(|_| StagingError::VerificationFailed)?;
-        self.context.current_version = current.clone();
-        if current < staged {
-            return Ok(false);
-        }
-        self.clear()?;
-        Ok(true)
+        let _lock = lock_root(&self.root)?;
+        let had_staging = read_pointer(&self.root)?.is_some();
+        self.context.current_version = current;
+        self.refresh_locked()?;
+        Ok(had_staging && self.staged.is_none())
     }
 
-    /// 发现更高 Stable 时清除旧 staging，为唯一候选腾出可信槽位。
-    pub(crate) fn discard_if_older_than(
+    /// 将候选写入独立 generation，并在最后一步原子切换 commit pointer。
+    fn commit_generation_locked(
         &mut self,
-        replacement_version: &str,
-    ) -> Result<bool, StagingError> {
-        let Some(metadata) = &self.staged else {
-            return Ok(false);
+        candidate: StageCandidate,
+        package: &mut impl Read,
+    ) -> Result<StagedUpdate, StagingError> {
+        let generation = tempfile::Builder::new()
+            .prefix(GENERATION_PREFIX)
+            .tempdir_in(&self.root)
+            .map_err(|_| StagingError::StorageFailed)?;
+        let package_path = generation.path().join(PACKAGE_FILE);
+        let mut output = File::create(&package_path).map_err(|_| StagingError::StorageFailed)?;
+        io::copy(package, &mut output).map_err(|_| StagingError::StorageFailed)?;
+        output.sync_all().map_err(|_| StagingError::StorageFailed)?;
+        self.faults
+            .checkpoint(StagingCommitPoint::AfterPackageSync)?;
+        self.verifier
+            .verify(&package_path, &candidate.signature)
+            .map_err(|_| StagingError::VerificationFailed)?;
+        self.faults
+            .checkpoint(StagingCommitPoint::AfterVerification)?;
+
+        let metadata = StoredMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            version: candidate.version.to_string(),
+            signature: candidate.signature,
+            target: candidate.target,
+            install_kind: candidate.install_kind,
+            release_notes: candidate.release_notes,
         };
-        let replacement =
-            Version::parse(replacement_version).map_err(|_| StagingError::InvalidCandidate)?;
-        let staged =
-            Version::parse(&metadata.version).map_err(|_| StagingError::VerificationFailed)?;
-        if replacement <= staged {
-            return Ok(false);
-        }
-        self.clear()?;
-        Ok(true)
+        write_metadata_file(&generation.path().join(METADATA_FILE), &metadata)?;
+        self.faults
+            .checkpoint(StagingCommitPoint::AfterMetadataSync)?;
+        sync_directory(generation.path())?;
+        self.faults
+            .checkpoint(StagingCommitPoint::AfterGenerationSync)?;
+
+        let generation_path = generation.keep();
+        let generation_name = generation_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| valid_generation_name(name))
+            .ok_or(StagingError::StorageFailed)?
+            .to_owned();
+        self.faults
+            .checkpoint(StagingCommitPoint::BeforePointerCommit)?;
+        write_commit_pointer(&self.root, &generation_name)?;
+        self.faults
+            .checkpoint(StagingCommitPoint::AfterPointerCommit)?;
+        sync_directory(&self.root)?;
+        self.faults
+            .checkpoint(StagingCommitPoint::AfterPointerSync)?;
+
+        cleanup_uncommitted(&self.root, Some(&generation_name))?;
+        self.staged = Some(CommittedGeneration {
+            name: generation_name,
+            metadata: metadata.clone(),
+        });
+        self.recovery_failure = None;
+        Ok(StagedUpdate {
+            version: metadata.version,
+            release_notes: metadata.release_notes,
+        })
     }
 
-    /// 验证候选严格升级且绑定当前目标与平台安装类型。
+    /// 提交前使用锁内最新 pointer 执行严格 SemVer CAS 与目标校验。
     fn validate_candidate(&self, candidate: &StageCandidate) -> Result<(), StagingError> {
         if candidate.target != self.context.target
             || candidate.install_kind != self.context.install_kind
@@ -380,8 +478,8 @@ impl<V: MinisignVerifier> StagingRepository<V> {
             return Err(StagingError::NotNewer);
         }
         if let Some(current) = &self.staged {
-            let current =
-                Version::parse(&current.version).map_err(|_| StagingError::VerificationFailed)?;
+            let current = Version::parse(&current.metadata.version)
+                .map_err(|_| StagingError::VerificationFailed)?;
             if candidate.version <= current {
                 return Err(StagingError::NotNewer);
             }
@@ -389,42 +487,83 @@ impl<V: MinisignVerifier> StagingRepository<V> {
         Ok(())
     }
 
-    /// 删除包、元数据与临时文件并同步公开快照。
-    fn clear(&mut self) -> Result<(), StagingError> {
-        remove_if_exists(&self.root.join(METADATA_FILE))?;
-        remove_if_exists(&self.root.join(PACKAGE_FILE))?;
-        remove_if_exists(&self.root.join(METADATA_TEMP_FILE))?;
-        remove_if_exists(&self.root.join(PACKAGE_TEMP_FILE))?;
+    /// 在已持有跨进程锁时按 commit pointer 刷新本实例权威视图。
+    fn refresh_locked(&mut self) -> Result<(), StagingError> {
+        let recovery = recover_committed(&self.root, &self.context, &self.verifier)?;
+        self.staged = recovery.committed;
+        self.recovery_failure = recovery.discarded;
+        Ok(())
+    }
+
+    /// 原子删除 commit pointer 后清理所有 generation，保证崩溃恢复不再安装。
+    fn clear_committed_locked(&mut self) -> Result<(), StagingError> {
+        remove_if_exists(&self.root.join(COMMIT_POINTER))?;
         sync_directory(&self.root)?;
+        cleanup_uncommitted(&self.root, None)?;
         self.staged = None;
         Ok(())
     }
 }
 
-/// 汇总一次恢复得到的可信元数据和可报告丢弃原因。
+/// 跨实例/进程持有 staging 根独占文件锁的 RAII 句柄。
+struct StagingLock {
+    file: File,
+}
+
+impl Drop for StagingLock {
+    /// 离开唯一事务临界区时释放操作系统文件锁。
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+/// 打开并独占 staging 根锁文件，macOS 与 Windows 使用 fs2 平台实现。
+fn lock_root(root: &Path) -> Result<StagingLock, StagingError> {
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(root.join(LOCK_FILE))
+        .map_err(|_| StagingError::StorageFailed)?;
+    FileExt::lock_exclusive(&file).map_err(|_| StagingError::StorageFailed)?;
+    Ok(StagingLock { file })
+}
+
+/// 汇总一次恢复得到的 committed generation 和可报告丢弃原因。
 struct RecoveryResult {
-    metadata: Option<StoredMetadata>,
+    committed: Option<CommittedGeneration>,
     discarded: Option<StagingError>,
 }
 
-/// 从磁盘恢复元数据，并重新校验版本、目标与完整包签名。
-fn recover_metadata<V: MinisignVerifier>(
+/// 恢复 commit pointer 指向的唯一 generation，并清除所有未提交 generation。
+fn recover_committed<V: MinisignVerifier>(
     root: &Path,
     context: &StagingContext,
     verifier: &V,
 ) -> Result<RecoveryResult, StagingError> {
-    let metadata_path = root.join(METADATA_FILE);
-    let package_path = root.join(PACKAGE_FILE);
-    if !metadata_path.is_file() || !package_path.is_file() {
-        let incomplete = metadata_path.exists() || package_path.exists();
-        remove_if_exists(&metadata_path)?;
-        remove_if_exists(&package_path)?;
+    let pointer = match read_pointer(root) {
+        Ok(pointer) => pointer,
+        Err(error) => {
+            remove_if_exists(&root.join(COMMIT_POINTER))?;
+            cleanup_uncommitted(root, None)?;
+            return Ok(RecoveryResult {
+                committed: None,
+                discarded: Some(error),
+            });
+        }
+    };
+    let Some(generation_name) = pointer else {
+        let incomplete = contains_generation(root)?;
+        cleanup_uncommitted(root, None)?;
         return Ok(RecoveryResult {
-            metadata: None,
+            committed: None,
             discarded: incomplete.then_some(StagingError::StorageFailed),
         });
-    }
+    };
 
+    let generation_path = root.join(&generation_name);
+    let metadata_path = generation_path.join(METADATA_FILE);
+    let package_path = generation_path.join(PACKAGE_FILE);
     let recovered = read_metadata(&metadata_path).and_then(|metadata| {
         validate_metadata(&metadata, context)?;
         verifier
@@ -433,21 +572,71 @@ fn recover_metadata<V: MinisignVerifier>(
         Ok(metadata)
     });
     match recovered {
-        Ok(metadata) => Ok(RecoveryResult {
-            metadata: Some(metadata),
-            discarded: None,
-        }),
-        Err(error) => {
-            remove_if_exists(&metadata_path)?;
-            remove_if_exists(&package_path)?;
-            sync_directory(root)?;
+        Ok(metadata) => {
+            cleanup_uncommitted(root, Some(&generation_name))?;
             Ok(RecoveryResult {
-                metadata: None,
-                // 运行版本已经达到 staging 是一次成功的 installer reconciliation，不是损坏。
+                committed: Some(CommittedGeneration {
+                    name: generation_name,
+                    metadata,
+                }),
+                discarded: None,
+            })
+        }
+        Err(error) => {
+            remove_if_exists(&root.join(COMMIT_POINTER))?;
+            sync_directory(root)?;
+            cleanup_uncommitted(root, None)?;
+            Ok(RecoveryResult {
+                committed: None,
                 discarded: (error != StagingError::NotNewer).then_some(error),
             })
         }
     }
+}
+
+/// 有界读取并验证原子 commit pointer 只引用本目录 generation 名称。
+fn read_pointer(root: &Path) -> Result<Option<String>, StagingError> {
+    let path = root.join(COMMIT_POINTER);
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(StagingError::StorageFailed),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_POINTER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| StagingError::StorageFailed)?;
+    if bytes.len() as u64 > MAX_POINTER_BYTES {
+        return Err(StagingError::VerificationFailed);
+    }
+    let name = std::str::from_utf8(&bytes).map_err(|_| StagingError::VerificationFailed)?;
+    if !valid_generation_name(name) {
+        return Err(StagingError::VerificationFailed);
+    }
+    Ok(Some(name.to_owned()))
+}
+
+/// 校验 pointer 名称不包含路径分隔符或父目录跳转。
+fn valid_generation_name(name: &str) -> bool {
+    name.starts_with(GENERATION_PREFIX)
+        && name.len() > GENERATION_PREFIX.len()
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+/// 原子写入并 fsync 唯一 commit pointer；父目录同步由调用方完成。
+fn write_commit_pointer(root: &Path, generation: &str) -> Result<(), StagingError> {
+    let mut temporary = tempfile::Builder::new()
+        .prefix(POINTER_TEMP_PREFIX)
+        .tempfile_in(root)
+        .map_err(|_| StagingError::StorageFailed)?;
+    temporary
+        .write_all(generation.as_bytes())
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|_| StagingError::StorageFailed)?;
+    atomic_replace_file(temporary.path(), &root.join(COMMIT_POINTER))
+        .map_err(|_| StagingError::StorageFailed)
 }
 
 /// 有界读取并反序列化版本化元数据，避免恶意文件造成无界内存分配。
@@ -476,22 +665,85 @@ fn validate_metadata(
     }
     let version =
         Version::parse(&metadata.version).map_err(|_| StagingError::VerificationFailed)?;
-    if version <= context.current_version {
+    if !version.pre.is_empty() || version <= context.current_version {
         return Err(StagingError::NotNewer);
     }
-    if metadata.signature.trim().is_empty() {
+    if metadata.signature.trim().is_empty()
+        || metadata.release_notes.len() > super::MAX_RELEASE_NOTES_BYTES
+    {
         return Err(StagingError::VerificationFailed);
     }
     Ok(())
 }
 
-/// 把元数据完整写入并同步临时文件，等待与包一起晋级。
-fn write_metadata_temp(path: &Path, metadata: &StoredMetadata) -> Result<(), StagingError> {
+/// 写入并同步 generation 内首次创建的 metadata 文件。
+fn write_metadata_file(path: &Path, metadata: &StoredMetadata) -> Result<(), StagingError> {
     let bytes = serde_json::to_vec(metadata).map_err(|_| StagingError::StorageFailed)?;
     let mut file = File::create(path).map_err(|_| StagingError::StorageFailed)?;
     file.write_all(&bytes)
         .and_then(|_| file.sync_all())
         .map_err(|_| StagingError::StorageFailed)
+}
+
+/// 在已提交 generation 内原子回填 metadata，并同步 generation 目录。
+fn write_metadata_atomic(generation: &Path, metadata: &StoredMetadata) -> Result<(), StagingError> {
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(generation).map_err(|_| StagingError::StorageFailed)?;
+    let bytes = serde_json::to_vec(metadata).map_err(|_| StagingError::StorageFailed)?;
+    temporary
+        .write_all(&bytes)
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|_| StagingError::StorageFailed)?;
+    atomic_replace_file(temporary.path(), &generation.join(METADATA_FILE))
+        .map_err(|_| StagingError::StorageFailed)?;
+    sync_directory(generation)
+}
+
+/// 清理 pointer 未引用的 generation 与 pointer 临时文件，并持久化删除目录项。
+fn cleanup_uncommitted(root: &Path, active: Option<&str>) -> Result<(), StagingError> {
+    let mut changed = false;
+    for entry in fs::read_dir(root).map_err(|_| StagingError::StorageFailed)? {
+        let entry = entry.map_err(|_| StagingError::StorageFailed)?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let path = entry.path();
+        if entry
+            .file_type()
+            .map_err(|_| StagingError::StorageFailed)?
+            .is_dir()
+            && name.starts_with(GENERATION_PREFIX)
+            && active != Some(name.as_ref())
+        {
+            fs::remove_dir_all(path).map_err(|_| StagingError::StorageFailed)?;
+            changed = true;
+        } else if name.starts_with(POINTER_TEMP_PREFIX) {
+            remove_if_exists(&path)?;
+            changed = true;
+        }
+    }
+    if changed {
+        sync_directory(root)?;
+    }
+    Ok(())
+}
+
+/// 判断 root 是否含有 pointer 未提交或崩溃遗留的 generation。
+fn contains_generation(root: &Path) -> Result<bool, StagingError> {
+    for entry in fs::read_dir(root).map_err(|_| StagingError::StorageFailed)? {
+        let entry = entry.map_err(|_| StagingError::StorageFailed)?;
+        if entry
+            .file_type()
+            .map_err(|_| StagingError::StorageFailed)?
+            .is_dir()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(GENERATION_PREFIX)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// 在支持的平台上以覆盖语义原子替换同一目录中的目标文件。
@@ -528,7 +780,7 @@ pub(super) fn atomic_replace_file(source: &Path, destination: &Path) -> io::Resu
     }
 }
 
-/// 在 Unix 上同步目录项，确保原子晋级在崩溃恢复后仍可见。
+/// 在 Unix 上同步目录项，确保 pointer 与清理在崩溃恢复后仍可见。
 #[cfg(unix)]
 fn sync_directory(directory: &Path) -> Result<(), StagingError> {
     File::open(directory)
@@ -536,7 +788,7 @@ fn sync_directory(directory: &Path) -> Result<(), StagingError> {
         .map_err(|_| StagingError::StorageFailed)
 }
 
-/// Windows 文件替换已经请求 WRITE_THROUGH，无需额外目录句柄。
+/// Windows 原子覆盖已请求 WRITE_THROUGH；目录句柄不能按 Unix 方式同步。
 #[cfg(windows)]
 fn sync_directory(_directory: &Path) -> Result<(), StagingError> {
     Ok(())

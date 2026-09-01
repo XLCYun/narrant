@@ -89,6 +89,7 @@ async fn external_ports_are_injected_and_deterministic() {
                 release.package().signature(),
                 release.package().target(),
                 release.package().install_kind(),
+                release.release_notes(),
             )
             .unwrap(),
             "package".as_bytes(),

@@ -1,10 +1,5 @@
 mod application_settings;
-#[allow(
-    dead_code,
-    unused_imports,
-    reason = "Task 2 只建立核心；Task 3 将把这些契约接入 Tauri 与平台适配器"
-)]
-mod application_update;
+pub(crate) mod application_update;
 mod babysit;
 mod child_process;
 mod core_git;
