@@ -1,13 +1,16 @@
 use crate::application_update::{
-    Clock, InstallAttemptError, InstallError, InstallIntent, InstallKind, InstallOutcome,
-    MinisignVerifier, PreferenceError, PreferenceStore, ReleasePackage, StableRelease,
-    StageCandidate, StageCommitOutcome, StagingCommitPoint, StagingContext, StagingError,
-    StagingFaultInjector, StagingRepository, UpdateController, UpdateEffect, UpdateInput,
-    UpdateInstaller, UpdateState, VerifiedStagedPackage,
+    Clock, InstallAttemptError, InstallCleanupDisposition, InstallError, InstallExecutionOutcome,
+    InstallIntent, InstallKind, InstallOutcome, MinisignVerifier, PendingStagedUpdate,
+    PreferenceError, PreferenceStore, ReleasePackage, StableRelease, StageCandidate,
+    StageCommitOutcome, StagingCommitPoint, StagingContext, StagingError, StagingFaultInjector,
+    StagingRepository, UpdateController, UpdateEffect, UpdateInput, UpdateInstaller, UpdateState,
+    VerifiedStagedPackage,
 };
-use std::fs;
+use fs2::FileExt;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -155,6 +158,43 @@ impl StagingFaultInjector for FailAt {
     }
 }
 
+/// 在多个指定事务边界模拟存储失败。
+struct FailAtMany(Vec<StagingCommitPoint>);
+
+impl StagingFaultInjector for FailAtMany {
+    /// 命中任一目标提交点时返回稳定存储错误。
+    fn checkpoint(&self, point: StagingCommitPoint) -> Result<(), StagingError> {
+        if self.0.contains(&point) {
+            Err(StagingError::StorageFailed)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// 统计平台安装调用次数并返回固定主结果。
+struct CountingInstaller {
+    calls: Arc<AtomicUsize>,
+    outcome: InstallOutcome,
+}
+
+impl UpdateInstaller for CountingInstaller {
+    /// 读取已复验包并记录一次不可逆的平台安装调用。
+    fn install(
+        &self,
+        package: &VerifiedStagedPackage,
+        _intent: InstallIntent,
+    ) -> Result<InstallOutcome, InstallError> {
+        if fs::read(package.path()).map_err(|error| InstallError::new(error.to_string()))?
+            != b"package-v2"
+        {
+            return Err(InstallError::new("unexpected package content"));
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.outcome)
+    }
+}
+
 /// 先产生部分内容再模拟网络读取中断的输入流。
 struct InterruptedReader {
     emitted: bool,
@@ -294,7 +334,7 @@ fn successful_higher_candidate_atomically_replaces_old_generation() {
                 InstallIntent::UpdateRestart,
             )
             .unwrap(),
-        InstallOutcome::HandedOff
+        InstallExecutionOutcome::HandedOff
     );
 }
 
@@ -330,7 +370,7 @@ fn stream_and_verification_failures_preserve_existing_staging() {
                 InstallIntent::UpdateRestart,
             )
             .unwrap(),
-        InstallOutcome::HandedOff
+        InstallExecutionOutcome::HandedOff
     );
     drop(repository);
     let recovered =
@@ -379,7 +419,7 @@ fn every_pre_pointer_failure_recovers_old_generation() {
     }
 }
 
-/// pointer 后 outcome 与新 generation snapshot 保持一致，不会误报普通失败。
+/// pointer 后只有跨过显式 durability barrier 才会暴露可安装快照。
 #[test]
 fn post_pointer_outcome_matches_new_generation() {
     for point in [
@@ -404,42 +444,41 @@ fn post_pointer_outcome_matches_new_generation() {
         let outcome = repository
             .stage(candidate("2.2.0", "new"), "new".as_bytes())
             .unwrap();
-        if point == StagingCommitPoint::AfterPointerCommit {
-            assert!(matches!(&outcome, StageCommitOutcome::DurabilityUnknown(_)));
-            assert!(!outcome.is_durable());
-        } else {
-            assert!(matches!(&outcome, StageCommitOutcome::Committed(_)));
-            assert!(outcome.is_durable());
+        match outcome {
+            StageCommitOutcome::DurabilityUnknown(pending) => {
+                let pending: PendingStagedUpdate = pending;
+                assert_eq!(point, StagingCommitPoint::AfterPointerCommit);
+                assert_eq!(pending.version(), "2.2.0");
+                assert!(!pending.release_notes().is_empty());
+                assert_eq!(repository.snapshot(), None);
+                let confirmed = repository.confirm_durability(&pending).unwrap();
+                assert_eq!(confirmed.version(), "2.2.0");
+            }
+            StageCommitOutcome::Committed(staged) => {
+                assert_eq!(point, StagingCommitPoint::AfterPointerSync);
+                assert_eq!(staged.version(), "2.2.0");
+            }
         }
-        assert_eq!(outcome.staged().version(), "2.2.0");
         assert_eq!(repository.snapshot().unwrap().version(), "2.2.0");
         drop(repository);
         let recovered =
             StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier)
                 .unwrap();
+        let mut recovered = recovered;
+        if recovered.snapshot().is_none() {
+            let pending = recovered.pending_durability().unwrap();
+            recovered.confirm_durability(&pending).unwrap();
+        }
         assert_eq!(recovered.snapshot().unwrap().version(), "2.2.0");
         assert_eq!(generation_count(cache.path()), 1);
     }
 }
 
-/// 组合层把 pointer 后显式 outcome 映射为成功，Controller 与仓储不会版本分叉。
+/// 首次 staging 的 unknown identity 跨实例恢复，确认前 Controller 与安装器都不会误用。
 #[test]
-fn repository_outcome_keeps_controller_snapshot_consistent() {
+fn first_staging_requires_durability_confirmation_before_publish_and_install() {
     let cache = tempfile::tempdir().unwrap();
-    let mut initial =
-        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
-    initial
-        .stage(candidate("2.1.0", "old"), "old".as_bytes())
-        .unwrap();
-    drop(initial);
-
     let mut controller = UpdateController::new("2.0.15", FixedClock, EnabledPreferences).unwrap();
-    controller
-        .handle(UpdateInput::RecoverStaged {
-            version: "2.1.0".into(),
-            release_notes: "旧说明".into(),
-        })
-        .unwrap();
     let check = controller.handle(UpdateInput::ManualCheck).unwrap();
     let check_id = check
         .effects
@@ -452,7 +491,7 @@ fn repository_outcome_keeps_controller_snapshot_consistent() {
     let download = controller
         .handle(UpdateInput::CheckSucceeded {
             operation_id: check_id,
-            release: Some(stable_release("2.2.0", "new")),
+            release: Some(stable_release("2.1.0", "package-v2")),
         })
         .unwrap();
     let download_id = download
@@ -472,19 +511,99 @@ fn repository_outcome_keeps_controller_snapshot_consistent() {
     )
     .unwrap();
     let outcome = repository
-        .stage(candidate("2.2.0", "new"), "new".as_bytes())
+        .stage(candidate("2.1.0", "package-v2"), "package-v2".as_bytes())
         .unwrap();
-    assert!(matches!(outcome, StageCommitOutcome::DurabilityUnknown(_)));
-    let authoritative = repository.refresh_snapshot().unwrap().unwrap();
-    assert_eq!(authoritative.version(), "2.2.0");
+    let StageCommitOutcome::DurabilityUnknown(pending) = outcome else {
+        panic!("pointer 后同步故障必须产生 unknown identity");
+    };
+    assert_eq!(repository.snapshot(), None);
+    assert!(controller
+        .handle(UpdateInput::RequestUpdateRestart)
+        .unwrap()
+        .effects
+        .is_empty());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let installer = CountingInstaller {
+        calls: calls.clone(),
+        outcome: InstallOutcome::HandedOff,
+    };
+    assert_eq!(
+        repository.install_with(&installer, InstallIntent::UpdateRestart),
+        Err(InstallAttemptError::Staging(
+            StagingError::DurabilityUnconfirmed
+        ))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    // 新实例必须从 marker 保守重建 unknown，而不是把可读 pointer 当作 durable。
+    drop(repository);
+    let mut recovered =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    assert_eq!(recovered.snapshot(), None);
+    assert_eq!(
+        recovered.install_with(&installer, InstallIntent::UpdateRestart),
+        Err(InstallAttemptError::Staging(
+            StagingError::DurabilityUnconfirmed
+        ))
+    );
+    let authoritative = recovered.confirm_durability(&pending).unwrap();
+    assert_eq!(authoritative.version(), "2.1.0");
     let published = controller
         .handle(UpdateInput::DownloadSucceeded {
             operation_id: download_id,
         })
         .unwrap();
     assert_eq!(published.snapshot.state, UpdateState::Staged);
-    assert_eq!(published.snapshot.candidate.unwrap().version, "2.2.0");
-    assert_eq!(repository.snapshot().unwrap().version(), "2.2.0");
+    assert_eq!(published.snapshot.candidate.unwrap().version, "2.1.0");
+    assert_eq!(recovered.snapshot().unwrap().version(), "2.1.0");
+    assert_eq!(
+        recovered
+            .install_with(&installer, InstallIntent::UpdateRestart)
+            .unwrap(),
+        InstallExecutionOutcome::HandedOff
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// durability barrier 自身失败时保持不可安装，并给出稳定仓储诊断。
+#[test]
+fn failed_durability_confirmation_remains_non_installable() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut repository = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        FailAtMany(vec![
+            StagingCommitPoint::AfterPointerCommit,
+            StagingCommitPoint::DurabilityConfirmationSync,
+        ]),
+    )
+    .unwrap();
+    let StageCommitOutcome::DurabilityUnknown(pending) = repository
+        .stage(candidate("2.1.0", "package-v2"), "package-v2".as_bytes())
+        .unwrap()
+    else {
+        panic!("必须保留 unknown identity");
+    };
+    assert_eq!(
+        repository.confirm_durability(&pending),
+        Err(StagingError::StorageFailed)
+    );
+    assert_eq!(repository.snapshot(), None);
+    let calls = Arc::new(AtomicUsize::new(0));
+    assert_eq!(
+        repository.install_with(
+            &CountingInstaller {
+                calls: calls.clone(),
+                outcome: InstallOutcome::Installed,
+            },
+            InstallIntent::NormalExit,
+        ),
+        Err(InstallAttemptError::Staging(
+            StagingError::DurabilityUnconfirmed
+        ))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 /// 两个先后打开的仓储都在锁内重读 pointer，并以 SemVer CAS 防止降级。
@@ -562,23 +681,44 @@ fn assert_install_lease_blocks_stage(moment: GateMoment, outcome: InstallOutcome
     });
     reached_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(cache.path().join("application-update/.lock"))
+        .unwrap();
+    assert!(FileExt::try_lock_exclusive(&lock_file).is_err());
+
+    let (stage_started_tx, stage_started_rx) = mpsc::sync_channel(0);
     let (stage_done_tx, stage_done_rx) = mpsc::sync_channel(0);
     let stage_thread = std::thread::spawn(move || {
+        stage_started_tx.send(()).unwrap();
         let result = competing.stage(candidate("2.2.0", "package-v3"), "package-v3".as_bytes());
         stage_done_tx.send(result).unwrap();
     });
+    stage_started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
     assert!(matches!(
         stage_done_rx.recv_timeout(Duration::from_millis(100)),
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
 
     proceed_tx.send(()).unwrap();
-    assert_eq!(install_thread.join().unwrap().unwrap(), outcome);
+    let expected = match outcome {
+        InstallOutcome::Installed => InstallExecutionOutcome::Installed {
+            cleanup: InstallCleanupDisposition::Complete,
+        },
+        InstallOutcome::HandedOff => InstallExecutionOutcome::HandedOff,
+    };
+    assert_eq!(install_thread.join().unwrap().unwrap(), expected);
     let staged = stage_done_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap()
         .unwrap();
-    assert_eq!(staged.staged().version(), "2.2.0");
+    let StageCommitOutcome::Committed(staged) = staged else {
+        panic!("释放 install lease 后新候选应完整提交");
+    };
+    assert_eq!(staged.version(), "2.2.0");
     stage_thread.join().unwrap();
     let recovered =
         StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
@@ -721,6 +861,64 @@ fn invalid_pointer_without_generation_is_removed_durably() {
     assert_eq!(generation_count(cache.path()), 0);
 }
 
+/// 平台安装成功是主结果，三个 cleanup 故障点都只产生可恢复 disposition。
+#[test]
+fn installed_result_survives_every_cleanup_failure_without_retrying_installer() {
+    for (point, expected_cleanup) in [
+        (
+            StagingCommitPoint::BeforeInstallPointerDelete,
+            InstallCleanupDisposition::Pending,
+        ),
+        (
+            StagingCommitPoint::AfterInstallPointerDelete,
+            InstallCleanupDisposition::DurabilityUnknown,
+        ),
+        (
+            StagingCommitPoint::BeforeInstallGenerationCleanup,
+            InstallCleanupDisposition::Pending,
+        ),
+    ] {
+        let cache = tempfile::tempdir().unwrap();
+        let mut repository = StagingRepository::open_with_faults(
+            cache.path(),
+            context("2.0.15"),
+            DeterministicVerifier,
+            FailAt(point),
+        )
+        .unwrap();
+        repository
+            .stage(candidate("2.1.0", "package-v2"), "package-v2".as_bytes())
+            .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let installer = CountingInstaller {
+            calls: calls.clone(),
+            outcome: InstallOutcome::Installed,
+        };
+        assert_eq!(
+            repository.install_with(&installer, InstallIntent::NormalExit),
+            Ok(InstallExecutionOutcome::Installed {
+                cleanup: expected_cleanup,
+            }),
+            "cleanup fault at {point:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.snapshot(), None);
+        assert_eq!(
+            repository.install_with(&installer, InstallIntent::NormalExit),
+            Err(InstallAttemptError::Staging(StagingError::NoStagedUpdate)),
+            "已安装 generation 不得再次调用 installer at {point:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        drop(repository);
+        let recovered =
+            StagingRepository::open(cache.path(), context("2.1.0"), DeterministicVerifier).unwrap();
+        assert_eq!(recovered.snapshot(), None);
+        assert!(!cache.path().join("application-update/current").exists());
+        assert_eq!(generation_count(cache.path()), 0);
+    }
+}
+
 /// 安装完成、版本 reconciliation 和无 pointer 的不完整 generation 都会同步清理。
 #[test]
 fn completion_reconciliation_and_incomplete_recovery_cleanup() {
@@ -741,7 +939,9 @@ fn completion_reconciliation_and_incomplete_recovery_cleanup() {
                 InstallIntent::NormalExit,
             )
             .unwrap(),
-        InstallOutcome::Installed
+        InstallExecutionOutcome::Installed {
+            cleanup: InstallCleanupDisposition::Complete,
+        }
     );
     assert_eq!(repository.snapshot(), None);
 

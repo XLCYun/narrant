@@ -45,8 +45,9 @@ pub(crate) use preference::{FilePreferenceStore, PreferenceError, PreferenceStor
     allow(unused_imports, reason = "Task 3 将消费 staging 事务入口")
 )]
 pub(crate) use staging::{
-    InstallAttemptError, InstallKind, MinisignVerifier, StageCandidate, StageCommitOutcome,
-    StagingContext, StagingRepository, VerifiedStagedPackage,
+    InstallAttemptError, InstallCleanupDisposition, InstallExecutionOutcome, InstallKind,
+    MinisignVerifier, PendingStagedUpdate, StageCandidate, StageCommitOutcome, StagingContext,
+    StagingRepository, VerifiedStagedPackage,
 };
 #[allow(
     unused_imports,

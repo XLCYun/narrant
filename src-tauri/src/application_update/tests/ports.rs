@@ -1,7 +1,8 @@
 use crate::application_update::{
-    InstallError, InstallIntent, InstallKind, InstallOutcome, MinisignVerifier, ReleasePackage,
-    StableRelease, StableReleaseProvider, StageCandidate, StagingContext, StagingRepository,
-    UpdateFailure, UpdateFailureCategory, UpdateInstaller,
+    InstallCleanupDisposition, InstallError, InstallExecutionOutcome, InstallIntent, InstallKind,
+    InstallOutcome, MinisignVerifier, ReleasePackage, StableRelease, StableReleaseProvider,
+    StageCandidate, StagingContext, StagingRepository, UpdateFailure, UpdateFailureCategory,
+    UpdateInstaller,
 };
 use async_trait::async_trait;
 use std::fs;
@@ -97,7 +98,9 @@ async fn external_ports_are_injected_and_deterministic() {
         .unwrap();
     assert_eq!(
         staging.install_with(&FixedInstaller, InstallIntent::UpdateRestart),
-        Ok(InstallOutcome::Installed)
+        Ok(InstallExecutionOutcome::Installed {
+            cleanup: InstallCleanupDisposition::Complete,
+        })
     );
 }
 

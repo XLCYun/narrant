@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 const STAGING_DIRECTORY: &str = "application-update";
 const LOCK_FILE: &str = ".lock";
 const COMMIT_POINTER: &str = "current";
+const DURABILITY_MARKER: &str = "pending-durability";
 const GENERATION_PREFIX: &str = "generation-";
 const POINTER_TEMP_PREFIX: &str = ".current-";
 const METADATA_FILE: &str = "metadata.json";
@@ -125,20 +126,36 @@ pub(crate) enum StageCommitOutcome {
     /// `current` 已切换并成功同步 staging 根目录。
     Committed(StagedUpdate),
     /// `current` 已精确指向新 generation，但父目录同步结果不确定。
-    DurabilityUnknown(StagedUpdate),
+    DurabilityUnknown(PendingStagedUpdate),
 }
 
-impl StageCommitOutcome {
-    /// 返回与仓储当前 snapshot 完全一致的新暂存摘要。
-    pub(crate) fn staged(&self) -> &StagedUpdate {
-        match self {
-            Self::Committed(staged) | Self::DurabilityUnknown(staged) => staged,
-        }
+/// 尚未跨过 staging 根目录 durability barrier 的不可安装候选身份。
+#[derive(PartialEq, Eq)]
+pub(crate) struct PendingStagedUpdate {
+    generation: String,
+    staged: StagedUpdate,
+}
+
+impl PendingStagedUpdate {
+    /// 返回仅供失败/确认界面展示的候选版本，不代表已经可安装。
+    pub(crate) fn version(&self) -> &str {
+        self.staged.version()
     }
 
-    /// 返回 pointer 与父目录均已确认持久化的结果。
-    pub(crate) const fn is_durable(&self) -> bool {
-        matches!(self, Self::Committed(_))
+    /// 返回仅供失败/确认界面展示的有界 Release Notes。
+    pub(crate) fn release_notes(&self) -> &str {
+        self.staged.release_notes()
+    }
+}
+
+impl fmt::Debug for PendingStagedUpdate {
+    /// 调试输出隐藏内部 generation identity，只展示不可安装候选摘要。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingStagedUpdate")
+            .field("version", &self.staged.version)
+            .field("release_notes_bytes", &self.staged.release_notes.len())
+            .finish()
     }
 }
 
@@ -207,6 +224,27 @@ pub(crate) enum StagingError {
     VerificationFailed,
     StorageFailed,
     NoStagedUpdate,
+    DurabilityUnconfirmed,
+}
+
+/// 平台安装主结果之后的 staging 清理状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstallCleanupDisposition {
+    /// pointer 与 generation 均已清理完成。
+    Complete,
+    /// 清理尚未完成，但新进程可通过版本 reconciliation 安全重试。
+    Pending,
+    /// pointer 删除已发生，但 staging 根目录同步结果不确定。
+    DurabilityUnknown,
+}
+
+/// 保留不可逆平台安装主结果并独立携带可恢复 cleanup 状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstallExecutionOutcome {
+    /// 当前进程已替换应用；cleanup 失败不得改变这个主事实。
+    Installed { cleanup: InstallCleanupDisposition },
+    /// 外部安装器已安全 open/launch，staging 留给新版本 reconciliation。
+    HandedOff,
 }
 
 /// 汇总锁内复验或平台安装器执行产生的稳定错误。
@@ -235,6 +273,10 @@ pub(crate) enum StagingCommitPoint {
     BeforePointerCommit,
     AfterPointerCommit,
     AfterPointerSync,
+    DurabilityConfirmationSync,
+    BeforeInstallPointerDelete,
+    AfterInstallPointerDelete,
+    BeforeInstallGenerationCleanup,
 }
 
 /// 为真实文件系统测试提供确定性崩溃/失败点，不参与业务决策。
@@ -280,6 +322,8 @@ pub(crate) struct StagingRepository<V, F = NoStagingFaults> {
     faults: F,
     context: StagingContext,
     staged: Option<CommittedGeneration>,
+    durability_unknown: Option<String>,
+    installed_generation: Option<String>,
     recovery_failure: Option<StagingError>,
 }
 
@@ -321,6 +365,8 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
             faults,
             context,
             staged: None,
+            durability_unknown: None,
+            installed_generation: None,
             recovery_failure: None,
         };
         let _lock = lock_root(&repository.root)?;
@@ -330,17 +376,60 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
 
     /// 返回不含文件路径与签名的当前进程暂存快照。
     pub(crate) fn snapshot(&self) -> Option<StagedUpdate> {
-        self.staged.as_ref().map(|generation| StagedUpdate {
-            version: generation.metadata.version.clone(),
-            release_notes: generation.metadata.release_notes.clone(),
+        self.staged
+            .as_ref()
+            .filter(|generation| {
+                self.durability_unknown.as_deref() != Some(&generation.name)
+                    && self.installed_generation.as_deref() != Some(&generation.name)
+            })
+            .map(|generation| StagedUpdate {
+                version: generation.metadata.version.clone(),
+                release_notes: generation.metadata.release_notes.clone(),
+            })
+    }
+
+    /// 为新进程保守恢复的 unknown generation 重建不可复制确认身份。
+    pub(crate) fn pending_durability(&self) -> Option<PendingStagedUpdate> {
+        let generation = self.durability_unknown.as_ref()?;
+        let committed = self
+            .staged
+            .as_ref()
+            .filter(|committed| &committed.name == generation)?;
+        Some(PendingStagedUpdate {
+            generation: generation.clone(),
+            staged: StagedUpdate {
+                version: committed.metadata.version.clone(),
+                release_notes: committed.metadata.release_notes.clone(),
+            },
         })
     }
 
-    /// 在文件锁内重读 `current`，供 `DurabilityUnknown` 后的组合层同步权威快照。
-    pub(crate) fn refresh_snapshot(&mut self) -> Result<Option<StagedUpdate>, StagingError> {
+    /// 对指定 unknown identity 无条件同步 staging 根目录并提升为可安装候选。
+    pub(crate) fn confirm_durability(
+        &mut self,
+        pending: &PendingStagedUpdate,
+    ) -> Result<StagedUpdate, StagingError> {
         let _lock = lock_root(&self.root)?;
         self.refresh_locked()?;
-        Ok(self.snapshot())
+        let Some(committed) = &self.staged else {
+            return Err(StagingError::NoStagedUpdate);
+        };
+        if committed.name != pending.generation
+            || self.durability_unknown.as_deref() != Some(&pending.generation)
+        {
+            return Err(StagingError::InvalidCandidate);
+        }
+        self.faults
+            .checkpoint(StagingCommitPoint::DurabilityConfirmationSync)?;
+        sync_directory(&self.root)?;
+        self.durability_unknown = None;
+        // barrier 已确认 primary durability；marker/旧 generation 只剩可恢复 housekeeping。
+        let _ = clear_durability_marker(&self.root);
+        let _ = cleanup_uncommitted(&self.root, Some(&pending.generation));
+        Ok(StagedUpdate {
+            version: committed.metadata.version.clone(),
+            release_notes: committed.metadata.release_notes.clone(),
+        })
     }
 
     /// 返回恢复时已安全丢弃的损坏或不匹配原因，供上层发布诊断。
@@ -350,8 +439,8 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
 
     /// 在锁内提交更高候选；`Err` 保证本次 generation 未被 `current` 选中。
     ///
-    /// 两种 `Ok` 都应映射为下载成功；`DurabilityUnknown` 还要求组合层保留该状态并在后续
-    /// 启动时按磁盘 pointer 重新恢复，不能转成普通 `DownloadFailed`。
+    /// 只有 `Committed` 可映射为 `DownloadSucceeded`；`DurabilityUnknown` 必须先通过
+    /// `confirm_durability`，否则只能保留为可诊断、不可安装的待确认状态。
     pub(crate) fn stage(
         &mut self,
         candidate: StageCandidate,
@@ -402,15 +491,25 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         &mut self,
         installer: &I,
         intent: InstallIntent,
-    ) -> Result<InstallOutcome, InstallAttemptError> {
+    ) -> Result<InstallExecutionOutcome, InstallAttemptError> {
         let _lock = lock_root(&self.root)?;
         self.refresh_locked()?;
+        if self.installed_generation.as_ref().is_some_and(|installed| {
+            self.staged
+                .as_ref()
+                .is_none_or(|committed| &committed.name == installed)
+        }) {
+            return Err(StagingError::NoStagedUpdate.into());
+        }
         let Some(committed) = &self.staged else {
             return Err(self
                 .recovery_failure
                 .unwrap_or(StagingError::NoStagedUpdate)
                 .into());
         };
+        if self.durability_unknown.as_deref() == Some(&committed.name) {
+            return Err(StagingError::DurabilityUnconfirmed.into());
+        }
         let package = self.root.join(&committed.name).join(PACKAGE_FILE);
         self.verifier
             .verify(&package, &committed.metadata.signature)
@@ -424,11 +523,16 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         let outcome = installer
             .install(&verified, intent)
             .map_err(InstallAttemptError::Installer)?;
-        if outcome == InstallOutcome::Installed {
-            self.clear_committed_locked()?;
+        match outcome {
+            InstallOutcome::Installed => {
+                let generation = committed.name.clone();
+                self.installed_generation = Some(generation);
+                let cleanup = self.finish_installed_cleanup_locked();
+                Ok(InstallExecutionOutcome::Installed { cleanup })
+            }
+            // HandedOff 只有在外部进程已完成安全 open/launch 后才能返回；此处随后释放 lease。
+            InstallOutcome::HandedOff => Ok(InstallExecutionOutcome::HandedOff),
         }
-        // HandedOff 只有在外部进程已完成安全 open/launch 后才能返回；此处随后释放 lease。
-        Ok(outcome)
     }
 
     /// 在新进程版本达到暂存版本后确认 installer handoff 成功并清理。
@@ -491,6 +595,8 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
             .to_owned();
         self.faults
             .checkpoint(StagingCommitPoint::BeforePointerCommit)?;
+        write_durability_marker(&self.root, &generation_name)?;
+        sync_directory(&self.root)?;
         write_commit_pointer(&self.root, &generation_name)?;
         if self
             .faults
@@ -506,7 +612,8 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
             .checkpoint(StagingCommitPoint::AfterPointerSync)
             .is_ok()
         {
-            // pointer 已持久化后，旧 generation 清理只属于可恢复 housekeeping。
+            // pointer 已持久化后，marker 与旧 generation 都只属于可恢复 housekeeping。
+            let _ = clear_durability_marker(&self.root);
             let _ = cleanup_uncommitted(&self.root, Some(&generation_name));
         }
         Ok(self.finish_commit(generation_name, metadata, true))
@@ -524,14 +631,18 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
             release_notes: metadata.release_notes.clone(),
         };
         self.staged = Some(CommittedGeneration {
-            name: generation_name,
+            name: generation_name.clone(),
             metadata,
         });
+        self.durability_unknown = (!durable).then_some(generation_name.clone());
         self.recovery_failure = None;
         if durable {
             StageCommitOutcome::Committed(staged)
         } else {
-            StageCommitOutcome::DurabilityUnknown(staged)
+            StageCommitOutcome::DurabilityUnknown(PendingStagedUpdate {
+                generation: generation_name,
+                staged,
+            })
         }
     }
 
@@ -560,16 +671,58 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         let recovery = recover_committed(&self.root, &self.context, &self.verifier)?;
         self.staged = recovery.committed;
         self.recovery_failure = recovery.discarded;
+        self.durability_unknown = match read_durability_marker(&self.root) {
+            Ok(Some(generation))
+                if self
+                    .staged
+                    .as_ref()
+                    .is_some_and(|committed| committed.name == generation) =>
+            {
+                Some(generation)
+            }
+            Ok(Some(_)) => {
+                clear_durability_marker(&self.root)?;
+                None
+            }
+            Ok(None) => None,
+            Err(error) => {
+                clear_durability_marker(&self.root)?;
+                self.recovery_failure = Some(error);
+                None
+            }
+        };
         Ok(())
     }
 
-    /// 原子删除 commit pointer 后清理所有 generation，保证崩溃恢复不再安装。
-    fn clear_committed_locked(&mut self) -> Result<(), StagingError> {
-        remove_if_exists(&self.root.join(COMMIT_POINTER))?;
-        sync_directory(&self.root)?;
-        cleanup_uncommitted(&self.root, None)?;
+    /// 在 Installed 主结果之后尽力清理，并把所有失败收敛为可恢复 disposition。
+    fn finish_installed_cleanup_locked(&mut self) -> InstallCleanupDisposition {
+        if self
+            .faults
+            .checkpoint(StagingCommitPoint::BeforeInstallPointerDelete)
+            .is_err()
+            || remove_if_exists(&self.root.join(COMMIT_POINTER)).is_err()
+        {
+            return InstallCleanupDisposition::Pending;
+        }
         self.staged = None;
-        Ok(())
+        self.durability_unknown = None;
+        if self
+            .faults
+            .checkpoint(StagingCommitPoint::AfterInstallPointerDelete)
+            .is_err()
+            || sync_directory(&self.root).is_err()
+        {
+            return InstallCleanupDisposition::DurabilityUnknown;
+        }
+        if self
+            .faults
+            .checkpoint(StagingCommitPoint::BeforeInstallGenerationCleanup)
+            .is_err()
+            || cleanup_uncommitted(&self.root, None).is_err()
+        {
+            return InstallCleanupDisposition::Pending;
+        }
+        InstallCleanupDisposition::Complete
     }
 }
 
@@ -665,7 +818,16 @@ fn recover_committed<V: MinisignVerifier>(
 
 /// 有界读取并验证原子 commit pointer 只引用本目录 generation 名称。
 fn read_pointer(root: &Path) -> Result<Option<String>, StagingError> {
-    let path = root.join(COMMIT_POINTER);
+    read_generation_reference(&root.join(COMMIT_POINTER))
+}
+
+/// 有界读取 durability marker 中的 generation identity。
+fn read_durability_marker(root: &Path) -> Result<Option<String>, StagingError> {
+    read_generation_reference(&root.join(DURABILITY_MARKER))
+}
+
+/// 有界读取并验证一个只允许引用同目录 generation 的文件。
+fn read_generation_reference(path: &Path) -> Result<Option<String>, StagingError> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -706,6 +868,25 @@ fn write_commit_pointer(root: &Path, generation: &str) -> Result<(), StagingErro
         .map_err(|_| StagingError::StorageFailed)?;
     atomic_replace_file(temporary.path(), &root.join(COMMIT_POINTER))
         .map_err(|_| StagingError::StorageFailed)
+}
+
+/// 在 pointer 切换前持久化 unknown identity，使新实例也会保守要求 durability barrier。
+fn write_durability_marker(root: &Path, generation: &str) -> Result<(), StagingError> {
+    let path = root.join(DURABILITY_MARKER);
+    let mut file = File::create(path).map_err(|_| StagingError::StorageFailed)?;
+    file.write_all(generation.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|_| StagingError::StorageFailed)
+}
+
+/// 删除 durability marker 并持久化目录项；不存在时视为已经清理。
+fn clear_durability_marker(root: &Path) -> Result<(), StagingError> {
+    let marker = root.join(DURABILITY_MARKER);
+    if !marker.exists() {
+        return Ok(());
+    }
+    remove_if_exists(&marker)?;
+    sync_directory(root)
 }
 
 /// 有界读取并反序列化版本化元数据，避免恶意文件造成无界内存分配。
