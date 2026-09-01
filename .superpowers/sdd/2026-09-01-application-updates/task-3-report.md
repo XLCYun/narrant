@@ -289,3 +289,52 @@ Round 2 实现提交为 `81d8c52`（`fix: close application update integration g
 - 当前 GitHub tag `v1.1.5` 下的 `latest.json` 只读请求为 404；release pipeline 在正式启用更新前必须上传与固定 endpoint/tag chain 匹配的 stable manifest。这不是客户端 allowlist 放宽可以解决的问题。
 - Windows production `SystemCommandLauncher`/target cfg 仍未在 macOS 编译，真实 NSIS current-user lifecycle 与 `/R` relaunch 必须由 Windows runner/Task 6 覆盖。Round 2 只声称 production-shared post-stop outcome 与既有 PE/temp/argv launcher core contract 覆盖，不声称 native Windows adapter 已在本机证明。
 - macOS production app replacement/native restart 仍需签名、公证 runner smoke；本轮没有修改 UI、workflow、secrets、capability schema 或制品发布状态。
+
+## Fix round 3（Round 2 re-review 的 1 个 Important）
+
+Round 3 实现提交为 `004ee9f`（`fix(updater): preserve staged update on preference errors`）。本节修正 round 2 对所有 `UpdateDomainError` 使用同一破坏性收敛输入的设计；metadata/check/download contract failure 的既有安全收敛保持不变。
+
+### 1. 偏好持久化失败与更新包真相分离
+
+- `UpdateSnapshot` 新增可选 `preferenceWarning`，只公开稳定 `category/message`，与 `state`、durable `candidate`、operation `failure`、`recoveryWarning` 可以同时存在；不会序列化原始存储错误或路径。
+- runtime 不再把 `PreferenceError` 发送给通用 domain-failure 分支。偏好保存失败改为专用 `PreferenceSaveFailed` 输入，只设置/替换 warning 并递增一次 sequence，不改变 state、candidate、failure、active check/download identity 或 retry。
+- 非偏好领域错误继续使用 `ContractDomainFailed`：它仍结束对应非法领域转换、取消下载（如适用）并生成有序 `Failed`，因此 round 2 的 prerelease/contract fail-closed 行为没有放宽。
+
+### 2. rollback、sequence 与 restart 语义
+
+- `SetAutomaticDownload` 仍先执行原子存储，再改变内存偏好。save 失败时原输入没有被 controller 接受、sequence 不增加，内存 `automaticDownload` 保持磁盘原值；随后 runtime 的专用 warning 输入被接受并只增加一个 sequence。
+- save 成功后才改变内存偏好，并明确清除旧 `preferenceWarning`。关闭自动下载的 cancel/retry 失效逻辑仍只发生在保存成功后，因此 UI 不会显示尚未落盘的值，也不会因失败误取消下载。
+- 已有 opaque durable proof 时，保存失败后公开投影仍为 `Staged`，candidate/proof 不变；`RequestUpdateRestart` 继续产生唯一 `RequestInstall { UpdateRestart }` effect。
+- 没有 staged candidate 时，原有 Idle/Checking/Downloading 等状态保持不变，warning 仍通过 snapshot command/单一 event 可见且可诊断。
+
+### 3. 真实 failing-store 与活动 operation 覆盖
+
+- controller 注入 `FailingPreferences`，覆盖：
+  - staged + save failure 仍 Staged、偏好保持磁盘真值、warning 为 Storage、restart 仍可安装；
+  - no-staged + save failure 只增加一次 sequence、保持 Idle，并验证序列化 warning 不含私有路径；
+  - active check + save failure 后，原 operation ID 的 `CheckSucceeded` 仍被接受；
+  - active download + save failure 后，原 operation ID 的 progress 仍被接受，且没有 CancelDownload effect。
+- runtime 使用真实 `FilePreferenceStore` 与临时文件系统：把正式偏好路径构造成目录，使原子替换确定性失败；验证 snapshot 保持默认磁盘真值、`Idle + preferenceWarning(Storage)`，并验证 snapshot/JSONL diagnostics 不含数据目录或偏好文件名。
+
+### Round 3 focused verification
+
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update::tests::state_machine::preference_save_failure -- --nocapture`
+  - **PASS**：4 passed, 0 failed。
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update::runtime::tests::runtime_preference_save_failure -- --nocapture`
+  - **PASS**：1 passed, 0 failed。
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update:: -- --nocapture`
+  - **PASS**：76 passed, 0 failed；包含 round 1/2 的 HTTP、redirect、真实 minisign/staging、平台契约、runtime gate 与全部 state-machine 回归。
+- `scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`
+  - **PASS**。
+- `scripts/cargo-agent.sh fmt --manifest-path src-tauri/Cargo.toml -- --check`
+  - **PASS**。
+- `git diff --check`
+  - **PASS**。
+
+未运行全量 Rust suite，未触发 quality-gate，符合 round 3 的聚焦验证约束。
+
+### Round 3 residual risks / scope
+
+- 本轮没有改变 production endpoint/public key fail-closed、metadata byte cap/redirect policy、opaque durable proof/lease、shared drain/post-stop coordinator、平台 installer 或 Tauri capability。
+- Windows native NSIS 与 macOS 签名/公证 smoke 的既有 residual 不变；本轮仅修改 provider-neutral state/runtime 错误收敛，不声称新增原生平台覆盖。
+- 本轮没有修改 Task 4 UI、Task 5/6 workflow、GitHub secrets/environments 或制品发布状态。
