@@ -118,3 +118,94 @@ Task 3 已完成。实现提交为 `7a67c6f`（`feat: add trusted application up
 - 本机没有执行真实 Windows NSIS 生命周期，也没有执行“替换已安装 DMG 应用”的原生升级；这些是 Task 6 Windows/macOS runner native smoke 的职责。
 - Tauri Builder 本身会先解析网络响应；本实现随后拒绝序列化超过 64 KiB 的 manifest，并以 30 秒 timeout 限制请求。若未来要求在分配 JSON DOM 之前强制 byte-level hard cap，需要在 Tauri updater 上游提供 bounded body hook 或换成保持同等 target/signature 语义的受审 metadata parser。
 - macOS 直接替换要求当前 app 所在目录可写；权限不足会安全失败并保留 staging，不使用 shell 拼接或隐式提权。若产品最终要求管理员授权安装，需要另行引入经过审查的原生授权 helper，并补真实签名/公证 smoke。
+
+## Fix round 1（独立审查 9 Important + 2 Minor）
+
+本节取代上文关于“由 Tauri Builder 先解析 manifest”“下载 token map”和“分离退出 gate”的旧实现描述。修复实现提交为 `f1706a1`（`fix: harden application update lifecycle`）。
+
+### Finding-by-finding 修复
+
+1. **Manifest byte hard cap / redirect policy**
+   - 新增 `application_update/metadata.rs`。rustls reqwest 在创建 JSON DOM 前逐块读取，Content-Length 与 chunked/stream 两条路径都执行 64 KiB hard cap，并使用 30 秒总 timeout。
+   - production 初始 endpoint 仍由 `TrustedUpdaterConfig` 逐字固定；manifest redirect 只允许无 credentials、无显式 port 的 HTTPS `github.com` 固定 manifest path，或 GitHub release asset 主机的非空 asset path，最多五跳。
+   - adapter 直接反序列化 `tauri-plugin-updater 2.10.1` 的公开 `RemoteRelease`，因此保留 Tauri stable manifest 的 dynamic/static target、version/notes、URL/signature wire semantics；随后仍按固定 target/install-kind 与 package allowlist 构造 private `StableRelease`。下载和磁盘 minisign 验证仍使用同一编译期 trust config。
+
+2. **真实 status/错误分类**
+   - 只有 transport、timeout/408、429、5xx 分别进入 Network、RequestTimeout、RateLimited、Server 并允许 retry。
+   - 400/404、redirect contract、oversize、malformed JSON/SemVer、missing target、empty signature、package/target contract 全部进入 Manifest 且不可 retry。
+   - 明确 HTTP status 作为可选数值写入脱敏 diagnostics；不保存响应正文或 URL。
+
+3. **Managed updater task owner / shared stop**
+   - periodic timer、retry timer、check 和 download 全部注册到 Task 1 的单一 `CancellableOperations`。`CancellationSignal` 增加 enable-before-check 的异步唤醒；`close_and_drain` 关闭 admission、取消所有 updater tasks 并等待 RAII registration 归零。
+   - download future 的 registration 覆盖 stream EOF、磁盘 sync、真实 minisign verification、staging 文件锁与 durable commit 临界区。同步临界区超出 15 秒时共享 `ApplicationShutdown` 返回 TimedOut，post-stop coordinator 使用 `try_lock` 跳过安装并 final exit，不会在 deadline 外等待 staging mutex。
+   - timer identity 使用单调序号，避免前一个 timer guard 尚未释放时后继 schedule 因 duplicate ID 丢失；关闭 admission 后不会执行新的网络检查。
+
+4. **取消与 durable side effect 原子线性化**
+   - 下载 EOF 后先检查 cancellation，再进入 runtime `transition_gate`。在同一 gate 内，先由 core `accepts_download_completion(operation_id)` 核对 active identity，再持 staging/root lock 执行 stage、必要的 pending durability confirmation，最后直接提交同一 identity 的 `DownloadSucceeded`。
+   - `SetAutomaticDownload(false)` 经过同一 transition gate：若偏好取消先获得 gate，active identity 消失且磁盘不写；若 stage 先获得 gate，opaque durable proof 与 core acceptance 已在同一受控边界完成，之后偏好变更保留合法 Staged 状态。旧 staging 仍由 Task 2 generation/pointer 事务保护。
+   - download token map 已删除；取消、正常返回、错误与 panic unwind 均由 operation registration RAII 统一清理。
+
+5. **stop outcome 后的 final exit**
+   - `Completed` 才尝试安装；`Failed`、`TimedOut` 都跳过安装但仍执行一次 final exit。安装失败发生在不可逆 stop 后会保留 staging、写脱敏 warning，并以非零 code final exit。
+
+6. **进程级单一 post-stop/install/final-action coordinator**
+   - 新增 managed `PostStopCoordinator`。普通 ExitRequested/CloseRequested 与显式 update restart 共享同一 CAS execution gate，UpdateRestart intent 可在 stop 期间覆盖普通退出 intent。
+   - 唯一 owner 复用 Task 1 `stop_once` outcome，installer 至多一次；macOS `Installed` 的显式 restart 才调用一次 `app.restart()`，Windows `HandedOff` 只 final exit、由唯一 `/R` installer 接管 relaunch。普通退出与安装失败也只产生一次 final action。
+
+7. **macOS real archive/FS safety**
+   - tar.gz 改为逐 entry 审查与解包：拒绝 absolute/`..`、duplicate path、symlink、hardlink 和特殊文件；只允许唯一 `.app` root 下的 directory/regular file。解包后使用 `symlink_metadata` 要求 root 本身为真实目录。
+   - candidate move 失败直接恢复 backup；post-replace 失败先将 destination 移到 `failed-candidate.app`，再把 backup 恢复到原路径。第二步失败时 temp work 通过 `keep()` 保留 backup/failed candidate 等恢复材料。
+
+8. **Runtime recovery visibility**
+   - runtime 装配不再对 install plan、context、verifier、repository open/recovery 使用 `.ok()` 静默丢失。
+   - “repository 可用且损坏候选已安全丢弃”会保留 repository、发布 Verification/Storage startup failure snapshot 和脱敏 diagnostics，随后仍允许 Ready/check/download；“repository 根不可打开”发布 Storage failure 且保持 staging unavailable，检查仍可恢复运行并明确在下载提交时报 Storage。
+
+9. **真实组合与平台 contract tests**
+   - 真实 loopback HTTP server 覆盖 chunked hard cap、redirect allow/deny、timeout、404/408/429/503、malformed JSON/SemVer、empty signature 与 missing target。
+   - 真实 staging filesystem 覆盖 EOF cancel-before-commit 与 stage-wins 的线性化、startup tamper recovery、repository unavailable。
+   - macOS 使用真实 gzip tar 和临时目录覆盖 candidate move、post-replace rollback、root symlink、hardlink、path traversal。
+   - Windows 共享核心在 macOS 可编译测试：可注入 `CommandLauncher` 验证复制后的 temp lifetime、DOS `e_lfanew`、`PE\0\0`、AMD64 machine `0x8664`、结构化 argv 与一次 launch。静态代码无法可靠证明任意 PE 为 NSIS，因此边界是“已经 minisign 验证的发布制品 + x64 PE contract + 固定 NSIS argv”；真实 NSIS 行为继续由 Windows runner 验证。
+
+10. **Minor findings**
+    - 删除易泄漏的 download-token HashMap，改由 shared operation registration RAII 负责所有出口清理。
+    - `SafeDiagnostic` 已添加中文结构说明，并只增加安全的数值 `httpStatus`。
+
+### Fix round files
+
+- 新增：
+  - `src-tauri/src/application_update/metadata.rs`
+  - `src-tauri/src/application_update/tests/metadata.rs`
+- 主要修改：
+  - `src-tauri/src/application_update/{config,diagnostics,platform,runtime,state,staging}.rs`
+  - `src-tauri/src/application_update/tests/{config,platform,runtime,staging}.rs`
+  - `src-tauri/src/operation/{cancellable.rs,cancellable_tests.rs}`
+  - `src-tauri/src/tauri_app/{bootstrap,shutdown}.rs`
+  - `src-tauri/src/tauri_app/tests/shutdown.rs`
+
+### Fix round verification
+
+- `scripts/cargo-agent.sh test application_update --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：63 passed, 0 failed（包含真实 HTTP、minisign disk、staging FS、mac tar/FS、Windows PE/launcher contract）。
+- `scripts/cargo-agent.sh test tauri_app::shutdown::tests --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：11 passed, 0 failed（包含 15 秒 timeout、Failed/TimedOut skip install + final action、普通 exit/restart intent race）。
+- `scripts/cargo-agent.sh test operation::cancellable::tests --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：9 passed, 0 failed（包含 async cancel wake、drain 与 admission close）。
+- `scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`
+  - **PASS**。
+- `scripts/cargo-agent.sh fmt --manifest-path src-tauri/Cargo.toml -- --check`
+  - **PASS**（最终提交前复核）。
+- `git diff --check`
+  - **PASS**（最终提交前复核）。
+- `pnpm tauri info`
+  - **PASS（配置解析）**：识别 Rust `tauri-plugin-updater 2.10.1`，且 `@tauri-apps/plugin-updater` 未安装；宿主仍提示 Node 26 超出项目 engine 且未安装完整 Xcode，不影响本轮配置/schema 解析。
+- `scripts/cargo-agent.sh clippy --lib --manifest-path src-tauri/Cargo.toml -- -D warnings`
+  - **BASELINE BLOCKED**：本轮已修复 Task 2 staging lock 的 `suspicious_open_options`，但仓库既有 Babysit `result_large_err` warnings 仍使全 lib `-D warnings` 失败；未修改不相关 Babysit。
+
+未运行全量 Rust suite，未触发 quality-gate。
+
+### Fix round residual risks
+
+- Windows 本机仍缺 MSVC/Windows SDK，真实 NSIS current-user install、进程退出后 `/R` relaunch 与签名制品行为必须由 Windows runner 覆盖；本轮共享 PE/argv/launcher contract 已在 macOS 执行。
+- macOS 测试真实 tar 与文件系统事务，但没有替换 `/Applications` 中已签名/公证的 production app；原生 smoke 仍属于 Task 6。
+- build-time endpoint/public key/release private key 要求不变；本轮没有新增或提交任何真实/冒充 production 的密钥，也没有修改 GitHub secrets/environments。
+- 本轮没有修改 Tauri config/capability schema、Task 4 UI 或 Task 5/6 workflow/smoke。
