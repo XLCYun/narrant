@@ -95,9 +95,8 @@ async fn external_ports_are_injected_and_deterministic() {
             "package".as_bytes(),
         )
         .unwrap();
-    let verified = staging.verify_for_install().unwrap();
     assert_eq!(
-        FixedInstaller.install(&verified, InstallIntent::UpdateRestart),
+        staging.install_with(&FixedInstaller, InstallIntent::UpdateRestart),
         Ok(InstallOutcome::Installed)
     );
 }

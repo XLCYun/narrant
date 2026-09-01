@@ -63,7 +63,7 @@ impl fmt::Display for InstallError {
 
 /// 在共享应用停止成功后消费已复验包的平台安装边界。
 pub(crate) trait UpdateInstaller: Send + Sync {
-    /// 按退出意图安装已复验包，不接受前端提供的路径、签名或参数。
+    /// 在 staging 独占 lease 内消费包；HandedOff 仅能在外部进程已安全 open/launch 后返回。
     fn install(
         &self,
         package: &VerifiedStagedPackage,

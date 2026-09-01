@@ -1,3 +1,4 @@
+use super::{InstallError, InstallIntent, InstallOutcome, UpdateInstaller};
 use fs2::FileExt;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -112,10 +113,33 @@ impl fmt::Debug for StageCandidate {
 }
 
 /// 可安全公开给状态快照和日志的暂存更新摘要。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct StagedUpdate {
     version: String,
     release_notes: String,
+}
+
+/// 描述本次 generation 提交在当前进程可观察到的权威结果。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StageCommitOutcome {
+    /// `current` 已切换并成功同步 staging 根目录。
+    Committed(StagedUpdate),
+    /// `current` 已精确指向新 generation，但父目录同步结果不确定。
+    DurabilityUnknown(StagedUpdate),
+}
+
+impl StageCommitOutcome {
+    /// 返回与仓储当前 snapshot 完全一致的新暂存摘要。
+    pub(crate) fn staged(&self) -> &StagedUpdate {
+        match self {
+            Self::Committed(staged) | Self::DurabilityUnknown(staged) => staged,
+        }
+    }
+
+    /// 返回 pointer 与父目录均已确认持久化的结果。
+    pub(crate) const fn is_durable(&self) -> bool {
+        matches!(self, Self::Committed(_))
+    }
 }
 
 impl StagedUpdate {
@@ -131,9 +155,8 @@ impl StagedUpdate {
 }
 
 /// 通过安装前复验、可交给受信安装适配器的包句柄。
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) struct VerifiedStagedPackage {
-    generation: String,
     version: String,
     path: PathBuf,
     target: String,
@@ -163,7 +186,7 @@ impl VerifiedStagedPackage {
 }
 
 impl fmt::Debug for VerifiedStagedPackage {
-    /// 输出安装句柄身份并隐藏 generation 与本机包路径。
+    /// 输出安装句柄身份并隐藏本机包路径。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VerifiedStagedPackage")
@@ -184,6 +207,22 @@ pub(crate) enum StagingError {
     VerificationFailed,
     StorageFailed,
     NoStagedUpdate,
+}
+
+/// 汇总锁内复验或平台安装器执行产生的稳定错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstallAttemptError {
+    /// staging 恢复、复验或收尾失败。
+    Staging(StagingError),
+    /// 平台安装器拒绝消费已复验包。
+    Installer(InstallError),
+}
+
+impl From<StagingError> for InstallAttemptError {
+    /// 将 staging 错误提升到完整安装尝试错误。
+    fn from(error: StagingError) -> Self {
+        Self::Staging(error)
+    }
 }
 
 /// generation 提交协议中可注入故障的持久化边界。
@@ -297,17 +336,27 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         })
     }
 
+    /// 在文件锁内重读 `current`，供 `DurabilityUnknown` 后的组合层同步权威快照。
+    pub(crate) fn refresh_snapshot(&mut self) -> Result<Option<StagedUpdate>, StagingError> {
+        let _lock = lock_root(&self.root)?;
+        self.refresh_locked()?;
+        Ok(self.snapshot())
+    }
+
     /// 返回恢复时已安全丢弃的损坏或不匹配原因，供上层发布诊断。
     pub(crate) fn recovery_failure(&self) -> Option<StagingError> {
         self.recovery_failure
     }
 
-    /// 在跨进程锁内流式写入唯一 generation，并以单一 pointer 原子提交更高候选。
+    /// 在锁内提交更高候选；`Err` 保证本次 generation 未被 `current` 选中。
+    ///
+    /// 两种 `Ok` 都应映射为下载成功；`DurabilityUnknown` 还要求组合层保留该状态并在后续
+    /// 启动时按磁盘 pointer 重新恢复，不能转成普通 `DownloadFailed`。
     pub(crate) fn stage(
         &mut self,
         candidate: StageCandidate,
         mut package: impl Read,
-    ) -> Result<StagedUpdate, StagingError> {
+    ) -> Result<StageCommitOutcome, StagingError> {
         let _lock = lock_root(&self.root)?;
         self.refresh_locked()?;
         self.validate_candidate(&candidate)?;
@@ -345,47 +394,41 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         Ok(true)
     }
 
-    /// 在安装前锁内重读 pointer，并重验版本、目标、安装类型与包签名。
-    pub(crate) fn verify_for_install(&mut self) -> Result<VerifiedStagedPackage, StagingError> {
+    /// 在同一个文件锁 lease 内完成复验、安装器消费与 Installed 收尾。
+    ///
+    /// `UpdateInstaller` 是同步端口，因此这里不跨 `await` 持锁。`HandedOff` 返回代表外部
+    /// 安装器已完成安全 open/launch；只有收到该结果后才释放 lease。
+    pub(crate) fn install_with<I: UpdateInstaller>(
+        &mut self,
+        installer: &I,
+        intent: InstallIntent,
+    ) -> Result<InstallOutcome, InstallAttemptError> {
         let _lock = lock_root(&self.root)?;
         self.refresh_locked()?;
         let Some(committed) = &self.staged else {
             return Err(self
                 .recovery_failure
-                .unwrap_or(StagingError::NoStagedUpdate));
+                .unwrap_or(StagingError::NoStagedUpdate)
+                .into());
         };
         let package = self.root.join(&committed.name).join(PACKAGE_FILE);
         self.verifier
             .verify(&package, &committed.metadata.signature)
             .map_err(|_| StagingError::VerificationFailed)?;
-        Ok(VerifiedStagedPackage {
-            generation: committed.name.clone(),
+        let verified = VerifiedStagedPackage {
             version: committed.metadata.version.clone(),
             path: package,
             target: committed.metadata.target.clone(),
             install_kind: committed.metadata.install_kind,
-        })
-    }
-
-    /// 在受信安装适配器确认原路径替换后，仅清除句柄对应的 committed generation。
-    pub(crate) fn complete_install(
-        &mut self,
-        installed: &VerifiedStagedPackage,
-    ) -> Result<(), StagingError> {
-        let _lock = lock_root(&self.root)?;
-        self.refresh_locked()?;
-        let Some(committed) = &self.staged else {
-            return Err(StagingError::NoStagedUpdate);
         };
-        if installed.generation != committed.name
-            || installed.version != committed.metadata.version
-            || installed.path != self.root.join(&committed.name).join(PACKAGE_FILE)
-            || installed.target != committed.metadata.target
-            || installed.install_kind != committed.metadata.install_kind
-        {
-            return Err(StagingError::InvalidCandidate);
+        let outcome = installer
+            .install(&verified, intent)
+            .map_err(InstallAttemptError::Installer)?;
+        if outcome == InstallOutcome::Installed {
+            self.clear_committed_locked()?;
         }
-        self.clear_committed_locked()
+        // HandedOff 只有在外部进程已完成安全 open/launch 后才能返回；此处随后释放 lease。
+        Ok(outcome)
     }
 
     /// 在新进程版本达到暂存版本后确认 installer handoff 成功并清理。
@@ -407,7 +450,7 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         &mut self,
         candidate: StageCandidate,
         package: &mut impl Read,
-    ) -> Result<StagedUpdate, StagingError> {
+    ) -> Result<StageCommitOutcome, StagingError> {
         let generation = tempfile::Builder::new()
             .prefix(GENERATION_PREFIX)
             .tempdir_in(&self.root)
@@ -449,22 +492,47 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         self.faults
             .checkpoint(StagingCommitPoint::BeforePointerCommit)?;
         write_commit_pointer(&self.root, &generation_name)?;
-        self.faults
-            .checkpoint(StagingCommitPoint::AfterPointerCommit)?;
-        sync_directory(&self.root)?;
-        self.faults
-            .checkpoint(StagingCommitPoint::AfterPointerSync)?;
+        if self
+            .faults
+            .checkpoint(StagingCommitPoint::AfterPointerCommit)
+            .is_err()
+            || sync_directory(&self.root).is_err()
+        {
+            return Ok(self.finish_commit(generation_name, metadata, false));
+        }
 
-        cleanup_uncommitted(&self.root, Some(&generation_name))?;
+        if self
+            .faults
+            .checkpoint(StagingCommitPoint::AfterPointerSync)
+            .is_ok()
+        {
+            // pointer 已持久化后，旧 generation 清理只属于可恢复 housekeeping。
+            let _ = cleanup_uncommitted(&self.root, Some(&generation_name));
+        }
+        Ok(self.finish_commit(generation_name, metadata, true))
+    }
+
+    /// 让返回 outcome 与当前仓储 snapshot 在同一个临界区内保持一致。
+    fn finish_commit(
+        &mut self,
+        generation_name: String,
+        metadata: StoredMetadata,
+        durable: bool,
+    ) -> StageCommitOutcome {
+        let staged = StagedUpdate {
+            version: metadata.version.clone(),
+            release_notes: metadata.release_notes.clone(),
+        };
         self.staged = Some(CommittedGeneration {
             name: generation_name,
-            metadata: metadata.clone(),
+            metadata,
         });
         self.recovery_failure = None;
-        Ok(StagedUpdate {
-            version: metadata.version,
-            release_notes: metadata.release_notes,
-        })
+        if durable {
+            StageCommitOutcome::Committed(staged)
+        } else {
+            StageCommitOutcome::DurabilityUnknown(staged)
+        }
     }
 
     /// 提交前使用锁内最新 pointer 执行严格 SemVer CAS 与目标校验。
@@ -545,6 +613,7 @@ fn recover_committed<V: MinisignVerifier>(
         Ok(pointer) => pointer,
         Err(error) => {
             remove_if_exists(&root.join(COMMIT_POINTER))?;
+            sync_directory(root)?;
             cleanup_uncommitted(root, None)?;
             return Ok(RecoveryResult {
                 committed: None,
