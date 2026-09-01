@@ -67,6 +67,26 @@ fn structured_output_schema_requires_exact_target_lines() {
     }
 }
 
+#[test]
+fn codex_generation_and_repair_prompts_discourage_repository_exploration() {
+    let request = request();
+    let generation = CodexAppServerProvider::generation_prompt(&request);
+    assert!(generation.contains("Do not explore the repository by default"));
+    assert!(generation.contains("one specific unresolved symbol or behavior"));
+    assert!(generation.contains("do not repeat or broaden a query"));
+
+    let repair = CodexAppServerProvider::repair_prompt(
+        &request,
+        &[ValidationFailure::MissingLine {
+            side: FileSide::Before,
+            line_number: 1,
+        }],
+        false,
+    );
+    assert!(repair.contains("do not explore the repository by default"));
+    assert!(repair.contains("do not repeat or broaden a query"));
+}
+
 /// 启动确定性 shell JSONL fixture，并将事件写入临时文件供断言读取。
 fn provider(mode: &str, timeout: Duration) -> (CodexAppServerProvider, TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
