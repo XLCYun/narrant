@@ -2,6 +2,7 @@ use super::commands::{
     application_settings as application_settings_commands, babysit as babysit_commands,
     github as github_commands, repository, review as review_commands,
 };
+use super::shutdown::{self, ApplicationShutdown};
 use crate::{
     application_settings::ApplicationSettingsApplication, babysit, github, operation, persistence,
     repository as repository_module, review,
@@ -22,7 +23,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         // Debug 构建安装本地终端日志；Release 保留同一 no-op 生命周期 seam。
         .manage(crate::telemetry::init())
-        .manage(operation::CancellableOperations::default());
+        .manage(operation::CancellableOperations::default())
+        .manage(ApplicationShutdown::default());
     #[cfg(feature = "wdio")]
     let builder = builder.manage(repository::E2eRepositoryPicker::default());
     let builder = builder
@@ -156,19 +158,5 @@ pub fn run() {
     let application = builder
         .build(tauri::generate_context!())
         .expect("build Narrant");
-    application.run(|app, event| {
-        if matches!(
-            event,
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-        ) {
-            let operations = app.state::<operation::CancellableOperations>();
-            let _ = operations.cancel_all();
-            let babysit = app.state::<babysit::BabysitApplication>();
-            let _ = tauri::async_runtime::block_on(babysit.shutdown());
-            let lifecycle = app.state::<review::ReviewLifecycle>();
-            let _ = tauri::async_runtime::block_on(lifecycle.shutdown());
-            let telemetry = app.state::<crate::telemetry::Telemetry>();
-            let _ = tauri::async_runtime::block_on(telemetry.shutdown());
-        }
-    });
+    application.run(shutdown::handle_run_event);
 }

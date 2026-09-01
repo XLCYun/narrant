@@ -114,6 +114,60 @@ async fn cancel_all_notifies_every_running_operation() {
     }
 }
 
+#[tokio::test]
+async fn close_and_drain_closes_admission_and_ignores_early_cancellations() {
+    let operations = CancellableOperations::default();
+    let early_id = OperationId::new("early-cancellation").unwrap();
+    operations.cancel(&early_id).unwrap();
+
+    operations.close_and_drain().await.unwrap();
+
+    let error = operations
+        .run(OperationId::new("after-close").unwrap(), |_| async {})
+        .await
+        .unwrap_err();
+    assert_eq!(error, OperationError::Cancelled);
+    assert_eq!(operations.cancel(&early_id), Err(OperationError::Cancelled));
+}
+
+#[tokio::test]
+async fn close_and_drain_waits_for_every_running_registration_to_release() {
+    let operations = CancellableOperations::default();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let running_operations = operations.clone();
+    let running_started = started.clone();
+    let running_release = release.clone();
+    let running = tokio::spawn(async move {
+        running_operations
+            .run(
+                OperationId::new("drained-operation").unwrap(),
+                move |context| async move {
+                    running_started.notify_one();
+                    while !context.cancellation().is_cancelled() {
+                        tokio::task::yield_now().await;
+                    }
+                    running_release.notified().await;
+                },
+            )
+            .await
+    });
+    started.notified().await;
+
+    let draining_operations = operations.clone();
+    let mut draining = tokio::spawn(async move { draining_operations.close_and_drain().await });
+    tokio::task::yield_now().await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut draining)
+            .await
+            .is_err()
+    );
+
+    release.notify_one();
+    running.await.unwrap().unwrap();
+    draining.await.unwrap().unwrap();
+}
+
 #[test]
 fn background_context_starts_uncancelled() {
     assert!(!OperationContext::background().cancellation().is_cancelled());
