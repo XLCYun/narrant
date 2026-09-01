@@ -289,6 +289,19 @@ fn generation_count(cache_root: &Path) -> usize {
         .count()
 }
 
+/// 返回 staging 根内排序后的 generation 名称，供故障前后精确比对。
+fn generation_names(cache_root: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(cache_root.join("application-update"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("generation-"))
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 /// 完整 generation 通过单一 pointer 提交并可跨实例恢复。
 #[test]
 fn staged_update_is_durable_generation_with_bounded_notes() {
@@ -624,10 +637,16 @@ fn second_repository_barriers_unknown_before_attempting_higher_generation() {
     assert_eq!(recovered.snapshot().unwrap().version(), "2.1.0");
 }
 
-/// 第二实例的 refresh barrier 失败时隐藏 G1，且不得开始写入 G2。
+/// G0/G1 共存时，新实例与预开实例的 barrier 失败都不破坏任何磁盘回滚状态。
 #[test]
 fn second_repository_refresh_failure_keeps_unknown_hidden_and_untouched() {
     let cache = tempfile::tempdir().unwrap();
+    let mut initial =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    initial
+        .stage(candidate("2.1.0", "old"), "old".as_bytes())
+        .unwrap();
+    drop(initial);
     let mut first = StagingRepository::open_with_faults(
         cache.path(),
         context("2.0.15"),
@@ -648,23 +667,152 @@ fn second_repository_refresh_failure_keeps_unknown_hidden_and_untouched() {
     .unwrap();
     assert!(matches!(
         first
-            .stage(candidate("2.1.0", "old"), "old".as_bytes())
+            .stage(candidate("2.2.0", "new"), "new".as_bytes())
             .unwrap(),
         StageCommitOutcome::DurabilityUnknown(_)
     ));
     let pointer = fs::read(cache.path().join("application-update/current")).unwrap();
-    armed.store(true, Ordering::SeqCst);
-    assert_eq!(
-        second.stage(candidate("2.2.0", "new"), "new".as_bytes()),
+    let generations = generation_names(cache.path());
+    assert_eq!(generations.len(), 2);
+
+    assert!(matches!(
+        StagingRepository::open_with_faults(
+            cache.path(),
+            context("2.0.15"),
+            DeterministicVerifier,
+            FailAt(StagingCommitPoint::RefreshDurabilitySync),
+        ),
         Err(StagingError::StorageFailed)
-    );
-    assert_eq!(second.snapshot(), None);
-    assert_eq!(second.pending_durability().unwrap().version(), "2.1.0");
+    ));
+    assert_eq!(generation_names(cache.path()), generations);
     assert_eq!(
         fs::read(cache.path().join("application-update/current")).unwrap(),
         pointer
     );
+
+    armed.store(true, Ordering::SeqCst);
+    assert_eq!(
+        second.stage(candidate("2.3.0", "newer"), "newer".as_bytes()),
+        Err(StagingError::StorageFailed)
+    );
+    assert_eq!(second.snapshot(), None);
+    assert_eq!(second.pending_durability(), None);
+    assert_eq!(
+        fs::read(cache.path().join("application-update/current")).unwrap(),
+        pointer
+    );
+    assert_eq!(generation_names(cache.path()), generations);
+
+    drop(first);
+    drop(second);
+    let recovered =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    assert_eq!(recovered.snapshot().unwrap().version(), "2.2.0");
     assert_eq!(generation_count(cache.path()), 1);
+}
+
+/// inspect/verify 失败清空旧 G0 proof；cleanup 失败只发布已确认的 G1 proof 与诊断。
+#[test]
+fn refresh_failures_never_reuse_pre_refresh_cached_proof() {
+    for point in [
+        StagingCommitPoint::RefreshInspect,
+        StagingCommitPoint::RefreshVerify,
+    ] {
+        let cache = tempfile::tempdir().unwrap();
+        let mut initial =
+            StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier)
+                .unwrap();
+        initial
+            .stage(candidate("2.1.0", "old"), "old".as_bytes())
+            .unwrap();
+        drop(initial);
+        let armed = Arc::new(AtomicBool::new(false));
+        let mut observing = StagingRepository::open_with_faults(
+            cache.path(),
+            context("2.0.15"),
+            DeterministicVerifier,
+            ArmedFailAt {
+                point,
+                armed: armed.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(observing.snapshot().unwrap().version(), "2.1.0");
+        let mut switching = StagingRepository::open_with_faults(
+            cache.path(),
+            context("2.0.15"),
+            DeterministicVerifier,
+            FailAt(StagingCommitPoint::AfterPointerCommit),
+        )
+        .unwrap();
+        assert!(matches!(
+            switching
+                .stage(candidate("2.2.0", "new"), "new".as_bytes())
+                .unwrap(),
+            StageCommitOutcome::DurabilityUnknown(_)
+        ));
+        let pointer = fs::read(cache.path().join("application-update/current")).unwrap();
+        let generations = generation_names(cache.path());
+        armed.store(true, Ordering::SeqCst);
+        assert_eq!(
+            observing.reconcile_current_version("2.0.15"),
+            Err(StagingError::StorageFailed),
+            "fault at {point:?}"
+        );
+        assert_eq!(observing.snapshot(), None);
+        assert_eq!(generation_names(cache.path()), generations);
+        assert_eq!(
+            fs::read(cache.path().join("application-update/current")).unwrap(),
+            pointer
+        );
+    }
+
+    let cache = tempfile::tempdir().unwrap();
+    let mut initial =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    initial
+        .stage(candidate("2.1.0", "old"), "old".as_bytes())
+        .unwrap();
+    drop(initial);
+    let armed = Arc::new(AtomicBool::new(false));
+    let mut observing = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        ArmedFailAt {
+            point: StagingCommitPoint::RefreshCleanup,
+            armed: armed.clone(),
+        },
+    )
+    .unwrap();
+    let mut switching = StagingRepository::open_with_faults(
+        cache.path(),
+        context("2.0.15"),
+        DeterministicVerifier,
+        FailAt(StagingCommitPoint::AfterPointerCommit),
+    )
+    .unwrap();
+    assert!(matches!(
+        switching
+            .stage(candidate("2.2.0", "new"), "new".as_bytes())
+            .unwrap(),
+        StageCommitOutcome::DurabilityUnknown(_)
+    ));
+    let pointer = fs::read(cache.path().join("application-update/current")).unwrap();
+    let generations = generation_names(cache.path());
+    assert_eq!(generations.len(), 2);
+    armed.store(true, Ordering::SeqCst);
+    assert!(!observing.reconcile_current_version("2.0.15").unwrap());
+    assert_eq!(observing.snapshot().unwrap().version(), "2.2.0");
+    assert_eq!(
+        observing.recovery_failure(),
+        Some(StagingError::StorageFailed)
+    );
+    assert_eq!(generation_names(cache.path()), generations);
+    assert_eq!(
+        fs::read(cache.path().join("application-update/current")).unwrap(),
+        pointer
+    );
 }
 
 /// durability barrier 自身失败时保持不可安装，并给出稳定仓储诊断。
@@ -732,7 +880,7 @@ fn recovery_barrier_fails_closed_before_promoting_unknown_pointer() {
             cache.path(),
             context("2.0.15"),
             DeterministicVerifier,
-            FailAt(StagingCommitPoint::RecoveryDurabilitySync),
+            FailAt(StagingCommitPoint::RefreshDurabilitySync),
         ),
         Err(StagingError::StorageFailed)
     ));
@@ -767,7 +915,7 @@ fn malformed_and_mismatched_legacy_markers_never_fail_open() {
                 cache.path(),
                 context("2.0.15"),
                 DeterministicVerifier,
-                FailAt(StagingCommitPoint::RecoveryDurabilitySync),
+                FailAt(StagingCommitPoint::RefreshDurabilitySync),
             ),
             Err(StagingError::StorageFailed)
         ));

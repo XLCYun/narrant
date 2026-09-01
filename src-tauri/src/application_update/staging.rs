@@ -303,8 +303,10 @@ pub(crate) enum StagingCommitPoint {
     AfterPointerCommit,
     AfterPointerSync,
     DurabilityConfirmationSync,
-    RecoveryDurabilitySync,
+    RefreshInspect,
+    RefreshVerify,
     RefreshDurabilitySync,
+    RefreshCleanup,
     BeforeInstallPointerDelete,
     AfterInstallPointerDelete,
     BeforeInstallGenerationCleanup,
@@ -411,13 +413,8 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
             recovery_failure: None,
         };
         let _lock = lock_root(&repository.root)?;
-        repository
-            .faults
-            .checkpoint(StagingCommitPoint::RecoveryDurabilitySync)?;
         repository.refresh_locked()?;
         repository.durability_unknown = None;
-        // 旧版 marker 只作为兼容残留清理，失败不会改变已经完成的 barrier。
-        let _ = clear_durability_marker(&repository.root);
         Ok(repository)
     }
 
@@ -456,10 +453,11 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         let Some(committed) = &self.staged else {
             return Err(StagingError::NoStagedUpdate);
         };
-        if committed.name != pending.generation
-            || self.durability_unknown.as_deref() != Some(&pending.generation)
-        {
+        if committed.name != pending.generation {
             return Err(StagingError::InvalidCandidate);
+        }
+        if self.durability_unknown.is_none() {
+            return Ok(durable_proof(committed));
         }
         self.faults
             .checkpoint(StagingCommitPoint::DurabilityConfirmationSync)?;
@@ -592,7 +590,13 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
         let current =
             Version::parse(current_version).map_err(|_| StagingError::InvalidCandidate)?;
         let _lock = lock_root(&self.root)?;
-        let had_staging = read_pointer(&self.root)?.is_some();
+        let had_cached_staging = self.staged.is_some();
+        // pointer inspect 失败也不能继续暴露调用前缓存 proof。
+        self.staged = None;
+        self.durability_unknown = None;
+        self.recovery_failure = None;
+        let had_pointer = read_pointer(&self.root)?.is_some();
+        let had_staging = had_cached_staging || had_pointer;
         self.context.current_version = current;
         self.refresh_locked()?;
         Ok(had_staging && self.staged.is_none())
@@ -719,24 +723,37 @@ impl<V: MinisignVerifier, F: StagingFaultInjector> StagingRepository<V, F> {
 
     /// 在已持有跨进程锁时重读 pointer，并用无条件 root barrier 证明该磁盘视图 durable。
     fn refresh_locked(&mut self) -> Result<(), StagingError> {
-        let pending = self.durability_unknown.clone();
-        let recovery = recover_committed(&self.root, &self.context, &self.verifier)?;
-        self.staged = recovery.committed;
-        self.recovery_failure = recovery.discarded;
-        // 预先打开的另一实例也可能观察到未知 pointer；barrier 失败时必须先隐藏该磁盘视图。
+        let pending = self.durability_unknown.take();
+        // 任何 inspect、verify、barrier 失败都不得继续投影调用前缓存的 durable proof。
+        self.staged = None;
+        self.recovery_failure = None;
+        self.faults.checkpoint(StagingCommitPoint::RefreshInspect)?;
+        let inspection =
+            inspect_committed(&self.root, &self.context, &self.verifier, &self.faults)?;
         let barrier = self
             .faults
             .checkpoint(StagingCommitPoint::RefreshDurabilitySync)
             .and_then(|()| sync_directory(&self.root));
-        if let Err(error) = barrier {
-            self.durability_unknown = self.staged.as_ref().map(|committed| committed.name.clone());
-            return Err(error);
-        }
+        barrier?;
+
+        // barrier 之后磁盘 current 才有资格成为本实例的 durable/pending 权威视图。
+        self.staged = inspection.committed;
+        self.recovery_failure = inspection.discarded;
         self.durability_unknown = pending.filter(|generation| {
             self.staged
                 .as_ref()
                 .is_some_and(|committed| &committed.name == generation)
         });
+
+        let housekeeping = self
+            .faults
+            .checkpoint(StagingCommitPoint::RefreshCleanup)
+            .and_then(|()| apply_recovery_cleanup(&self.root, &inspection.cleanup))
+            .and_then(|()| clear_durability_marker(&self.root));
+        if housekeeping.is_err() {
+            // current 已经由 barrier 证明；cleanup 只留下显式诊断，不得降级或恢复旧缓存 proof。
+            self.recovery_failure = Some(StagingError::StorageFailed);
+        }
         Ok(())
     }
 
@@ -796,36 +813,45 @@ fn lock_root(root: &Path) -> Result<StagingLock, StagingError> {
     Ok(StagingLock { file })
 }
 
-/// 汇总一次恢复得到的 committed generation 和可报告丢弃原因。
-struct RecoveryResult {
-    committed: Option<CommittedGeneration>,
-    discarded: Option<StagingError>,
+/// 记录 barrier 成功后才能执行的恢复清理计划。
+enum RecoveryCleanup {
+    /// 保留 current generation，只清理其他 generation 与临时文件。
+    KeepCurrent(String),
+    /// 清除无效/缺失 current 及全部未提交 generation。
+    ClearCurrent,
 }
 
-/// 恢复 commit pointer 指向的唯一 generation，并清除所有未提交 generation。
-fn recover_committed<V: MinisignVerifier>(
+/// 汇总一次完全只读的 pointer/generation 检查结果。
+struct RecoveryInspection {
+    committed: Option<CommittedGeneration>,
+    discarded: Option<StagingError>,
+    cleanup: RecoveryCleanup,
+}
+
+/// 只读检查并验证 current 指向的 generation，不删除任何回滚或兼容文件。
+fn inspect_committed<V: MinisignVerifier, F: StagingFaultInjector>(
     root: &Path,
     context: &StagingContext,
     verifier: &V,
-) -> Result<RecoveryResult, StagingError> {
+    faults: &F,
+) -> Result<RecoveryInspection, StagingError> {
     let pointer = match read_pointer(root) {
         Ok(pointer) => pointer,
+        Err(StagingError::StorageFailed) => return Err(StagingError::StorageFailed),
         Err(error) => {
-            remove_if_exists(&root.join(COMMIT_POINTER))?;
-            sync_directory(root)?;
-            cleanup_uncommitted(root, None)?;
-            return Ok(RecoveryResult {
+            return Ok(RecoveryInspection {
                 committed: None,
                 discarded: Some(error),
+                cleanup: RecoveryCleanup::ClearCurrent,
             });
         }
     };
     let Some(generation_name) = pointer else {
         let incomplete = contains_generation(root)?;
-        cleanup_uncommitted(root, None)?;
-        return Ok(RecoveryResult {
+        return Ok(RecoveryInspection {
             committed: None,
             discarded: incomplete.then_some(StagingError::StorageFailed),
+            cleanup: RecoveryCleanup::ClearCurrent,
         });
     };
 
@@ -834,30 +860,39 @@ fn recover_committed<V: MinisignVerifier>(
     let package_path = generation_path.join(PACKAGE_FILE);
     let recovered = read_metadata(&metadata_path).and_then(|metadata| {
         validate_metadata(&metadata, context)?;
+        faults.checkpoint(StagingCommitPoint::RefreshVerify)?;
         verifier
             .verify(&package_path, &metadata.signature)
             .map_err(|_| StagingError::VerificationFailed)?;
         Ok(metadata)
     });
     match recovered {
-        Ok(metadata) => {
-            cleanup_uncommitted(root, Some(&generation_name))?;
-            Ok(RecoveryResult {
-                committed: Some(CommittedGeneration {
-                    name: generation_name,
-                    metadata,
-                }),
-                discarded: None,
-            })
-        }
-        Err(error) => {
+        Ok(metadata) => Ok(RecoveryInspection {
+            committed: Some(CommittedGeneration {
+                name: generation_name.clone(),
+                metadata,
+            }),
+            discarded: None,
+            cleanup: RecoveryCleanup::KeepCurrent(generation_name),
+        }),
+        Err(StagingError::StorageFailed) => Err(StagingError::StorageFailed),
+        Err(error) => Ok(RecoveryInspection {
+            committed: None,
+            discarded: (error != StagingError::NotNewer).then_some(error),
+            cleanup: RecoveryCleanup::ClearCurrent,
+        }),
+    }
+}
+
+/// 在 root barrier 成功后应用恢复清理计划，不改变已确认 current 的信任级别。
+fn apply_recovery_cleanup(root: &Path, cleanup: &RecoveryCleanup) -> Result<(), StagingError> {
+    match cleanup {
+        RecoveryCleanup::KeepCurrent(generation) => cleanup_uncommitted(root, Some(generation)),
+        RecoveryCleanup::ClearCurrent => {
             remove_if_exists(&root.join(COMMIT_POINTER))?;
+            // invalid/no pointer 分支始终同步删除意图，再清理不完整 generation。
             sync_directory(root)?;
-            cleanup_uncommitted(root, None)?;
-            Ok(RecoveryResult {
-                committed: None,
-                discarded: (error != StagingError::NotNewer).then_some(error),
-            })
+            cleanup_uncommitted(root, None)
         }
     }
 }
