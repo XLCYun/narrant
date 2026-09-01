@@ -24,6 +24,7 @@ import { useApplicationUpdate, type ApplicationUpdateBinding } from "@/applicati
 import { ApplicationUpdateAttention } from "@/components/application-update/application-update-attention";
 import { ApplicationUpdateSurface } from "@/components/application-update/application-update-surface";
 import type { SettingsSection } from "@/settings/settings-section";
+import { resolvePreviewScenarioKey } from "@/dev/preview-routing";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -689,7 +690,7 @@ function PreviewApp() {
   const componentKey = query.get("component") ?? "branch-selector";
   const definition = previews[componentKey] ?? previews["branch-selector"];
   const requestedScenario = query.get("scenario") ?? "default";
-  const scenarioKey = definition.scenarios[requestedScenario] ? requestedScenario : "default";
+  const scenarioKey = resolvePreviewScenarioKey(definition.scenarios, requestedScenario);
   const theme = query.get("theme") === "light" ? "light" : "dark";
 
   if (componentKey === "app-shell") return definition.scenarios[scenarioKey].render();
