@@ -1,4 +1,8 @@
 use super::*;
+use crate::application_update::{
+    Clock, PreferenceError, PreferenceStore, UpdateController, UpdateEffect, UpdateInput,
+    UpdateOperationId, UpdateState,
+};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -23,8 +27,13 @@ fn serve(responses: Vec<(Duration, String)>) -> Url {
 
 /// 构造符合 Tauri static stable manifest wire shape 的响应体。
 fn manifest(target: &str) -> String {
+    manifest_version(target, "2.0.0")
+}
+
+/// 构造指定版本的 Tauri static manifest。
+fn manifest_version(target: &str, version: &str) -> String {
     serde_json::json!({
-        "version": "2.0.0",
+        "version": version,
         "notes": "safe",
         "platforms": {
             target: {
@@ -34,6 +43,42 @@ fn manifest(target: &str) -> String {
         }
     })
     .to_string()
+}
+
+/// metadata/controller 组合测试使用的固定单调时钟。
+struct FixedClock;
+
+impl Clock for FixedClock {
+    fn now(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// metadata/controller 组合测试使用的内存偏好仓储。
+struct Preferences;
+
+impl PreferenceStore for Preferences {
+    fn load_automatic_download(&self) -> Result<Option<bool>, PreferenceError> {
+        Ok(Some(false))
+    }
+
+    fn save_automatic_download(&mut self, _enabled: bool) -> Result<(), PreferenceError> {
+        Ok(())
+    }
+}
+
+/// 创建一次真实 check identity。
+fn begin_check(controller: &mut UpdateController<FixedClock, Preferences>) -> UpdateOperationId {
+    controller
+        .handle(UpdateInput::ManualCheck)
+        .unwrap()
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::CheckStable { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap()
 }
 
 /// 构造带 Content-Length 的完整 HTTP response。
@@ -185,4 +230,63 @@ async fn redirect_policy_allows_same_origin_and_rejects_another_host() {
             .category(),
         UpdateFailureCategory::Manifest
     );
+}
+
+#[tokio::test]
+async fn prerelease_becomes_ordered_manifest_failure_and_204_becomes_up_to_date() {
+    let prerelease = serve(vec![(
+        Duration::ZERO,
+        response(
+            "200 OK",
+            &manifest_version("darwin-aarch64", "2.0.0-beta.1"),
+            "",
+        ),
+    )]);
+    let adapter = BoundedManifestAdapter::for_test(
+        prerelease,
+        "darwin-aarch64",
+        InstallKind::MacosAppArchive,
+        "1.0.0",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let error = adapter.check().await.expect_err("prerelease must fail");
+    assert_eq!(error.failure().category(), UpdateFailureCategory::Manifest);
+    let mut controller = UpdateController::new("1.0.0", FixedClock, Preferences).unwrap();
+    let operation_id = begin_check(&mut controller);
+    let failed = controller
+        .handle(UpdateInput::CheckFailed {
+            operation_id,
+            failure: error.failure().clone(),
+        })
+        .unwrap();
+    assert_eq!(failed.snapshot.state, UpdateState::Failed);
+    assert_eq!(
+        failed.snapshot.failure.unwrap().category,
+        UpdateFailureCategory::Manifest
+    );
+    assert!(begin_check(&mut controller).value() > operation_id.value());
+
+    let no_content = serve(vec![(
+        Duration::ZERO,
+        "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_owned(),
+    )]);
+    let adapter = BoundedManifestAdapter::for_test(
+        no_content,
+        "darwin-aarch64",
+        InstallKind::MacosAppArchive,
+        "1.0.0",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert!(adapter.check().await.unwrap().is_none());
+    let mut controller = UpdateController::new("1.0.0", FixedClock, Preferences).unwrap();
+    let operation_id = begin_check(&mut controller);
+    let up_to_date = controller
+        .handle(UpdateInput::CheckSucceeded {
+            operation_id,
+            release: None,
+        })
+        .unwrap();
+    assert_eq!(up_to_date.snapshot.state, UpdateState::UpToDate);
 }

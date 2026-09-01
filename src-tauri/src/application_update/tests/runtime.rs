@@ -1,6 +1,9 @@
 use super::*;
 use base64::Engine;
+use bytes::Bytes;
 use std::io::Cursor;
+use std::sync::Arc;
+use std::time::Duration;
 
 const PUBLIC_KEY: &str = "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
 const SIGNATURE: &str = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1556193335\tfile:test\ny/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
@@ -16,19 +19,272 @@ fn trusted_config() -> Result<TrustedUpdaterConfig, super::super::config::Update
     )
 }
 
+/// 创建真实 verifier/staging runtime 并推进到 Downloading。
+fn downloading_runtime() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Arc<ApplicationUpdateRuntime>,
+    UpdateOperationId,
+    StableRelease,
+) {
+    let cache = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let (runtime, _) = ApplicationUpdateRuntime::new_at_paths(
+        data.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        "1.0.0",
+        trusted_config(),
+    )
+    .unwrap();
+    let ready = runtime.transition(UpdateInput::Ready).unwrap();
+    let check_id = ready
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::CheckStable { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    let package = super::super::ReleasePackage::new(
+        "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.tar.gz",
+        encode(SIGNATURE),
+        super::super::platform::MACOS_TARGET,
+        super::super::InstallKind::MacosAppArchive,
+    )
+    .unwrap();
+    let release = StableRelease::new("2.0.0", "notes", package);
+    let available = runtime
+        .transition(UpdateInput::CheckSucceeded {
+            operation_id: check_id,
+            release: Some(release.clone()),
+        })
+        .unwrap();
+    let download_id = available
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::StartDownload { operation_id, .. } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    runtime
+        .transition(UpdateInput::DownloadStarted {
+            operation_id: download_id,
+        })
+        .unwrap();
+    (cache, data, runtime, download_id, release)
+}
+
+/// 返回 staging 是否持有 opaque durable proof。
+fn has_staged(runtime: &ApplicationUpdateRuntime) -> bool {
+    runtime
+        .staging
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(StagingRepository::snapshot)
+        .is_some()
+}
+
 #[test]
 fn updater_registry_identity_is_namespaced_and_bounded() {
     let _ = managed_operation_id("download", 42);
 }
 
 #[test]
-fn startup_distinguishes_recoverable_discard_from_unavailable_repository() {
-    let temporary = tempfile::tempdir().expect("cache");
+fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure() {
+    let cache = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths(
+        data.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        "1.0.0",
+        trusted_config(),
+    )
+    .unwrap();
+    assert!(startup.is_none());
+    let ready = runtime.transition(UpdateInput::Ready).unwrap();
+    let operation_id = ready
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::CheckStable { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    let package = super::super::ReleasePackage::new(
+        "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.tar.gz",
+        "signature",
+        super::super::platform::MACOS_TARGET,
+        super::super::InstallKind::MacosAppArchive,
+    )
+    .unwrap();
+    let failed = runtime
+        .transition(UpdateInput::CheckSucceeded {
+            operation_id,
+            release: Some(StableRelease::new("2.0.0-beta.1", "notes", package)),
+        })
+        .unwrap();
+    assert_eq!(failed.snapshot.state, super::super::UpdateState::Failed);
+    assert_eq!(
+        failed.snapshot.failure.unwrap().category,
+        UpdateFailureCategory::Manifest
+    );
+    assert!(failed.snapshot.sequence > ready.snapshot.sequence);
+    assert!(runtime
+        .transition(UpdateInput::ManualCheck)
+        .unwrap()
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, UpdateEffect::CheckStable { .. })));
+    let diagnostics = std::fs::read_to_string(runtime.diagnostics.path()).unwrap();
+    assert!(diagnostics.contains("manifest"));
+    assert!(!diagnostics.contains("beta"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_download_cancel_before_eof_leaves_disk_and_core_unstaged_and_releases_raii() {
+    let (_cache, _data, runtime, operation_id, release) = downloading_runtime();
+    let operations = CancellableOperations::default();
+    let registry_id = managed_operation_id("download-test", operation_id.value());
+    let (body_tx, body_rx) = tokio::sync::mpsc::channel::<Result<Bytes, ()>>(2);
+    let stream = futures_util::stream::unfold(body_rx, |mut receiver| async move {
+        receiver.recv().await.map(|item| (item, receiver))
+    });
+    let (progress_tx, progress_rx) = std::sync::mpsc::sync_channel(1);
+    let task_operations = operations.clone();
+    let task_id = registry_id.clone();
+    let task_runtime = runtime.clone();
+    let task = tokio::spawn(async move {
+        task_operations
+            .run(task_id, |context| async move {
+                task_runtime
+                    .consume_stream_and_commit(
+                        operation_id,
+                        release,
+                        None,
+                        stream,
+                        context.cancellation(),
+                        |_| {
+                            let _ = progress_tx.send(());
+                        },
+                        || {},
+                    )
+                    .await
+            })
+            .await
+    });
+    body_tx.send(Ok(Bytes::from_static(b"te"))).await.unwrap();
+    progress_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    runtime
+        .transition(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+    operations.cancel(&registry_id).unwrap();
+    drop(body_tx);
+    assert!(matches!(
+        task.await.unwrap().unwrap(),
+        DownloadTaskOutcome::Cancelled
+    ));
+    assert!(!has_staged(&runtime));
+    assert_eq!(
+        runtime.snapshot().state,
+        super::super::UpdateState::Available
+    );
+    assert!(operations.run(registry_id, |_| async {}).await.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_download_cancel_after_eof_while_waiting_transition_gate_does_not_commit() {
+    let (_cache, _data, runtime, operation_id, release) = downloading_runtime();
+    let operations = CancellableOperations::default();
+    let registry_id = managed_operation_id("download-test", operation_id.value());
+    let gate = runtime.transition_gate.lock().unwrap();
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(1);
+    let task_operations = operations.clone();
+    let task_id = registry_id.clone();
+    let task_runtime = runtime.clone();
+    let task = tokio::spawn(async move {
+        task_operations
+            .run(task_id, |context| async move {
+                task_runtime
+                    .consume_stream_and_commit(
+                        operation_id,
+                        release,
+                        Some(4),
+                        futures_util::stream::iter([Ok::<Bytes, ()>(Bytes::from_static(b"test"))]),
+                        context.cancellation(),
+                        |_| {},
+                        || reached_tx.send(()).unwrap(),
+                    )
+                    .await
+            })
+            .await
+    });
+    reached_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    operations.cancel(&registry_id).unwrap();
+    drop(gate);
+    assert!(matches!(
+        task.await.unwrap().unwrap(),
+        DownloadTaskOutcome::Cancelled
+    ));
+    runtime
+        .transition(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+    assert!(!has_staged(&runtime));
+    assert_eq!(
+        runtime.snapshot().state,
+        super::super::UpdateState::Available
+    );
+    assert!(operations.run(registry_id, |_| async {}).await.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_download_stage_winner_commits_disk_and_core_then_releases_raii() {
+    let (_cache, _data, runtime, operation_id, release) = downloading_runtime();
+    let operations = CancellableOperations::default();
+    let registry_id = managed_operation_id("download-test", operation_id.value());
+    let task_runtime = runtime.clone();
+    let outcome = operations
+        .run(registry_id.clone(), |context| async move {
+            task_runtime
+                .consume_stream_and_commit(
+                    operation_id,
+                    release,
+                    Some(4),
+                    futures_util::stream::iter([Ok::<Bytes, ()>(Bytes::from_static(b"test"))]),
+                    context.cancellation(),
+                    |_| {},
+                    || {},
+                )
+                .await
+        })
+        .await
+        .unwrap();
+    assert!(matches!(outcome, DownloadTaskOutcome::Committed(_)));
+    assert!(has_staged(&runtime));
+    assert_eq!(runtime.snapshot().state, super::super::UpdateState::Staged);
+    assert!(operations.run(registry_id, |_| async {}).await.is_ok());
+}
+
+#[test]
+fn post_stop_staging_try_lock_busy_returns_without_waiting() {
+    let (_cache, _data, runtime, _operation_id, _release) = downloading_runtime();
+    let _guard = runtime.staging.lock().unwrap();
+    let started = std::time::Instant::now();
+    let result = runtime.try_use_staged(|_| Ok::<_, String>(()));
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_millis(50));
+}
+
+#[test]
+fn runtime_ready_keeps_recovery_warning_queryable_and_repository_can_continue() {
+    let cache = tempfile::tempdir().expect("cache");
+    let data = tempfile::tempdir().expect("data");
     let target = super::super::platform::MACOS_TARGET;
     let context =
         StagingContext::new("1.0.0", target, super::super::InstallKind::MacosAppArchive).unwrap();
     let verifier = DiskMinisignVerifier::new(&encode(PUBLIC_KEY)).unwrap();
-    let mut repository = StagingRepository::open(temporary.path(), context, verifier).unwrap();
+    let mut repository = StagingRepository::open(cache.path(), context, verifier).unwrap();
     let candidate = StageCandidate::new(
         "2.0.0",
         encode(SIGNATURE),
@@ -39,7 +295,7 @@ fn startup_distinguishes_recoverable_discard_from_unavailable_repository() {
     .unwrap();
     repository.stage(candidate, Cursor::new(b"test")).unwrap();
     drop(repository);
-    let staging_root = temporary.path().join("application-update");
+    let staging_root = cache.path().join("application-update");
     let generation = std::fs::read_to_string(staging_root.join("current")).unwrap();
     std::fs::write(
         staging_root.join(generation.trim()).join("package.bin"),
@@ -47,21 +303,63 @@ fn startup_distinguishes_recoverable_discard_from_unavailable_repository() {
     )
     .unwrap();
 
-    let (available, recovery_failure) =
-        initialize_staging(temporary.path(), "1.0.0", &trusted_config());
-    assert!(available.is_some());
+    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths(
+        data.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        "1.0.0",
+        trusted_config(),
+    )
+    .unwrap();
     assert_eq!(
-        recovery_failure.unwrap().category(),
+        startup.unwrap().snapshot.recovery_warning.unwrap().category,
         UpdateFailureCategory::Verification
     );
-
-    let unavailable_root = temporary.path().join("not-a-directory");
-    std::fs::write(&unavailable_root, b"file").unwrap();
-    let (available, recovery_failure) =
-        initialize_staging(&unavailable_root, "1.0.0", &trusted_config());
-    assert!(available.is_none());
+    let ready = runtime.transition(UpdateInput::Ready).unwrap();
+    assert_eq!(ready.snapshot.state, super::super::UpdateState::Checking);
     assert_eq!(
-        recovery_failure.unwrap().category(),
+        runtime.snapshot().recovery_warning.unwrap().category,
+        UpdateFailureCategory::Verification
+    );
+    let serialized = serde_json::to_value(runtime.snapshot()).unwrap();
+    assert_eq!(serialized["recoveryWarning"]["category"], "verification");
+    assert!(ready
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, UpdateEffect::CheckStable { .. })));
+    assert!(runtime.staging.lock().unwrap().as_ref().is_some());
+    let diagnostics = std::fs::read_to_string(runtime.diagnostics.path()).unwrap();
+    assert!(diagnostics.contains("verification"));
+    assert!(!diagnostics.contains(cache.path().to_string_lossy().as_ref()));
+    assert!(!diagnostics.contains("signature"));
+}
+
+#[test]
+fn runtime_ready_keeps_unavailable_repository_warning_queryable() {
+    let root = tempfile::tempdir().expect("root");
+    let data = tempfile::tempdir().expect("data");
+    let unavailable_root = root.path().join("not-a-directory");
+    std::fs::write(&unavailable_root, b"file").unwrap();
+    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths(
+        data.path().to_path_buf(),
+        unavailable_root.clone(),
+        "1.0.0",
+        trusted_config(),
+    )
+    .unwrap();
+    assert_eq!(
+        startup.unwrap().snapshot.recovery_warning.unwrap().category,
         UpdateFailureCategory::Storage
     );
+    let ready = runtime.transition(UpdateInput::Ready).unwrap();
+    assert_eq!(ready.snapshot.state, super::super::UpdateState::Checking);
+    assert_eq!(
+        runtime.snapshot().recovery_warning.unwrap().category,
+        UpdateFailureCategory::Storage
+    );
+    let serialized = serde_json::to_value(runtime.snapshot()).unwrap();
+    assert_eq!(serialized["recoveryWarning"]["category"], "storage");
+    assert!(runtime.staging.lock().unwrap().is_none());
+    let diagnostics = std::fs::read_to_string(runtime.diagnostics.path()).unwrap();
+    assert!(diagnostics.contains("storage"));
+    assert!(!diagnostics.contains(unavailable_root.to_string_lossy().as_ref()));
 }

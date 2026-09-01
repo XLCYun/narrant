@@ -274,6 +274,24 @@ pub(crate) struct UpdateFailureSnapshot {
     pub(crate) message: String,
 }
 
+/// 启动恢复留下的 provider-neutral 警告，与进行中的检查状态可以同时存在。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateRecoveryWarning {
+    pub(crate) category: UpdateFailureCategory,
+    pub(crate) message: String,
+}
+
+impl UpdateRecoveryWarning {
+    /// 从恢复失败事实构造不含路径、签名或 adapter 文本的稳定投影。
+    fn from_failure(failure: &UpdateFailure) -> Self {
+        Self {
+            category: failure.category(),
+            message: failure.category().safe_message().to_owned(),
+        }
+    }
+}
+
 impl UpdateFailureSnapshot {
     /// 从私有失败事实构造仅含核心安全文本的公开投影。
     fn from_failure(operation: UpdateOperation, failure: &UpdateFailure) -> Self {
@@ -313,6 +331,7 @@ pub(crate) struct UpdateSnapshot {
     pub(crate) automatic_download: bool,
     pub(crate) candidate: Option<UpdateCandidate>,
     pub(crate) failure: Option<UpdateFailureSnapshot>,
+    pub(crate) recovery_warning: Option<UpdateRecoveryWarning>,
     #[serde(skip)]
     pub(crate) next_check_at: Option<Duration>,
 }
@@ -369,6 +388,10 @@ pub(crate) enum UpdateEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateInput {
     StartupRecoveryFailed {
+        failure: UpdateFailure,
+    },
+    RuntimeDomainFailed {
+        operation: UpdateOperation,
         failure: UpdateFailure,
     },
     RecoverStaged {
@@ -495,6 +518,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 automatic_download,
                 candidate: None,
                 failure: None,
+                recovery_warning: None,
                 next_check_at: None,
             },
             pending_retry: None,
@@ -523,9 +547,28 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                     UpdateOperation::Download,
                     &failure,
                 ));
+                self.snapshot.recovery_warning =
+                    Some(UpdateRecoveryWarning::from_failure(&failure));
                 true
             }
             UpdateInput::StartupRecoveryFailed { .. } => false,
+            UpdateInput::RuntimeDomainFailed { operation, failure } => {
+                if let Some(active) = self.active.take() {
+                    if matches!(
+                        active.phase,
+                        OperationPhase::DownloadPending | OperationPhase::Downloading
+                    ) {
+                        effects.push(UpdateEffect::CancelDownload {
+                            operation_id: active.id,
+                        });
+                    }
+                }
+                self.pending_retry = None;
+                self.snapshot.state = UpdateState::Failed;
+                self.snapshot.failure =
+                    Some(UpdateFailureSnapshot::from_failure(operation, &failure));
+                true
+            }
             UpdateInput::RecoverStaged { staged } => self.recover_staged(staged)?,
             UpdateInput::Ready if !self.ready => {
                 self.ready = true;
@@ -647,21 +690,28 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
         if !self.active_matches(operation_id, OperationPhase::Checking) {
             return Ok(false);
         }
+        let candidate_version = release
+            .as_ref()
+            .map(|release| {
+                let parsed = Version::parse(release.version()).map_err(|_| {
+                    UpdateDomainError::InvalidReleaseVersion(release.version().to_owned())
+                })?;
+                if !parsed.pre.is_empty() {
+                    return Err(UpdateDomainError::InvalidReleaseVersion(
+                        release.version().to_owned(),
+                    ));
+                }
+                Ok(parsed)
+            })
+            .transpose()?;
         self.active = None;
         self.pending_retry = None;
         self.snapshot.failure = None;
-        let Some(release) = release else {
+        let (Some(release), Some(candidate_version)) = (release, candidate_version) else {
             self.current_release = None;
             self.restore_staged_or(UpdateState::UpToDate);
             return Ok(true);
         };
-        let candidate_version = Version::parse(release.version())
-            .map_err(|_| UpdateDomainError::InvalidReleaseVersion(release.version().to_owned()))?;
-        if !candidate_version.pre.is_empty() {
-            return Err(UpdateDomainError::InvalidReleaseVersion(
-                release.version().to_owned(),
-            ));
-        }
         if candidate_version <= self.current_version {
             self.current_release = None;
             self.restore_staged_or(UpdateState::UpToDate);
@@ -824,6 +874,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
         self.snapshot.state = UpdateState::Staged;
         self.snapshot.candidate = Some(candidate);
         self.snapshot.failure = None;
+        self.snapshot.recovery_warning = None;
         true
     }
 

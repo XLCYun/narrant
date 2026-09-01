@@ -17,6 +17,11 @@ fn manifest_redirect_allowlist_requires_https_default_port_and_known_path() {
         &PRODUCTION_UPDATE_ENDPOINT.parse().unwrap()
     ));
     assert!(trusted_manifest_url(
+        &"https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json"
+            .parse()
+            .unwrap()
+    ));
+    assert!(trusted_manifest_url(
         &"https://release-assets.githubusercontent.com/github-production-release-asset/123/token"
             .parse()
             .unwrap()
@@ -26,10 +31,29 @@ fn manifest_redirect_allowlist_requires_https_default_port_and_known_path() {
         "https://github.com:444/cyunlab/narrant/releases/latest/download/latest.json",
         "https://user@github.com/cyunlab/narrant/releases/latest/download/latest.json",
         "https://github.com/cyunlab/other/releases/latest/download/latest.json",
+        "https://github.com/other/narrant/releases/download/v1.1.5/latest.json",
+        "https://github.com/cyunlab/narrant/releases/download//latest.json",
+        "https://github.com/cyunlab/narrant/releases/download/../latest.json",
+        "https://github.com/cyunlab/narrant/releases/download/%2F/latest.json",
+        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/other.json",
+        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json?download=1",
+        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json#fragment",
         "https://evil.example/github-production-release-asset/123/token",
     ] {
         assert!(!trusted_manifest_url(&denied.parse().unwrap()), "{denied}");
     }
+}
+
+#[test]
+fn production_manifest_policy_accepts_latest_tagged_and_asset_chain() {
+    let chain = [
+        PRODUCTION_UPDATE_ENDPOINT,
+        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json",
+        "https://release-assets.githubusercontent.com/github-production-release-asset/123/abcdef?sp=r&sig=opaque",
+    ];
+    assert!(chain
+        .iter()
+        .all(|url| trusted_manifest_url(&url.parse().unwrap())));
 }
 
 #[test]

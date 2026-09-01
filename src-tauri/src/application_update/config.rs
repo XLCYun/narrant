@@ -1,11 +1,14 @@
 use base64::Engine;
 use minisign_verify::PublicKey;
 use reqwest::Url;
+use semver::Version;
 
 pub(crate) const PRODUCTION_UPDATE_ENDPOINT: &str =
     "https://github.com/cyunlab/narrant/releases/latest/download/latest.json";
 const RELEASE_DOWNLOAD_PREFIX: &str = "/cyunlab/narrant/releases/download/";
 const RELEASE_MANIFEST_PATH: &str = "/cyunlab/narrant/releases/latest/download/latest.json";
+const TAGGED_MANIFEST_PREFIX: &str = "/cyunlab/narrant/releases/download/";
+const TAGGED_MANIFEST_SUFFIX: &str = "/latest.json";
 
 /// 更新信任配置的稳定失败分类，不包含公钥内容或环境变量值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,11 +115,39 @@ pub(crate) fn trusted_manifest_url(url: &Url) -> bool {
     {
         return false;
     }
+    if url.fragment().is_some() {
+        return false;
+    }
     match url.host_str() {
-        Some("github.com") => url.path() == RELEASE_MANIFEST_PATH,
+        Some("github.com") => {
+            url.query().is_none()
+                && (url.path() == RELEASE_MANIFEST_PATH || trusted_tagged_manifest_path(url.path()))
+        }
         Some("release-assets.githubusercontent.com" | "objects.githubusercontent.com") => {
             !url.path().is_empty() && url.path() != "/"
         }
         _ => false,
     }
+}
+
+/// 验证固定仓库、固定文件名且以 stable SemVer tag 标识的 GitHub 中间跳。
+fn trusted_tagged_manifest_path(path: &str) -> bool {
+    let Some(tag) = path
+        .strip_prefix(TAGGED_MANIFEST_PREFIX)
+        .and_then(|path| path.strip_suffix(TAGGED_MANIFEST_SUFFIX))
+    else {
+        return false;
+    };
+    if tag.is_empty()
+        || tag == "."
+        || tag == ".."
+        || tag.contains('/')
+        || tag.contains('%')
+        || !tag
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return false;
+    }
+    Version::parse(tag.strip_prefix('v').unwrap_or(tag)).is_ok_and(|version| version.pre.is_empty())
 }

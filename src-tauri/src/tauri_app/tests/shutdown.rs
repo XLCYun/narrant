@@ -3,6 +3,33 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
+/// post-stop executor 的可注入安装结果。
+#[derive(Clone, Copy)]
+enum InstallFixture {
+    None,
+    Installed,
+    HandedOff,
+    Error,
+}
+
+impl InstallFixture {
+    /// 转换成生产 executor 实际消费的安装结果。
+    fn result(self) -> Result<Option<crate::application_update::InstallExecutionOutcome>, String> {
+        match self {
+            Self::None => Ok(None),
+            Self::Installed => Ok(Some(
+                crate::application_update::InstallExecutionOutcome::Installed {
+                    cleanup: crate::application_update::InstallCleanupDisposition::Complete,
+                },
+            )),
+            Self::HandedOff => Ok(Some(
+                crate::application_update::InstallExecutionOutcome::HandedOff,
+            )),
+            Self::Error => Err("installer failed".to_owned()),
+        }
+    }
+}
+
 /// 记录停止步骤并允许测试暂停 operation drain 的确定性替身。
 #[derive(Default)]
 struct RecordingStopSteps {
@@ -328,4 +355,122 @@ fn every_stop_outcome_has_one_final_action_but_only_completed_may_install() {
         );
         assert_eq!(finals.load(Ordering::Acquire), 1);
     }
+}
+
+#[tokio::test]
+async fn post_stop_executor_runs_real_outcome_install_and_final_action_matrix_once() {
+    let cases = [
+        (
+            ApplicationStopOutcome::Completed,
+            PostStopIntent::UpdateRestart,
+            InstallFixture::Installed,
+            1,
+            PostStopFinalAction::Restart,
+        ),
+        (
+            ApplicationStopOutcome::Completed,
+            PostStopIntent::UpdateRestart,
+            InstallFixture::HandedOff,
+            1,
+            PostStopFinalAction::Exit(0),
+        ),
+        (
+            ApplicationStopOutcome::Completed,
+            PostStopIntent::OrdinaryExit,
+            InstallFixture::Installed,
+            1,
+            PostStopFinalAction::Exit(0),
+        ),
+        (
+            ApplicationStopOutcome::Completed,
+            PostStopIntent::UpdateRestart,
+            InstallFixture::Error,
+            1,
+            PostStopFinalAction::Exit(1),
+        ),
+        (
+            ApplicationStopOutcome::Failed,
+            PostStopIntent::UpdateRestart,
+            InstallFixture::Installed,
+            0,
+            PostStopFinalAction::Exit(0),
+        ),
+        (
+            ApplicationStopOutcome::TimedOut,
+            PostStopIntent::UpdateRestart,
+            InstallFixture::Installed,
+            0,
+            PostStopFinalAction::Exit(0),
+        ),
+        (
+            ApplicationStopOutcome::Completed,
+            PostStopIntent::UpdateRestart,
+            InstallFixture::None,
+            1,
+            PostStopFinalAction::Exit(0),
+        ),
+    ];
+    for (stop, intent, fixture, expected_installs, expected_action) in cases {
+        let installs = Arc::new(AtomicUsize::new(0));
+        let finals = Arc::new(Mutex::new(Vec::new()));
+        let install_calls = installs.clone();
+        let final_calls = finals.clone();
+        let execution = execute_post_stop(
+            async move { stop },
+            move || intent,
+            move |_| {
+                install_calls.fetch_add(1, Ordering::AcqRel);
+                fixture.result()
+            },
+            move |action| final_calls.lock().unwrap().push(action),
+        )
+        .await;
+        assert_eq!(execution.final_action, expected_action);
+        assert_eq!(installs.load(Ordering::Acquire), expected_installs);
+        assert_eq!(*finals.lock().unwrap(), vec![expected_action]);
+    }
+}
+
+#[tokio::test]
+async fn exit_close_and_restart_compete_but_execute_one_installer_and_final_action() {
+    let coordinator = Arc::new(PostStopCoordinator::default());
+    assert!(coordinator.begin(PostStopIntent::OrdinaryExit));
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let installs = Arc::new(AtomicUsize::new(0));
+    let finals = Arc::new(Mutex::new(Vec::new()));
+    let execution_coordinator = coordinator.clone();
+    let install_calls = installs.clone();
+    let final_calls = finals.clone();
+    let execution = tokio::spawn(async move {
+        execute_post_stop(
+            async move { stop_rx.await.unwrap() },
+            move || execution_coordinator.merged_intent(),
+            move |_| {
+                install_calls.fetch_add(1, Ordering::AcqRel);
+                InstallFixture::Installed.result()
+            },
+            move |action| final_calls.lock().unwrap().push(action),
+        )
+        .await
+    });
+    let exit = {
+        let coordinator = coordinator.clone();
+        std::thread::spawn(move || coordinator.begin(PostStopIntent::OrdinaryExit))
+    };
+    let close = {
+        let coordinator = coordinator.clone();
+        std::thread::spawn(move || coordinator.begin(PostStopIntent::OrdinaryExit))
+    };
+    let restart = {
+        let coordinator = coordinator.clone();
+        std::thread::spawn(move || coordinator.begin(PostStopIntent::UpdateRestart))
+    };
+    assert!(!exit.join().unwrap());
+    assert!(!close.join().unwrap());
+    assert!(!restart.join().unwrap());
+    stop_tx.send(ApplicationStopOutcome::Completed).unwrap();
+    let result = execution.await.unwrap();
+    assert_eq!(result.final_action, PostStopFinalAction::Restart);
+    assert_eq!(installs.load(Ordering::Acquire), 1);
+    assert_eq!(*finals.lock().unwrap(), vec![PostStopFinalAction::Restart]);
 }

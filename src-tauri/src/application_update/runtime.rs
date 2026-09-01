@@ -6,10 +6,10 @@ use super::{
     Clock, DownloadProgress, FilePreferenceStore, InstallExecutionOutcome, InstallIntent,
     StableRelease, StageCandidate, StageCommitOutcome, StagingContext, StagingRepository,
     UpdateController, UpdateEffect, UpdateFailure, UpdateFailureCategory, UpdateInput,
-    UpdateOperationId, UpdateSnapshot,
+    UpdateOperationId, UpdateOutput, UpdateSnapshot,
 };
 use crate::operation::{CancellableOperations, CancellationSignal, OperationId};
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -50,6 +50,13 @@ struct PendingUpdate {
     release: StableRelease,
 }
 
+/// 一次受管 stream→durable/core 提交的稳定结果。
+enum DownloadTaskOutcome {
+    Committed(UpdateOutput),
+    Cancelled,
+    Failed(UpdateFailureCategory, &'static str),
+}
+
 /// Tauri-managed 的 Application Update 运行时与单一快照发布 owner。
 pub(crate) struct ApplicationUpdateRuntime {
     controller: Mutex<UpdateController<SystemClock, FilePreferenceStore>>,
@@ -77,10 +84,24 @@ impl ApplicationUpdateRuntime {
             .app_cache_dir()
             .map_err(|_| "应用更新目录不可用".to_owned())?;
         let version = app.package_info().version.to_string();
+        let (runtime, startup_output) = Self::new_at_paths(data_dir, cache_dir, &version, config)?;
+        if let Some(output) = startup_output {
+            let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
+        }
+        Ok(runtime)
+    }
+
+    /// 从显式私有目录创建 runtime，生产路径与真实文件系统组合测试共用。
+    fn new_at_paths(
+        data_dir: std::path::PathBuf,
+        cache_dir: std::path::PathBuf,
+        version: &str,
+        config: Result<TrustedUpdaterConfig, super::config::UpdaterConfigError>,
+    ) -> Result<(Arc<Self>, Option<UpdateOutput>), String> {
         let preferences = FilePreferenceStore::new(data_dir.join("application-update.json"));
-        let mut controller = UpdateController::new(&version, SystemClock::new(), preferences)
+        let mut controller = UpdateController::new(version, SystemClock::new(), preferences)
             .map_err(|_| "应用更新状态无法初始化".to_owned())?;
-        let (staging, recovery_failure) = initialize_staging(&cache_dir, &version, &config);
+        let (staging, recovery_failure) = initialize_staging(&cache_dir, version, &config);
         if let Some(staged) = staging.as_ref().and_then(StagingRepository::snapshot) {
             let _ = controller.handle(UpdateInput::RecoverStaged { staged });
         }
@@ -93,9 +114,8 @@ impl ApplicationUpdateRuntime {
             UpdateDiagnostics::new(data_dir.join("logs").join("application-update.jsonl"));
         if let Some(output) = &startup_output {
             diagnostics.record_snapshot(&output.snapshot);
-            let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
         }
-        Ok(Arc::new(Self {
+        let runtime = Arc::new(Self {
             controller: Mutex::new(controller),
             config,
             staging: Mutex::new(staging),
@@ -104,7 +124,8 @@ impl ApplicationUpdateRuntime {
             check_gate: tokio::sync::Mutex::new(()),
             diagnostics,
             managed_sequence: AtomicU64::new(1),
-        }))
+        });
+        Ok((runtime, startup_output))
     }
 
     /// 返回当前 provider-neutral 完整快照，不接受任何资源参数。
@@ -122,26 +143,40 @@ impl ApplicationUpdateRuntime {
         app: &tauri::AppHandle<R>,
         input: UpdateInput,
     ) {
-        let output = {
-            let _gate = self
-                .transition_gate
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let Ok(output) = self
-                .controller
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .handle(input)
-            else {
-                return;
-            };
-            self.diagnostics.record_snapshot(&output.snapshot);
-            let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
-            output
+        let Some(output) = self.transition(input) else {
+            return;
         };
+        let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
         for effect in output.effects {
             self.execute_effect(app, effect);
         }
+    }
+
+    /// 在单一 gate 内执行领域转换、收敛领域错误并持久化脱敏快照。
+    fn transition(&self, input: UpdateInput) -> Option<UpdateOutput> {
+        let _gate = self
+            .transition_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut controller = self
+            .controller
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let input_for_failure = input.clone();
+        let output = match controller.handle(input) {
+            Ok(output) => output,
+            Err(error) => {
+                let (operation_id, operation, category, diagnostic) =
+                    domain_failure_context(&input_for_failure, &error);
+                let failure = UpdateFailure::new(category, diagnostic);
+                self.diagnostics.record_failure(operation_id, &failure);
+                controller
+                    .handle(UpdateInput::RuntimeDomainFailed { operation, failure })
+                    .ok()?
+            }
+        };
+        self.diagnostics.record_snapshot(&output.snapshot);
+        Some(output)
     }
 
     /// 在 Tauri runtime 上执行 controller 产生的 check/download/timer/install effect。
@@ -412,40 +447,82 @@ impl ApplicationUpdateRuntime {
             );
             return;
         }
-        let total = response.content_length();
+        let runtime_for_progress = self.clone();
+        let outcome = self
+            .consume_stream_and_commit(
+                operation_id,
+                release,
+                response.content_length(),
+                response.bytes_stream(),
+                cancellation,
+                |progress| {
+                    runtime_for_progress.dispatch(
+                        app,
+                        UpdateInput::DownloadAdvanced {
+                            operation_id,
+                            progress,
+                        },
+                    );
+                },
+                || {},
+            )
+            .await;
+        match outcome {
+            DownloadTaskOutcome::Committed(output) => {
+                self.diagnostics.record_snapshot(&output.snapshot);
+                let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
+                for effect in output.effects {
+                    self.execute_effect(app, effect);
+                }
+            }
+            DownloadTaskOutcome::Cancelled => {}
+            DownloadTaskOutcome::Failed(category, diagnostic) => {
+                self.fail_download(app, operation_id, category, diagnostic);
+            }
+        }
+    }
+
+    /// 流式写临时文件并执行与生产下载共用的 EOF、取消、验签和 durable commit 边界。
+    async fn consume_stream_and_commit<S, E, F, G>(
+        self: &Arc<Self>,
+        operation_id: UpdateOperationId,
+        release: StableRelease,
+        total: Option<u64>,
+        stream: S,
+        cancellation: &CancellationSignal,
+        mut on_progress: F,
+        before_commit: G,
+    ) -> DownloadTaskOutcome
+    where
+        S: Stream<Item = Result<bytes::Bytes, E>>,
+        F: FnMut(DownloadProgress),
+        G: FnOnce(),
+    {
         let mut temporary = match tempfile::NamedTempFile::new() {
             Ok(file) => file,
             Err(_) => {
-                self.fail_download(
-                    app,
-                    operation_id,
-                    UpdateFailureCategory::Storage,
-                    "temporary",
-                );
-                return;
+                return DownloadTaskOutcome::Failed(UpdateFailureCategory::Storage, "temporary")
             }
         };
         let mut downloaded = 0_u64;
-        let mut stream = response.bytes_stream();
+        futures_util::pin_mut!(stream);
         loop {
             let next = tokio::select! {
-                _ = cancellation.cancelled() => return,
+                _ = cancellation.cancelled() => return DownloadTaskOutcome::Cancelled,
                 next = stream.next() => next,
             };
             let Some(chunk) = next else { break };
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(_) => {
-                    self.fail_download(app, operation_id, UpdateFailureCategory::Network, "stream");
-                    return;
+                    return DownloadTaskOutcome::Failed(UpdateFailureCategory::Network, "stream")
                 }
             };
             if temporary.write_all(&chunk).is_err() {
-                self.fail_download(app, operation_id, UpdateFailureCategory::Storage, "write");
-                return;
+                return DownloadTaskOutcome::Failed(UpdateFailureCategory::Storage, "write");
             }
             downloaded = downloaded.saturating_add(chunk.len() as u64);
-            let progress = total.map_or(
+            on_progress(total.map_or(
                 DownloadProgress::UnknownTotal {
                     downloaded_bytes: downloaded,
                 },
@@ -453,20 +530,15 @@ impl ApplicationUpdateRuntime {
                     downloaded_bytes: downloaded,
                     total_bytes,
                 },
-            );
-            self.dispatch(
-                app,
-                UpdateInput::DownloadAdvanced {
-                    operation_id,
-                    progress,
-                },
-            );
+            ));
+        }
+        if cancellation.is_cancelled() {
+            return DownloadTaskOutcome::Cancelled;
         }
         if temporary.as_file_mut().sync_all().is_err()
             || temporary.as_file_mut().seek(SeekFrom::Start(0)).is_err()
         {
-            self.fail_download(app, operation_id, UpdateFailureCategory::Storage, "sync");
-            return;
+            return DownloadTaskOutcome::Failed(UpdateFailureCategory::Storage, "sync");
         }
         let candidate = match StageCandidate::new(
             release.version(),
@@ -477,29 +549,40 @@ impl ApplicationUpdateRuntime {
         ) {
             Ok(candidate) => candidate,
             Err(_) => {
-                self.fail_download(
-                    app,
-                    operation_id,
-                    UpdateFailureCategory::Manifest,
-                    "metadata",
-                );
-                return;
+                return DownloadTaskOutcome::Failed(UpdateFailureCategory::Manifest, "metadata")
             }
         };
-        if cancellation.is_cancelled() {
-            return;
-        }
-        let output = {
+        before_commit();
+        self.commit_download_file(
+            operation_id,
+            candidate,
+            temporary.as_file_mut(),
+            cancellation,
+        )
+    }
+
+    /// 在 transition gate 内再次观察取消并原子提交磁盘 proof 与 core identity。
+    fn commit_download_file(
+        &self,
+        operation_id: UpdateOperationId,
+        candidate: StageCandidate,
+        package: &mut std::fs::File,
+        cancellation: &CancellationSignal,
+    ) -> DownloadTaskOutcome {
+        {
             let _gate = self
                 .transition_gate
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cancellation.is_cancelled() {
+                return DownloadTaskOutcome::Cancelled;
+            }
             let mut controller = self
                 .controller
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !controller.accepts_download_completion(operation_id) {
-                return;
+                return DownloadTaskOutcome::Cancelled;
             }
             let mut staging = self
                 .staging
@@ -509,15 +592,9 @@ impl ApplicationUpdateRuntime {
                 drop(controller);
                 drop(staging);
                 drop(_gate);
-                self.fail_download(
-                    app,
-                    operation_id,
-                    UpdateFailureCategory::Storage,
-                    "repository",
-                );
-                return;
+                return DownloadTaskOutcome::Failed(UpdateFailureCategory::Storage, "repository");
             };
-            let staged = match repository.stage(candidate, temporary.as_file_mut()) {
+            let staged = match repository.stage(candidate, package) {
                 Ok(StageCommitOutcome::Committed(staged)) => Ok(staged),
                 Ok(StageCommitOutcome::DurabilityUnknown(pending)) => {
                     repository.confirm_durability(&pending)
@@ -532,33 +609,20 @@ impl ApplicationUpdateRuntime {
                     })
                     .ok(),
                 Err(super::StagingError::VerificationFailed) => {
-                    drop(controller);
-                    drop(staging);
-                    drop(_gate);
-                    self.fail_download(
-                        app,
-                        operation_id,
+                    return DownloadTaskOutcome::Failed(
                         UpdateFailureCategory::Verification,
                         "signature",
-                    );
-                    return;
+                    )
                 }
                 Err(_) => {
-                    drop(controller);
-                    drop(staging);
-                    drop(_gate);
-                    self.fail_download(app, operation_id, UpdateFailureCategory::Storage, "commit");
-                    return;
+                    return DownloadTaskOutcome::Failed(UpdateFailureCategory::Storage, "commit")
                 }
             }
-        };
-        if let Some(output) = output {
-            self.diagnostics.record_snapshot(&output.snapshot);
-            let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
-            for effect in output.effects {
-                self.execute_effect(app, effect);
-            }
         }
+        .map_or(
+            DownloadTaskOutcome::Failed(UpdateFailureCategory::Manifest, "core-commit"),
+            DownloadTaskOutcome::Committed,
+        )
     }
 
     /// 发布一次带原 operation identity 的脱敏下载失败。
@@ -588,6 +652,21 @@ impl ApplicationUpdateRuntime {
         intent: InstallIntent,
     ) -> Result<Option<InstallExecutionOutcome>, String> {
         let installer = PlatformUpdateInstaller::new(app);
+        self.try_use_staged(|repository| {
+            repository
+                .install_with(&installer, intent)
+                .map_err(|error| match error {
+                    super::InstallAttemptError::Staging(_) => "应用更新暂存复验失败".to_owned(),
+                    super::InstallAttemptError::Installer(error) => error.message().to_owned(),
+                })
+        })
+    }
+
+    /// 非阻塞取得 staging mutex，并只在存在 durable proof 时执行 closure。
+    fn try_use_staged<T>(
+        &self,
+        use_staged: impl FnOnce(&mut StagingRepository<DiskMinisignVerifier>) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
         let mut staging = self
             .staging
             .try_lock()
@@ -598,13 +677,7 @@ impl ApplicationUpdateRuntime {
         if repository.snapshot().is_none() {
             return Ok(None);
         }
-        repository
-            .install_with(&installer, intent)
-            .map(Some)
-            .map_err(|error| match error {
-                super::InstallAttemptError::Staging(_) => "应用更新暂存复验失败".to_owned(),
-                super::InstallAttemptError::Installer(error) => error.message().to_owned(),
-            })
+        use_staged(repository).map(Some)
     }
 
     /// 显式 restart 复用 ApplicationShutdown outcome；成功安装后才 relaunch/exit。
@@ -630,6 +703,45 @@ impl ApplicationUpdateRuntime {
     /// 为每个 timer 分配不重用的 registry identity，避免旧 guard 与后继任务竞态。
     fn next_managed_id(&self, kind: &str) -> OperationId {
         managed_operation_id(kind, self.managed_sequence.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// 将 controller 领域错误转换为有序、可诊断且不泄露输入的失败事实。
+fn domain_failure_context(
+    input: &UpdateInput,
+    error: &super::UpdateDomainError,
+) -> (
+    u64,
+    super::UpdateOperation,
+    UpdateFailureCategory,
+    &'static str,
+) {
+    let (operation_id, operation) = match input {
+        UpdateInput::CheckSucceeded { operation_id, .. }
+        | UpdateInput::CheckFailed { operation_id, .. } => {
+            (operation_id.value(), super::UpdateOperation::Check)
+        }
+        UpdateInput::DownloadStarted { operation_id }
+        | UpdateInput::DownloadAdvanced { operation_id, .. }
+        | UpdateInput::DownloadSucceeded { operation_id, .. }
+        | UpdateInput::DownloadFailed { operation_id, .. } => {
+            (operation_id.value(), super::UpdateOperation::Download)
+        }
+        _ => (0, super::UpdateOperation::Download),
+    };
+    match error {
+        super::UpdateDomainError::Preference(_) => (
+            operation_id,
+            operation,
+            UpdateFailureCategory::Storage,
+            "domain-preference",
+        ),
+        _ => (
+            operation_id,
+            operation,
+            UpdateFailureCategory::Manifest,
+            "domain-contract",
+        ),
     }
 }
 

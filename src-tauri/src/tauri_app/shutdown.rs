@@ -1,5 +1,4 @@
 use crate::{babysit, operation, review, telemetry};
-#[cfg(test)]
 use std::future::Future;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -37,6 +36,22 @@ pub(crate) enum ApplicationStopOutcome {
 pub(crate) enum PostStopIntent {
     OrdinaryExit,
     UpdateRestart,
+}
+
+/// stop 后唯一允许执行的进程最终动作。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PostStopFinalAction {
+    Exit(i32),
+    Restart,
+}
+
+/// 可测试协调器执行结果，不包含 installer 文本或本地路径。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PostStopExecution {
+    stop: ApplicationStopOutcome,
+    installed: Option<crate::application_update::InstallExecutionOutcome>,
+    install_failed: bool,
+    final_action: PostStopFinalAction,
 }
 
 /// 确保 stop/install/final action 在进程内至多执行一次的协调器。
@@ -83,48 +98,92 @@ impl PostStopCoordinator {
 
     /// 等待共享 stop outcome，Completed 才安装，并无条件执行一次最终动作。
     async fn run<R: tauri::Runtime>(&self, app: tauri::AppHandle<R>) {
-        let outcome = app
-            .state::<ApplicationShutdown>()
-            .stop_once(&app, ApplicationStopIntent::OrdinaryExit)
-            .await;
-        let restart = self.merged_intent() == PostStopIntent::UpdateRestart;
-        let install_intent = if restart {
-            crate::application_update::InstallIntent::UpdateRestart
-        } else {
-            crate::application_update::InstallIntent::NormalExit
-        };
-        let mut exit_code = 0;
-        let installed: Result<Option<crate::application_update::InstallExecutionOutcome>, String> =
-            if outcome.allows_update_installation() {
-                match app.try_state::<Arc<crate::application_update::ApplicationUpdateRuntime>>() {
-                    Some(runtime) => runtime.try_install_after_completed_stop(&app, install_intent),
+        let stop_app = app.clone();
+        let execution = execute_post_stop(
+            async move {
+                stop_app
+                    .state::<ApplicationShutdown>()
+                    .stop_once(&stop_app, ApplicationStopIntent::OrdinaryExit)
+                    .await
+            },
+            || self.merged_intent(),
+            |install_intent| {
+                let result = match app
+                    .try_state::<Arc<crate::application_update::ApplicationUpdateRuntime>>()
+                {
+                    Some(runtime) => {
+                        runtime.try_install_after_completed_stop(&app, install_intent)
+                    }
                     None => Ok(None),
+                };
+                if let Err(error) = &result {
+                    tracing::warn!(target: "narrant::application_update", %error, "停止后更新安装失败，保留暂存包并退出");
                 }
-            } else {
-                Ok(None)
-            };
-        let installed = match installed {
-            Ok(Some(installed)) => Some(installed),
-            Ok(None) => None,
-            Err(error) => {
-                exit_code = 1;
-                tracing::warn!(target: "narrant::application_update", %error, "停止后更新安装失败，保留暂存包并退出");
-                None
-            }
-        };
-        if outcome != ApplicationStopOutcome::Completed {
-            tracing::warn!(target: "narrant::shutdown", ?outcome, "应用清理未完整完成，跳过安装并继续退出");
+                result
+            },
+            |action| {
+                app.state::<ApplicationShutdown>().mark_final_exit();
+                match action {
+                    PostStopFinalAction::Restart => app.restart(),
+                    PostStopFinalAction::Exit(code) => app.exit(code),
+                }
+            },
+        )
+        .await;
+        if execution.stop != ApplicationStopOutcome::Completed {
+            tracing::warn!(target: "narrant::shutdown", outcome = ?execution.stop, "应用清理未完整完成，跳过安装并继续退出");
         }
-        app.state::<ApplicationShutdown>().mark_final_exit();
-        if restart
-            && matches!(
-                installed,
-                Some(crate::application_update::InstallExecutionOutcome::Installed { .. })
-            )
-        {
-            app.restart();
+    }
+}
+
+/// 运行真实 stop/install/final-action 顺序，生产与确定性组合测试共用。
+async fn execute_post_stop<S, M, I, A>(
+    stop: S,
+    merged_intent: M,
+    install: I,
+    final_action: A,
+) -> PostStopExecution
+where
+    S: Future<Output = ApplicationStopOutcome>,
+    M: FnOnce() -> PostStopIntent,
+    I: FnOnce(
+        crate::application_update::InstallIntent,
+    ) -> Result<Option<crate::application_update::InstallExecutionOutcome>, String>,
+    A: FnOnce(PostStopFinalAction),
+{
+    let outcome = stop.await;
+    let restart = merged_intent() == PostStopIntent::UpdateRestart;
+    let install_intent = if restart {
+        crate::application_update::InstallIntent::UpdateRestart
+    } else {
+        crate::application_update::InstallIntent::NormalExit
+    };
+    let (installed, install_failed) = if outcome.allows_update_installation() {
+        match install(install_intent) {
+            Ok(installed) => (installed, false),
+            Err(_) => (None, true),
         }
-        app.exit(exit_code);
+    } else {
+        (None, false)
+    };
+    let action = if install_failed {
+        PostStopFinalAction::Exit(1)
+    } else if restart
+        && matches!(
+            installed,
+            Some(crate::application_update::InstallExecutionOutcome::Installed { .. })
+        )
+    {
+        PostStopFinalAction::Restart
+    } else {
+        PostStopFinalAction::Exit(0)
+    };
+    final_action(action);
+    PostStopExecution {
+        stop: outcome,
+        installed,
+        install_failed,
+        final_action: action,
     }
 }
 

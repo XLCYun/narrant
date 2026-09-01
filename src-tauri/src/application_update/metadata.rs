@@ -122,6 +122,9 @@ impl BoundedManifestAdapter {
             .await
             .map_err(classify_request_error)?;
         let status = response.status();
+        if status == StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
         if !status.is_success() {
             return Err(ManifestAdapterError::from_status(status));
         }
@@ -149,6 +152,12 @@ impl BoundedManifestAdapter {
         let remote: RemoteRelease = serde_json::from_slice(&body).map_err(|_| {
             ManifestAdapterError::new(UpdateFailureCategory::Manifest, "manifest-json")
         })?;
+        if !remote.version.pre.is_empty() {
+            return Err(ManifestAdapterError::new(
+                UpdateFailureCategory::Manifest,
+                "manifest-prerelease",
+            ));
+        }
         if remote.version <= self.current_version {
             return Ok(None);
         }
