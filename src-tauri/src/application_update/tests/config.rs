@@ -1,5 +1,6 @@
 use super::super::config::{
-    trusted_package_url, TrustedUpdaterConfig, UpdaterConfigError, PRODUCTION_UPDATE_ENDPOINT,
+    trusted_manifest_url, trusted_package_url, TrustedUpdaterConfig, UpdaterConfigError,
+    PRODUCTION_UPDATE_ENDPOINT,
 };
 use base64::Engine;
 
@@ -8,6 +9,27 @@ const PUBLIC_KEY: &str = "untrusted comment: minisign public key E7620F1842B4E81
 /// 将真实 minisign 公钥文本包装成 Tauri updater 配置格式。
 fn encoded_public_key() -> String {
     base64::engine::general_purpose::STANDARD.encode(PUBLIC_KEY)
+}
+
+#[test]
+fn manifest_redirect_allowlist_requires_https_default_port_and_known_path() {
+    assert!(trusted_manifest_url(
+        &PRODUCTION_UPDATE_ENDPOINT.parse().unwrap()
+    ));
+    assert!(trusted_manifest_url(
+        &"https://release-assets.githubusercontent.com/github-production-release-asset/123/token"
+            .parse()
+            .unwrap()
+    ));
+    for denied in [
+        "http://github.com/cyunlab/narrant/releases/latest/download/latest.json",
+        "https://github.com:444/cyunlab/narrant/releases/latest/download/latest.json",
+        "https://user@github.com/cyunlab/narrant/releases/latest/download/latest.json",
+        "https://github.com/cyunlab/other/releases/latest/download/latest.json",
+        "https://evil.example/github-production-release-asset/123/token",
+    ] {
+        assert!(!trusted_manifest_url(&denied.parse().unwrap()), "{denied}");
+    }
 }
 
 #[test]

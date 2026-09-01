@@ -1,32 +1,27 @@
-use super::config::{trusted_package_url, trusted_redirect_url, TrustedUpdaterConfig};
+use super::config::{trusted_redirect_url, TrustedUpdaterConfig};
 use super::diagnostics::UpdateDiagnostics;
+use super::metadata::BoundedManifestAdapter;
 use super::platform::{current_install_plan, PlatformUpdateInstaller};
 use super::{
     Clock, DownloadProgress, FilePreferenceStore, InstallExecutionOutcome, InstallIntent,
-    ReleasePackage, StableRelease, StageCandidate, StageCommitOutcome, StagingContext,
-    StagingRepository, UpdateController, UpdateEffect, UpdateFailure, UpdateFailureCategory,
-    UpdateInput, UpdateOperationId, UpdateSnapshot,
+    StableRelease, StageCandidate, StageCommitOutcome, StagingContext, StagingRepository,
+    UpdateController, UpdateEffect, UpdateFailure, UpdateFailureCategory, UpdateInput,
+    UpdateOperationId, UpdateSnapshot,
 };
+use crate::operation::{CancellableOperations, CancellationSignal, OperationId};
 use futures_util::StreamExt;
-use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
-use tauri_plugin_updater::{Update, UpdaterExt};
-use tokio_util::sync::CancellationToken;
 
 use super::verifier::DiskMinisignVerifier;
-use crate::tauri_app::shutdown::{
-    install_after_successful_stop, ApplicationShutdown, ApplicationStopIntent,
-};
+use crate::tauri_app::shutdown::{PostStopCoordinator, PostStopIntent};
 
 pub(crate) const UPDATE_SNAPSHOT_EVENT: &str = "application-update:snapshot";
-const MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
 const PACKAGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PACKAGE_READ_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 /// 使用进程内单调时间驱动六小时调度与 retry timer。
 pub(crate) struct SystemClock {
@@ -49,10 +44,10 @@ impl Clock for SystemClock {
     }
 }
 
-/// 保存 Tauri trusted builder 返回的候选及其领域 operation identity。
+/// 保存有界 trusted metadata adapter 返回的候选及其领域 operation identity。
 struct PendingUpdate {
     operation_id: UpdateOperationId,
-    update: Update,
+    release: StableRelease,
 }
 
 /// Tauri-managed 的 Application Update 运行时与单一快照发布 owner。
@@ -61,11 +56,10 @@ pub(crate) struct ApplicationUpdateRuntime {
     config: Result<TrustedUpdaterConfig, super::config::UpdaterConfigError>,
     staging: Mutex<Option<StagingRepository<DiskMinisignVerifier>>>,
     pending: Mutex<Option<PendingUpdate>>,
-    downloads: Mutex<HashMap<u64, CancellationToken>>,
     transition_gate: Mutex<()>,
     check_gate: tokio::sync::Mutex<()>,
-    install_requested: AtomicBool,
     diagnostics: UpdateDiagnostics,
+    managed_sequence: AtomicU64,
 }
 
 impl ApplicationUpdateRuntime {
@@ -86,27 +80,30 @@ impl ApplicationUpdateRuntime {
         let preferences = FilePreferenceStore::new(data_dir.join("application-update.json"));
         let mut controller = UpdateController::new(&version, SystemClock::new(), preferences)
             .map_err(|_| "应用更新状态无法初始化".to_owned())?;
-        let staging = config.as_ref().ok().and_then(|trusted| {
-            let (target, install_kind) = current_install_plan().ok()?;
-            let context = StagingContext::new(&version, target, install_kind).ok()?;
-            let verifier = DiskMinisignVerifier::new(trusted.public_key()).ok()?;
-            StagingRepository::open(cache_dir, context, verifier).ok()
-        });
+        let (staging, recovery_failure) = initialize_staging(&cache_dir, &version, &config);
         if let Some(staged) = staging.as_ref().and_then(StagingRepository::snapshot) {
             let _ = controller.handle(UpdateInput::RecoverStaged { staged });
+        }
+        let startup_output = recovery_failure.and_then(|failure| {
+            controller
+                .handle(UpdateInput::StartupRecoveryFailed { failure })
+                .ok()
+        });
+        let diagnostics =
+            UpdateDiagnostics::new(data_dir.join("logs").join("application-update.jsonl"));
+        if let Some(output) = &startup_output {
+            diagnostics.record_snapshot(&output.snapshot);
+            let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
         }
         Ok(Arc::new(Self {
             controller: Mutex::new(controller),
             config,
             staging: Mutex::new(staging),
             pending: Mutex::new(None),
-            downloads: Mutex::new(HashMap::new()),
             transition_gate: Mutex::new(()),
             check_gate: tokio::sync::Mutex::new(()),
-            install_requested: AtomicBool::new(false),
-            diagnostics: UpdateDiagnostics::new(
-                data_dir.join("logs").join("application-update.jsonl"),
-            ),
+            diagnostics,
+            managed_sequence: AtomicU64::new(1),
         }))
     }
 
@@ -117,16 +114,6 @@ impl ApplicationUpdateRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .snapshot()
             .clone()
-    }
-
-    /// 判断仓储是否持有已经跨过 durability barrier 的可安装候选。
-    pub(crate) fn has_durable_staged_update(&self) -> bool {
-        self.staging
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(StagingRepository::snapshot)
-            .is_some()
     }
 
     /// 提交可信输入、按 sequence 发布唯一 snapshot event，再执行窄化副作用。
@@ -165,54 +152,74 @@ impl ApplicationUpdateRuntime {
     ) {
         match effect {
             UpdateEffect::ScheduleCheck { after } => {
+                let task_id = self.next_managed_id("periodic");
                 let runtime = self.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(after).await;
-                    runtime.dispatch(&app, UpdateInput::PeriodicCheckDue);
+                    let operations = app.state::<CancellableOperations>().inner().clone();
+                    let _ = operations.run(task_id, |context| async move {
+                        tokio::select! {
+                            _ = context.cancellation().cancelled() => {},
+                            _ = tokio::time::sleep(after) => runtime.dispatch(&app, UpdateInput::PeriodicCheckDue),
+                        }
+                    }).await;
                 });
             }
             UpdateEffect::ScheduleRetry { token, after, .. } => {
+                let task_id = self.next_managed_id("retry");
                 let runtime = self.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(after).await;
-                    runtime.dispatch(&app, UpdateInput::RetryDue { token });
+                    let operations = app.state::<CancellableOperations>().inner().clone();
+                    let _ = operations.run(task_id, |context| async move {
+                        tokio::select! {
+                            _ = context.cancellation().cancelled() => {},
+                            _ = tokio::time::sleep(after) => runtime.dispatch(&app, UpdateInput::RetryDue { token }),
+                        }
+                    }).await;
                 });
             }
             UpdateEffect::CheckStable { operation_id } => {
                 let runtime = self.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    runtime.check_stable(&app, operation_id).await;
+                    let operations = app.state::<CancellableOperations>().inner().clone();
+                    let id = managed_operation_id("check", operation_id.value());
+                    let _ = operations
+                        .run(id, |context| async move {
+                            runtime
+                                .check_stable(&app, operation_id, context.cancellation())
+                                .await;
+                        })
+                        .await;
                 });
             }
             UpdateEffect::StartDownload {
                 operation_id,
                 release,
             } => {
-                let token = CancellationToken::new();
-                self.downloads
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(operation_id.value(), token.clone());
                 let runtime = self.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    runtime
-                        .download_pending(&app, operation_id, release, token)
+                    let operations = app.state::<CancellableOperations>().inner().clone();
+                    let id = managed_operation_id("download", operation_id.value());
+                    let _ = operations
+                        .run(id, |context| async move {
+                            runtime
+                                .download_pending(
+                                    &app,
+                                    operation_id,
+                                    release,
+                                    context.cancellation(),
+                                )
+                                .await;
+                        })
                         .await;
                 });
             }
             UpdateEffect::CancelDownload { operation_id } => {
-                if let Some(token) = self
-                    .downloads
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&operation_id.value())
-                {
-                    token.cancel();
-                }
+                let operations = app.state::<CancellableOperations>();
+                let _ = operations.cancel(&managed_operation_id("download", operation_id.value()));
             }
             UpdateEffect::PersistStagedReleaseNotes {
                 version,
@@ -238,8 +245,12 @@ impl ApplicationUpdateRuntime {
         self: Arc<Self>,
         app: &tauri::AppHandle<R>,
         operation_id: UpdateOperationId,
+        cancellation: &CancellationSignal,
     ) {
-        let _check = self.check_gate.lock().await;
+        let _check = tokio::select! {
+            _ = cancellation.cancelled() => return,
+            guard = self.check_gate.lock() => guard,
+        };
         let trusted = match &self.config {
             Ok(config) => config,
             Err(_) => {
@@ -254,15 +265,13 @@ impl ApplicationUpdateRuntime {
                 return;
             }
         };
-        let updater = match app
-            .updater_builder()
-            .target(target)
-            .timeout(MANIFEST_TIMEOUT)
-            .endpoints(vec![trusted.endpoint().clone()])
-            .map(|builder| builder.pubkey(trusted.public_key()))
-            .and_then(|builder| builder.build())
-        {
-            Ok(updater) => updater,
+        let adapter = match BoundedManifestAdapter::new(
+            trusted,
+            target,
+            install_kind,
+            app.package_info().version.to_string().as_str(),
+        ) {
+            Ok(adapter) => adapter,
             Err(_) => {
                 self.fail_check(
                     app,
@@ -273,49 +282,18 @@ impl ApplicationUpdateRuntime {
                 return;
             }
         };
-        match updater.check().await {
-            Ok(Some(update)) => {
-                if update.target != target
-                    || update.signature.trim().is_empty()
-                    || !trusted_package_url(&update.download_url)
-                    || !manifest_within_limit(&update.raw_json)
-                {
-                    self.fail_check(
-                        app,
-                        operation_id,
-                        UpdateFailureCategory::Manifest,
-                        "candidate",
-                    );
-                    return;
-                }
-                let package = match ReleasePackage::new(
-                    update.download_url.to_string(),
-                    update.signature.clone(),
-                    target,
-                    install_kind,
-                ) {
-                    Ok(package) => package,
-                    Err(_) => {
-                        self.fail_check(
-                            app,
-                            operation_id,
-                            UpdateFailureCategory::Manifest,
-                            "package",
-                        );
-                        return;
-                    }
-                };
-                let release = StableRelease::new(
-                    update.version.clone(),
-                    update.body.clone().unwrap_or_default(),
-                    package,
-                );
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => return,
+            result = adapter.check() => result,
+        };
+        match result {
+            Ok(Some(release)) => {
                 *self
                     .pending
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingUpdate {
                     operation_id,
-                    update,
+                    release: release.clone(),
                 });
                 self.dispatch(
                     app,
@@ -332,7 +310,20 @@ impl ApplicationUpdateRuntime {
                     release: None,
                 },
             ),
-            Err(_) => self.fail_check(app, operation_id, UpdateFailureCategory::Network, "request"),
+            Err(error) => {
+                self.diagnostics.record_failure_with_status(
+                    operation_id.value(),
+                    error.failure(),
+                    error.status(),
+                );
+                self.dispatch(
+                    app,
+                    UpdateInput::CheckFailed {
+                        operation_id,
+                        failure: error.failure().clone(),
+                    },
+                );
+            }
         }
     }
 
@@ -362,21 +353,16 @@ impl ApplicationUpdateRuntime {
         app: &tauri::AppHandle<R>,
         operation_id: UpdateOperationId,
         release: StableRelease,
-        cancellation: CancellationToken,
+        cancellation: &CancellationSignal,
     ) {
         let pending = self
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .filter(|pending| {
-                pending.operation_id == operation_id
-                    && pending.update.version == release.version()
-                    && pending.update.download_url.as_str() == release.package().download_url()
-                    && pending.update.signature == release.package().signature()
-            })
-            .map(|pending| pending.update.clone());
-        let Some(update) = pending else {
+            .filter(|pending| pending.operation_id == operation_id && pending.release == release)
+            .map(|pending| pending.release.clone());
+        let Some(trusted_release) = pending else {
             self.fail_download(
                 app,
                 operation_id,
@@ -408,7 +394,7 @@ impl ApplicationUpdateRuntime {
         };
         let response = tokio::select! {
             _ = cancellation.cancelled() => return,
-            response = client.get(update.download_url.clone()).headers(update.headers.clone()).send() => response,
+            response = client.get(trusted_release.package().download_url()).send() => response,
         };
         let response = match response {
             Ok(response) => response,
@@ -500,12 +486,29 @@ impl ApplicationUpdateRuntime {
                 return;
             }
         };
-        let staged = {
+        if cancellation.is_cancelled() {
+            return;
+        }
+        let output = {
+            let _gate = self
+                .transition_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut controller = self
+                .controller
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !controller.accepts_download_completion(operation_id) {
+                return;
+            }
             let mut staging = self
                 .staging
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(repository) = staging.as_mut() else {
+                drop(controller);
+                drop(staging);
+                drop(_gate);
                 self.fail_download(
                     app,
                     operation_id,
@@ -514,36 +517,48 @@ impl ApplicationUpdateRuntime {
                 );
                 return;
             };
-            match repository.stage(candidate, temporary.as_file_mut()) {
+            let staged = match repository.stage(candidate, temporary.as_file_mut()) {
                 Ok(StageCommitOutcome::Committed(staged)) => Ok(staged),
                 Ok(StageCommitOutcome::DurabilityUnknown(pending)) => {
                     repository.confirm_durability(&pending)
                 }
                 Err(error) => Err(error),
+            };
+            match staged {
+                Ok(staged) => controller
+                    .handle(UpdateInput::DownloadSucceeded {
+                        operation_id,
+                        staged,
+                    })
+                    .ok(),
+                Err(super::StagingError::VerificationFailed) => {
+                    drop(controller);
+                    drop(staging);
+                    drop(_gate);
+                    self.fail_download(
+                        app,
+                        operation_id,
+                        UpdateFailureCategory::Verification,
+                        "signature",
+                    );
+                    return;
+                }
+                Err(_) => {
+                    drop(controller);
+                    drop(staging);
+                    drop(_gate);
+                    self.fail_download(app, operation_id, UpdateFailureCategory::Storage, "commit");
+                    return;
+                }
             }
         };
-        match staged {
-            Ok(staged) => self.dispatch(
-                app,
-                UpdateInput::DownloadSucceeded {
-                    operation_id,
-                    staged,
-                },
-            ),
-            Err(super::StagingError::VerificationFailed) => self.fail_download(
-                app,
-                operation_id,
-                UpdateFailureCategory::Verification,
-                "signature",
-            ),
-            Err(_) => {
-                self.fail_download(app, operation_id, UpdateFailureCategory::Storage, "commit")
+        if let Some(output) = output {
+            self.diagnostics.record_snapshot(&output.snapshot);
+            let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
+            for effect in output.effects {
+                self.execute_effect(app, effect);
             }
         }
-        self.downloads
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&operation_id.value());
     }
 
     /// 发布一次带原 operation identity 的脱敏下载失败。
@@ -567,18 +582,25 @@ impl ApplicationUpdateRuntime {
     }
 
     /// 在共享 stop Completed 之后同步复验并执行一次 staging install transaction。
-    pub(crate) fn install_after_completed_stop<R: tauri::Runtime>(
+    pub(crate) fn try_install_after_completed_stop<R: tauri::Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
         intent: InstallIntent,
-    ) -> Result<InstallExecutionOutcome, String> {
+    ) -> Result<Option<InstallExecutionOutcome>, String> {
         let installer = PlatformUpdateInstaller::new(app);
-        self.staging
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_mut()
-            .ok_or_else(|| "没有可安装的可信应用更新".to_owned())?
+        let mut staging = self
+            .staging
+            .try_lock()
+            .map_err(|_| "更新暂存仍被受管任务占用，跳过本次安装".to_owned())?;
+        let Some(repository) = staging.as_mut() else {
+            return Ok(None);
+        };
+        if repository.snapshot().is_none() {
+            return Ok(None);
+        }
+        repository
             .install_with(&installer, intent)
+            .map(Some)
             .map_err(|error| match error {
                 super::InstallAttemptError::Staging(_) => "应用更新暂存复验失败".to_owned(),
                 super::InstallAttemptError::Installer(error) => error.message().to_owned(),
@@ -601,48 +623,96 @@ impl ApplicationUpdateRuntime {
         {
             return;
         }
-        if self
-            .install_requested
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
-        }
-        let runtime = self.clone();
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let outcome = app
-                .state::<ApplicationShutdown>()
-                .stop_once(&app, ApplicationStopIntent::UpdateRestart)
-                .await;
-            let Some(installed) = install_after_successful_stop(outcome, || {
-                runtime.install_after_completed_stop(&app, intent)
-            }) else {
-                return;
-            };
-            let installed = match installed {
-                Ok(installed) => installed,
-                Err(error) => {
-                    tracing::warn!(target: "narrant::application_update", %error, "更新重启安装失败，退出已停止的旧进程");
-                    app.state::<ApplicationShutdown>().mark_final_exit();
-                    app.exit(1);
-                    return;
-                }
-            };
-            app.state::<ApplicationShutdown>().mark_final_exit();
-            match installed {
-                InstallExecutionOutcome::Installed { .. } => app.restart(),
-                InstallExecutionOutcome::HandedOff => app.exit(0),
-            }
-        });
+        app.state::<Arc<PostStopCoordinator>>()
+            .request(app.clone(), PostStopIntent::UpdateRestart);
+    }
+
+    /// 为每个 timer 分配不重用的 registry identity，避免旧 guard 与后继任务竞态。
+    fn next_managed_id(&self, kind: &str) -> OperationId {
+        managed_operation_id(kind, self.managed_sequence.fetch_add(1, Ordering::Relaxed))
     }
 }
 
-/// 对 trusted builder 解析后的 manifest 继续施加序列化字节上限。
-fn manifest_within_limit(manifest: &serde_json::Value) -> bool {
-    serde_json::to_vec(manifest)
-        .map(|bytes| bytes.len() <= MAX_MANIFEST_BYTES)
-        .unwrap_or(false)
+/// 显式区分仓储可用但安全丢弃损坏候选，与仓储根目录完全不可用。
+fn initialize_staging(
+    cache_dir: &std::path::Path,
+    version: &str,
+    config: &Result<TrustedUpdaterConfig, super::config::UpdaterConfigError>,
+) -> (
+    Option<StagingRepository<DiskMinisignVerifier>>,
+    Option<UpdateFailure>,
+) {
+    let trusted = match config {
+        Ok(trusted) => trusted,
+        Err(_) => {
+            return (
+                None,
+                Some(UpdateFailure::new(
+                    UpdateFailureCategory::Manifest,
+                    "config",
+                )),
+            )
+        }
+    };
+    let (target, install_kind) = match current_install_plan() {
+        Ok(plan) => plan,
+        Err(_) => {
+            return (
+                None,
+                Some(UpdateFailure::new(
+                    UpdateFailureCategory::Manifest,
+                    "target",
+                )),
+            )
+        }
+    };
+    let context = match StagingContext::new(version, target, install_kind) {
+        Ok(context) => context,
+        Err(_) => {
+            return (
+                None,
+                Some(UpdateFailure::new(
+                    UpdateFailureCategory::Storage,
+                    "context",
+                )),
+            )
+        }
+    };
+    let verifier = match DiskMinisignVerifier::new(trusted.public_key()) {
+        Ok(verifier) => verifier,
+        Err(_) => {
+            return (
+                None,
+                Some(UpdateFailure::new(UpdateFailureCategory::Manifest, "key")),
+            )
+        }
+    };
+    match StagingRepository::open(cache_dir, context, verifier) {
+        Ok(repository) => {
+            let failure = repository.recovery_failure().map(|error| {
+                let category = if error == super::StagingError::VerificationFailed {
+                    UpdateFailureCategory::Verification
+                } else {
+                    UpdateFailureCategory::Storage
+                };
+                UpdateFailure::new(category, "recovery-discarded")
+            });
+            (Some(repository), failure)
+        }
+        Err(_) => (
+            None,
+            Some(UpdateFailure::new(
+                UpdateFailureCategory::Storage,
+                "repository-open",
+            )),
+        ),
+    }
+}
+
+/// 为 updater task 创建不会与业务 operation ID 冲突的 registry identity。
+fn managed_operation_id(kind: &str, value: u64) -> OperationId {
+    OperationId::new(format!("application-update:{kind}:{value}"))
+        .expect("bounded internal updater operation id")
 }
 
 #[cfg(test)]

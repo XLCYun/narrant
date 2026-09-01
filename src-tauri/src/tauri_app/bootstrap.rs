@@ -3,7 +3,7 @@ use super::commands::{
     application_update as application_update_commands, babysit as babysit_commands,
     github as github_commands, repository, review as review_commands,
 };
-use super::shutdown::{self, ApplicationShutdown};
+use super::shutdown::{self, ApplicationShutdown, PostStopCoordinator};
 use crate::{
     application_settings::ApplicationSettingsApplication,
     application_update::{ApplicationUpdateRuntime, TrustedUpdaterConfig, UpdateInput},
@@ -33,6 +33,7 @@ pub fn run() {
         .manage(crate::telemetry::init())
         .manage(operation::CancellableOperations::default())
         .manage(ApplicationShutdown::default())
+        .manage(Arc::new(PostStopCoordinator::default()))
         .plugin(
             tauri_plugin_updater::Builder::new()
                 .pubkey(updater_public_key)

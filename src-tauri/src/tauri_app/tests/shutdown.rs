@@ -299,3 +299,33 @@ fn timeout_and_failed_cleanup_skip_install_but_allow_existing_exit_path() {
         assert!(!outcome.allows_update_installation());
     }
 }
+
+#[test]
+fn ordinary_exit_and_update_restart_race_merge_to_one_restart_execution() {
+    let coordinator = PostStopCoordinator::default();
+
+    assert!(coordinator.begin(PostStopIntent::OrdinaryExit));
+    assert!(!coordinator.begin(PostStopIntent::UpdateRestart));
+    assert_eq!(coordinator.merged_intent(), PostStopIntent::UpdateRestart);
+}
+
+#[test]
+fn every_stop_outcome_has_one_final_action_but_only_completed_may_install() {
+    for outcome in [
+        ApplicationStopOutcome::Completed,
+        ApplicationStopOutcome::Failed,
+        ApplicationStopOutcome::TimedOut,
+    ] {
+        let installs = AtomicUsize::new(0);
+        let finals = AtomicUsize::new(0);
+        let _ = install_after_successful_stop(outcome, || {
+            installs.fetch_add(1, Ordering::AcqRel);
+        });
+        finals.fetch_add(1, Ordering::AcqRel);
+        assert_eq!(
+            installs.load(Ordering::Acquire),
+            usize::from(outcome == ApplicationStopOutcome::Completed)
+        );
+        assert_eq!(finals.load(Ordering::Acquire), 1);
+    }
+}

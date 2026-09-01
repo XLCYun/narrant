@@ -26,18 +26,39 @@ impl OperationId {
 }
 
 /// 应用操作可只读观察的取消信号，不能触发上层操作取消。
+#[derive(Debug, Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    notified: Notify,
+}
+
+/// 可 clone 的只读取消信号，同时支持同步轮询与异步唤醒。
 #[derive(Clone, Debug, Default)]
-pub(crate) struct CancellationSignal(Arc<AtomicBool>);
+pub(crate) struct CancellationSignal(Arc<CancellationState>);
 
 impl CancellationSignal {
     /// 仅由同模块的取消 source 标记共享状态。
     fn mark_cancelled(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
+        self.0.notified.notify_waiters();
     }
 
     /// 返回调用方是否已经请求取消。
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// 异步等待取消，并用 enable-before-check 避免通知丢失。
+    pub(crate) async fn cancelled(&self) {
+        loop {
+            let notified = self.0.notified.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 

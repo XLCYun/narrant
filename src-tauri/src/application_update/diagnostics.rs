@@ -11,6 +11,7 @@ pub(crate) struct UpdateDiagnostics {
     path: PathBuf,
 }
 
+/// 单条脱敏诊断，只允许稳定分类、版本、序号、operation identity 与 HTTP status。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SafeDiagnostic<'a> {
@@ -19,6 +20,7 @@ struct SafeDiagnostic<'a> {
     version: Option<&'a str>,
     category: Option<&'a str>,
     operation_id: Option<u64>,
+    http_status: Option<u16>,
 }
 
 impl UpdateDiagnostics {
@@ -55,11 +57,22 @@ impl UpdateDiagnostics {
                     super::UpdateFailureCategory::Installer => "installer",
                 }),
             operation_id: None,
+            http_status: None,
         });
     }
 
     /// 记录 adapter 原始失败的稳定类别与 operation identity，原始文本只用于内存分类。
     pub(crate) fn record_failure(&self, operation_id: u64, failure: &UpdateFailure) {
+        self.record_failure_with_status(operation_id, failure, None);
+    }
+
+    /// 记录脱敏失败分类及可选 HTTP status，不持久化响应正文或请求地址。
+    pub(crate) fn record_failure_with_status(
+        &self,
+        operation_id: u64,
+        failure: &UpdateFailure,
+        http_status: Option<u16>,
+    ) {
         let _ = failure.diagnostic();
         self.append(&SafeDiagnostic {
             event: "adapter-failed",
@@ -76,6 +89,7 @@ impl UpdateDiagnostics {
                 super::UpdateFailureCategory::Installer => "installer",
             }),
             operation_id: Some(operation_id),
+            http_status,
         });
     }
 

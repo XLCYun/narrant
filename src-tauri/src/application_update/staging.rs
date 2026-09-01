@@ -805,6 +805,7 @@ impl Drop for StagingLock {
 fn lock_root(root: &Path) -> Result<StagingLock, StagingError> {
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(root.join(LOCK_FILE))

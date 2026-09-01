@@ -368,6 +368,9 @@ pub(crate) enum UpdateEffect {
 /// Controller 接收的可信结果与窄化用户意图。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateInput {
+    StartupRecoveryFailed {
+        failure: UpdateFailure,
+    },
     RecoverStaged {
         staged: DurableStagedUpdate,
     },
@@ -505,10 +508,24 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
         &self.snapshot
     }
 
+    /// 仅当当前 active identity 仍处于下载阶段时允许 adapter 提交 durable 副作用。
+    pub(crate) fn accepts_download_completion(&self, operation_id: UpdateOperationId) -> bool {
+        self.active_is_download(operation_id)
+    }
+
     /// 消费可信结果或窄化用户意图；迟到 identity 返回完全不变的快照。
     pub(crate) fn handle(&mut self, input: UpdateInput) -> Result<UpdateOutput, UpdateDomainError> {
         let mut effects = Vec::new();
         let accepted = match input {
+            UpdateInput::StartupRecoveryFailed { failure } if !self.ready => {
+                self.snapshot.state = UpdateState::Failed;
+                self.snapshot.failure = Some(UpdateFailureSnapshot::from_failure(
+                    UpdateOperation::Download,
+                    &failure,
+                ));
+                true
+            }
+            UpdateInput::StartupRecoveryFailed { .. } => false,
             UpdateInput::RecoverStaged { staged } => self.recover_staged(staged)?,
             UpdateInput::Ready if !self.ready => {
                 self.ready = true;

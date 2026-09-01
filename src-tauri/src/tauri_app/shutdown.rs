@@ -1,4 +1,5 @@
 use crate::{babysit, operation, review, telemetry};
+#[cfg(test)]
 use std::future::Future;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -10,6 +11,7 @@ const APPLICATION_STOP_DEADLINE: Duration = Duration::from_secs(15);
 const EXIT_IDLE: u8 = 0;
 const EXIT_STOPPING: u8 = 1;
 const EXIT_FINAL: u8 = 2;
+const UPDATE_RESTART_INTENT: u8 = 1;
 
 /// 调用共享停止边界的业务意图；更新实现仍由调用方持有。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +32,102 @@ pub(crate) enum ApplicationStopOutcome {
     TimedOut,
 }
 
+/// 合并普通退出与显式更新重启的进程级安装意图。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PostStopIntent {
+    OrdinaryExit,
+    UpdateRestart,
+}
+
+/// 确保 stop/install/final action 在进程内至多执行一次的协调器。
+#[derive(Default)]
+pub(crate) struct PostStopCoordinator {
+    intent: AtomicU8,
+    started: std::sync::atomic::AtomicBool,
+}
+
+impl PostStopCoordinator {
+    /// 合并意图并启动唯一协调任务；更新重启优先于普通退出。
+    pub(crate) fn request<R: tauri::Runtime>(
+        self: &Arc<Self>,
+        app: tauri::AppHandle<R>,
+        intent: PostStopIntent,
+    ) {
+        if !self.begin(intent) {
+            return;
+        }
+        let coordinator = self.clone();
+        tauri::async_runtime::spawn(async move {
+            coordinator.run(app).await;
+        });
+    }
+
+    /// 原子合并 intent 并返回调用方是否拥有唯一执行权。
+    fn begin(&self, intent: PostStopIntent) -> bool {
+        if intent == PostStopIntent::UpdateRestart {
+            self.intent.store(UPDATE_RESTART_INTENT, Ordering::Release);
+        }
+        self.started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// 返回全部竞态合并后的最终意图。
+    fn merged_intent(&self) -> PostStopIntent {
+        if self.intent.load(Ordering::Acquire) == UPDATE_RESTART_INTENT {
+            PostStopIntent::UpdateRestart
+        } else {
+            PostStopIntent::OrdinaryExit
+        }
+    }
+
+    /// 等待共享 stop outcome，Completed 才安装，并无条件执行一次最终动作。
+    async fn run<R: tauri::Runtime>(&self, app: tauri::AppHandle<R>) {
+        let outcome = app
+            .state::<ApplicationShutdown>()
+            .stop_once(&app, ApplicationStopIntent::OrdinaryExit)
+            .await;
+        let restart = self.merged_intent() == PostStopIntent::UpdateRestart;
+        let install_intent = if restart {
+            crate::application_update::InstallIntent::UpdateRestart
+        } else {
+            crate::application_update::InstallIntent::NormalExit
+        };
+        let mut exit_code = 0;
+        let installed: Result<Option<crate::application_update::InstallExecutionOutcome>, String> =
+            if outcome.allows_update_installation() {
+                match app.try_state::<Arc<crate::application_update::ApplicationUpdateRuntime>>() {
+                    Some(runtime) => runtime.try_install_after_completed_stop(&app, install_intent),
+                    None => Ok(None),
+                }
+            } else {
+                Ok(None)
+            };
+        let installed = match installed {
+            Ok(Some(installed)) => Some(installed),
+            Ok(None) => None,
+            Err(error) => {
+                exit_code = 1;
+                tracing::warn!(target: "narrant::application_update", %error, "停止后更新安装失败，保留暂存包并退出");
+                None
+            }
+        };
+        if outcome != ApplicationStopOutcome::Completed {
+            tracing::warn!(target: "narrant::shutdown", ?outcome, "应用清理未完整完成，跳过安装并继续退出");
+        }
+        app.state::<ApplicationShutdown>().mark_final_exit();
+        if restart
+            && matches!(
+                installed,
+                Some(crate::application_update::InstallExecutionOutcome::Installed { .. })
+            )
+        {
+            app.restart();
+        }
+        app.exit(exit_code);
+    }
+}
+
 impl ApplicationStopOutcome {
     /// 只有完整成功的停止结果才允许 updater 替换程序文件。
     #[allow(dead_code, reason = "Task 3 的 installer gate 将消费此结果")]
@@ -39,6 +137,7 @@ impl ApplicationStopOutcome {
 }
 
 /// 只在共享停止完整成功后执行安装 closure；超时或失败不会触碰暂存包。
+#[cfg(test)]
 pub(crate) fn install_after_successful_stop<T>(
     outcome: ApplicationStopOutcome,
     install: impl FnOnce() -> T,
@@ -282,7 +381,8 @@ pub(super) fn handle_run_event<R: tauri::Runtime>(
                 api.prevent_exit();
             }
             if decision == ExitRequestDecision::PreventAndStart {
-                spawn_final_exit(app.clone());
+                app.state::<Arc<PostStopCoordinator>>()
+                    .request(app.clone(), PostStopIntent::OrdinaryExit);
             }
         }
         tauri::RunEvent::WindowEvent {
@@ -295,60 +395,23 @@ pub(super) fn handle_run_event<R: tauri::Runtime>(
                 api.prevent_close();
             }
             if decision == ExitRequestDecision::PreventAndStart {
-                spawn_final_exit(app.clone());
+                app.state::<Arc<PostStopCoordinator>>()
+                    .request(app.clone(), PostStopIntent::OrdinaryExit);
             }
         }
         _ => {}
     }
 }
 
-/// 在 Tauri 异步 runtime 上完成停止后请求一次最终退出，绝不阻塞事件循环。
-fn spawn_final_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    let stop_app = app.clone();
-    let stop = async move {
-        let outcome = stop_app
-            .state::<ApplicationShutdown>()
-            .stop_once(&stop_app, ApplicationStopIntent::OrdinaryExit)
-            .await;
-        let _ = install_after_successful_stop(outcome, || {
-            if let Some(updater) = stop_app
-                .try_state::<std::sync::Arc<crate::application_update::ApplicationUpdateRuntime>>()
-            {
-                if updater.has_durable_staged_update() {
-                    if let Err(error) = updater.install_after_completed_stop(
-                        &stop_app,
-                        crate::application_update::InstallIntent::NormalExit,
-                    ) {
-                        tracing::warn!(target: "narrant::application_update", %error, "普通退出安装失败，保留暂存包");
-                    }
-                }
-            }
-        });
-        outcome
-    };
-    let _ = spawn_final_exit_with(stop, Arc::new(TauriFinalExit { app }));
-}
-
 /// 最终退出动作的可注入窄 seam；生产实现调用 Tauri `app.exit(0)`。
+#[cfg(test)]
 trait FinalExit: Send + Sync {
     /// 记录清理结果、放行内部退出并结束应用。
     fn exit(&self, outcome: ApplicationStopOutcome);
 }
 
-/// Tauri 最终退出 adapter，确保内部 ExitRequested 不再重复清理。
-struct TauriFinalExit<R: tauri::Runtime> {
-    app: tauri::AppHandle<R>,
-}
-
-impl<R: tauri::Runtime> FinalExit for TauriFinalExit<R> {
-    /// 标记最终阶段后请求 Tauri 退出事件循环。
-    fn exit(&self, _outcome: ApplicationStopOutcome) {
-        self.app.state::<ApplicationShutdown>().mark_final_exit();
-        self.app.exit(0);
-    }
-}
-
 /// 在独立任务中等待停止结果，并无条件调用一次最终退出 seam。
+#[cfg(test)]
 fn spawn_final_exit_with<F>(
     stop: F,
     final_exit: Arc<dyn FinalExit>,

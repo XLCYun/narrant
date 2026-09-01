@@ -267,6 +267,91 @@ fn stable_release(version: &str, content: &str) -> StableRelease {
     )
 }
 
+/// 推进 controller 到 downloading 并返回 active operation identity。
+fn begin_test_download(
+    controller: &mut UpdateController<FixedClock, EnabledPreferences>,
+) -> crate::application_update::UpdateOperationId {
+    let check = controller.handle(UpdateInput::ManualCheck).unwrap();
+    let check_id = check
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::CheckStable { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    let download = controller
+        .handle(UpdateInput::CheckSucceeded {
+            operation_id: check_id,
+            release: Some(stable_release("2.1.0", "package-v2")),
+        })
+        .unwrap();
+    let download_id = download
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::StartDownload { operation_id, .. } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    controller
+        .handle(UpdateInput::DownloadStarted {
+            operation_id: download_id,
+        })
+        .unwrap();
+    download_id
+}
+
+#[test]
+fn eof_cancellation_wins_before_commit_gate_and_creates_no_durable_generation() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut repository =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    let mut controller = UpdateController::new("2.0.15", FixedClock, EnabledPreferences).unwrap();
+    let download_id = begin_test_download(&mut controller);
+
+    controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+    if controller.accepts_download_completion(download_id) {
+        let _ = repository.stage(candidate("2.1.0", "package-v2"), b"package-v2".as_slice());
+    }
+
+    assert!(repository.snapshot().is_none());
+    assert_eq!(generation_count(cache.path()), 0);
+}
+
+#[test]
+fn stage_gate_winner_commits_proof_to_core_before_preference_cancellation() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut repository =
+        StagingRepository::open(cache.path(), context("2.0.15"), DeterministicVerifier).unwrap();
+    let mut controller = UpdateController::new("2.0.15", FixedClock, EnabledPreferences).unwrap();
+    let download_id = begin_test_download(&mut controller);
+    assert!(controller.accepts_download_completion(download_id));
+    let staged = match repository
+        .stage(candidate("2.1.0", "package-v2"), b"package-v2".as_slice())
+        .unwrap()
+    {
+        StageCommitOutcome::Committed(staged) => staged,
+        StageCommitOutcome::DurabilityUnknown(pending) => {
+            repository.confirm_durability(&pending).unwrap()
+        }
+    };
+    controller
+        .handle(UpdateInput::DownloadSucceeded {
+            operation_id: download_id,
+            staged,
+        })
+        .unwrap();
+    controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+
+    assert!(repository.snapshot().is_some());
+    assert_eq!(controller.snapshot().state, UpdateState::Staged);
+}
+
 /// 读取原子 pointer 指向的 generation 目录。
 fn active_generation(cache_root: &Path) -> PathBuf {
     let root = cache_root.join("application-update");

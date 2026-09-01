@@ -5,6 +5,7 @@ use reqwest::Url;
 pub(crate) const PRODUCTION_UPDATE_ENDPOINT: &str =
     "https://github.com/cyunlab/narrant/releases/latest/download/latest.json";
 const RELEASE_DOWNLOAD_PREFIX: &str = "/cyunlab/narrant/releases/download/";
+const RELEASE_MANIFEST_PATH: &str = "/cyunlab/narrant/releases/latest/download/latest.json";
 
 /// 更新信任配置的稳定失败分类，不包含公钥内容或环境变量值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +90,9 @@ pub(crate) fn trusted_package_url(url: &Url) -> bool {
 /// 限制下载重定向只经过 GitHub 的 HTTPS Release 资产主机。
 pub(crate) fn trusted_redirect_url(url: &Url) -> bool {
     url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
         && matches!(
             url.host_str(),
             Some(
@@ -97,4 +101,22 @@ pub(crate) fn trusted_redirect_url(url: &Url) -> bool {
                     | "release-assets.githubusercontent.com"
             )
         )
+}
+
+/// 限制 manifest 初始请求与重定向只能落到 GitHub 的固定 HTTPS 发布链路。
+pub(crate) fn trusted_manifest_url(url: &Url) -> bool {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return false;
+    }
+    match url.host_str() {
+        Some("github.com") => url.path() == RELEASE_MANIFEST_PATH,
+        Some("release-assets.githubusercontent.com" | "objects.githubusercontent.com") => {
+            !url.path().is_empty() && url.path() != "/"
+        }
+        _ => false,
+    }
 }

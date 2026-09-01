@@ -168,6 +168,39 @@ async fn close_and_drain_waits_for_every_running_registration_to_release() {
     draining.await.unwrap().unwrap();
 }
 
+#[tokio::test]
+async fn async_cancellation_wakes_managed_timer_and_drain_closes_future_admission() {
+    let operations = CancellableOperations::default();
+    let running_operations = operations.clone();
+    let started = Arc::new(Notify::new());
+    let running_started = started.clone();
+    let timer = tokio::spawn(async move {
+        running_operations
+            .run(
+                OperationId::new("application-update:periodic:1").unwrap(),
+                move |context| async move {
+                    running_started.notify_one();
+                    context.cancellation().cancelled().await;
+                },
+            )
+            .await
+    });
+    started.notified().await;
+
+    operations.close_and_drain().await.unwrap();
+
+    timer.await.unwrap().unwrap();
+    assert_eq!(
+        operations
+            .run(
+                OperationId::new("application-update:check:2").unwrap(),
+                |_| async {}
+            )
+            .await,
+        Err(OperationError::Cancelled)
+    );
+}
+
 #[test]
 fn background_context_starts_uncancelled() {
     assert!(!OperationContext::background().cancellation().is_cancelled());

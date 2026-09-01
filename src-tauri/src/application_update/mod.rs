@@ -1,5 +1,6 @@
 mod config;
 mod diagnostics;
+mod metadata;
 mod platform;
 #[cfg_attr(
     not(test),
