@@ -215,7 +215,6 @@ impl AnthropicMessagesAdapter {
                 connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::InvalidEndpoint,
-                connection.base_url(),
             ))
         })?;
         Ok(Self {
@@ -251,7 +250,6 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                 self.connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::InvalidEndpoint,
-                self.connection.base_url(),
             ))
         })?;
         #[cfg(test)]
@@ -275,7 +273,6 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                         self.connection.protocol(),
                         CustomRequestPhase::Model,
                         CustomStatusCategory::Network,
-                        self.connection.base_url(),
                     ))
                 }
                 AnthropicAdapterError::Protocol => {
@@ -283,7 +280,6 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                         self.connection.protocol(),
                         CustomRequestPhase::Response,
                         CustomStatusCategory::InvalidResponse,
-                        self.connection.base_url(),
                     ))
                 }
             })?;

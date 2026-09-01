@@ -52,7 +52,6 @@ export type BabysitProviderDiagnostic = {
   status: "network" | "invalid_endpoint" | "unauthorized" | "client" | "server" | "rate_limited" | "invalid_response" | "unknown";
   reason: "model_not_found" | "reasoning_tools_incompatible" | "tools_unsupported" | "parameter_unsupported" | "error_envelope" | "unknown";
   errorCategory: "transport";
-  originHash: string;
 };
 
 /** Babysit command 失败的结构化 payload；detail 不参与业务分支。 */
@@ -126,9 +125,7 @@ function isBabysitProviderDiagnostic(value: unknown): value is BabysitProviderDi
     && typeof candidate.reason === "string"
     && babysitProviderDiagnosticReasons.has(candidate.reason)
     && candidate.errorCategory === "transport"
-    && typeof candidate.originHash === "string"
-    && /^[0-9a-f]{16}$/.test(candidate.originHash)
-    && Object.keys(candidate).every((key) => ["providerId", "protocol", "phase", "status", "reason", "errorCategory", "originHash"].includes(key));
+    && Object.keys(candidate).every((key) => ["providerId", "protocol", "phase", "status", "reason", "errorCategory"].includes(key));
 }
 
 /** 判断 Tauri reject 值是否符合 provider-independent Babysit error shape。 */

@@ -145,6 +145,29 @@ fn frozen_connection_identity_excludes_key_but_includes_generation_and_connectio
     assert!(!format!("{first:?}").contains("secret-a"));
 }
 
+/// 冻结连接的 Debug 只保留可安全诊断的字段，不暴露 endpoint 或 secret。
+#[test]
+fn frozen_connection_debug_excludes_endpoint_fingerprint_and_secret() {
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        "https://secret.invalid/v1?token=secret-url-token",
+        "secret-api-key",
+        "review-model",
+        CustomEffort::Medium,
+        "credential-generation-1",
+    )
+    .expect("构造冻结连接");
+
+    let debug = format!("{connection:?}");
+    assert!(!debug.contains("hash"));
+    assert!(!debug.contains("endpoint"));
+    assert!(!debug.contains("https://secret.invalid"));
+    assert!(!debug.contains("secret-url-token"));
+    assert!(!debug.contains("secret-api-key"));
+    assert!(debug.contains("api_key"));
+    assert!(debug.contains("<redacted>"));
+}
+
 #[tokio::test]
 async fn runtime_replays_repository_tool_results_in_one_memory_session() {
     let workspace = tempfile::tempdir().expect("创建 workspace");

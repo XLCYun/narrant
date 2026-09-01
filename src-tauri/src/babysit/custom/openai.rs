@@ -184,7 +184,6 @@ impl OpenAiChatCompletionsAdapter {
                 connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::Network,
-                connection.base_url(),
             ))
         })?;
         let client = CompletionsClient::builder()
@@ -197,7 +196,6 @@ impl OpenAiChatCompletionsAdapter {
                     connection.protocol(),
                     CustomRequestPhase::Setup,
                     CustomStatusCategory::InvalidEndpoint,
-                    connection.base_url(),
                 ))
             })?;
         Ok(Self {
@@ -232,7 +230,6 @@ impl OpenAiChatCompletionsAdapter {
                 self.connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::InvalidEndpoint,
-                self.connection.base_url(),
             ))
         })?;
         #[cfg(test)]
@@ -303,13 +300,9 @@ impl OpenAiChatCompletionsAdapter {
         match error {
             OpenAiPromptAttemptError::Cancelled => CustomAdapterError::Cancelled,
             OpenAiPromptAttemptError::Adapter(error) => error,
-            OpenAiPromptAttemptError::Prompt(error) => {
-                CustomAdapterError::Transport(CustomTransportFailure::from_prompt_error(
-                    self.connection.protocol(),
-                    self.connection.base_url(),
-                    error,
-                ))
-            }
+            OpenAiPromptAttemptError::Prompt(error) => CustomAdapterError::Transport(
+                CustomTransportFailure::from_prompt_error(self.connection.protocol(), error),
+            ),
         }
     }
 }

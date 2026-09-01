@@ -1,4 +1,4 @@
-use super::connection::{endpoint_origin_hash, CustomProtocol};
+use super::connection::CustomProtocol;
 use super::round::{CustomRoundRequest, CustomRoundResult};
 use crate::operation::CancellationSignal;
 use std::fmt;
@@ -99,14 +99,13 @@ impl CustomFailureReason {
     }
 }
 
-/// 只包含协议、阶段、状态、白名单原因与 endpoint origin hash 的脱敏传输失败。
+/// 只包含协议、阶段、状态和白名单原因的脱敏传输失败。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CustomTransportFailure {
     protocol: CustomProtocol,
     phase: CustomRequestPhase,
     status: CustomStatusCategory,
     reason: CustomFailureReason,
-    origin_hash: String,
 }
 
 impl CustomTransportFailure {
@@ -115,20 +114,17 @@ impl CustomTransportFailure {
         protocol: CustomProtocol,
         phase: CustomRequestPhase,
         status: CustomStatusCategory,
-        base_url: &str,
     ) -> Self {
         Self {
             protocol,
             phase,
             status,
             reason: CustomFailureReason::Unknown,
-            origin_hash: endpoint_origin_hash(base_url),
         }
     }
     /// 将 Rig agent 错误降级为状态类别，丢弃 provider body 与原始错误文本。
     pub(super) fn from_prompt_error(
         protocol: CustomProtocol,
-        base_url: &str,
         error: rig::completion::PromptError,
     ) -> Self {
         let response_status = error.provider_response_status();
@@ -157,7 +153,7 @@ impl CustomTransportFailure {
             });
         Self {
             reason,
-            ..Self::new(protocol, CustomRequestPhase::Model, status, base_url)
+            ..Self::new(protocol, CustomRequestPhase::Model, status)
         }
     }
     /// 返回脱敏协议字段。
@@ -175,10 +171,6 @@ impl CustomTransportFailure {
     /// 返回从 provider 错误信封归一化出的白名单原因。
     pub(crate) const fn reason(&self) -> CustomFailureReason {
         self.reason
-    }
-    /// 返回不可逆 endpoint origin hash。
-    pub(crate) fn origin_hash(&self) -> &str {
-        &self.origin_hash
     }
 }
 
@@ -298,8 +290,8 @@ impl fmt::Display for CustomAdapterError {
             Self::Cancelled => formatter.write_str("Custom 请求已取消。"),
             Self::Transport(failure) => write!(
                 formatter,
-                "Custom {:?} 请求在 {:?} 阶段失败（状态 {:?}，origin {}）。",
-                failure.protocol, failure.phase, failure.status, failure.origin_hash
+                "Custom {:?} 请求在 {:?} 阶段失败（状态 {:?}）。",
+                failure.protocol, failure.phase, failure.status
             ),
         }
     }

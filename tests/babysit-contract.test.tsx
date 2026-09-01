@@ -84,7 +84,6 @@ describe("Babysit contract spine", () => {
         status: "client",
         reason: "reasoning_tools_incompatible",
         errorCategory: "transport",
-        originHash: "0123456789abcdef",
       },
     })).toBe(true);
     expect(isBabysitError({

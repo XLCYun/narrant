@@ -153,7 +153,6 @@ fn round_request_rejects_turns_after_the_shared_budget() {
 fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     let failure = CustomTransportFailure::from_prompt_error(
         CustomProtocol::OpenaiChatCompletions,
-        "https://model.example/v1",
         rig::completion::PromptError::MaxTurnsError {
             max_turns: MAX_MODEL_TURNS,
             chat_history: Box::default(),
@@ -164,6 +163,12 @@ fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     assert_eq!(failure.phase(), CustomRequestPhase::Model);
     assert_eq!(failure.status(), CustomStatusCategory::InvalidResponse);
     assert_eq!(failure.reason(), CustomFailureReason::ModelTurnLimit);
+    let debug = format!("{failure:?}");
+    assert!(!debug.contains("hash"));
+    assert!(!debug.contains("endpoint"));
+    assert!(!debug.contains("https://model.example/v1"));
+    assert!(!failure.to_string().contains("origin"));
+    assert!(!failure.to_string().contains("endpoint"));
 }
 
 #[tokio::test]

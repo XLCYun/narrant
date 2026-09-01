@@ -47,7 +47,6 @@ pub struct BabysitProviderDiagnostic {
     status: String,
     reason: String,
     error_category: String,
-    origin_hash: String,
 }
 
 impl BabysitProviderDiagnostic {
@@ -57,7 +56,6 @@ impl BabysitProviderDiagnostic {
         phase: impl Into<String>,
         status: impl Into<String>,
         reason: impl Into<String>,
-        origin_hash: impl Into<String>,
     ) -> Self {
         Self {
             provider_id: "custom".to_owned(),
@@ -66,7 +64,6 @@ impl BabysitProviderDiagnostic {
             status: status.into(),
             reason: reason.into(),
             error_category: "transport".to_owned(),
-            origin_hash: origin_hash.into(),
         }
     }
 }

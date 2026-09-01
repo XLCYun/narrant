@@ -347,7 +347,6 @@ fn adapter_error(error: CustomAdapterError) -> BabysitError {
                 failure.phase().as_str(),
                 failure.status().as_str(),
                 failure.reason().as_str(),
-                failure.origin_hash(),
             ),
         },
         other => BabysitError::Provider {
