@@ -174,6 +174,8 @@ impl TestBabysitAgentProvider for InFlightModelProvider {
 
 #[path = "claude.rs"]
 mod claude;
+#[path = "observability.rs"]
+mod observability;
 #[path = "provider_registry.rs"]
 mod provider_registry;
 

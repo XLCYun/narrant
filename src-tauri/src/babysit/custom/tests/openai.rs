@@ -80,6 +80,7 @@ impl BabysitProviderCapabilities for FrozenCustomCapability {
                 "custom-fixture-{}",
                 self.process_generation.load(Ordering::Acquire)
             ),
+            protocol: None,
             _lease: None,
         })
     }

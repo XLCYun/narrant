@@ -11,6 +11,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
+dev-observability = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-appender-tracing",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+]
 wdio = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
@@ -27,6 +36,10 @@ globset = "0.4"
 libc = "0.2"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
+opentelemetry = { version = "0.32", default-features = false, features = ["trace", "logs"], optional = true }
+opentelemetry-appender-tracing = { version = "0.32", optional = true }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "http-proto", "reqwest-blocking-client"], optional = true }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "logs"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig = { version = "0.42", default-features = false, features = ["agent", "reqwest", "rustls"] }
 grep-regex = "0.1"
@@ -45,8 +58,13 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util", "process"] }
 tempfile = "3"
 tauri-plugin-dialog = "2.7.2"
+tracing = { version = "0.1", optional = true }
+tracing-opentelemetry = { version = "0.33", optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"], optional = true }
 walkdir = "2"
 
 [dev-dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 httpmock = "0.7"
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace", "logs"] }
+prost = "0.14"
