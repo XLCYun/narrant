@@ -195,7 +195,12 @@ async fn runtime_delegates_tool_dispatch_without_a_second_narrant_loop() {
         .expect("adapter 已经负责完整 Rig agent loop");
 
     assert!(output.before.is_empty() && output.after.is_empty());
-    assert_eq!(requests.lock().expect("请求锁").len(), 1);
+    let requests = requests.lock().expect("请求锁");
+    assert_eq!(requests.len(), 1);
+    let prompt = user_message_text(requests[0].prompt());
+    assert!(prompt.contains("Do not explore the repository by default"));
+    assert!(prompt.contains("one specific unresolved symbol or behavior"));
+    assert!(prompt.contains("do not repeat or broaden a query"));
 }
 
 #[tokio::test]
@@ -359,7 +364,10 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].history().len(), 2);
-    assert!(user_message_text(requests[1].prompt()).contains("zh-CN"));
+    let repair_prompt = user_message_text(requests[1].prompt());
+    assert!(repair_prompt.contains("zh-CN"));
+    assert!(repair_prompt.contains("Do not explore the repository by default"));
+    assert!(repair_prompt.contains("do not repeat or broaden a query"));
 }
 
 #[tokio::test]

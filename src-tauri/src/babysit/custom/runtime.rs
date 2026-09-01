@@ -210,7 +210,8 @@ Before ({path}):\n{before}\n\
 After ({path}):\n{after}\n\
 Requested targets:\n{targets}\n\
 Write every line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN.\n\
-Use read, glob, and grep only inside the Review Workspace when more context is needed.\n\
+The complete before/after content is already provided and is normally sufficient. Do not explore the repository by default.\n\
+Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate line explanation. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available.\n\
 When finished, call final_result with both before and after maps.",
         path = request.path,
         before = crate::babysit::numbered_content(&request.before),
@@ -228,6 +229,8 @@ File ({path}) before:\n{before}\n\
 File ({path}) after:\n{after}\n\
 Only these validation failures require new explanations:\n{failures}\n\
 Write every repaired line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN.\n\
+The supplied file content and existing conversation are normally sufficient. Do not explore the repository by default.\n\
+Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate repair. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available.\n\
 Return the complete result by calling final_result; preserve valid prior explanations.",
         path = request.path,
         before = crate::babysit::numbered_content(&request.before),
