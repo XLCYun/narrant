@@ -248,20 +248,27 @@ export function createUpdateSmokeTlsSystemAdapter(environment = process.env, dep
         close: () => control.close(),
       };
     },
-    /** 备份原 hosts 并只追加 exact mapping。 */
-    async routeHostname(hostname, address) {
+    /** 在任何 mutation 前备份原 hosts，并准备只含 exact mapping 的替换文件。 */
+    async prepareHostnameRoute(hostname, address) {
       if (originalHosts) throw new Error("hosts 已由本次 adapter 修改");
-      originalHosts = await readFile(hostsPath);
-      const temporary = buildTemporaryHostsBytes(originalHosts, hostname, address);
+      const original = await readFile(hostsPath);
+      const temporary = buildTemporaryHostsBytes(original, hostname, address);
       const root = dependencies.temporaryDirectory ?? environment.RUNNER_TEMP ?? environment.TEMP ?? environment.TMPDIR;
       if (!root) throw new Error("runner 临时目录不可用");
-      originalPath = path.join(root, `narrant-hosts-${process.pid}.original`);
-      temporaryPath = path.join(root, `narrant-hosts-${process.pid}.temporary`);
+      const backup = path.join(root, `narrant-hosts-${process.pid}.original`);
+      const replacement = path.join(root, `narrant-hosts-${process.pid}.temporary`);
       await Promise.all([
-        writeFile(originalPath, originalHosts, { flag: "wx", mode: 0o600 }),
-        writeFile(temporaryPath, temporary, { flag: "wx", mode: 0o600 }),
+        writeFile(backup, original, { flag: "wx", mode: 0o600 }),
+        writeFile(replacement, temporary, { flag: "wx", mode: 0o600 }),
       ]);
-      if (platform === "win32") await writeFile(hostsPath, temporary);
+      originalHosts = original;
+      originalPath = backup;
+      temporaryPath = replacement;
+    },
+    /** 应用已经 armed 的 hosts replacement；抛错后外层仍必须调用 restore。 */
+    async routeHostname() {
+      if (!originalHosts || !originalPath || !temporaryPath) throw new Error("hosts restore 尚未 armed");
+      if (platform === "win32") await writeFile(hostsPath, await readFile(temporaryPath));
       else await command("sudo", ["-n", "install", "-m", "0644", temporaryPath, hostsPath], { environment: commandEnvironment });
       await flushDns(platform, command, commandEnvironment);
     },
@@ -274,11 +281,15 @@ export function createUpdateSmokeTlsSystemAdapter(environment = process.env, dep
       if (!(await readFile(hostsPath)).equals(originalHosts)) throw new Error("hosts 未按原字节恢复");
       originalHosts = undefined;
     },
-    /** 删除本次 CA 与 hosts 临时备份。 */
+    /** 删除本次 CA；只有 hosts 已确认恢复时才删除备份。 */
     async removeCertificateAuthority() {
       if (trustPlan) await command(trustPlan.remove.executable, trustPlan.remove.arguments, { environment: commandEnvironment });
       trustPlan = undefined;
-      for (const file of [originalPath, temporaryPath]) if (file && await stat(file).catch(() => null)) await rm(file, { force: true });
+      if (!originalHosts) {
+        for (const file of [originalPath, temporaryPath]) if (file && await stat(file).catch(() => null)) await rm(file, { force: true });
+        originalPath = undefined;
+        temporaryPath = undefined;
+      }
     },
   };
 }

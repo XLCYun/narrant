@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import test from "node:test";
 
 import { buildTemporaryHostsBytes, createUpdateSmokeTlsSystemAdapter, tlsTrustCommandPlan } from "../update-smoke-tls-system-adapter.mjs";
@@ -62,6 +63,7 @@ test("gate 任意失败都按 hosts/server/CA 顺序恢复", async (context) => 
       events.push("server");
       return { async waitForAllRequests() { events.push("requests"); }, async close() { events.push("close"); } };
     },
+    async prepareHostnameRoute() { events.push("prepare-route"); },
     async routeHostname() { events.push("route"); },
     async restoreHostname() { events.push("restore"); },
     async removeCertificateAuthority() { events.push("untrust"); },
@@ -70,7 +72,30 @@ test("gate 任意失败都按 hosts/server/CA 顺序恢复", async (context) => 
     await gate.waitForAllRequests();
     throw new Error("primary native failure");
   }, adapter), /primary native failure/);
-  assert.deepEqual(events, ["identity", "trust", "server", "route", "requests", "restore", "close", "untrust"]);
+  assert.deepEqual(events, ["identity", "trust", "server", "prepare-route", "route", "requests", "restore", "close", "untrust"]);
+});
+
+test("hosts mutation 写后抛错仍执行 armed restore 并保留主错误", async (context) => {
+  const { directory, manifest } = await fixture(context);
+  const routes = createCandidateGateRoutes({ target: "darwin-aarch64", tag: "v2.0.0", version: "2.0.0", directory, manifest });
+  const events = [];
+  const adapter = {
+    async createTlsIdentity() { events.push("identity"); return {}; },
+    async installCertificateAuthority() { events.push("trust"); },
+    async startHttpsGate() {
+      events.push("server");
+      return { async waitForAllRequests() {}, async close() { events.push("close"); } };
+    },
+    async prepareHostnameRoute() { events.push("prepare-route"); },
+    async routeHostname() { events.push("hosts-mutated"); throw new Error("route post-write failure"); },
+    async restoreHostname() { events.push("restore"); },
+    async removeCertificateAuthority() { events.push("untrust"); },
+  };
+  await assert.rejects(
+    () => withUpdateSmokeTlsGate({ endpoint, tag: "v2.0.0", routes }, async () => {}, adapter),
+    /route post-write failure/,
+  );
+  assert.deepEqual(events, ["identity", "trust", "server", "prepare-route", "hosts-mutated", "restore", "close", "untrust"]);
 });
 
 test("cleanup 失败不会覆盖主错误，多个失败收敛为 AggregateError", () => {
@@ -112,7 +137,8 @@ test("system adapter 实际按原字节恢复 hosts 并只移除本次 CA", asyn
   });
   const identity = { authority: join(directory, "authority.pem"), sha1Fingerprint: "B".repeat(40) };
   await system.installCertificateAuthority(identity);
-  await system.routeHostname("github.com", "127.0.0.1");
+  await system.prepareHostnameRoute("github.com", "127.0.0.1");
+  await system.routeHostname();
   assert.match((await readFile(hostsPath, "utf8")), /127\.0\.0\.1 github\.com\r\n$/);
   await system.restoreHostname();
   assert.equal((await readFile(hostsPath)).equals(original), true);
@@ -121,4 +147,34 @@ test("system adapter 实际按原字节恢复 hosts 并只移除本次 CA", asyn
     ["-user", "-addstore", "-f", "Root", identity.authority],
     ["-user", "-delstore", "Root", identity.sha1Fingerprint],
   ]);
+});
+
+test("hosts 恢复失败时 CA cleanup 不删除可重试的原字节 backup", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "narrant-system-backup-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const hostsPath = join(directory, "hosts");
+  const original = Buffer.from("127.0.0.1 localhost\n");
+  await writeFile(hostsPath, original);
+  let installCount = 0;
+  const system = createUpdateSmokeTlsSystemAdapter({ HOME: directory, TEMP: directory }, {
+    platform: "darwin",
+    hostsPath,
+    temporaryDirectory: directory,
+    runCommand: async (executable, arguments_) => {
+      if (executable === "sudo" && arguments_.includes("install")) {
+        installCount += 1;
+        if (installCount === 2) throw new Error("restore install failed");
+      }
+      return "";
+    },
+  });
+  const identity = { authority: join(directory, "authority.pem"), sha1Fingerprint: "C".repeat(40) };
+  await system.installCertificateAuthority(identity);
+  await system.prepareHostnameRoute("github.com", "127.0.0.1");
+  await system.routeHostname();
+  await assert.rejects(() => system.restoreHostname(), /restore install failed/);
+  await system.removeCertificateAuthority(identity);
+  const backup = join(directory, `narrant-hosts-${process.pid}.original`);
+  assert.equal((await stat(backup)).isFile(), true);
+  assert.equal((await readFile(backup)).equals(original), true);
 });

@@ -269,6 +269,38 @@ export function verifyTauriUpdaterSignature(packageBytes, signatureText, publicK
   }
 }
 
+/**
+ * 解析本版包签名 key 与候选内嵌 successor key；常规发布必须相同，只有 exact normal bridge tag 可不同。
+ * 返回值只包含 SHA-256 身份，避免把完整公钥写入 receipt、artifact 或日志。
+ */
+export function resolveUpdaterKeyPolicy(options) {
+  const {
+    tag,
+    mode = "normal",
+    releaseSigningPublicKey,
+    candidateUpdaterPublicKey,
+    bridgeTag = "",
+  } = options;
+  parseReleaseIdentity(tag, tag.replace(/^v/, ""));
+  if (!["normal", "bootstrap"].includes(mode)) throw new Error("updater key policy mode 无效");
+  parsePublicKey(releaseSigningPublicKey);
+  parsePublicKey(candidateUpdaterPublicKey);
+  const releaseSigningKeySha256 = createHash("sha256").update(releaseSigningPublicKey).digest("hex");
+  const candidateUpdaterKeySha256 = createHash("sha256").update(candidateUpdaterPublicKey).digest("hex");
+  const differs = releaseSigningKeySha256 !== candidateUpdaterKeySha256;
+  if (differs && mode !== "normal") {
+    throw new Error("bootstrap 不允许 updater key bridge");
+  }
+  if (differs && bridgeTag !== tag) {
+    throw new Error("updater key bridge 缺少 exact tag 授权");
+  }
+  return Object.freeze({
+    releaseSigningKeySha256,
+    candidateUpdaterKeySha256,
+    bridgeAuthorized: differs,
+  });
+}
+
 /** 要求资产列表与期望集合完全相等，并单独报告重复、缺少和意外名称。 */
 export function assertExactNameSet(actualNames, expectedNames, label) {
   const counts = new Map();
@@ -402,10 +434,18 @@ export function prepareDraftAssetDirectory(options) {
     tag,
     version,
     notes,
-    publicKey,
+    releaseSigningPublicKey,
+    candidateUpdaterPublicKey,
+    bridgeTag,
     privateRepository,
   } = options;
   parseReleaseIdentity(tag, version);
+  const updaterTrust = resolveUpdaterKeyPolicy({
+    tag,
+    releaseSigningPublicKey,
+    candidateUpdaterPublicKey,
+    bridgeTag,
+  });
   if (!String(notes ?? "").trim()) {
     throw new Error("公开 Release Notes 不能为空");
   }
@@ -436,12 +476,12 @@ export function prepareDraftAssetDirectory(options) {
   verifyTauriUpdaterSignature(
     byName.get(names.updater.darwin).bytes,
     signatures.get(`${names.updater.darwin}.sig`),
-    publicKey,
+    releaseSigningPublicKey,
   );
   verifyTauriUpdaterSignature(
     byName.get(names.updater.windows).bytes,
     signatures.get(`${names.updater.windows}.sig`),
-    publicKey,
+    releaseSigningPublicKey,
   );
 
   const manifest = {
@@ -481,6 +521,7 @@ export function prepareDraftAssetDirectory(options) {
     names: [...finalNames].sort(comparePublicNames),
     manifest,
     checksums,
+    updaterTrust,
   };
 }
 

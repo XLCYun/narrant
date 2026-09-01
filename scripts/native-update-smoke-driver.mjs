@@ -16,7 +16,10 @@ export function combineDriverErrors(primary, cleanup) {
 function validateOptions(options) {
   if (!["darwin-aarch64", "windows-x86_64"].includes(options.target)) throw new Error("native driver target 无效");
   if (!["normal", "bootstrap"].includes(options.mode)) throw new Error("native driver mode 无效");
-  for (const name of ["version", "publicTag", "candidateDirectory", "candidateInstaller", "publicKey", "manifest"]) {
+  for (const name of [
+    "version", "publicTag", "candidateDirectory", "candidateInstaller",
+    "releaseSigningPublicKey", "candidateUpdaterPublicKey", "manifest",
+  ]) {
     if (!options[name]) throw new Error(`native driver 缺少 ${name}`);
   }
   if (options.mode === "normal" && (!options.previous?.tag || !options.previous?.version || !options.baselinePackage || !options.baselineSignature)) {
@@ -36,7 +39,7 @@ async function runNormal(options, adapter) {
     await adapter.inspectUpdated(options, baseline);
     await adapter.assertNotRelaunched();
     await adapter.launch();
-    await adapter.inspectTrustedConfiguration(options.publicKey);
+    await adapter.inspectTrustedConfiguration(options.candidateUpdaterPublicKey);
   });
   return NORMAL_CHECKPOINTS;
 }
@@ -45,7 +48,7 @@ async function runNormal(options, adapter) {
 async function runBootstrap(options, adapter) {
   await adapter.installBootstrap(options);
   const recoveryLaunch = await adapter.proveBootstrapRecovery(options);
-  await adapter.inspectTrustedConfiguration(options.publicKey);
+  await adapter.inspectTrustedConfiguration(options.candidateUpdaterPublicKey);
   await adapter.requestNormalClose(recoveryLaunch);
   await adapter.waitForExit(recoveryLaunch);
   await adapter.launch();
@@ -106,8 +109,11 @@ function parseArguments(arguments_) {
 /** production CLI 只向 stdout 输出一份有界 JSON observation。 */
 async function main() {
   const values = parseArguments(process.argv.slice(2));
-  const publicKey = process.env.NARRANT_UPDATER_PUBLIC_KEY;
-  if (!publicKey) throw new Error("native driver 缺少 NARRANT_UPDATER_PUBLIC_KEY");
+  const releaseSigningPublicKey = process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY;
+  const candidateUpdaterPublicKey = process.env.NARRANT_UPDATER_PUBLIC_KEY;
+  if (!releaseSigningPublicKey || !candidateUpdaterPublicKey) {
+    throw new Error("native driver 缺少 release signing/candidate updater public key");
+  }
   const options = {
     target: values.target,
     mode: values.mode,
@@ -115,7 +121,8 @@ async function main() {
     publicTag: values["public-tag"],
     candidateDirectory: values["candidate-directory"],
     candidateInstaller: values["candidate-installer"],
-    publicKey,
+    releaseSigningPublicKey,
+    candidateUpdaterPublicKey,
     manifest: JSON.parse(await readFile(values["candidate-manifest"], "utf8")),
     previous: values["previous-json"] ? JSON.parse(await readFile(values["previous-json"], "utf8")) : null,
     baselinePackage: values["baseline-package"],

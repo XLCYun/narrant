@@ -52,6 +52,7 @@ async function fetchPackage(url, destination, fetchImpl) {
   const hash = createHash("sha256");
   let size = 0;
   const verifier = new Transform({
+    /** 逐块限制 previous package 总量并计算最终 SHA-256。 */
     transform(chunk, _encoding, callback) {
       size += chunk.length;
       if (size > MAX_PACKAGE_BYTES) {
@@ -79,7 +80,7 @@ async function fetchPackage(url, destination, fetchImpl) {
 /** 下载并验证当前 published Stable 的单 target baseline。 */
 export async function preparePreviousStable(options, dependencies = {}) {
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
-  const { target, expectedTag, outputDirectory, publicKey } = options;
+  const { target, expectedTag, outputDirectory, releaseSigningPublicKey } = options;
   if (!["darwin-aarch64", "windows-x86_64"].includes(target)) throw new Error("previous Stable target 无效");
   if (!/^v\d+\.\d+\.\d+$/.test(expectedTag ?? "")) throw new Error("previous Stable tag 无效");
   await mkdir(outputDirectory, { recursive: true });
@@ -109,7 +110,7 @@ export async function preparePreviousStable(options, dependencies = {}) {
     writeFile(signaturePath, entry.signature, { flag: "wx", mode: 0o600 }),
   ]);
   const packageIdentity = await fetchPackage(entry.url, packagePath, fetchImpl);
-  verifyTauriUpdaterSignature(await readFile(packagePath), entry.signature, publicKey);
+  verifyTauriUpdaterSignature(await readFile(packagePath), entry.signature, releaseSigningPublicKey);
   const result = Object.freeze({
     tag: expectedTag,
     version,
@@ -131,7 +132,7 @@ async function main() {
   const [target, expectedTag, outputDirectory] = process.argv.slice(2);
   const result = await preparePreviousStable({
     target, expectedTag, outputDirectory,
-    publicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
   });
   process.stdout.write(`已验证 previous Stable ${result.tag} / ${target}。\n`);
 }

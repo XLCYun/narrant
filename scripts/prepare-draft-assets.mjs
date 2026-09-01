@@ -16,7 +16,9 @@ function main() {
     tag: process.env.RELEASE_TAG,
     version: process.env.RELEASE_VERSION,
     notes: readFileSync(notesFile, "utf8"),
-    publicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
+    candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    bridgeTag: process.env.NARRANT_UPDATER_BRIDGE_TAG,
     privateRepository: process.env.GITHUB_REPOSITORY,
   });
   process.stdout.write(`已验证 ${result.names.length} 个 Draft 资产。\n`);

@@ -6,6 +6,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { verifyUpdateSmokeEvidenceDocument, writeUpdateSmokeEvidence } from "./update-smoke-evidence.mjs";
+import { resolveUpdaterKeyPolicy } from "./release-assets.mjs";
 
 const DRIVER = path.resolve(import.meta.dirname, "native-update-smoke-driver.mjs");
 const OUTPUT_BOUND = 256 * 1024;
@@ -16,7 +17,7 @@ function driverEnvironment(environment) {
     "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
     "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA",
     "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
-    "NARRANT_UPDATER_PUBLIC_KEY",
+    "NARRANT_RELEASE_SIGNING_PUBLIC_KEY", "NARRANT_UPDATER_PUBLIC_KEY",
   ];
   return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
 }
@@ -48,6 +49,16 @@ function runDriver(arguments_, environment) {
 /** 调用真实 driver 并写出与固定 Draft/源码身份绑定的 evidence。 */
 export async function runNativeUpdateSmoke(options, environment = process.env, dependencies = {}) {
   const draftReceipt = JSON.parse(await readFile(options.draftReceipt, "utf8"));
+  const updaterTrust = resolveUpdaterKeyPolicy({
+    tag: options.publicTag,
+    mode: options.mode,
+    releaseSigningPublicKey: environment.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
+    candidateUpdaterPublicKey: environment.NARRANT_UPDATER_PUBLIC_KEY,
+    bridgeTag: environment.NARRANT_UPDATER_BRIDGE_TAG,
+  });
+  if (JSON.stringify(updaterTrust) !== JSON.stringify(draftReceipt.updaterTrust)) {
+    throw new Error("native runner updater key identity 与已验证 Draft receipt 不匹配");
+  }
   const previous = options.previousJson ? JSON.parse(await readFile(options.previousJson, "utf8")) : null;
   const arguments_ = [
     "--target", options.target,
@@ -83,6 +94,7 @@ export async function runNativeUpdateSmoke(options, environment = process.env, d
       publicTag: options.publicTag,
       manifestSha256: draftReceipt.manifestSha256,
     },
+    updaterTrust,
     draftReceipt,
     previousStable: previous ? {
       tag: previous.tag,

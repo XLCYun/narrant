@@ -15,11 +15,16 @@ function occurrences(text) {
   return workflow.split(text).length - 1;
 }
 
-test("macOS 与 Windows 构建都注入并预验 updater 私钥、密码、固定 endpoint 和公钥", () => {
+test("macOS 与 Windows 构建都注入并预验 updater 私钥、密码、固定 endpoint 和双公钥 bridge", () => {
   assert.equal(occurrences("TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"), 2);
   assert.equal(occurrences("TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"), 2);
   assert.equal(occurrences(`NARRANT_UPDATER_ENDPOINT: ${endpoint}`), 2);
   assert.equal(occurrences("NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}"), 3);
+  assert.equal(occurrences("NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}"), 3);
+  assert.equal(occurrences("NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}"), 3);
+  assert.match(workflow, /NARRANT_RELEASE_SIGNING_PUBLIC_KEY.*!=.*NARRANT_UPDATER_PUBLIC_KEY.*NARRANT_UPDATER_BRIDGE_TAG.*GITHUB_REF_NAME/s);
+  assert.match(workflow, /NARRANT_RELEASE_SIGNING_PUBLIC_KEY.*-ne.*NARRANT_UPDATER_PUBLIC_KEY.*NARRANT_UPDATER_BRIDGE_TAG.*GITHUB_REF_NAME/s);
+  assert.doesNotMatch(workflow, /echo[^\n]*(?:NARRANT_RELEASE_SIGNING_PUBLIC_KEY|NARRANT_UPDATER_PUBLIC_KEY)/);
   assert.equal(occurrences("name: 在构建前校验 updater trust 配置"), 2);
   assert.ok(workflow.indexOf("在构建前校验 updater trust 配置") < workflow.indexOf("pnpm tauri build"));
 });
@@ -79,6 +84,7 @@ test("公开 Draft 使用跨仓库 token，且完整本地预验严格早于远�
   assert.ok(prepare > 0);
   assert.ok(prepare < reconcile);
   assert.match(workflow, /release-assets\/\*/);
+  assert.doesNotMatch(workflow, /environment:/);
 });
 
 test("Draft 二进制上传固定 uploads.github.com release-ID endpoint，不解析 tag 或 clobber", () => {

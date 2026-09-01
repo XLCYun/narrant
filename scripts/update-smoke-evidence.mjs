@@ -135,6 +135,20 @@ function verifyDraftReceipt(receipt, expectations) {
   if (expectations.draftReceipt) assertSameDraftReceipt(object, expectations.draftReceipt);
 }
 
+/** 校验两把 updater 公钥的摘要身份与当前 normal/bootstrap bridge 语义。 */
+function verifyUpdaterTrust(trust, mode, receiptTrust) {
+  const object = requireObject(trust, "updaterTrust");
+  const fields = ["releaseSigningKeySha256", "candidateUpdaterKeySha256"];
+  if (Object.keys(object).sort().join(",") !== [...fields, "bridgeAuthorized"].sort().join(",") ||
+      fields.some((field) => !SHA256.test(object[field])) || typeof object.bridgeAuthorized !== "boolean") {
+    throw new Error("updater key identity 无效");
+  }
+  const differs = object.releaseSigningKeySha256 !== object.candidateUpdaterKeySha256;
+  if (differs !== object.bridgeAuthorized) throw new Error("updater key identity/bridge 状态不一致");
+  if (mode === "bootstrap" && differs) throw new Error("bootstrap 不允许 updater key bridge");
+  if (JSON.stringify(object) !== JSON.stringify(receiptTrust)) throw new Error("updater key identity 与 Draft receipt 不匹配");
+}
+
 /** 校验一个 target 的 evidence document。 */
 export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   requireObject(document, "evidence");
@@ -165,6 +179,7 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   }
   if (!SHA256.test(candidate.manifestSha256)) throw new Error("candidate manifest SHA-256 无效");
   verifyDraftReceipt(document.draftReceipt, expectations);
+  verifyUpdaterTrust(document.updaterTrust, document.mode, document.draftReceipt.updaterTrust);
 
   if (document.mode === "bootstrap") {
     if (expectations.allowBootstrap !== true) throw new Error("bootstrap evidence 未获一次性授权");
@@ -245,6 +260,7 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
     assertSameDraftReceipt(document.draftReceipt, first.draftReceipt);
     if (JSON.stringify(document.source) !== JSON.stringify(first.source) ||
         JSON.stringify(document.candidate) !== JSON.stringify(first.candidate) ||
+        JSON.stringify(document.updaterTrust) !== JSON.stringify(first.updaterTrust) ||
         document.mode !== first.mode) {
       throw new Error("两个 target 的候选/previous identity 不一致");
     }
@@ -262,6 +278,7 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
     targets: REQUIRED_UPDATE_TARGETS,
     source: first.source,
     candidate: first.candidate,
+    updaterTrust: first.updaterTrust,
     draftReceipt: first.draftReceipt,
     previousStable: first.previousStable,
   });

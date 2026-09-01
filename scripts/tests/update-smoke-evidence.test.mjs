@@ -27,6 +27,11 @@ function receipt() {
     tag: "v2.0.0",
     version: "2.0.0",
     manifestSha256: sha,
+    updaterTrust: {
+      releaseSigningKeySha256: "d".repeat(64),
+      candidateUpdaterKeySha256: "d".repeat(64),
+      bridgeAuthorized: false,
+    },
     assets: expectedDraftAssetNames("2.0.0").sort().map((name, index) => ({
       id: index + 1, name, size: index + 10, sha256: String(index + 1).padStart(64, "0"),
     })),
@@ -49,6 +54,7 @@ function evidence(target, mode = "normal") {
       : { packageKind: "nsis-exe", installerKind: "nsis-exe", installScope: "current-user", registryRoot: "HKCU", msiPresent: false, authenticode: "not-required" },
     source: { repository: "XLCYun/narrant", tag: "v2.0.0", sha: sourceSha },
     candidate: { version: "2.0.0", publicReleaseId: 42, publicTag: "v2.0.0", manifestSha256: sha },
+    updaterTrust: receipt().updaterTrust,
     draftReceipt: receipt(),
     previousStable: mode === "bootstrap" ? null : {
       tag: "v1.9.0", version: "1.9.0", manifestSha256: "c".repeat(64),
@@ -87,6 +93,27 @@ test("normal evidence 绑定源码、Draft 八资产、previous package/signatur
   assert.equal(verifyUpdateSmokeEvidenceSet([
     evidence("darwin-aarch64"), evidence("windows-x86_64"),
   ], expectations()).targets.length, 2);
+});
+
+test("evidence 绑定两个 updater key identity，并只允许 normal bridge", () => {
+  const bridged = evidence("darwin-aarch64");
+  bridged.updaterTrust.candidateUpdaterKeySha256 = "e".repeat(64);
+  bridged.updaterTrust.bridgeAuthorized = true;
+  bridged.draftReceipt.updaterTrust = bridged.updaterTrust;
+  const bridgedExpectations = expectations();
+  bridgedExpectations.draftReceipt.updaterTrust = bridged.updaterTrust;
+  assert.doesNotThrow(() => verifyUpdateSmokeEvidenceDocument(bridged, bridgedExpectations));
+
+  const mismatched = JSON.parse(JSON.stringify(bridged));
+  mismatched.updaterTrust.releaseSigningKeySha256 = "f".repeat(64);
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(mismatched, bridgedExpectations), /updater key identity/);
+  const bootstrap = evidence("darwin-aarch64", "bootstrap");
+  bootstrap.updaterTrust.candidateUpdaterKeySha256 = "e".repeat(64);
+  bootstrap.updaterTrust.bridgeAuthorized = true;
+  bootstrap.draftReceipt.updaterTrust = bootstrap.updaterTrust;
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(bootstrap, {
+    ...expectations("bootstrap"), draftReceipt: bootstrap.draftReceipt,
+  }), /bootstrap.*bridge/i);
 });
 
 test("evidence set 拒绝重复、缺少、额外目标与跨 target Draft 漂移", () => {

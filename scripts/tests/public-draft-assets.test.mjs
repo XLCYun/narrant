@@ -77,7 +77,10 @@ async function assetsFixture(context) {
   ]);
   prepareDraftAssetDirectory({
     directory, tag: "v2.0.0", version: "2.0.0", notes: "公开说明",
-    publicKey: key.publicKey, privateRepository: "XLCYun/narrant",
+    releaseSigningPublicKey: key.publicKey,
+    candidateUpdaterPublicKey: key.publicKey,
+    bridgeTag: "",
+    privateRepository: "XLCYun/narrant",
   });
   const assetNames = expectedDraftAssetNames("2.0.0");
   const bytes = new Map(await Promise.all(assetNames.map(async (name) => [name, await readFile(join(directory, name))])));
@@ -121,14 +124,41 @@ test("固定 Release ID 回读八资产并校验 bytes/checksums/manifest/minisi
   const mock = fetchMock(fixture);
   const result = await downloadVerifiedPublicDraft({
     releaseId: 42, tag: "v2.0.0", version: "2.0.0", outputDirectory: fixture.output,
-    token: "secret-token", publicKey: fixture.key.publicKey,
+    token: "secret-token", mode: "normal",
+    releaseSigningPublicKey: fixture.key.publicKey,
+    candidateUpdaterPublicKey: fixture.key.publicKey, bridgeTag: "",
   }, { fetchImpl: mock.implementation });
   assert.equal(result.assets.length, 8);
+  assert.equal(result.updaterTrust.bridgeAuthorized, false);
   assert.equal(result.manifestSha256, createHash("sha256").update(fixture.bytes.get("latest.json")).digest("hex"));
   assert.equal(mock.calls.every((call) => !call.url.includes("secret-token")), true);
   const redirected = mock.calls.filter((call) => call.url.startsWith("https://release-assets.githubusercontent.com/"));
   assert.equal(redirected.every((call) => call.options.headers.Authorization === undefined), true);
   assert.equal(mock.calls.filter((call) => call.url.startsWith("https://api.github.com/")).every((call) => call.options.headers.Authorization === "Bearer secret-token"), true);
+});
+
+test("public Draft receipt 绑定 old signing 与 successor key 身份，且 bootstrap 拒绝 bridge", async (context) => {
+  const fixture = await assetsFixture(context);
+  const successor = signing(new Map([["unused", Buffer.from("successor")]])).publicKey;
+  const accepted = await downloadVerifiedPublicDraft({
+    releaseId: 42, tag: "v2.0.0", version: "2.0.0", outputDirectory: fixture.output,
+    token: "secret-token", mode: "normal",
+    releaseSigningPublicKey: fixture.key.publicKey,
+    candidateUpdaterPublicKey: successor, bridgeTag: "v2.0.0",
+  }, { fetchImpl: fetchMock(fixture).implementation });
+  assert.equal(accepted.updaterTrust.bridgeAuthorized, true);
+  assert.notEqual(
+    accepted.updaterTrust.releaseSigningKeySha256,
+    accepted.updaterTrust.candidateUpdaterKeySha256,
+  );
+
+  await rm(fixture.output, { recursive: true, force: true });
+  await assert.rejects(() => downloadVerifiedPublicDraft({
+    releaseId: 42, tag: "v2.0.0", version: "2.0.0", outputDirectory: fixture.output,
+    token: "secret-token", mode: "bootstrap",
+    releaseSigningPublicKey: fixture.key.publicKey,
+    candidateUpdaterPublicKey: successor, bridgeTag: "v2.0.0",
+  }, { fetchImpl: fetchMock(fixture).implementation }), /bootstrap.*bridge/i);
 });
 
 test("Draft identity 拒绝发布状态、tag/ID 漂移与错误仓库 API URL", () => {
@@ -148,7 +178,9 @@ test("asset byte/size 变化 fail closed 且不留下部分文件", async (conte
   const mock = fetchMock(fixture, (bytes, asset) => asset.name === "latest.json" ? Buffer.concat([bytes, Buffer.from("x")]) : bytes);
   await assert.rejects(() => downloadVerifiedPublicDraft({
     releaseId: 42, tag: "v2.0.0", version: "2.0.0", outputDirectory: fixture.output,
-    token: "secret-token", publicKey: fixture.key.publicKey,
+    token: "secret-token", mode: "normal",
+    releaseSigningPublicKey: fixture.key.publicKey,
+    candidateUpdaterPublicKey: fixture.key.publicKey, bridgeTag: "",
   }, { fetchImpl: mock.implementation }), /Content-Length|字节数/);
 });
 
@@ -168,16 +200,29 @@ test("Draft asset redirect 只接受默认 TLS 端口的 GitHub 官方资产域�
   };
   await assert.rejects(() => downloadVerifiedPublicDraft({
     releaseId: 42, tag: "v2.0.0", version: "2.0.0", outputDirectory: fixture.output,
-    token: "secret-token", publicKey: fixture.key.publicKey,
+    token: "secret-token", mode: "normal",
+    releaseSigningPublicKey: fixture.key.publicKey,
+    candidateUpdaterPublicKey: fixture.key.publicKey, bridgeTag: "",
   }, { fetchImpl: implementation }), /官方资产域名/);
   assert.equal(calls.some((url) => url.includes("secret-token")), false);
   assert.equal(calls.some((url) => url.includes(":444/")), false);
 });
 
-test("receipt 比较绑定 asset ID/size/SHA，不接受同名不同 bytes", () => {
-  const left = { repository: "cyunlab/narrant", releaseId: 42, tag: "v2.0.0", version: "2.0.0", manifestSha256: "a".repeat(64), assets: [{ id: 1, name: "a", size: 1, sha256: "b".repeat(64) }] };
+test("receipt 比较绑定 asset/key ID/size/SHA，不接受同名不同 bytes", () => {
+  const left = {
+    repository: "cyunlab/narrant", releaseId: 42, tag: "v2.0.0", version: "2.0.0",
+    manifestSha256: "a".repeat(64),
+    updaterTrust: {
+      releaseSigningKeySha256: "c".repeat(64),
+      candidateUpdaterKeySha256: "c".repeat(64),
+      bridgeAuthorized: false,
+    },
+    assets: [{ id: 1, name: "a", size: 1, sha256: "b".repeat(64) }],
+  };
   const clone = (value) => JSON.parse(JSON.stringify(value));
   assert.doesNotThrow(() => assertSameDraftReceipt(left, clone(left)));
   const changed = clone(left); changed.assets[0].sha256 = "c".repeat(64);
   assert.throws(() => assertSameDraftReceipt(changed, left), /已变化/);
+  const changedKey = clone(left); changedKey.updaterTrust.candidateUpdaterKeySha256 = "d".repeat(64);
+  assert.throws(() => assertSameDraftReceipt(changedKey, left), /key identity|已变化/i);
 });

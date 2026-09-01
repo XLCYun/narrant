@@ -27,6 +27,10 @@ test("update-smoke 只有手动可信输入且 matrix 精确覆盖 macOS15 arm64
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
   assert.match(workflow, /public-draft-assets\.mjs/);
   assert.match(workflow, /--draft-receipt aggregate-draft-receipt\.json/);
+  assert.equal((workflow.match(/NARRANT_UPDATER_PUBLIC_KEY: \$\{\{ vars\.NARRANT_UPDATER_PUBLIC_KEY \}\}/g) ?? []).length, 3);
+  assert.equal((workflow.match(/NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/g) ?? []).length, 4);
+  assert.equal((workflow.match(/NARRANT_UPDATER_BRIDGE_TAG: \$\{\{ vars\.NARRANT_UPDATER_BRIDGE_TAG \}\}/g) ?? []).length, 3);
+  assert.doesNotMatch(workflow, /environment: stable-promotion/);
   assertPinnedActions(workflow);
 });
 
@@ -42,11 +46,16 @@ test("promotion 使用受保护 Environment、fixed ID、private evidence attest
   assert.match(workflow, /for evidence_file in "\$\{evidence_files\[@\]\}"; do/);
   assert.match(workflow, /gh attestation verify "\$evidence_file"/);
   assert.doesNotMatch(workflow, /gh attestation verify smoke-evidence\/\*/);
-  assert.match(workflow, /--signer-workflow .*update-smoke\.yml/);
+  assert.match(workflow, /--signer-workflow "github\.com\/\$GITHUB_REPOSITORY\/\.github\/workflows\/update-smoke\.yml"/);
+  assert.doesNotMatch(workflow, /--signer-workflow "https?:\/\//);
   assert.match(workflow, /--source-ref "refs\/heads\/\$DEFAULT_BRANCH"/);
   assert.match(workflow, /--deny-self-hosted-runners/);
   assert.match(workflow, /promote-stable-release\.mjs/);
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
+  assert.match(workflow, /NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
+  assert.match(workflow, /NARRANT_UPDATER_PUBLIC_KEY: \$\{\{ vars\.NARRANT_UPDATER_PUBLIC_KEY \}\}/);
+  assert.match(workflow, /NARRANT_UPDATER_BRIDGE_TAG: \$\{\{ vars\.NARRANT_UPDATER_BRIDGE_TAG \}\}/);
+  assert.match(workflow, /NARRANT_FIRST_UPDATER_TAG: \$\{\{ vars\.NARRANT_FIRST_UPDATER_TAG \}\}/);
   assert.match(workflow, /cyunlab\/narrant/);
   assert.match(workflow, /XLCYun\/narrant|private source/);
   assertPinnedActions(workflow);

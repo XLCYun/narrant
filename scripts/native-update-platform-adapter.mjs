@@ -19,12 +19,75 @@ const TARGETS = Object.freeze({
   "windows-x86_64": Object.freeze({ platform: "win32", arch: "x64", installKind: "windows_nsis" }),
 });
 const MAX_METADATA_BYTES = 64 * 1024;
+const MAX_DIAGNOSTICS_BYTES = 256 * 1024;
 
 /** 计算完整 bytes 的 lowercase SHA-256。 */
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
 /** 有界轮询共用的短暂停顿。 */
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+
+/** 为 bootstrap recovery fixture 生成严格高于当前 Stable 的下一个 patch 版本。 */
+function nextPatchVersion(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version ?? "");
+  if (!match) throw new Error("bootstrap current version 不是稳定三段版本");
+  return `${match[1]}.${match[2]}.${BigInt(match[3]) + 1n}`;
+}
+
+/** 写入字段均有效但签名/包必然失败的严格更高版本 staging fixture。 */
+export async function writeBootstrapVerificationFixture(stagingRoot, options) {
+  const generation = "generation-00000000-0000-4000-8000-000000000001";
+  const root = path.join(stagingRoot, generation);
+  const version = nextPatchVersion(options.currentVersion);
+  await mkdir(root, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(root, "package.bin"), "tampered-bootstrap-package", { flag: "wx" }),
+    writeFile(path.join(root, "metadata.json"), `${JSON.stringify({
+      schemaVersion: 2,
+      version,
+      signature: "invalid-bootstrap-verification-signature",
+      target: options.target,
+      installKind: options.installKind,
+      releaseNotes: "bootstrap verification recovery fixture",
+    })}\n`, { flag: "wx" }),
+    writeFile(path.join(stagingRoot, "current"), generation, { flag: "wx" }),
+  ]);
+  return Object.freeze({ generation, version });
+}
+
+/** 读取有界 JSONL，确认 production startup recovery 发布 verification 警告。 */
+async function hasVerificationRecoveryDiagnostic(diagnostics) {
+  const bytes = await readFile(diagnostics).catch(() => undefined);
+  if (!bytes) return false;
+  if (bytes.length <= 0 || bytes.length > MAX_DIAGNOSTICS_BYTES) throw new Error("bootstrap recovery diagnostics 大小无效");
+  const lines = bytes.toString("utf8").split("\n");
+  if (lines.at(-1) !== "") return false;
+  return lines.slice(0, -1).some((line) => {
+    let record;
+    try { record = JSON.parse(line); } catch { throw new Error("bootstrap recovery diagnostics JSONL 无效"); }
+    return record?.event === "transition-warning" && record.category === "verification";
+  });
+}
+
+/** 等待 pointer、generation 都清理且 verification recovery 诊断落盘。 */
+export async function observeBootstrapRecovery(statePaths, generation, options = {}) {
+  const deadline = Date.now() + (options.timeoutMilliseconds ?? 60_000);
+  const interval = options.pollMilliseconds ?? 100;
+  let remaining = "current pointer";
+  while (Date.now() < deadline) {
+    if (await lstat(path.join(statePaths.stagingRoot, "current")).catch(() => null)) {
+      remaining = "current pointer";
+    } else if (await lstat(path.join(statePaths.stagingRoot, generation)).catch(() => null)) {
+      remaining = "generation";
+    } else if (!await hasVerificationRecoveryDiagnostic(statePaths.diagnostics)) {
+      remaining = "verification diagnostic";
+    } else {
+      return;
+    }
+    await delay(interval);
+  }
+  throw new Error(`bootstrap candidate recovery 未清理或确认 ${remaining}`);
+}
 
 /** 只向原生应用和平台工具传公共系统环境。 */
 function selectEnvironment(environment) {
@@ -250,9 +313,9 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   /** 安装 previous Stable 并验证签名、版本、配置。 */
   async function installBaseline(options) {
     const [packageBytes, signature] = await Promise.all([readFile(options.baselinePackage), readFile(options.baselineSignature, "utf8")]);
-    verifyTauriUpdaterSignature(packageBytes, signature, options.publicKey);
+    verifyTauriUpdaterSignature(packageBytes, signature, options.releaseSigningPublicKey);
     installation = await installPreviousStable(target, options.baselinePackage, options.previous.version, temporary, command, commandEnvironment);
-    await inspectTrustedConfiguration(installation, options.publicKey);
+    await inspectTrustedConfiguration(installation, options.releaseSigningPublicKey);
     return installation;
   }
 
@@ -265,10 +328,10 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
         readFile(options.candidateInstaller), readFile(updater), readFile(`${updater}.sig`, "utf8"),
       ]);
       if (digest(installerBytes) !== digest(updaterBytes)) throw new Error("bootstrap Windows installer 与已签 updater bytes 不同");
-      verifyTauriUpdaterSignature(installerBytes, updaterSignature, options.publicKey);
+      verifyTauriUpdaterSignature(installerBytes, updaterSignature, options.releaseSigningPublicKey);
     }
     installation = await installBootstrapCandidate(target, options.candidateInstaller, options.version, temporary, command, commandEnvironment);
-    await inspectTrustedConfiguration(installation, options.publicKey);
+    await inspectTrustedConfiguration(installation, options.candidateUpdaterPublicKey);
     return installation;
   }
 
@@ -320,25 +383,15 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
 
   /** 注入损坏 staging，并证明 candidate 启动恢复时会清除。 */
   async function proveBootstrapRecovery(options) {
-    const generation = "generation-00000000-0000-4000-8000-000000000001";
-    const root = path.join(statePaths.stagingRoot, generation);
-    await mkdir(root, { recursive: true });
-    await Promise.all([
-      writeFile(path.join(root, "package.bin"), "tampered-bootstrap-package", { flag: "wx" }),
-      writeFile(path.join(root, "metadata.json"), `${JSON.stringify({
-        schemaVersion: 2, version: options.version, signature: "tampered", target,
-        installKind: contract.installKind, releaseNotes: "bootstrap recovery fixture",
-      })}\n`, { flag: "wx" }),
-      writeFile(path.join(statePaths.stagingRoot, "current"), generation, { flag: "wx" }),
-    ]);
+    const fixture = await writeBootstrapVerificationFixture(statePaths.stagingRoot, {
+      currentVersion: options.version,
+      target,
+      installKind: contract.installKind,
+    });
     const launch = await launchInstalled(target, installation, command, commandEnvironment);
     launches.push(launch);
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
-      if (!(await lstat(path.join(statePaths.stagingRoot, "current")).catch(() => null))) return launch;
-      await delay(250);
-    }
-    throw new Error("bootstrap candidate 未拒绝损坏 staging");
+    await observeBootstrapRecovery(statePaths, fixture.generation);
+    return launch;
   }
 
   /** 失败路径终止进程，正常路径卸载/删除本次 runner state。 */

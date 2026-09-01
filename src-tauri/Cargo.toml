@@ -28,7 +28,7 @@ fs2 = "0.4"
 libc = "0.2"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
 futures-util = "0.3"
 flate2 = "1"
 minisign-verify = "0.2"

@@ -25,15 +25,22 @@ https://github.com/cyunlab/narrant/releases/latest/download/latest.json
 
 私有仓库需要以下 Actions variables：
 
-- `NARRANT_UPDATER_PUBLIC_KEY`：与发布私钥匹配、并编译进应用的 Tauri outer-base64
-  minisign 公钥。
+- `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`：验证本版 updater package 签名的 Tauri
+  outer-base64 minisign 公钥；正常情况下与发布私钥及下项匹配。
+- `NARRANT_UPDATER_PUBLIC_KEY`：编译进候选应用、用于验证下一版 updater 的公钥。普通发布必须与
+  `NARRANT_RELEASE_SIGNING_PUBLIC_KEY` 相同；只有计划轮换的 bridge tag 可以不同。
+- `NARRANT_UPDATER_BRIDGE_TAG`：通常留空。只在计划轮换时设置为唯一 exact
+  `vMAJOR.MINOR.PATCH` bridge tag；它不是通配符或长期开关。
 - `NARRANT_GITHUB_CLIENT_ID`、`NARRANT_GITHUB_APP_SLUG`：现有 GitHub Identity 构建配置。
 
 创建名为 `stable-promotion` 的 protected Environment：
 
 1. 配置 required reviewers，至少一名不负责本次构建的维护者批准；禁止 self-review（如果组织策略支持）。
-2. 将 `CYUNLAB_RELEASE_TOKEN` 和 `NARRANT_UPDATER_PUBLIC_KEY` 放在该 Environment，或用
-   同名仓库配置并确保 Environment 审批仍是 job 的必经门。推荐把发布 token 放在 Environment。
+2. `CYUNLAB_RELEASE_TOKEN` 必须作为 repository secret 供自动 Draft/smoke 使用，并在 Environment
+   中配置同名受保护副本供最终 promotion 使用。把 `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`、
+   `NARRANT_UPDATER_PUBLIC_KEY` 和 `NARRANT_UPDATER_BRIDGE_TAG` 作为 repository variables 供自动
+   Draft/smoke 使用，同时在 Environment 中配置同名副本；Environment 副本是最终 promotion 的受保护
+   授权，必须逐字匹配获批 tag 的预期值。
 3. 首个 updater-capable 版本期间，设置 Environment variable
    `NARRANT_FIRST_UPDATER_TAG=vMAJOR.MINOR.PATCH`。第一次成功后删除该变量。即使变量被误留，
    promotion 也会在发现已有包含 `latest.json` 的 published Stable 时永久拒绝 bootstrap。
@@ -139,10 +146,24 @@ bootstrap：
   Actions secret；需要用户手动安装重新建立信任的新版本，并进行安全/产品评审。
 - **疑似私钥泄露**：立刻停止 promotion、撤销相关 CI 访问并保存审计记录。攻击者若拥有旧私钥，也能签
   bridge，因此不能把普通自动轮换当作充分处置；先完成事件响应和独立安全评审，必要时要求手动安装。
-- **计划轮换**：在旧私钥仍可信时，先发布一个由旧钥签名的 bridge release。bridge 把 successor public
-  key 编译进客户端，同时仍可由旧客户端验证。bridge 按 normal 两平台真实升级流程发布并达到 Stable；
-  确认采用后，才把构建 secret 切换到 successor private key，更新 `NARRANT_UPDATER_PUBLIC_KEY`，并发布
-  由新钥签名的下一版。保留旧 key 的离线退役记录，不得让同一版本混用两把钥匙。
+- **计划轮换**：只能在旧私钥仍可信时执行以下 old-key-signed bridge；bootstrap 禁止 bridge。
+
+  1. 离线生成并备份 successor keypair。选定一个尚未发布的 exact bridge tag。
+  2. 保持 `TAURI_SIGNING_PRIVATE_KEY` 为 old private key；把 repository variables 和
+     `stable-promotion` Environment variables 同时设置为：
+     `NARRANT_RELEASE_SIGNING_PUBLIC_KEY=old public key`、
+     `NARRANT_UPDATER_PUBLIC_KEY=successor public key`、
+     `NARRANT_UPDATER_BRIDGE_TAG=exact bridge tag`。不得把公钥正文写进 artifact 或日志；流水线只把
+     两个 SHA-256 identity 和 bridge 状态写入 Draft receipt/evidence。
+  3. 推送 exact tag。`release.yml` 自动创建 Draft，本版 package 必须由 old key 验签，而候选 binary
+     必须内嵌 successor key。以 `mode=normal` 运行两平台 smoke：previous Stable 的配置与 candidate
+     package signature 都证明 old key；更新后的 candidate 配置证明 successor key。
+  4. 审批 promotion 前，核对 Environment 中 exact bridge tag 与两个 key identity。promotion 会重新下载
+     Draft，并要求受保护值重新计算的两个摘要逐字匹配 evidence，之后才允许发布。
+  5. bridge 成为 Stable 且采用情况确认后，为**更高版本的下一 normal tag**同时切换
+     `TAURI_SIGNING_PRIVATE_KEY=successor private key`、两个 public-key variables 均为 successor，并清空
+     repository/Environment 的 `NARRANT_UPDATER_BRIDGE_TAG`。下一版必须证明两摘要相等；不能继续使用
+     bridge 授权，也不能让同一版本混用两把钥匙。保留 old key 的离线退役记录。
 
 ## 每次发布检查表
 

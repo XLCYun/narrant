@@ -109,6 +109,9 @@ jobs:
         env:
           CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
           NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          NARRANT_UPDATE_MODE: ${{ inputs.mode }}
           PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}
           PUBLIC_TAG: ${{ inputs.public_tag }}
           SOURCE_TAG: ${{ inputs.source_tag }}
@@ -122,7 +125,7 @@ jobs:
         if: inputs.mode == 'normal'
         shell: bash
         env:
-          NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
           TARGET: ${{ matrix.target }}
           PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
         run: |
@@ -134,6 +137,8 @@ jobs:
         shell: bash
         env:
           NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
           TARGET: ${{ matrix.target }}
           MODE: ${{ inputs.mode }}
           SOURCE_TAG: ${{ inputs.source_tag }}
@@ -207,6 +212,9 @@ jobs:
         env:
           CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
           NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          NARRANT_UPDATE_MODE: ${{ inputs.mode }}
           SOURCE_TAG: ${{ inputs.source_tag }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}

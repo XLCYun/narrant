@@ -64,7 +64,7 @@ export function combineGateErrors(primary, cleanupErrors) {
 export async function withUpdateSmokeTlsGate(config, action, systemAdapter) {
   const endpoint = validateGateConfiguration(config);
   if (typeof action !== "function") throw new Error("TLS gate action 缺失");
-  for (const method of ["createTlsIdentity", "installCertificateAuthority", "startHttpsGate", "routeHostname", "restoreHostname", "removeCertificateAuthority"]) {
+  for (const method of ["createTlsIdentity", "installCertificateAuthority", "startHttpsGate", "prepareHostnameRoute", "routeHostname", "restoreHostname", "removeCertificateAuthority"]) {
     if (typeof systemAdapter?.[method] !== "function") throw new Error(`TLS system adapter 缺少 ${method}`);
   }
   const directory = await mkdtemp(join(tmpdir(), "narrant-update-smoke-tls-"));
@@ -83,8 +83,9 @@ export async function withUpdateSmokeTlsGate(config, action, systemAdapter) {
     if (typeof server?.waitForAllRequests !== "function" || typeof server?.close !== "function") {
       throw new Error("TLS server adapter contract 无效");
     }
-    await systemAdapter.routeHostname(endpoint.hostname, "127.0.0.1");
+    await systemAdapter.prepareHostnameRoute(endpoint.hostname, "127.0.0.1");
     routed = true;
+    await systemAdapter.routeHostname();
     result = await action(Object.freeze({
       /** 等待真实旧应用读取 exact latest.json 与当前 target package。 */
       waitForAllRequests: () => server.waitForAllRequests(),

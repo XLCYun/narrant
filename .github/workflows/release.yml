@@ -53,6 +53,8 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       NARRANT_UPDATER_ENDPOINT: https://github.com/cyunlab/narrant/releases/latest/download/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+      NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+      NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
       - name: 在构建前校验 updater trust 配置
@@ -62,6 +64,10 @@ jobs:
           : "${TAURI_SIGNING_PRIVATE_KEY:?缺少 TAURI_SIGNING_PRIVATE_KEY}"
           : "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:?缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD}"
           : "${NARRANT_UPDATER_PUBLIC_KEY:?缺少 NARRANT_UPDATER_PUBLIC_KEY}"
+          : "${NARRANT_RELEASE_SIGNING_PUBLIC_KEY:?缺少 NARRANT_RELEASE_SIGNING_PUBLIC_KEY}"
+          if [[ "$NARRANT_RELEASE_SIGNING_PUBLIC_KEY" != "$NARRANT_UPDATER_PUBLIC_KEY" ]]; then
+            test "$NARRANT_UPDATER_BRIDGE_TAG" = "$GITHUB_REF_NAME"
+          fi
           [[ "$NARRANT_UPDATER_ENDPOINT" == "https://github.com/cyunlab/narrant/releases/latest/download/latest.json" ]] || {
             echo "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。" >&2
             exit 1
@@ -246,6 +252,8 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       NARRANT_UPDATER_ENDPOINT: https://github.com/cyunlab/narrant/releases/latest/download/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+      NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+      NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
       - name: 在构建前校验 updater trust 配置
@@ -259,6 +267,13 @@ jobs:
           }
           if ([string]::IsNullOrWhiteSpace($env:NARRANT_UPDATER_PUBLIC_KEY)) {
             throw "缺少 NARRANT_UPDATER_PUBLIC_KEY"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:NARRANT_RELEASE_SIGNING_PUBLIC_KEY)) {
+            throw "缺少 NARRANT_RELEASE_SIGNING_PUBLIC_KEY"
+          }
+          if (($env:NARRANT_RELEASE_SIGNING_PUBLIC_KEY -ne $env:NARRANT_UPDATER_PUBLIC_KEY) -and
+              ($env:NARRANT_UPDATER_BRIDGE_TAG -ne $env:GITHUB_REF_NAME)) {
+            throw "updater key bridge 缺少 exact tag 授权"
           }
           if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://github.com/cyunlab/narrant/releases/latest/download/latest.json") {
             throw "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。"
@@ -306,6 +321,8 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+      NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+      NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
         with:

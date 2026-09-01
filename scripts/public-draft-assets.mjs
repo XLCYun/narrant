@@ -13,6 +13,7 @@ import {
   assertExactNameSet,
   parseReleaseIdentity,
   releaseAssetNames,
+  resolveUpdaterKeyPolicy,
   validateUpdaterManifest,
   verifyTauriUpdaterSignature,
 } from "./release-assets.mjs";
@@ -204,6 +205,7 @@ async function downloadAsset(asset, destination, token, fetchImpl) {
   const hash = createHash("sha256");
   let bytes = 0;
   const verifier = new Transform({
+    /** 逐块累计字节数与摘要，并在写盘前拒绝超过 API identity 的响应。 */
     transform(chunk, _encoding, callback) {
       bytes += chunk.length;
       if (bytes > asset.size) {
@@ -242,7 +244,7 @@ function parseChecksums(text, expectedNames) {
 }
 
 /** 对八个本地 Draft bytes 做 manifest、checksum、签名和 URL 全合约复核。 */
-async function verifyDownloadedDraft(directory, release, version, publicKey, receipts) {
+async function verifyDownloadedDraft(directory, release, version, releaseSigningPublicKey, receipts) {
   const names = releaseAssetNames(version);
   const byName = new Map(receipts.map((asset) => [asset.name, asset]));
   const checksumText = await readFile(join(directory, names.checksums), "utf8");
@@ -270,12 +272,12 @@ async function verifyDownloadedDraft(directory, release, version, publicKey, rec
     verifyTauriUpdaterSignature(
       await readFile(join(directory, names.updater.darwin)),
       signatures.get(`${names.updater.darwin}.sig`),
-      publicKey,
+      releaseSigningPublicKey,
     ),
     verifyTauriUpdaterSignature(
       await readFile(join(directory, names.updater.windows)),
       signatures.get(`${names.updater.windows}.sig`),
-      publicKey,
+      releaseSigningPublicKey,
     ),
   ]);
   return manifest;
@@ -287,12 +289,28 @@ async function verifyDownloadedDraft(directory, release, version, publicKey, rec
  */
 export async function downloadVerifiedPublicDraft(options, dependencies = {}) {
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
-  const { releaseId, tag, version, outputDirectory, token, publicKey } = options;
+  const {
+    releaseId,
+    tag,
+    version,
+    outputDirectory,
+    token,
+    mode,
+    releaseSigningPublicKey,
+    candidateUpdaterPublicKey,
+    bridgeTag,
+  } = options;
   if (typeof fetchImpl !== "function") throw new Error("当前 Node 缺少 fetch");
   if (typeof token !== "string" || !token || token.trim() !== token) {
     throw new Error("读取 public Draft 需要有效 CYUNLAB_RELEASE_TOKEN");
   }
-  if (typeof publicKey !== "string" || !publicKey) throw new Error("缺少 NARRANT_UPDATER_PUBLIC_KEY");
+  const updaterTrust = resolveUpdaterKeyPolicy({
+    tag,
+    mode,
+    releaseSigningPublicKey,
+    candidateUpdaterPublicKey,
+    bridgeTag,
+  });
   parseReleaseIdentity(tag, version);
   requireDatabaseId(releaseId, "public Release ID");
   await mkdir(outputDirectory, { recursive: true });
@@ -309,7 +327,13 @@ export async function downloadVerifiedPublicDraft(options, dependencies = {}) {
       const asset = validateAssetIdentity(byName.get(name), release, name);
       receipts.push(await downloadAsset(asset, join(outputDirectory, name), token, fetchImpl));
     }
-    const manifest = await verifyDownloadedDraft(outputDirectory, release, version, publicKey, receipts);
+    const manifest = await verifyDownloadedDraft(
+      outputDirectory,
+      release,
+      version,
+      releaseSigningPublicKey,
+      receipts,
+    );
     return Object.freeze({
       schemaVersion: 1,
       repository: PUBLIC_RELEASE_REPOSITORY,
@@ -317,6 +341,7 @@ export async function downloadVerifiedPublicDraft(options, dependencies = {}) {
       tag,
       version,
       manifestSha256: receipts.find((asset) => asset.name === "latest.json").sha256,
+      updaterTrust,
       assets: receipts.sort((left, right) => left.name.localeCompare(right.name, "en")),
       manifest,
     });
@@ -333,6 +358,9 @@ export function assertSameDraftReceipt(actual, expected) {
   }
   const serialize = (value) => JSON.stringify(value?.assets ?? []);
   if (serialize(actual) !== serialize(expected)) throw new Error("Draft asset IDs/sizes/digests 已变化");
+  if (JSON.stringify(actual?.updaterTrust) !== JSON.stringify(expected?.updaterTrust)) {
+    throw new Error("Draft updater key identity 已变化");
+  }
   return true;
 }
 
@@ -345,7 +373,10 @@ async function main() {
     version,
     outputDirectory,
     token: process.env.CYUNLAB_RELEASE_TOKEN,
-    publicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    mode: process.env.NARRANT_UPDATE_MODE,
+    releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
+    candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    bridgeTag: process.env.NARRANT_UPDATER_BRIDGE_TAG,
   });
   await import("node:fs/promises").then(({ writeFile }) =>
     writeFile(receiptPath, `${JSON.stringify(result, null, 2)}\n`, { flag: "wx", mode: 0o600 }),

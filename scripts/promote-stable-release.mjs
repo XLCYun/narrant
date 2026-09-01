@@ -14,6 +14,8 @@ import { verifyUpdateSmokeEvidenceDirectory } from "./update-smoke-evidence.mjs"
 
 const API_ORIGIN = "https://api.github.com";
 const RESPONSE_BOUND = 512 * 1024;
+const RELEASES_PER_PAGE = 100;
+const MAX_RELEASE_PAGES = 20;
 
 /** 解析一个有界 GitHub API JSON response，不把 body/token 注入错误。 */
 async function parseApiResponse(response, context, allow404 = false) {
@@ -88,13 +90,50 @@ function assertDraftAssetIdentity(release, receipt) {
   }
 }
 
-/** bootstrap 只允许 protected variable 指定的首版，且当前 Latest 尚无 updater manifest。 */
-export function assertBootstrapTransition(latestRelease, candidateTag, bootstrapTag) {
+/** bootstrap 只允许 protected variable 指定的首版。 */
+export function assertBootstrapTransition(candidateTag, bootstrapTag) {
   if (!bootstrapTag || candidateTag !== bootstrapTag) throw new Error("bootstrap tag 不匹配 protected Environment variable");
-  if ((latestRelease?.assets ?? []).some((asset) => asset.name === "latest.json")) {
-    throw new Error("已有 updater-capable Stable，bootstrap 已永久关闭");
-  }
   return true;
+}
+
+/** 校验一个 Release 历史页，并永久拒绝任一已发布 updater manifest。 */
+function inspectBootstrapHistoryPage(releases, options, seenIds) {
+  if (!Array.isArray(releases) || releases.length > RELEASES_PER_PAGE) throw new Error("bootstrap Release 历史页无效");
+  for (const release of releases) {
+    if (!Number.isSafeInteger(release?.id) || release.id <= 0 || seenIds.has(release.id)) {
+      throw new Error("bootstrap Release 历史 identity 无效或重复");
+    }
+    seenIds.add(release.id);
+    if (typeof release.tag_name !== "string" || typeof release.draft !== "boolean" || !Array.isArray(release.assets)) {
+      throw new Error("bootstrap Release 历史 shape 无效");
+    }
+    if (release.id === options.candidateReleaseId) {
+      if (release.tag_name !== options.candidateTag || release.draft !== true) {
+        throw new Error("bootstrap candidate 在 Release 历史中 identity 漂移");
+      }
+      continue;
+    }
+    if (release.draft === false && release.assets.some((asset) => asset?.name === "latest.json")) {
+      throw new Error("已有历史 updater-capable published Stable，bootstrap 已永久关闭");
+    }
+  }
+}
+
+/** 有界分页扫描固定 public repository 的完整 Release 历史。 */
+export async function verifyBootstrapReleaseHistory(options, dependencies = {}) {
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  const seenIds = new Set();
+  for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
+    const releases = await githubApi(
+      `/repos/${PUBLIC_RELEASE_REPOSITORY}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+      options.token,
+      fetchImpl,
+      { context: `扫描 bootstrap Release 历史第 ${page} 页` },
+    );
+    inspectBootstrapHistoryPage(releases, options, seenIds);
+    if (releases.length < RELEASES_PER_PAGE) return true;
+  }
+  throw new Error("bootstrap Release 历史超过有界分页上限");
 }
 
 /**
@@ -114,15 +153,23 @@ export async function promoteStableRelease(options, dependencies = {}) {
     version: options.version,
     outputDirectory: options.draftDirectory,
     token,
-    publicKey: options.publicKey,
-  });
-  const latestBefore = await githubApi(`/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/latest`, token, fetchImpl, {
-    allow404: true, context: "查询 promotion 前 Latest",
+    mode: options.mode,
+    releaseSigningPublicKey: options.releaseSigningPublicKey,
+    candidateUpdaterPublicKey: options.candidateUpdaterPublicKey,
+    bridgeTag: options.bridgeTag,
   });
   let stableManifest;
   if (options.mode === "bootstrap") {
-    assertBootstrapTransition(latestBefore, options.sourceTag, options.bootstrapTag);
+    assertBootstrapTransition(options.sourceTag, options.bootstrapTag);
+    await (dependencies.verifyBootstrapHistory ?? verifyBootstrapReleaseHistory)({
+      token,
+      candidateReleaseId: options.publicReleaseId,
+      candidateTag: options.publicTag,
+    }, { fetchImpl });
   } else {
+    const latestBefore = await githubApi(`/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/latest`, token, fetchImpl, {
+      allow404: true, context: "查询 promotion 前 Latest",
+    });
     if (!latestBefore || latestBefore.tag_name !== options.previousTag || latestBefore.draft === true) {
       throw new Error("promotion 前 Latest 不匹配 previous Stable");
     }
@@ -194,7 +241,9 @@ async function main() {
     publicReleaseId: Number(values.publicReleaseId),
     maxAgeHours: Number(values.maxAgeHours),
     token: process.env.CYUNLAB_RELEASE_TOKEN,
-    publicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
+    candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
+    bridgeTag: process.env.NARRANT_UPDATER_BRIDGE_TAG,
   });
   process.stdout.write(`已发布 public Stable ${result.tag}（Release ${result.releaseId}）。\n`);
 }

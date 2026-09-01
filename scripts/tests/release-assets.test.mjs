@@ -23,6 +23,7 @@ import {
   parseReleaseIdentity,
   prepareDraftAssetDirectory,
   releaseAssetNames,
+  resolveUpdaterKeyPolicy,
   validateUpdaterManifest,
   verifyTauriUpdaterSignature,
 } from "../release-assets.mjs";
@@ -126,7 +127,9 @@ function prepareFixture(fixture, overrides = {}) {
     tag: "v2.3.4",
     version: "2.3.4",
     notes: "发布说明\n保留换行。\n",
-    publicKey: fixture.publicKey,
+    releaseSigningPublicKey: fixture.publicKey,
+    candidateUpdaterPublicKey: fixture.publicKey,
+    bridgeTag: "",
     privateRepository: "cyunlab/narrant-private",
     ...overrides,
   });
@@ -163,6 +166,41 @@ test("完整准备生成固定两目标 manifest 并字面保留 canonical ED �
     /cyunlab\/narrant\/releases\/download\/v2\.3\.4\/narrant-windows-x86_64-updater\.exe$/,
   );
   assert.equal(result.names.length, 8);
+  assert.equal(result.updaterTrust.bridgeAuthorized, false);
+  assert.equal(result.updaterTrust.releaseSigningKeySha256, result.updaterTrust.candidateUpdaterKeySha256);
+});
+
+test("双公钥仅允许 exact normal bridge tag，且本版包始终由 release signing key 验证", (context) => {
+  const accepted = createNativeAssetFixture();
+  const missing = createNativeAssetFixture();
+  const wrong = createNativeAssetFixture();
+  context.after(() => [accepted, missing, wrong].forEach((fixture) =>
+    rmSync(fixture.directory, { recursive: true, force: true })));
+  const successor = createSigningFixture(new Map([["unused", Buffer.from("successor")]])).publicKey;
+
+  assert.throws(() => prepareFixture(missing, {
+    candidateUpdaterPublicKey: successor,
+  }), /bridge.*tag|授权/i);
+  assert.throws(() => prepareFixture(wrong, {
+    candidateUpdaterPublicKey: successor,
+    bridgeTag: "v2.3.5",
+  }), /bridge.*tag|授权/i);
+  const result = prepareFixture(accepted, {
+    candidateUpdaterPublicKey: successor,
+    bridgeTag: "v2.3.4",
+  });
+  assert.equal(result.updaterTrust.bridgeAuthorized, true);
+  assert.notEqual(result.updaterTrust.releaseSigningKeySha256, result.updaterTrust.candidateUpdaterKeySha256);
+  assert.equal(JSON.stringify(result.updaterTrust).includes(accepted.publicKey), false);
+  assert.equal(JSON.stringify(result.updaterTrust).includes(successor), false);
+
+  assert.throws(() => resolveUpdaterKeyPolicy({
+    tag: "v2.3.4",
+    mode: "bootstrap",
+    releaseSigningPublicKey: accepted.publicKey,
+    candidateUpdaterPublicKey: successor,
+    bridgeTag: "v2.3.4",
+  }), /bootstrap.*bridge|bridge.*bootstrap/i);
 });
 
 test("updater 验签只接受 canonical prehashed ED，并拒绝 legacy/非 canonical/篡改", () => {

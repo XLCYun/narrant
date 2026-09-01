@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { expectedDraftAssetNames } from "../public-draft-assets.mjs";
-import { assertBootstrapTransition, promoteStableRelease } from "../promote-stable-release.mjs";
+import { assertBootstrapTransition, promoteStableRelease, verifyBootstrapReleaseHistory } from "../promote-stable-release.mjs";
 
 /** 构造固定 Draft receipt 与 API assets。 */
 function receipt() {
   return {
     schemaVersion: 1, repository: "cyunlab/narrant", releaseId: 42,
     tag: "v2.0.0", version: "2.0.0", manifestSha256: "a".repeat(64),
+    updaterTrust: {
+      releaseSigningKeySha256: "d".repeat(64),
+      candidateUpdaterKeySha256: "d".repeat(64),
+      bridgeAuthorized: false,
+    },
     assets: expectedDraftAssetNames("2.0.0").sort().map((name, index) => ({ id: index + 100, name, size: index + 10, sha256: String(index + 1).padStart(64, "0") })),
   };
 }
@@ -38,7 +43,9 @@ function options(mode = "normal") {
     draftDirectory: "/draft",
     maxAgeHours: 24,
     token: "secret-token",
-    publicKey: "public-key",
+    releaseSigningPublicKey: "old-public-key",
+    candidateUpdaterPublicKey: "candidate-public-key",
+    bridgeTag: "v2.0.0",
   };
 }
 
@@ -67,14 +74,26 @@ test("normal promotion 在 verify 后只 PATCH fixed Release ID 并回读 Latest
     { body: beforeLatest }, { body: draft }, { body: published }, { body: published },
   ]);
   let verified;
+  let draftOptions;
   const result = await promoteStableRelease(options(), {
     fetchImpl: fetch.implementation,
-    downloadDraft: async () => receipt(),
+    downloadDraft: async (value) => { draftOptions = value; return receipt(); },
     fetchStableManifest: async () => ({ manifest: { version: "1.9.0" }, sha256: "c".repeat(64) }),
     verifyEvidence: async (_directory, expectations) => { verified = expectations; },
   });
   assert.deepEqual(result, { releaseId: 42, tag: "v2.0.0", mode: "normal" });
   assert.equal(verified.draftReceipt.assets.length, 8);
+  assert.deepEqual({
+    mode: draftOptions.mode,
+    releaseSigningPublicKey: draftOptions.releaseSigningPublicKey,
+    candidateUpdaterPublicKey: draftOptions.candidateUpdaterPublicKey,
+    bridgeTag: draftOptions.bridgeTag,
+  }, {
+    mode: "normal",
+    releaseSigningPublicKey: "old-public-key",
+    candidateUpdaterPublicKey: "candidate-public-key",
+    bridgeTag: "v2.0.0",
+  });
   const patches = fetch.calls.filter((call) => call.init.method === "PATCH");
   assert.equal(patches.length, 1);
   assert.equal(patches[0].url, "https://api.github.com/repos/cyunlab/narrant/releases/42");
@@ -100,17 +119,16 @@ test("evidence、Stable manifest 或 Draft asset 漂移时 PATCH 永不发生", 
   }
 });
 
-test("bootstrap 仅在 protected tag 匹配且当前 Latest 无 latest.json 时开放", async () => {
-  assert.doesNotThrow(() => assertBootstrapTransition(release({ id: 1, tag: "v1.1.5", draft: false, assets: [] }), "v2.0.0", "v2.0.0"));
-  assert.throws(() => assertBootstrapTransition(release({ assets: [{ id: 1, name: "latest.json", size: 1 }] }), "v2.0.0", "v2.0.0"), /永久关闭/);
-  assert.throws(() => assertBootstrapTransition(undefined, "v2.0.0", "v2.0.1"), /protected/);
+test("bootstrap protected tag 必须与 candidate 完全匹配", async () => {
+  assert.doesNotThrow(() => assertBootstrapTransition("v2.0.0", "v2.0.0"));
+  assert.throws(() => assertBootstrapTransition("v2.0.0", "v2.0.1"), /protected/);
 });
 
 test("bootstrap promotion 不要求 previous Stable，但 normal evidence 不能混入", async () => {
   const latestLegacy = release({ id: 1, tag: "v1.1.5", draft: false, assets: [] });
   const draft = release();
   const published = release({ draft: false });
-  const fetch = queuedFetch([{ body: latestLegacy }, { body: draft }, { body: published }, { body: published }]);
+  const fetch = queuedFetch([{ body: [draft, latestLegacy] }, { body: draft }, { body: published }, { body: published }]);
   let mode;
   await promoteStableRelease(options("bootstrap"), {
     fetchImpl: fetch.implementation,
@@ -118,4 +136,44 @@ test("bootstrap promotion 不要求 previous Stable，但 normal evidence 不能
     verifyEvidence: async (_directory, expectations) => { mode = expectations.mode; },
   });
   assert.equal(mode, "bootstrap");
+});
+
+test("历史 published updater Stable 会永久关闭 bootstrap，即使当前 Latest 是 legacy", async () => {
+  const draft = release();
+  const historical = release({ id: 9, tag: "v1.9.0", draft: false, assets: [{ id: 91, name: "latest.json", size: 10 }] });
+  const legacyLatest = release({ id: 1, tag: "v1.1.5", draft: false, assets: [] });
+  const fetch = queuedFetch([{ body: [draft, historical, legacyLatest] }]);
+  await assert.rejects(() => promoteStableRelease(options("bootstrap"), {
+    fetchImpl: fetch.implementation,
+    downloadDraft: async () => receipt(),
+    verifyEvidence: async () => {},
+  }), /永久关闭/);
+  assert.equal(fetch.calls.some((call) => call.init.method === "PATCH"), false);
+  assert.match(fetch.calls[0].url, /releases\?per_page=100&page=1$/);
+});
+
+test("bootstrap history scan 有界分页并在后续 API 错误时 fail closed", async () => {
+  const fullPage = Array.from({ length: 100 }, (_value, index) =>
+    release({ id: index + 1000, tag: `v1.0.${index}`, draft: false, assets: [] }));
+  const paged = queuedFetch([{ body: fullPage }, { body: [] }]);
+  await verifyBootstrapReleaseHistory({
+    token: "secret-token", candidateReleaseId: 42, candidateTag: "v2.0.0",
+  }, { fetchImpl: paged.implementation });
+  assert.deepEqual(paged.calls.map(({ url }) => url), [
+    "https://api.github.com/repos/cyunlab/narrant/releases?per_page=100&page=1",
+    "https://api.github.com/repos/cyunlab/narrant/releases?per_page=100&page=2",
+  ]);
+
+  const error = queuedFetch([{ body: fullPage }, new Error("page two unavailable")]);
+  await assert.rejects(() => verifyBootstrapReleaseHistory({
+    token: "secret-token", candidateReleaseId: 42, candidateTag: "v2.0.0",
+  }, { fetchImpl: error.implementation }), /网络请求失败/);
+
+  const bounded = queuedFetch(Array.from({ length: 20 }, (_value, page) => ({
+    body: fullPage.map((item, index) => ({ ...item, id: 10_000 + page * 100 + index })),
+  })));
+  await assert.rejects(() => verifyBootstrapReleaseHistory({
+    token: "secret-token", candidateReleaseId: 42, candidateTag: "v2.0.0",
+  }, { fetchImpl: bounded.implementation }), /分页上限/);
+  assert.equal(bounded.calls.length, 20);
 });
