@@ -326,6 +326,12 @@ impl UpdateOperationId {
     pub(crate) const fn value(self) -> u64 {
         self.0
     }
+
+    /// 仅为 adapter 契约测试创建 operation identity，生产构建不存在该入口。
+    #[cfg(test)]
+    pub(crate) const fn test_fixture(value: u64) -> Self {
+        Self(value)
+    }
 }
 
 /// 请求可信适配器执行、但不向前端开放资源参数的副作用。

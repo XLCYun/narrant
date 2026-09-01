@@ -1,5 +1,5 @@
 mod bootstrap;
 mod commands;
-mod shutdown;
+pub(crate) mod shutdown;
 
 pub use bootstrap::run;

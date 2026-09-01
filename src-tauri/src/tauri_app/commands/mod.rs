@@ -1,4 +1,5 @@
 pub(super) mod application_settings;
+pub(super) mod application_update;
 pub(super) mod babysit;
 pub(super) mod github;
 pub(super) mod repository;

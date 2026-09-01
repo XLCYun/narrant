@@ -38,6 +38,14 @@ impl ApplicationStopOutcome {
     }
 }
 
+/// 只在共享停止完整成功后执行安装 closure；超时或失败不会触碰暂存包。
+pub(crate) fn install_after_successful_stop<T>(
+    outcome: ApplicationStopOutcome,
+    install: impl FnOnce() -> T,
+) -> Option<T> {
+    outcome.allows_update_installation().then(install)
+}
+
 /// 用户退出事件进入共享停止边界时，事件 adapter 应采取的动作。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExitRequestDecision {
@@ -136,7 +144,7 @@ impl ApplicationShutdown {
     }
 
     /// 清理返回后只放行一次内部最终退出，后续 Exit 不再触发清理。
-    fn mark_final_exit(&self) {
+    pub(crate) fn mark_final_exit(&self) {
         self.exit_phase.store(EXIT_FINAL, Ordering::Release);
     }
 }
@@ -298,10 +306,25 @@ pub(super) fn handle_run_event<R: tauri::Runtime>(
 fn spawn_final_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     let stop_app = app.clone();
     let stop = async move {
-        stop_app
+        let outcome = stop_app
             .state::<ApplicationShutdown>()
             .stop_once(&stop_app, ApplicationStopIntent::OrdinaryExit)
-            .await
+            .await;
+        let _ = install_after_successful_stop(outcome, || {
+            if let Some(updater) = stop_app
+                .try_state::<std::sync::Arc<crate::application_update::ApplicationUpdateRuntime>>()
+            {
+                if updater.has_durable_staged_update() {
+                    if let Err(error) = updater.install_after_completed_stop(
+                        &stop_app,
+                        crate::application_update::InstallIntent::NormalExit,
+                    ) {
+                        tracing::warn!(target: "narrant::application_update", %error, "普通退出安装失败，保留暂存包");
+                    }
+                }
+            }
+        });
+        outcome
     };
     let _ = spawn_final_exit_with(stop, Arc::new(TauriFinalExit { app }));
 }

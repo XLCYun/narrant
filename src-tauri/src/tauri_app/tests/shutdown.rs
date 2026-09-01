@@ -269,3 +269,33 @@ fn production_stop_boundary_uses_one_fifteen_second_deadline() {
 
     assert_eq!(shutdown.deadline, Duration::from_secs(15));
 }
+
+#[test]
+fn completed_cleanup_runs_install_after_stop_in_order() {
+    let events = Arc::new(Mutex::new(vec!["cleanup"]));
+    let install_events = events.clone();
+
+    let result = install_after_successful_stop(ApplicationStopOutcome::Completed, move || {
+        install_events.lock().unwrap().push("install");
+        "installed"
+    });
+
+    assert_eq!(result, Some("installed"));
+    assert_eq!(*events.lock().unwrap(), vec!["cleanup", "install"]);
+}
+
+#[test]
+fn timeout_and_failed_cleanup_skip_install_but_allow_existing_exit_path() {
+    for outcome in [
+        ApplicationStopOutcome::TimedOut,
+        ApplicationStopOutcome::Failed,
+    ] {
+        let installs = AtomicUsize::new(0);
+        let result = install_after_successful_stop(outcome, || {
+            installs.fetch_add(1, Ordering::AcqRel);
+        });
+        assert!(result.is_none());
+        assert_eq!(installs.load(Ordering::Acquire), 0);
+        assert!(!outcome.allows_update_installation());
+    }
+}

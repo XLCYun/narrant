@@ -1,3 +1,6 @@
+mod config;
+mod diagnostics;
+mod platform;
 #[cfg_attr(
     not(test),
     allow(
@@ -14,6 +17,7 @@ mod ports;
     )
 )]
 mod preference;
+mod runtime;
 #[cfg_attr(
     not(test),
     allow(
@@ -30,7 +34,9 @@ mod staging;
     )
 )]
 mod state;
+mod verifier;
 
+pub(crate) use config::TrustedUpdaterConfig;
 #[cfg_attr(
     not(test),
     allow(unused_imports, reason = "Task 3 将消费 provider 与 installer 端口")
@@ -40,6 +46,7 @@ pub(crate) use ports::{
 };
 #[cfg_attr(not(test), allow(unused_imports, reason = "Task 3 将创建文件偏好仓储"))]
 pub(crate) use preference::{FilePreferenceStore, PreferenceError, PreferenceStore};
+pub(crate) use runtime::ApplicationUpdateRuntime;
 #[allow(
     unused_imports,
     reason = "Task 3 的 adapter 将消费暂存结果与稳定错误分类；接线后删除"
