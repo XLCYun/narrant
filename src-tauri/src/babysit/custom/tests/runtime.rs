@@ -94,6 +94,17 @@ fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult 
     }
 }
 
+/// 构造携带 Rig 当前 run transcript 的 response，模拟真实 adapter 返回值。
+fn tool_response_with_transcript(
+    name: &str,
+    arguments: serde_json::Value,
+    transcript: Vec<Message>,
+) -> CustomRoundResult {
+    let mut response = tool_response(name, arguments);
+    response.transcript = Some(transcript);
+    response
+}
+
 /// 从测试捕获的 provider-neutral user message 中读取唯一文本块。
 fn user_message_text(message: &Message) -> &str {
     let Message::User { content } = message else {
@@ -169,38 +180,95 @@ fn frozen_connection_debug_excludes_endpoint_fingerprint_and_secret() {
 }
 
 #[tokio::test]
-async fn runtime_replays_repository_tool_results_in_one_memory_session() {
+async fn runtime_delegates_tool_dispatch_to_the_adapter_without_a_second_round() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
-    std::fs::create_dir_all(workspace.path().join("src")).expect("创建目录");
-    std::fs::write(workspace.path().join("src/example.rs"), "fn example() {}\n")
-        .expect("写入 fixture");
-    let adapter = FakeAdapter::scripted(vec![
-        tool_response("read", json!({"path": "src/example.rs"})),
-        tool_response(
-            FINAL_OUTPUT_TOOL_NAME,
-            json!({"before": {"1": "before explanation"}, "after": {"1": "after explanation"}}),
-        ),
-    ]);
+    std::fs::write(workspace.path().join("example.rs"), "fn example() {}\n").expect("写入 fixture");
+    let adapter = FakeAdapter::scripted(vec![tool_response("read", json!({"path": "example.rs"}))]);
     let requests = adapter.requests.clone();
     let runtime = CustomRuntime::new();
+
     let output = runtime
         .generate(
             Arc::new(adapter),
-            fixture_request(41, &workspace.path().to_string_lossy()),
+            fixture_request(401, &workspace.path().to_string_lossy()),
             &TestCancellation::default(),
         )
         .await
-        .expect("runtime 输出");
+        .expect("adapter 已经负责完整 Rig agent loop");
 
-    assert_eq!(
-        output.before.get("1"),
-        Some(&"before explanation".to_owned())
-    );
-    assert_eq!(output.after.get("1"), Some(&"after explanation".to_owned()));
+    assert!(output.before.is_empty() && output.after.is_empty());
+    assert_eq!(requests.lock().expect("请求锁").len(), 1);
+}
+
+#[tokio::test]
+async fn runtime_preserves_rig_transcript_across_generation_and_repairs() {
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let result = json!({"before": {"1": "旧行"}, "after": {"1": "新行"}});
+    let generation_transcript = vec![
+        Message::user("generation prompt"),
+        Message::Assistant {
+            id: Some("generation-assistant".to_owned()),
+            content: vec![rig::completion::AssistantContent::text("generation result")],
+        },
+    ];
+    let first_repair_transcript = vec![
+        Message::user("repair prompt"),
+        Message::Assistant {
+            id: Some("repair-assistant".to_owned()),
+            content: vec![rig::completion::AssistantContent::text("repair result")],
+        },
+    ];
+    let second_repair_transcript = vec![
+        Message::user("second repair prompt"),
+        Message::Assistant {
+            id: Some("second-repair-assistant".to_owned()),
+            content: vec![rig::completion::AssistantContent::text(
+                "second repair result",
+            )],
+        },
+    ];
+    let adapter = FakeAdapter::scripted(vec![
+        tool_response_with_transcript(
+            FINAL_OUTPUT_TOOL_NAME,
+            result.clone(),
+            generation_transcript.clone(),
+        ),
+        tool_response_with_transcript(
+            FINAL_OUTPUT_TOOL_NAME,
+            result.clone(),
+            first_repair_transcript,
+        ),
+        tool_response_with_transcript(FINAL_OUTPUT_TOOL_NAME, result, second_repair_transcript),
+    ]);
+    let requests = adapter.requests.clone();
+    let runtime = CustomRuntime::new();
+    let request = fixture_request(402, &workspace.path().to_string_lossy());
+    let output = runtime
+        .generate(
+            Arc::new(adapter),
+            request.clone(),
+            &TestCancellation::default(),
+        )
+        .await
+        .expect("首轮结果");
+    runtime
+        .repair(
+            request.clone(),
+            output.clone(),
+            Vec::new(),
+            &TestCancellation::default(),
+        )
+        .await
+        .expect("第一次 repair");
+    runtime
+        .repair(request, output, Vec::new(), &TestCancellation::default())
+        .await
+        .expect("第二次 repair");
+
     let requests = requests.lock().expect("请求锁");
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].history().len(), 3);
-    assert!(user_message_text(requests[0].prompt()).contains("zh-CN"));
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].history(), generation_transcript.as_slice());
+    assert_eq!(requests[2].history().len(), 4);
 }
 
 #[tokio::test]
@@ -227,21 +295,17 @@ async fn runtime_rejects_late_response_after_cancellation_without_next_tool_or_f
 }
 
 #[tokio::test]
-async fn runtime_stops_after_shared_sixteen_turn_budget() {
+async fn runtime_delegates_turn_budget_to_the_adapter() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
-    let adapter = FakeAdapter::scripted(
-        (0..MAX_MODEL_TURNS)
-            .map(|_| CustomRoundResult {
-                choice: vec![rig::completion::AssistantContent::text("继续")],
-                identity: ResponseIdentity {
-                    message_id: None,
-                    response_id: None,
-                    provider_request_id: None,
-                },
-                transcript: None,
-            })
-            .collect(),
-    );
+    let adapter = FakeAdapter::scripted(vec![CustomRoundResult {
+        choice: vec![rig::completion::AssistantContent::text("继续")],
+        identity: ResponseIdentity {
+            message_id: None,
+            response_id: None,
+            provider_request_id: None,
+        },
+        transcript: None,
+    }]);
     let requests = adapter.requests.clone();
     let runtime = CustomRuntime::new();
     let result = runtime
@@ -251,10 +315,10 @@ async fn runtime_stops_after_shared_sixteen_turn_budget() {
             &TestCancellation::default(),
         )
         .await
-        .expect("预算耗尽仍返回上层可 repair 的默认结果");
+        .expect("adapter 已经拥有 Rig 的 turn budget");
 
     assert!(result.before.is_empty() && result.after.is_empty());
-    assert_eq!(requests.lock().expect("请求锁").len(), MAX_MODEL_TURNS);
+    assert_eq!(requests.lock().expect("请求锁").len(), 1);
 }
 
 #[tokio::test]

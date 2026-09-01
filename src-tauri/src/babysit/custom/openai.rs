@@ -4,7 +4,7 @@ use super::adapter::{
 };
 use super::connection::{CustomConnectionSnapshot, CustomProtocol};
 use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
-use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
+use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS};
 use crate::babysit::RepositoryTools;
 use crate::operation::CancellationSignal;
 use async_trait::async_trait;
@@ -218,7 +218,7 @@ impl OpenAiChatCompletionsAdapter {
         self
     }
 
-    /// 构造使用 Rig OutputMode::Tool 的 agent，供共享 runtime 保持会话与工具循环。
+    /// 构造使用 Rig OutputMode::Tool 的 agent，由 Rig 独占会话内模型与工具循环。
     fn agent_for_workspace(
         &self,
         workspace: impl AsRef<Path>,
@@ -251,6 +251,7 @@ impl OpenAiChatCompletionsAdapter {
         };
         Ok(builder
             .default_max_turns(MAX_MODEL_TURNS)
+            .max_tokens(MAX_OUTPUT_TOKENS)
             .tool(rig_tools.read)
             .tool(rig_tools.glob)
             .tool(rig_tools.grep)
@@ -325,6 +326,16 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
             .map_err(|error| self.map_attempt_error(error))?;
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
+        }
+        if response.completion_calls.iter().any(|call| {
+            call.finish_reason
+                .as_ref()
+                .is_some_and(|reason| matches!(reason, rig::completion::FinishReason::Length))
+        }) {
+            // Rig 已保留每次 completion 的 finish_reason；长度截断不能伪装成 malformed output。
+            return Err(CustomAdapterError::OutputLimit {
+                limit: MAX_OUTPUT_TOKENS,
+            });
         }
         let arguments = serde_json::from_str(&response.output).unwrap_or(serde_json::Value::Null);
         Ok(CustomRoundResult {

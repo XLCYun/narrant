@@ -184,6 +184,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
                 .body_contains("\"name\":\"glob\"")
                 .body_contains("\"name\":\"grep\"")
                 .body_contains("\"name\":\"final_result\"")
+                .body_contains("\"max_tokens\":65536")
                 .json_body_partial(
                     serde_json::to_string(&json!({
                         "model": "fixture-model",
@@ -239,6 +240,66 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     assert_eq!(
         response.tool_calls()[0].function.name,
         FINAL_OUTPUT_TOOL_NAME
+    );
+    mock.assert_async().await;
+}
+
+/// 模型以 length 结束时应返回独立输出上限错误，不得伪装成 malformed output。
+#[tokio::test]
+async fn openai_length_finish_reason_is_an_output_limit_error() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "id": "fixture-length",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "length"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 65536, "total_tokens": 65537}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-length",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+
+    let error = adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect_err("length 不能进入 malformed repair");
+
+    assert_eq!(
+        error,
+        CustomAdapterError::OutputLimit {
+            limit: MAX_OUTPUT_TOKENS,
+        }
     );
     mock.assert_async().await;
 }
@@ -371,6 +432,77 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
         .complete(request, &TestCancellation::default())
         .await
         .expect_err("显式 effort 被拒绝时应直接返回错误");
+
+    assert!(matches!(error, CustomAdapterError::Transport(_)));
+    assert_eq!(rejected.hits_async().await, 1);
+    assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
+/// provider 拒绝固定输出预算时必须显式失败，不能退回较小预算重试。
+#[tokio::test]
+async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
+    let server = MockServer::start_async().await;
+    let rejected = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .body_contains(r#""max_tokens":65536"#);
+            then.status(400).json_body(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "fixture rejects the fixed output budget"
+                }
+            }));
+        })
+        .await;
+    let unexpected_fallback = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .body_contains(r#""max_tokens":8192"#);
+            then.status(200).json_body(json!({
+                "id": "unexpected-fallback",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-final",
+                            "type": "function",
+                            "function": {
+                                "name": FINAL_OUTPUT_TOOL_NAME,
+                                "arguments": "{\"before\":{},\"after\":{}}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-budget-rejection",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
+        .expect("构造请求");
+
+    let error = adapter
+        .complete(request, &TestCancellation::default())
+        .await
+        .expect_err("固定输出预算被拒绝时应直接失败");
 
     assert!(matches!(error, CustomAdapterError::Transport(_)));
     assert_eq!(rejected.hits_async().await, 1);

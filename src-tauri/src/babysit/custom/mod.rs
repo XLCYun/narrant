@@ -27,7 +27,7 @@ pub(crate) use provider::CustomProvider;
 #[cfg(test)]
 use provider::PROVIDER_ID;
 #[cfg(test)]
-pub(crate) use round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
+pub(crate) use round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS};
 #[cfg(test)]
 pub(crate) use runtime::CustomRuntime;
 #[cfg(test)]

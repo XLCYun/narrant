@@ -268,6 +268,8 @@ pub(crate) enum CustomAdapterError {
     InvalidToolSet,
     /// 请求超出共享模型轮次预算。
     TurnLimitExceeded { limit: usize },
+    /// provider 已经在固定输出预算处截断了模型回复；不能交给 malformed repair。
+    OutputLimit { limit: u64 },
     /// 调用方在 transport 返回前取消了请求。
     Cancelled,
     /// provider/transport 失败的脱敏投影。
@@ -287,6 +289,9 @@ impl fmt::Display for CustomAdapterError {
             Self::TurnLimitExceeded { limit } => {
                 write!(formatter, "Custom 模型轮次已达到上限 {limit}。")
             }
+            Self::OutputLimit { limit } => {
+                write!(formatter, "Custom 模型输出已达到固定上限 {limit}。")
+            }
             Self::Cancelled => formatter.write_str("Custom 请求已取消。"),
             Self::Transport(failure) => write!(
                 formatter,
@@ -299,10 +304,10 @@ impl fmt::Display for CustomAdapterError {
 
 impl std::error::Error for CustomAdapterError {}
 
-/// OpenAI 与 Anthropic 共用的单轮协议适配器 seam。
+/// OpenAI 与 Anthropic 共用的单次 Rig generation/repair run 适配器 seam。
 #[async_trait::async_trait]
 pub(crate) trait CustomProtocolAdapter: Send + Sync {
-    /// 发送一轮 provider-neutral 模型请求并返回归一化结果。
+    /// 执行一次 provider-neutral Rig run 并返回归一化结果；内部模型/工具轮由 adapter 持有。
     async fn complete(
         &self,
         request: CustomRoundRequest,

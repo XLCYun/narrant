@@ -6,6 +6,8 @@ use std::collections::HashSet;
 
 /// Custom 协议适配器共享的单次模型调用上限。
 pub(crate) const MAX_MODEL_TURNS: usize = 16;
+/// Custom 协议适配器共享的单次模型输出上限。
+pub(crate) const MAX_OUTPUT_TOKENS: u64 = 65_536;
 
 /// 单次模型请求的 provider-neutral 输入；不含任何协议 wire 类型。
 #[derive(Clone, Debug)]
@@ -15,6 +17,11 @@ pub(crate) struct CustomRoundRequest {
 }
 
 impl CustomRoundRequest {
+    /// 构造由 adapter 自己持有工具集合的单次 Rig agent-loop 请求。
+    pub(crate) fn from_prompt(prompt: Message, history: Vec<Message>) -> Self {
+        Self { prompt, history }
+    }
+
     /// 创建一轮请求，并拒绝超过共享模型调用预算或越权工具集合的输入。
     pub(crate) fn new(
         prompt: Message,
@@ -42,7 +49,7 @@ impl CustomRoundRequest {
         {
             return Err(CustomAdapterError::InvalidToolSet);
         }
-        Ok(Self { prompt, history })
+        Ok(Self::from_prompt(prompt, history))
     }
     /// 返回本轮 prompt 的 provider-neutral 消息。
     pub(super) fn prompt(&self) -> &Message {
@@ -61,12 +68,12 @@ pub(crate) struct CustomRoundResult {
     pub(crate) choice: Vec<AssistantContent>,
     /// provider 为本轮返回的三类可选 identity。
     pub(crate) identity: ResponseIdentity,
-    /// Rig Agent 在本轮内部工具循环后返回的完整会话记录。
+    /// Rig Agent 返回的本轮 transcript；跨轮合并由共享 runtime 负责。
     pub(crate) transcript: Option<Vec<Message>>,
 }
 
 impl CustomRoundResult {
-    /// 返回本轮 assistant 发出的工具调用，供共享 runtime 决定是否 dispatch。
+    /// 返回本轮 assistant 发出的工具调用，供协议适配器测试和结果归一化使用。
     pub(crate) fn tool_calls(&self) -> Vec<&ToolCall> {
         self.choice
             .iter()

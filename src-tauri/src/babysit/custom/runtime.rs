@@ -1,30 +1,26 @@
 use super::adapter::{CustomAdapterError, CustomProtocolAdapter};
-use super::final_tool::{custom_tool_definitions, FINAL_OUTPUT_TOOL_NAME};
-use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
+use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
+use super::round::{CustomRoundRequest, CustomRoundResult};
 use crate::babysit::{
-    BabysitError, BabysitFileExplanations, BabysitProviderRequest, LineTarget, RepositoryToolError,
-    RepositoryToolRequest, RepositoryTools, ValidationFailure,
+    BabysitError, BabysitFileExplanations, BabysitProviderRequest, LineTarget, ValidationFailure,
 };
 use crate::operation::CancellationSignal;
 use rig::completion::Message;
 use rig::message::ToolCall;
-use serde::de::DeserializeOwned;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Custom 运行允许的最大修复轮数；共享 runtime 负责具体 repair 编排。
 pub(super) const MAX_REPAIR_ATTEMPTS: u8 = 3;
 
-/// 一次 Custom 分析的单内存会话；generate 与 repair 共用这份 history。
+/// 一次 Custom 分析的单内存会话；generate 与 repair 共用 Rig transcript。
 struct CustomSession {
     adapter: Arc<dyn CustomProtocolAdapter>,
-    tools: RepositoryTools,
     history: Vec<Message>,
     repair_attempts: u8,
 }
 
-/// Custom provider 的共享 runtime，统一管理 turn、repair、工具和取消边界。
+/// Custom provider 的共享 runtime，统一管理跨请求 transcript、repair 和取消边界。
 pub(crate) struct CustomRuntime {
     sessions: Mutex<HashMap<u64, CustomSession>>,
 }
@@ -37,7 +33,7 @@ impl CustomRuntime {
         }
     }
 
-    /// 创建一次完整分析会话，并在同一会话内执行最多 16 次模型调用。
+    /// 创建一次完整分析会话，并把单次 Rig agent loop 交给 adapter 执行。
     pub(crate) async fn generate(
         &self,
         adapter: Arc<dyn CustomProtocolAdapter>,
@@ -45,8 +41,6 @@ impl CustomRuntime {
         cancellation: &CancellationSignal,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         ensure_not_cancelled(cancellation)?;
-        let tools =
-            RepositoryTools::new(&request.workspace_path).map_err(repository_setup_error)?;
         let run_id = request.analysis_run_id;
         self.sessions
             .lock()
@@ -55,7 +49,6 @@ impl CustomRuntime {
                 run_id,
                 CustomSession {
                     adapter,
-                    tools,
                     history: Vec::new(),
                     repair_attempts: 0,
                 },
@@ -116,7 +109,7 @@ impl CustomRuntime {
         }
     }
 
-    /// 执行一个 generate/repair round，并严格在每个边界检查取消状态。
+    /// 执行一次 generate/repair 的 Rig agent loop，并严格在边界检查取消状态。
     async fn run_round<F>(
         &self,
         run_id: u64,
@@ -127,116 +120,65 @@ impl CustomRuntime {
     where
         F: Fn(&BabysitProviderRequest) -> String,
     {
-        for turn in 1..=MAX_MODEL_TURNS {
-            ensure_not_cancelled(cancellation)?;
-            let (adapter, tools, history) = self.session_context(run_id)?;
-            let round = CustomRoundRequest::new(
-                Message::user(if turn == 1 {
-                    prompt(&request)
-                } else {
-                    continuation_prompt()
-                }),
-                history,
-                turn,
-                custom_tool_definitions(&tools),
-            )
+        ensure_not_cancelled(cancellation)?;
+        let (adapter, history) = self.session_context(run_id)?;
+        let prompt = Message::user(prompt(&request));
+        let round = CustomRoundRequest::from_prompt(prompt.clone(), history.clone());
+        let response = adapter
+            .complete(round, cancellation)
+            .await
             .map_err(adapter_error)?;
-            self.append_user(run_id, round.prompt().clone())?;
-            let response = adapter
-                .complete(round, cancellation)
-                .await
-                .map_err(adapter_error)?;
-            // transport future 即使刚刚完成，也不能在取消之后接受 final 或 dispatch。
+        // Rig future 即使刚刚完成，也不能在取消之后接受 final 或继续写入 transcript。
+        ensure_not_cancelled(cancellation)?;
+        self.record_response(run_id, &history, &prompt, &response)?;
+
+        if let Some(final_call) = response
+            .tool_calls()
+            .into_iter()
+            .find(|call| call.function.name == FINAL_OUTPUT_TOOL_NAME)
+        {
             ensure_not_cancelled(cancellation)?;
-            self.append_assistant(run_id, &response)?;
-
-            if let Some(final_call) = response
-                .tool_calls()
-                .into_iter()
-                .find(|call| call.function.name == FINAL_OUTPUT_TOOL_NAME)
-            {
-                ensure_not_cancelled(cancellation)?;
-                return Ok(parse_final_result(final_call));
-            }
-
-            let calls = response
-                .tool_calls()
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>();
-            for call in calls {
-                ensure_not_cancelled(cancellation)?;
-                let output = dispatch_repository_tool(&tools, &call, cancellation)?;
-                ensure_not_cancelled(cancellation)?;
-                self.append_tool_result(run_id, &call, output)?;
-            }
+            return Ok(parse_final_result(final_call));
         }
         // 让上层 validation/repair merging 决定如何处理未完成的输出。
         Ok(BabysitFileExplanations::default())
     }
 
-    /// 读取当前会话的 adapter、工具和不可变消息历史，避免跨 await 持有锁。
+    /// 读取当前会话的 adapter 和不可变消息历史，避免跨 await 持有锁。
     fn session_context(
         &self,
         run_id: u64,
-    ) -> Result<
-        (
-            Arc<dyn CustomProtocolAdapter>,
-            RepositoryTools,
-            Vec<Message>,
-        ),
-        BabysitError,
-    > {
+    ) -> Result<(Arc<dyn CustomProtocolAdapter>, Vec<Message>), BabysitError> {
         let sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
         let session = sessions.get(&run_id).ok_or_else(runtime_unavailable)?;
-        Ok((
-            session.adapter.clone(),
-            session.tools.clone(),
-            session.history.clone(),
-        ))
+        Ok((session.adapter.clone(), session.history.clone()))
     }
 
-    /// 将 provider assistant response 固定写入单内存会话历史。
-    fn append_assistant(
+    /// 将 adapter 返回的 Rig transcript 合并进跨 generation/repair 会话。
+    fn record_response(
         &self,
         run_id: u64,
+        previous_history: &[Message],
+        prompt: &Message,
         response: &CustomRoundResult,
     ) -> Result<(), BabysitError> {
         let mut sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
         let session = sessions.get_mut(&run_id).ok_or_else(runtime_unavailable)?;
-        if let Some(transcript) = &response.transcript {
-            session.history = transcript.clone();
-            return Ok(());
+        if let Some(transcript) = response
+            .transcript
+            .as_deref()
+            .filter(|messages| !messages.is_empty())
+        {
+            session.history = merge_transcript(previous_history, transcript);
+        } else {
+            // 没有 extended transcript 的测试/adapter 仍需保留本轮 prompt 与 assistant。
+            session.history = previous_history.to_vec();
+            session.history.push(prompt.clone());
+            session.history.push(Message::Assistant {
+                id: response.identity.message_id.clone(),
+                content: response.choice.clone(),
+            });
         }
-        session.history.push(Message::Assistant {
-            id: response.identity.message_id.clone(),
-            content: response.choice.clone(),
-        });
-        Ok(())
-    }
-
-    /// 在请求发出前保存当前 user prompt，使下一次工具轮或 repair 继承完整会话。
-    fn append_user(&self, run_id: u64, prompt: Message) -> Result<(), BabysitError> {
-        let mut sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
-        let session = sessions.get_mut(&run_id).ok_or_else(runtime_unavailable)?;
-        session.history.push(prompt);
-        Ok(())
-    }
-
-    /// 将每一项 repository tool 的结果按 call id 回放给下一模型轮。
-    fn append_tool_result(
-        &self,
-        run_id: u64,
-        call: &ToolCall,
-        output: String,
-    ) -> Result<(), BabysitError> {
-        let mut sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
-        let session = sessions.get_mut(&run_id).ok_or_else(runtime_unavailable)?;
-        session.history.push(Message::tool_result(
-            call.id.as_str(),
-            call.function.name.clone(),
-            output,
-        ));
         Ok(())
     }
 
@@ -287,11 +229,6 @@ Return the complete result by calling final_result; preserve valid prior explana
     )
 }
 
-/// 非首轮模型调用使用短 continuation，历史中已保留完整原始 prompt。
-fn continuation_prompt() -> String {
-    "Continue using the available repository tools, then call final_result when ready.".to_owned()
-}
-
 /// 格式化目标 inventory，不把 source 再复制进 repair 诊断。
 fn format_targets(targets: &[LineTarget]) -> String {
     targets
@@ -304,36 +241,6 @@ fn format_targets(targets: &[LineTarget]) -> String {
 /// 严格读取 synthetic final tool；坏 JSON 交给上层 validation 触发 repair。
 fn parse_final_result(call: &ToolCall) -> BabysitFileExplanations {
     serde_json::from_value(call.function.arguments.clone()).unwrap_or_default()
-}
-
-/// 只调度 Narrant-owned repository tools，未知工具不会触碰 Workspace。
-fn dispatch_repository_tool(
-    tools: &RepositoryTools,
-    call: &ToolCall,
-    cancellation: &CancellationSignal,
-) -> Result<String, BabysitError> {
-    let result = match call.function.name.as_str() {
-        "read" => parse_args::<crate::babysit::ReadInput>(&call.function.arguments)
-            .map(RepositoryToolRequest::Read),
-        "glob" => parse_args::<crate::babysit::GlobRequest>(&call.function.arguments)
-            .map(RepositoryToolRequest::Glob),
-        "grep" => parse_args::<crate::babysit::GrepRequest>(&call.function.arguments)
-            .map(RepositoryToolRequest::Grep),
-        _ => Err(RepositoryToolError::InvalidInput),
-    };
-    let response = match result.and_then(|request| tools.execute(request, cancellation)) {
-        Ok(response) => {
-            serde_json::to_string(&response).unwrap_or_else(|_| RepositoryToolError::Io.to_string())
-        }
-        Err(RepositoryToolError::Cancelled) => return Err(BabysitError::Cancelled),
-        Err(error) => error.to_string(),
-    };
-    Ok(response)
-}
-
-/// 将 provider tool arguments 限制在 typed repository 输入结构内。
-fn parse_args<T: DeserializeOwned>(arguments: &Value) -> Result<T, RepositoryToolError> {
-    serde_json::from_value(arguments.clone()).map_err(|_| RepositoryToolError::InvalidInput)
 }
 
 /// 适配器取消错误保持公共语义；transport 失败额外保留白名单诊断字段。
@@ -355,22 +262,27 @@ fn adapter_error(error: CustomAdapterError) -> BabysitError {
     }
 }
 
-/// Workspace 初始化失败只通过稳定 repository 错误类别返回。
-fn repository_setup_error(error: RepositoryToolError) -> BabysitError {
-    if error == RepositoryToolError::Cancelled {
-        BabysitError::Cancelled
-    } else {
-        BabysitError::Provider {
-            detail: error.to_string(),
-        }
-    }
-}
-
 /// runtime mutex 损坏时保持 provider-independent failure，不泄漏内部状态。
 fn runtime_unavailable() -> BabysitError {
     BabysitError::Provider {
         detail: "Custom runtime 不可用。".to_owned(),
     }
+}
+
+/// 把 adapter 返回的本轮 transcript 与既有会话无重复地拼接。
+fn merge_transcript(previous: &[Message], transcript: &[Message]) -> Vec<Message> {
+    if transcript.starts_with(previous) {
+        return transcript.to_vec();
+    }
+    let overlap = (1..=previous.len().min(transcript.len()))
+        .rev()
+        .find(|length| previous[previous.len() - length..] == transcript[..*length])
+        .unwrap_or(0);
+    previous
+        .iter()
+        .cloned()
+        .chain(transcript.iter().skip(overlap).cloned())
+        .collect()
 }
 
 /// 每个模型调用、工具前后和 final 接受前共享的取消 guard。
