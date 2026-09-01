@@ -5938,6 +5938,7 @@ dependencies = [
  "rusqlite",
  "schemars 1.2.1",
  "secrecy",
+ "semver",
  "serde",
  "serde_json",
  "sys-locale",
@@ -5953,6 +5954,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
