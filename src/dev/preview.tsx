@@ -1,4 +1,4 @@
-import { StrictMode, type ReactNode, useState } from "react";
+import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import "@/index.css";
@@ -19,6 +19,11 @@ import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identit
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
 import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationUpdateApplication, ApplicationUpdateSnapshot } from "@/application-update/application-update";
+import { useApplicationUpdate } from "@/application-update/use-application-update";
+import { ApplicationUpdateAttention } from "@/components/application-update/application-update-attention";
+import { ApplicationUpdateSurface } from "@/components/application-update/application-update-surface";
+import { ApplicationUpdateSettings } from "@/components/settings-page/application-update-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -34,6 +39,90 @@ type PreviewDefinition = {
 
 /** Settings Preview 中 Custom 连接的可交互状态集合。 */
 type CustomPreviewState = "empty" | "configured" | "invalid" | "saving" | "failed" | "revealed";
+
+type UpdatePreviewKind = ApplicationUpdateSnapshot["state"]["kind"];
+
+/** 构造不含 URL、路径、签名或 target 的代表性更新快照。 */
+function updatePreviewSnapshot(kind: UpdatePreviewKind, options: { longNotes?: boolean; knownProgress?: boolean } = {}): ApplicationUpdateSnapshot {
+  const candidate = ["available", "downloading", "staged", "failed"].includes(kind) ? {
+    version: "2.4.0",
+    releaseNotes: options.longNotes
+      ? `# 2.4.0\n\n${"这是一段用于验证窄窗口换行与长版本说明滚动的内容。".repeat(12)}\n\n## 改进\n\n- 支持安全暂存更新\n- 保留当前 Review 工作\n\n| 项目 | 结果 |\n| --- | --- |\n| 安全验证 | 通过 |\n| 原始 HTML | <script>blocked</script> |\n\n[安全链接](https://example.com/release) [危险链接](javascript:alert(1))`
+      : "## 此版本的改进\n\n- 更可靠的应用更新\n- 更清晰的下载进度",
+  } : null;
+  const state: ApplicationUpdateSnapshot["state"] = kind === "downloading"
+    ? { kind, progress: options.knownProgress
+      ? { kind: "known_total", downloadedBytes: 7_340_032, totalBytes: 12_582_912 }
+      : { kind: "unknown_total", downloadedBytes: 3_145_728 } }
+    : { kind };
+  return {
+    sequence: 12,
+    currentVersion: "2.3.1",
+    state,
+    automaticDownload: true,
+    candidate,
+    failure: kind === "failed" ? { operation: "download", category: "network", retryable: true, message: "redacted" } : null,
+    recoveryWarning: null,
+    preferenceWarning: null,
+  };
+}
+
+/** 用窄应用端口驱动真实更新组件，供浏览器检查所有交互状态。 */
+function ApplicationUpdatePreview({
+  kind,
+  longNotes = false,
+  knownProgress = false,
+  settings = false,
+  longIdentity = false,
+}: {
+  kind: UpdatePreviewKind;
+  longNotes?: boolean;
+  knownProgress?: boolean;
+  settings?: boolean;
+  longIdentity?: boolean;
+}) {
+  const initial = useMemo(() => updatePreviewSnapshot(kind, { longNotes, knownProgress }), [kind, knownProgress, longNotes]);
+  const application = useMemo<ApplicationUpdateApplication>(() => {
+    let current = initial;
+    const listeners = new Set<(snapshot: ApplicationUpdateSnapshot) => void>();
+    const publish = (next: ApplicationUpdateSnapshot) => {
+      current = next;
+      listeners.forEach((listener) => listener(next));
+      return Promise.resolve(next);
+    };
+    return {
+      snapshot: async () => current,
+      subscribe: async (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+      manualCheck: () => publish({ ...current, sequence: current.sequence + 1, state: { kind: "checking" }, failure: null }),
+      setAutomaticDownload: (enabled) => publish({ ...current, sequence: current.sequence + 1, automaticDownload: enabled, preferenceWarning: null }),
+      retry: () => publish({ ...current, sequence: current.sequence + 1, state: { kind: "checking" }, failure: null }),
+      restart: async () => current,
+    };
+  }, [initial]);
+  const update = useApplicationUpdate(application);
+  const updateSnapshot = update.snapshot;
+  const openUpdateSurface = update.openSurface;
+  useEffect(() => {
+    if (!settings && updateSnapshot) openUpdateSurface();
+  }, [openUpdateSurface, settings, updateSnapshot]);
+  if (settings) return <div className="mx-auto max-w-3xl rounded-2xl border bg-card p-5 sm:p-9"><ApplicationUpdateSettings update={update} /></div>;
+  return <>
+    <HomePage
+      reviews={[]}
+      onOpenReview={() => undefined}
+      onOpenFolder={() => undefined}
+      githubIdentityEntry={<GitHubIdentityEntry
+        className="h-auto min-h-12 w-full justify-start py-2"
+        signedIn
+        identity={{ id: 42, login: longIdentity ? "octocat-with-an-extraordinarily-long-github-identity-that-must-truncate" : "octocat", name: longIdentity ? "Monalisa Octocat With An Extraordinarily Long Display Name" : "Monalisa", avatarPath: null }}
+        onConnect={() => undefined}
+        onSignOut={() => undefined}
+      />}
+      applicationUpdateAttention={<ApplicationUpdateAttention snapshot={update.snapshot} onOpen={update.openSurface} />}
+    />
+    <ApplicationUpdateSurface update={update} />
+  </>;
+}
 
 /** 用公开端口提供可交互的主题、语言与持久化失败预览。 */
 function SettingsPreview({ saveFails = false, language: initialLanguage = "zh-CN", longCodexPath = false, babysitSection = false, customState, githubState, modelState = "idle" }: { saveFails?: boolean; language?: ApplicationLanguage; longCodexPath?: boolean; babysitSection?: boolean; customState?: CustomPreviewState; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
@@ -425,6 +514,18 @@ const previews: Record<string, PreviewDefinition> = {
       "custom-saving": { label: "Custom 保存中", render: () => <SettingsPreview customState="saving" /> },
       "custom-revealed": { label: "Custom 密钥已显示", render: () => <SettingsPreview customState="revealed" /> },
       "custom-failed": { label: "Custom 保存失败", render: () => <SettingsPreview customState="failed" /> },
+      "application-update": { label: "应用更新设置", render: () => <ApplicationUpdatePreview kind="up_to_date" settings /> },
+    },
+  },
+  "application-update": {
+    label: "应用更新",
+    scenarios: {
+      available: { label: "宽窗口与短说明", render: () => <ApplicationUpdatePreview kind="available" /> },
+      "narrow-long-notes": { label: "窄窗口、长身份与长说明", render: () => <ApplicationUpdatePreview kind="available" longNotes longIdentity /> },
+      "downloading-determinate": { label: "确定下载进度", render: () => <ApplicationUpdatePreview kind="downloading" knownProgress /> },
+      "downloading-indeterminate": { label: "不确定下载进度", render: () => <ApplicationUpdatePreview kind="downloading" /> },
+      failed: { label: "可重试失败", render: () => <ApplicationUpdatePreview kind="failed" /> },
+      staged: { label: "已暂存并可重启", render: () => <ApplicationUpdatePreview kind="staged" /> },
     },
   },
   "app-shell": {

@@ -148,6 +148,17 @@ export const resources = {
         hideApiKey: "隐藏 API 密钥",
       },
     },
+    applicationUpdate: {
+      settings: { title: "应用更新", description: "检查、下载并安全暂存 Narrant 更新。", currentVersion: "当前版本", availableVersion: "可用版本", status: "状态", automaticDownload: "自动下载更新", automaticDownloadDescription: "发现新版本后自动下载并验证；关闭后仍会定期检查。", loading: "正在读取更新状态…", loadFailed: "无法读取应用更新状态，请重试。" },
+      state: { idle: "等待检查", checking: "正在检查", up_to_date: "已是最新版本", available: "有新版本可用", downloading: "正在下载更新", staged: "更新已准备就绪", failed: "更新失败" },
+      attention: { available: "有应用更新可用", downloading: "正在下载应用更新", failed: "应用更新失败", staged: "应用更新已准备就绪" },
+      action: { check: "检查更新", checking: "正在检查…", retry: "重试", details: "查看更新详情" },
+      surface: { title: "应用更新", version: "Narrant {{version}}", releaseNotes: "版本说明", noNotes: "此版本没有提供版本说明。", later: "稍后", restart: "立即重启并更新", blockedImage: "远程图片已阻止加载", blockedImageWithAlt: "远程图片“{{alt}}”已阻止加载" },
+      progress: { downloading: "正在下载", known: "{{percentage}}% · {{downloaded}} / {{total}}", determinateLabel: "更新已下载 {{percentage}}%", indeterminateLabel: "正在下载更新，文件总大小未知" },
+      failure: { network: "无法连接应用更新服务，请检查网络后重试。", request_timeout: "应用更新请求超时，请稍后重试。", rate_limited: "应用更新检查过于频繁，请稍后重试。", server: "应用更新服务暂时不可用，请稍后重试。", manifest: "应用更新信息无效，已停止本次更新。", verification: "应用更新包验证失败，已安全丢弃。", storage: "应用更新无法安全写入本机存储。", installer: "应用更新安装失败，暂存包已保留。" },
+      warning: { recovery: "上次暂存的更新无法恢复；你可以重新检查更新。", preference: { rejected: "自动下载偏好未能保存，已恢复原设置。", durability_unknown: "自动下载偏好已应用，但持久保存尚未确认。", state_unknown: "无法确认自动下载偏好的当前值，请稍后重试。" } },
+      commandError: { "manual-check": "无法发起更新检查，请重试。", preference: "自动下载偏好未能保存，已恢复原设置。", retry: "无法重试更新，请稍后再试。", restart: "无法请求重启更新，请稍后再试。" },
+    },
   },
   en: {
     common: {
@@ -251,6 +262,17 @@ export const resources = {
         hideApiKey: "Hide API key",
       },
     },
+    applicationUpdate: {
+      settings: { title: "Application updates", description: "Check, download, and safely stage Narrant updates.", currentVersion: "Current version", availableVersion: "Available version", status: "Status", automaticDownload: "Download updates automatically", automaticDownloadDescription: "Download and verify new versions automatically. Narrant still checks for updates when this is off.", loading: "Loading update status…", loadFailed: "Could not load application update status. Try again." },
+      state: { idle: "Waiting to check", checking: "Checking for updates", up_to_date: "Up to date", available: "New version available", downloading: "Downloading update", staged: "Update ready", failed: "Update failed" },
+      attention: { available: "Application update available", downloading: "Downloading application update", failed: "Application update failed", staged: "Application update ready" },
+      action: { check: "Check for updates", checking: "Checking…", retry: "Retry", details: "View update details" },
+      surface: { title: "Application update", version: "Narrant {{version}}", releaseNotes: "Release notes", noNotes: "No release notes were provided for this version.", later: "Later", restart: "Restart and Update", blockedImage: "Remote image blocked", blockedImageWithAlt: "Remote image “{{alt}}” blocked" },
+      progress: { downloading: "Downloading", known: "{{percentage}}% · {{downloaded}} / {{total}}", determinateLabel: "Update {{percentage}}% downloaded", indeterminateLabel: "Downloading update; total size unknown" },
+      failure: { network: "Could not connect to the update service. Check your network and retry.", request_timeout: "The update request timed out. Try again later.", rate_limited: "Update checks are being rate limited. Try again later.", server: "The update service is temporarily unavailable. Try again later.", manifest: "The update information is invalid. This update was stopped.", verification: "The update package could not be verified and was safely discarded.", storage: "The update could not be written safely to local storage.", installer: "Installation failed. The staged package was kept." },
+      warning: { recovery: "The previously staged update could not be recovered. Check again to retry.", preference: { rejected: "The automatic download preference was not saved and has been restored.", durability_unknown: "The automatic download preference was applied, but durable storage is not confirmed.", state_unknown: "The current automatic download preference could not be confirmed. Try again later." } },
+      commandError: { "manual-check": "Could not start the update check. Try again.", preference: "The automatic download preference was not saved and has been restored.", retry: "Could not retry the update. Try again later.", restart: "Could not request restart and update. Try again later." },
+    },
   },
 } as const;
 
@@ -260,7 +282,7 @@ void i18n.use(initReactI18next).init({
   lng: "zh-CN",
   fallbackLng: "zh-CN",
   defaultNS: "common",
-  ns: ["common", "repository", "review", "github", "settings"],
+  ns: ["common", "repository", "review", "github", "settings", "applicationUpdate"],
   interpolation: { escapeValue: false },
 });
 document.documentElement.lang = "zh-CN";
