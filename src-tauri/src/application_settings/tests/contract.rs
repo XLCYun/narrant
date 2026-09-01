@@ -3,7 +3,11 @@ use super::{
     CustomProviderConnection, CustomProviderEffort, CustomProviderProtocol, ThemePreference,
 };
 use crate::application_settings::{ApplicationSettingsError, CustomCredentialAdapter};
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Barrier, Mutex},
+    thread,
+    time::Duration,
+};
 
 #[test]
 fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
@@ -65,6 +69,40 @@ fn production_system_locale_resolver_returns_a_supported_language() {
         settings.language,
         ApplicationLanguage::SimplifiedChinese | ApplicationLanguage::English
     ));
+}
+
+#[test]
+fn concurrent_theme_and_language_updates_preserve_both_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application = Arc::new(ApplicationSettingsApplication::with_locale_resolver(
+        path.clone(),
+        || {
+            thread::sleep(Duration::from_millis(25));
+            "zh-CN".to_owned()
+        },
+    ));
+    let start = Arc::new(Barrier::new(3));
+
+    let theme_application = Arc::clone(&application);
+    let theme_start = Arc::clone(&start);
+    let theme_update = thread::spawn(move || {
+        theme_start.wait();
+        theme_application.update_theme(ThemePreference::Dark)
+    });
+    let language_application = Arc::clone(&application);
+    let language_start = Arc::clone(&start);
+    let language_update = thread::spawn(move || {
+        language_start.wait();
+        language_application.update_language(ApplicationLanguage::English)
+    });
+    start.wait();
+
+    assert!(theme_update.join().unwrap().is_ok());
+    assert!(language_update.join().unwrap().is_ok());
+    let settings = application.load().unwrap();
+    assert_eq!(settings.theme, ThemePreference::Dark);
+    assert_eq!(settings.language, ApplicationLanguage::English);
 }
 
 #[test]
