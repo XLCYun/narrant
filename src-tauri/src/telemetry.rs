@@ -329,8 +329,8 @@ impl EnabledTelemetry {
 
         let tracer = self.tracer_provider.tracer("narrant");
         let trace_layer = tracing_opentelemetry::layer()
-            // Lifecycle span-events have an explicit field allowlist; automatic source
-            // location attributes would otherwise be appended to every exported event.
+            // Lifecycle span-event 使用显式字段 allowlist；否则会自动为
+            // 每个导出 event 追加源码位置属性。
             .with_location(false)
             .with_tracer(tracer)
             .with_filter(tracing_subscriber::filter::filter_fn(is_trace_callsite));

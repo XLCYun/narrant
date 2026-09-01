@@ -188,8 +188,8 @@ async fn custom_analysis_exports_correlated_safe_otel_signals() {
                 let result = application
                     .explain_file(request, content, &cancellation, |_| Ok(()))
                     .await;
-                // Emit representative unsafe provider events while the same local subscriber is
-                // active. Their callsites must be rejected even though all spans are retained.
+                // 在同一局部 subscriber 活跃时发出代表性不安全 provider event；
+                // 即使所有 span 都保留，这些 callsite 也必须被拒绝。
                 tracing::debug!(target: "rig", message = SECRET_PROMPT, error = SECRET_TOOL_RESULT);
                 tracing::debug!(target: "provider", body = SECRET_SOURCE, tool_args = SECRET_TOOL_ARGS);
                 result
