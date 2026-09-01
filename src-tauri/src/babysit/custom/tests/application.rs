@@ -4,8 +4,8 @@ use crate::application_settings::{
     CustomProviderConnection, CustomProviderEffort, CustomProviderProtocol,
 };
 use crate::babysit::{
-    BabysitApplication, BabysitFileRequest, BabysitGenerationPolicy, BabysitProgress,
-    BabysitProviderCapabilities, ReviewIdentity,
+    BabysitApplication, BabysitError, BabysitErrorPayload, BabysitFileRequest,
+    BabysitGenerationPolicy, BabysitProgress, BabysitProviderCapabilities, ReviewIdentity,
 };
 use crate::operation::OperationContext;
 use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
@@ -58,7 +58,23 @@ fn application_for_connection(
     protocol: CustomProviderProtocol,
     base_url: String,
 ) -> ConfiguredApplication {
-    application_for_connection_with_tool_cancellation(settings_path, protocol, base_url, None)
+    application_for_connection_with_options(settings_path, protocol, base_url, String::new(), None)
+}
+
+/// 构造带指定 API key 的真实 Custom capability，供 application 脱敏契约使用。
+fn application_for_connection_with_api_key(
+    settings_path: impl Into<std::path::PathBuf>,
+    protocol: CustomProviderProtocol,
+    base_url: String,
+    api_key: &str,
+) -> ConfiguredApplication {
+    application_for_connection_with_options(
+        settings_path,
+        protocol,
+        base_url,
+        api_key.to_owned(),
+        None,
+    )
 }
 
 /// 构造可选 repository-tool 边界取消的真实 Custom capability。
@@ -68,6 +84,23 @@ fn application_for_connection_with_tool_cancellation(
     base_url: String,
     tool_cancellation: Option<crate::operation::TestCancellation>,
 ) -> ConfiguredApplication {
+    application_for_connection_with_options(
+        settings_path,
+        protocol,
+        base_url,
+        String::new(),
+        tool_cancellation,
+    )
+}
+
+/// 统一构造测试设置、凭据边界、Custom registry 与可选 tool 取消 seam。
+fn application_for_connection_with_options(
+    settings_path: impl Into<std::path::PathBuf>,
+    protocol: CustomProviderProtocol,
+    base_url: String,
+    api_key: String,
+    tool_cancellation: Option<crate::operation::TestCancellation>,
+) -> ConfiguredApplication {
     let credentials = Arc::new(MemoryCredentials::default());
     let settings =
         ApplicationSettingsApplication::with_credential_adapter(settings_path.into(), credentials);
@@ -75,7 +108,7 @@ fn application_for_connection_with_tool_cancellation(
         .update_custom_connection(CustomProviderConnection {
             protocol,
             base_url,
-            api_key: String::new(),
+            api_key,
             model: "fixture-model".to_owned(),
             effort: CustomProviderEffort::High,
         })
@@ -177,6 +210,26 @@ fn final_response(protocol: CustomProviderProtocol) -> Value {
     }
 }
 
+/// 为缓存隔离契约返回可区分来源的完整 final_result。
+fn response_with_explanations(
+    protocol: CustomProviderProtocol,
+    before: &str,
+    after: &str,
+) -> Value {
+    let mut response = final_response(protocol);
+    let output = json!({"before": {"1": before}, "after": {"1": after}});
+    match protocol {
+        CustomProviderProtocol::OpenaiChatCompletions => {
+            response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
+                Value::String(serde_json::to_string(&output).expect("序列化 fixture output"));
+        }
+        CustomProviderProtocol::AnthropicMessages => {
+            response["content"][0]["input"] = output;
+        }
+    }
+    response
+}
+
 /// 根据协议构造 schema 合法但缺少目标行的输出，让应用层 validation 进入同一会话 repair。
 fn malformed_response(protocol: CustomProviderProtocol) -> Value {
     match protocol {
@@ -247,6 +300,29 @@ fn omits_fixture_repository_result(request: &HttpMockRequest) -> bool {
         .body
         .as_deref()
         .is_some_and(|body| !String::from_utf8_lossy(body).contains("fixture repository context"))
+}
+
+/// 解析真实模型请求并确认 Custom 只注册 Read、Glob、Grep 与 final_result。
+fn has_exact_custom_tools(request: &HttpMockRequest) -> bool {
+    let Some(body) = request.body.as_deref() else {
+        return false;
+    };
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let Some(tools) = body["tools"].as_array() else {
+        return false;
+    };
+    let names = tools
+        .iter()
+        .filter_map(|tool| {
+            tool["name"]
+                .as_str()
+                .or_else(|| tool["function"]["name"].as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    tools.len() == 4
+        && names == std::collections::BTreeSet::from(["final_result", "glob", "grep", "read"])
 }
 
 /// 为指定协议计算 Rig 使用的 completion endpoint。
@@ -327,6 +403,181 @@ async fn both_custom_protocols_run_through_registry_and_completed_cache() {
     }
 }
 
+/// 跨协议切换不能复用先前协议的 completed result，即使请求 identity 完全相同。
+#[tokio::test]
+async fn changing_custom_protocol_does_not_reuse_a_completed_result() {
+    let server = MockServer::start_async().await;
+    let openai = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(response_with_explanations(
+                    CustomProviderProtocol::OpenaiChatCompletions,
+                    "openai before",
+                    "openai after",
+                ));
+        })
+        .await;
+    let anthropic = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(response_with_explanations(
+                    CustomProviderProtocol::AnthropicMessages,
+                    "anthropic before",
+                    "anthropic after",
+                ));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+    let settings = tempfile::tempdir().expect("创建 fixture settings");
+    let configured = application_for_connection(
+        settings.path().join("settings.json"),
+        CustomProviderProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+    );
+    let (request, content) = fixture_input(workspace.path());
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let openai_result = configured
+        .application
+        .explain_file(request.clone(), content.clone(), &cancellation, |_| Ok(()))
+        .await
+        .expect("OpenAI fixture should complete");
+
+    configured
+        .settings
+        .update_custom_connection(CustomProviderConnection {
+            protocol: CustomProviderProtocol::AnthropicMessages,
+            // Anthropic 会规范化末尾的 `/v1`，而 OpenAI 会保留它；相同 base URL 可让断言聚焦协议 identity。
+            base_url: format!("{}/v1", server.url("")),
+            api_key: String::new(),
+            model: "fixture-model".to_owned(),
+            effort: CustomProviderEffort::High,
+        })
+        .expect("保存 Anthropic fixture connection");
+
+    let anthropic_result = configured
+        .application
+        .explain_file(request, content, &cancellation, |_| Ok(()))
+        .await
+        .expect("Anthropic fixture should complete");
+
+    assert_eq!(
+        openai_result.before.get("1"),
+        Some(&"openai before".to_owned())
+    );
+    assert_eq!(
+        anthropic_result.before.get("1"),
+        Some(&"anthropic before".to_owned())
+    );
+    assert_eq!(openai.hits_async().await, 1);
+    assert_eq!(anthropic.hits_async().await, 1);
+}
+
+/// application 层 transport 失败必须完全移除 URL、secret、内容与旧 origin/hash 诊断。
+#[tokio::test]
+async fn both_custom_protocols_redact_transport_diagnostics_at_application_boundary() {
+    const API_KEY_MARKER: &str = "application-api-key-secret";
+    const REQUEST_MARKER: &str = "application-request-body-secret";
+    const RESPONSE_MARKER: &str = "application-response-body-secret";
+    const PROMPT_MARKER: &str = "application-prompt-secret";
+    const SOURCE_MARKER: &str = "application-source-secret";
+    const EXPLANATION_MARKER: &str = "application-explanation-secret";
+    const TOOL_RESULT_MARKER: &str = "application-tool-result-secret";
+    const ORIGIN_HASH_MARKER: &str = "application-origin-hash-secret";
+
+    for protocol in [
+        CustomProviderProtocol::OpenaiChatCompletions,
+        CustomProviderProtocol::AnthropicMessages,
+    ] {
+        let server = MockServer::start_async().await;
+        let endpoint_marker = format!("{ORIGIN_HASH_MARKER}-{protocol:?}");
+        let expected_path = match protocol {
+            CustomProviderProtocol::OpenaiChatCompletions => {
+                format!("/v1/{endpoint_marker}/chat/completions")
+            }
+            CustomProviderProtocol::AnthropicMessages => {
+                format!("/{endpoint_marker}/v1/messages")
+            }
+        };
+        let response_body = format!(
+            "{RESPONSE_MARKER} {REQUEST_MARKER} {PROMPT_MARKER} {SOURCE_MARKER} \
+             {EXPLANATION_MARKER} {TOOL_RESULT_MARKER}"
+        );
+        let failed = server
+            .mock_async(|when, then| {
+                when.method(POST).path(expected_path);
+                then.status(500)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "error": {
+                            "type": "fixture_failure",
+                            "message": response_body,
+                        }
+                    }));
+            })
+            .await;
+        let base_url = match protocol {
+            CustomProviderProtocol::OpenaiChatCompletions => {
+                format!("{}/v1/{endpoint_marker}", server.url(""))
+            }
+            CustomProviderProtocol::AnthropicMessages => {
+                format!("{}/{endpoint_marker}", server.base_url())
+            }
+        };
+        let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        let settings = tempfile::tempdir().expect("创建 fixture settings");
+        let configured = application_for_connection_with_api_key(
+            settings.path().join("settings.json"),
+            protocol,
+            base_url,
+            API_KEY_MARKER,
+        );
+        let (mut request, mut content) = fixture_input(workspace.path());
+        request.path = format!("{}-{PROMPT_MARKER}", request.path);
+        content.path = request.path.clone();
+        if let Some(FileContent::Text { text, .. }) = content.before.as_mut() {
+            *text = SOURCE_MARKER.to_owned();
+        }
+        let cancellation = OperationContext::background().cancellation().clone();
+
+        let error = configured
+            .application
+            .explain_file(request, content, &cancellation, |_| Ok(()))
+            .await
+            .expect_err("fixture transport failure should reach application boundary");
+        let payload = BabysitErrorPayload::from(error.clone());
+        let diagnostic = format!(
+            "{error} {error:?} {}",
+            serde_json::to_string(&payload).expect("序列化脱敏 application payload")
+        );
+        for forbidden in [
+            endpoint_marker,
+            API_KEY_MARKER.to_owned(),
+            REQUEST_MARKER.to_owned(),
+            RESPONSE_MARKER.to_owned(),
+            PROMPT_MARKER.to_owned(),
+            SOURCE_MARKER.to_owned(),
+            EXPLANATION_MARKER.to_owned(),
+            TOOL_RESULT_MARKER.to_owned(),
+            ORIGIN_HASH_MARKER.to_owned(),
+        ] {
+            assert!(
+                !diagnostic.contains(&forbidden),
+                "application diagnostic leaked marker {forbidden}: {diagnostic}"
+            );
+        }
+        let diagnostic_lower = diagnostic.to_ascii_lowercase();
+        assert!(!diagnostic_lower.contains("origin"));
+        assert!(!diagnostic_lower.contains("hash"));
+        assert!(matches!(error, BabysitError::ProviderDiagnostic { .. }));
+        failed.assert_async().await;
+    }
+}
+
 /// 共享 wire 契约：registry 选出的两个协议都执行真实 Read 循环且只暴露四个工具。
 #[tokio::test]
 async fn both_custom_protocols_preserve_wire_contract_through_repository_tool_loop() {
@@ -352,6 +603,7 @@ async fn both_custom_protocols_preserve_wire_contract_through_repository_tool_lo
                 let when = when
                     .method(POST)
                     .path(endpoint_path(protocol))
+                    .matches(has_exact_custom_tools)
                     .body_contains(r#""name":"read""#)
                     .body_contains(r#""name":"glob""#)
                     .body_contains(r#""name":"grep""#)
