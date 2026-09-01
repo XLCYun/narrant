@@ -333,7 +333,7 @@ test("SHA256SUMS 只覆盖七文件且按公开名称稳定排序", (context) =>
 });
 
 test("公开元数据逐个拒绝任意 SHA 和 delimiter 拼接的 allowlist 外 URL", (context) => {
-  const fixtures = Array.from({ length: 21 }, () => createNativeAssetFixture());
+  const fixtures = Array.from({ length: 28 }, () => createNativeAssetFixture());
   context.after(() => fixtures.forEach((fixture) => rmSync(fixture.directory, { recursive: true, force: true })));
   assert.throws(() => prepareFixture(fixtures[0], { notes: "cyunlab/narrant-private" }), /私有/);
   assert.throws(() => prepareFixture(fixtures[1], { notes: "b".repeat(40) }), /完整 Git SHA/);
@@ -390,5 +390,23 @@ test("公开元数据逐个拒绝任意 SHA 和 delimiter 拼接的 allowlist �
   );
   assert.doesNotThrow(() => prepareFixture(fixtures[20], {
     notes: `<a href="${publicUrl}">公开 issue</a>`,
+  }));
+  for (const [fixture, notes] of [
+    [fixtures[21], "内部手册 www.internal.example/runbook"],
+    [fixtures[22], "联系 private@example.com"],
+    [fixtures[23], "[内部][ref]\n\n[ref]: /private/runbook"],
+    [fixtures[24], "![内部图][image]\n\n[image]: mailto:private@example.com"],
+    [fixtures[25], "[内部](/private/runbook)"],
+  ]) {
+    assert.throws(
+      () => prepareFixture(fixture, { notes }),
+      /未允许 URL|无效 URL/,
+    );
+  }
+  assert.doesNotThrow(() => prepareFixture(fixtures[26], {
+    notes: `公开 autolink <${publicUrl}>`,
+  }));
+  assert.doesNotThrow(() => prepareFixture(fixtures[27], {
+    notes: `[公开][issue]\n\n[issue]: ${publicUrl}`,
   }));
 });

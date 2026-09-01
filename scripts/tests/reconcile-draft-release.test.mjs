@@ -156,6 +156,44 @@ function uploadResponse(body, settings = {}) {
   };
 }
 
+/** 构造可观测 cancel/release 次数且能注入敏感 lifecycle cause 的 fake response body。 */
+function trackedResponseBody(chunks, lifecycle, failures = {}) {
+  return {
+    async cancel() {
+      lifecycle.bodyCancel += 1;
+      if (failures.bodyCancel) throw new Error(failures.bodyCancel);
+    },
+    getReader() {
+      lifecycle.getReader += 1;
+      if (failures.getReader) throw new Error(failures.getReader);
+      let cursor = 0;
+      return {
+        async read() {
+          lifecycle.read += 1;
+          if (failures.read) throw new Error(failures.read);
+          if (cursor >= chunks.length) return { done: true, value: undefined };
+          const value = chunks[cursor];
+          cursor += 1;
+          return { done: false, value };
+        },
+        async cancel() {
+          lifecycle.readerCancel += 1;
+          if (failures.readerCancel) throw new Error(failures.readerCancel);
+        },
+        releaseLock() {
+          lifecycle.releaseLock += 1;
+          if (failures.releaseLock) throw new Error(failures.releaseLock);
+        },
+      };
+    },
+  };
+}
+
+/** 创建 lifecycle 计数器，避免各测试遗漏某一条清理路径。 */
+function lifecycleCounts() {
+  return { bodyCancel: 0, getReader: 0, read: 0, readerCancel: 0, releaseLock: 0 };
+}
+
 test("不存在时创建 Draft、上传八文件并通过 API 回读精确集合", async () => {
   const gh = createGhAdapter();
   const result = await reconcileDraftRelease(options(), adapterDependencies(gh));
@@ -536,6 +574,207 @@ test("生产上传 adapter 拒绝网络、redirect、非 2xx 与不可信响应 
   );
 });
 
+test("response metadata 早退均 best-effort cancel body 且 cleanup cause 不覆盖主错误", async (context) => {
+  const token = "token-from-body-cancel";
+  const base = {
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact: "/tmp/file.bin",
+    token: "request-token",
+  };
+  const fixtures = [
+    { name: "redirect", settings: { redirected: true }, pattern: /拒绝重定向/ },
+    { name: "non-2xx", settings: { status: 422 }, pattern: /HTTP 422/ },
+    { name: "content-type", settings: { contentType: "text/plain" }, pattern: /错误 Content-Type/ },
+    { name: "invalid length", settings: { contentLength: "NaN" }, pattern: /无效 Content-Length/ },
+    { name: "declared oversize", settings: { contentLength: 256 * 1024 + 1 }, pattern: /超过安全上限/ },
+  ];
+  for (const fixture of fixtures) {
+    await context.test(fixture.name, async () => {
+      const lifecycle = lifecycleCounts();
+      const response = uploadResponse(uploadedAsset("file.bin"), fixture.settings);
+      response.body = trackedResponseBody([], lifecycle, { bodyCancel: token });
+      await assert.rejects(
+        uploadReleaseAsset(base, {
+          openBlob: async () => new Blob(["binary"]),
+          fetchImpl: async () => response,
+        }),
+        (error) => {
+          assert.match(error.message, fixture.pattern);
+          assert.equal(error.message.includes(token), false);
+          return true;
+        },
+      );
+      assert.deepEqual(lifecycle, {
+        bodyCancel: 1,
+        getReader: 0,
+        read: 0,
+        readerCancel: 0,
+        releaseLock: 0,
+      });
+    });
+  }
+});
+
+test("response body/header/getReader cause 固定脱敏并在可用时 cancel body", async (context) => {
+  const token = "token-from-response-lifecycle";
+  const base = {
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact: "/tmp/file.bin",
+    token: "request-token",
+  };
+  await context.test("body getter", async () => {
+    const response = uploadResponse(uploadedAsset("file.bin"));
+    Object.defineProperty(response, "body", {
+      get() { throw new Error(token); },
+    });
+    await assert.rejects(
+      uploadReleaseAsset(base, {
+        openBlob: async () => new Blob(["binary"]),
+        fetchImpl: async () => response,
+      }),
+      (error) => {
+        assert.match(error.message, /metadata 无法安全读取/);
+        assert.equal(error.message.includes(token), false);
+        return true;
+      },
+    );
+  });
+  await context.test("header getter", async () => {
+    const lifecycle = lifecycleCounts();
+    const response = uploadResponse(uploadedAsset("file.bin"));
+    response.body = trackedResponseBody([], lifecycle);
+    response.headers.get = () => { throw new Error(token); };
+    await assert.rejects(
+      uploadReleaseAsset(base, {
+        openBlob: async () => new Blob(["binary"]),
+        fetchImpl: async () => response,
+      }),
+      (error) => {
+        assert.match(error.message, /metadata 无法安全读取/);
+        assert.equal(error.message.includes(token), false);
+        return true;
+      },
+    );
+    assert.equal(lifecycle.bodyCancel, 1);
+    assert.equal(lifecycle.getReader, 0);
+  });
+  await context.test("getReader", async () => {
+    const lifecycle = lifecycleCounts();
+    const response = uploadResponse(uploadedAsset("file.bin"));
+    response.body = trackedResponseBody([], lifecycle, { getReader: token, bodyCancel: token });
+    await assert.rejects(
+      uploadReleaseAsset(base, {
+        openBlob: async () => new Blob(["binary"]),
+        fetchImpl: async () => response,
+      }),
+      (error) => {
+        assert.match(error.message, /reader 无法安全创建/);
+        assert.equal(error.message.includes(token), false);
+        return true;
+      },
+    );
+    assert.equal(lifecycle.getReader, 1);
+    assert.equal(lifecycle.bodyCancel, 1);
+  });
+});
+
+test("reader read、oversize、release 异常均 cancel/release 且敏感 cleanup cause 不外泄", async (context) => {
+  const token = "token-from-reader-lifecycle";
+  const base = {
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact: "/tmp/file.bin",
+    token: "request-token",
+  };
+  const fixtures = [
+    {
+      name: "read",
+      chunks: [],
+      failures: { read: token, readerCancel: token, releaseLock: token },
+      pattern: /响应读取失败/,
+    },
+    {
+      name: "stream oversize",
+      chunks: [Buffer.alloc(256 * 1024 + 1)],
+      failures: { readerCancel: token, releaseLock: token },
+      pattern: /超过安全上限/,
+    },
+    {
+      name: "release",
+      chunks: [Buffer.from(JSON.stringify(uploadedAsset("file.bin")))],
+      failures: { readerCancel: token, releaseLock: token },
+      pattern: /reader lifecycle 无效/,
+    },
+  ];
+  for (const fixture of fixtures) {
+    await context.test(fixture.name, async () => {
+      const lifecycle = lifecycleCounts();
+      const response = uploadResponse("", { contentLength: null });
+      response.body = trackedResponseBody(fixture.chunks, lifecycle, fixture.failures);
+      await assert.rejects(
+        uploadReleaseAsset(base, {
+          openBlob: async () => new Blob(["binary"]),
+          fetchImpl: async () => response,
+        }),
+        (error) => {
+          assert.match(error.message, fixture.pattern);
+          assert.equal(error.message.includes(token), false);
+          return true;
+        },
+      );
+      assert.equal(lifecycle.readerCancel, 1);
+      assert.equal(lifecycle.releaseLock, 1);
+      assert.equal(lifecycle.bodyCancel, 0);
+    });
+  }
+});
+
+test("本地 Blob.size 必须逐字节等于 GitHub asset.size，size getter cause 不外泄", async () => {
+  const token = "token-from-blob-size";
+  const base = {
+    repository: "cyunlab/narrant",
+    tag: "v2.3.4",
+    releaseId: 42,
+    artifact: "/tmp/file.bin",
+    token: "request-token",
+  };
+  const oneByteAsset = uploadedAsset("file.bin");
+  oneByteAsset.size = 1;
+  assert.equal((await uploadReleaseAsset(base, {
+    openBlob: async () => new Blob(["x"]),
+    fetchImpl: async () => uploadResponse(oneByteAsset),
+  })).size, 1);
+
+  const wrongSize = uploadedAsset("file.bin");
+  wrongSize.size = 999;
+  await assert.rejects(
+    uploadReleaseAsset(base, {
+      openBlob: async () => new Blob(["x"]),
+      fetchImpl: async () => uploadResponse(wrongSize),
+    }),
+    /无效 asset identity/,
+  );
+
+  let fetched = false;
+  await assert.rejects(
+    uploadReleaseAsset(base, {
+      openBlob: async () => ({ get size() { throw new Error(token); } }),
+      fetchImpl: async () => { fetched = true; },
+    }),
+    (error) => {
+      assert.match(error.message, /无法读取待上传资产/);
+      assert.equal(error.message.includes(token), false);
+      return true;
+    },
+  );
+  assert.equal(fetched, false);
+});
+
 test("生产上传 adapter 对每个 asset response identity 与 exact API URL fail closed", async (context) => {
   const base = {
     repository: "cyunlab/narrant",
@@ -551,6 +790,7 @@ test("生产上传 adapter 对每个 asset response identity 与 exact API URL f
     (asset) => { asset.state = "starter"; },
     (asset) => { asset.content_type = "text/plain"; },
     (asset) => { asset.size = 0; },
+    (asset) => { asset.size = 999; },
     (asset) => { asset.url = "https://api.github.com:443/repos/cyunlab/narrant/releases/assets/101"; },
     (asset) => { asset.url += "?private=1"; },
     (asset) => { asset.url += "#fragment"; },

@@ -88,6 +88,8 @@ test("Draft 二进制上传固定 uploads.github.com release-ID endpoint，不�
   assert.match(reconciliation, /redirect: "error"/);
   assert.match(reconciliation, /openAsBlob/);
   assert.match(reconciliation, /MAX_UPLOAD_RESPONSE_BYTES/);
+  assert.match(reconciliation, /artifacts\.map\(\(artifact\) => basename\(artifact\)\)/);
+  assert.doesNotMatch(reconciliation, /artifact\.split\(/);
   assert.doesNotMatch(reconciliation, /"release",\s*"upload"/);
   assert.doesNotMatch(reconciliation, /--hostname/);
   assert.doesNotMatch(reconciliation, /--clobber/);

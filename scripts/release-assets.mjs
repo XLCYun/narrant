@@ -13,10 +13,14 @@ import { basename, join } from "node:path";
 import { URL } from "node:url";
 import { TextDecoder } from "node:util";
 import { gunzipSync } from "node:zlib";
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 
 const PUBLIC_REPOSITORY = "cyunlab/narrant";
 const STABLE_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const TARGETS = ["darwin-aarch64", "windows-x86_64"];
+const GFM_PARSER = unified().use(remarkParse).use(remarkGfm);
 
 /** 按 Unicode code point 稳定排序公开文件名，不依赖 runner locale/ICU。 */
 function comparePublicNames(left, right) {
@@ -155,21 +159,25 @@ function extractHttpUrlCandidates(text) {
   });
 }
 
-/** 提取 Markdown inline link 的第一个 destination token；不完整语法 fail closed。 */
-function extractMarkdownDestinations(text) {
+/** 以仓库锁定的 GFM parser 枚举 link、image、definition 和 autolink destination。 */
+function extractGfmDestinations(text) {
   const destinations = [];
-  let cursor = 0;
-  while ((cursor = text.indexOf("](", cursor)) !== -1) {
-    const start = cursor + 2;
-    const end = text.indexOf(")", start);
-    if (end === -1) throw new Error("公开发布元数据包含不完整 Markdown link destination");
-    const body = text.slice(start, end).trim();
-    const bracketed = body.startsWith("<") && body.includes(">")
-      ? body.slice(1, body.indexOf(">"))
-      : body.split(/\s/, 1)[0];
-    if (!bracketed) throw new Error("公开发布元数据包含空 Markdown link destination");
-    destinations.push(bracketed);
-    cursor = end + 1;
+  let tree;
+  try {
+    tree = GFM_PARSER.parse(text);
+  } catch {
+    throw new Error("公开发布元数据无法按 GFM 安全解析");
+  }
+  const pending = [tree];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (["link", "image", "definition"].includes(node.type)) {
+      if (typeof node.url !== "string" || node.url.length === 0) {
+        throw new Error("公开发布元数据包含空 GFM destination");
+      }
+      destinations.push(node.url);
+    }
+    pending.push(...(node.children ?? []));
   }
   return destinations;
 }
@@ -184,8 +192,8 @@ function extractHtmlAttributeDestinations(text) {
   return destinations;
 }
 
-/** 要求一个 link destination 是 canonical 的 Narrant 公开仓库 HTTPS URL。 */
-function assertAllowedPublicUrl(candidate) {
+/** 要求一个 link destination 解析后仍严格位于 Narrant 公开仓库 HTTPS path。 */
+function assertAllowedPublicUrl(candidate, requireLiteralCanonical = true) {
   let url;
   try {
     url = new URL(candidate);
@@ -195,7 +203,7 @@ function assertAllowedPublicUrl(candidate) {
   const publicPath = url.pathname === "/cyunlab/narrant" ||
     url.pathname.startsWith("/cyunlab/narrant/");
   if (
-    url.href !== candidate ||
+    (requireLiteralCanonical && url.href !== candidate) ||
     url.protocol !== "https:" ||
     url.hostname !== "github.com" ||
     url.port ||
@@ -210,12 +218,14 @@ function assertAllowedPublicUrl(candidate) {
 
 /** 检查 raw URL、Markdown/HTML destination、protocol-relative 和明确 URI scheme。 */
 function assertAllowedPublicLinks(text) {
-  const candidates = [
-    ...extractHttpUrlCandidates(text),
-    ...extractMarkdownDestinations(text),
-    ...extractHtmlAttributeDestinations(text),
-  ];
-  for (const candidate of candidates) {
+  for (const candidate of extractHttpUrlCandidates(text)) {
+    assertAllowedPublicUrl(candidate);
+  }
+  // GFM 会把紧邻的 Unicode 标点纳入 bare autolink；以解析后的 origin/path 判定真实目标。
+  for (const candidate of extractGfmDestinations(text)) {
+    assertAllowedPublicUrl(candidate, false);
+  }
+  for (const candidate of extractHtmlAttributeDestinations(text)) {
     assertAllowedPublicUrl(candidate);
   }
   if (/(?:^|[^A-Za-z0-9+.-:])\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?=[:/?#]|$)/im.test(text)) {
@@ -358,7 +368,9 @@ function assertPublicMetadata({ title, notes, manifestText, assetNames, privateR
   if (/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/i.test(publicText)) {
     throw new Error("公开发布元数据包含完整 Git SHA");
   }
-  assertAllowedPublicLinks(publicText);
+  for (const document of [title, notes, manifestText, ...assetNames]) {
+    assertAllowedPublicLinks(document);
+  }
 }
 
 /** 生成稳定排序、只覆盖七个非校验和文件的 SHA256SUMS。 */

@@ -88,8 +88,8 @@ function assertUploadedDraft(release, tag, releaseId, expectedNames) {
   assertExactNameSet(actualNames, expectedNames, "上传后 Draft 资产集合");
 }
 
-/** 验证 uploads.github.com 对单个二进制资产返回的固定仓库、名称和下载身份。 */
-function parseUploadedAsset(asset, { repository, tag, name }) {
+/** 验证 uploads.github.com 对单个二进制资产返回的固定仓库、名称、字节数和下载身份。 */
+function parseUploadedAsset(asset, { repository, tag, name, expectedSize }) {
   if (
     !asset ||
     !Number.isSafeInteger(asset.id) ||
@@ -98,7 +98,7 @@ function parseUploadedAsset(asset, { repository, tag, name }) {
     asset.state !== "uploaded" ||
     asset.content_type !== "application/octet-stream" ||
     !Number.isSafeInteger(asset.size) ||
-    asset.size <= 0
+    asset.size !== expectedSize
   ) {
     throw new Error(`上传资产 ${name} 返回无效 asset identity`);
   }
@@ -113,39 +113,133 @@ function parseUploadedAsset(asset, { repository, tag, name }) {
   return asset;
 }
 
-/** 在固定上限内读取上传响应，避免错误端点返回的无界内容耗尽内存。 */
+/** 尽力取消尚未交给 reader 的响应体；清理异常永远不暴露也不覆盖主错误。 */
+async function cancelResponseBody(body) {
+  try {
+    if (body && typeof body.cancel === "function") await body.cancel();
+  } catch {
+    // 远端 lifecycle cause 可能包含敏感 header；调用方只保留原本的安全错误。
+  }
+}
+
+/** 尽力取消 reader；清理异常永远不暴露也不覆盖主错误。 */
+async function cancelResponseReader(reader) {
+  try {
+    await reader.cancel();
+  } catch {
+    // reader 的底层 cause 不进入 Actions 错误输出。
+  }
+}
+
+/** 尽力释放 reader lock，并用布尔值让成功路径感知 lifecycle 失败。 */
+function releaseResponseReader(reader) {
+  try {
+    reader.releaseLock();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 取消未消费 body 后抛出预先构造的安全主错误。 */
+async function rejectUploadResponse(body, message) {
+  await cancelResponseBody(body);
+  throw new Error(message);
+}
+
+/** 验证响应 metadata，并在固定上限内读取；所有 lifecycle cause 都替换为安全中文错误。 */
 async function readBoundedUploadResponse(response, name) {
-  const contentLength = response.headers.get("content-length");
+  let body;
+  let redirected;
+  let status;
+  let contentType;
+  let contentLength;
+  try {
+    body = response.body;
+    redirected = response.redirected;
+    status = response.status;
+    contentType = response.headers.get("content-type");
+    contentLength = response.headers.get("content-length");
+  } catch {
+    await cancelResponseBody(body);
+    throw new Error(`上传资产 ${name} 的响应 metadata 无法安全读取`);
+  }
+  if (typeof redirected !== "boolean" || !Number.isSafeInteger(status)) {
+    await rejectUploadResponse(body, `上传资产 ${name} 的响应 metadata 无效`);
+  }
+  if (redirected) {
+    await rejectUploadResponse(body, `上传 Draft 资产 ${name} 拒绝重定向响应`);
+  }
+  if (status < 200 || status >= 300) {
+    await rejectUploadResponse(body, `上传 Draft 资产 ${name} 失败（HTTP ${status}）`);
+  }
+  if (typeof contentType !== "string" || !/^application\/json(?:\s*;|$)/i.test(contentType)) {
+    await rejectUploadResponse(body, `上传资产 ${name} 返回错误 Content-Type`);
+  }
   if (contentLength !== null) {
+    if (typeof contentLength !== "string") {
+      await rejectUploadResponse(body, `上传资产 ${name} 返回无效 Content-Length`);
+    }
     const parsedLength = Number(contentLength);
     if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) {
-      throw new Error(`上传资产 ${name} 返回无效 Content-Length`);
+      await rejectUploadResponse(body, `上传资产 ${name} 返回无效 Content-Length`);
     }
     if (parsedLength > MAX_UPLOAD_RESPONSE_BYTES) {
-      throw new Error(`上传资产 ${name} 的响应超过安全上限`);
+      await rejectUploadResponse(body, `上传资产 ${name} 的响应超过安全上限`);
     }
   }
-  if (!response.body || typeof response.body.getReader !== "function") {
-    throw new Error(`上传资产 ${name} 缺少可读取响应体`);
+  let getReader;
+  try {
+    getReader = body?.getReader;
+  } catch {
+    await cancelResponseBody(body);
+    throw new Error(`上传资产 ${name} 的响应 reader 无法安全创建`);
+  }
+  if (typeof getReader !== "function") {
+    await rejectUploadResponse(body, `上传资产 ${name} 缺少可读取响应体`);
   }
 
-  const reader = response.body.getReader();
+  let reader;
+  try {
+    reader = getReader.call(body);
+  } catch {
+    await cancelResponseBody(body);
+    throw new Error(`上传资产 ${name} 的响应 reader 无法安全创建`);
+  }
   const chunks = [];
   let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_UPLOAD_RESPONSE_BYTES) {
-        await reader.cancel();
-        throw new Error(`上传资产 ${name} 的响应超过安全上限`);
-      }
-      chunks.push(Buffer.from(value));
+  let primaryError;
+  let completed = false;
+  while (!primaryError && !completed) {
+    let result;
+    try {
+      result = await reader.read();
+    } catch {
+      primaryError = new Error(`上传资产 ${name} 的响应读取失败`);
+      break;
     }
-  } finally {
-    reader.releaseLock();
+    try {
+      if (result.done) {
+        completed = true;
+        break;
+      }
+      const chunk = Buffer.from(result.value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > MAX_UPLOAD_RESPONSE_BYTES) {
+        primaryError = new Error(`上传资产 ${name} 的响应超过安全上限`);
+        break;
+      }
+      chunks.push(chunk);
+    } catch {
+      primaryError = new Error(`上传资产 ${name} 的响应 reader lifecycle 无效`);
+    }
   }
+  if (primaryError || !completed) await cancelResponseReader(reader);
+  if (!releaseResponseReader(reader) && !primaryError) {
+    await cancelResponseReader(reader);
+    primaryError = new Error(`上传资产 ${name} 的响应 reader lifecycle 无效`);
+  }
+  if (primaryError) throw primaryError;
 
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
@@ -172,8 +266,11 @@ export async function uploadReleaseAsset(options, dependencies = {}) {
   const name = basename(artifact);
   const endpoint = `https://uploads.github.com/repos/${repository}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`;
   let body;
+  let expectedSize;
   try {
     body = await openBlob(artifact, { type: "application/octet-stream" });
+    expectedSize = body.size;
+    if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0) throw new Error("invalid blob size");
   } catch {
     throw new Error(`无法读取待上传资产 ${name}`);
   }
@@ -194,17 +291,6 @@ export async function uploadReleaseAsset(options, dependencies = {}) {
   } catch {
     throw new Error(`上传 Draft 资产 ${name} 的网络请求失败`);
   }
-  if (response.redirected) {
-    throw new Error(`上传 Draft 资产 ${name} 拒绝重定向响应`);
-  }
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`上传 Draft 资产 ${name} 失败（HTTP ${response.status}）`);
-  }
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
-    throw new Error(`上传资产 ${name} 返回错误 Content-Type`);
-  }
-
   const responseText = await readBoundedUploadResponse(response, name);
   let asset;
   try {
@@ -212,7 +298,7 @@ export async function uploadReleaseAsset(options, dependencies = {}) {
   } catch {
     throw new Error(`上传资产 ${name} 返回无效 JSON`);
   }
-  return parseUploadedAsset(asset, { repository, tag, name });
+  return parseUploadedAsset(asset, { repository, tag, name, expectedSize });
 }
 
 /**
@@ -303,7 +389,7 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
     uploaded,
     tag,
     releaseId,
-    artifacts.map((artifact) => artifact.split(/[\\/]/).at(-1)),
+    artifacts.map((artifact) => basename(artifact)),
   );
   return { outcome, releaseId: uploaded.id };
 }
