@@ -114,6 +114,42 @@ fn both_signal_queues_are_explicitly_bounded() {
 }
 
 #[cfg(feature = "dev-observability")]
+#[test]
+fn terminal_fallback_rejects_sensitive_warn_and_error_events() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+    /// 只统计经过 fallback filter 的 event，不保留任何字段内容。
+    struct CountEvents(Arc<AtomicUsize>);
+
+    impl<S: Subscriber> Layer<S> for CountEvents {
+        fn on_event(&self, _event: &Event<'_>, _context: Context<'_, S>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(
+        CountEvents(accepted.clone())
+            .with_filter(tracing_subscriber::filter::filter_fn(is_lifecycle_callsite)),
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::warn!(target: "rig", message = "SECRET_WARN", body = "SECRET_BODY");
+        tracing::error!(target: "provider", error = "SECRET_ERROR", body = "SECRET_BODY");
+        tracing::info!(
+            target: LIFECYCLE_TARGET,
+            analysis_run_id = 158_u64,
+            provider = "custom",
+            protocol = "openai_chat_completions",
+            phase = "generation"
+        );
+    });
+
+    assert_eq!(accepted.load(Ordering::Relaxed), 1);
+}
+
+#[cfg(feature = "dev-observability")]
 /// 通过真实 Custom/Rig agent 验证 OTLP protobuf 中的 span、logs 和关联关系。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn custom_analysis_exports_correlated_safe_otel_signals() {
@@ -123,6 +159,10 @@ async fn custom_analysis_exports_correlated_safe_otel_signals() {
     };
     use prost::Message;
 
+    let _environment_guard = OTEL_ENDPOINT_ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("OTLP endpoint environment lock");
     let _subscriber_guard = TELEMETRY_SUBSCRIBER_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -176,7 +216,12 @@ async fn custom_analysis_exports_correlated_safe_otel_signals() {
     let (request, content) = telemetry_fixture_input(workspace.path(), SECRET_SOURCE);
 
     let fixture = OtlpFixture::start(2);
-    let endpoint = EndpointConfig::from_optional(Some(fixture.endpoint()));
+    let endpoint_restore = EnvironmentValueRestore {
+        name: OTEL_ENDPOINT_ENV_NAME,
+        previous: std::env::var(OTEL_ENDPOINT_ENV_NAME).ok(),
+    };
+    std::env::set_var(OTEL_ENDPOINT_ENV_NAME, fixture.endpoint());
+    let endpoint = EndpointConfig::from_environment();
     let telemetry = EnabledTelemetry::build(&endpoint).expect("build OTLP integration telemetry");
     let subscriber = telemetry.subscriber();
     let cancellation = crate::operation::OperationContext::background()
@@ -298,6 +343,7 @@ async fn custom_analysis_exports_correlated_safe_otel_signals() {
     ] {
         assert!(!decoded.contains(secret), "telemetry leaked {secret}");
     }
+    drop(endpoint_restore);
 }
 
 #[cfg(feature = "dev-observability")]

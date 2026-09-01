@@ -367,9 +367,16 @@ fn shutdown_providers(
 
 #[cfg(feature = "dev-observability")]
 fn install_terminal_subscriber() {
+    use tracing_subscriber::layer::{Layer, SubscriberExt};
+    use tracing_subscriber::util::SubscriberInitExt;
+
     // endpoint 格式错误或其他库已占用全局 subscriber 时，仍保留终端 fmt。
-    // 不打印 endpoint 细节或 exporter 错误。
-    let _ = tracing_subscriber::fmt().try_init();
+    // fallback 必须复用 lifecycle allowlist，避免 Rig/provider 的错误正文泄漏。
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_filter(tracing_subscriber::filter::filter_fn(is_lifecycle_callsite)),
+    );
+    let _ = subscriber.try_init();
 }
 
 #[cfg(test)]
