@@ -209,3 +209,83 @@ Task 3 已完成。实现提交为 `7a67c6f`（`feat: add trusted application up
 - macOS 测试真实 tar 与文件系统事务，但没有替换 `/Applications` 中已签名/公证的 production app；原生 smoke 仍属于 Task 6。
 - build-time endpoint/public key/release private key 要求不变；本轮没有新增或提交任何真实/冒充 production 的密钥，也没有修改 GitHub secrets/environments。
 - 本轮没有修改 Tauri config/capability schema、Task 4 UI 或 Task 5/6 workflow/smoke。
+
+## Fix round 2（Round 1 scoped re-review 的 4 个 PARTIAL）
+
+Round 2 实现提交为 `81d8c52`（`fix: close application update integration gaps`）。本节取代 round 1 对顺序 helper 测试的覆盖表述；只有下列 production-shared executor/seam 覆盖才视为 runtime/post-stop 组合证据。
+
+### 1. Production GitHub manifest redirect chain
+
+- 初始 endpoint 仍必须逐字等于 `PRODUCTION_UPDATE_ENDPOINT`。
+- 同一 pure production policy 现在额外允许：
+  - `https://github.com/cyunlab/narrant/releases/download/<tag>/latest.json`；
+  - `<tag>` 必须为 `v` 可选前缀的 stable SemVer，非空，不是 `.`/`..`，不能包含 `/`、percent encoding 或非安全字符；
+  - GitHub 中间 URL 必须固定 owner/repo/filename、无 credentials/query/fragment/显式 port；
+  - 后续只允许既有 GitHub asset hosts 的 HTTPS 非空 asset path、无 credentials/fragment/显式 port。asset host 允许 GitHub 实际下载链需要的签名 query；query 不会改变固定 host/path trust owner。
+- production-policy contract test 对 `latest -> v1.1.5 tag-specific -> release-assets.githubusercontent.com` 三段 URL 使用与生产 redirect callback 完全相同的 `trusted_manifest_url`，并覆盖其他 owner/repo、空/`.`/`..`/encoded tag、错误 filename、query/fragment/port 拒绝。loopback fixture policy 没有被放宽。
+- 2026-09-02 只读核对：固定 latest endpoint 返回 `302` 到 `.../releases/download/v1.1.5/latest.json`，新 policy 接受该首跳；当前 tag-specific URL 随后返回 `404`，说明当前 GitHub Release 尚未提供 `latest.json` asset。代码已不再误拒合法首跳，但正式检查成功仍要求 release workflow 上传 manifest。
+
+### 2. Stable metadata/controller semantics
+
+- HTTP 204 在读取/解析 body 前直接映射为 `Ok(None)`，与 Tauri 2.10.1 stable check 的 no-update 语义一致。
+- `RemoteRelease` 的非空 prerelease 在构造 `StableRelease` 前映射为不可 retry 的 `Manifest`。
+- controller 在清除 active identity、retry/failure 前先完成候选 SemVer/stable-channel 验证；未来 adapter 漏检时不会产生“active 已清除但 snapshot 仍 checking”的半转换。
+- runtime 的共用 `transition` 捕获 `UpdateDomainError`，写脱敏 diagnostics，再提交有序 `RuntimeDomainFailed` snapshot；下载中的 domain failure 同时产生精确 CancelDownload effect，不再静默 return。
+- 真实 loopback adapter + controller 组合测试覆盖 prerelease 最终 `Failed/Manifest`、active 收敛后可开始新 check，以及 204 最终 `UpToDate`。
+- 真实 runtime test 额外故意注入漏过 adapter 的 prerelease `StableRelease`，验证 sequence 增长、最终 `Failed/Manifest`、新 check 可进入、diagnostics 不含版本文本。
+
+### 3. Queryable startup recovery warning
+
+- `UpdateSnapshot` 新增独立可选 `recoveryWarning` provider-neutral 投影，只含稳定 `category/message`；它可以与 `Checking`/后继状态同时存在。
+- startup 损坏候选/仓储不可打开仍先写 diagnostics；bootstrap 随后的 `Ready` 只启动检查，不覆盖 warning。snapshot command 与完整 snapshot event 都会携带 warning。
+- warning 在同一进程内保持可查询；成功提交新的 opaque durable proof/`DownloadSucceeded` 后明确清除。重启时仓储恢复成功也自然不再创建 warning。
+- production 与测试共用 `ApplicationUpdateRuntime::new_at_paths` 和 `transition`。真实 filesystem tests 分别构造签名 generation 后篡改 package、以及把 cache root 变为普通文件；随后创建 runtime、dispatch Ready、读取 serialized snapshot 与 diagnostics。两者最终均为 `Checking + recoveryWarning`，分类分别是 Verification/Storage，且 diagnostics/snapshot 不含路径或签名；仓储可用场景仍产生真实 `CheckStable` effect。
+
+### 4. Production-shared combination seams
+
+#### Download runtime
+
+- production `download_pending` 与测试共用 `consume_stream_and_commit` / `commit_download_file`：真实 stream、EOF、temporary disk sync、StageCandidate、DiskMinisignVerifier、StagingRepository、pending durability confirmation、transition gate、core identity/proof commit 全部在同一执行路径。
+- transition gate 内二次检查 shared cancellation，覆盖“EOF 后等待 gate 时才取消”的窗口。
+- 三个受管任务测试使用真实 `CancellableOperations::run`：
+  - EOF 前取消：stream 保持打开，收到 progress 后 preference + registry cancel；磁盘无 proof，core Available，registration 释放且同 ID 可复用；
+  - EOF 后/gate 前取消：测试持有真实 transition mutex，before-commit hook 证明任务已过 EOF，再 cancel/release；二次 cancellation check 阻止 stage，磁盘/core 未 staged，RAII 可复用；
+  - stage 先赢：真实 minisign `test` bytes 验证并提交，磁盘 proof 与 core 均 Staged，registration 释放。
+
+#### Post-stop coordinator
+
+- production `PostStopCoordinator::run` 与测试共用 `execute_post_stop`，注入 stop Future、installer closure 与唯一 final-action closure；测试不再手工增加虚构计数。
+- outcome matrix 真正执行 Completed/Failed/TimedOut、install error、no staged、macOS `Installed`、Windows `HandedOff`、ordinary install：
+  - 只有 Completed 调 installer；
+  - install error -> Exit(1)；Failed/TimedOut/HandedOff/no staged -> Exit(0)；
+  - 只有 UpdateRestart + Installed -> Restart；
+  - 每例 final action 恰好一次，停止后的进程不存在无 final action 分支。
+- Exit/Close/UpdateRestart 使用多个线程竞争同一个 coordinator begin gate，stop completion 前 restart intent 成功升级；production-shared executor 最终只调用一次 installer 与一次 Restart。
+- runtime 的 `try_use_staged` 与 production install 共用 `Mutex::try_lock`；真实 runtime 持有 staging mutex 时测试证明立即返回错误（<50ms），不会在 15 秒 stop deadline 外等待。
+
+### Round 2 focused verification
+
+- `scripts/cargo-agent.sh test application_update --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：71 passed, 0 failed。
+- `scripts/cargo-agent.sh test application_update::runtime::tests --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：8 passed, 0 failed。
+- `scripts/cargo-agent.sh test application_update::metadata::tests --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：4 passed, 0 failed。
+- `scripts/cargo-agent.sh test application_update::tests::config --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：4 passed, 0 failed。
+- `scripts/cargo-agent.sh test tauri_app::shutdown::tests --manifest-path src-tauri/Cargo.toml`
+  - **PASS**：13 passed, 0 failed。
+- `scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`
+  - **PASS**。
+- `scripts/cargo-agent.sh fmt --manifest-path src-tauri/Cargo.toml -- --check`
+  - **PASS**。
+- `git diff --check`
+  - **PASS**。
+
+未运行全量 Rust suite，未触发 quality-gate。
+
+### Round 2 residual risks / report scope
+
+- 当前 GitHub tag `v1.1.5` 下的 `latest.json` 只读请求为 404；release pipeline 在正式启用更新前必须上传与固定 endpoint/tag chain 匹配的 stable manifest。这不是客户端 allowlist 放宽可以解决的问题。
+- Windows production `SystemCommandLauncher`/target cfg 仍未在 macOS 编译，真实 NSIS current-user lifecycle 与 `/R` relaunch 必须由 Windows runner/Task 6 覆盖。Round 2 只声称 production-shared post-stop outcome 与既有 PE/temp/argv launcher core contract 覆盖，不声称 native Windows adapter 已在本机证明。
+- macOS production app replacement/native restart 仍需签名、公证 runner smoke；本轮没有修改 UI、workflow、secrets、capability schema 或制品发布状态。
