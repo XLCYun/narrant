@@ -155,14 +155,18 @@ Coding Agent Provider in Application Settings.
 - Diagnostics include only Custom identity, protocol, phase, HTTP status category, and
   redacted Rig error category. They contain no endpoint fingerprint and exclude URL, key,
   request/response bodies, prompts, source, Line Explanations, and tool output.
-- An explicitly enabled `dev-observability` build exports OpenTelemetry traces and logs
-  over OTLP HTTP/protobuf. Rig supplies OpenTelemetry GenAI semantic-convention spans;
-  Narrant adds analysis-lifecycle spans and structured events without duplicating Rig's
-  model or tool instrumentation. The endpoint defaults to Venator at
-  `http://127.0.0.1:8362` and honors `OTEL_EXPORTER_OTLP_ENDPOINT`. An unavailable
-  dashboard does not fail or block analysis, exporter queues are bounded, terminal logs
-  remain enabled, and application shutdown waits at most two seconds to flush. Telemetry
-  never captures prompts, source, Line Explanations, tool arguments, or tool results.
+- Debug builds install a local `tracing-subscriber::fmt` terminal subscriber; Release
+  builds install no subscriber. With no `RUST_LOG`, Debug defaults to
+  `narrant=info,rig=info`; a valid `RUST_LOG` overrides that filter, while an invalid value
+  emits one safe warning and falls back to the default without failing startup. Logs use
+  human-readable single-line formatting and are neither persisted nor exported.
+- Rig supplies its native completion spans with content telemetry disabled. Narrant adds
+  correlated analysis, generation/repair, model-turn, provider-request, and repository-tool
+  boundary events. Critical completion events include explicit `elapsed_ms`; tool events
+  may include only tool name, sequence, input/output byte counts, truncation, status, and
+  elapsed time. Development logs may include the configured endpoint URL and model
+  identifier, but never the API key, prompt, source, model body, Line Explanations, tool
+  arguments, or tool results.
 
 ## Testing Decisions
 
@@ -190,11 +194,10 @@ Coding Agent Provider in Application Settings.
   patches, three exhausted repairs, Rig-owned tool-loop limits, timeout, cancellation at
   model and tool boundaries, late responses, frozen connection identity, and
   completed-only caching.
-- Development-observability tests capture Rig GenAI spans and correlated Narrant logs
-  through a local OTLP fixture, prove the Venator default and standard endpoint override,
-  and show that an unavailable receiver neither blocks nor fails analysis. They also pin
-  bounded shutdown and the absence of prompts, source, explanations, tool arguments, and
-  tool results from exported telemetry.
+- Development-logging tests prove the Debug default filter, valid and invalid `RUST_LOG`
+  handling, correlated lifecycle/model/tool boundaries, explicit elapsed time, allowed URL
+  and model fields, forbidden content fields, and the absence of subscriber initialization
+  in Release builds. They do not pin terminal colors or the complete rendered line.
 - React behavior tests cover selecting Custom, the full form, Provider default semantics,
   password visibility, validation, save failure, unconfigured recovery, and absence of
   silent fallback.

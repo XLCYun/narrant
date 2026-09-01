@@ -360,6 +360,14 @@ impl AnthropicAdapter {
         &self,
         request: AnthropicAdapterRequest,
     ) -> Result<AnthropicAdapterResponse, AnthropicAdapterError> {
+        let started_at = std::time::Instant::now();
+        tracing::info!(
+            target: "narrant::babysit::custom",
+            protocol = "anthropic_messages",
+            endpoint = self.config.base_url,
+            model = self.config.model,
+            phase = "agent_run_started",
+        );
         if request.cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }
@@ -427,6 +435,15 @@ impl AnthropicAdapter {
                 }
             }
         };
+        tracing::info!(
+            target: "narrant::babysit::custom",
+            protocol = "anthropic_messages",
+            endpoint = self.config.base_url,
+            model = self.config.model,
+            phase = "agent_run_completed",
+            status = "ok",
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+        );
         if cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }

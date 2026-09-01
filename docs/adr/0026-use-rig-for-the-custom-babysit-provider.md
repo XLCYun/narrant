@@ -60,11 +60,11 @@ the ten-minute analysis deadline, validation, cancellation, and completed-result
 - Custom diagnostics retain stable protocol, phase, status, and redacted provider-error
   categories but no endpoint fingerprint. URL, key, bodies, prompts, source, Line
   Explanations, and repository-tool content remain excluded.
-- An explicitly enabled `dev-observability` build installs OpenTelemetry traces and logs
-  without changing the production default. Rig supplies its OpenTelemetry GenAI semantic
-  convention spans; Narrant adds only analysis-lifecycle spans and structured events.
-  OTLP HTTP/protobuf defaults to Venator on `http://127.0.0.1:8362` and honors
-  `OTEL_EXPORTER_OTLP_ENDPOINT`. An absent collector never fails or blocks analysis;
-  exporter queues are bounded, terminal formatting remains available, and shutdown waits
-  at most two seconds to flush. Telemetry never records prompts, source, explanations,
-  tool arguments, or tool results.
+- Debug builds install only a local `tracing-subscriber::fmt` terminal subscriber; Release
+  builds install none. Narrant deliberately does not ship OpenTelemetry, OTLP export, a
+  collector, or a dashboard integration because local performance diagnosis does not
+  justify that dependency and lifecycle surface. Rig's native completion spans remain,
+  with content telemetry disabled, while Narrant records correlated lifecycle, model,
+  provider-request, and tool boundaries with explicit elapsed time. Development logs may
+  contain the configured endpoint URL and model identifier, but never the API key, prompt,
+  source, model body, explanation, tool arguments, or tool results.

@@ -1,5 +1,3 @@
-#![cfg(feature = "dev-observability")]
-
 use super::super::observability::AnalysisLifecycle;
 use crate::babysit::BabysitError;
 use std::fmt;
@@ -40,7 +38,7 @@ impl tracing::field::Visit for FieldVisitor {
     }
 }
 
-/// 只观察 event 字段，不读取 span 内部实现，模拟 OTLP log bridge 的输入 seam。
+/// 只观察 event 字段，不读取 formatter 的终端展示实现。
 #[derive(Clone)]
 struct CaptureLayer {
     events: Arc<Mutex<Vec<CapturedEvent>>>,
@@ -65,7 +63,6 @@ where
 
 /// 在局部 subscriber 中执行生命周期动作并返回捕获的结构化 events。
 fn capture(run: impl FnOnce()) -> Vec<CapturedEvent> {
-    let _subscriber_guard = crate::telemetry::lock_test_subscriber();
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(CaptureLayer {
         events: events.clone(),
@@ -113,6 +110,7 @@ fn lifecycle_events_cover_cache_generation_repair_and_completion() {
         assert_eq!(field(event, "analysis_run_id"), Some("42"));
         assert_eq!(field(event, "provider"), Some("custom"));
         assert_eq!(field(event, "protocol"), Some("openai_chat_completions"));
+        assert!(field(event, "elapsed_ms").is_some());
     }
     assert_eq!(field(&events[2], "attempt"), Some("1"));
 }

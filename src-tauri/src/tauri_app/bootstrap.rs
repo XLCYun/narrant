@@ -20,7 +20,7 @@ pub fn run() {
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
     let builder = tauri::Builder::default()
-        // telemetry 在默认 feature 下是 no-op，开发观测 feature 下安装全局 layers。
+        // Debug 构建安装本地终端日志；Release 保留同一 no-op 生命周期 seam。
         .manage(crate::telemetry::init())
         .manage(operation::CancellableOperations::default());
     #[cfg(feature = "wdio")]

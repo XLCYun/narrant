@@ -321,14 +321,43 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
         request: CustomRunRequest,
         cancellation: &CancellationSignal,
     ) -> Result<CustomRunResult, CustomAdapterError> {
+        let started_at = std::time::Instant::now();
+        tracing::info!(
+            target: "narrant::babysit::custom",
+            protocol = self.connection.protocol().as_str(),
+            endpoint = self.connection.base_url(),
+            model = self.connection.model(),
+            phase = "agent_run_started",
+        );
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
         self.http_client.bind_cancellation(cancellation);
-        let response = self
-            .run_prompt_attempt(&request, cancellation)
-            .await
-            .map_err(|error| self.map_attempt_error(error))?;
+        let response = match self.run_prompt_attempt(&request, cancellation).await {
+            Ok(response) => response,
+            Err(error) => {
+                let error = self.map_attempt_error(error);
+                tracing::info!(
+                    target: "narrant::babysit::custom",
+                    protocol = self.connection.protocol().as_str(),
+                    endpoint = self.connection.base_url(),
+                    model = self.connection.model(),
+                    phase = "agent_run_completed",
+                    status = "error",
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                );
+                return Err(error);
+            }
+        };
+        tracing::info!(
+            target: "narrant::babysit::custom",
+            protocol = self.connection.protocol().as_str(),
+            endpoint = self.connection.base_url(),
+            model = self.connection.model(),
+            phase = "agent_run_completed",
+            status = "ok",
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+        );
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }

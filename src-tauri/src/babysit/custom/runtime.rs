@@ -137,9 +137,21 @@ impl CustomRuntime {
             .into_iter()
             .find(|call| call.function.name == FINAL_OUTPUT_TOOL_NAME)
         {
+            tracing::debug!(
+                target: "narrant::babysit::custom",
+                analysis_run_id = run_id,
+                tool = FINAL_OUTPUT_TOOL_NAME,
+                phase = "called",
+            );
             ensure_not_cancelled(cancellation)?;
             return Ok(parse_final_result(final_call));
         }
+        tracing::debug!(
+            target: "narrant::babysit::custom",
+            analysis_run_id = run_id,
+            tool = FINAL_OUTPUT_TOOL_NAME,
+            phase = "not_called",
+        );
         // 让上层 validation/repair merging 决定如何处理未完成的输出。
         Ok(BabysitFileExplanations::default())
     }

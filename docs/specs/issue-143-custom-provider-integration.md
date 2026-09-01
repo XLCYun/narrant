@@ -33,13 +33,15 @@ opt-in smoke procedure without making a live model request in CI.
   status/error category, with no endpoint fingerprint. Tests must prove URL, key,
   request/response body, prompt/source, explanation, and repository output do not occur
   in user-visible or debug error text.
-- An explicitly enabled development-observability build exports Rig's OpenTelemetry
-  GenAI spans, Narrant analysis-lifecycle spans, and structured logs over OTLP
-  HTTP/protobuf. It defaults to Venator at `http://127.0.0.1:8362`, honors
-  `OTEL_EXPORTER_OTLP_ENDPOINT`, keeps terminal logs, never blocks analysis when the
-  dashboard is absent, uses bounded queues, and waits at most two seconds to flush on
-  shutdown. It never captures prompts, source, explanations, tool arguments, or tool
-  results.
+- Debug builds install a human-readable single-line `tracing-subscriber::fmt` terminal
+  subscriber; Release builds install none. Debug defaults to `narrant=info,rig=info`,
+  honors a valid `RUST_LOG`, and safely falls back after an invalid filter. Logs are not
+  persisted or exported and require no dashboard, collector, or separate build feature.
+- Keep Rig's native completion spans with content telemetry disabled, and add correlated
+  Narrant analysis, generation/repair, model-turn, provider-request, and repository-tool
+  boundary events with explicit elapsed time. Development logs may contain the configured
+  endpoint URL and model identifier, but must exclude the API key, prompt, source, model
+  body, explanation, tool arguments, and tool results.
 - Remove obsolete `.scratch` slice specs, placeholder comments, unused alternate
   execution paths, and suppressions that are no longer justified. Keep intentional
   diagnostic fields only when a production or test consumer proves the seam.
@@ -54,10 +56,10 @@ opt-in smoke procedure without making a live model request in CI.
 - Assert final wire shapes for both protocols, effort mapping, optional authentication,
   exact tools, the fixed 65,536-token output budget, distinct rejected-budget and
   output-limit behavior, and schema output without a paid request.
-- Capture development traces and logs with a deterministic OTLP fixture. Assert Rig
-  GenAI spans, Narrant analysis correlation, the Venator default, the standard endpoint
-  override, non-blocking receiver absence, bounded shutdown, and exclusion of prompts,
-  source, explanations, tool arguments, and tool results.
+- Test Debug default filtering, valid and invalid `RUST_LOG`, Rig/Narrant correlation,
+  model and tool boundary timing, allowed endpoint/model fields, forbidden content fields,
+  and the Release path without subscriber initialization. Do not assert colors or the
+  complete rendered terminal line.
 - Run affected frontend tests, full frontend tests, lint, type/build checks, focused
   Rust tests, and exactly one final full Rust test for this Issue. Do not manually
   trigger `quality-gate`.
