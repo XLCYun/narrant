@@ -53,6 +53,21 @@ fn missing_settings_resolve_language_from_a_chinese_system_locale_without_writin
 }
 
 #[test]
+fn production_system_locale_resolver_returns_a_supported_language() {
+    let directory = tempfile::tempdir().unwrap();
+    let application = ApplicationSettingsApplication::with_system_locale_resolver(
+        directory.path().join("settings.json"),
+    );
+
+    let settings = application.load().unwrap();
+
+    assert!(matches!(
+        settings.language,
+        ApplicationLanguage::SimplifiedChinese | ApplicationLanguage::English
+    ));
+}
+
+#[test]
 fn missing_language_uses_non_chinese_system_default_and_preserves_the_existing_snapshot() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");

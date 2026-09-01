@@ -34,20 +34,13 @@ where
     }
 }
 
-/// 生产环境从操作系统约定的 locale 变量取得当前语言提示。
-struct EnvironmentSystemLocaleResolver;
+/// 生产环境通过跨平台 OS API 取得当前语言提示。
+struct OsSystemLocaleResolver;
 
-impl SystemLocaleResolver for EnvironmentSystemLocaleResolver {
-    /// 按 POSIX locale 优先级读取进程继承的系统 locale。
+impl SystemLocaleResolver for OsSystemLocaleResolver {
+    /// 读取 macOS、Windows、Linux 等平台的首选 BCP-47 locale。
     fn resolve(&self) -> String {
-        ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"]
-            .into_iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .unwrap_or_else(|| "en-US".to_owned())
+        sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned())
     }
 }
 
@@ -113,11 +106,17 @@ pub(crate) struct ApplicationSettingsApplication {
 impl ApplicationSettingsApplication {
     /// 为首版统一设置文件建立应用边界，不读取或迁移旧文件。
     pub(crate) fn new(settings_path: PathBuf) -> Self {
+        Self::with_system_locale_resolver(settings_path)
+    }
+
+    /// 使用跨平台 OS locale resolver 建立生产设置应用。
+    #[allow(dead_code, reason = "供生产启动与 OS locale 集成契约使用")]
+    pub(crate) fn with_system_locale_resolver(settings_path: PathBuf) -> Self {
         let credential_adapter = default_custom_credential_adapter(&settings_path);
         Self::with_dependencies(
             settings_path,
             credential_adapter,
-            Arc::new(EnvironmentSystemLocaleResolver),
+            Arc::new(OsSystemLocaleResolver),
         )
     }
 
@@ -130,7 +129,7 @@ impl ApplicationSettingsApplication {
         Self::with_dependencies(
             settings_path,
             credential_adapter,
-            Arc::new(EnvironmentSystemLocaleResolver),
+            Arc::new(OsSystemLocaleResolver),
         )
     }
 
