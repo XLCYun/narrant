@@ -165,6 +165,11 @@ The device-local preferences that shape Narrant's appearance, external identitie
 and Babysit Mode integration for the current operating-system user.
 _Avoid_: Repository Settings, Review Settings
 
+**Application Update**:
+A newer published version of Narrant offered to replace the version currently installed
+on the reviewer's device.
+_Avoid_: Review Update, Update
+
 **Application Language**:
 The device-local choice between Simplified Chinese and English that shapes Narrant's
 user interface and the language of future Line Explanations.

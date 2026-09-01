@@ -9,8 +9,8 @@ builds succeed. The public `cyunlab/narrant` repository is an artifact channel r
 than a source mirror: automation uses repository secrets and a narrowly scoped
 fine-grained token to write a complete draft Release there, without exposing private
 source identity. A maintainer reviews the generated commit-title notes and assets and
-publishes the draft manually. Windows artifacts may be unsigned for now; macOS
-artifacts remain signed and notarized.
+approves a protected promotion job, which revalidates and publishes the draft. Windows
+artifacts may be unsigned for now; macOS artifacts remain signed and notarized.
 
 ## Consequences
 
