@@ -154,18 +154,25 @@ async fn uses_authenticated_metadata_access_and_keeps_permission_failures_local(
 }
 
 #[tokio::test]
-async fn reports_offline_discovery_per_repository_without_losing_groups() {
+async fn reports_transport_failure_per_repository_without_losing_groups() {
     let repository = repository_with_remotes(&[
         ("origin", "https://github.com/acme/one.git"),
         ("upstream", "https://github.com/acme/two.git"),
     ]);
 
-    let groups = discover_pull_requests(repository.path(), "http://127.0.0.1:9", None)
+    let groups = discover_pull_requests(repository.path(), "://invalid-github-api-base", None)
         .await
         .unwrap();
 
     assert_eq!(groups.len(), 2);
-    assert!(groups
+    let errors = groups
         .iter()
-        .all(|group| group.error.as_deref().unwrap().contains("无法连接 GitHub")));
+        .filter_map(|group| group.error.as_deref())
+        .collect::<Vec<_>>();
+    assert!(
+        groups
+            .iter()
+            .all(|group| group.error.as_deref().unwrap().contains("无法连接 GitHub")),
+        "离线 discovery 应返回连接失败，实际为 {errors:?}"
+    );
 }
