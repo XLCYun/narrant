@@ -338,3 +338,61 @@ Round 3 实现提交为 `004ee9f`（`fix(updater): preserve staged update on pre
 - 本轮没有改变 production endpoint/public key fail-closed、metadata byte cap/redirect policy、opaque durable proof/lease、shared drain/post-stop coordinator、平台 installer 或 Tauri capability。
 - Windows native NSIS 与 macOS 签名/公证 smoke 的既有 residual 不变；本轮仅修改 provider-neutral state/runtime 错误收敛，不声称新增原生平台覆盖。
 - 本轮没有修改 Task 4 UI、Task 5/6 workflow、GitHub secrets/environments 或制品发布状态。
+
+## Fix round 4（Round 3 re-review 的 1 个 PARTIAL）
+
+Round 4 实现提交为 `8031377`（`fix(updater): model preference commit durability`）。本节取代 round 3 中“所有 save failure 均代表磁盘仍为旧值”的过宽表述：偏好仓储现在明确报告正式文件所处的提交阶段。
+
+### 1. PreferenceStore 事务结果
+
+- `PreferenceSaveOutcome` 明确区分：
+  - `Rejected { error }`：正式文件尚未替换，旧值仍是权威值；
+  - `Committed { appliedValue }`：正式文件已替换且父目录持久化屏障完成；
+  - `DurabilityUnknown { appliedValue, error }`：rename 已成功，当前 formal 文件已是 applied value，但父目录屏障失败，崩溃恢复结果尚未证明；
+  - `StateUnknown { error }`：仓储/未来 readback 适配器无法确认 formal 当前值，调用方不得宣称内存与磁盘一致。
+- `FilePreferenceStore` 在 temporary write + file `sync_all`、atomic replace、parent directory `sync_all` 之间保留精确提交边界。replace 前所有失败返回 `Rejected`；replace 后的 failpoint 或真实 directory sync 失败返回携带 requested 值的 `DurabilityUnknown`；完整屏障成功才返回 `Committed`。
+- 当前生产实现不需要 rename 后 readback：atomic replace 成功已证明当前文件系统视图中的 formal 文件是 requested 文档。`StateUnknown` 保留为明确的 fail-closed contract，覆盖未来 readback 失败、读回值不一致以及 adapter 违反 applied-value 契约的情况。
+
+### 2. Controller/effect/sequence 收敛
+
+- `SetAutomaticDownload` 的一个 typed input 现在始终只产生一个有序 snapshot sequence：
+  - `Rejected` 保留旧内存值、staged candidate/proof、active identity、retry 与 operation failure，只设置 `preferenceWarning(kind=rejected)`；
+  - `Committed` 采用 requested/formal 值、执行对应的精确自动下载 cancel/resume，并清除旧 warning；
+  - `DurabilityUnknown` 在 applied value 与 requested 一致时采用 formal 当前值、执行相同 cancel/resume，但保留 `preferenceWarning(kind=durability_unknown)`；
+  - `StateUnknown` 或 applied value 与 requested 不一致时保守保留旧运行策略、保留 unrelated staged/active truth，并设置 `kind=state_unknown`，不会伪称磁盘一致。
+- durable staged candidate 在所有偏好结果下都不被降级或删除；`DurabilityUnknown` 后仍为 `Staged` 且 `RequestUpdateRestart` 继续产生唯一 `RequestInstall`。
+- active check 在 preference outcome 下保持原 identity；明确 applied 的关闭值只取消精确的 automatic download identity。pre-commit rejection 不取消 download，避免磁盘仍启用但本进程误停。
+- snapshot warning 新增稳定 `kind/category/message`，不含路径或原始 I/O 文本。JSONL diagnostics 把 preference/recovery warning 记录为 `transition-warning` 与稳定 category，不写 formal path。
+
+### 3. 真实文件系统/failpoint 证据
+
+- `FilePreferenceStore` 增加测试专用 commit failpoint，并继续执行真实 temp file、file sync、rename 与 formal file 读取：
+  - `BeforeReplace` 失败：outcome 为 Rejected，formal bytes 保持旧文档，下一个仓储实例加载旧值；
+  - `AfterReplaceBeforeDirectorySync` 失败：outcome 为 DurabilityUnknown(applied=requested)，formal bytes 已是新文档，下一个仓储实例加载新值；
+  - 无故障：outcome 为 Committed，formal bytes 与跨实例 load 均为 requested。
+- runtime 通过 production-shared `new_at_paths_with_preferences` 注入上述真实仓储：pre-replace 路径保持旧 snapshot/formal 值并发 rejected warning；post-replace 路径立即采用新 snapshot/formal 值并发 durability warning，销毁 runtime 后重新创建会从 formal 文件加载新值且不凭空保留旧进程 warning。
+- controller scripted outcome tests 额外覆盖 staged/proof/restart、active check、active automatic download 的精确 cancel、Committed 清 warning、StateUnknown 与 mismatched applied value fail-closed。
+
+### Round 4 focused verification
+
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update::tests::preference -- --nocapture`
+  - **PASS**：5 passed, 0 failed（Committed、pre-replace Rejected、post-replace DurabilityUnknown、formal bytes 与 next load）。
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update::tests::state_machine:: -- --nocapture`
+  - **PASS**：25 passed, 0 failed。
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update::runtime::tests:: -- --nocapture`
+  - **PASS**：10 passed, 0 failed。
+- `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml application_update:: -- --nocapture`
+  - **PASS**：84 passed, 0 failed；round 1-3 的 metadata、redirect、minisign、staging、platform、drain 与 post-stop 契约均未回退。
+- `scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`
+  - **PASS**。
+- `scripts/cargo-agent.sh fmt --manifest-path src-tauri/Cargo.toml -- --check`
+  - **PASS**。
+- `git diff --check`
+  - **PASS**。
+
+未运行全量 Rust suite，未触发 quality-gate，符合 round 4 的聚焦验证约束。
+
+### Round 4 residual risks / scope
+
+- `DurabilityUnknown` 的 warning 只描述崩溃持久性未证明；当前进程的 formal 文件与内存值一致。异常崩溃后由下一次 `load_automatic_download` 读取文件系统实际恢复结果，不假设 directory barrier 已完成。
+- Windows native NSIS 与 macOS 签名/公证 smoke 的既有 residual 不变；本轮没有修改 trust config、staging proof/lease、installer、post-stop coordinator、Tauri capability、Task 4 UI、Task 5/6 workflow 或 secrets/environments。
