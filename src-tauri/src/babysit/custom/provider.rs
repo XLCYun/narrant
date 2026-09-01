@@ -189,6 +189,7 @@ impl BabysitProviderCapabilities for CustomCapabilityBundle {
                 reasoning_effort: snapshot.effort().as_str().to_owned(),
             },
             process_generation: snapshot.cache_identity(),
+            protocol: Some(snapshot.protocol().as_str()),
             _lease: None,
         })
     }
