@@ -51,7 +51,7 @@ export type BabysitProviderDiagnostic = {
   protocol: "openai_chat_completions" | "anthropic_messages";
   phase: "setup" | "model" | "response";
   status: "network" | "invalid_endpoint" | "unauthorized" | "client" | "server" | "rate_limited" | "invalid_response" | "unknown";
-  reason: "model_not_found" | "reasoning_tools_incompatible" | "tools_unsupported" | "parameter_unsupported" | "error_envelope" | "unknown";
+  reason: "model_not_found" | "reasoning_tools_incompatible" | "tools_unsupported" | "parameter_unsupported" | "error_envelope" | "model_turn_limit" | "unknown_tool_call" | "unknown";
   errorCategory: "transport";
 };
 
@@ -111,7 +111,7 @@ const babysitRecoveryActions: ReadonlySet<BabysitRecoveryAction> = new Set([
 const babysitProviderDiagnosticProtocols = new Set(["openai_chat_completions", "anthropic_messages"]);
 const babysitProviderDiagnosticPhases = new Set(["setup", "model", "response"]);
 const babysitProviderDiagnosticStatuses = new Set(["network", "invalid_endpoint", "unauthorized", "client", "server", "rate_limited", "invalid_response", "unknown"]);
-const babysitProviderDiagnosticReasons = new Set(["model_not_found", "reasoning_tools_incompatible", "tools_unsupported", "parameter_unsupported", "error_envelope", "unknown"]);
+const babysitProviderDiagnosticReasons = new Set(["model_not_found", "reasoning_tools_incompatible", "tools_unsupported", "parameter_unsupported", "error_envelope", "model_turn_limit", "unknown_tool_call", "unknown"]);
 
 /** 验证 provider 诊断只包含固定白名单字段和值。 */
 function isBabysitProviderDiagnostic(value: unknown): value is BabysitProviderDiagnostic {
