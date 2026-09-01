@@ -5,8 +5,7 @@ use super::super::*;
 use crate::babysit::{
     BabysitAgentProvider, BabysitError, BabysitFileRequest, BabysitGenerationPolicy,
     BabysitProgress, BabysitProviderCapabilities, BabysitProviderModelCatalog,
-    BabysitProviderSetupFailure, BabysitResolvedModel, PreparedBabysitAnalysis, RepositoryTools,
-    ReviewIdentity,
+    BabysitProviderSetupFailure, BabysitResolvedModel, PreparedBabysitAnalysis, ReviewIdentity,
 };
 use crate::operation::TestCancellation;
 use httpmock::prelude::*;
@@ -109,12 +108,6 @@ impl BabysitProviderCapabilities for FrozenCustomCapability {
     }
 }
 
-fn fixture_tools() -> Vec<rig::completion::ToolDefinition> {
-    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
-    let tools = RepositoryTools::new(workspace.path()).expect("创建 repository tools");
-    custom_tool_definitions(&tools)
-}
-
 /// 构造只返回 Read 调用的 deterministic OpenAI response，让 Rig 自己推进工具循环。
 fn repeated_read_response() -> serde_json::Value {
     json!({
@@ -139,41 +132,6 @@ fn repeated_read_response() -> serde_json::Value {
         }],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
     })
-}
-
-#[test]
-fn final_tool_is_schema_bearing_and_tool_set_is_bounded() {
-    let tools = fixture_tools();
-    assert_eq!(
-        tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>(),
-        ["read", "glob", "grep", FINAL_OUTPUT_TOOL_NAME]
-    );
-    let final_tool = tools
-        .iter()
-        .find(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME)
-        .expect("final tool");
-    assert_eq!(final_tool.parameters, line_explanation_schema().to_value());
-    assert_eq!(final_tool.parameters["additionalProperties"], json!(false));
-}
-
-#[test]
-fn round_request_rejects_turns_after_the_shared_budget() {
-    let error = CustomRoundRequest::new(
-        Message::user("review"),
-        Vec::new(),
-        MAX_MODEL_TURNS + 1,
-        fixture_tools(),
-    )
-    .expect_err("超过预算的请求应在本地拒绝");
-    assert_eq!(
-        error,
-        CustomAdapterError::TurnLimitExceeded {
-            limit: MAX_MODEL_TURNS
-        }
-    );
 }
 
 #[test]
@@ -241,7 +199,6 @@ async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
 #[tokio::test]
 async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() {
     let server = MockServer::start_async().await;
-    let expected_tools = fixture_tools();
     let mock = server
         .mock_async(|when, then| {
             when.method(POST)
@@ -296,8 +253,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, expected_tools)
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
     let response = adapter
         .complete(request, &TestCancellation::default())
         .await
@@ -354,8 +310,7 @@ async fn openai_length_finish_reason_is_an_output_limit_error() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -425,8 +380,7 @@ async fn openai_provider_default_omits_reasoning_effort() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
         .complete(request, &TestCancellation::default())
@@ -492,8 +446,7 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -563,8 +516,7 @@ async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -737,8 +689,7 @@ async fn empty_key_omits_the_authorization_header() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
         .complete(request, &TestCancellation::default())
@@ -775,8 +726,7 @@ async fn openai_http_client_failure_keeps_redacted_transport_classification() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -826,8 +776,7 @@ async fn openai_success_status_error_envelope_is_invalid_response() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::new(Message::user("review"), Vec::new(), 1, fixture_tools())
-        .expect("构造请求");
+    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
     let error = adapter
         .complete(request, &TestCancellation::default())
         .await

@@ -1,8 +1,5 @@
-use super::adapter::CustomAdapterError;
-use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
-use rig::completion::{AssistantContent, Message, ResponseIdentity, ToolDefinition};
+use rig::completion::{AssistantContent, Message, ResponseIdentity};
 use rig::message::ToolCall;
-use std::collections::HashSet;
 
 /// Custom 协议适配器共享的单次模型调用上限。
 pub(crate) const MAX_MODEL_TURNS: usize = 16;
@@ -31,35 +28,6 @@ impl CustomRoundRequest {
         Self { prompt, history }
     }
 
-    /// 创建一轮请求，并拒绝超过共享模型调用预算或越权工具集合的输入。
-    pub(crate) fn new(
-        prompt: Message,
-        history: Vec<Message>,
-        turn: usize,
-        tools: Vec<ToolDefinition>,
-    ) -> Result<Self, CustomAdapterError> {
-        if turn == 0 || turn > MAX_MODEL_TURNS {
-            return Err(CustomAdapterError::TurnLimitExceeded {
-                limit: MAX_MODEL_TURNS,
-            });
-        }
-        let names = tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<HashSet<_>>();
-        if names.len() != 4
-            || !["read", "glob", "grep", FINAL_OUTPUT_TOOL_NAME]
-                .iter()
-                .all(|name| names.contains(name))
-            || tools
-                .iter()
-                .find(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME)
-                .is_none_or(|tool| tool.parameters != line_explanation_schema().to_value())
-        {
-            return Err(CustomAdapterError::InvalidToolSet);
-        }
-        Ok(Self::from_prompt(prompt, history))
-    }
     /// 返回本轮 prompt 的 provider-neutral 消息。
     pub(super) fn prompt(&self) -> &Message {
         &self.prompt

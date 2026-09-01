@@ -44,9 +44,7 @@ impl CustomProtocolAdapter for FakeAdapter {
         }
         let mut responses = self.responses.lock().expect("响应锁");
         if responses.is_empty() {
-            Err(CustomAdapterError::TurnLimitExceeded {
-                limit: MAX_MODEL_TURNS,
-            })
+            Err(CustomAdapterError::InvalidConnection)
         } else {
             Ok(responses.remove(0))
         }

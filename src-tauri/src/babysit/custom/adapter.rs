@@ -264,10 +264,6 @@ pub(crate) enum CustomAdapterError {
     InvalidConnection,
     /// 调用了与 adapter 协议不匹配的 implementation。
     UnsupportedProtocol(CustomProtocol),
-    /// 工具集合不是严格的三项 repository 工具加 final tool。
-    InvalidToolSet,
-    /// 请求超出共享模型轮次预算。
-    TurnLimitExceeded { limit: usize },
     /// provider 已经在固定输出预算处截断了模型回复；不能交给 malformed repair。
     OutputLimit { limit: u64 },
     /// 调用方在 transport 返回前取消了请求。
@@ -285,10 +281,6 @@ impl fmt::Display for CustomAdapterError {
                 formatter,
                 "Custom 协议不受当前 adapter 支持：{protocol:?}。"
             ),
-            Self::InvalidToolSet => formatter.write_str("Custom 工具集合不符合固定契约。"),
-            Self::TurnLimitExceeded { limit } => {
-                write!(formatter, "Custom 模型轮次已达到上限 {limit}。")
-            }
             Self::OutputLimit { limit } => {
                 write!(formatter, "Custom 模型输出已达到固定上限 {limit}。")
             }

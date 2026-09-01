@@ -16,9 +16,7 @@ pub(crate) use anthropic::{
 #[cfg(test)]
 pub(crate) use connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
 #[cfg(test)]
-pub(crate) use final_tool::{
-    custom_tool_definitions, line_explanation_schema, FINAL_OUTPUT_TOOL_NAME,
-};
+pub(crate) use final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
 #[cfg(test)]
 pub(crate) use openai::OpenAiChatCompletionsAdapter;
 pub(crate) use provider::CustomCapabilityBundle;
