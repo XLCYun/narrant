@@ -186,6 +186,7 @@ impl BabysitProviderCapabilities for RecordingBundle {
                 reasoning_effort: "high".to_owned(),
             },
             process_generation: "generation".to_owned(),
+            protocol: None,
             _lease: None,
         })
     }

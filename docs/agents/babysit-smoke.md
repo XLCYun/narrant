@@ -3,6 +3,9 @@
 默认验证全部使用仓库内的确定性 fixture，不需要 provider 登录，也不会访问模型服务。
 真实 endpoint probe 是明确 opt-in 的人工步骤，绝不属于 CI 或默认开发命令。
 
+Debug 终端日志的默认过滤、详细诊断命令、数据边界和 CI 边界见
+[开发日志](dev-logging.md)。
+
 ## CI 边界与数据安全
 
 - CI 只运行 deterministic fixture、前端测试和 Preview Harness；默认测试命令不得调用本节的真实

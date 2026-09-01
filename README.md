@@ -13,3 +13,8 @@ pnpm build:windows
 ```text
 src-tauri\target\release\bundle\nsis\Narrant_1.0.0_x64-setup.exe
 ```
+
+## 本地开发
+
+Custom Babysit 的确定性 smoke、终端开发日志和数据保密边界见
+[开发日志](docs/agents/dev-logging.md) 与 [Babysit smoke test](docs/agents/babysit-smoke.md)。

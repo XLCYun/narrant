@@ -272,7 +272,6 @@ describe("Babysit Review Reader presentation", () => {
           status: "client",
           reason: "reasoning_tools_incompatible",
           errorCategory: "transport",
-          originHash: "0123456789abcdef",
         },
       },
     });
@@ -292,7 +291,6 @@ describe("Babysit Review Reader presentation", () => {
         status: "client",
         reason: "reasoning_tools_incompatible",
         errorCategory: "transport",
-        originHash: "0123456789abcdef",
       },
     }));
     expect(writeText.mock.calls[0]?.[0]).not.toContain("provider 原文");

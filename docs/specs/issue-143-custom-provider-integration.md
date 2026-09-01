@@ -23,12 +23,25 @@ opt-in smoke procedure without making a live model request in CI.
   authentication value.
 - Both adapters expose exactly Read, Glob, Grep, and `final_result`; final output uses
   Rig Tool mode and returns to the provider-independent validation/repair contract.
+- Rig is the sole model-and-tool agent-loop owner. Each generation or repair gives Rig at
+  most 16 model turns with a 65,536-token output budget; the shared runtime owns no
+  duplicate turn or repository-tool dispatch loop. The integration does not batch
+  targets, reduce or retry a rejected budget, or repair output that reached the limit.
 - Cancellation at HTTP, repository tool, repair, and late-response boundaries prevents
   subsequent local dispatch and completed-cache writes.
-- Diagnostics are stable redacted values only: Custom identity, protocol, phase,
-  status/error category, and irreversible endpoint-origin hash. Tests must prove URL,
-  key, request/response body, prompt/source, explanation, and repository output do not
-  occur in user-visible or debug error text.
+- Diagnostics are stable redacted values only: Custom identity, protocol, phase, and
+  status/error category, with no endpoint fingerprint. Tests must prove URL, key,
+  request/response body, prompt/source, explanation, and repository output do not occur
+  in user-visible or debug error text.
+- Debug builds install a human-readable single-line `tracing-subscriber::fmt` terminal
+  subscriber; Release builds install none. Debug defaults to `narrant=info,rig=info`,
+  honors a valid `RUST_LOG`, and safely falls back after an invalid filter. Logs are not
+  persisted or exported and require no dashboard, collector, or separate build feature.
+- Keep Rig's native completion spans with content telemetry disabled, and add correlated
+  Narrant analysis, generation/repair, model-turn, provider-request, and repository-tool
+  boundary events with explicit elapsed time. Development logs may contain the configured
+  endpoint URL and model identifier, but must exclude the API key, prompt, source, model
+  body, explanation, tool arguments, and tool results.
 - Remove obsolete `.scratch` slice specs, placeholder comments, unused alternate
   execution paths, and suppressions that are no longer justified. Keep intentional
   diagnostic fields only when a production or test consumer proves the seam.
@@ -41,7 +54,12 @@ opt-in smoke procedure without making a live model request in CI.
   the same conversation, repair exhaustion, cancellation/late response, completed-only
   caching, connection identity isolation, and frozen in-flight configuration.
 - Assert final wire shapes for both protocols, effort mapping, optional authentication,
-  exact tools, and schema output without a paid request.
+  exact tools, the fixed 65,536-token output budget, distinct rejected-budget and
+  output-limit behavior, and schema output without a paid request.
+- Test Debug default filtering, valid and invalid `RUST_LOG`, Rig/Narrant correlation,
+  model and tool boundary timing, allowed endpoint/model fields, forbidden content fields,
+  and the Release path without subscriber initialization. Do not assert colors or the
+  complete rendered terminal line.
 - Run affected frontend tests, full frontend tests, lint, type/build checks, focused
   Rust tests, and exactly one final full Rust test for this Issue. Do not manually
   trigger `quality-gate`.
@@ -63,4 +81,3 @@ opt-in smoke procedure without making a live model request in CI.
   Anthropic-compatible endpoints.
 - The procedure must never echo or record a key, full endpoint URL, prompts, source,
   responses, explanations, or tool results; it must be clearly excluded from CI.
-

@@ -6,9 +6,11 @@ use super::adapter::{
     CustomAdapterError, CustomProtocolAdapter, CustomRequestPhase, CustomStatusCategory,
     CustomTransportFailure,
 };
+use super::agent_run::{
+    reached_output_limit, CustomRunRequest, CustomRunResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
+};
 use super::connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
 use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
-use super::round::{CustomRoundRequest, CustomRoundResult};
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
@@ -215,7 +217,6 @@ impl AnthropicMessagesAdapter {
                 connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::InvalidEndpoint,
-                connection.base_url(),
             ))
         })?;
         Ok(Self {
@@ -240,18 +241,17 @@ impl AnthropicMessagesAdapter {
 
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for AnthropicMessagesAdapter {
-    /// 将共享 round 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
-    async fn complete(
+    /// 将共享 agent run 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
+    async fn run_agent(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         let repository_tools = RepositoryTools::new(&self.workspace).map_err(|_| {
             CustomAdapterError::Transport(CustomTransportFailure::new(
                 self.connection.protocol(),
                 CustomRequestPhase::Setup,
                 CustomStatusCategory::InvalidEndpoint,
-                self.connection.base_url(),
             ))
         })?;
         #[cfg(test)]
@@ -261,7 +261,7 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
         };
         let response = self
             .adapter
-            .complete(AnthropicAdapterRequest {
+            .run_agent(AnthropicAdapterRequest {
                 prompt: request.prompt().clone(),
                 history: request.history().to_vec(),
                 repository_tools,
@@ -275,19 +275,21 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                         self.connection.protocol(),
                         CustomRequestPhase::Model,
                         CustomStatusCategory::Network,
-                        self.connection.base_url(),
                     ))
                 }
+                AnthropicAdapterError::OutputLimit { limit } => {
+                    CustomAdapterError::OutputLimit { limit }
+                }
+                AnthropicAdapterError::Transport(failure) => CustomAdapterError::Transport(failure),
                 AnthropicAdapterError::Protocol => {
                     CustomAdapterError::Transport(CustomTransportFailure::new(
                         self.connection.protocol(),
                         CustomRequestPhase::Response,
                         CustomStatusCategory::InvalidResponse,
-                        self.connection.base_url(),
                     ))
                 }
             })?;
-        Ok(CustomRoundResult {
+        Ok(CustomRunResult {
             choice: vec![AssistantContent::tool_call(
                 "final-result",
                 FINAL_OUTPUT_TOOL_NAME,
@@ -314,19 +316,29 @@ pub(crate) struct AnthropicAdapterResponse {
 /// 不携带 endpoint、credential 或模型内容的 Anthropic adapter 错误。
 #[derive(Debug)]
 pub(crate) enum AnthropicAdapterError {
+    /// provider 已经在固定输出预算处截断了回复，不应进入 malformed repair。
+    OutputLimit {
+        limit: u64,
+    },
     Cancelled,
     Client,
+    /// Rig prompt 失败已投影为共享的脱敏 transport failure。
+    Transport(CustomTransportFailure),
     Protocol,
 }
 
 impl fmt::Display for AnthropicAdapterError {
     /// 输出稳定的脱敏错误分类。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Cancelled => "Anthropic 请求已取消。",
-            Self::Client => "Anthropic 客户端不可用。",
-            Self::Protocol => "Anthropic 响应无效。",
-        })
+        match self {
+            Self::OutputLimit { limit } => {
+                write!(formatter, "Anthropic 输出已达到固定上限 {limit}。")
+            }
+            Self::Cancelled => formatter.write_str("Anthropic 请求已取消。"),
+            Self::Client => formatter.write_str("Anthropic 客户端不可用。"),
+            Self::Transport(_) => formatter.write_str("Anthropic 请求失败。"),
+            Self::Protocol => formatter.write_str("Anthropic 响应无效。"),
+        }
     }
 }
 
@@ -344,10 +356,18 @@ impl AnthropicAdapter {
     }
 
     /// 执行一次允许仓库只读工具与 final-output tool 的 Messages 对话。
-    pub(crate) async fn complete(
+    pub(crate) async fn run_agent(
         &self,
         request: AnthropicAdapterRequest,
     ) -> Result<AnthropicAdapterResponse, AnthropicAdapterError> {
+        let started_at = std::time::Instant::now();
+        tracing::info!(
+            target: "narrant::babysit::custom",
+            protocol = "anthropic_messages",
+            endpoint = self.config.base_url,
+            model = self.config.model,
+            phase = "agent_run_started",
+        );
         if request.cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
         }
@@ -365,7 +385,9 @@ impl AnthropicAdapter {
         let cancellation = request.cancellation.clone();
         let prompt = request.prompt;
         let history = request.history;
-        let builder = client.agent(&self.config.model).max_tokens(8_192);
+        let builder = client
+            .agent(&self.config.model)
+            .max_tokens(MAX_OUTPUT_TOKENS);
         let builder = match self.config.effort.wire_value() {
             Some(effort) => builder.additional_params(json!({
                 "thinking": {"type": "adaptive"},
@@ -374,7 +396,9 @@ impl AnthropicAdapter {
             None => builder,
         };
         let agent = builder
-            .default_max_turns(16)
+            // 与 OpenAI-compatible adapter 保持一致，禁止 Rig 记录模型内容。
+            .record_content_telemetry(false)
+            .default_max_turns(MAX_MODEL_TURNS)
             .output_schema::<LineExplanationOutput>()
             .output_mode(OutputMode::Tool)
             .tool(tools.read)
@@ -395,7 +419,14 @@ impl AnthropicAdapter {
                     if cancellation.is_cancelled() {
                         return Err(AnthropicAdapterError::Cancelled);
                     }
-                    break response.map_err(|_| AnthropicAdapterError::Protocol)?;
+                    break response.map_err(|error| {
+                        AnthropicAdapterError::Transport(
+                            CustomTransportFailure::from_prompt_error(
+                                CustomProtocol::AnthropicMessages,
+                                error,
+                            ),
+                        )
+                    })?;
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
                     if cancellation.is_cancelled() {
@@ -404,8 +435,22 @@ impl AnthropicAdapter {
                 }
             }
         };
+        tracing::info!(
+            target: "narrant::babysit::custom",
+            protocol = "anthropic_messages",
+            endpoint = self.config.base_url,
+            model = self.config.model,
+            phase = "agent_run_completed",
+            status = "ok",
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+        );
         if cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
+        }
+        if reached_output_limit(response.completion_calls()) {
+            return Err(AnthropicAdapterError::OutputLimit {
+                limit: MAX_OUTPUT_TOKENS,
+            });
         }
         let output =
             serde_json::from_str(&response.output).map_err(|_| AnthropicAdapterError::Protocol)?;

@@ -89,6 +89,10 @@ async fn structured_output_uses_non_persistent_read_only_claude_process() {
     assert!(!events.contains("--resume"));
     assert!(events.contains("0001|let old = 1;"));
     assert!(events.contains("0001|let next = 2;"));
+    assert!(events.contains("默认不要探索仓库"));
+    assert!(events.contains("不要重复查询或扩大搜索范围"));
+    assert!(events.contains("一到两个短句"));
+    assert!(events.contains("最多 240 个 Unicode 字符"));
 }
 
 #[tokio::test]
@@ -163,6 +167,8 @@ async fn malformed_generation_is_repaired_by_a_fresh_self_contained_process() {
     assert!(events.contains("let old = 1;"));
     assert!(!events.contains("上一轮输出 JSON"));
     assert!(events.contains("只返回这些目标行"));
+    assert!(events.contains("默认不要探索仓库"));
+    assert!(events.contains("不要重复查询或扩大搜索范围"));
     assert!(events.contains("Before 缺少第 1 行解释"));
     assert!(events.contains("0001|let old = 1;"));
     assert!(

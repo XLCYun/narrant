@@ -4,8 +4,8 @@ use crate::application_settings::{
     CustomProviderConnection, CustomProviderEffort, CustomProviderProtocol,
 };
 use crate::babysit::{
-    BabysitApplication, BabysitFileRequest, BabysitGenerationPolicy, BabysitProgress,
-    BabysitProviderCapabilities, ReviewIdentity,
+    BabysitApplication, BabysitError, BabysitErrorPayload, BabysitFileRequest,
+    BabysitGenerationPolicy, BabysitProgress, BabysitProviderCapabilities, ReviewIdentity,
 };
 use crate::operation::OperationContext;
 use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
@@ -58,7 +58,23 @@ fn application_for_connection(
     protocol: CustomProviderProtocol,
     base_url: String,
 ) -> ConfiguredApplication {
-    application_for_connection_with_tool_cancellation(settings_path, protocol, base_url, None)
+    application_for_connection_with_options(settings_path, protocol, base_url, String::new(), None)
+}
+
+/// 构造带指定 API key 的真实 Custom capability，供 application 脱敏契约使用。
+fn application_for_connection_with_api_key(
+    settings_path: impl Into<std::path::PathBuf>,
+    protocol: CustomProviderProtocol,
+    base_url: String,
+    api_key: &str,
+) -> ConfiguredApplication {
+    application_for_connection_with_options(
+        settings_path,
+        protocol,
+        base_url,
+        api_key.to_owned(),
+        None,
+    )
 }
 
 /// 构造可选 repository-tool 边界取消的真实 Custom capability。
@@ -68,6 +84,23 @@ fn application_for_connection_with_tool_cancellation(
     base_url: String,
     tool_cancellation: Option<crate::operation::TestCancellation>,
 ) -> ConfiguredApplication {
+    application_for_connection_with_options(
+        settings_path,
+        protocol,
+        base_url,
+        String::new(),
+        tool_cancellation,
+    )
+}
+
+/// 统一构造测试设置、凭据边界、Custom registry 与可选 tool 取消 seam。
+fn application_for_connection_with_options(
+    settings_path: impl Into<std::path::PathBuf>,
+    protocol: CustomProviderProtocol,
+    base_url: String,
+    api_key: String,
+    tool_cancellation: Option<crate::operation::TestCancellation>,
+) -> ConfiguredApplication {
     let credentials = Arc::new(MemoryCredentials::default());
     let settings =
         ApplicationSettingsApplication::with_credential_adapter(settings_path.into(), credentials);
@@ -75,7 +108,7 @@ fn application_for_connection_with_tool_cancellation(
         .update_custom_connection(CustomProviderConnection {
             protocol,
             base_url,
-            api_key: String::new(),
+            api_key,
             model: "fixture-model".to_owned(),
             effort: CustomProviderEffort::High,
         })
@@ -176,6 +209,40 @@ fn final_response(protocol: CustomProviderProtocol) -> Value {
     }
 }
 
+/// 返回达到固定输出上限的协议 response，验证应用层不把截断交给 repair。
+fn output_limit_response(protocol: CustomProviderProtocol) -> Value {
+    let mut response = final_response(protocol);
+    match protocol {
+        CustomProviderProtocol::OpenaiChatCompletions => {
+            response["choices"][0]["finish_reason"] = json!("length");
+        }
+        CustomProviderProtocol::AnthropicMessages => {
+            response["stop_reason"] = json!("max_tokens");
+        }
+    }
+    response
+}
+
+/// 为缓存隔离契约返回可区分来源的完整 final_result。
+fn response_with_explanations(
+    protocol: CustomProviderProtocol,
+    before: &str,
+    after: &str,
+) -> Value {
+    let mut response = final_response(protocol);
+    let output = json!({"before": {"1": before}, "after": {"1": after}});
+    match protocol {
+        CustomProviderProtocol::OpenaiChatCompletions => {
+            response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
+                Value::String(serde_json::to_string(&output).expect("序列化 fixture output"));
+        }
+        CustomProviderProtocol::AnthropicMessages => {
+            response["content"][0]["input"] = output;
+        }
+    }
+    response
+}
+
 /// 根据协议构造 schema 合法但缺少目标行的输出，让应用层 validation 进入同一会话 repair。
 fn malformed_response(protocol: CustomProviderProtocol) -> Value {
     match protocol {
@@ -246,6 +313,96 @@ fn omits_fixture_repository_result(request: &HttpMockRequest) -> bool {
         .body
         .as_deref()
         .is_some_and(|body| !String::from_utf8_lossy(body).contains("fixture repository context"))
+}
+
+/// 解析真实模型请求并确认 Custom 只注册 Read、Glob、Grep 与 final_result。
+fn has_exact_custom_tools(request: &HttpMockRequest) -> bool {
+    let Some(body) = request.body.as_deref() else {
+        return false;
+    };
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let Some(tools) = body["tools"].as_array() else {
+        return false;
+    };
+    let names = tools
+        .iter()
+        .filter_map(|tool| {
+            tool["name"]
+                .as_str()
+                .or_else(|| tool["function"]["name"].as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    tools.len() == 4
+        && names == std::collections::BTreeSet::from(["final_result", "glob", "grep", "read"])
+}
+
+/// 解析 repair wire history，确认首轮 assistant 的 Read 调用与 tool-result 都被保留。
+fn has_read_tool_round_trip(protocol: CustomProviderProtocol, request: &HttpMockRequest) -> bool {
+    let Some(body) = request.body.as_deref() else {
+        return false;
+    };
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let Some(messages) = body["messages"].as_array() else {
+        return false;
+    };
+
+    match protocol {
+        CustomProviderProtocol::OpenaiChatCompletions => {
+            let assistant_call = messages.iter().any(|message| {
+                message["role"] == "assistant"
+                    && message["tool_calls"].as_array().is_some_and(|calls| {
+                        calls.iter().any(|call| {
+                            call["id"] == "call-read" && call["function"]["name"] == "read"
+                        })
+                    })
+            });
+            let tool_result = messages.iter().any(|message| {
+                message["role"] == "tool"
+                    && message["tool_call_id"] == "call-read"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("fixture repository context"))
+            });
+            assistant_call && tool_result
+        }
+        CustomProviderProtocol::AnthropicMessages => {
+            let assistant_call = messages.iter().any(|message| {
+                message["role"] == "assistant"
+                    && message["content"].as_array().is_some_and(|content| {
+                        content.iter().any(|part| {
+                            part["type"] == "tool_use"
+                                && part["id"] == "call-read"
+                                && part["name"] == "read"
+                        })
+                    })
+            });
+            let tool_result = messages.iter().any(|message| {
+                message["role"] == "user"
+                    && message["content"].as_array().is_some_and(|content| {
+                        content.iter().any(|part| {
+                            part["type"] == "tool_result"
+                                && part["tool_use_id"] == "call-read"
+                                && part.to_string().contains("fixture repository context")
+                        })
+                    })
+            });
+            assistant_call && tool_result
+        }
+    }
+}
+
+/// 提供无捕获的 OpenAI history matcher，满足 httpmock 的函数指针 seam。
+fn has_openai_read_tool_round_trip(request: &HttpMockRequest) -> bool {
+    has_read_tool_round_trip(CustomProviderProtocol::OpenaiChatCompletions, request)
+}
+
+/// 提供无捕获的 Anthropic history matcher，满足 httpmock 的函数指针 seam。
+fn has_anthropic_read_tool_round_trip(request: &HttpMockRequest) -> bool {
+    has_read_tool_round_trip(CustomProviderProtocol::AnthropicMessages, request)
 }
 
 /// 为指定协议计算 Rig 使用的 completion endpoint。
@@ -326,6 +483,244 @@ async fn both_custom_protocols_run_through_registry_and_completed_cache() {
     }
 }
 
+/// 共享输出上限契约：两个协议都返回 distinct OutputLimit，跳过 repair 且失败不缓存。
+#[tokio::test]
+async fn both_custom_protocols_surface_output_limit_without_repair_or_cache() {
+    for protocol in [
+        CustomProviderProtocol::OpenaiChatCompletions,
+        CustomProviderProtocol::AnthropicMessages,
+    ] {
+        let server = MockServer::start_async().await;
+        let model = server
+            .mock_async(|when, then| {
+                when.method(POST).path(endpoint_path(protocol));
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(output_limit_response(protocol));
+            })
+            .await;
+        let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        let settings = tempfile::tempdir().expect("创建 fixture settings");
+        let configured = application_for_connection(
+            settings.path().join("settings.json"),
+            protocol,
+            base_url(protocol, &server),
+        );
+        let (request, content) = fixture_input(workspace.path());
+        let cancellation = OperationContext::background().cancellation().clone();
+        let mut first_progress = Vec::new();
+
+        let first = configured
+            .application
+            .explain_file(request.clone(), content.clone(), &cancellation, |event| {
+                first_progress.push(event);
+                Ok(())
+            })
+            .await;
+
+        assert_eq!(
+            first,
+            Err(BabysitError::OutputLimit {
+                limit: MAX_OUTPUT_TOKENS,
+            })
+        );
+        assert_eq!(first_progress, vec![BabysitProgress::Generating]);
+
+        // ReuseCached 仍须重新发起请求，证明 output-limit failure 没有进入 completed cache。
+        let mut retry_progress = Vec::new();
+        let retry = configured
+            .application
+            .explain_file(request, content, &cancellation, |event| {
+                retry_progress.push(event);
+                Ok(())
+            })
+            .await;
+        assert_eq!(
+            retry,
+            Err(BabysitError::OutputLimit {
+                limit: MAX_OUTPUT_TOKENS,
+            })
+        );
+        assert_eq!(retry_progress, vec![BabysitProgress::Generating]);
+        assert_eq!(model.hits_async().await, 2);
+    }
+}
+
+/// 跨协议切换不能复用先前协议的 completed result，即使请求 identity 完全相同。
+#[tokio::test]
+async fn changing_custom_protocol_does_not_reuse_a_completed_result() {
+    let server = MockServer::start_async().await;
+    let openai = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(response_with_explanations(
+                    CustomProviderProtocol::OpenaiChatCompletions,
+                    "openai before",
+                    "openai after",
+                ));
+        })
+        .await;
+    let anthropic = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(response_with_explanations(
+                    CustomProviderProtocol::AnthropicMessages,
+                    "anthropic before",
+                    "anthropic after",
+                ));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+    let settings = tempfile::tempdir().expect("创建 fixture settings");
+    let configured = application_for_connection(
+        settings.path().join("settings.json"),
+        CustomProviderProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+    );
+    let (request, content) = fixture_input(workspace.path());
+    let cancellation = OperationContext::background().cancellation().clone();
+
+    let openai_result = configured
+        .application
+        .explain_file(request.clone(), content.clone(), &cancellation, |_| Ok(()))
+        .await
+        .expect("OpenAI fixture should complete");
+
+    configured
+        .settings
+        .update_custom_connection(CustomProviderConnection {
+            protocol: CustomProviderProtocol::AnthropicMessages,
+            // Anthropic 会规范化末尾的 `/v1`，而 OpenAI 会保留它；相同 base URL 可让断言聚焦协议 identity。
+            base_url: format!("{}/v1", server.url("")),
+            api_key: String::new(),
+            model: "fixture-model".to_owned(),
+            effort: CustomProviderEffort::High,
+        })
+        .expect("保存 Anthropic fixture connection");
+
+    let anthropic_result = configured
+        .application
+        .explain_file(request, content, &cancellation, |_| Ok(()))
+        .await
+        .expect("Anthropic fixture should complete");
+
+    assert_eq!(
+        openai_result.before.get("1"),
+        Some(&"openai before".to_owned())
+    );
+    assert_eq!(
+        anthropic_result.before.get("1"),
+        Some(&"anthropic before".to_owned())
+    );
+    assert_eq!(openai.hits_async().await, 1);
+    assert_eq!(anthropic.hits_async().await, 1);
+}
+
+/// application 层 transport 失败必须完全移除 URL、secret、内容与旧 origin/hash 诊断。
+#[tokio::test]
+async fn both_custom_protocols_redact_transport_diagnostics_at_application_boundary() {
+    const API_KEY_MARKER: &str = "application-api-key-secret";
+    const REQUEST_MARKER: &str = "application-request-body-secret";
+    const RESPONSE_MARKER: &str = "application-response-body-secret";
+    const PROMPT_MARKER: &str = "application-prompt-secret";
+    const SOURCE_MARKER: &str = "application-source-secret";
+    const EXPLANATION_MARKER: &str = "application-explanation-secret";
+    const TOOL_RESULT_MARKER: &str = "application-tool-result-secret";
+    const ORIGIN_HASH_MARKER: &str = "application-origin-hash-secret";
+
+    for protocol in [
+        CustomProviderProtocol::OpenaiChatCompletions,
+        CustomProviderProtocol::AnthropicMessages,
+    ] {
+        let server = MockServer::start_async().await;
+        let endpoint_marker = format!("{ORIGIN_HASH_MARKER}-{protocol:?}");
+        let expected_path = match protocol {
+            CustomProviderProtocol::OpenaiChatCompletions => {
+                format!("/v1/{endpoint_marker}/chat/completions")
+            }
+            CustomProviderProtocol::AnthropicMessages => {
+                format!("/{endpoint_marker}/v1/messages")
+            }
+        };
+        let response_body = format!(
+            "{RESPONSE_MARKER} {REQUEST_MARKER} {PROMPT_MARKER} {SOURCE_MARKER} \
+             {EXPLANATION_MARKER} {TOOL_RESULT_MARKER}"
+        );
+        let failed = server
+            .mock_async(|when, then| {
+                when.method(POST).path(expected_path);
+                then.status(500)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "error": {
+                            "type": "fixture_failure",
+                            "message": response_body,
+                        }
+                    }));
+            })
+            .await;
+        let base_url = match protocol {
+            CustomProviderProtocol::OpenaiChatCompletions => {
+                format!("{}/v1/{endpoint_marker}", server.url(""))
+            }
+            CustomProviderProtocol::AnthropicMessages => {
+                format!("{}/{endpoint_marker}", server.base_url())
+            }
+        };
+        let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        let settings = tempfile::tempdir().expect("创建 fixture settings");
+        let configured = application_for_connection_with_api_key(
+            settings.path().join("settings.json"),
+            protocol,
+            base_url,
+            API_KEY_MARKER,
+        );
+        let (mut request, mut content) = fixture_input(workspace.path());
+        request.path = format!("{}-{PROMPT_MARKER}", request.path);
+        content.path = request.path.clone();
+        if let Some(FileContent::Text { text, .. }) = content.before.as_mut() {
+            *text = SOURCE_MARKER.to_owned();
+        }
+        let cancellation = OperationContext::background().cancellation().clone();
+
+        let error = configured
+            .application
+            .explain_file(request, content, &cancellation, |_| Ok(()))
+            .await
+            .expect_err("fixture transport failure should reach application boundary");
+        let payload = BabysitErrorPayload::from(error.clone());
+        let diagnostic = format!(
+            "{error} {error:?} {}",
+            serde_json::to_string(&payload).expect("序列化脱敏 application payload")
+        );
+        for forbidden in [
+            endpoint_marker,
+            API_KEY_MARKER.to_owned(),
+            REQUEST_MARKER.to_owned(),
+            RESPONSE_MARKER.to_owned(),
+            PROMPT_MARKER.to_owned(),
+            SOURCE_MARKER.to_owned(),
+            EXPLANATION_MARKER.to_owned(),
+            TOOL_RESULT_MARKER.to_owned(),
+            ORIGIN_HASH_MARKER.to_owned(),
+        ] {
+            assert!(
+                !diagnostic.contains(&forbidden),
+                "application diagnostic leaked marker {forbidden}: {diagnostic}"
+            );
+        }
+        let diagnostic_lower = diagnostic.to_ascii_lowercase();
+        assert!(!diagnostic_lower.contains("origin"));
+        assert!(!diagnostic_lower.contains("hash"));
+        assert!(matches!(error, BabysitError::ProviderDiagnostic { .. }));
+        failed.assert_async().await;
+    }
+}
+
 /// 共享 wire 契约：registry 选出的两个协议都执行真实 Read 循环且只暴露四个工具。
 #[tokio::test]
 async fn both_custom_protocols_preserve_wire_contract_through_repository_tool_loop() {
@@ -351,6 +746,7 @@ async fn both_custom_protocols_preserve_wire_contract_through_repository_tool_lo
                 let when = when
                     .method(POST)
                     .path(endpoint_path(protocol))
+                    .matches(has_exact_custom_tools)
                     .body_contains(r#""name":"read""#)
                     .body_contains(r#""name":"glob""#)
                     .body_contains(r#""name":"grep""#)
@@ -478,7 +874,7 @@ async fn both_custom_protocols_repair_malformed_output_in_one_application_sessio
         CustomProviderProtocol::AnthropicMessages,
     ] {
         let server = MockServer::start_async().await;
-        let initial = server
+        let initial_read = server
             .mock_async(|when, then| {
                 when.method(POST)
                     .path(endpoint_path(protocol))
@@ -490,6 +886,26 @@ async fn both_custom_protocols_repair_malformed_output_in_one_application_sessio
                             .unwrap_or_default();
                         body.contains("Review this complete file change")
                             && !body.contains("Repair the previous Line Explanation result")
+                            && !body.contains("fixture repository context")
+                    });
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(read_tool_response(protocol));
+            })
+            .await;
+        let initial_final = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(endpoint_path(protocol))
+                    .matches(|request| {
+                        let body = request
+                            .body
+                            .as_deref()
+                            .map(String::from_utf8_lossy)
+                            .unwrap_or_default();
+                        body.contains("Review this complete file change")
+                            && body.contains("fixture repository context")
+                            && !body.contains("Repair the previous Line Explanation result")
                     });
                 then.status(200)
                     .header("content-type", "application/json")
@@ -500,14 +916,15 @@ async fn both_custom_protocols_repair_malformed_output_in_one_application_sessio
             .mock_async(|when, then| {
                 when.method(POST)
                     .path(endpoint_path(protocol))
-                    .matches(|request| {
-                        let body = request
-                            .body
-                            .as_deref()
-                            .map(String::from_utf8_lossy)
-                            .unwrap_or_default();
-                        body.contains("Repair the previous Line Explanation result")
-                            && body.contains("before")
+                    .body_contains("Repair the previous Line Explanation result")
+                    .body_contains("before")
+                    .matches(match protocol {
+                        CustomProviderProtocol::OpenaiChatCompletions => {
+                            has_openai_read_tool_round_trip
+                        }
+                        CustomProviderProtocol::AnthropicMessages => {
+                            has_anthropic_read_tool_round_trip
+                        }
                     });
                 then.status(200)
                     .header("content-type", "application/json")
@@ -515,6 +932,11 @@ async fn both_custom_protocols_repair_malformed_output_in_one_application_sessio
             })
             .await;
         let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+        std::fs::write(
+            workspace.path().join("fixture.rs"),
+            "fixture repository context\n",
+        )
+        .expect("写入 repository fixture");
         let settings = tempfile::tempdir().expect("创建 fixture settings");
         let configured = application_for_connection(
             settings.path().join("settings.json"),
@@ -539,7 +961,8 @@ async fn both_custom_protocols_repair_malformed_output_in_one_application_sessio
             Some(&"before explanation".to_owned())
         );
         assert_eq!(output.after.get("1"), Some(&"after explanation".to_owned()));
-        assert_eq!(initial.hits_async().await, 1);
+        assert_eq!(initial_read.hits_async().await, 1);
+        assert_eq!(initial_final.hits_async().await, 1);
         assert_eq!(repair.hits_async().await, 1);
         assert_eq!(
             progress,
@@ -780,39 +1203,84 @@ async fn both_custom_protocols_reject_late_responses_and_regenerate_after_cancel
     }
 }
 
-/// 共享冻结快照契约：保存新连接只影响后续分析，in-flight 请求仍使用旧 endpoint。
+/// 共享冻结快照契约：in-flight wire 请求使用旧完整连接，后续 run 使用新完整连接。
 #[tokio::test]
 async fn both_custom_protocols_freeze_connection_while_a_request_is_in_flight() {
-    for protocol in [
-        CustomProviderProtocol::OpenaiChatCompletions,
-        CustomProviderProtocol::AnthropicMessages,
+    for (old_protocol, new_protocol) in [
+        (
+            CustomProviderProtocol::OpenaiChatCompletions,
+            CustomProviderProtocol::AnthropicMessages,
+        ),
+        (
+            CustomProviderProtocol::AnthropicMessages,
+            CustomProviderProtocol::OpenaiChatCompletions,
+        ),
     ] {
         let old_server = MockServer::start_async().await;
         let old_model = old_server
             .mock_async(|when, then| {
-                when.method(POST).path(endpoint_path(protocol));
+                match old_protocol {
+                    CustomProviderProtocol::OpenaiChatCompletions => when
+                        .method(POST)
+                        .path(endpoint_path(old_protocol))
+                        .body_contains(r#""model":"fixture-model""#)
+                        .header("authorization", "Bearer old-key")
+                        .body_contains(r#""reasoning_effort":"high""#),
+                    CustomProviderProtocol::AnthropicMessages => when
+                        .method(POST)
+                        .path(endpoint_path(old_protocol))
+                        .body_contains(r#""model":"fixture-model""#)
+                        .header("x-api-key", "old-key")
+                        .body_contains(r#""output_config":{"effort":"high"}"#),
+                };
                 then.status(200)
                     .delay(std::time::Duration::from_millis(200))
                     .header("content-type", "application/json")
-                    .json_body(final_response(protocol));
+                    .json_body(response_with_explanations(
+                        old_protocol,
+                        "old before",
+                        "old after",
+                    ));
             })
             .await;
         let new_server = MockServer::start_async().await;
         let new_model = new_server
             .mock_async(|when, then| {
-                when.method(POST).path(endpoint_path(protocol));
+                match new_protocol {
+                    CustomProviderProtocol::OpenaiChatCompletions => when
+                        .method(POST)
+                        .path(endpoint_path(new_protocol))
+                        .body_contains(r#""model":"next-model""#)
+                        .header("authorization", "Bearer new-key")
+                        .body_contains(r#""reasoning_effort":"low""#),
+                    CustomProviderProtocol::AnthropicMessages => when
+                        .method(POST)
+                        .path(endpoint_path(new_protocol))
+                        .body_contains(r#""model":"next-model""#)
+                        .header("x-api-key", "new-key")
+                        .body_contains(r#""output_config":{"effort":"low"}"#),
+                };
                 then.status(200)
                     .header("content-type", "application/json")
-                    .json_body(final_response(protocol));
+                    .json_body(response_with_explanations(
+                        new_protocol,
+                        "new before",
+                        "new after",
+                    ));
             })
             .await;
         let workspace = tempfile::tempdir().expect("创建 fixture workspace");
         let settings = tempfile::tempdir().expect("创建 fixture settings");
-        let configured = application_for_connection(
+        let configured = application_for_connection_with_api_key(
             settings.path().join("settings.json"),
-            protocol,
-            base_url(protocol, &old_server),
+            old_protocol,
+            base_url(old_protocol, &old_server),
+            "old-key",
         );
+        let (_, old_generation) = configured
+            .settings
+            .load_custom_connection_with_generation()
+            .expect("读取旧连接 generation");
         let (request, content) = fixture_input(workspace.path());
         let first_cancellation = OperationContext::background().cancellation().clone();
         let first_task = {
@@ -837,27 +1305,34 @@ async fn both_custom_protocols_freeze_connection_while_a_request_is_in_flight() 
         configured
             .settings
             .update_custom_connection(CustomProviderConnection {
-                protocol,
-                base_url: base_url(protocol, &new_server),
-                api_key: String::new(),
+                protocol: new_protocol,
+                base_url: base_url(new_protocol, &new_server),
+                api_key: "new-key".to_owned(),
                 model: "next-model".to_owned(),
                 effort: CustomProviderEffort::Low,
             })
             .expect("保存新的 fixture connection");
+        let (_, new_generation) = configured
+            .settings
+            .load_custom_connection_with_generation()
+            .expect("读取新连接 generation");
+        assert_eq!(new_generation, old_generation.saturating_add(1));
 
-        first_task
+        let first_output = first_task
             .await
             .expect("旧连接 task 应正常 join")
             .expect("旧连接 response 应成功");
+        assert_eq!(first_output.before.get("1"), Some(&"old before".to_owned()));
         assert_eq!(old_model.hits_async().await, 1);
 
         let (request, content) = fixture_input(workspace.path());
         let next_cancellation = OperationContext::background().cancellation().clone();
-        configured
+        let next_output = configured
             .application
             .explain_file(request, content, &next_cancellation, |_| Ok(()))
             .await
             .expect("新连接应服务后续分析");
+        assert_eq!(next_output.before.get("1"), Some(&"new before".to_owned()));
         assert_eq!(new_model.hits_async().await, 1);
     }
 }

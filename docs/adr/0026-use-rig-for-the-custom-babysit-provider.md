@@ -21,6 +21,13 @@ the final Line Explanations. Tool output keeps the provider-independent validati
 three-round repair contract while avoiding incompatible native structured-output shapes
 between the two supported protocols.
 
+Rig is the only owner of the model-and-tool agent loop. Each initial generation or repair
+run gives Rig at most 16 model turns and a 65,536-token output budget; Narrant does not
+wrap that run in another turn loop, split one result into batches, silently reduce the
+budget, or repair a response that ended because it reached the output limit. Narrant
+retains only the cross-run responsibilities: the shared transcript, up to three repairs,
+the ten-minute analysis deadline, validation, cancellation, and completed-result caching.
+
 ## Consequences
 
 - The stable provider identity is `custom`; `rig` remains an implementation detail.
@@ -47,3 +54,17 @@ between the two supported protocols.
   does not promise that the selected model disables reasoning.
 - Narrant does not retry a failed request with different reasoning parameters. A service
   that rejects an explicit effort returns one redacted provider error for that request.
+- A service that rejects the 65,536-token output budget fails explicitly. A response that
+  reaches that limit produces a distinct output-limit failure instead of malformed-output
+  repair.
+- Custom diagnostics retain stable protocol, phase, status, and redacted provider-error
+  categories but no endpoint fingerprint. URL, key, bodies, prompts, source, Line
+  Explanations, and repository-tool content remain excluded.
+- Debug builds install only a local `tracing-subscriber::fmt` terminal subscriber; Release
+  builds install none. Narrant deliberately does not ship OpenTelemetry, OTLP export, a
+  collector, or a dashboard integration because local performance diagnosis does not
+  justify that dependency and lifecycle surface. Rig's native completion spans remain,
+  with content telemetry disabled, while Narrant records correlated lifecycle, model,
+  provider-request, and tool boundaries with explicit elapsed time. Development logs may
+  contain the configured endpoint URL and model identifier, but never the API key, prompt,
+  source, model body, explanation, tool arguments, or tool results.

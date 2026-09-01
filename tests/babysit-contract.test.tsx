@@ -74,6 +74,21 @@ describe("Babysit contract spine", () => {
   it("rejects unknown provider-specific error codes at the runtime boundary", () => {
     expect(isBabysitError({ code: "provider_timeout", detail: "timeout" })).toBe(false);
     expect(isBabysitError({ code: "provider", detail: "provider failed" })).toBe(true);
+    expect(isBabysitError({ code: "output_limit", detail: "fixed budget reached" })).toBe(true);
+    for (const reason of ["model_turn_limit", "unknown_tool_call"]) {
+      expect(isBabysitError({
+        code: "provider",
+        detail: "provider failed",
+        diagnostic: {
+          providerId: "custom",
+          protocol: "openai_chat_completions",
+          phase: "model",
+          status: "client",
+          reason,
+          errorCategory: "transport",
+        },
+      })).toBe(true);
+    }
     expect(isBabysitError({
       code: "provider",
       detail: "provider failed",
@@ -84,7 +99,6 @@ describe("Babysit contract spine", () => {
         status: "client",
         reason: "reasoning_tools_incompatible",
         errorCategory: "transport",
-        originHash: "0123456789abcdef",
       },
     })).toBe(true);
     expect(isBabysitError({

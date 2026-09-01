@@ -176,6 +176,8 @@ impl TestBabysitAgentProvider for InFlightModelProvider {
 mod claude;
 #[path = "language.rs"]
 mod language;
+#[path = "observability.rs"]
+mod observability;
 #[path = "provider_registry.rs"]
 mod provider_registry;
 
@@ -749,6 +751,19 @@ fn error_payload_serializes_a_stable_code_and_detail_shape() {
 }
 
 #[test]
+fn output_limit_payload_uses_a_distinct_non_repairable_code() {
+    let payload = BabysitErrorPayload::from(BabysitError::OutputLimit { limit: 65_536 });
+
+    assert_eq!(
+        serde_json::to_value(payload).unwrap(),
+        serde_json::json!({
+            "code": "output_limit",
+            "detail": "宝宝模式模型输出已达到固定上限 65536"
+        })
+    );
+}
+
+#[test]
 fn custom_transport_payload_serializes_only_whitelisted_diagnostics() {
     let payload = BabysitErrorPayload::from(BabysitError::ProviderDiagnostic {
         detail: "脱敏 provider 失败".to_owned(),
@@ -757,12 +772,11 @@ fn custom_transport_payload_serializes_only_whitelisted_diagnostics() {
             "model",
             "client",
             "unknown",
-            "0123456789abcdef",
         ),
     });
 
     assert_eq!(
-        serde_json::to_value(payload).unwrap(),
+        serde_json::to_value(&payload).unwrap(),
         serde_json::json!({
             "code": "provider",
             "detail": "宝宝模式 provider 失败：脱敏 provider 失败",
@@ -772,11 +786,16 @@ fn custom_transport_payload_serializes_only_whitelisted_diagnostics() {
                 "phase": "model",
                 "status": "client",
                 "reason": "unknown",
-                "errorCategory": "transport",
-                "originHash": "0123456789abcdef"
+                "errorCategory": "transport"
             }
         })
     );
+    let serialized = serde_json::to_string(&payload).expect("序列化脱敏诊断");
+    assert!(!serialized.contains("https://secret.invalid"));
+    assert!(!serialized.contains("secret-api-key"));
+    assert!(!serialized.contains("request body"));
+    assert!(!serialized.contains("prompt source"));
+    assert!(!serialized.contains("tool output"));
 }
 
 #[test]

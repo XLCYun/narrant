@@ -46,6 +46,8 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util", "process"] }
 tempfile = "3"
 tauri-plugin-dialog = "2.7.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "env-filter", "fmt", "registry", "std"] }
 walkdir = "2"
 
 [dev-dependencies]

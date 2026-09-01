@@ -29,6 +29,7 @@ impl BabysitProviderCapabilities for TestCapabilityBundle {
             provider: self.provider.clone(),
             resolved: self.provider.resolve_test_model().await?,
             process_generation: "test-process-v1".to_owned(),
+            protocol: None,
             _lease: None,
         })
     }

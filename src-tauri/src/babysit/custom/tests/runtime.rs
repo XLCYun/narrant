@@ -11,14 +11,14 @@ use std::sync::{Arc, Mutex};
 /// 只在 runtime 契约测试中使用的可脚本化 provider-neutral adapter。
 #[derive(Clone)]
 struct FakeAdapter {
-    responses: Arc<Mutex<Vec<CustomRoundResult>>>,
-    requests: Arc<Mutex<Vec<CustomRoundRequest>>>,
+    responses: Arc<Mutex<Vec<CustomRunResult>>>,
+    requests: Arc<Mutex<Vec<CustomRunRequest>>>,
     cancel_before_return: Option<TestCancellation>,
 }
 
 impl FakeAdapter {
-    /// 按预设顺序返回 round response，同时记录每轮 history。
-    fn scripted(responses: Vec<CustomRoundResult>) -> Self {
+    /// 按预设顺序返回 agent run response，同时记录每次 run 的 history。
+    fn scripted(responses: Vec<CustomRunResult>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
             requests: Arc::new(Mutex::new(Vec::new())),
@@ -30,11 +30,11 @@ impl FakeAdapter {
 #[async_trait::async_trait]
 impl CustomProtocolAdapter for FakeAdapter {
     /// 从脚本取出 response；取消开关用于模拟 late response 边界。
-    async fn complete(
+    async fn run_agent(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &crate::operation::CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         self.requests.lock().expect("请求锁").push(request);
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
@@ -44,9 +44,7 @@ impl CustomProtocolAdapter for FakeAdapter {
         }
         let mut responses = self.responses.lock().expect("响应锁");
         if responses.is_empty() {
-            Err(CustomAdapterError::TurnLimitExceeded {
-                limit: MAX_MODEL_TURNS,
-            })
+            Err(CustomAdapterError::InvalidConnection)
         } else {
             Ok(responses.remove(0))
         }
@@ -80,8 +78,8 @@ fn fixture_request(run_id: u64, workspace_path: &str) -> BabysitProviderRequest 
 }
 
 /// 构造一个带 assistant tool call 的 provider-neutral response。
-fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult {
-    CustomRoundResult {
+fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRunResult {
+    CustomRunResult {
         choice: vec![rig::completion::AssistantContent::tool_call(
             "call-1", name, arguments,
         )],
@@ -92,6 +90,17 @@ fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult 
         },
         transcript: None,
     }
+}
+
+/// 构造携带 Rig 当前 run transcript 的 response，模拟真实 adapter 返回值。
+fn tool_response_with_transcript(
+    name: &str,
+    arguments: serde_json::Value,
+    transcript: Vec<Message>,
+) -> CustomRunResult {
+    let mut response = tool_response(name, arguments);
+    response.transcript = Some(transcript);
+    response
 }
 
 /// 从测试捕获的 provider-neutral user message 中读取唯一文本块。
@@ -145,39 +154,126 @@ fn frozen_connection_identity_excludes_key_but_includes_generation_and_connectio
     assert!(!format!("{first:?}").contains("secret-a"));
 }
 
+/// 冻结连接的 Debug 只保留可安全诊断的字段，不暴露 endpoint 或 secret。
+#[test]
+fn frozen_connection_debug_excludes_endpoint_fingerprint_and_secret() {
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        "https://secret.invalid/v1?token=secret-url-token",
+        "secret-api-key",
+        "review-model",
+        CustomEffort::Medium,
+        "credential-generation-1",
+    )
+    .expect("构造冻结连接");
+
+    let debug = format!("{connection:?}");
+    assert!(!debug.contains("hash"));
+    assert!(!debug.contains("endpoint"));
+    assert!(!debug.contains("https://secret.invalid"));
+    assert!(!debug.contains("secret-url-token"));
+    assert!(!debug.contains("secret-api-key"));
+    assert!(debug.contains("api_key"));
+    assert!(debug.contains("<redacted>"));
+}
+
 #[tokio::test]
-async fn runtime_replays_repository_tool_results_in_one_memory_session() {
+async fn runtime_delegates_tool_dispatch_without_a_second_narrant_loop() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
-    std::fs::create_dir_all(workspace.path().join("src")).expect("创建目录");
-    std::fs::write(workspace.path().join("src/example.rs"), "fn example() {}\n")
-        .expect("写入 fixture");
-    let adapter = FakeAdapter::scripted(vec![
-        tool_response("read", json!({"path": "src/example.rs"})),
-        tool_response(
-            FINAL_OUTPUT_TOOL_NAME,
-            json!({"before": {"1": "before explanation"}, "after": {"1": "after explanation"}}),
-        ),
-    ]);
+    std::fs::write(workspace.path().join("example.rs"), "fn example() {}\n").expect("写入 fixture");
+    let adapter = FakeAdapter::scripted(vec![tool_response("read", json!({"path": "example.rs"}))]);
     let requests = adapter.requests.clone();
     let runtime = CustomRuntime::new();
+
     let output = runtime
         .generate(
             Arc::new(adapter),
-            fixture_request(41, &workspace.path().to_string_lossy()),
+            fixture_request(401, &workspace.path().to_string_lossy()),
             &TestCancellation::default(),
         )
         .await
-        .expect("runtime 输出");
+        .expect("adapter 已经负责完整 Rig agent loop");
 
-    assert_eq!(
-        output.before.get("1"),
-        Some(&"before explanation".to_owned())
-    );
-    assert_eq!(output.after.get("1"), Some(&"after explanation".to_owned()));
+    assert!(output.before.is_empty() && output.after.is_empty());
     let requests = requests.lock().expect("请求锁");
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].history().len(), 3);
-    assert!(user_message_text(requests[0].prompt()).contains("zh-CN"));
+    assert_eq!(requests.len(), 1);
+    let prompt = user_message_text(requests[0].prompt());
+    assert!(prompt.contains("Do not explore the repository by default"));
+    assert!(prompt.contains("one specific unresolved symbol or behavior"));
+    assert!(prompt.contains("do not repeat or broaden a query"));
+    assert!(prompt.contains("one or two short sentences"));
+    assert!(prompt.contains("at most 240 Unicode characters"));
+}
+
+#[tokio::test]
+async fn runtime_preserves_rig_transcript_across_generation_and_repairs() {
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let result = json!({"before": {"1": "旧行"}, "after": {"1": "新行"}});
+    let generation_transcript = vec![
+        Message::user("generation prompt"),
+        Message::Assistant {
+            id: Some("generation-assistant".to_owned()),
+            content: vec![rig::completion::AssistantContent::text("generation result")],
+        },
+    ];
+    let first_repair_transcript = vec![
+        Message::user("repair prompt"),
+        Message::Assistant {
+            id: Some("repair-assistant".to_owned()),
+            content: vec![rig::completion::AssistantContent::text("repair result")],
+        },
+    ];
+    let second_repair_transcript = vec![
+        Message::user("second repair prompt"),
+        Message::Assistant {
+            id: Some("second-repair-assistant".to_owned()),
+            content: vec![rig::completion::AssistantContent::text(
+                "second repair result",
+            )],
+        },
+    ];
+    let adapter = FakeAdapter::scripted(vec![
+        tool_response_with_transcript(
+            FINAL_OUTPUT_TOOL_NAME,
+            result.clone(),
+            generation_transcript.clone(),
+        ),
+        tool_response_with_transcript(
+            FINAL_OUTPUT_TOOL_NAME,
+            result.clone(),
+            first_repair_transcript,
+        ),
+        tool_response_with_transcript(FINAL_OUTPUT_TOOL_NAME, result, second_repair_transcript),
+    ]);
+    let requests = adapter.requests.clone();
+    let runtime = CustomRuntime::new();
+    let request = fixture_request(402, &workspace.path().to_string_lossy());
+    let output = runtime
+        .generate(
+            Arc::new(adapter),
+            request.clone(),
+            &TestCancellation::default(),
+        )
+        .await
+        .expect("首轮结果");
+    runtime
+        .repair(
+            request.clone(),
+            output.clone(),
+            Vec::new(),
+            &TestCancellation::default(),
+        )
+        .await
+        .expect("第一次 repair");
+    runtime
+        .repair(request, output, Vec::new(), &TestCancellation::default())
+        .await
+        .expect("第二次 repair");
+
+    let requests = requests.lock().expect("请求锁");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].history(), generation_transcript.as_slice());
+    assert_eq!(requests[2].history().len(), 4);
 }
 
 #[tokio::test]
@@ -204,21 +300,17 @@ async fn runtime_rejects_late_response_after_cancellation_without_next_tool_or_f
 }
 
 #[tokio::test]
-async fn runtime_stops_after_shared_sixteen_turn_budget() {
+async fn runtime_delegates_turn_budget_to_the_adapter() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
-    let adapter = FakeAdapter::scripted(
-        (0..MAX_MODEL_TURNS)
-            .map(|_| CustomRoundResult {
-                choice: vec![rig::completion::AssistantContent::text("继续")],
-                identity: ResponseIdentity {
-                    message_id: None,
-                    response_id: None,
-                    provider_request_id: None,
-                },
-                transcript: None,
-            })
-            .collect(),
-    );
+    let adapter = FakeAdapter::scripted(vec![CustomRunResult {
+        choice: vec![rig::completion::AssistantContent::text("继续")],
+        identity: ResponseIdentity {
+            message_id: None,
+            response_id: None,
+            provider_request_id: None,
+        },
+        transcript: None,
+    }]);
     let requests = adapter.requests.clone();
     let runtime = CustomRuntime::new();
     let result = runtime
@@ -228,10 +320,10 @@ async fn runtime_stops_after_shared_sixteen_turn_budget() {
             &TestCancellation::default(),
         )
         .await
-        .expect("预算耗尽仍返回上层可 repair 的默认结果");
+        .expect("adapter 已经拥有 Rig 的 turn budget");
 
     assert!(result.before.is_empty() && result.after.is_empty());
-    assert_eq!(requests.lock().expect("请求锁").len(), MAX_MODEL_TURNS);
+    assert_eq!(requests.lock().expect("请求锁").len(), 1);
 }
 
 #[tokio::test]
@@ -274,7 +366,11 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].history().len(), 2);
-    assert!(user_message_text(requests[1].prompt()).contains("zh-CN"));
+    let repair_prompt = user_message_text(requests[1].prompt());
+    assert!(repair_prompt.contains("zh-CN"));
+    assert!(repair_prompt.contains("Do not explore the repository by default"));
+    assert!(repair_prompt.contains("do not repeat or broaden a query"));
+    assert!(repair_prompt.contains("preferably within 240 Unicode characters"));
 }
 
 #[tokio::test]

@@ -101,7 +101,6 @@ impl fmt::Debug for CustomConnectionSnapshot {
         formatter
             .debug_struct("CustomConnectionSnapshot")
             .field("protocol", &self.protocol)
-            .field("origin_hash", &endpoint_origin_hash(&self.base_url))
             .field(
                 "api_key",
                 &(!self.api_key.expose_secret().is_empty()).then_some("<redacted>"),
@@ -184,19 +183,4 @@ impl CustomConnectionSnapshot {
     pub(super) fn api_key(&self) -> &str {
         self.api_key.expose_secret()
     }
-}
-
-/// 从 URL 中只取 scheme 与 authority，再计算不可逆 origin hash。
-pub(super) fn endpoint_origin_hash(base_url: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let origin = base_url
-        .split_once("://")
-        .map(|(_, remainder)| {
-            let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
-            &base_url[..base_url.len() - remainder.len() + authority_end]
-        })
-        .unwrap_or(base_url);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    origin.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
 }

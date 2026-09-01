@@ -137,18 +137,36 @@ Coding Agent Provider in Application Settings.
   UTF-8 boundary. Every truncated result says so.
 - The final Line Explanations use Rig Tool output mode for both protocols. Narrant still
   parses, validates, and merges repair patches through its provider-independent contract.
-- Initial generation and up to three repairs reuse one in-memory Rig conversation. Each
-  generation or repair permits at most 16 model turns, while the whole File Change run
-  retains the existing ten-minute deadline.
+- Rig alone owns the model-and-tool agent loop. Initial generation and up to three repairs
+  reuse one in-memory Rig conversation, and each generation or repair gives Rig at most
+  16 model turns. Narrant does not wrap a Rig run in another model-turn or repository-tool
+  dispatch loop; the whole File Change run retains the existing ten-minute deadline.
+- Every model turn uses a 65,536-token output budget for both protocols. Narrant does not
+  split targets into output batches, silently retry with a smaller budget, or delegate the
+  budget to a provider default. A service that rejects the budget fails explicitly, and a
+  response that ends at the output limit produces a distinct output-limit failure rather
+  than entering malformed-output repair.
 - Cancellation drops the active HTTP future, stops further local tool dispatch, rejects
   late output, and prevents incomplete caching. Remote termination and billing are best
   effort rather than a product guarantee.
 - A connection snapshot freezes protocol, URL, model, effort, and credential generation
   for an in-flight run. A successful connection change invalidates completed Custom
   caches; the credential itself never enters a cache key.
-- Diagnostics include only Custom identity, protocol, phase, HTTP status category,
-  redacted Rig error category, and an irreversible endpoint-origin hash. They exclude
-  URL, key, request/response bodies, prompts, source, Line Explanations, and tool output.
+- Diagnostics include only Custom identity, protocol, phase, HTTP status category, and
+  redacted Rig error category. They contain no endpoint fingerprint and exclude URL, key,
+  request/response bodies, prompts, source, Line Explanations, and tool output.
+- Debug builds install a local `tracing-subscriber::fmt` terminal subscriber; Release
+  builds install no subscriber. With no `RUST_LOG`, Debug defaults to
+  `narrant=info,rig=info`; a valid `RUST_LOG` overrides that filter, while an invalid value
+  emits one safe warning and falls back to the default without failing startup. Logs use
+  human-readable single-line formatting and are neither persisted nor exported.
+- Rig supplies its native completion spans with content telemetry disabled. Narrant adds
+  correlated analysis, generation/repair, model-turn, provider-request, and repository-tool
+  boundary events. Critical completion events include explicit `elapsed_ms`; tool events
+  may include only tool name, sequence, input/output byte counts, truncation, status, and
+  elapsed time. Development logs may include the configured endpoint URL and model
+  identifier, but never the API key, prompt, source, model body, Line Explanations, tool
+  arguments, or tool results.
 
 ## Testing Decisions
 
@@ -171,9 +189,15 @@ Coding Agent Provider in Application Settings.
   workspace-local ignore behavior, hidden paths, binary and invalid-UTF-8 files,
   count/byte truncation, oversized patterns, continuation, cancellation, and
   deterministic logical-path ordering.
-- Provider tests cover complete output, final-tool schema errors, partial repair patches,
-  three exhausted repairs, tool-loop limits, timeout, cancellation at model and tool
-  boundaries, late responses, frozen connection identity, and completed-only caching.
+- Provider tests cover complete output, the fixed 65,536-token request budget, rejected
+  budgets, distinct output-limit failures, final-tool schema errors, partial repair
+  patches, three exhausted repairs, Rig-owned tool-loop limits, timeout, cancellation at
+  model and tool boundaries, late responses, frozen connection identity, and
+  completed-only caching.
+- Development-logging tests prove the Debug default filter, valid and invalid `RUST_LOG`
+  handling, correlated lifecycle/model/tool boundaries, explicit elapsed time, allowed URL
+  and model fields, forbidden content fields, and the absence of subscriber initialization
+  in Release builds. They do not pin terminal colors or the complete rendered line.
 - React behavior tests cover selecting Custom, the full form, Provider default semantics,
   password visibility, validation, save failure, unconfigured recovery, and absence of
   silent fallback.

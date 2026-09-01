@@ -19,7 +19,10 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let builder = tauri::Builder::default().manage(operation::CancellableOperations::default());
+    let builder = tauri::Builder::default()
+        // Debug 构建安装本地终端日志；Release 保留同一 no-op 生命周期 seam。
+        .manage(crate::telemetry::init())
+        .manage(operation::CancellableOperations::default());
     #[cfg(feature = "wdio")]
     let builder = builder.manage(repository::E2eRepositoryPicker::default());
     let builder = builder
@@ -164,6 +167,8 @@ pub fn run() {
             let _ = tauri::async_runtime::block_on(babysit.shutdown());
             let lifecycle = app.state::<review::ReviewLifecycle>();
             let _ = tauri::async_runtime::block_on(lifecycle.shutdown());
+            let telemetry = app.state::<crate::telemetry::Telemetry>();
+            let _ = tauri::async_runtime::block_on(telemetry.shutdown());
         }
     });
 }

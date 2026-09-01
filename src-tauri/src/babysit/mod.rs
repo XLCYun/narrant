@@ -17,6 +17,7 @@ mod custom;
 mod eligibility;
 mod error;
 mod model_catalog;
+mod observability;
 mod repository_tools;
 mod validation;
 
@@ -41,10 +42,7 @@ pub use validation::{
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexAppServerProvider;
-pub use repository_tools::{
-    GlobRequest, GrepRequest, ReadInput, RepositoryToolError, RepositoryToolRequest,
-    RepositoryTools,
-};
+pub use repository_tools::RepositoryTools;
 // Provider-neutral model catalog types live in their own deep module.
 /// 当前首个 Babysit 契约版本；它参与缓存 identity，避免契约变更复用旧结果。
 pub const ANALYSIS_CONTRACT_VERSION: &str = "babysit-line-explanations-v2";
@@ -140,6 +138,8 @@ pub struct PreparedBabysitAnalysis {
     provider: Arc<dyn BabysitAgentProvider>,
     resolved: BabysitResolvedModel,
     process_generation: String,
+    /// 当前冻结快照的安全协议标识，用于分析生命周期关联。
+    protocol: Option<&'static str>,
     _lease: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
@@ -170,6 +170,7 @@ impl BabysitProviderCapabilities for CodexCapabilityBundle {
             provider: self.provider.clone(),
             resolved: resolved.into(),
             process_generation: self.provider.process_generation(),
+            protocol: Some("codex_app_server"),
             _lease: Some(lease),
         })
     }
@@ -227,6 +228,7 @@ impl BabysitProviderCapabilities for ClaudeCapabilityBundle {
             provider: self.provider.clone(),
             resolved,
             process_generation: self.provider.process_generation(),
+            protocol: Some("claude_code"),
             _lease: None,
         })
     }
@@ -350,10 +352,16 @@ fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), Babysit
         .map_or(Ok(()), Err)
 }
 
+/// 为每次 Babysit 调用分配进程内唯一 run id，缓存命中与 provider 请求共用该 identity。
+pub(super) fn next_analysis_run_id() -> u64 {
+    NEXT_ANALYSIS_RUN_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 /// 将 Review 读取结果转换为 provider 需要的单次完整请求。
 fn build_provider_request(
     request: &BabysitFileRequest,
     content: &FileChangeContent,
+    analysis_run_id: u64,
     locale: String,
 ) -> Result<BabysitProviderRequest, BabysitError> {
     let before = content
@@ -370,7 +378,7 @@ fn build_provider_request(
     targets.extend(non_empty_targets(FileSide::After, after));
     validate_target_inventory(&targets)?;
     Ok(BabysitProviderRequest {
-        analysis_run_id: NEXT_ANALYSIS_RUN_ID.fetch_add(1, Ordering::Relaxed),
+        analysis_run_id,
         path: request.path.clone(),
         locale,
         workspace_path: request.workspace_path.clone(),
