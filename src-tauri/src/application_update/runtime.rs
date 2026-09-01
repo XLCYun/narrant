@@ -99,6 +99,17 @@ impl ApplicationUpdateRuntime {
         config: Result<TrustedUpdaterConfig, super::config::UpdaterConfigError>,
     ) -> Result<(Arc<Self>, Option<UpdateOutput>), String> {
         let preferences = FilePreferenceStore::new(data_dir.join("application-update.json"));
+        Self::new_at_paths_with_preferences(data_dir, cache_dir, version, config, preferences)
+    }
+
+    /// 组合显式偏好仓储，供生产构造器与真实文件系统 failpoint 测试共用。
+    fn new_at_paths_with_preferences(
+        data_dir: std::path::PathBuf,
+        cache_dir: std::path::PathBuf,
+        version: &str,
+        config: Result<TrustedUpdaterConfig, super::config::UpdaterConfigError>,
+        preferences: FilePreferenceStore,
+    ) -> Result<(Arc<Self>, Option<UpdateOutput>), String> {
         let mut controller = UpdateController::new(version, SystemClock::new(), preferences)
             .map_err(|_| "应用更新状态无法初始化".to_owned())?;
         let (staging, recovery_failure) = initialize_staging(&cache_dir, version, &config);
@@ -170,11 +181,14 @@ impl ApplicationUpdateRuntime {
                     domain_failure_context(&input_for_failure, &error);
                 let failure = UpdateFailure::new(category, diagnostic);
                 self.diagnostics.record_failure(operation_id, &failure);
-                let convergence = if matches!(error, super::UpdateDomainError::Preference(_)) {
-                    UpdateInput::PreferenceSaveFailed { failure }
-                } else {
-                    UpdateInput::ContractDomainFailed { operation, failure }
-                };
+                let convergence =
+                    if matches!(input_for_failure, UpdateInput::SetAutomaticDownload(_))
+                        && matches!(error, super::UpdateDomainError::Preference(_))
+                    {
+                        UpdateInput::PreferenceStateUnknown { failure }
+                    } else {
+                        UpdateInput::ContractDomainFailed { operation, failure }
+                    };
                 controller.handle(convergence).ok()?
             }
         };

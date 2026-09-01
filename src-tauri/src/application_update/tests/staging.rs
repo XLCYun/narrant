@@ -1,10 +1,10 @@
 use crate::application_update::{
     Clock, InstallAttemptError, InstallCleanupDisposition, InstallError, InstallExecutionOutcome,
     InstallIntent, InstallKind, InstallOutcome, MinisignVerifier, PendingStagedUpdate,
-    PreferenceError, PreferenceStore, ReleasePackage, StableRelease, StageCandidate,
-    StageCommitOutcome, StagingCommitPoint, StagingContext, StagingError, StagingFaultInjector,
-    StagingRepository, UpdateController, UpdateEffect, UpdateInput, UpdateInstaller, UpdateState,
-    VerifiedStagedPackage,
+    PreferenceError, PreferenceSaveOutcome, PreferenceStore, ReleasePackage, StableRelease,
+    StageCandidate, StageCommitOutcome, StagingCommitPoint, StagingContext, StagingError,
+    StagingFaultInjector, StagingRepository, UpdateController, UpdateEffect, UpdateInput,
+    UpdateInstaller, UpdateState, VerifiedStagedPackage,
 };
 use fs2::FileExt;
 use std::fs::{self, OpenOptions};
@@ -36,8 +36,10 @@ impl PreferenceStore for EnabledPreferences {
     }
 
     /// 本测试不需要跨实例保存偏好。
-    fn save_automatic_download(&mut self, _enabled: bool) -> Result<(), PreferenceError> {
-        Ok(())
+    fn save_automatic_download(&mut self, enabled: bool) -> PreferenceSaveOutcome {
+        PreferenceSaveOutcome::Committed {
+            applied_value: enabled,
+        }
     }
 }
 

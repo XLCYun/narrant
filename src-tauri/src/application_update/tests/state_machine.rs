@@ -1,10 +1,11 @@
 use crate::application_update::{
     Clock, DownloadProgress, DurableStagedUpdate, InstallIntent, InstallKind, PreferenceError,
-    PreferenceStore, ReleasePackage, StableRelease, UpdateController, UpdateDomainError,
-    UpdateEffect, UpdateFailure, UpdateFailureCategory, UpdateInput, UpdateOperationId,
-    UpdateState,
+    PreferenceSaveOutcome, PreferenceStore, ReleasePackage, StableRelease, UpdateController,
+    UpdateDomainError, UpdateEffect, UpdateFailure, UpdateFailureCategory, UpdateInput,
+    UpdateOperationId, UpdateState,
 };
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -30,15 +31,39 @@ impl PreferenceStore for MemoryPreferences {
     }
 
     /// 保存测试内存中的自动下载偏好。
-    fn save_automatic_download(&mut self, enabled: bool) -> Result<(), PreferenceError> {
+    fn save_automatic_download(&mut self, enabled: bool) -> PreferenceSaveOutcome {
         self.0.set(Some(enabled));
-        Ok(())
+        PreferenceSaveOutcome::Committed {
+            applied_value: enabled,
+        }
     }
 }
 
 /// 测试用的只读偏好真相，所有保存请求都稳定失败。
 struct FailingPreferences {
     automatic_download: bool,
+}
+
+/// 按顺序返回提交阶段事实的偏好仓储。
+struct ScriptedPreferences {
+    automatic_download: bool,
+    outcomes: VecDeque<PreferenceSaveOutcome>,
+}
+
+impl PreferenceStore for ScriptedPreferences {
+    /// 返回脚本指定的初始正式值。
+    fn load_automatic_download(&self) -> Result<Option<bool>, PreferenceError> {
+        Ok(Some(self.automatic_download))
+    }
+
+    /// 返回下一条提交阶段事实，脚本不足时保守报告未知。
+    fn save_automatic_download(&mut self, _enabled: bool) -> PreferenceSaveOutcome {
+        self.outcomes
+            .pop_front()
+            .unwrap_or(PreferenceSaveOutcome::StateUnknown {
+                error: PreferenceError::Storage,
+            })
+    }
 }
 
 impl PreferenceStore for FailingPreferences {
@@ -48,8 +73,10 @@ impl PreferenceStore for FailingPreferences {
     }
 
     /// 模拟原子替换偏好文件失败。
-    fn save_automatic_download(&mut self, _enabled: bool) -> Result<(), PreferenceError> {
-        Err(PreferenceError::Storage)
+    fn save_automatic_download(&mut self, _enabled: bool) -> PreferenceSaveOutcome {
+        PreferenceSaveOutcome::Rejected {
+            error: PreferenceError::Storage,
+        }
     }
 }
 
@@ -73,22 +100,28 @@ fn failing_controller(automatic_download: bool) -> UpdateController<TestClock, F
     .unwrap()
 }
 
-/// 按 runtime 的输入特定策略把偏好保存错误收敛为可并存 warning。
+/// 创建按顺序返回保存结果的领域控制器。
+fn scripted_controller(
+    outcomes: impl IntoIterator<Item = PreferenceSaveOutcome>,
+) -> UpdateController<TestClock, ScriptedPreferences> {
+    UpdateController::new(
+        "2.0.15",
+        TestClock(Rc::new(Cell::new(Duration::from_secs(10)))),
+        ScriptedPreferences {
+            automatic_download: true,
+            outcomes: outcomes.into_iter().collect(),
+        },
+    )
+    .unwrap()
+}
+
+/// 触发明确的 pre-commit rejection，并返回同一次有序领域转换。
 fn fail_preference_save(
     controller: &mut UpdateController<TestClock, FailingPreferences>,
     enabled: bool,
 ) -> crate::application_update::UpdateOutput {
-    assert_eq!(
-        controller.handle(UpdateInput::SetAutomaticDownload(enabled)),
-        Err(UpdateDomainError::Preference(PreferenceError::Storage))
-    );
     controller
-        .handle(UpdateInput::PreferenceSaveFailed {
-            failure: UpdateFailure::new(
-                UpdateFailureCategory::Storage,
-                "/private/path/application-update.json",
-            ),
-        })
+        .handle(UpdateInput::SetAutomaticDownload(enabled))
         .unwrap()
 }
 
@@ -426,6 +459,180 @@ fn preference_save_failure_does_not_interrupt_active_download() {
         }
     );
     assert!(advanced.snapshot.preference_warning.is_some());
+}
+
+/// rename 后耐久性未知时应用正式值、保留 staged proof 与安全 warning。
+#[test]
+fn durability_unknown_applies_formal_value_and_keeps_staged_installable() {
+    let mut controller = scripted_controller([PreferenceSaveOutcome::DurabilityUnknown {
+        applied_value: false,
+        error: PreferenceError::Storage,
+    }]);
+    controller
+        .handle(UpdateInput::RecoverStaged {
+            staged: durable("2.1.0", "已验证版本"),
+        })
+        .unwrap();
+    let before = controller.snapshot().clone();
+
+    let output = controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+
+    assert_eq!(output.snapshot.sequence, before.sequence + 1);
+    assert_eq!(output.snapshot.state, UpdateState::Staged);
+    assert!(!output.snapshot.automatic_download);
+    assert_eq!(output.snapshot.candidate, before.candidate);
+    assert!(output.snapshot.failure.is_none());
+    assert_eq!(
+        output.snapshot.preference_warning.unwrap().kind,
+        crate::application_update::UpdatePreferenceWarningKind::DurabilityUnknown
+    );
+    assert_eq!(
+        controller
+            .handle(UpdateInput::RequestUpdateRestart)
+            .unwrap()
+            .effects,
+        vec![UpdateEffect::RequestInstall {
+            intent: InstallIntent::UpdateRestart,
+            version: "2.1.0".into(),
+        }]
+    );
+}
+
+/// durability unknown 的已应用关闭值保留 check identity，不产生无关取消。
+#[test]
+fn durability_unknown_preserves_active_check_while_applying_formal_value() {
+    let mut controller = scripted_controller([PreferenceSaveOutcome::DurabilityUnknown {
+        applied_value: false,
+        error: PreferenceError::Storage,
+    }]);
+    let checking = controller.handle(UpdateInput::ManualCheck).unwrap();
+    let operation_id = check_id(&checking.effects);
+
+    let output = controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+
+    assert_eq!(output.snapshot.state, UpdateState::Checking);
+    assert!(!output.snapshot.automatic_download);
+    assert!(output.effects.is_empty());
+    assert_eq!(
+        controller
+            .handle(UpdateInput::CheckSucceeded {
+                operation_id,
+                release: None,
+            })
+            .unwrap()
+            .snapshot
+            .state,
+        UpdateState::UpToDate
+    );
+}
+
+/// durability unknown 的已应用关闭值只取消精确自动下载 identity。
+#[test]
+fn durability_unknown_applied_disable_cancels_only_active_automatic_download() {
+    let mut controller = scripted_controller([PreferenceSaveOutcome::DurabilityUnknown {
+        applied_value: false,
+        error: PreferenceError::Storage,
+    }]);
+    let checking = controller.handle(UpdateInput::ManualCheck).unwrap();
+    let discovered = controller
+        .handle(UpdateInput::CheckSucceeded {
+            operation_id: check_id(&checking.effects),
+            release: Some(release("2.1.0")),
+        })
+        .unwrap();
+    let operation_id = download_id(&discovered.effects);
+    controller
+        .handle(UpdateInput::DownloadStarted { operation_id })
+        .unwrap();
+
+    let output = controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+
+    assert_eq!(output.snapshot.state, UpdateState::Available);
+    assert!(!output.snapshot.automatic_download);
+    assert_eq!(
+        output.effects,
+        vec![UpdateEffect::CancelDownload { operation_id }]
+    );
+    assert_eq!(
+        output.snapshot.preference_warning.unwrap().kind,
+        crate::application_update::UpdatePreferenceWarningKind::DurabilityUnknown
+    );
+}
+
+/// 正式值不可信或与 requested 不一致时保守保留旧策略与 active check。
+#[test]
+fn unknown_or_mismatched_save_outcome_is_fail_closed_without_clearing_active_check() {
+    for outcome in [
+        PreferenceSaveOutcome::StateUnknown {
+            error: PreferenceError::Storage,
+        },
+        PreferenceSaveOutcome::Committed {
+            applied_value: true,
+        },
+        PreferenceSaveOutcome::DurabilityUnknown {
+            applied_value: true,
+            error: PreferenceError::Storage,
+        },
+    ] {
+        let mut controller = scripted_controller([outcome]);
+        let checking = controller.handle(UpdateInput::ManualCheck).unwrap();
+        let operation_id = check_id(&checking.effects);
+
+        let output = controller
+            .handle(UpdateInput::SetAutomaticDownload(false))
+            .unwrap();
+
+        assert_eq!(output.snapshot.state, UpdateState::Checking);
+        assert!(output.snapshot.automatic_download);
+        assert_eq!(
+            output.snapshot.preference_warning.unwrap().kind,
+            crate::application_update::UpdatePreferenceWarningKind::StateUnknown
+        );
+        assert!(output.effects.is_empty());
+        assert_eq!(
+            controller
+                .handle(UpdateInput::CheckSucceeded {
+                    operation_id,
+                    release: None,
+                })
+                .unwrap()
+                .snapshot
+                .state,
+            UpdateState::UpToDate
+        );
+    }
+}
+
+/// 后续明确提交会应用 requested 值并清除旧 rejection warning。
+#[test]
+fn committed_preference_clears_warning_and_applies_requested_value_once() {
+    let mut controller = scripted_controller([
+        PreferenceSaveOutcome::Rejected {
+            error: PreferenceError::Storage,
+        },
+        PreferenceSaveOutcome::Committed {
+            applied_value: false,
+        },
+    ]);
+    let rejected = controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+    assert_eq!(rejected.snapshot.sequence, 1);
+    assert!(rejected.snapshot.automatic_download);
+    assert!(rejected.snapshot.preference_warning.is_some());
+
+    let committed = controller
+        .handle(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+    assert_eq!(committed.snapshot.sequence, 2);
+    assert!(!committed.snapshot.automatic_download);
+    assert!(committed.snapshot.preference_warning.is_none());
 }
 
 /// 更高候选下载、验签或存储失败时，旧可信 staging 仍可安装。

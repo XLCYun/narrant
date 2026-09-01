@@ -1,4 +1,7 @@
-use super::{Clock, DurableStagedUpdate, InstallIntent, PreferenceError, PreferenceStore};
+use super::{
+    Clock, DurableStagedUpdate, InstallIntent, PreferenceError, PreferenceSaveOutcome,
+    PreferenceStore,
+};
 use semver::Version;
 use serde::Serialize;
 use std::fmt;
@@ -286,16 +289,50 @@ pub(crate) struct UpdateRecoveryWarning {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UpdatePreferenceWarning {
+    pub(crate) kind: UpdatePreferenceWarningKind,
     pub(crate) category: UpdateFailureCategory,
     pub(crate) message: String,
 }
 
+/// 区分偏好请求未提交、耐久性未知与正式值无法确认三种安全状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UpdatePreferenceWarningKind {
+    Rejected,
+    DurabilityUnknown,
+    StateUnknown,
+}
+
 impl UpdatePreferenceWarning {
-    /// 从偏好存储失败构造只含稳定分类与安全文本的投影。
-    fn from_failure(failure: &UpdateFailure) -> Self {
+    /// 从提交阶段构造只含稳定分类与安全文本的投影。
+    fn from_persistence(kind: UpdatePreferenceWarningKind, _error: PreferenceError) -> Self {
         Self {
+            kind,
+            category: UpdateFailureCategory::Storage,
+            message: match kind {
+                UpdatePreferenceWarningKind::Rejected => "自动下载偏好未能保存。",
+                UpdatePreferenceWarningKind::DurabilityUnknown => {
+                    "自动下载偏好已应用，但崩溃持久性尚未确认。"
+                }
+                UpdatePreferenceWarningKind::StateUnknown => "自动下载偏好的当前值无法确认。",
+            }
+            .to_owned(),
+        }
+    }
+
+    /// 从 runtime 的私有失败构造 state-unknown 投影，不复制原始诊断。
+    fn from_failure(kind: UpdatePreferenceWarningKind, failure: &UpdateFailure) -> Self {
+        Self {
+            kind,
             category: failure.category(),
-            message: failure.category().safe_message().to_owned(),
+            message: match kind {
+                UpdatePreferenceWarningKind::Rejected => "自动下载偏好未能保存。",
+                UpdatePreferenceWarningKind::DurabilityUnknown => {
+                    "自动下载偏好已应用，但崩溃持久性尚未确认。"
+                }
+                UpdatePreferenceWarningKind::StateUnknown => "自动下载偏好的当前值无法确认。",
+            }
+            .to_owned(),
         }
     }
 }
@@ -413,7 +450,7 @@ pub(crate) enum UpdateInput {
         operation: UpdateOperation,
         failure: UpdateFailure,
     },
-    PreferenceSaveFailed {
+    PreferenceStateUnknown {
         failure: UpdateFailure,
     },
     RecoverStaged {
@@ -592,9 +629,11 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                     Some(UpdateFailureSnapshot::from_failure(operation, &failure));
                 true
             }
-            UpdateInput::PreferenceSaveFailed { failure } => {
-                self.snapshot.preference_warning =
-                    Some(UpdatePreferenceWarning::from_failure(&failure));
+            UpdateInput::PreferenceStateUnknown { failure } => {
+                self.snapshot.preference_warning = Some(UpdatePreferenceWarning::from_failure(
+                    UpdatePreferenceWarningKind::StateUnknown,
+                    &failure,
+                ));
                 true
             }
             UpdateInput::RecoverStaged { staged } => self.recover_staged(staged)?,
@@ -631,7 +670,7 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 failure,
             } => self.accept_failure(operation_id, UpdateOperation::Check, failure, &mut effects),
             UpdateInput::SetAutomaticDownload(enabled) => {
-                self.set_automatic_download(enabled, &mut effects)?;
+                self.set_automatic_download(enabled, &mut effects);
                 true
             }
             UpdateInput::DownloadStarted { operation_id } => self.start_download(operation_id),
@@ -775,16 +814,50 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
         Ok(true)
     }
 
-    /// 原子保存偏好；关闭时取消自动下载并使已排定 download retry 失效。
-    fn set_automatic_download(
-        &mut self,
-        enabled: bool,
-        effects: &mut Vec<UpdateEffect>,
-    ) -> Result<(), UpdateDomainError> {
-        self.preferences.save_automatic_download(enabled)?;
+    /// 按正式文件提交阶段更新偏好；只有已应用值才改变自动下载行为。
+    fn set_automatic_download(&mut self, enabled: bool, effects: &mut Vec<UpdateEffect>) {
+        match self.preferences.save_automatic_download(enabled) {
+            PreferenceSaveOutcome::Rejected { error } => {
+                self.snapshot.preference_warning = Some(UpdatePreferenceWarning::from_persistence(
+                    UpdatePreferenceWarningKind::Rejected,
+                    error,
+                ));
+                return;
+            }
+            PreferenceSaveOutcome::Committed { applied_value } if applied_value == enabled => {
+                self.apply_automatic_download(applied_value, effects);
+                self.snapshot.preference_warning = None;
+            }
+            PreferenceSaveOutcome::DurabilityUnknown {
+                applied_value,
+                error,
+            } if applied_value == enabled => {
+                self.apply_automatic_download(applied_value, effects);
+                self.snapshot.preference_warning = Some(UpdatePreferenceWarning::from_persistence(
+                    UpdatePreferenceWarningKind::DurabilityUnknown,
+                    error,
+                ));
+            }
+            PreferenceSaveOutcome::StateUnknown { error }
+            | PreferenceSaveOutcome::DurabilityUnknown { error, .. } => {
+                self.snapshot.preference_warning = Some(UpdatePreferenceWarning::from_persistence(
+                    UpdatePreferenceWarningKind::StateUnknown,
+                    error,
+                ));
+            }
+            PreferenceSaveOutcome::Committed { .. } => {
+                self.snapshot.preference_warning = Some(UpdatePreferenceWarning::from_persistence(
+                    UpdatePreferenceWarningKind::StateUnknown,
+                    PreferenceError::Storage,
+                ));
+            }
+        }
+    }
+
+    /// 应用已由正式文件确认的值，并执行相应的下载取消或恢复副作用。
+    fn apply_automatic_download(&mut self, enabled: bool, effects: &mut Vec<UpdateEffect>) {
         let was_enabled = self.snapshot.automatic_download;
         self.snapshot.automatic_download = enabled;
-        self.snapshot.preference_warning = None;
         if !enabled {
             if self
                 .pending_retry
@@ -819,7 +892,6 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                 self.begin_download(release, true, true, effects);
             }
         }
-        Ok(())
     }
 
     /// 分配 identity 并开始一次自动或显式下载尝试。

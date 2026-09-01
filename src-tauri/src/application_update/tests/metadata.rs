@@ -1,7 +1,7 @@
 use super::*;
 use crate::application_update::{
-    Clock, PreferenceError, PreferenceStore, UpdateController, UpdateEffect, UpdateInput,
-    UpdateOperationId, UpdateState,
+    Clock, PreferenceError, PreferenceSaveOutcome, PreferenceStore, UpdateController, UpdateEffect,
+    UpdateInput, UpdateOperationId, UpdateState,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -62,8 +62,10 @@ impl PreferenceStore for Preferences {
         Ok(Some(false))
     }
 
-    fn save_automatic_download(&mut self, _enabled: bool) -> Result<(), PreferenceError> {
-        Ok(())
+    fn save_automatic_download(&mut self, enabled: bool) -> PreferenceSaveOutcome {
+        PreferenceSaveOutcome::Committed {
+            applied_value: enabled,
+        }
     }
 }
 

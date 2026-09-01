@@ -1,4 +1,8 @@
 use super::*;
+use crate::application_update::{
+    PreferenceCommitPoint, PreferenceError, PreferenceFaultInjector, PreferenceSaveOutcome,
+    PreferenceStore, UpdatePreferenceWarningKind,
+};
 use base64::Engine;
 use bytes::Bytes;
 use std::io::Cursor;
@@ -7,6 +11,20 @@ use std::time::Duration;
 
 const PUBLIC_KEY: &str = "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
 const SIGNATURE: &str = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1556193335\tfile:test\ny/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
+
+/// 在一个精确偏好提交点注入稳定存储失败。
+struct PreferenceFailAt(PreferenceCommitPoint);
+
+impl PreferenceFaultInjector for PreferenceFailAt {
+    /// 只拒绝指定提交点，其他真实文件系统步骤继续执行。
+    fn checkpoint(&self, point: PreferenceCommitPoint) -> Result<(), PreferenceError> {
+        if point == self.0 {
+            Err(PreferenceError::Storage)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 fn encode(value: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(value)
@@ -146,16 +164,27 @@ fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure
 fn runtime_preference_save_failure_keeps_disk_truth_and_emits_redacted_warning() {
     let cache = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
-    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths(
+    let preference_path = data.path().join("application-update.json");
+    let mut initial = FilePreferenceStore::new(&preference_path);
+    assert_eq!(
+        initial.save_automatic_download(true),
+        PreferenceSaveOutcome::Committed {
+            applied_value: true,
+        }
+    );
+    let preferences = FilePreferenceStore::with_faults(
+        &preference_path,
+        PreferenceFailAt(PreferenceCommitPoint::BeforeReplace),
+    );
+    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths_with_preferences(
         data.path().to_path_buf(),
         cache.path().to_path_buf(),
         "1.0.0",
         trusted_config(),
+        preferences,
     )
     .unwrap();
     assert!(startup.is_none());
-    let preference_path = data.path().join("application-update.json");
-    std::fs::create_dir(&preference_path).unwrap();
 
     let failed = runtime
         .transition(UpdateInput::SetAutomaticDownload(false))
@@ -166,8 +195,14 @@ fn runtime_preference_save_failure_keeps_disk_truth_and_emits_redacted_warning()
     assert!(failed.snapshot.automatic_download);
     assert!(failed.snapshot.failure.is_none());
     assert_eq!(
-        failed.snapshot.preference_warning.unwrap().category,
-        UpdateFailureCategory::Storage
+        failed.snapshot.preference_warning.unwrap().kind,
+        UpdatePreferenceWarningKind::Rejected
+    );
+    assert_eq!(
+        FilePreferenceStore::new(&preference_path)
+            .load_automatic_download()
+            .unwrap(),
+        Some(true)
     );
     let serialized = serde_json::to_string(&runtime.snapshot()).unwrap();
     assert!(serialized.contains("preferenceWarning"));
@@ -178,6 +213,65 @@ fn runtime_preference_save_failure_keeps_disk_truth_and_emits_redacted_warning()
     assert!(diagnostics.contains("storage"));
     assert!(!diagnostics.contains(data.path().to_string_lossy().as_ref()));
     assert!(!diagnostics.contains("application-update.json"));
+}
+
+#[test]
+fn runtime_post_replace_sync_failure_applies_formal_value_and_warns_about_durability() {
+    let cache = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let preference_path = data.path().join("application-update.json");
+    let mut initial = FilePreferenceStore::new(&preference_path);
+    assert!(matches!(
+        initial.save_automatic_download(true),
+        PreferenceSaveOutcome::Committed { .. }
+    ));
+    let preferences = FilePreferenceStore::with_faults(
+        &preference_path,
+        PreferenceFailAt(PreferenceCommitPoint::AfterReplaceBeforeDirectorySync),
+    );
+    let (runtime, startup) = ApplicationUpdateRuntime::new_at_paths_with_preferences(
+        data.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        "1.0.0",
+        trusted_config(),
+        preferences,
+    )
+    .unwrap();
+    assert!(startup.is_none());
+
+    let uncertain = runtime
+        .transition(UpdateInput::SetAutomaticDownload(false))
+        .unwrap();
+
+    assert_eq!(uncertain.snapshot.sequence, 1);
+    assert_eq!(uncertain.snapshot.state, super::super::UpdateState::Idle);
+    assert!(!uncertain.snapshot.automatic_download);
+    assert!(uncertain.snapshot.failure.is_none());
+    assert_eq!(
+        uncertain.snapshot.preference_warning.unwrap().kind,
+        UpdatePreferenceWarningKind::DurabilityUnknown
+    );
+    assert_eq!(
+        FilePreferenceStore::new(&preference_path)
+            .load_automatic_download()
+            .unwrap(),
+        Some(false)
+    );
+    let diagnostics = std::fs::read_to_string(runtime.diagnostics.path()).unwrap();
+    assert!(diagnostics.contains("transition-warning"));
+    assert!(diagnostics.contains("storage"));
+    assert!(!diagnostics.contains(data.path().to_string_lossy().as_ref()));
+    drop(runtime);
+
+    let (restarted, _) = ApplicationUpdateRuntime::new_at_paths(
+        data.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        "1.0.0",
+        trusted_config(),
+    )
+    .unwrap();
+    assert!(!restarted.snapshot().automatic_download);
+    assert!(restarted.snapshot().preference_warning.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

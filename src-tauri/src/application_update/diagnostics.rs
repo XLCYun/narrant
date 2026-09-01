@@ -38,6 +38,8 @@ impl UpdateDiagnostics {
         self.append(&SafeDiagnostic {
             event: if snapshot.state == UpdateState::Failed {
                 "transition-failed"
+            } else if snapshot.preference_warning.is_some() || snapshot.recovery_warning.is_some() {
+                "transition-warning"
             } else {
                 "transition"
             },
@@ -46,15 +48,18 @@ impl UpdateDiagnostics {
             category: snapshot
                 .failure
                 .as_ref()
-                .map(|failure| match failure.category {
-                    super::UpdateFailureCategory::Network => "network",
-                    super::UpdateFailureCategory::RequestTimeout => "request_timeout",
-                    super::UpdateFailureCategory::RateLimited => "rate_limited",
-                    super::UpdateFailureCategory::Server => "server",
-                    super::UpdateFailureCategory::Manifest => "manifest",
-                    super::UpdateFailureCategory::Verification => "verification",
-                    super::UpdateFailureCategory::Storage => "storage",
-                    super::UpdateFailureCategory::Installer => "installer",
+                .map(|failure| failure_category_name(failure.category))
+                .or_else(|| {
+                    snapshot
+                        .preference_warning
+                        .as_ref()
+                        .map(|warning| failure_category_name(warning.category))
+                })
+                .or_else(|| {
+                    snapshot
+                        .recovery_warning
+                        .as_ref()
+                        .map(|warning| failure_category_name(warning.category))
                 }),
             operation_id: None,
             http_status: None,
@@ -78,16 +83,7 @@ impl UpdateDiagnostics {
             event: "adapter-failed",
             sequence: 0,
             version: None,
-            category: Some(match failure.category() {
-                super::UpdateFailureCategory::Network => "network",
-                super::UpdateFailureCategory::RequestTimeout => "request_timeout",
-                super::UpdateFailureCategory::RateLimited => "rate_limited",
-                super::UpdateFailureCategory::Server => "server",
-                super::UpdateFailureCategory::Manifest => "manifest",
-                super::UpdateFailureCategory::Verification => "verification",
-                super::UpdateFailureCategory::Storage => "storage",
-                super::UpdateFailureCategory::Installer => "installer",
-            }),
+            category: Some(failure_category_name(failure.category())),
             operation_id: Some(operation_id),
             http_status,
         });
@@ -117,5 +113,19 @@ impl UpdateDiagnostics {
     #[cfg(test)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+/// 将内部稳定分类映射成 provider-neutral 诊断标签。
+fn failure_category_name(category: super::UpdateFailureCategory) -> &'static str {
+    match category {
+        super::UpdateFailureCategory::Network => "network",
+        super::UpdateFailureCategory::RequestTimeout => "request_timeout",
+        super::UpdateFailureCategory::RateLimited => "rate_limited",
+        super::UpdateFailureCategory::Server => "server",
+        super::UpdateFailureCategory::Manifest => "manifest",
+        super::UpdateFailureCategory::Verification => "verification",
+        super::UpdateFailureCategory::Storage => "storage",
+        super::UpdateFailureCategory::Installer => "installer",
     }
 }

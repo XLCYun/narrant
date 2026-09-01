@@ -46,7 +46,11 @@ pub(crate) use ports::{
     Clock, InstallError, InstallIntent, InstallOutcome, StableReleaseProvider, UpdateInstaller,
 };
 #[cfg_attr(not(test), allow(unused_imports, reason = "Task 3 将创建文件偏好仓储"))]
-pub(crate) use preference::{FilePreferenceStore, PreferenceError, PreferenceStore};
+pub(crate) use preference::{
+    FilePreferenceStore, PreferenceError, PreferenceSaveOutcome, PreferenceStore,
+};
+#[cfg(test)]
+pub(crate) use preference::{PreferenceCommitPoint, PreferenceFaultInjector};
 pub(crate) use runtime::ApplicationUpdateRuntime;
 #[allow(
     unused_imports,
@@ -75,7 +79,7 @@ pub(crate) use state::{
 )]
 pub(crate) use state::{
     UpdateCandidate, UpdateDomainError, UpdateFailureSnapshot, UpdateOperation, UpdateOperationId,
-    UpdateOutput, UpdateSnapshot, UpdateState,
+    UpdateOutput, UpdatePreferenceWarningKind, UpdateSnapshot, UpdateState,
 };
 
 #[cfg_attr(
