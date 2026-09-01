@@ -60,6 +60,7 @@ function evidence(target, mode = "normal") {
       tag: "v1.9.0", version: "1.9.0", manifestSha256: "c".repeat(64),
       packageSha256: mac ? "d".repeat(64) : "e".repeat(64),
       signatureSha256: mac ? "f".repeat(64) : "1".repeat(64),
+      previousReleaseSigningKeySha256: "2".repeat(64),
       packageUrl: `https://github.com/cyunlab/narrant/releases/download/v1.9.0/previous-${mac ? "mac" : "windows"}`,
     },
     startedAt: "2026-09-02T07:00:00.000Z",
@@ -81,6 +82,7 @@ function expectations(mode = "normal") {
     draftReceipt: receipt(),
     previousTag: mode === "normal" ? "v1.9.0" : undefined,
     previousManifestSha256: mode === "normal" ? "c".repeat(64) : undefined,
+    previousReleaseSigningKeySha256: mode === "normal" ? "2".repeat(64) : undefined,
     allowBootstrap: mode === "bootstrap",
     bootstrapTag: mode === "bootstrap" ? "v2.0.0" : undefined,
     maxAgeHours: 24,
@@ -123,6 +125,20 @@ test("evidence set 拒绝重复、缺少、额外目标与跨 target Draft 漂�
   assert.throws(() => verifyUpdateSmokeEvidenceSet([mac, mac], expectations()), /两个 production targets/);
   windows.draftReceipt.assets[0].id = 999;
   assert.throws(() => verifyUpdateSmokeEvidenceSet([mac, windows], expectations()), /Draft asset IDs/);
+});
+
+test("normal evidence 精确绑定 previous release key hash 且两 target 必须一致", () => {
+  const mac = evidence("darwin-aarch64");
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(mac, {
+    ...expectations(), previousReleaseSigningKeySha256: "3".repeat(64),
+  }), /previous release signing key/i);
+
+  const windows = evidence("windows-x86_64");
+  windows.previousStable.previousReleaseSigningKeySha256 = "3".repeat(64);
+  assert.throws(
+    () => verifyUpdateSmokeEvidenceSet([mac, windows], expectations()),
+    /previous Stable previousReleaseSigningKeySha256|previous release signing key/i,
+  );
 });
 
 test("bootstrap 必须显式授权、匹配 protected tag 且没有 previous Stable", () => {

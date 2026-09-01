@@ -11,6 +11,7 @@ import {
   validateDraftReleaseIdentity,
 } from "./public-draft-assets.mjs";
 import { verifyUpdateSmokeEvidenceDirectory } from "./update-smoke-evidence.mjs";
+import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
 
 const API_ORIGIN = "https://api.github.com";
 const RESPONSE_BOUND = 512 * 1024;
@@ -147,6 +148,10 @@ export async function promoteStableRelease(options, dependencies = {}) {
   const token = options.token;
   if (typeof token !== "string" || !token || token.trim() !== token) throw new Error("promotion 缺少 CYUNLAB_RELEASE_TOKEN");
   if (!["normal", "bootstrap"].includes(options.mode)) throw new Error("promotion mode 无效");
+  const previousReleaseSigningKeySha256 = resolvePreviousReleaseSigningKeySha256(
+    options.mode,
+    options.previousReleaseSigningPublicKey,
+  );
   const draftReceipt = await downloadDraft({
     releaseId: options.publicReleaseId,
     tag: options.publicTag,
@@ -189,6 +194,7 @@ export async function promoteStableRelease(options, dependencies = {}) {
     draftReceipt,
     previousTag: options.previousTag,
     previousManifestSha256: options.previousManifestSha256,
+    previousReleaseSigningKeySha256,
     allowBootstrap: options.mode === "bootstrap",
     bootstrapTag: options.bootstrapTag,
     maxAgeHours: options.maxAgeHours,
@@ -244,6 +250,7 @@ async function main() {
     releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
     candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
     bridgeTag: process.env.NARRANT_UPDATER_BRIDGE_TAG,
+    previousReleaseSigningPublicKey: process.env.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY,
   });
   process.stdout.write(`已发布 public Stable ${result.tag}（Release ${result.releaseId}）。\n`);
 }

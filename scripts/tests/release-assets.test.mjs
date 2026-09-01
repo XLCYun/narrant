@@ -24,6 +24,8 @@ import {
   prepareDraftAssetDirectory,
   releaseAssetNames,
   resolveUpdaterKeyPolicy,
+  resolvePreviousReleaseSigningKeySha256,
+  updaterPublicKeySha256,
   validateUpdaterManifest,
   verifyTauriUpdaterSignature,
 } from "../release-assets.mjs";
@@ -72,7 +74,7 @@ function createSigningFixture(packages, options = {}) {
   const algorithm = options.algorithm ?? "ED";
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const rawPublicKey = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
-  const id = Buffer.from("0102030405060708", "hex");
+  const id = Buffer.from(options.id ?? "0102030405060708", "hex");
   const publicPacket = Buffer.concat([Buffer.from("Ed"), id, rawPublicKey]);
   const encodedPublicKey = encodeCanonicalFixture([
     "untrusted comment: narrant test key",
@@ -201,6 +203,62 @@ test("双公钥仅允许 exact normal bridge tag，且本版包始终由 release
     candidateUpdaterPublicKey: successor,
     bridgeTag: "v2.3.4",
   }), /bootstrap.*bridge|bridge.*bootstrap/i);
+});
+
+test("真实 minisign A old/old → B old/successor → C successor/successor 完整轮换", () => {
+  const packages = new Map([
+    ["A", Buffer.from("release-A")],
+    ["B", Buffer.from("release-B")],
+  ]);
+  const old = createSigningFixture(packages);
+  const successor = createSigningFixture(
+    new Map([["C", Buffer.from("release-C")]]),
+    { id: "1112131415161718" },
+  );
+
+  const releaseA = resolveUpdaterKeyPolicy({
+    tag: "v1.0.0", mode: "normal",
+    releaseSigningPublicKey: old.publicKey,
+    candidateUpdaterPublicKey: old.publicKey,
+  });
+  const bridgeB = resolveUpdaterKeyPolicy({
+    tag: "v2.0.0", mode: "normal", bridgeTag: "v2.0.0",
+    releaseSigningPublicKey: old.publicKey,
+    candidateUpdaterPublicKey: successor.publicKey,
+  });
+  const releaseC = resolveUpdaterKeyPolicy({
+    tag: "v3.0.0", mode: "normal",
+    releaseSigningPublicKey: successor.publicKey,
+    candidateUpdaterPublicKey: successor.publicKey,
+  });
+
+  assert.equal(releaseA.bridgeAuthorized, false);
+  assert.equal(bridgeB.bridgeAuthorized, true);
+  assert.equal(releaseC.bridgeAuthorized, false);
+  assert.doesNotThrow(() => verifyTauriUpdaterSignature(
+    packages.get("A"), old.signatures.get("A"), old.publicKey,
+  ));
+  assert.doesNotThrow(() => verifyTauriUpdaterSignature(
+    packages.get("B"), old.signatures.get("B"), old.publicKey,
+  ));
+  assert.throws(() => verifyTauriUpdaterSignature(
+    packages.get("B"), old.signatures.get("B"), successor.publicKey,
+  ), /key id 不匹配/);
+  assert.doesNotThrow(() => verifyTauriUpdaterSignature(
+    Buffer.from("release-C"), successor.signatures.get("C"), successor.publicKey,
+  ));
+  assert.equal(updaterPublicKeySha256(old.publicKey), releaseA.releaseSigningKeySha256);
+  assert.equal(updaterPublicKeySha256(successor.publicKey), releaseC.releaseSigningKeySha256);
+  assert.equal(
+    resolvePreviousReleaseSigningKeySha256("normal", old.publicKey),
+    releaseA.releaseSigningKeySha256,
+  );
+  assert.throws(() => resolvePreviousReleaseSigningKeySha256("normal"), /previous release key/i);
+  assert.throws(
+    () => resolvePreviousReleaseSigningKeySha256("bootstrap", old.publicKey),
+    /bootstrap.*previous release key/i,
+  );
+  assert.equal(resolvePreviousReleaseSigningKeySha256("bootstrap"), undefined);
 });
 
 test("updater 验签只接受 canonical prehashed ED，并拒绝 legacy/非 canonical/篡改", () => {

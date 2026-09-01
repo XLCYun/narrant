@@ -269,6 +269,22 @@ export function verifyTauriUpdaterSignature(packageBytes, signatureText, publicK
   }
 }
 
+/** 校验 canonical updater public key，并返回可持久化而不泄露原文的 SHA-256 身份。 */
+export function updaterPublicKeySha256(publicKeyText) {
+  parsePublicKey(publicKeyText);
+  return createHash("sha256").update(publicKeyText).digest("hex");
+}
+
+/** normal 必须绑定 previous archive key；bootstrap 必须完全省略该历史输入。 */
+export function resolvePreviousReleaseSigningKeySha256(mode, publicKeyText) {
+  if (mode === "bootstrap") {
+    if (publicKeyText) throw new Error("bootstrap 不得提供 previous release key");
+    return undefined;
+  }
+  if (mode !== "normal" || !publicKeyText) throw new Error("normal 缺少 previous release key");
+  return updaterPublicKeySha256(publicKeyText);
+}
+
 /**
  * 解析本版包签名 key 与候选内嵌 successor key；常规发布必须相同，只有 exact normal bridge tag 可不同。
  * 返回值只包含 SHA-256 身份，避免把完整公钥写入 receipt、artifact 或日志。
@@ -283,10 +299,8 @@ export function resolveUpdaterKeyPolicy(options) {
   } = options;
   parseReleaseIdentity(tag, tag.replace(/^v/, ""));
   if (!["normal", "bootstrap"].includes(mode)) throw new Error("updater key policy mode 无效");
-  parsePublicKey(releaseSigningPublicKey);
-  parsePublicKey(candidateUpdaterPublicKey);
-  const releaseSigningKeySha256 = createHash("sha256").update(releaseSigningPublicKey).digest("hex");
-  const candidateUpdaterKeySha256 = createHash("sha256").update(candidateUpdaterPublicKey).digest("hex");
+  const releaseSigningKeySha256 = updaterPublicKeySha256(releaseSigningPublicKey);
+  const candidateUpdaterKeySha256 = updaterPublicKeySha256(candidateUpdaterPublicKey);
   const differs = releaseSigningKeySha256 !== candidateUpdaterKeySha256;
   if (differs && mode !== "normal") {
     throw new Error("bootstrap 不允许 updater key bridge");

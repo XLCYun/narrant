@@ -6,7 +6,10 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { verifyUpdateSmokeEvidenceDocument, writeUpdateSmokeEvidence } from "./update-smoke-evidence.mjs";
-import { resolveUpdaterKeyPolicy } from "./release-assets.mjs";
+import {
+  resolvePreviousReleaseSigningKeySha256,
+  resolveUpdaterKeyPolicy,
+} from "./release-assets.mjs";
 
 const DRIVER = path.resolve(import.meta.dirname, "native-update-smoke-driver.mjs");
 const OUTPUT_BOUND = 256 * 1024;
@@ -17,6 +20,7 @@ function driverEnvironment(environment) {
     "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
     "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA",
     "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
+    "NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY",
     "NARRANT_RELEASE_SIGNING_PUBLIC_KEY", "NARRANT_UPDATER_PUBLIC_KEY",
   ];
   return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
@@ -59,7 +63,15 @@ export async function runNativeUpdateSmoke(options, environment = process.env, d
   if (JSON.stringify(updaterTrust) !== JSON.stringify(draftReceipt.updaterTrust)) {
     throw new Error("native runner updater key identity 与已验证 Draft receipt 不匹配");
   }
+  const previousReleaseSigningKeySha256 = resolvePreviousReleaseSigningKeySha256(
+    options.mode,
+    environment.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY,
+  );
   const previous = options.previousJson ? JSON.parse(await readFile(options.previousJson, "utf8")) : null;
+  if (options.mode === "normal" &&
+      previous?.previousReleaseSigningKeySha256 !== previousReleaseSigningKeySha256) {
+    throw new Error("previous Stable key identity 与当前 normal smoke 输入不匹配");
+  }
   const arguments_ = [
     "--target", options.target,
     "--mode", options.mode,
@@ -102,6 +114,7 @@ export async function runNativeUpdateSmoke(options, environment = process.env, d
       manifestSha256: previous.manifestSha256,
       packageSha256: previous.packageSha256,
       signatureSha256: previous.signatureSha256,
+      previousReleaseSigningKeySha256,
       packageUrl: previous.packageUrl,
     } : null,
     startedAt: observation.startedAt,
@@ -119,6 +132,7 @@ export async function runNativeUpdateSmoke(options, environment = process.env, d
     draftReceipt,
     previousTag: previous?.tag,
     previousManifestSha256: previous?.manifestSha256,
+    previousReleaseSigningKeySha256,
     allowBootstrap: options.mode === "bootstrap",
     bootstrapTag: options.mode === "bootstrap" ? options.sourceTag : undefined,
     maxAgeHours: 24,

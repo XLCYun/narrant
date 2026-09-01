@@ -25,6 +25,9 @@ https://github.com/cyunlab/narrant/releases/latest/download/latest.json
 
 私有仓库需要以下 Actions variables：
 
+- `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY`：只在 normal smoke/promotion 中验证 published previous
+  Stable archive 的公钥。它描述历史包的 signer，可能在 bridge 后暂时不同于当前 release key；bootstrap
+  必须不配置该值。
 - `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`：验证本版 updater package 签名的 Tauri
   outer-base64 minisign 公钥；正常情况下与发布私钥及下项匹配。
 - `NARRANT_UPDATER_PUBLIC_KEY`：编译进候选应用、用于验证下一版 updater 的公钥。普通发布必须与
@@ -38,9 +41,10 @@ https://github.com/cyunlab/narrant/releases/latest/download/latest.json
 1. 配置 required reviewers，至少一名不负责本次构建的维护者批准；禁止 self-review（如果组织策略支持）。
 2. `CYUNLAB_RELEASE_TOKEN` 必须作为 repository secret 供自动 Draft/smoke 使用，并在 Environment
    中配置同名受保护副本供最终 promotion 使用。把 `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`、
-   `NARRANT_UPDATER_PUBLIC_KEY` 和 `NARRANT_UPDATER_BRIDGE_TAG` 作为 repository variables 供自动
-   Draft/smoke 使用，同时在 Environment 中配置同名副本；Environment 副本是最终 promotion 的受保护
-   授权，必须逐字匹配获批 tag 的预期值。
+   `NARRANT_UPDATER_PUBLIC_KEY`、`NARRANT_UPDATER_BRIDGE_TAG` 和 normal-only 的
+   `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY` 作为 repository variables 供自动 Draft/smoke 使用，
+   同时在 Environment 中配置同名副本；Environment 副本是最终 promotion 的受保护授权，必须逐字匹配
+   获批 tag 的预期值。bootstrap 期间不得设置 previous-release key。
 3. 首个 updater-capable 版本期间，设置 Environment variable
    `NARRANT_FIRST_UPDATER_TAG=vMAJOR.MINOR.PATCH`。第一次成功后删除该变量。即使变量被误留，
    promotion 也会在发现已有包含 `latest.json` 的 published Stable 时永久拒绝 bootstrap。
@@ -102,8 +106,9 @@ bootstrap：
 3. 运行 smoke 时选择 `mode=bootstrap`，previous Stable 两项必须留空。两平台证据只声明：签名安装包
    安装、exact installed candidate 启动、内嵌 endpoint/public key、候选版本、损坏 staging 被恢复清除、
    正常关闭后 clean relaunch；它不声明旧版本自动升级。
-4. promotion 也选择 `mode=bootstrap`。protected variable 必须与 source tag 完全相同，而且当前公开
-   Latest 不得已有 `latest.json`。任一条件不满足都在发布 mutation 前失败。
+4. promotion 也选择 `mode=bootstrap`。protected variable 必须与 source tag 完全相同，previous-release
+   key 必须缺失，而且有界扫描的全部公开 Release 历史中不得存在任何含 `latest.json` 的 published
+   Stable。任一条件不满足都在发布 mutation 前失败；当前 Latest 是否是 legacy 不能重新开放 bootstrap。
 5. 第一次成功后删除 variable 并永久使用 `mode=normal`。保存 bootstrap workflow run、两份 evidence、
    checksums、attestation 和 Release ID 作为一次性审计记录。不得因重跑方便而复用 bootstrap。
 
@@ -151,19 +156,25 @@ bootstrap：
   1. 离线生成并备份 successor keypair。选定一个尚未发布的 exact bridge tag。
   2. 保持 `TAURI_SIGNING_PRIVATE_KEY` 为 old private key；把 repository variables 和
      `stable-promotion` Environment variables 同时设置为：
+     `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY=old public key`、
      `NARRANT_RELEASE_SIGNING_PUBLIC_KEY=old public key`、
      `NARRANT_UPDATER_PUBLIC_KEY=successor public key`、
      `NARRANT_UPDATER_BRIDGE_TAG=exact bridge tag`。不得把公钥正文写进 artifact 或日志；流水线只把
-     两个 SHA-256 identity 和 bridge 状态写入 Draft receipt/evidence。
+     当前/候选两个 SHA-256 identity、previous-release key SHA-256 和 bridge 状态写入 receipt/evidence。
   3. 推送 exact tag。`release.yml` 自动创建 Draft，本版 package 必须由 old key 验签，而候选 binary
      必须内嵌 successor key。以 `mode=normal` 运行两平台 smoke：previous Stable 的配置与 candidate
      package signature 都证明 old key；更新后的 candidate 配置证明 successor key。
-  4. 审批 promotion 前，核对 Environment 中 exact bridge tag 与两个 key identity。promotion 会重新下载
-     Draft，并要求受保护值重新计算的两个摘要逐字匹配 evidence，之后才允许发布。
-  5. bridge 成为 Stable 且采用情况确认后，为**更高版本的下一 normal tag**同时切换
-     `TAURI_SIGNING_PRIVATE_KEY=successor private key`、两个 public-key variables 均为 successor，并清空
-     repository/Environment 的 `NARRANT_UPDATER_BRIDGE_TAG`。下一版必须证明两摘要相等；不能继续使用
-     bridge 授权，也不能让同一版本混用两把钥匙。保留 old key 的离线退役记录。
+  4. 审批 promotion 前，核对 Environment 中 exact bridge tag 与三个 key identity。promotion 会重新下载
+     Draft，并要求受保护值重新计算的摘要逐字匹配 evidence，之后才允许发布 B。
+  5. B 成为 Stable 且采用情况确认后，为**更高版本 C**切换
+     `TAURI_SIGNING_PRIVATE_KEY=successor private key`，把 `NARRANT_RELEASE_SIGNING_PUBLIC_KEY` 与
+     `NARRANT_UPDATER_PUBLIC_KEY` 都切为 successor，并清空 repository/Environment 的 bridge tag；但
+     `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY` 必须继续保留 old key，因为 C admission 安装的 previous
+     B archive 仍由 old key 签名。C smoke 必须证明：old 验 B archive、B 内嵌 successor 验 C package、
+     C 内嵌 successor。
+  6. 只有 C 已通过 protected promotion 并成为 Stable 后，才把 repository/Environment 的
+     `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY` 切为 successor，供 D 及后续 normal release 验证 previous
+     archive。此后 previous/current/candidate 三个角色通常都为 successor；保留 old key 的离线退役记录。
 
 ## 每次发布检查表
 
@@ -171,7 +182,8 @@ bootstrap：
 - [ ] public Draft ID/tag 已单独记录，八资产集合、Release Notes 和签名完整。
 - [ ] macOS Developer ID/codesign/Gatekeeper/notarization/stapling 全部通过。
 - [ ] Windows 是 x64 current-user NSIS；首期不要求 Authenticode，但 updater minisign 必须通过。
-- [ ] normal evidence 绑定真实 previous Stable manifest；bootstrap 只在一次性首版使用。
+- [ ] normal evidence 绑定真实 previous Stable manifest 与 previous-release signing key SHA-256；bootstrap
+      不携带 previous key 且只在一次性首版使用。
 - [ ] exactly 两份 fresh real-native evidence、checksums 和 GitHub attestation 均通过。
 - [ ] `stable-promotion` required reviewer 已核对身份并批准。
 - [ ] promotion 二次回读 fixed Draft 后才发布；published Release 未被自动化编辑。

@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
 import { expectedDraftAssetNames } from "../public-draft-assets.mjs";
 import { assertBootstrapTransition, promoteStableRelease, verifyBootstrapReleaseHistory } from "../promote-stable-release.mjs";
+import { updaterPublicKeySha256 } from "../release-assets.mjs";
+
+/** 生成只用于 protected previous-key identity 的 canonical minisign 公钥。 */
+function publicKeyFixture(idHex = "0102030405060708") {
+  const { publicKey } = generateKeyPairSync("ed25519");
+  const raw = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+  const lines = [
+    "untrusted comment: promotion previous key",
+    Buffer.concat([Buffer.from("Ed"), Buffer.from(idHex, "hex"), raw]).toString("base64"),
+  ];
+  while (Buffer.byteLength(lines.join("\n")) % 3 === 0) lines[0] += "x";
+  return Buffer.from(lines.join("\n")).toString("base64");
+}
+
+const previousPublicKey = publicKeyFixture();
 
 /** 构造固定 Draft receipt 与 API assets。 */
 function receipt() {
@@ -46,6 +63,7 @@ function options(mode = "normal") {
     releaseSigningPublicKey: "old-public-key",
     candidateUpdaterPublicKey: "candidate-public-key",
     bridgeTag: "v2.0.0",
+    previousReleaseSigningPublicKey: mode === "normal" ? previousPublicKey : undefined,
   };
 }
 
@@ -83,6 +101,10 @@ test("normal promotion 在 verify 后只 PATCH fixed Release ID 并回读 Latest
   });
   assert.deepEqual(result, { releaseId: 42, tag: "v2.0.0", mode: "normal" });
   assert.equal(verified.draftReceipt.assets.length, 8);
+  assert.equal(
+    verified.previousReleaseSigningKeySha256,
+    updaterPublicKeySha256(previousPublicKey),
+  );
   assert.deepEqual({
     mode: draftOptions.mode,
     releaseSigningPublicKey: draftOptions.releaseSigningPublicKey,
@@ -136,6 +158,16 @@ test("bootstrap promotion 不要求 previous Stable，但 normal evidence 不能
     verifyEvidence: async (_directory, expectations) => { mode = expectations.mode; },
   });
   assert.equal(mode, "bootstrap");
+});
+
+test("bootstrap promotion 拒绝 protected Environment 中的 previous release key", async () => {
+  const bootstrap = options("bootstrap");
+  bootstrap.previousReleaseSigningPublicKey = previousPublicKey;
+  let downloaded = false;
+  await assert.rejects(() => promoteStableRelease(bootstrap, {
+    downloadDraft: async () => { downloaded = true; return receipt(); },
+  }), /bootstrap.*previous release key/i);
+  assert.equal(downloaded, false);
 });
 
 test("历史 published updater Stable 会永久关闭 bootstrap，即使当前 Latest 是 legacy", async () => {

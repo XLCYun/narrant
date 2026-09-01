@@ -6,6 +6,7 @@ import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
 
 import { assertSameDraftReceipt, expectedDraftAssetNames } from "./public-draft-assets.mjs";
+import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
 
 export const REQUIRED_UPDATE_TARGETS = Object.freeze([
   "darwin-aarch64",
@@ -182,6 +183,9 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   verifyUpdaterTrust(document.updaterTrust, document.mode, document.draftReceipt.updaterTrust);
 
   if (document.mode === "bootstrap") {
+    if (expectations.previousReleaseSigningKeySha256 !== undefined) {
+      throw new Error("bootstrap 不得提供 previous release signing key identity");
+    }
     if (expectations.allowBootstrap !== true) throw new Error("bootstrap evidence 未获一次性授权");
     if (expectations.bootstrapTag !== source.tag) throw new Error("bootstrap tag 不匹配受保护变量");
     if (document.previousStable !== null) throw new Error("bootstrap 不得伪造 previous Stable");
@@ -193,6 +197,11 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
     if (!SHA256.test(previous.manifestSha256)) throw new Error("previous Stable manifest SHA-256 无效");
     if (!SHA256.test(previous.packageSha256) || !SHA256.test(previous.signatureSha256)) {
       throw new Error("previous Stable package/signature SHA-256 无效");
+    }
+    if (!SHA256.test(previous.previousReleaseSigningKeySha256) ||
+        !SHA256.test(expectations.previousReleaseSigningKeySha256) ||
+        previous.previousReleaseSigningKeySha256 !== expectations.previousReleaseSigningKeySha256) {
+      throw new Error("previous release signing key SHA-256 不匹配");
     }
     let previousUrl;
     try { previousUrl = new URL(previous.packageUrl); } catch { throw new Error("previous Stable package URL 无效"); }
@@ -265,7 +274,7 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
       throw new Error("两个 target 的候选/previous identity 不一致");
     }
     if (first.mode === "normal") {
-      for (const field of ["tag", "version", "manifestSha256"]) {
+      for (const field of ["tag", "version", "manifestSha256", "previousReleaseSigningKeySha256"]) {
         if (document.previousStable[field] !== first.previousStable[field]) {
           throw new Error(`两个 target 的 previous Stable ${field} 不一致`);
         }
@@ -337,7 +346,11 @@ function parseArguments(arguments_) {
 }
 
 /** workflow 使用的公开 verifier CLI。 */
-export async function runEvidenceVerifierCli(arguments_ = process.argv.slice(2), now = new Date()) {
+export async function runEvidenceVerifierCli(
+  arguments_ = process.argv.slice(2),
+  now = new Date(),
+  environment = process.env,
+) {
   const values = parseArguments(arguments_);
   for (const name of ["evidence", "mode", "source-tag", "source-sha", "public-release-id", "public-tag", "version", "manifest-sha256", "max-age-hours"]) {
     if (!values[name]) throw new Error(`缺少 --${name}`);
@@ -345,6 +358,10 @@ export async function runEvidenceVerifierCli(arguments_ = process.argv.slice(2),
   const draftReceipt = values["draft-receipt"]
     ? JSON.parse(await readFile(values["draft-receipt"], "utf8"))
     : undefined;
+  const previousReleaseSigningKeySha256 = resolvePreviousReleaseSigningKeySha256(
+    values.mode,
+    environment.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY,
+  );
   return verifyUpdateSmokeEvidenceDirectory(values.evidence, {
     mode: values.mode,
     sourceTag: values["source-tag"],
@@ -356,6 +373,7 @@ export async function runEvidenceVerifierCli(arguments_ = process.argv.slice(2),
     draftReceipt,
     previousTag: values["previous-tag"],
     previousManifestSha256: values["previous-manifest-sha256"],
+    previousReleaseSigningKeySha256,
     bootstrapTag: values["bootstrap-tag"],
     allowBootstrap: values.allowBootstrap === true,
     maxAgeHours: Number(values["max-age-hours"]),

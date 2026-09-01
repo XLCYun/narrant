@@ -28,8 +28,12 @@ test("update-smoke 只有手动可信输入且 matrix 精确覆盖 macOS15 arm64
   assert.match(workflow, /public-draft-assets\.mjs/);
   assert.match(workflow, /--draft-receipt aggregate-draft-receipt\.json/);
   assert.equal((workflow.match(/NARRANT_UPDATER_PUBLIC_KEY: \$\{\{ vars\.NARRANT_UPDATER_PUBLIC_KEY \}\}/g) ?? []).length, 3);
-  assert.equal((workflow.match(/NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/g) ?? []).length, 4);
+  assert.equal((workflow.match(/NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/g) ?? []).length, 3);
   assert.equal((workflow.match(/NARRANT_UPDATER_BRIDGE_TAG: \$\{\{ vars\.NARRANT_UPDATER_BRIDGE_TAG \}\}/g) ?? []).length, 3);
+  assert.equal((workflow.match(/NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY:/g) ?? []).length, 3);
+  assert.equal((workflow.match(/inputs\.mode == 'normal' && vars\.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY \|\| ''/g) ?? []).length, 2);
+  assert.match(workflow, /Prepare exact published previous Stable baseline[\s\S]*NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
+  assert.doesNotMatch(workflow, /echo[^\r]*NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY/);
   assert.doesNotMatch(workflow, /environment: stable-promotion/);
   assertPinnedActions(workflow);
 });
@@ -56,6 +60,7 @@ test("promotion 使用受保护 Environment、fixed ID、private evidence attest
   assert.match(workflow, /NARRANT_UPDATER_PUBLIC_KEY: \$\{\{ vars\.NARRANT_UPDATER_PUBLIC_KEY \}\}/);
   assert.match(workflow, /NARRANT_UPDATER_BRIDGE_TAG: \$\{\{ vars\.NARRANT_UPDATER_BRIDGE_TAG \}\}/);
   assert.match(workflow, /NARRANT_FIRST_UPDATER_TAG: \$\{\{ vars\.NARRANT_FIRST_UPDATER_TAG \}\}/);
+  assert.match(workflow, /NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
   assert.match(workflow, /cyunlab\/narrant/);
   assert.match(workflow, /XLCYun\/narrant|private source/);
   assertPinnedActions(workflow);

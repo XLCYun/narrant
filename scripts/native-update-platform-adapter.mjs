@@ -313,7 +313,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   /** 安装 previous Stable 并验证签名、版本、配置。 */
   async function installBaseline(options) {
     const [packageBytes, signature] = await Promise.all([readFile(options.baselinePackage), readFile(options.baselineSignature, "utf8")]);
-    verifyTauriUpdaterSignature(packageBytes, signature, options.releaseSigningPublicKey);
+    verifyTauriUpdaterSignature(packageBytes, signature, options.previousReleaseSigningPublicKey);
     installation = await installPreviousStable(target, options.baselinePackage, options.previous.version, temporary, command, commandEnvironment);
     await inspectTrustedConfiguration(installation, options.releaseSigningPublicKey);
     return installation;

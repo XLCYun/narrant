@@ -22,10 +22,17 @@ function validateOptions(options) {
   ]) {
     if (!options[name]) throw new Error(`native driver 缺少 ${name}`);
   }
-  if (options.mode === "normal" && (!options.previous?.tag || !options.previous?.version || !options.baselinePackage || !options.baselineSignature)) {
+  if (options.mode === "normal" && !options.previousReleaseSigningPublicKey) {
+    throw new Error("normal native driver 缺少 previous release key");
+  }
+  if (options.mode === "normal" && (
+    !options.previous?.tag || !options.previous?.version || !options.baselinePackage || !options.baselineSignature
+  )) {
     throw new Error("normal native driver 缺少 previous Stable inputs");
   }
-  if (options.mode === "bootstrap" && options.previous !== null) throw new Error("bootstrap 不得提供 previous Stable");
+  if (options.mode === "bootstrap" && (options.previous !== null || options.previousReleaseSigningPublicKey)) {
+    throw new Error("bootstrap 不得提供 previous Stable 或 previous release key");
+  }
 }
 
 /** 运行 previous Stable→candidate 的真实 normal-exit 更新。 */
@@ -111,6 +118,8 @@ async function main() {
   const values = parseArguments(process.argv.slice(2));
   const releaseSigningPublicKey = process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY;
   const candidateUpdaterPublicKey = process.env.NARRANT_UPDATER_PUBLIC_KEY;
+  const previousReleaseSigningPublicKey =
+    process.env.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY || undefined;
   if (!releaseSigningPublicKey || !candidateUpdaterPublicKey) {
     throw new Error("native driver 缺少 release signing/candidate updater public key");
   }
@@ -123,6 +132,7 @@ async function main() {
     candidateInstaller: values["candidate-installer"],
     releaseSigningPublicKey,
     candidateUpdaterPublicKey,
+    previousReleaseSigningPublicKey,
     manifest: JSON.parse(await readFile(values["candidate-manifest"], "utf8")),
     previous: values["previous-json"] ? JSON.parse(await readFile(values["previous-json"], "utf8")) : null,
     baselinePackage: values["baseline-package"],

@@ -51,6 +51,7 @@ function options(mode = "normal") {
     target: "darwin-aarch64", mode, version: "2.0.0", publicTag: "v2.0.0",
     candidateDirectory: "/candidate", candidateInstaller: "/installer",
     releaseSigningPublicKey: "old-public", candidateUpdaterPublicKey: "successor-public",
+    previousReleaseSigningPublicKey: mode === "normal" ? "previous-old-public" : undefined,
     manifest: { version: "2.0.0" },
     previous: mode === "normal" ? { tag: "v1.9.0", version: "1.9.0" } : null,
     baselinePackage: mode === "normal" ? "/previous" : undefined,
@@ -73,6 +74,15 @@ test("bootstrap driver 不调用 baseline/gate，真实恢复后正常退出并 
   const result = await runNativeUpdateSmokeDriver(options("bootstrap"), adapter(events));
   assert.deepEqual(events, ["initialize", "installBootstrap", "recovery", "trust", "close", "exit", "launch", "cleanup"]);
   assert.deepEqual(result.checkpoints.map(({ id }) => id), [...BOOTSTRAP_CHECKPOINTS]);
+});
+
+test("normal 必须提供 previous release key，bootstrap 必须拒绝该 key", async () => {
+  const missing = options();
+  delete missing.previousReleaseSigningPublicKey;
+  await assert.rejects(() => runNativeUpdateSmokeDriver(missing, adapter([])), /previous.*key/i);
+  const bootstrap = options("bootstrap");
+  bootstrap.previousReleaseSigningPublicKey = "unexpected-old-key";
+  await assert.rejects(() => runNativeUpdateSmokeDriver(bootstrap, adapter([])), /bootstrap.*previous.*key/i);
 });
 
 test("cleanup 错误不覆盖 native 主错误", async () => {
