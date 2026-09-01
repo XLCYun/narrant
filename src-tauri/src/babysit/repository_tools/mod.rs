@@ -64,6 +64,7 @@ impl RepositoryTools {
     }
 
     /// 返回固定顺序的三项工具注册，供 provider adapter 消费。
+    #[cfg(test)]
     pub fn registrations(&self) -> Vec<RepositoryToolRegistration> {
         rig_adapter::registrations()
     }
@@ -83,6 +84,7 @@ impl RepositoryTools {
     }
 
     /// 通过统一 typed seam 执行 Read、Glob 或 Grep 工具。
+    #[cfg(test)]
     pub fn execute(
         &self,
         request: RepositoryToolRequest,

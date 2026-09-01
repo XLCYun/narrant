@@ -2,11 +2,11 @@ use super::adapter::{
     CustomAdapterError, CustomProtocolAdapter, CustomRequestPhase, CustomStatusCategory,
     CustomTransportFailure,
 };
+use super::agent_run::{
+    reached_output_limit, CustomRunRequest, CustomRunResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
+};
 use super::connection::{CustomConnectionSnapshot, CustomProtocol};
 use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
-use super::round::{
-    reached_output_limit, CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
-};
 use crate::babysit::RepositoryTools;
 use crate::operation::CancellationSignal;
 use async_trait::async_trait;
@@ -265,7 +265,7 @@ impl OpenAiChatCompletionsAdapter {
     /// 运行一次完整 Rig agent loop，并把取消与 provider 错误保留为可判定的内部结果。
     async fn run_prompt_attempt(
         &self,
-        request: &CustomRoundRequest,
+        request: &CustomRunRequest,
         cancellation: &CancellationSignal,
     ) -> Result<rig::agent::PromptResponse, OpenAiPromptAttemptError> {
         let agent = self
@@ -312,12 +312,12 @@ impl OpenAiChatCompletionsAdapter {
 
 #[async_trait]
 impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
-    /// 发送一轮 Chat Completions 请求，并在取消时丢弃活动 HTTP future。
+    /// 执行一次完整 Rig agent run，并在取消时丢弃活动 HTTP future。
     async fn complete(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
         }
@@ -336,7 +336,7 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
             });
         }
         let arguments = serde_json::from_str(&response.output).unwrap_or(serde_json::Value::Null);
-        Ok(CustomRoundResult {
+        Ok(CustomRunResult {
             choice: vec![AssistantContent::tool_call(
                 "final-result",
                 FINAL_OUTPUT_TOOL_NAME,

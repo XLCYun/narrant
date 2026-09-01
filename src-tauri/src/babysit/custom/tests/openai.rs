@@ -31,14 +31,14 @@ impl CustomProtocolAdapter for CancelOnceAdapter {
     /// 首次在返回 Read 调用前触发取消，第二次证明应用没有 dispatch 或复用取消结果。
     async fn complete(
         &self,
-        _request: CustomRoundRequest,
+        _request: CustomRunRequest,
         _cancellation: &crate::operation::CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         let first_call = self.calls.fetch_add(1, Ordering::AcqRel) == 0;
         if first_call {
             self.first_cancellation.cancel();
         }
-        Ok(CustomRoundResult {
+        Ok(CustomRunResult {
             choice: vec![rig::completion::AssistantContent::tool_call(
                 "final",
                 if first_call {
@@ -152,9 +152,7 @@ fn rig_max_turns_error_is_classified_as_an_invalid_model_response() {
     assert!(!debug.contains("hash"));
     assert!(!debug.contains("endpoint"));
     assert!(!debug.contains("https://model.example/v1"));
-    let debug = format!("{failure:?}");
     assert!(!debug.contains("origin"));
-    assert!(!debug.contains("endpoint"));
 }
 
 /// 连续工具调用必须由 Rig 消耗 16 次模型预算，runtime 不得再发第 17 次请求。
@@ -180,7 +178,7 @@ async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
     .expect("冻结连接");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -253,7 +251,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
     let response = adapter
         .complete(request, &TestCancellation::default())
         .await
@@ -310,7 +308,7 @@ async fn openai_length_finish_reason_is_an_output_limit_error() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -380,7 +378,7 @@ async fn openai_provider_default_omits_reasoning_effort() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
         .complete(request, &TestCancellation::default())
@@ -446,7 +444,7 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -516,7 +514,7 @@ async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -689,7 +687,7 @@ async fn empty_key_omits_the_authorization_header() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     adapter
         .complete(request, &TestCancellation::default())
@@ -726,7 +724,7 @@ async fn openai_http_client_failure_keeps_redacted_transport_classification() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
 
     let error = adapter
         .complete(request, &TestCancellation::default())
@@ -776,7 +774,7 @@ async fn openai_success_status_error_envelope_is_invalid_response() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRoundRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
     let error = adapter
         .complete(request, &TestCancellation::default())
         .await

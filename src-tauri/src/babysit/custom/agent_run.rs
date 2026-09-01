@@ -17,12 +17,12 @@ pub(crate) fn reached_output_limit(calls: &[rig::agent::CompletionCall]) -> bool
 
 /// 单次模型请求的 provider-neutral 输入；不含任何协议 wire 类型。
 #[derive(Clone, Debug)]
-pub(crate) struct CustomRoundRequest {
+pub(crate) struct CustomRunRequest {
     prompt: Message,
     history: Vec<Message>,
 }
 
-impl CustomRoundRequest {
+impl CustomRunRequest {
     /// 构造由 adapter 自己持有工具集合的单次 Rig agent-loop 请求。
     pub(crate) fn from_prompt(prompt: Message, history: Vec<Message>) -> Self {
         Self { prompt, history }
@@ -38,9 +38,9 @@ impl CustomRoundRequest {
     }
 }
 
-/// 一次模型轮次的 provider-neutral 结果；协议 wire response 在 adapter 内被抹平。
+/// 一次完整 Rig agent run 的 provider-neutral 结果；协议 wire response 在 adapter 内被抹平。
 #[derive(Clone, Debug)]
-pub(crate) struct CustomRoundResult {
+pub(crate) struct CustomRunResult {
     /// Rig 归一化后的 assistant 内容，工具调用保持可调度信息。
     pub(crate) choice: Vec<AssistantContent>,
     /// provider 为本轮返回的三类可选 identity。
@@ -49,7 +49,7 @@ pub(crate) struct CustomRoundResult {
     pub(crate) transcript: Option<Vec<Message>>,
 }
 
-impl CustomRoundResult {
+impl CustomRunResult {
     /// 返回本轮 assistant 发出的工具调用，供协议适配器测试和结果归一化使用。
     pub(crate) fn tool_calls(&self) -> Vec<&ToolCall> {
         self.choice

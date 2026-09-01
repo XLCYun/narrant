@@ -1,5 +1,5 @@
+use super::agent_run::{CustomRunRequest, CustomRunResult};
 use super::connection::CustomProtocol;
-use super::round::{CustomRoundRequest, CustomRoundResult};
 use crate::operation::CancellationSignal;
 use std::fmt;
 
@@ -302,7 +302,7 @@ pub(crate) trait CustomProtocolAdapter: Send + Sync {
     /// 执行一次 provider-neutral Rig run 并返回归一化结果；内部模型/工具轮由 adapter 持有。
     async fn complete(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError>;
+    ) -> Result<CustomRunResult, CustomAdapterError>;
 }

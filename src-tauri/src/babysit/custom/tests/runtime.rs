@@ -11,14 +11,14 @@ use std::sync::{Arc, Mutex};
 /// 只在 runtime 契约测试中使用的可脚本化 provider-neutral adapter。
 #[derive(Clone)]
 struct FakeAdapter {
-    responses: Arc<Mutex<Vec<CustomRoundResult>>>,
-    requests: Arc<Mutex<Vec<CustomRoundRequest>>>,
+    responses: Arc<Mutex<Vec<CustomRunResult>>>,
+    requests: Arc<Mutex<Vec<CustomRunRequest>>>,
     cancel_before_return: Option<TestCancellation>,
 }
 
 impl FakeAdapter {
     /// 按预设顺序返回 round response，同时记录每轮 history。
-    fn scripted(responses: Vec<CustomRoundResult>) -> Self {
+    fn scripted(responses: Vec<CustomRunResult>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses)),
             requests: Arc::new(Mutex::new(Vec::new())),
@@ -32,9 +32,9 @@ impl CustomProtocolAdapter for FakeAdapter {
     /// 从脚本取出 response；取消开关用于模拟 late response 边界。
     async fn complete(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &crate::operation::CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         self.requests.lock().expect("请求锁").push(request);
         if cancellation.is_cancelled() {
             return Err(CustomAdapterError::Cancelled);
@@ -78,8 +78,8 @@ fn fixture_request(run_id: u64, workspace_path: &str) -> BabysitProviderRequest 
 }
 
 /// 构造一个带 assistant tool call 的 provider-neutral response。
-fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRoundResult {
-    CustomRoundResult {
+fn tool_response(name: &str, arguments: serde_json::Value) -> CustomRunResult {
+    CustomRunResult {
         choice: vec![rig::completion::AssistantContent::tool_call(
             "call-1", name, arguments,
         )],
@@ -97,7 +97,7 @@ fn tool_response_with_transcript(
     name: &str,
     arguments: serde_json::Value,
     transcript: Vec<Message>,
-) -> CustomRoundResult {
+) -> CustomRunResult {
     let mut response = tool_response(name, arguments);
     response.transcript = Some(transcript);
     response
@@ -295,7 +295,7 @@ async fn runtime_rejects_late_response_after_cancellation_without_next_tool_or_f
 #[tokio::test]
 async fn runtime_delegates_turn_budget_to_the_adapter() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
-    let adapter = FakeAdapter::scripted(vec![CustomRoundResult {
+    let adapter = FakeAdapter::scripted(vec![CustomRunResult {
         choice: vec![rig::completion::AssistantContent::text("继续")],
         identity: ResponseIdentity {
             message_id: None,

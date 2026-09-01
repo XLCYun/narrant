@@ -1,6 +1,6 @@
 use super::adapter::{CustomAdapterError, CustomProtocolAdapter};
+use super::agent_run::{CustomRunRequest, CustomRunResult};
 use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
-use super::round::{CustomRoundRequest, CustomRoundResult};
 use crate::babysit::{
     BabysitError, BabysitFileExplanations, BabysitProviderRequest, LineTarget, ValidationFailure,
 };
@@ -123,9 +123,9 @@ impl CustomRuntime {
         ensure_not_cancelled(cancellation)?;
         let (adapter, history) = self.session_context(run_id)?;
         let prompt = Message::user(prompt(&request));
-        let round = CustomRoundRequest::from_prompt(prompt.clone(), history.clone());
+        let run = CustomRunRequest::from_prompt(prompt.clone(), history.clone());
         let response = adapter
-            .complete(round, cancellation)
+            .complete(run, cancellation)
             .await
             .map_err(adapter_error)?;
         // Rig future 即使刚刚完成，也不能在取消之后接受 final 或继续写入 transcript。
@@ -160,7 +160,7 @@ impl CustomRuntime {
         run_id: u64,
         previous_history: &[Message],
         prompt: &Message,
-        response: &CustomRoundResult,
+        response: &CustomRunResult,
     ) -> Result<(), BabysitError> {
         let mut sessions = self.sessions.lock().map_err(|_| runtime_unavailable())?;
         let session = sessions.get_mut(&run_id).ok_or_else(runtime_unavailable)?;

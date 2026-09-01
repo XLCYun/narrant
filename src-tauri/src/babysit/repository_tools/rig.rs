@@ -57,6 +57,7 @@ pub(super) fn build(
 }
 
 /// 返回固定顺序的三项工具注册。
+#[cfg(test)]
 pub(super) fn registrations() -> Vec<RepositoryToolRegistration> {
     vec![
         registration(READ_TOOL_NAME, READ_TOOL_DESCRIPTION, read_input_schema()),
@@ -66,6 +67,7 @@ pub(super) fn registrations() -> Vec<RepositoryToolRegistration> {
 }
 
 /// 构造一项工具注册描述。
+#[cfg(test)]
 fn registration(name: &str, description: &str, input_schema: Value) -> RepositoryToolRegistration {
     RepositoryToolRegistration {
         name: name.to_owned(),

@@ -6,11 +6,11 @@ use super::adapter::{
     CustomAdapterError, CustomProtocolAdapter, CustomRequestPhase, CustomStatusCategory,
     CustomTransportFailure,
 };
+use super::agent_run::{
+    reached_output_limit, CustomRunRequest, CustomRunResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
+};
 use super::connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
 use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
-use super::round::{
-    reached_output_limit, CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS, MAX_OUTPUT_TOKENS,
-};
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
@@ -244,9 +244,9 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
     /// 将共享 round 请求转换为 Anthropic Messages 对话并归一化 final tool 结果。
     async fn complete(
         &self,
-        request: CustomRoundRequest,
+        request: CustomRunRequest,
         cancellation: &CancellationSignal,
-    ) -> Result<CustomRoundResult, CustomAdapterError> {
+    ) -> Result<CustomRunResult, CustomAdapterError> {
         let repository_tools = RepositoryTools::new(&self.workspace).map_err(|_| {
             CustomAdapterError::Transport(CustomTransportFailure::new(
                 self.connection.protocol(),
@@ -289,7 +289,7 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                     ))
                 }
             })?;
-        Ok(CustomRoundResult {
+        Ok(CustomRunResult {
             choice: vec![AssistantContent::tool_call(
                 "final-result",
                 FINAL_OUTPUT_TOOL_NAME,
