@@ -13,10 +13,12 @@ export type ApplicationUpdateProgress =
   | { kind: "unknown_total"; downloadedBytes: number }
   | { kind: "known_total"; downloadedBytes: number; totalBytes: number };
 
+/** 前端可稳定分组展示的更新失败类别，不包含 adapter 私有诊断。 */
 export type ApplicationUpdateFailureCategory =
   | "network" | "request_timeout" | "rate_limited" | "server"
   | "manifest" | "verification" | "storage" | "installer";
 
+/** 当前 check/download 失败的安全展示契约。 */
 export type ApplicationUpdateFailure = {
   operation: "check" | "download";
   category: ApplicationUpdateFailureCategory;
@@ -24,11 +26,13 @@ export type ApplicationUpdateFailure = {
   message: string;
 };
 
+/** 恢复或持久化阶段不阻断当前权威状态的安全警告。 */
 export type ApplicationUpdateWarning = {
   category: ApplicationUpdateFailureCategory;
   message: string;
 };
 
+/** 自动下载偏好保存失败或 durability 不确定时的细分警告。 */
 export type ApplicationUpdatePreferenceWarning = ApplicationUpdateWarning & {
   kind: "rejected" | "durability_unknown" | "state_unknown";
 };

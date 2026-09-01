@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ApplicationUpdateApplication, ApplicationUpdateSnapshot } from "@/application-update/application-update";
 
+/** 前端更新控制器可观察的命令阶段与稳定错误类别。 */
 export type ApplicationUpdateCommand = "load" | "manual-check" | "preference" | "retry" | "restart";
 
 /** 以 Rust 权威快照为单一状态源，并在其上提供可回滚的偏好乐观显示。 */
@@ -143,4 +144,5 @@ export function useApplicationUpdate(application: ApplicationUpdateApplication, 
   };
 }
 
+/** 更新组件共享的 controller 返回契约。 */
 export type ApplicationUpdateBinding = ReturnType<typeof useApplicationUpdate>;

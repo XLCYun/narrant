@@ -421,5 +421,5 @@ fn remove_oldest_early_cancellation(state: &mut OperationState) {
 }
 
 #[cfg(test)]
-#[path = "cancellable_tests.rs"]
+#[path = "tests/cancellable.rs"]
 mod tests;

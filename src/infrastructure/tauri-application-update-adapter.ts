@@ -3,8 +3,10 @@ import { listen, type Event } from "@tauri-apps/api/event";
 import type { ApplicationUpdateApplication, ApplicationUpdateSnapshot } from "@/application-update/application-update";
 import type { TypedTauriTransport } from "@/infrastructure/tauri/transport";
 
+/** Rust 向前端发布完整更新快照的唯一事件名。 */
 export const APPLICATION_UPDATE_SNAPSHOT_EVENT = "application-update:snapshot";
 
+/** 可注入的 Tauri snapshot 监听边界，测试不需要连接真实 WebView。 */
 type SnapshotListener = (
   event: string,
   handler: (event: Event<ApplicationUpdateSnapshot>) => void,

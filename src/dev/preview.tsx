@@ -41,6 +41,7 @@ type PreviewDefinition = {
 /** Settings Preview 中 Custom 连接的可交互状态集合。 */
 type CustomPreviewState = "empty" | "configured" | "invalid" | "saving" | "failed" | "revealed";
 
+/** Application Update Preview 允许直接构造的 provider-neutral 状态。 */
 type UpdatePreviewKind = ApplicationUpdateSnapshot["state"]["kind"];
 
 /** 构造不含 URL、路径、签名或 target 的代表性更新快照。 */
