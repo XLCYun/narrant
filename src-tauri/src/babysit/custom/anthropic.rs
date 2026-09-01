@@ -8,7 +8,7 @@ use super::adapter::{
 };
 use super::connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
 use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
-use super::round::{CustomRoundRequest, CustomRoundResult};
+use super::round::{CustomRoundRequest, CustomRoundResult, MAX_MODEL_TURNS};
 use crate::babysit::repository_tools::RepositoryTools;
 use crate::operation::CancellationSignal;
 use rig::agent::OutputMode;
@@ -21,6 +21,9 @@ use serde_json::{json, Value};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+
+/// Anthropic 每次模型请求固定使用的最大输出 token 数。
+const ANTHROPIC_MAX_OUTPUT_TOKENS: u64 = 65_536;
 
 /// Anthropic 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
 #[derive(Clone)]
@@ -275,6 +278,10 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
                         CustomStatusCategory::Network,
                     ))
                 }
+                AnthropicAdapterError::OutputLimit { limit } => {
+                    CustomAdapterError::OutputLimit { limit }
+                }
+                AnthropicAdapterError::Transport(failure) => CustomAdapterError::Transport(failure),
                 AnthropicAdapterError::Protocol => {
                     CustomAdapterError::Transport(CustomTransportFailure::new(
                         self.connection.protocol(),
@@ -310,19 +317,29 @@ pub(crate) struct AnthropicAdapterResponse {
 /// 不携带 endpoint、credential 或模型内容的 Anthropic adapter 错误。
 #[derive(Debug)]
 pub(crate) enum AnthropicAdapterError {
+    /// provider 已经在固定输出预算处截断了回复，不应进入 malformed repair。
+    OutputLimit {
+        limit: u64,
+    },
     Cancelled,
     Client,
+    /// Rig prompt 失败已投影为共享的脱敏 transport failure。
+    Transport(CustomTransportFailure),
     Protocol,
 }
 
 impl fmt::Display for AnthropicAdapterError {
     /// 输出稳定的脱敏错误分类。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Cancelled => "Anthropic 请求已取消。",
-            Self::Client => "Anthropic 客户端不可用。",
-            Self::Protocol => "Anthropic 响应无效。",
-        })
+        match self {
+            Self::OutputLimit { limit } => {
+                write!(formatter, "Anthropic 输出已达到固定上限 {limit}。")
+            }
+            Self::Cancelled => formatter.write_str("Anthropic 请求已取消。"),
+            Self::Client => formatter.write_str("Anthropic 客户端不可用。"),
+            Self::Transport(_) => formatter.write_str("Anthropic 请求失败。"),
+            Self::Protocol => formatter.write_str("Anthropic 响应无效。"),
+        }
     }
 }
 
@@ -361,7 +378,9 @@ impl AnthropicAdapter {
         let cancellation = request.cancellation.clone();
         let prompt = request.prompt;
         let history = request.history;
-        let builder = client.agent(&self.config.model).max_tokens(8_192);
+        let builder = client
+            .agent(&self.config.model)
+            .max_tokens(ANTHROPIC_MAX_OUTPUT_TOKENS);
         let builder = match self.config.effort.wire_value() {
             Some(effort) => builder.additional_params(json!({
                 "thinking": {"type": "adaptive"},
@@ -370,7 +389,7 @@ impl AnthropicAdapter {
             None => builder,
         };
         let agent = builder
-            .default_max_turns(16)
+            .default_max_turns(MAX_MODEL_TURNS)
             .output_schema::<LineExplanationOutput>()
             .output_mode(OutputMode::Tool)
             .tool(tools.read)
@@ -391,7 +410,15 @@ impl AnthropicAdapter {
                     if cancellation.is_cancelled() {
                         return Err(AnthropicAdapterError::Cancelled);
                     }
-                    break response.map_err(|_| AnthropicAdapterError::Protocol)?;
+                    break response.map_err(|error| {
+                        AnthropicAdapterError::Transport(
+                            CustomTransportFailure::from_prompt_error(
+                                CustomProtocol::AnthropicMessages,
+                                &self.config.base_url,
+                                error,
+                            ),
+                        )
+                    })?;
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
                     if cancellation.is_cancelled() {
@@ -402,6 +429,15 @@ impl AnthropicAdapter {
         };
         if cancellation.is_cancelled() {
             return Err(AnthropicAdapterError::Cancelled);
+        }
+        if response.completion_calls().iter().any(|call| {
+            call.finish_reason
+                .as_ref()
+                .is_some_and(|reason| matches!(reason, rig::completion::FinishReason::Length))
+        }) {
+            return Err(AnthropicAdapterError::OutputLimit {
+                limit: ANTHROPIC_MAX_OUTPUT_TOKENS,
+            });
         }
         let output =
             serde_json::from_str(&response.output).map_err(|_| AnthropicAdapterError::Protocol)?;

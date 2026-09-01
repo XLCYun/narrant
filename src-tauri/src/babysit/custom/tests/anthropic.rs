@@ -34,6 +34,13 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
                 .path("/v1/messages")
                 .header("x-api-key", "fixture-key")
                 .body_contains(r#""model":"user-entered-model""#)
+                .matches(|request| {
+                    let body: serde_json::Value = serde_json::from_slice(
+                        request.body.as_deref().expect("request should have a body"),
+                    )
+                    .expect("request body should be JSON");
+                    body["max_tokens"] == json!(65_536)
+                })
                 .body_contains(r#""thinking":{"type":"adaptive"}"#)
                 .body_contains(r#""output_config":{"effort":"low"}"#)
                 .body_contains(r#""name":"read""#)
@@ -156,6 +163,123 @@ async fn adapter_provider_default_omits_thinking_configuration() {
     mock.assert_async().await;
 }
 
+/// 达到 Anthropic 输出预算时不得把截断结果当作可修复的 final output。
+#[tokio::test]
+async fn adapter_rejects_anthropic_max_tokens_stop_reason() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "length-limited",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "fixture-model",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "final_fixture",
+                        "name": "final_result",
+                        "input": {"before": {}, "after": {}}
+                    }],
+                    "stop_reason": "max_tokens",
+                    "stop_sequence": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 65_536}
+                }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("fixture-key".to_owned()),
+        "fixture-model",
+        CustomProviderEffort::Medium,
+    ))
+    .expect("创建 adapter");
+
+    let result = adapter
+        .complete(AnthropicAdapterRequest::new(
+            "review",
+            Vec::new(),
+            RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
+            CancellationSignal::default(),
+        ))
+        .await;
+
+    mock.assert_async().await;
+    assert!(matches!(
+        result,
+        Err(AnthropicAdapterError::OutputLimit { limit: 65_536 })
+    ));
+}
+
+/// provider 拒绝固定预算时必须直接失败，不能改用较小预算重试。
+#[tokio::test]
+async fn adapter_propagates_max_tokens_rejection_without_retrying() {
+    let server = MockServer::start_async().await;
+    let rejected = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages").matches(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body.as_deref().expect("请求应包含 JSON body"))
+                        .expect("请求 body 应为 JSON");
+                body["max_tokens"] == json!(65_536)
+            });
+            then.status(400).json_body(json!({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "fixture rejects max_tokens"
+                }
+            }));
+        })
+        .await;
+    let unexpected_fallback = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "id": "unexpected-fallback",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "fixture-model",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "final_fixture",
+                        "name": "final_result",
+                        "input": {"before": {}, "after": {}}
+                    }],
+                    "stop_reason": "tool_use",
+                    "stop_sequence": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }));
+        })
+        .await;
+    let workspace = tempfile::tempdir().expect("创建 fixture workspace");
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("fixture-key".to_owned()),
+        "fixture-model",
+        CustomProviderEffort::Medium,
+    ))
+    .expect("创建 adapter");
+
+    let result = adapter
+        .complete(AnthropicAdapterRequest::new(
+            "review",
+            Vec::new(),
+            RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
+            CancellationSignal::default(),
+        ))
+        .await;
+
+    assert!(matches!(result, Err(AnthropicAdapterError::Transport(_))));
+    assert_eq!(rejected.hits_async().await, 1);
+    assert_eq!(unexpected_fallback.hits_async().await, 0);
+}
+
 #[tokio::test]
 async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
     let server = MockServer::start_async().await;
@@ -212,9 +336,14 @@ async fn adapter_converts_anthropic_tool_use_and_tool_result_round_trip() {
     let first = server
         .mock_async(|when, then| {
             when.method(POST).path("/v1/messages").matches(|request| {
-                request.body.as_deref().is_some_and(|body| {
-                    !String::from_utf8_lossy(body).contains(r#""type":"tool_result""#)
-                })
+                let Some(body) = request.body.as_deref() else {
+                    return false;
+                };
+                let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) else {
+                    return false;
+                };
+                json["max_tokens"] == json!(65_536)
+                    && !String::from_utf8_lossy(body).contains(r#""type":"tool_result""#)
             });
             then.status(200)
                 .header("content-type", "application/json")
@@ -231,6 +360,13 @@ async fn adapter_converts_anthropic_tool_use_and_tool_result_round_trip() {
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/v1/messages")
+                .matches(|request| {
+                    let body: serde_json::Value = serde_json::from_slice(
+                        request.body.as_deref().expect("请求应包含 JSON body"),
+                    )
+                    .expect("请求 body 应为 JSON");
+                    body["max_tokens"] == json!(65_536)
+                })
                 .body_contains(r#""type":"tool_result""#)
                 .body_contains(r#""tool_use_id":"toolu_read_fixture""#)
                 .body_contains("fixture source");
