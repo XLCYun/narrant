@@ -23,7 +23,6 @@ export function createTauriBabysitApplicationAdapter(
         reviewId: file.reviewId,
         snapshotId: file.snapshotId,
         path: file.path,
-        locale: file.locale,
         detectedLanguage: file.detectedLanguage,
         generationPolicy,
         progress,

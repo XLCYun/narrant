@@ -3,10 +3,51 @@ use super::custom_connection::{CustomProviderConnection, CustomProviderSettings}
 #[cfg(test)]
 use super::model::BabysitModelPreference;
 use super::model::{
-    ApplicationSettings, BabysitProvider, BabysitProviderSettings, ThemePreference,
-    SETTINGS_VERSION,
+    ApplicationLanguage, ApplicationSettings, BabysitProvider, BabysitProviderSettings,
+    ThemePreference, SETTINGS_VERSION,
 };
-use std::{fmt, io::Write, path::PathBuf, sync::Arc};
+use std::{
+    fmt,
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, Mutex, MutexGuard},
+};
+
+/// 为旧 settings v1 缺少语言字段时提供系统 locale 的可注入边界。
+pub(crate) trait SystemLocaleResolver: Send + Sync {
+    /// 返回系统当前 locale；无法识别的值由应用边界映射为英文。
+    fn resolve(&self) -> String;
+}
+
+impl<F> SystemLocaleResolver for F
+where
+    F: Fn() -> String + Send + Sync,
+{
+    /// 允许契约测试直接注入闭包而不暴露文件或平台实现。
+    fn resolve(&self) -> String {
+        self()
+    }
+}
+
+impl<T> SystemLocaleResolver for Arc<T>
+where
+    T: SystemLocaleResolver + ?Sized,
+{
+    /// 保持已擦除 resolver 的共享所有权，同时保留注入式 seam。
+    fn resolve(&self) -> String {
+        (**self).resolve()
+    }
+}
+
+/// 生产环境通过跨平台 OS API 取得当前语言提示。
+struct OsSystemLocaleResolver;
+
+impl SystemLocaleResolver for OsSystemLocaleResolver {
+    /// 读取 macOS、Windows、Linux 等平台的首选 BCP-47 locale。
+    fn resolve(&self) -> String {
+        sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned())
+    }
+}
 
 /// Application Settings 读取或持久化失败。
 pub(crate) enum ApplicationSettingsError {
@@ -64,23 +105,61 @@ impl std::error::Error for ApplicationSettingsError {}
 pub(crate) struct ApplicationSettingsApplication {
     settings_path: PathBuf,
     credential_adapter: Arc<dyn CustomCredentialAdapter>,
+    locale_resolver: Arc<dyn SystemLocaleResolver>,
+    update_lock: Arc<Mutex<()>>,
 }
 
 impl ApplicationSettingsApplication {
     /// 为首版统一设置文件建立应用边界，不读取或迁移旧文件。
     pub(crate) fn new(settings_path: PathBuf) -> Self {
+        Self::with_system_locale_resolver(settings_path)
+    }
+
+    /// 使用跨平台 OS locale resolver 建立生产设置应用。
+    #[allow(dead_code, reason = "供生产启动与 OS locale 集成契约使用")]
+    pub(crate) fn with_system_locale_resolver(settings_path: PathBuf) -> Self {
         let credential_adapter = default_custom_credential_adapter(&settings_path);
-        Self::with_credential_adapter(settings_path, credential_adapter)
+        Self::with_dependencies(
+            settings_path,
+            credential_adapter,
+            Arc::new(OsSystemLocaleResolver),
+        )
     }
 
     /// 使用注入的凭据适配器建立设置应用，供 E2E 与契约测试隔离系统钥匙串。
+    #[allow(dead_code, reason = "供契约测试注入凭据边界")]
     pub(crate) fn with_credential_adapter(
         settings_path: PathBuf,
         credential_adapter: Arc<dyn CustomCredentialAdapter>,
     ) -> Self {
+        Self::with_dependencies(
+            settings_path,
+            credential_adapter,
+            Arc::new(OsSystemLocaleResolver),
+        )
+    }
+
+    /// 使用注入的系统 locale resolver 建立设置应用，供公开契约测试固定默认语言。
+    #[allow(dead_code, reason = "供契约测试注入系统 locale 边界")]
+    pub(crate) fn with_locale_resolver<R>(settings_path: PathBuf, resolver: R) -> Self
+    where
+        R: SystemLocaleResolver + 'static,
+    {
+        let credential_adapter = default_custom_credential_adapter(&settings_path);
+        Self::with_dependencies(settings_path, credential_adapter, Arc::new(resolver))
+    }
+
+    /// 组装设置边界依赖，确保所有构造入口共享同一 resolver 生命周期。
+    fn with_dependencies(
+        settings_path: PathBuf,
+        credential_adapter: Arc<dyn CustomCredentialAdapter>,
+        locale_resolver: Arc<dyn SystemLocaleResolver>,
+    ) -> Self {
         Self {
             settings_path,
             credential_adapter,
+            locale_resolver,
+            update_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -88,8 +167,13 @@ impl ApplicationSettingsApplication {
     pub(crate) fn load(&self) -> Result<ApplicationSettings, ApplicationSettingsError> {
         match std::fs::read_to_string(&self.settings_path) {
             Ok(contents) => {
-                let settings: ApplicationSettings =
+                let document: serde_json::Value =
                     serde_json::from_str(&contents).map_err(ApplicationSettingsError::Malformed)?;
+                let mut settings: ApplicationSettings = serde_json::from_value(document.clone())
+                    .map_err(ApplicationSettingsError::Malformed)?;
+                if document.get("language").is_none() {
+                    settings.language = self.resolve_system_language();
+                }
                 if settings.version != SETTINGS_VERSION {
                     return Err(ApplicationSettingsError::UnsupportedVersion(
                         settings.version,
@@ -103,7 +187,7 @@ impl ApplicationSettingsApplication {
                 Ok(settings)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(ApplicationSettings::default())
+                Ok(self.default_settings())
             }
             Err(error) => Err(ApplicationSettingsError::Io(error)),
         }
@@ -115,6 +199,14 @@ impl ApplicationSettingsApplication {
         theme: ThemePreference,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
         self.update(|settings| settings.theme = theme)
+    }
+
+    /// 原子保存 Application Language，并仅在落盘成功后返回新权威快照。
+    pub(crate) fn update_language(
+        &self,
+        language: ApplicationLanguage,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        self.update(|settings| settings.language = language)
     }
 
     /// 原子切换 future analyses 使用的 provider，保留三套 provider 配置。
@@ -165,7 +257,18 @@ impl ApplicationSettingsApplication {
     }
 
     /// 校验并原子替换完整 Custom 连接，先写非敏感设置再更新系统凭据。
+    #[allow(dead_code, reason = "供契约测试直接验证完整 Custom 更新边界")]
     pub(crate) fn update_custom_connection(
+        &self,
+        connection: CustomProviderConnection,
+    ) -> Result<CustomProviderConnection, ApplicationSettingsError> {
+        self.with_update_lock(|application| {
+            application.update_custom_connection_unlocked(connection)
+        })
+    }
+
+    /// 在调用方已持有更新锁时替换 Custom 连接，保证设置与凭据变更属于同一串行事务。
+    fn update_custom_connection_unlocked(
         &self,
         connection: CustomProviderConnection,
     ) -> Result<CustomProviderConnection, ApplicationSettingsError> {
@@ -206,8 +309,10 @@ impl ApplicationSettingsApplication {
         &self,
         connection: CustomProviderConnection,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        self.update_custom_connection(connection)?;
-        self.load()
+        self.with_update_lock(|application| {
+            application.update_custom_connection_unlocked(connection)?;
+            application.load()
+        })
     }
 
     /// 将 Codex runtime 的模型投影写回完整 provider 配置，同时保留 executable。
@@ -216,21 +321,19 @@ impl ApplicationSettingsApplication {
         &self,
         preference: BabysitModelPreference,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        let mut provider = self.load()?.babysit.codex;
-        match preference {
+        self.update(|settings| match preference {
             BabysitModelPreference::Automatic => {
-                provider.model = None;
-                provider.reasoning_effort = None;
+                settings.babysit.codex.model = None;
+                settings.babysit.codex.reasoning_effort = None;
             }
             BabysitModelPreference::Explicit {
                 model,
                 reasoning_effort,
             } => {
-                provider.model = Some(model);
-                provider.reasoning_effort = reasoning_effort;
+                settings.babysit.codex.model = Some(model);
+                settings.babysit.codex.reasoning_effort = reasoning_effort;
             }
-        }
-        self.update_provider_settings(BabysitProvider::Codex, provider)
+        })
     }
 
     /// 在内存快照完成一次变更，并仅在原子替换成功后返回新权威值。
@@ -238,10 +341,51 @@ impl ApplicationSettingsApplication {
         &self,
         change: impl FnOnce(&mut ApplicationSettings),
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
-        let mut settings = self.load()?;
-        change(&mut settings);
-        self.persist(&settings)?;
-        Ok(settings)
+        self.with_update_lock(|application| {
+            let mut settings = application.load()?;
+            change(&mut settings);
+            application.persist(&settings)?;
+            Ok(settings)
+        })
+    }
+
+    /// 串行化同一应用实例的所有读取、修改、持久化更新事务，并把锁毒化转为稳定错误。
+    fn with_update_lock<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, ApplicationSettingsError>,
+    ) -> Result<T, ApplicationSettingsError> {
+        let _update_guard = self.lock_updates()?;
+        operation(self)
+    }
+
+    /// 获取共享更新锁，避免同一应用实例的并发 update 丢失字段。
+    fn lock_updates(&self) -> Result<MutexGuard<'_, ()>, ApplicationSettingsError> {
+        self.update_lock.lock().map_err(|_| {
+            ApplicationSettingsError::Io(std::io::Error::other("Application Settings 更新锁已中毒"))
+        })
+    }
+
+    /// 以当前系统 locale 解析无持久化语言时的完整设备级默认快照。
+    fn default_settings(&self) -> ApplicationSettings {
+        ApplicationSettings {
+            language: self.resolve_system_language(),
+            ..ApplicationSettings::default()
+        }
+    }
+
+    /// 将 locale family 映射为 Application Language 白名单中的一个稳定值。
+    fn resolve_system_language(&self) -> ApplicationLanguage {
+        let locale = self.locale_resolver.resolve();
+        let family = locale
+            .trim()
+            .split(['-', '_', '.'])
+            .next()
+            .unwrap_or_default();
+        if family.eq_ignore_ascii_case("zh") {
+            ApplicationLanguage::SimplifiedChinese
+        } else {
+            ApplicationLanguage::English
+        }
     }
 
     /// 通过同目录临时文件同步落盘并原子替换正式设置文件。

@@ -37,6 +37,7 @@ secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
+sys-locale = "0.3.2"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2.4.1"
@@ -50,3 +51,4 @@ walkdir = "2"
 [dev-dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 httpmock = "0.7"
+tauri = { version = "2", features = ["test"] }

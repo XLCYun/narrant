@@ -36,7 +36,7 @@ import { useRepositoryOverview } from "@/repository/use-repository-overview";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import { SettingsPage } from "@/components/settings-page";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
-import { useApplicationTheme } from "@/settings/use-application-theme";
+import { useApplicationSettings } from "@/settings/use-application-settings";
 import "@/lib/i18n";
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
@@ -57,8 +57,8 @@ export function App() {
   const desktopRuntimeEnabled = "__TAURI_INTERNALS__" in window;
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const applicationSettings = useMemo(() => createTauriApplicationSettingsAdapter(tauriTransport), []);
-  const applicationTheme = useApplicationTheme(applicationSettings, desktopRuntimeEnabled && !testHarnessEnabled);
-  const editorTheme = applicationTheme.editorTheme;
+  const applicationSettingsBinding = useApplicationSettings(applicationSettings, desktopRuntimeEnabled && !testHarnessEnabled);
+  const editorTheme = applicationSettingsBinding.editorTheme;
   const pullRequestDiscovery = useMemo(
     () => createTauriPullRequestDiscoveryApplicationAdapter(tauriTransport),
     [],
@@ -403,7 +403,7 @@ export function App() {
       />
     </article>}
     {appShell.destination.kind === "settings" && <SettingsPage
-      theme={applicationTheme}
+      settings={applicationSettingsBinding}
       application={applicationSettings}
       githubIdentity={githubIdentity}
       initialSection={appShell.destination.initialSection}

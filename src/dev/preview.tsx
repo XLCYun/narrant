@@ -18,7 +18,7 @@ import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
-import type { ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -35,9 +35,10 @@ type PreviewDefinition = {
 /** Settings Preview 中 Custom 连接的可交互状态集合。 */
 type CustomPreviewState = "empty" | "configured" | "invalid" | "saving" | "failed" | "revealed";
 
-/** 用公开端口提供可交互的主题设置与持久化失败预览。 */
-function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSection = false, customState, githubState, modelState = "idle" }: { saveFails?: boolean; longCodexPath?: boolean; babysitSection?: boolean; customState?: CustomPreviewState; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
+/** 用公开端口提供可交互的主题、语言与持久化失败预览。 */
+function SettingsPreview({ saveFails = false, language: initialLanguage = "zh-CN", longCodexPath = false, babysitSection = false, customState, githubState, modelState = "idle" }: { saveFails?: boolean; language?: ApplicationLanguage; longCodexPath?: boolean; babysitSection?: boolean; customState?: CustomPreviewState; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
+  const [savedLanguage, setSavedLanguage] = useState<ApplicationLanguage>(initialLanguage);
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
     ? `C:\\${"very-long-directory-name\\".repeat(10)}codex.exe`
     : null);
@@ -52,13 +53,18 @@ function SettingsPreview({ saveFails = false, longCodexPath = false, babysitSect
     claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
     custom: { protocol: customConnection.protocol, baseUrl: customConnection.baseUrl, model: customConnection.model, effort: customConnection.effort },
   });
-  const snapshot = (theme: ThemePreference, value = babysit): ApplicationSettings => ({ version: 1, theme, babysit: value });
+  const snapshot = (theme: ThemePreference, value = babysit, language = savedLanguage): ApplicationSettings => ({ version: 1, theme, language, babysit: value });
   const application: ApplicationSettingsApplication = {
     load: async () => snapshot(savedTheme),
     updateTheme: async (theme) => {
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedTheme(theme);
       return snapshot(theme);
+    },
+    updateLanguage: async (language) => {
+      if (saveFails) throw new Error("预览中的 settings.json 无法写入");
+      setSavedLanguage(language);
+      return snapshot(savedTheme, babysit, language);
     },
     listBabysitModels: async () => {
       if (modelState === "loading") return new Promise(() => undefined);
@@ -325,7 +331,7 @@ function ReviewReaderPreview({
   const [view, setView] = useState<"overview" | "file-changes">(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
   const babysitRequest = selectedPath
-    ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, locale: "zh-CN" as const, detectedLanguage: "typescript" }
+    ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, detectedLanguage: "typescript" }
     : undefined;
   const babysitExplanations: BabysitFileExplanations = {
     before: selectedContent?.before ? { "1": "定义当前文件的旧实现入口。", "2": "返回修改前的阅读器结果。" } : {},
@@ -402,6 +408,9 @@ const previews: Record<string, PreviewDefinition> = {
     scenarios: {
       default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
       error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
+      "language-zh-CN": { label: "简体中文", render: () => <SettingsPreview language="zh-CN" /> },
+      "language-en-US": { label: "English", render: () => <SettingsPreview language="en-US" /> },
+      "language-error": { label: "语言保存失败", render: () => <SettingsPreview language="en-US" saveFails /> },
       "long-codex-path": { label: "Codex 长路径", render: () => <SettingsPreview longCodexPath /> },
       "github-signed-in": { label: "GitHub 已登录", render: () => <SettingsPreview githubState="signed-in" /> },
       "github-confirm": { label: "GitHub 退出确认", render: () => <SettingsPreview githubState="confirm" /> },

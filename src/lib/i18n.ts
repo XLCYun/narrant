@@ -3,7 +3,6 @@ import { initReactI18next } from "react-i18next";
 
 /** 当前随应用离线打包的界面语言白名单。 */
 export type SupportedLocale = "zh-CN" | "en";
-export const localePreferenceKey = "narrant.locale";
 
 /** 将任意 BCP-47 locale 收敛到离线资源白名单。 */
 export function normalizeLocale(locale?: string): SupportedLocale {
@@ -257,17 +256,23 @@ export const resources = {
 
 void i18n.use(initReactI18next).init({
   resources,
-  lng: resolveLocale(window.localStorage?.getItem(localePreferenceKey) ?? undefined, navigator.language),
+  // Application Settings 加载前使用稳定的离线初始资源；启动后由设置快照唯一同步语言。
+  lng: "zh-CN",
   fallbackLng: "zh-CN",
   defaultNS: "common",
   ns: ["common", "repository", "review", "github", "settings"],
   interpolation: { escapeValue: false },
 });
+document.documentElement.lang = "zh-CN";
 
 if (import.meta.env.VITE_WDIO === "true") {
   /** 让真实 Tauri E2E 显式固定界面 locale，避免依赖 CI 主机语言。 */
   (window as Window & { __NARRANT_E2E_SET_LOCALE__?: (locale: string) => Promise<unknown> })
-    .__NARRANT_E2E_SET_LOCALE__ = (locale) => i18n.changeLanguage(normalizeLocale(locale));
+    .__NARRANT_E2E_SET_LOCALE__ = async (locale) => {
+      const normalized = normalizeLocale(locale);
+      await i18n.changeLanguage(normalized);
+      document.documentElement.lang = normalized === "en" ? "en-US" : "zh-CN";
+    };
 }
 
 export { i18n };

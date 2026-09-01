@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 
 import { detectBabysitLanguage } from "@/babysit/detected-language";
 import {
@@ -13,7 +12,6 @@ import {
   type BabysitProgress,
   type BabysitState,
 } from "@/babysit/types";
-import { normalizeLocale } from "@/lib/i18n";
 import type { FileChangeContent, ReviewIdentity } from "@/review/types";
 
 /** Babysit 只需知道当前 Snapshot identity 与可选中的 File Change。 */
@@ -43,8 +41,6 @@ function babysitFailure(reason: unknown): BabysitError {
 /** 管理当前 File Change 的 Babysit eligibility、provider 请求与恢复动作。 */
 export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecycle {
   const { adapter, snapshot, fileChange } = input;
-  const { i18n } = useTranslation();
-  const locale = normalizeLocale(i18n.resolvedLanguage);
   const explanationAbort = useRef<AbortController>();
   const explanationRequest = useRef(0);
   const eligibilityAbort = useRef<AbortController>();
@@ -92,7 +88,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
         setEligibility({ kind: "resolved", result: { eligible: true, reason: null } });
         setState({
           kind: "failed",
-          request: { ...identity, locale, detectedLanguage },
+          request: { ...identity, detectedLanguage },
           error: babysitFailure(reason),
           retryable: true,
         });
@@ -101,7 +97,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
       }
     });
     return () => abort.abort();
-  }, [adapter, fileChange, locale, snapshot]);
+  }, [adapter, fileChange, snapshot]);
 
   /** 对当前 immutable File Change 发起完整文件分析，并丢弃 stale response。 */
   const generate = useCallback((generationPolicy: BabysitGenerationPolicy) => {
@@ -110,7 +106,6 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     const request: BabysitFileRequest = {
       ...snapshot,
       path: fileChange.path,
-      locale,
       detectedLanguage: detectBabysitLanguage(fileChange.path, fileChange.content),
     };
     lastGenerationPolicy.current = generationPolicy;
@@ -133,7 +128,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
         setState({ kind: "failed", request, error: babysitFailure(reason), retryable: true });
       }
     });
-  }, [adapter, eligibility, fileChange, invalidateExplanation, locale, snapshot]);
+  }, [adapter, eligibility, fileChange, invalidateExplanation, snapshot]);
 
   /** 普通开启允许复用精确 identity 的已完成结果。 */
   const explain = useCallback(() => generate("reuse_cached"), [generate]);
@@ -142,11 +137,6 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
   const regenerate = useCallback(() => {
     if (state.kind === "completed") generate("regenerate");
   }, [generate, state.kind]);
-
-  /** UI locale 改变后清掉旧语言结果，下一次点击使用新的 cache identity。 */
-  useEffect(() => {
-    if (state.kind !== "idle" && state.request.locale !== locale) invalidateExplanation();
-  }, [invalidateExplanation, locale, state]);
 
   /** Module 卸载时只终止在途请求；Review cache 由宿主的 close/switch 协调。 */
   useEffect(() => () => {

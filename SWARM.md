@@ -16,3 +16,9 @@
 - 有界工具在实现前列出结果条数、单项字节、总扫描预算、UTF-8 边界、非法文本和取消矩阵。
 - Provider 契约在实现前列出空/非空认证、effort wire shape、精确工具集合、同会话 repair、HTTP/tool/late-response 取消和 completed-cache 不写入矩阵。
 - 协议 adapter 完成后保留独立的 application-level 集成 Issue，证明跨协议一致性、真实工具循环、恢复 UI、取消和缓存行为。
+
+## 关键路径与任务包
+
+- 一个工蜂分片同时跨越设置模型、命令契约和生成生命周期三个 seam 时，默认继续拆分；以最长工蜂的关键路径而不是总工作量优化并行计划。
+- 统计蜂群耗时时以 observed active duration 和终态事件为准；子会话 transcript 的 session duration 可能包含完成后滞留，不能单独作为执行耗时。
+- 工蜂任务包应给出冻结接口、目标文件、聚焦验证命令和范围禁区；出现超过 100 次 exec 或首次 context compaction 时，雄蜂应主动收敛任务或转交机械剩余工作。
