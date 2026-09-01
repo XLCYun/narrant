@@ -82,6 +82,11 @@ export function ApplicationUpdateSurface({ update }: { update: ApplicationUpdate
       </DialogHeader>
       <div className="min-w-0 space-y-4 overflow-y-auto pr-1">
         {snapshot.state.kind === "downloading" && <DownloadProgress progress={snapshot.state.progress} />}
+        {(update.commandError === "retry" || update.commandError === "restart") && <p
+          role="alert"
+          aria-live="assertive"
+          className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        >{t(`commandError.${update.commandError}`)}</p>}
         {snapshot.failure && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{t(`failure.${snapshot.failure.category}`)}</p>}
         {snapshot.recoveryWarning && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-800 dark:text-amber-200">{t("warning.recovery")}</p>}
         <section aria-labelledby="application-update-release-notes" className="min-w-0 overflow-hidden rounded-xl border">

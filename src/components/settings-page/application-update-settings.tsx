@@ -16,6 +16,7 @@ export function ApplicationUpdateSettings({ update }: { update: ApplicationUpdat
     <p role={update.commandError === "load" ? "alert" : "status"} className="mt-4 text-sm text-muted-foreground">
       {update.commandError === "load" ? t("settings.loadFailed") : t("settings.loading")}
     </p>
+    {update.commandError === "load" && <Button className="mt-4" variant="outline" onClick={update.reload}>{t("action.retryLoad")}</Button>}
   </section>;
 
   const preferenceBusy = update.pending === "preference";
@@ -50,7 +51,11 @@ export function ApplicationUpdateSettings({ update }: { update: ApplicationUpdat
     </p>}
     {snapshot.recoveryWarning && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-800 dark:text-amber-200">{t("warning.recovery")}</p>}
     {snapshot.preferenceWarning && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-800 dark:text-amber-200">{t(`warning.preference.${snapshot.preferenceWarning.kind}`)}</p>}
-    {update.commandError && update.commandError !== "load" && <p role="alert" className="text-sm text-destructive">{t(`commandError.${update.commandError}`)}</p>}
+    {update.commandError === "load" && <div className="flex flex-wrap items-center gap-3">
+      <p role="alert" className="text-sm text-destructive">{t("settings.loadFailed")}</p>
+      <Button variant="outline" size="sm" onClick={update.reload}>{t("action.retryLoad")}</Button>
+    </div>}
+    {update.commandError && ["manual-check", "preference"].includes(update.commandError) && <p role="alert" className="text-sm text-destructive">{t(`commandError.${update.commandError}`)}</p>}
     <div className="flex flex-wrap gap-3">
       <Button disabled={checking} onClick={() => void update.manualCheck()}>
         {checking && <Spinner aria-hidden />}{checking ? t("action.checking") : t("action.check")}

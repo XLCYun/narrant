@@ -20,10 +20,10 @@ import type { BranchSelectionContinuationBinding } from "@/review/use-branch-sel
 import { ApplicationSettingsDestination } from "@/components/settings-page";
 import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 import type { ApplicationUpdateApplication, ApplicationUpdateSnapshot } from "@/application-update/application-update";
-import { useApplicationUpdate } from "@/application-update/use-application-update";
+import { useApplicationUpdate, type ApplicationUpdateBinding } from "@/application-update/use-application-update";
 import { ApplicationUpdateAttention } from "@/components/application-update/application-update-attention";
 import { ApplicationUpdateSurface } from "@/components/application-update/application-update-surface";
-import { ApplicationUpdateSettings } from "@/components/settings-page/application-update-settings";
+import type { SettingsSection } from "@/settings/settings-section";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -105,7 +105,7 @@ function ApplicationUpdatePreview({
   useEffect(() => {
     if (!settings && updateSnapshot) openUpdateSurface();
   }, [openUpdateSurface, settings, updateSnapshot]);
-  if (settings) return <div className="mx-auto max-w-3xl rounded-2xl border bg-card p-5 sm:p-9"><ApplicationUpdateSettings update={update} /></div>;
+  if (settings) return <SettingsPreview applicationUpdate={update} initialSection="application-update" />;
   return <>
     <HomePage
       reviews={[]}
@@ -125,7 +125,27 @@ function ApplicationUpdatePreview({
 }
 
 /** 用公开端口提供可交互的主题、语言与持久化失败预览。 */
-function SettingsPreview({ saveFails = false, language: initialLanguage = "zh-CN", longCodexPath = false, babysitSection = false, customState, githubState, modelState = "idle" }: { saveFails?: boolean; language?: ApplicationLanguage; longCodexPath?: boolean; babysitSection?: boolean; customState?: CustomPreviewState; githubState?: "signed-in" | "confirm" | "failed"; modelState?: "idle" | "loading" | "empty" | "error" }) {
+function SettingsPreview({
+  saveFails = false,
+  language: initialLanguage = "zh-CN",
+  longCodexPath = false,
+  babysitSection = false,
+  customState,
+  githubState,
+  modelState = "idle",
+  applicationUpdate,
+  initialSection,
+}: {
+  saveFails?: boolean;
+  language?: ApplicationLanguage;
+  longCodexPath?: boolean;
+  babysitSection?: boolean;
+  customState?: CustomPreviewState;
+  githubState?: "signed-in" | "confirm" | "failed";
+  modelState?: "idle" | "loading" | "empty" | "error";
+  applicationUpdate?: ApplicationUpdateBinding;
+  initialSection?: SettingsSection;
+}) {
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [savedLanguage, setSavedLanguage] = useState<ApplicationLanguage>(initialLanguage);
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
@@ -196,7 +216,16 @@ function SettingsPreview({ saveFails = false, language: initialLanguage = "zh-CN
     signOut: async () => ({ kind: githubState === "failed" ? "failed" : "signed-out" }),
     retry: async () => undefined,
   } : undefined;
-  return <ApplicationSettingsDestination application={application} githubIdentity={githubIdentity} initialSection={githubState ? "github" : longCodexPath || babysitSection || customState || modelState !== "idle" ? "babysit" : "appearance"} initialCustomApiKeyVisible={customState === "revealed"} autoSaveCustomConnection={customState === "saving"} initialGitHubSignOutConfirmation={githubState === "confirm"} onBack={() => undefined} />;
+  return <ApplicationSettingsDestination
+    application={application}
+    githubIdentity={githubIdentity}
+    applicationUpdate={applicationUpdate}
+    initialSection={initialSection ?? (githubState ? "github" : longCodexPath || babysitSection || customState || modelState !== "idle" ? "babysit" : "appearance")}
+    initialCustomApiKeyVisible={customState === "revealed"}
+    autoSaveCustomConnection={customState === "saving"}
+    initialGitHubSignOutConfirmation={githubState === "confirm"}
+    onBack={() => undefined}
+  />;
 }
 
 /** 用与真实 App 相同的组件预览展开中的 Repository Trust 弹层。 */

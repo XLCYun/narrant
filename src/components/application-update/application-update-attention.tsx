@@ -32,6 +32,7 @@ export function ApplicationUpdateAttention({
     onClick={onOpen}
     onKeyDown={(event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
+      // Base UI Button 在 WebView 中不会稳定合成键盘 click；阻止默认行为以避免重复触发。
       event.preventDefault();
       onOpen();
     }}

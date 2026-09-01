@@ -38,6 +38,7 @@ function binding(value: ApplicationUpdateSnapshot, open = false): ApplicationUpd
     surfaceOpen: open,
     openSurface: vi.fn(),
     setSurfaceOpen: vi.fn(),
+    reload: vi.fn(),
     manualCheck: vi.fn(async () => undefined),
     setAutomaticDownload: vi.fn(async () => undefined),
     retry: vi.fn(async () => undefined),
@@ -63,10 +64,19 @@ describe("Application Update UI", () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
-  it("attention icon 支持键盘打开且不触发 restart", () => {
+  it("attention icon 使用原生 button 语义且点击只打开一次", () => {
     const onOpen = vi.fn();
     render(<ApplicationUpdateAttention snapshot={snapshot("staged")} onOpen={onOpen} />);
-    fireEvent.keyDown(screen.getByRole("button"), { key: "Enter" });
+    const button = screen.getByRole("button");
+    expect(button.tagName).toBe("BUTTON");
+    fireEvent.click(button);
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Enter", " "])("attention icon 用 %s 键只打开 surface 一次", (key) => {
+    const onOpen = vi.fn();
+    render(<ApplicationUpdateAttention snapshot={snapshot("staged")} onOpen={onOpen} />);
+    fireEvent.keyDown(screen.getByRole("button"), { key });
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
