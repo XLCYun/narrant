@@ -77,7 +77,7 @@ fn capture(run: impl FnOnce()) -> Vec<CapturedEvent> {
 }
 
 /// 读取捕获 event 的一个字段，避免测试绑定 subscriber 的内部数据结构。
-fn field(event: &CapturedEvent, name: &str) -> Option<&str> {
+fn field<'a>(event: &'a CapturedEvent, name: &str) -> Option<&'a str> {
     event
         .fields
         .iter()
@@ -126,11 +126,11 @@ fn lifecycle_failure_and_cancellation_are_redacted_and_classified() {
                 "https://secret.example/path?key=secret-key prompt source explanation tool-result"
                     .to_owned(),
         };
-        failure.finish(&Err(error));
+        failure.finish(&Err::<(), _>(error));
 
         let cancelled = AnalysisLifecycle::new(8);
         cancelled.bind("custom", Some("anthropic_messages"));
-        cancelled.finish(&Err(BabysitError::Cancelled));
+        cancelled.finish(&Err::<(), _>(BabysitError::Cancelled));
     });
 
     assert_eq!(field(&events[0], "phase"), Some("failed"));

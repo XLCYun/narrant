@@ -5,22 +5,31 @@
 //! OpenTelemetry traces/logs。这个模块拥有 exporter 的生命周期，但不拥有业务
 //! span；业务模块只需要使用 tracing 的公开宏即可。
 
+#[cfg(any(feature = "dev-observability", test))]
 use std::time::Duration;
 
 /// Venator 的本地 OTLP HTTP endpoint；标准环境变量可以覆盖它。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const DEFAULT_OTLP_ENDPOINT: &str = "http://127.0.0.1:8362";
 /// exporter 单次 HTTP 请求的上限，避免无响应 receiver 拖住 shutdown。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const OTLP_EXPORT_TIMEOUT: Duration = Duration::from_secs(1);
 /// 应用退出时为 traces 与 logs 合计保留的 flush 上限。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const OTLP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// traces 的有界批处理队列大小。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const TRACE_MAX_QUEUE_SIZE: usize = 256;
 /// traces 单批最大条目数。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const TRACE_MAX_EXPORT_BATCH_SIZE: usize = 64;
 /// logs 的有界批处理队列大小。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const LOG_MAX_QUEUE_SIZE: usize = 256;
 /// logs 单批最大条目数。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) const LOG_MAX_EXPORT_BATCH_SIZE: usize = 64;
+#[cfg(any(feature = "dev-observability", test))]
 const OTLP_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
 /// 应用生命周期持有的 telemetry owner。
@@ -97,10 +106,12 @@ impl Telemetry {
 /// 运行时只在启动时读取一次 `OTEL_EXPORTER_OTLP_ENDPOINT`。OTLP exporter 自己
 /// 为不同 signal 追加 `/v1/traces` 与 `/v1/logs`。
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) struct EndpointConfig {
     base_url: String,
 }
 
+#[cfg(any(feature = "dev-observability", test))]
 impl EndpointConfig {
     /// 使用标准环境变量，空值按未配置处理。
     pub(crate) fn from_environment() -> Self {
@@ -118,9 +129,20 @@ impl EndpointConfig {
         Self { base_url }
     }
 
-    /// 返回供 OTLP signal builder 使用的基址；builder 会追加 signal path。
+    /// 返回经过规范化的 OTLP 基址。
+    #[cfg(test)]
     pub(crate) fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// 返回 OTLP/HTTP traces endpoint。
+    pub(crate) fn traces_url(&self) -> String {
+        format!("{}/v1/traces", self.base_url)
+    }
+
+    /// 返回 OTLP/HTTP logs endpoint。
+    pub(crate) fn logs_url(&self) -> String {
+        format!("{}/v1/logs", self.base_url)
     }
 }
 
@@ -129,6 +151,7 @@ impl EndpointConfig {
 /// logs bridge 默认会把 event 字段转成 LogRecord attributes。仅靠调用方自律
 /// 不足以形成安全边界，因此 logs layer 会拒绝声明这些字段的 event；Rig 的
 /// GenAI spans 仍完整保留（它们只声明空的 content fields，且默认不写入值）。
+#[cfg(any(feature = "dev-observability", test))]
 pub(crate) fn is_sensitive_field(name: &str) -> bool {
     matches!(
         name,
@@ -199,14 +222,14 @@ impl EnabledTelemetry {
         let span_exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
-            .with_endpoint(endpoint.base_url())
+            .with_endpoint(endpoint.traces_url())
             .with_timeout(OTLP_EXPORT_TIMEOUT)
             .build()
             .map_err(|_| ())?;
         let log_exporter = opentelemetry_otlp::LogExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
-            .with_endpoint(endpoint.base_url())
+            .with_endpoint(endpoint.logs_url())
             .with_timeout(OTLP_EXPORT_TIMEOUT)
             .build()
             .map_err(|_| ())?;
@@ -282,8 +305,6 @@ impl EnabledTelemetry {
 
 #[cfg(feature = "dev-observability")]
 fn install_terminal_subscriber() {
-    use tracing_subscriber::util::SubscriberInitExt;
-
     // endpoint 格式错误或其他库已占用全局 subscriber 时，仍保留终端 fmt。
     // 不打印 endpoint 细节或 exporter 错误。
     let _ = tracing_subscriber::fmt().try_init();

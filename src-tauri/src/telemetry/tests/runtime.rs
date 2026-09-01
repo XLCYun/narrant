@@ -15,6 +15,8 @@ fn endpoint_override_trims_whitespace_and_trailing_slashes() {
     let endpoint = EndpointConfig::from_optional(Some("  http://fixture:4318///  "));
 
     assert_eq!(endpoint.base_url(), "http://fixture:4318");
+    assert_eq!(endpoint.traces_url(), "http://fixture:4318/v1/traces");
+    assert_eq!(endpoint.logs_url(), "http://fixture:4318/v1/logs");
 }
 
 #[test]
@@ -174,7 +176,7 @@ impl OtlpFixture {
 #[cfg(feature = "dev-observability")]
 /// 接收并应答 fixture 请求，直到收齐预期 signal 数量或超时。
 fn collect_requests(listener: std::net::TcpListener, expected_requests: usize) -> Vec<OtlpRequest> {
-    use std::io::{Read, Write};
+    use std::io::Write;
 
     listener
         .set_nonblocking(true)
