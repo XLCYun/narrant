@@ -1,6 +1,6 @@
 [package]
 name = "narrant"
-version = "1.2.5"
+version = "1.2.6"
 description = "Narrant read-only change review"
 authors = ["Narrant contributors"]
 edition = "2021"
