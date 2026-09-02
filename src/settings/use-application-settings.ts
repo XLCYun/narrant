@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { i18n, type SupportedLocale } from "@/lib/i18n";
+import { applyApplicationLocale, i18n, type SupportedLocale } from "@/lib/i18n";
 import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, ThemePreference } from "@/settings/application-settings";
 
 const SYSTEM_DARK_THEME_QUERY = "(prefers-color-scheme: dark)";
@@ -19,8 +19,7 @@ function localeForLanguage(language: ApplicationLanguage): SupportedLocale {
 
 /** 把一个 Application Language 同步到 i18n 实例与根文档可访问语言标记。 */
 function applyLanguage(language: ApplicationLanguage) {
-  document.documentElement.lang = language;
-  void i18n.changeLanguage(localeForLanguage(language));
+  void applyApplicationLocale(localeForLanguage(language));
 }
 
 /** 兼容旧 settings v1 的暂时缺字段快照；正式快照由 Rust 负责补出语言。 */

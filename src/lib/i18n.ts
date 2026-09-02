@@ -4,6 +4,8 @@ import { initReactI18next } from "react-i18next";
 /** 当前随应用离线打包的界面语言白名单。 */
 export type SupportedLocale = "zh-CN" | "en";
 
+let e2eLocaleOverride: SupportedLocale | undefined;
+
 /** 将任意 BCP-47 locale 收敛到离线资源白名单。 */
 export function normalizeLocale(locale?: string): SupportedLocale {
   return locale?.toLowerCase().startsWith("en") ? "en" : "zh-CN";
@@ -12,6 +14,13 @@ export function normalizeLocale(locale?: string): SupportedLocale {
 /** 按显式偏好、系统语言、中文回退的顺序确定界面语言。 */
 export function resolveLocale(explicit?: string, system?: string): SupportedLocale {
   return normalizeLocale(explicit || system);
+}
+
+/** 同步应用语言；真实 Tauri E2E 的显式覆盖优先于异步加载的持久化设置。 */
+export async function applyApplicationLocale(locale: SupportedLocale): Promise<void> {
+  const effective = e2eLocaleOverride ?? locale;
+  await i18n.changeLanguage(effective);
+  document.documentElement.lang = effective === "en" ? "en-US" : "zh-CN";
 }
 
 /** 使用界面 locale 格式化绝对时间；测试可固定时区。 */
@@ -291,9 +300,8 @@ if (import.meta.env.VITE_WDIO === "true") {
   /** 让真实 Tauri E2E 显式固定界面 locale，避免依赖 CI 主机语言。 */
   (window as Window & { __NARRANT_E2E_SET_LOCALE__?: (locale: string) => Promise<unknown> })
     .__NARRANT_E2E_SET_LOCALE__ = async (locale) => {
-      const normalized = normalizeLocale(locale);
-      await i18n.changeLanguage(normalized);
-      document.documentElement.lang = normalized === "en" ? "en-US" : "zh-CN";
+      e2eLocaleOverride = normalizeLocale(locale);
+      await applyApplicationLocale(e2eLocaleOverride);
     };
 }
 

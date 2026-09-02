@@ -31,7 +31,12 @@ export async function setE2ELocale(locale: "zh-CN" | "en") {
     }
     void setter(nextLocale).then(() => done()).catch(done);
   }, locale);
-  // i18next 的 Promise 先于 React 订阅者提交；等待两帧，保证后续按本地化名称查询稳定 DOM。
+  const expectedDocumentLanguage = locale === "en" ? "en-US" : "zh-CN";
+  await browser.waitUntil(async () => browser.execute(
+    (language) => document.documentElement.lang === language,
+    expectedDocumentLanguage,
+  ), { timeoutMsg: `界面语言没有稳定切换到 ${locale}` });
+  // i18next 的 Promise 先于 React 订阅者提交；等待两帧，但不把语言生命周期绑定到侧边栏挂载。
   await browser.executeAsync((done) => {
     requestAnimationFrame(() => requestAnimationFrame(() => done()));
   });
