@@ -55,7 +55,7 @@ fn read_returns_text_file_with_workspace_relative_identity() {
     let response = tools
         .read(
             ReadInput::new("src/lib.rs"),
-            &crate::operation::OperationContext::background().cancellation(),
+            crate::operation::OperationContext::background().cancellation(),
         )
         .unwrap();
 

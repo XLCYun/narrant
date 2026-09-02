@@ -52,7 +52,7 @@ struct PendingUpdate {
 
 /// 一次受管 stream→durable/core 提交的稳定结果。
 enum DownloadTaskOutcome {
-    Committed(UpdateOutput),
+    Committed(Box<UpdateOutput>),
     Cancelled,
     Failed(UpdateFailureCategory, &'static str),
 }
@@ -486,6 +486,7 @@ impl ApplicationUpdateRuntime {
             .await;
         match outcome {
             DownloadTaskOutcome::Committed(output) => {
+                let output = *output;
                 self.diagnostics.record_snapshot(&output.snapshot);
                 let _ = app.emit(UPDATE_SNAPSHOT_EVENT, &output.snapshot);
                 for effect in output.effects {
@@ -500,6 +501,7 @@ impl ApplicationUpdateRuntime {
     }
 
     /// 流式写临时文件并执行与生产下载共用的 EOF、取消、验签和 durable commit 边界。
+    #[allow(clippy::too_many_arguments)]
     async fn consume_stream_and_commit<S, E, F, G>(
         self: &Arc<Self>,
         operation_id: UpdateOperationId,
@@ -638,7 +640,7 @@ impl ApplicationUpdateRuntime {
         }
         .map_or(
             DownloadTaskOutcome::Failed(UpdateFailureCategory::Manifest, "core-commit"),
-            DownloadTaskOutcome::Committed,
+            |output| DownloadTaskOutcome::Committed(Box::new(output)),
         )
     }
 

@@ -767,12 +767,12 @@ fn output_limit_payload_uses_a_distinct_non_repairable_code() {
 fn custom_transport_payload_serializes_only_whitelisted_diagnostics() {
     let payload = BabysitErrorPayload::from(BabysitError::ProviderDiagnostic {
         detail: "脱敏 provider 失败".to_owned(),
-        diagnostic: BabysitProviderDiagnostic::custom_transport(
+        diagnostic: Box::new(BabysitProviderDiagnostic::custom_transport(
             "openai_chat_completions",
             "model",
             "client",
             "unknown",
-        ),
+        )),
     });
 
     assert_eq!(

@@ -499,7 +499,7 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
             .mock_async(|when, then| {
                 when.method(POST)
                     .path("/v1/messages")
-                    .body_contains(&format!(r#""output_config":{{"effort":"{effort_text}"}}"#));
+                    .body_contains(format!(r#""output_config":{{"effort":"{effort_text}"}}"#));
                 then.status(200)
                     .header("content-type", "application/json")
                     .json_body(response);

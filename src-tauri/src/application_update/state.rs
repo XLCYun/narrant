@@ -822,7 +822,6 @@ impl<C: Clock, P: PreferenceStore> UpdateController<C, P> {
                     UpdatePreferenceWarningKind::Rejected,
                     error,
                 ));
-                return;
             }
             PreferenceSaveOutcome::Committed { applied_value } if applied_value == enabled => {
                 self.apply_automatic_download(applied_value, effects);

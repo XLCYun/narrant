@@ -265,12 +265,12 @@ fn adapter_error(error: CustomAdapterError) -> BabysitError {
         CustomAdapterError::OutputLimit { limit } => BabysitError::OutputLimit { limit },
         CustomAdapterError::Transport(failure) => BabysitError::ProviderDiagnostic {
             detail: CustomAdapterError::Transport(failure.clone()).to_string(),
-            diagnostic: crate::babysit::BabysitProviderDiagnostic::custom_transport(
+            diagnostic: Box::new(crate::babysit::BabysitProviderDiagnostic::custom_transport(
                 failure.protocol().as_str(),
                 failure.phase().as_str(),
                 failure.status().as_str(),
                 failure.reason().as_str(),
-            ),
+            )),
         },
         other => BabysitError::Provider {
             detail: other.to_string(),

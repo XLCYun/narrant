@@ -26,7 +26,8 @@ pub enum BabysitError {
     /// provider 失败附带经过白名单约束的诊断字段，不包含原始请求、响应或 endpoint。
     ProviderDiagnostic {
         detail: String,
-        diagnostic: BabysitProviderDiagnostic,
+        /// 诊断字段独立装箱，避免放大每一个 Babysit 失败返回值。
+        diagnostic: Box<BabysitProviderDiagnostic>,
     },
     ProgressClosed,
     CacheUnavailable,
@@ -141,7 +142,7 @@ pub struct BabysitErrorPayload {
     pub recovery: Option<BabysitRecoveryAction>,
     /// 仅包含白名单分类的 provider 诊断；不得放入 detail、URL 或 provider body。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub diagnostic: Option<BabysitProviderDiagnostic>,
+    pub diagnostic: Option<Box<BabysitProviderDiagnostic>>,
 }
 
 impl BabysitErrorPayload {
