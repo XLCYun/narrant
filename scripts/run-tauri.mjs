@@ -23,7 +23,7 @@ export function normalizeUpdaterPublicKey(value) {
   if (
     !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
     || Buffer.from(decoded, "utf8").toString("base64") !== normalized
-    || !/^untrusted comment: minisign public key: [0-9A-F]+\nRW[A-Za-z0-9+/=]+\n?$/.test(decoded)
+    || !/^untrusted comment: minisign public key: [0-9A-F]+\nRW[A-Za-z0-9+/=]+$/.test(decoded)
   ) {
     throw new Error("NARRANT_UPDATER_PUBLIC_KEY 必须是 base64 编码的两行 minisign 公钥");
   }

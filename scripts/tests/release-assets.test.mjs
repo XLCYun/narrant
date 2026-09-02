@@ -21,6 +21,7 @@ import { gzipSync } from "node:zlib";
 import {
   assertDraftArtifactPaths,
   assertPublicReleaseMetadata,
+  normalizeTauriUpdaterSignature,
   parseReleaseIdentity,
   prepareDraftAssetDirectory,
   releaseAssetNames,
@@ -189,6 +190,36 @@ test("完整准备生成固定两目标 manifest 并字面保留 canonical ED �
   assert.equal(result.names.length, 8);
   assert.equal(result.updaterTrust.bridgeAuthorized, false);
   assert.equal(result.updaterTrust.releaseSigningKeySha256, result.updaterTrust.candidateUpdaterKeySha256);
+});
+
+test("Draft 边界只移除 Tauri signer 的单个末尾 LF 并重写 canonical 签名", (context) => {
+  const fixture = createNativeAssetFixture();
+  context.after(() => rmSync(fixture.directory, { recursive: true, force: true }));
+  for (const updaterName of [fixture.names.updater.darwin, fixture.names.updater.windows]) {
+    const canonical = fixture.signatures.get(updaterName);
+    const signerOutput = rewriteCanonicalOuter(canonical, (inner) => `${inner}\n`);
+    writeFileSync(join(fixture.directory, `${updaterName}.sig`), signerOutput);
+  }
+
+  const result = prepareFixture(fixture);
+
+  for (const updaterName of [fixture.names.updater.darwin, fixture.names.updater.windows]) {
+    const signature = readFileSync(join(fixture.directory, `${updaterName}.sig`), "utf8");
+    assert.equal(signature, fixture.signatures.get(updaterName));
+    assert.equal(Buffer.from(signature, "base64").toString("utf8").endsWith("\n"), false);
+  }
+  assert.equal(result.manifest.platforms["darwin-aarch64"].signature, fixture.signatures.get(fixture.names.updater.darwin));
+  const canonical = fixture.signatures.get(fixture.names.updater.darwin);
+  for (const transform of [
+    (inner) => `${inner}\n\n`,
+    (inner) => `${inner}\r\n`,
+    (inner) => `${inner} `,
+  ]) {
+    assert.throws(
+      () => normalizeTauriUpdaterSignature(rewriteCanonicalOuter(canonical, transform)),
+      /inner text|canonical base64/,
+    );
+  }
 });
 
 test("双公钥仅允许 exact normal bridge tag，且本版包始终由 release signing key 验证", (context) => {

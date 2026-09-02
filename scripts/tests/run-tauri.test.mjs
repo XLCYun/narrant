@@ -48,7 +48,7 @@ test("非 build 命令和无公钥的本地 build 不注入配置", () => {
 test("公钥必须是 canonical base64 minisign 两行文本", () => {
   assert.equal(normalizeUpdaterPublicKey(`  ${PUBLIC_KEY}\n`), PUBLIC_KEY);
   const fileKey = Buffer.from(`${Buffer.from(PUBLIC_KEY, "base64").toString("utf8")}\n`).toString("base64");
-  assert.equal(normalizeUpdaterPublicKey(fileKey), fileKey);
+  assert.throws(() => normalizeUpdaterPublicKey(fileKey), /NARRANT_UPDATER_PUBLIC_KEY/);
   assert.throws(() => normalizeUpdaterPublicKey("not-a-key"), /NARRANT_UPDATER_PUBLIC_KEY/);
   assert.throws(
     () => normalizeUpdaterPublicKey(Buffer.from(`${Buffer.from(PUBLIC_KEY, "base64")}\n\n`).toString("base64")),

@@ -139,6 +139,17 @@ function parseUpdaterSignature(encoded) {
   };
 }
 
+/** 把 Tauri signer 唯一允许的末尾 LF 收敛为公开资产使用的 canonical 四行签名。 */
+export function normalizeTauriUpdaterSignature(encoded) {
+  const decoded = decodeTauriText(encoded, "updater 签名");
+  const normalized = decoded.endsWith("\n") && !decoded.endsWith("\n\n")
+    ? decoded.slice(0, -1)
+    : decoded;
+  const canonical = Buffer.from(normalized, "utf8").toString("base64");
+  parseUpdaterSignature(canonical);
+  return canonical;
+}
+
 /**
  * 扫描每一个 http(s) scheme，并以 Markdown/自然语言标点或下一个 scheme 作为 token 终点。
  * 任何 scheme 都会产生一个独立候选，避免私有 URL 被拼进公开 URL path 后漏检。
@@ -494,9 +505,13 @@ export function prepareDraftAssetDirectory(options) {
     assertNativeContainer(name, byName.get(name).bytes);
   }
   const signatures = new Map([
-    [`${names.updater.darwin}.sig`, byName.get(`${names.updater.darwin}.sig`).bytes.toString("utf8")],
-    [`${names.updater.windows}.sig`, byName.get(`${names.updater.windows}.sig`).bytes.toString("utf8")],
+    [`${names.updater.darwin}.sig`, normalizeTauriUpdaterSignature(byName.get(`${names.updater.darwin}.sig`).bytes.toString("utf8"))],
+    [`${names.updater.windows}.sig`, normalizeTauriUpdaterSignature(byName.get(`${names.updater.windows}.sig`).bytes.toString("utf8"))],
   ]);
+  for (const [name, signature] of signatures) {
+    // 公开 `.sig`、latest.json 与 SHA256SUMS 必须共享同一份 canonical bytes。
+    writeFileSync(join(directory, name), signature);
+  }
   verifyTauriUpdaterSignature(
     byName.get(names.updater.darwin).bytes,
     signatures.get(`${names.updater.darwin}.sig`),
