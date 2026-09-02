@@ -20,6 +20,15 @@ pub(crate) fn current_install_plan() -> Result<(&'static str, InstallKind), Inst
     return Ok((MACOS_TARGET, InstallKind::MacosAppArchive));
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     return Ok((WINDOWS_TARGET, InstallKind::WindowsNsis));
+    // Linux 只承载跨平台单元测试；用 macOS 契约装配真实 staging，生产构建仍然关闭更新。
+    #[cfg(all(
+        test,
+        not(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "windows", target_arch = "x86_64")
+        ))
+    ))]
+    return Ok((MACOS_TARGET, InstallKind::MacosAppArchive));
     #[allow(unreachable_code)]
     Err(InstallError::new("当前平台不支持应用内更新"))
 }
