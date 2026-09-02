@@ -1,4 +1,5 @@
 import { navigateHome, visibleBrandButton } from "./review-navigation";
+import { clickWebView } from "./webview-interaction";
 
 /** 让系统目录选择器在 E2E 中返回 fixture 路径，同时保留真实 Tauri IPC 后端。 */
 export async function chooseRepositoryFolder(
@@ -11,7 +12,7 @@ export async function chooseRepositoryFolder(
   );
   const openButton = await $("main").$(`button=${buttonName}`);
   await openButton.waitForDisplayed();
-  await openButton.click();
+  await clickWebView(openButton, "点击打开仓库文件夹失败");
   await browser.waitUntil(async () => (
     await $("[role='dialog']").isDisplayed()
     || await $("[aria-label='Repository']").isDisplayed()
@@ -30,6 +31,10 @@ export async function setE2ELocale(locale: "zh-CN" | "en") {
     }
     void setter(nextLocale).then(() => done()).catch(done);
   }, locale);
+  // i18next 的 Promise 先于 React 订阅者提交；等待两帧，保证后续按本地化名称查询稳定 DOM。
+  await browser.executeAsync((done) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => done()));
+  });
 }
 
 /** 通过当前可见的 desktop/offcanvas sidebar 返回 Home。 */
@@ -56,29 +61,30 @@ async function reloadRepositoryNavigation() {
   });
 }
 
+/** 返回当前可见的 Repository 分组，统一 desktop 与 offcanvas sidebar 查询。 */
+async function visibleRepositoryGroup(groupName: string) {
+  for (const candidate of await $$(`button=${groupName}`)) {
+    if (await candidate.isDisplayed()) return candidate;
+  }
+}
+
 /** 点击当前可见且名称精确匹配的 Repository 侧边栏入口。 */
 async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en", expectReady = true) {
   const name = repositoryPath.split(/[\\/]/).filter(Boolean).at(-1);
   if (!name) throw new Error(`无法从 fixture 路径读取 Repository 名称：${repositoryPath}`);
   const label = locale === "en" ? `Open repository ${name}` : `打开仓库 ${name}`;
   const groupName = locale === "en" ? "Repositories" : "代码仓库";
-  let group: WebdriverIO.Element | undefined;
-  const findVisibleGroup = async () => {
-    for (const candidate of await $$(`button=${groupName}`)) {
-      if (await candidate.isDisplayed()) {
-        group = candidate;
-        return true;
-      }
-    }
-    return false;
-  };
-  if (!(await findVisibleGroup())) {
+  let group = await visibleRepositoryGroup(groupName);
+  if (!group) {
     await visibleBrandButton();
   }
-  await browser.waitUntil(findVisibleGroup);
+  await browser.waitUntil(async () => {
+    group = await visibleRepositoryGroup(groupName);
+    return Boolean(group);
+  });
   if (!group) throw new Error(`没有可见的 Repository 分组：${groupName}`);
   if (await group.getAttribute("aria-expanded") === "false") {
-    await group.click();
+    await clickWebView(group, "展开 Repository 分组失败");
   }
   let opened = false;
   await browser.waitUntil(async () => {
@@ -89,7 +95,9 @@ async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en",
         const repositoryButton = await row.$("button");
         if (!(await repositoryButton.isDisplayed())) continue;
         // 展开真实 Repository 行；展开态会持续呈现精确 open action，兼顾键盘与触屏。
-        if (await repositoryButton.getAttribute("aria-expanded") === "false") await repositoryButton.click();
+        if (await repositoryButton.getAttribute("aria-expanded") === "false") {
+          await clickWebView(repositoryButton, `展开 Repository 行失败：${name}`);
+        }
         await browser.waitUntil(async () => await button.isDisplayed(), {
           timeout: 1000,
           timeoutMsg: `Repository action 展开后仍不可见：${label}`,
@@ -97,7 +105,7 @@ async function openSeededFixture(repositoryPath: string, locale: "zh-CN" | "en",
       }
       if (!(await button.isDisplayed())) continue;
       await button.waitForDisplayed();
-      await button.click();
+      await clickWebView(button, `打开 Repository 失败：${name}`);
       opened = true;
       return true;
     }
@@ -118,10 +126,11 @@ export async function openFixtureRepository(repositoryPath: string, locale: "zh-
   await visibleBrandButton();
   const groupName = locale === "en" ? "Repositories" : "代码仓库";
   await browser.waitUntil(async () => {
-    for (const group of await $$(`button=${groupName}`)) {
-      if (await group.isDisplayed()) return true;
-    }
-    return false;
-  }, { timeoutMsg: "Repository navigation 已加载但侧边栏投影尚未提交" });
+    if (await visibleRepositoryGroup(groupName)) return true;
+    // 首次冷启动时 IPC 可能先于 React projection 提交；串行重载而不制造并发请求。
+    await reloadRepositoryNavigation();
+    await visibleBrandButton();
+    return Boolean(await visibleRepositoryGroup(groupName));
+  }, { interval: 1000, timeoutMsg: "Repository navigation 已加载但侧边栏投影尚未提交" });
   await openSeededFixture(repositoryPath, locale);
 }
