@@ -80,8 +80,14 @@ test("Windows 收集 current-user NSIS updater exe 与强制签名", () => {
 test("公开 Draft 使用跨仓库 token，且完整本地预验严格早于远端协调", () => {
   assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
   assert.match(workflow, /TARGET_REPOSITORY: cyunlab\/narrant/);
+  const draft = workflow.slice(workflow.indexOf("\n  draft-release:"));
+  const install = draft.indexOf("pnpm install --frozen-lockfile --prod");
+  const notes = draft.indexOf("node scripts/generate-public-release-notes.mjs");
   const prepare = workflow.indexOf("node scripts/prepare-draft-assets.mjs");
   const reconcile = workflow.indexOf("node scripts/reconcile-draft-release.mjs");
+  assert.match(draft, /pnpm\/action-setup@v4/);
+  assert.ok(install > 0);
+  assert.ok(install < notes);
   assert.ok(prepare > 0);
   assert.ok(prepare < reconcile);
   assert.match(workflow, /release-assets\/\*/);
