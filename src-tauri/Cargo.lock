@@ -5956,7 +5956,7 @@ dependencies = [
 
 [[package]]
 name = "narrant"
-version = "1.1.5"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
