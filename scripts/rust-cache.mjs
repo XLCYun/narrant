@@ -76,7 +76,7 @@ function hasSccache() {
 }
 
 /** 返回包含统一缓存目录、容量限制和 rustc wrapper 的构建环境。 */
-function createBuildEnvironment() {
+export function createBuildEnvironment() {
   const env = {
     ...process.env,
     SCCACHE_CACHE_SIZE: process.env.SCCACHE_CACHE_SIZE || DEFAULT_CACHE_SIZE,

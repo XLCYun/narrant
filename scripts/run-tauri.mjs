@@ -7,8 +7,9 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { createBuildEnvironment } from "./rust-cache.mjs";
+
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const RUST_CACHE_PATH = path.join(path.dirname(SCRIPT_PATH), "rust-cache.mjs");
 
 /** 验证正式构建使用的是 canonical、两行且 base64 编码的 minisign 公钥。 */
 export function normalizeUpdaterPublicKey(value) {
@@ -40,15 +41,26 @@ export function buildTauriArguments(command, args, environment) {
   return [...cliArguments, ...normalizedArguments];
 }
 
-/** 经仓库统一 sccache 包装启动 Tauri，并原样转发终端与退出状态。 */
+/** 通过当前 pnpm 入口构造无 shell 的 Tauri 调用，确保 Windows 不会剥掉 JSON 引号。 */
+export function buildTauriInvocation(command, args, environment, nodeExecutable = process.execPath) {
+  const pnpmEntry = environment.npm_execpath;
+  if (!pnpmEntry) throw new Error("Tauri 启动器必须从 pnpm script 运行");
+  return {
+    args: [pnpmEntry, "exec", "tauri", ...buildTauriArguments(command, args, environment)],
+    executable: nodeExecutable,
+  };
+}
+
+/** 经仓库统一 sccache 环境启动 Tauri，并原样转发终端与退出状态。 */
 function run() {
   const [command, ...args] = process.argv.slice(2);
   if (!command) throw new Error("缺少 Tauri 子命令");
-  const child = spawn(
-    process.execPath,
-    [RUST_CACHE_PATH, "run", "tauri", ...buildTauriArguments(command, args, process.env)],
-    { env: process.env, stdio: "inherit" },
-  );
+  const invocation = buildTauriInvocation(command, args, process.env);
+  const child = spawn(invocation.executable, invocation.args, {
+    env: createBuildEnvironment(),
+    shell: false,
+    stdio: "inherit",
+  });
   child.once("error", (error) => {
     console.error(`无法启动 Tauri：${error.message}`);
     process.exitCode = 1;
