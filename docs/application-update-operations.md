@@ -7,7 +7,8 @@ Release 位于 `cyunlab/narrant`。公开仓库不是源码镜像。客户端唯
 https://github.com/cyunlab/narrant/releases/latest/download/latest.json
 ```
 
-每次发布先在公开仓库形成完整 Draft；两平台真实原生 smoke 通过后，维护者手动 dispatch 私有仓库
+每次发布先在公开仓库形成完整 Draft；私有 `release.yml` 随后自动复用两平台真实原生 smoke，
+通过后维护者手动 dispatch 私有仓库
 `stable-promotion` Environment 中的 job，自动化才把同一个固定 Release ID 发布并标为 Latest。
 不得用公开仓库的 `release.published` event 反向触发私有发布控制。若 GitHub 计划支持 required
 reviewers，还应在该 Environment 增加独立审批；当前 user-owned private repository 的 GitHub Free
@@ -61,10 +62,12 @@ Release GET/asset download；token 只进入 `Authorization` header，不进入 
 evidence 或错误正文。最终写操作只存在于受保护的 promotion job。
 
 个人账户下的私有仓库在 GitHub Free 计划中不提供 Artifact Attestations。当前 promotion 在下载
-evidence 前调用 `scripts/verify-evidence-run.mjs`，通过只读 Actions API 固定验证：run 属于
-`XLCYun/narrant`、workflow path 为 `.github/workflows/update-smoke.yml`、事件为 `workflow_dispatch`、
-ref 为默认分支、head SHA 等于 promotion checkout 的可信提交、attempt 为 1、结论为 success，并且
-该 run 恰好有两个 target artifact 与一个 aggregate artifact；每个 artifact 的 ID、名称、大小、
+evidence 前调用 `scripts/verify-evidence-run.mjs`，通过只读 Actions API 固定验证 run 属于
+`XLCYun/narrant`。正常自动路径要求 `.github/workflows/release.yml` 的 tag push run 绑定 exact
+source tag/SHA，并且恰好有两个构建 artifact、两个 target artifact 与一个 aggregate artifact；手动
+重试路径仍要求 `.github/workflows/update-smoke.yml` 的 `workflow_dispatch` run 绑定默认分支及 promotion
+checkout 的可信 SHA，并且恰好有三个 smoke artifact。两种路径都要求 attempt 为 1、结论为 success，
+且每个 artifact 的 ID、名称、大小、
 GitHub SHA-256 digest、run/ref 与 archive URL 都必须匹配。下载后再要求 exact-four evidence 文件和
 byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，应恢复 Artifact Attestations，
 不能在文档中把当前替代门禁描述成 attestation。
@@ -73,9 +76,11 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 
 1. 在私有仓库创建并推送经批准的 `vMAJOR.MINOR.PATCH` tag。确认 tag 解引用为默认分支上的
    exact 40 位 lowercase commit SHA。
-2. 等待 `release.yml` 完成。它构建 macOS arm64 和 Windows x64，签名 updater packages，向
-   `cyunlab/narrant` 创建或完整替换一个 Draft。Draft 必须恰好含八个资产：两个安装包、两个
-   updater packages、两个 `.sig`、`latest.json` 和 `SHA256SUMS`。
+2. 等待 `release.yml` 完成。它先固定当前匿名 published Stable 的 tag 与 manifest 原始字节 SHA-256，
+   构建 macOS arm64 和 Windows x64，签名 updater packages，向 `cyunlab/narrant` 创建或完整替换一个
+   Draft；随后自动以 `mode=normal` 运行两平台真实更新 smoke。Draft 必须恰好含八个资产：两个安装包、
+   两个 updater packages、两个 `.sig`、`latest.json` 和 `SHA256SUMS`。任何 smoke 失败都会使 release
+   run 失败并保留 Draft，不会自动发布 Stable。
 3. 从 release job 日志取得固定 public Release database ID，或用 token 做只读查询：
 
    ```bash
@@ -83,9 +88,8 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
    ```
 
    同时记录 private source tag/full SHA 与 public Release ID/tag；public tag 不能代替 private SHA。
-4. 记录当前 published Stable 的 tag，并下载当前固定 endpoint 的 `latest.json`，对完整 bytes
-   计算 lowercase SHA-256。不要从 Draft body、GitHub “latest” 网页或本地重建猜 previous identity。
-5. 在私有仓库手动运行 `Native application update smoke evidence`：
+4. `release.yml` 已在 Draft mutation 前记录 previous Stable tag 和 manifest SHA-256，并把它们传给自动
+   smoke。若自动 run 因 runner 临时故障需要重试，才手动运行 `Native application update smoke evidence`：
 
    - `mode=normal`；
    - 传入 source tag/full SHA、fixed public Release ID/public tag；
@@ -96,19 +100,20 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
    runner 临时 CA 只信任本次 `github.com` leaf，hosts 只增加 loopback mapping；gate 只服务固定
    latest 路径和当前 tag/target package。无论成功失败，hosts 按原字节恢复、DNS 刷新、helper
    退出、临时 CA 删除。任何 cleanup 失败保留原 native 根因。
-6. 两个平台必须观察真实 check/download/durable staging、原生窗口正常关闭、共享 stop 完成后的
+5. 两个平台必须观察真实 check/download/durable staging、原生窗口正常关闭、共享 stop 完成后的
    安装、同路径替换、无自动 relaunch，以及 harness 手工启动候选版本。aggregate job 只接受
    exactly `darwin-aarch64` 和 `windows-x86_64` 两份 fresh `real-native` evidence；每份 JSON 都有
    byte-exact `.sha256` companion。aggregate 上传两个 target artifact 与唯一 aggregate artifact。
-7. 记下成功 smoke workflow run ID。手动运行 `Promote public Stable release`，输入完全相同的
-   source/public/previous identity 和 evidence run ID。GitHub 计划支持 required reviewers 时等待独立
+6. 自动路径记下成功的 **release workflow run ID**；手动重试路径才记下独立 smoke workflow run ID。
+   手动运行 `Promote public Stable release`，输入完全相同的 source/public/previous identity 和对应
+   evidence run ID。GitHub 计划支持 required reviewers 时等待独立
    Environment 审批；当前 GitHub Free 配置由 dispatch 操作者在运行前完成人工核对。
-8. 操作者核对 source tag/SHA、public Draft ID/tag、Release Notes、previous Stable 和 smoke run。
-   job 先验证可信 workflow run 与 exact-three artifact identity，再验证 exact-four 下载文件，随后通过
+7. 操作者核对 source tag/SHA、public Draft ID/tag、Release Notes、previous Stable 和 smoke run。
+   job 先验证可信 workflow run 与该路径的 exact artifact set，再验证 exact-four 下载文件，随后通过
    固定 public Release ID 下载和验签八个 Draft assets，重验 freshness/两目标/previous identity，并在
    mutation 紧前再次校验 Draft ID、tag、asset ID/size/state。最后只 PATCH 该 Release 为
    `draft=false`、`prerelease=false`、Latest，并回读 `/releases/latest` 确认固定 ID。
-9. 从一台不带 Actions 凭据的机器匿名读取 Stable endpoint，确认 version、两 target URL 和签名。
+8. 从一台不带 Actions 凭据的机器匿名读取 Stable endpoint，确认 version、两 target URL 和签名。
    不要在已发布 Release 上“修补”资产；任何内容变化都发布更高 SemVer。
 
 ## 一次性 first-updater bootstrap

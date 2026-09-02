@@ -63,7 +63,7 @@ runner 上产生的真实原生升级证据。除特别注明外，本机证据�
 | 9 | 前端测试通过 | `tests/application-update-components.test.tsx`：七状态 Settings table、四个 attention 状态、三个隐藏状态、Enter/Space、确定/不确定进度、安全 GFM、retry/restart intent 和双语文案；`tests/application-update-controller.test.tsx`：sequence 去旧、偏好回滚、重连、Retry/Restart 失败；`tests/tauri-application-update-adapter.test.ts` 证明只有一个 snapshot event 和五个窄命令。父任务 fresh 浏览器证据补足真实键盘/焦点。 |
 | 10 | Fresh 浏览器通过 | `src/dev/preview.tsx` 的 `application-update` 组件声明 wide/short、narrow/long、determinate、indeterminate、failed、staged，Settings 还声明 `application-update` 场景。`tests/preview-routing.test.ts` 证明组件没有 `default` 时安全回退到首个已定义场景，修复了 fresh 验收发现的崩溃。父任务已采集本轮截图、DOM、bounds 与交互，并复验组件选择器回退、恢复 viewport 和关闭 tab，明细见下一节。 |
 | 11 | 本机脚本测试通过 | `scripts/tests/release-assets.test.mjs`：`完整准备生成固定两目标 manifest并字面保留 canonical ED 签名文件`、`资产集合拒绝缺少、意外与重复名称`、`manifest 校验拒绝 URL、名称、版本、notes 和签名映射偏差`、`SHA256SUMS 只覆盖七文件且按公开名称稳定排序`；`scripts/tests/reconcile-draft-release.test.mjs` 覆盖 Draft 重建与 published fail-closed；`scripts/tests/release-workflow.test.mjs` 覆盖双平台签名构建与跨仓库身份。 |
-| 12 | 本机脚本与真实托管门禁通过 | `scripts/tests/update-smoke-evidence.test.mjs` 覆盖 evidence 集合、freshness、checkpoint 和 source/Draft identity；`scripts/tests/promote-stable-release.test.mjs` 证明任何 evidence、Stable manifest 或 Draft asset 漂移时 PATCH 永不发生；`scripts/tests/verify-evidence-run.test.mjs` 固定 private workflow run 与 exact-three artifact identity。真实 run `33658283469` 通过 exact-two 聚合。 |
+| 12 | 本机脚本与真实托管门禁通过 | `scripts/tests/update-smoke-evidence.test.mjs` 覆盖 evidence 集合、freshness、checkpoint 和 source/Draft identity；`scripts/tests/promote-stable-release.test.mjs` 证明任何 evidence、Stable manifest 或 Draft asset 漂移时 PATCH 永不发生；`scripts/tests/verify-evidence-run.test.mjs` 同时固定手动 smoke 的 exact-three 与自动 release 的 two-build-plus-three-evidence artifact identity。真实 bootstrap run `33658283469` 通过 exact-two 聚合。 |
 | 13 | 真实原生 bootstrap 通过 | `scripts/tests/native-update-smoke-driver.test.mjs` 覆盖 normal/bootstrap checkpoint、durable staging 和 recovery；真实 `update-smoke.yml` run `33658283469` 的 `macos-15`/`darwin-aarch64`、`windows-2025`/`windows-x86_64` 与 aggregate 全部成功，promotion run `33659151005` 随后发布固定 Release ID。 |
 | 14 | 文档通过 | [application-update-operations.md](./application-update-operations.md) 的“GitHub 配置”“正常发布流程”“一次性 first-updater bootstrap”“失败与恢复”“Updater 私钥备份、丢失与轮换”“每次发布检查表”分别覆盖密钥备份/丢失/泄露、old-key-signed A→B→C bridge、promotion 人工控制边界、GitHub Free 限制、失败恢复、bootstrap 和 immutable releases 未启用。 |
 | 15 | 全部门禁已执行；全量中的既有测试夹具已聚焦稳定化 | 本轮运行 `pnpm test`、`pnpm test:scripts`、`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm build`、`scripts/cargo-agent.sh check --lib --manifest-path src-tauri/Cargo.toml`、聚焦 Rust 测试、fresh 应用内浏览器和 `git diff --check`。父任务恰好一次运行 `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml`：472/473 通过，唯一失败是既有 Core Git 瞬时测试夹具；夹具稳定化后 50 次聚焦重复和相邻 3 个 process 测试通过。没有第二次全量运行，也没有手动触发 quality-gate。 |
@@ -104,7 +104,7 @@ Preview server。
 本地脚本只证明 schema、路由、fail-closed 和 workflow 静态契约，不能产生 `real-native` evidence。
 发布时必须满足以下顺序：
 
-1. 手动运行 `.github/workflows/update-smoke.yml`；`native-smoke` 两目标均从固定 public Release ID
+1. 正常发布由 `.github/workflows/release.yml` 在 Draft 后自动调用 `.github/workflows/update-smoke.yml`；仅在需要重试时手动运行后者。`native-smoke` 两目标均从固定 public Release ID
    API 回读 Draft，并在真实平台完成 bootstrap 或 previous-Stable-to-candidate 生命周期。
 2. `aggregate` 只接受 `darwin-aarch64` 与 `windows-x86_64` 两份 fresh、checksummed `real-native`
    evidence，并上传两个 target artifact 与唯一 aggregate artifact。

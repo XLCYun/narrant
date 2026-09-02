@@ -32,6 +32,18 @@ on:
         description: Required lowercase SHA-256 in normal mode
         required: false
         type: string
+  workflow_call:
+    inputs:
+      source_tag: { required: true, type: string }
+      source_sha: { required: true, type: string }
+      public_release_id: { required: true, type: string }
+      public_tag: { required: true, type: string }
+      mode: { required: true, type: string }
+      previous_stable_tag: { required: false, type: string }
+      previous_stable_manifest_sha256: { required: false, type: string }
+    secrets:
+      CYUNLAB_RELEASE_TOKEN:
+        required: true
 
 permissions:
   contents: read

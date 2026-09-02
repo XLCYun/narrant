@@ -13,9 +13,11 @@ function assertPinnedActions(text) {
   for (const reference of uses) assert.match(reference, /@[0-9a-f]{40}$/);
 }
 
-test("update-smoke 只有手动可信输入且 matrix 精确覆盖 macOS15 arm64/Windows x64", async () => {
+test("update-smoke 同时支持手动重试与 release 复用调用，matrix 精确覆盖两平台", async () => {
   const workflow = await readFile(smokePath, "utf8");
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /workflow_call:/);
+  assert.match(workflow, /CYUNLAB_RELEASE_TOKEN:\n\s+required: true/);
   assert.doesNotMatch(workflow, /release:\s*\n|types:\s*\[published\]/);
   assert.equal((workflow.match(/^\s*- runner:/gm) ?? []).length, 2);
   assert.match(workflow, /runner: macos-15\n\s+target: darwin-aarch64/);

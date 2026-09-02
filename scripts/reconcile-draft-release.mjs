@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { openAsBlob as openBlobFromDisk } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
@@ -522,6 +523,9 @@ async function main() {
     notesFile,
     artifacts,
   });
+  if (process.env.GITHUB_OUTPUT) {
+    await appendFile(process.env.GITHUB_OUTPUT, `release_id=${result.releaseId}\n`, "utf8");
+  }
   process.stdout.write(`Draft ${tag} ${result.outcome}（Release ${result.releaseId}）。\n`);
 }
 

@@ -7,6 +7,8 @@ const API_ORIGIN = "https://api.github.com";
 const PRIVATE_REPOSITORY = "XLCYun/narrant";
 const WORKFLOW_NAME = "Native application update smoke evidence";
 const WORKFLOW_PATH = ".github/workflows/update-smoke.yml";
+const RELEASE_WORKFLOW_NAME = "release";
+const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
 const MAX_API_BYTES = 1024 * 1024;
 
 /** 要求 GitHub database ID 是安全正整数。 */
@@ -80,42 +82,49 @@ export function expectedEvidenceArtifactNames(publicTag, sourceSha) {
   return [prefix, `${prefix}-darwin-aarch64`, `${prefix}-windows-x86_64`].sort();
 }
 
-/** 验证 evidence run 来自当前 private repository 的可信默认分支 workflow。 */
+/** 验证 evidence run 来自可信手动 smoke，或绑定 source tag/SHA 的自动 release。 */
 export function validateEvidenceWorkflowRun(run, expected) {
   requireDatabaseId(expected.runId, "evidence run ID");
-  if (
+  const commonInvalid =
     !run ||
     run.id !== expected.runId ||
-    run.name !== WORKFLOW_NAME ||
-    run.path !== WORKFLOW_PATH ||
-    run.event !== "workflow_dispatch" ||
     run.status !== "completed" ||
     run.conclusion !== "success" ||
-    run.head_branch !== expected.defaultBranch ||
-    run.head_sha !== expected.workflowSha ||
     run.run_attempt !== 1 ||
     run.repository?.full_name !== PRIVATE_REPOSITORY ||
     run.repository?.private !== true ||
     run.head_repository?.full_name !== PRIVATE_REPOSITORY ||
     run.head_repository?.private !== true ||
     !Array.isArray(run.pull_requests) ||
-    run.pull_requests.length !== 0
-  ) {
+    run.pull_requests.length !== 0;
+  const manualValid =
+    run?.name === WORKFLOW_NAME && run.path === WORKFLOW_PATH && run.event === "workflow_dispatch" &&
+    run.head_branch === expected.defaultBranch && run.head_sha === expected.workflowSha;
+  const automaticValid =
+    run?.name === RELEASE_WORKFLOW_NAME && run.path === RELEASE_WORKFLOW_PATH && run.event === "push" &&
+    run.head_branch === expected.publicTag && run.head_sha === expected.sourceSha;
+  if (commonInvalid || (!manualValid && !automaticValid)) {
     throw new Error("evidence run workflow/repository/ref identity 无效");
   }
-  return run;
+  return automaticValid ? "release" : "smoke";
 }
 
-/** 验证完成 run 只产生 exact-two target 与唯一 aggregate 三个不可变 artifact。 */
-export function validateEvidenceArtifacts(payload, expected) {
-  const expectedNames = expectedEvidenceArtifactNames(expected.publicTag, expected.sourceSha);
+/** 验证手动 smoke 的三证据，或自动 release 的两构建加三证据 exact set。 */
+export function validateEvidenceArtifacts(payload, expected, runKind = "smoke") {
+  const smokeNames = expectedEvidenceArtifactNames(expected.publicTag, expected.sourceSha);
+  const version = expected.publicTag.slice(1);
+  const expectedNames = runKind === "release"
+    ? [...smokeNames, `narrant-macos-${version}`, `narrant-windows-${version}`].sort()
+    : smokeNames;
+  const expectedBranch = runKind === "release" ? expected.publicTag : expected.defaultBranch;
+  const expectedSha = runKind === "release" ? expected.sourceSha : expected.workflowSha;
   if (
     !payload ||
-    payload.total_count !== 3 ||
+    payload.total_count !== expectedNames.length ||
     !Array.isArray(payload.artifacts) ||
-    payload.artifacts.length !== 3
+    payload.artifacts.length !== expectedNames.length
   ) {
-    throw new Error("evidence run artifact 数量不是 exact three");
+    throw new Error("evidence run artifact 数量不符合该 workflow 的 exact set");
   }
   const seen = new Set();
   for (const artifact of payload.artifacts) {
@@ -131,8 +140,8 @@ export function validateEvidenceArtifacts(payload, expected) {
       artifact.archive_download_url !== expectedArchiveUrl ||
       !/^sha256:[0-9a-f]{64}$/.test(artifact.digest ?? "") ||
       artifact.workflow_run?.id !== expected.runId ||
-      artifact.workflow_run?.head_branch !== expected.defaultBranch ||
-      artifact.workflow_run?.head_sha !== expected.workflowSha
+      artifact.workflow_run?.head_branch !== expectedBranch ||
+      artifact.workflow_run?.head_sha !== expectedSha
     ) {
       throw new Error("evidence artifact identity 无效");
     }
@@ -141,10 +150,10 @@ export function validateEvidenceArtifacts(payload, expected) {
   if (expectedNames.some((name) => !seen.has(name))) {
     throw new Error("evidence artifact 名称集合不完整");
   }
-  return payload.artifacts.find((artifact) => artifact.name === expectedNames[0]);
+  return payload.artifacts.find((artifact) => artifact.name === smokeNames[0]);
 }
 
-/** 通过只读 Actions API 绑定 evidence run 与其三个 artifact。 */
+/** 通过只读 Actions API 绑定 evidence run 与该路径的精确 artifact 集合。 */
 export async function verifyEvidenceRun(options, dependencies = {}) {
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("当前 Node 缺少 fetch");
@@ -153,8 +162,9 @@ export async function verifyEvidenceRun(options, dependencies = {}) {
   }
   const runId = requireDatabaseId(options.runId, "evidence run ID");
   const expected = { ...options, runId };
-  const run = validateEvidenceWorkflowRun(
-    await githubApiJson(`/repos/${PRIVATE_REPOSITORY}/actions/runs/${runId}`, options.token, fetchImpl),
+  const run = await githubApiJson(`/repos/${PRIVATE_REPOSITORY}/actions/runs/${runId}`, options.token, fetchImpl);
+  const runKind = validateEvidenceWorkflowRun(
+    run,
     expected,
   );
   const artifacts = await githubApiJson(
@@ -162,7 +172,7 @@ export async function verifyEvidenceRun(options, dependencies = {}) {
     options.token,
     fetchImpl,
   );
-  const aggregate = validateEvidenceArtifacts(artifacts, expected);
+  const aggregate = validateEvidenceArtifacts(artifacts, expected, runKind);
   return Object.freeze({ runId: run.id, workflowSha: run.head_sha, aggregateArtifactId: aggregate.id });
 }
 

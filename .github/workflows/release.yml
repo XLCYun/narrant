@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.value }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +34,9 @@ jobs:
           : "${NARRANT_GITHUB_CLIENT_ID:?缺少 Actions Variable NARRANT_GITHUB_CLIENT_ID}"
           : "${NARRANT_GITHUB_APP_SLUG:?缺少 Actions Variable NARRANT_GITHUB_APP_SLUG}"
           version="$(node scripts/release-version-check.mjs "$GITHUB_REF_NAME")"
+          source_sha="$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{}")"
           echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
   quality-gate:
     needs: validate
@@ -315,6 +318,10 @@ jobs:
     needs: [validate, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      public_release_id: ${{ steps.reconcile.outputs.release_id }}
+      previous_stable_tag: ${{ steps.previous-stable.outputs.tag }}
+      previous_stable_manifest_sha256: ${{ steps.previous-stable.outputs.manifest_sha256 }}
     env:
       GH_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
       TARGET_REPOSITORY: cyunlab/narrant
@@ -334,6 +341,9 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prod
+      - name: 在任何远端变更前固定当前 published Stable 身份
+        id: previous-stable
+        run: node scripts/read-public-stable-identity.mjs
       - uses: actions/download-artifact@v4
         with:
           pattern: narrant-*-${{ needs.validate.outputs.version }}
@@ -344,4 +354,19 @@ jobs:
       - name: 在任何远端变更前生成并验证完整 Draft 资产
         run: node scripts/prepare-draft-assets.mjs release-assets release-notes.md
       - name: 创建或完整替换公开仓库 Draft 并 API 回读资产集合
+        id: reconcile
         run: node scripts/reconcile-draft-release.mjs "$RELEASE_TAG" "$RELEASE_VERSION" release-notes.md release-assets/*
+
+  update-smoke:
+    needs: [validate, draft-release]
+    uses: ./.github/workflows/update-smoke.yml
+    with:
+      source_tag: ${{ github.ref_name }}
+      source_sha: ${{ needs.validate.outputs.source_sha }}
+      public_release_id: ${{ needs.draft-release.outputs.public_release_id }}
+      public_tag: ${{ github.ref_name }}
+      mode: normal
+      previous_stable_tag: ${{ needs.draft-release.outputs.previous_stable_tag }}
+      previous_stable_manifest_sha256: ${{ needs.draft-release.outputs.previous_stable_manifest_sha256 }}
+    secrets:
+      CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}

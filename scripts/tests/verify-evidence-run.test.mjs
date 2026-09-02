@@ -54,6 +54,40 @@ function artifactsFixture() {
   return { total_count: 3, artifacts };
 }
 
+/** 构造包含两个构建产物和三个 smoke 证据的自动 release run。 */
+function automaticReleaseFixture() {
+  return {
+    ...runFixture(),
+    name: "release",
+    path: ".github/workflows/release.yml",
+    event: "push",
+    head_branch: expected.publicTag,
+    head_sha: expected.sourceSha,
+  };
+}
+
+/** 在自动 release run 中加入两个签名构建 artifact。 */
+function automaticArtifactsFixture() {
+  const payload = artifactsFixture();
+  for (const [index, name] of ["narrant-macos-2.0.0", "narrant-windows-2.0.0"].entries()) {
+    payload.artifacts.push({
+      id: 200 + index,
+      name,
+      size_in_bytes: 20 + index,
+      expired: false,
+      digest: `sha256:${String(index + 8).padStart(64, "0")}`,
+      archive_download_url: `https://api.github.com/repos/XLCYun/narrant/actions/artifacts/${200 + index}/zip`,
+      workflow_run: { id: expected.runId, head_branch: expected.publicTag, head_sha: expected.sourceSha },
+    });
+  }
+  for (const artifact of payload.artifacts.slice(0, 3)) {
+    artifact.workflow_run.head_branch = expected.publicTag;
+    artifact.workflow_run.head_sha = expected.sourceSha;
+  }
+  payload.total_count = 5;
+  return payload;
+}
+
 test("evidence run 绑定 private workflow、默认分支、可信 SHA 和首次 attempt", () => {
   assert.doesNotThrow(() => validateEvidenceWorkflowRun(runFixture(), expected));
   for (const mutate of [
@@ -67,7 +101,7 @@ test("evidence run 绑定 private workflow、默认分支、可信 SHA 和首次
     (run) => { run.head_repository.private = false; },
     (run) => { run.pull_requests = [{}]; },
   ]) {
-    const copy = structuredClone(runFixture());
+    const copy = globalThis.structuredClone(runFixture());
     mutate(copy);
     assert.throws(() => validateEvidenceWorkflowRun(copy, expected), /identity 无效/);
   }
@@ -86,10 +120,19 @@ test("evidence artifacts 精确绑定三个名称、digest、run、ref 与 archi
     (payload) => { payload.artifacts[0].workflow_run.id = 43; },
     (payload) => { payload.artifacts[0].archive_download_url += "?redirect=1"; },
   ]) {
-    const copy = structuredClone(artifactsFixture());
+    const copy = globalThis.structuredClone(artifactsFixture());
     mutate(copy);
     assert.throws(() => validateEvidenceArtifacts(copy, expected), /artifact/);
   }
+});
+
+test("自动 release run 绑定 tag/source SHA 并只允许两构建加三证据 artifact", () => {
+  assert.doesNotThrow(() => validateEvidenceWorkflowRun(automaticReleaseFixture(), expected));
+  const aggregate = validateEvidenceArtifacts(automaticArtifactsFixture(), expected, "release");
+  assert.equal(aggregate.name, `narrant-update-smoke-v2.0.0-${"a".repeat(40)}`);
+  const bad = automaticArtifactsFixture();
+  bad.artifacts[3].name = "narrant-macos-9.9.9";
+  assert.throws(() => validateEvidenceArtifacts(bad, expected, "release"), /artifact/);
 });
 
 test("Actions API 验证 token 只进入 header 且固定查询 run 与 artifact", async () => {
@@ -97,7 +140,7 @@ test("Actions API 验证 token 只进入 header 且固定查询 run 与 artifact
   const responses = [runFixture(), artifactsFixture()];
   const fetchImpl = async (url, options) => {
     calls.push({ url: String(url), options });
-    return new Response(JSON.stringify(responses.shift()), {
+    return new globalThis.Response(JSON.stringify(responses.shift()), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
