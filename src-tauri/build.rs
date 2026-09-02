@@ -2,7 +2,15 @@ use std::path::Path;
 
 fn main() {
     load_local_github_app_configuration();
+    track_application_update_configuration();
     tauri_build::build()
+}
+
+/// 让编译期 updater trust root 变化必然触发应用 crate 重新编译。
+fn track_application_update_configuration() {
+    for name in ["NARRANT_UPDATER_ENDPOINT", "NARRANT_UPDATER_PUBLIC_KEY"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
 }
 
 /// 将根目录的本地 GitHub App 公开配置传递给 Rust 编译器。

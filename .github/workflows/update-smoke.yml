@@ -1,0 +1,262 @@
+name: Native application update smoke evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: Private source stable tag
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character private source commit
+        required: true
+        type: string
+      public_release_id:
+        description: Fixed cyunlab/narrant Draft Release database ID
+        required: true
+        type: string
+      public_tag:
+        description: Public artifact Release tag
+        required: true
+        type: string
+      mode:
+        description: One-time bootstrap or normal previous-Stable upgrade
+        required: true
+        type: choice
+        options: [normal, bootstrap]
+      previous_stable_tag:
+        description: Required in normal mode
+        required: false
+        type: string
+      previous_stable_manifest_sha256:
+        description: Required lowercase SHA-256 in normal mode
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: narrant-update-smoke-${{ inputs.public_release_id }}
+  cancel-in-progress: false
+
+jobs:
+  native-smoke:
+    name: Native update smoke (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-aarch64
+            expected_os: darwin
+            expected_arch: arm64
+          - runner: windows-2025
+            target: windows-x86_64
+            expected_os: win32
+            expected_arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Validate trusted source identity and runner target
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+          MODE: ${{ inputs.mode }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          PREVIOUS_MANIFEST_SHA256: ${{ inputs.previous_stable_manifest_sha256 }}
+          EXPECTED_OS: ${{ matrix.expected_os }}
+          EXPECTED_ARCH: ${{ matrix.expected_arch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PUBLIC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git cat-file -e "${SOURCE_SHA}^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"
+          test "$(git rev-parse "refs/tags/${SOURCE_TAG}^{}")" = "$SOURCE_SHA"
+          node -e "if (process.platform !== process.env.EXPECTED_OS || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)"
+          if [[ "$MODE" == normal ]]; then
+            [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            [[ "$PREVIOUS_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          else
+            test "$MODE" = bootstrap
+            test -z "$PREVIOUS_TAG"
+            test -z "$PREVIOUS_MANIFEST_SHA256"
+          fi
+      - name: Install exact locked script dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Download and byte-verify the fixed public Draft
+        shell: bash
+        env:
+          CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
+          NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          NARRANT_UPDATE_MODE: ${{ inputs.mode }}
+          PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          version="${SOURCE_TAG#v}"
+          node scripts/public-draft-assets.mjs \
+            "$PUBLIC_RELEASE_ID" "$PUBLIC_TAG" "$version" \
+            candidate-assets candidate-draft-receipt.json
+      - name: Prepare exact published previous Stable baseline
+        if: inputs.mode == 'normal'
+        shell: bash
+        env:
+          NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY }}
+          TARGET: ${{ matrix.target }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+        run: |
+          set -euo pipefail
+          node scripts/prepare-update-smoke-assets.mjs "$TARGET" "$PREVIOUS_TAG" previous-assets
+          test "$(node -p "require('./previous-assets/previous.json').manifestSha256")" = \
+            "${{ inputs.previous_stable_manifest_sha256 }}"
+      - name: Run repository-owned real native lifecycle
+        shell: bash
+        env:
+          NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: ${{ inputs.mode == 'normal' && vars.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY || '' }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          TARGET: ${{ matrix.target }}
+          MODE: ${{ inputs.mode }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+        run: |
+          set -euo pipefail
+          version="${SOURCE_TAG#v}"
+          if [[ "$TARGET" == darwin-aarch64 ]]; then
+            installer="candidate-assets/Narrant_${version}_aarch64.dmg"
+          else
+            installer="candidate-assets/Narrant_${version}_x64-setup.exe"
+          fi
+          args=(
+            --target "$TARGET"
+            --mode "$MODE"
+            --source-tag "$SOURCE_TAG"
+            --source-sha "$SOURCE_SHA"
+            --public-release-id "$PUBLIC_RELEASE_ID"
+            --public-tag "$PUBLIC_TAG"
+            --version "$version"
+            --draft-receipt candidate-draft-receipt.json
+            --candidate-directory candidate-assets
+            --candidate-installer "$installer"
+            --output-directory smoke-evidence
+          )
+          if [[ "$MODE" == normal ]]; then
+            args+=(--previous-json previous-assets/previous.json)
+          fi
+          node scripts/run-native-update-smoke.mjs "${args[@]}"
+      - name: Upload checksummed target evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: narrant-update-smoke-${{ inputs.public_tag }}-${{ inputs.source_sha }}-${{ matrix.target }}
+          path: smoke-evidence/*
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate:
+    name: Verify and attest exact two-target evidence
+    needs: native-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: narrant-update-smoke-${{ inputs.public_tag }}-${{ inputs.source_sha }}-*
+          path: smoke-evidence
+          merge-multiple: true
+      - name: Re-download Draft and verify exact evidence aggregation
+        shell: bash
+        env:
+          CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
+          NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: ${{ inputs.mode == 'normal' && vars.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY || '' }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          NARRANT_UPDATE_MODE: ${{ inputs.mode }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+          MODE: ${{ inputs.mode }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          PREVIOUS_MANIFEST_SHA256: ${{ inputs.previous_stable_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          version="${SOURCE_TAG#v}"
+          node scripts/public-draft-assets.mjs \
+            "$PUBLIC_RELEASE_ID" "$PUBLIC_TAG" "$version" \
+            aggregate-draft aggregate-draft-receipt.json
+          manifest_sha="$(node -p "require('./aggregate-draft-receipt.json').manifestSha256")"
+          args=(
+            --evidence smoke-evidence
+            --mode "$MODE"
+            --source-tag "$SOURCE_TAG"
+            --source-sha "$SOURCE_SHA"
+            --public-release-id "$PUBLIC_RELEASE_ID"
+            --public-tag "$PUBLIC_TAG"
+            --version "$version"
+            --manifest-sha256 "$manifest_sha"
+            --draft-receipt aggregate-draft-receipt.json
+            --max-age-hours 24
+          )
+          if [[ "$MODE" == bootstrap ]]; then
+            args+=(--allow-bootstrap --bootstrap-tag "$SOURCE_TAG")
+          else
+            args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
+          fi
+          node scripts/update-smoke-evidence.mjs "${args[@]}"
+      - name: Attest the exact evidence bytes to the private workflow identity
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: smoke-evidence/*
+      - name: Upload verified aggregate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: narrant-update-smoke-${{ inputs.public_tag }}-${{ inputs.source_sha }}
+          path: smoke-evidence/*
+          if-no-files-found: error
+          retention-days: 30

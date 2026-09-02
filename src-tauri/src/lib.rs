@@ -1,4 +1,5 @@
 mod application_settings;
+pub(crate) mod application_update;
 mod babysit;
 mod child_process;
 mod core_git;

@@ -131,11 +131,11 @@ async fn core_git_process_preserves_failure_kind_when_context_is_added() {
 async fn core_git_process_classifies_the_stream_that_crosses_its_limit() {
     let fixture = repository();
     let process = CoreGitProcess::with_limits(QUERY_TIMEOUT, 1);
-    let invocation = GitInvocation::new(
-        fixture.path(),
-        ["rev-parse", "--git-dir"],
-        GitOperationClass::Query,
-    );
+    #[cfg(unix)]
+    let arguments = ["-c", "alias.overflow=!printf xx; sleep 30", "overflow"];
+    #[cfg(windows)]
+    let arguments = ["rev-parse", "--git-dir"];
+    let invocation = GitInvocation::new(fixture.path(), arguments, GitOperationClass::Query);
 
     let error = process
         .execute(invocation, OperationContext::background().cancellation())

@@ -5,6 +5,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 const EARLY_CANCELLATION_TTL: Duration = Duration::from_secs(60);
 const MAX_EARLY_CANCELLATIONS: usize = 1_024;
@@ -25,18 +26,39 @@ impl OperationId {
 }
 
 /// 应用操作可只读观察的取消信号，不能触发上层操作取消。
+#[derive(Debug, Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    notified: Notify,
+}
+
+/// 可 clone 的只读取消信号，同时支持同步轮询与异步唤醒。
 #[derive(Clone, Debug, Default)]
-pub(crate) struct CancellationSignal(Arc<AtomicBool>);
+pub(crate) struct CancellationSignal(Arc<CancellationState>);
 
 impl CancellationSignal {
     /// 仅由同模块的取消 source 标记共享状态。
     fn mark_cancelled(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
+        self.0.notified.notify_waiters();
     }
 
     /// 返回调用方是否已经请求取消。
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// 异步等待取消，并用 enable-before-check 避免通知丢失。
+    pub(crate) async fn cancelled(&self) {
+        loop {
+            let notified = self.0.notified.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -179,17 +201,37 @@ enum OperationEntry {
     },
 }
 
-#[derive(Default)]
 /// 可取消操作 registry 的全部可变状态。
 struct OperationState {
+    admission_open: bool,
     next_registration: u64,
+    running_entries: usize,
     entries: HashMap<OperationId, OperationEntry>,
+}
+
+impl Default for OperationState {
+    /// 新 registry 默认允许操作进入，停止流程会永久关闭入口。
+    fn default() -> Self {
+        Self {
+            admission_open: true,
+            next_registration: 0,
+            running_entries: 0,
+            entries: HashMap::new(),
+        }
+    }
+}
+
+/// 可取消操作 registry 的共享状态与 drain 通知。
+#[derive(Default)]
+struct OperationRegistry {
+    state: Mutex<OperationState>,
+    drained: Notify,
 }
 
 /// 集中管理应用操作的注册、取消投递、重复拒绝和自动释放。
 #[derive(Clone, Default)]
 pub struct CancellableOperations {
-    state: Arc<Mutex<OperationState>>,
+    registry: Arc<OperationRegistry>,
 }
 
 impl CancellableOperations {
@@ -201,9 +243,13 @@ impl CancellableOperations {
     {
         let (context, registration) = {
             let mut state = self
+                .registry
                 .state
                 .lock()
                 .map_err(|_| OperationError::RegistryUnavailable)?;
+            if !state.admission_open {
+                return Err(OperationError::Cancelled);
+            }
             prune_early_cancellations(&mut state);
             match state.entries.get(&id) {
                 Some(OperationEntry::Running { .. }) => {
@@ -225,10 +271,11 @@ impl CancellableOperations {
                     source,
                 },
             );
+            state.running_entries += 1;
             (OperationContext { cancellation }, registration)
         };
         let _release = OperationRegistration {
-            state: self.state.clone(),
+            registry: self.registry.clone(),
             id,
             registration,
         };
@@ -238,9 +285,13 @@ impl CancellableOperations {
     /// 取消运行中的操作，或暂存一个尚未开始操作的取消请求。
     pub fn cancel(&self, id: &OperationId) -> Result<(), OperationError> {
         let mut state = self
+            .registry
             .state
             .lock()
             .map_err(|_| OperationError::RegistryUnavailable)?;
+        if !state.admission_open {
+            return Err(OperationError::Cancelled);
+        }
         prune_early_cancellations(&mut state);
         match state.entries.get(id) {
             Some(OperationEntry::Running { source, .. }) => source.cancel(),
@@ -261,8 +312,10 @@ impl CancellableOperations {
     }
 
     /// 应用退出时通知当前已注册的全部运行操作，不创建新的提前取消记录。
+    #[allow(dead_code, reason = "保留只广播取消而不永久关闭注册入口的机制 seam")]
     pub fn cancel_all(&self) -> Result<(), OperationError> {
         let state = self
+            .registry
             .state
             .lock()
             .map_err(|_| OperationError::RegistryUnavailable)?;
@@ -273,11 +326,44 @@ impl CancellableOperations {
         }
         Ok(())
     }
+
+    /// 原子关闭注册入口、取消全部运行项，并通过通知等待 RAII 注册归零。
+    pub async fn close_and_drain(&self) -> Result<(), OperationError> {
+        {
+            let mut state = self
+                .registry
+                .state
+                .lock()
+                .map_err(|_| OperationError::RegistryUnavailable)?;
+            state.admission_open = false;
+            for entry in state.entries.values() {
+                if let OperationEntry::Running { source, .. } = entry {
+                    source.cancel();
+                }
+            }
+        }
+
+        loop {
+            let drained = self.registry.drained.notified();
+            tokio::pin!(drained);
+            drained.as_mut().enable();
+            let running_entries = self
+                .registry
+                .state
+                .lock()
+                .map_err(|_| OperationError::RegistryUnavailable)?
+                .running_entries;
+            if running_entries == 0 {
+                return Ok(());
+            }
+            drained.await;
+        }
+    }
 }
 
 /// 在 future 生命周期结束时精确释放本次注册的 RAII guard。
 struct OperationRegistration {
-    state: Arc<Mutex<OperationState>>,
+    registry: Arc<OperationRegistry>,
     id: OperationId,
     registration: u64,
 }
@@ -285,7 +371,7 @@ struct OperationRegistration {
 impl Drop for OperationRegistration {
     /// 只释放本次注册，避免旧 future 删除同 ID 的后继操作。
     fn drop(&mut self) {
-        if let Ok(mut state) = self.state.lock() {
+        if let Ok(mut state) = self.registry.state.lock() {
             let owns_entry = matches!(
                 state.entries.get(&self.id),
                 Some(OperationEntry::Running { registration, .. })
@@ -293,6 +379,10 @@ impl Drop for OperationRegistration {
             );
             if owns_entry {
                 state.entries.remove(&self.id);
+                state.running_entries -= 1;
+                if state.running_entries == 0 {
+                    self.registry.drained.notify_waiters();
+                }
             }
         }
     }
@@ -331,5 +421,5 @@ fn remove_oldest_early_cancellation(state: &mut OperationState) {
 }
 
 #[cfg(test)]
-#[path = "cancellable_tests.rs"]
+#[path = "tests/cancellable.rs"]
 mod tests;

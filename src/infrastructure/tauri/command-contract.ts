@@ -16,6 +16,7 @@ import type {
   RepositoryReviewList,
 } from "@/repository/repository-application";
 import type { ApplicationLanguage, ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationUpdateSnapshot } from "@/application-update/application-update";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -31,6 +32,11 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
+  application_update_snapshot: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
+  application_update_manual_check: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
+  application_update_set_automatic_download: { args: { enabled: boolean }; result: ApplicationUpdateSnapshot };
+  application_update_retry: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
+  application_update_restart: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
   update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
   update_application_language: { args: { language: ApplicationLanguage }; result: ApplicationSettings };
@@ -93,6 +99,11 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "application_update_snapshot",
+  "application_update_manual_check",
+  "application_update_set_automatic_download",
+  "application_update_retry",
+  "application_update_restart",
   "load_application_settings",
   "update_application_theme",
   "update_application_language",

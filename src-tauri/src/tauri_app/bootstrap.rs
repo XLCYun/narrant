@@ -1,10 +1,13 @@
 use super::commands::{
-    application_settings as application_settings_commands, babysit as babysit_commands,
+    application_settings as application_settings_commands,
+    application_update as application_update_commands, babysit as babysit_commands,
     github as github_commands, repository, review as review_commands,
 };
+use super::shutdown::{self, ApplicationShutdown, PostStopCoordinator};
 use crate::{
-    application_settings::ApplicationSettingsApplication, babysit, github, operation, persistence,
-    repository as repository_module, review,
+    application_settings::ApplicationSettingsApplication,
+    application_update::{ApplicationUpdateRuntime, TrustedUpdaterConfig, UpdateInput},
+    babysit, github, operation, persistence, repository as repository_module, review,
 };
 use std::sync::Arc;
 use tauri::Manager;
@@ -19,10 +22,23 @@ pub fn run() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
+    let updater_config = TrustedUpdaterConfig::from_build();
+    let updater_public_key = updater_config
+        .as_ref()
+        .map(|config| config.public_key().to_owned())
+        .unwrap_or_default();
+    let setup_updater_config = updater_config.clone();
     let builder = tauri::Builder::default()
         // Debug 构建安装本地终端日志；Release 保留同一 no-op 生命周期 seam。
         .manage(crate::telemetry::init())
-        .manage(operation::CancellableOperations::default());
+        .manage(operation::CancellableOperations::default())
+        .manage(ApplicationShutdown::default())
+        .manage(Arc::new(PostStopCoordinator::default()))
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(updater_public_key)
+                .build(),
+        );
     #[cfg(feature = "wdio")]
     let builder = builder.manage(repository::E2eRepositoryPicker::default());
     let builder = builder
@@ -98,6 +114,10 @@ pub fn run() {
                 ),
             );
             app.manage(application_settings);
+            let updater =
+                ApplicationUpdateRuntime::new(app.handle(), setup_updater_config.clone())?;
+            app.manage(updater.clone());
+            updater.dispatch(app.handle(), UpdateInput::Ready);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -108,6 +128,11 @@ pub fn run() {
             application_settings_commands::update_application_language,
             application_settings_commands::update_application_babysit_provider,
             application_settings_commands::update_application_babysit_preferences,
+            application_update_commands::application_update_snapshot,
+            application_update_commands::application_update_manual_check,
+            application_update_commands::application_update_set_automatic_download,
+            application_update_commands::application_update_retry,
+            application_update_commands::application_update_restart,
             #[cfg(feature = "wdio")]
             repository::set_e2e_repository_directory,
             #[cfg(feature = "wdio")]
@@ -156,19 +181,5 @@ pub fn run() {
     let application = builder
         .build(tauri::generate_context!())
         .expect("build Narrant");
-    application.run(|app, event| {
-        if matches!(
-            event,
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-        ) {
-            let operations = app.state::<operation::CancellableOperations>();
-            let _ = operations.cancel_all();
-            let babysit = app.state::<babysit::BabysitApplication>();
-            let _ = tauri::async_runtime::block_on(babysit.shutdown());
-            let lifecycle = app.state::<review::ReviewLifecycle>();
-            let _ = tauri::async_runtime::block_on(lifecycle.shutdown());
-            let telemetry = app.state::<crate::telemetry::Telemetry>();
-            let _ = tauri::async_runtime::block_on(telemetry.shutdown());
-        }
-    });
+    application.run(shutdown::handle_run_event);
 }

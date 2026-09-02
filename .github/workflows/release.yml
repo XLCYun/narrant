@@ -32,8 +32,7 @@ jobs:
           set -euo pipefail
           : "${NARRANT_GITHUB_CLIENT_ID:?缺少 Actions Variable NARRANT_GITHUB_CLIENT_ID}"
           : "${NARRANT_GITHUB_APP_SLUG:?缺少 Actions Variable NARRANT_GITHUB_APP_SLUG}"
-          tag="${GITHUB_REF_NAME}"
-          version="$(node scripts/release-version-check.mjs "$tag")"
+          version="$(node scripts/release-version-check.mjs "$GITHUB_REF_NAME")"
           echo "value=$version" >> "$GITHUB_OUTPUT"
 
   quality-gate:
@@ -50,8 +49,29 @@ jobs:
       APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      NARRANT_UPDATER_ENDPOINT: https://github.com/cyunlab/narrant/releases/latest/download/latest.json
+      NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+      NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+      NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
+      - name: 在构建前校验 updater trust 配置
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${TAURI_SIGNING_PRIVATE_KEY:?缺少 TAURI_SIGNING_PRIVATE_KEY}"
+          : "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:?缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD}"
+          : "${NARRANT_UPDATER_PUBLIC_KEY:?缺少 NARRANT_UPDATER_PUBLIC_KEY}"
+          : "${NARRANT_RELEASE_SIGNING_PUBLIC_KEY:?缺少 NARRANT_RELEASE_SIGNING_PUBLIC_KEY}"
+          if [[ "$NARRANT_RELEASE_SIGNING_PUBLIC_KEY" != "$NARRANT_UPDATER_PUBLIC_KEY" ]]; then
+            test "$NARRANT_UPDATER_BRIDGE_TAG" = "$GITHUB_REF_NAME"
+          fi
+          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://github.com/cyunlab/narrant/releases/latest/download/latest.json" ]] || {
+            echo "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。" >&2
+            exit 1
+          }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -97,34 +117,128 @@ jobs:
           security list-keychains -d user -s "$keychain"
           security find-identity -v -p codesigning "$keychain" | grep -F "$APPLE_SIGNING_IDENTITY"
           echo "APPLE_API_KEY_PATH=$api_key" >> "$GITHUB_ENV"
-      - name: 构建签名并公证的 Apple Silicon DMG
-        run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg
-      - name: 验证并公证 DMG
+      - name: 构建、递归签名并公证最终 macOS app
         shell: bash
         run: |
           set -euo pipefail
+          env -u APPLE_API_ISSUER -u APPLE_API_KEY -u APPLE_API_KEY_PATH \
+            pnpm tauri build --target aarch64-apple-darwin --bundles app --verbose
+
           shopt -s nullglob
-          dmgs=(src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)
-          if (( ${#dmgs[@]} != 1 )); then
-            echo "期望一个 Apple Silicon DMG，实际找到 ${#dmgs[@]} 个。" >&2
+          apps=(src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app)
+          [[ ${#apps[@]} -eq 1 ]] || {
+            echo "期望一个 Apple Silicon app，实际找到 ${#apps[@]} 个。" >&2
             exit 1
-          fi
-          dmg="${dmgs[0]}"
-          codesign --verify --strict --verbose=2 "$dmg"
-          xcrun notarytool submit "$dmg" \
+          }
+          app_path="${apps[0]}"
+          while IFS= read -r -d '' candidate; do
+            if file -b "$candidate" | grep -q 'Mach-O'; then
+              codesign --force \
+                --sign "$APPLE_SIGNING_IDENTITY" \
+                --options runtime \
+                --timestamp \
+                "$candidate"
+            fi
+          done < <(find "$app_path/Contents" -type f -print0)
+          codesign --force \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          notary_zip="$RUNNER_TEMP/narrant-app-notary.zip"
+          ditto -c -k --keepParent "$app_path" "$notary_zip"
+          xcrun notarytool submit "$notary_zip" \
             --key-id "$APPLE_API_KEY" \
             --issuer "$APPLE_API_ISSUER" \
             --key "$APPLE_API_KEY_PATH" \
             --wait
-          xcrun stapler staple "$dmg"
-          xcrun stapler validate "$dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          xcrun stapler staple "$app_path"
+          xcrun stapler validate "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+          app_directory="$(dirname "$app_path")"
+          updater_archives=("$app_directory"/*.app.tar.gz)
+          [[ ${#updater_archives[@]} -eq 1 ]] || {
+            echo "期望一个 macOS updater archive，实际找到 ${#updater_archives[@]} 个。" >&2
+            exit 1
+          }
+          updater_archive="${updater_archives[0]}"
+          rm -f "$updater_archive" "$updater_archive.sig"
+          tar -czf "$updater_archive" -C "$app_directory" "$(basename "$app_path")"
+          pnpm tauri signer sign "$updater_archive"
+          test -s "$updater_archive.sig"
+
+          dmg_directory="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
+          dmg_path="$dmg_directory/Narrant_${{ needs.validate.outputs.version }}_aarch64.dmg"
+          mkdir -p "$dmg_directory"
+          dmg_staging="$(mktemp -d "$RUNNER_TEMP/narrant-dmg-root.XXXXXX")"
+          ditto "$app_path" "$dmg_staging/Narrant.app"
+          ln -s /Applications "$dmg_staging/Applications"
+          test -d "$dmg_staging/Narrant.app"
+          [[ "$(readlink "$dmg_staging/Applications")" == "/Applications" ]]
+          hdiutil create -volname Narrant -srcfolder "$dmg_staging" -ov -format UDZO "$dmg_path"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg_path"
+          codesign --verify --strict --verbose=2 "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --key "$APPLE_API_KEY_PATH" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+
+          dmg_mount="$(mktemp -d "$RUNNER_TEMP/narrant-dmg-mount.XXXXXX")"
+          dmg_device=""
+          dmg_attached=0
+          # 无论布局或盘内签名验证在哪一步失败，都尝试安全卸载只读镜像。
+          detach_dmg() {
+            local detach_target
+            if (( dmg_attached == 0 )); then
+              return
+            fi
+            detach_target="${dmg_device:-$dmg_mount}"
+            hdiutil detach "$detach_target" || hdiutil detach -force "$detach_target"
+            dmg_attached=0
+          }
+          trap detach_dmg EXIT
+          attach_output="$(hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$dmg_mount")"
+          dmg_attached=1
+          dmg_device="$(awk '$1 ~ /^\/dev\// { device=$1 } END { print device }' <<< "$attach_output")"
+          [[ -n "$dmg_device" ]] || {
+            echo "最终 DMG 已挂载但无法识别设备。" >&2
+            exit 1
+          }
+          mounted_apps=("$dmg_mount"/*.app)
+          [[ ${#mounted_apps[@]} -eq 1 ]] || {
+            echo "最终 DMG 卷根必须只包含唯一 Narrant.app。" >&2
+            exit 1
+          }
+          [[ "$(basename "${mounted_apps[0]}")" == "Narrant.app" ]] || {
+            echo "最终 DMG 卷根的唯一 app 必须命名为 Narrant.app。" >&2
+            exit 1
+          }
+          [[ -L "$dmg_mount/Applications" && "$(readlink "$dmg_mount/Applications")" == "/Applications" ]] || {
+            echo "最终 DMG 缺少指向 /Applications 的安装快捷方式。" >&2
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 "$dmg_mount/Narrant.app"
+          xcrun stapler validate "$dmg_mount/Narrant.app"
+          spctl --assess --type execute --verbose=4 "$dmg_mount/Narrant.app"
+          detach_dmg
+          trap - EXIT
+
           mkdir -p release-assets
-          cp "$dmg" "release-assets/Narrant_${{ needs.validate.outputs.version }}_aarch64.dmg"
+          cp "$dmg_path" "release-assets/Narrant_${{ needs.validate.outputs.version }}_aarch64.dmg"
+          cp "$updater_archive" release-assets/narrant-darwin-aarch64-updater.app.tar.gz
+          cp "$updater_archive.sig" release-assets/narrant-darwin-aarch64-updater.app.tar.gz.sig
       - uses: actions/upload-artifact@v4
         with:
           name: narrant-macos-${{ needs.validate.outputs.version }}
-          path: release-assets/*.dmg
+          path: release-assets/*
           if-no-files-found: error
 
   windows:
@@ -134,8 +248,36 @@ jobs:
     env:
       NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
       NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      NARRANT_UPDATER_ENDPOINT: https://github.com/cyunlab/narrant/releases/latest/download/latest.json
+      NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+      NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+      NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
+      - name: 在构建前校验 updater trust 配置
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "缺少 TAURI_SIGNING_PRIVATE_KEY"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw "缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:NARRANT_UPDATER_PUBLIC_KEY)) {
+            throw "缺少 NARRANT_UPDATER_PUBLIC_KEY"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:NARRANT_RELEASE_SIGNING_PUBLIC_KEY)) {
+            throw "缺少 NARRANT_RELEASE_SIGNING_PUBLIC_KEY"
+          }
+          if (($env:NARRANT_RELEASE_SIGNING_PUBLIC_KEY -ne $env:NARRANT_UPDATER_PUBLIC_KEY) -and
+              ($env:NARRANT_UPDATER_BRIDGE_TAG -ne $env:GITHUB_REF_NAME)) {
+            throw "updater key bridge 缺少 exact tag 授权"
+          }
+          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://github.com/cyunlab/narrant/releases/latest/download/latest.json") {
+            throw "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。"
+          }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -146,21 +288,27 @@ jobs:
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
-      - name: 构建未签名的 Windows x64 NSIS
+      - name: 构建带 updater 签名的 current-user Windows x64 NSIS
         run: pnpm build:windows
-      - name: 收集 Windows 安装包
+      - name: 收集 Windows 安装包、updater 包与签名
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe")
+          $signatures = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe.sig")
           if ($installers.Count -ne 1) {
             throw "期望一个 Windows x64 NSIS 安装包，实际找到 $($installers.Count) 个。"
           }
+          if ($signatures.Count -ne 1) {
+            throw "期望一个 Windows x64 updater 签名，实际找到 $($signatures.Count) 个。"
+          }
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
           Copy-Item $installers[0].FullName "release-assets/Narrant_${{ needs.validate.outputs.version }}_x64-setup.exe"
+          Copy-Item $installers[0].FullName "release-assets/narrant-windows-x86_64-updater.exe"
+          Copy-Item $signatures[0].FullName "release-assets/narrant-windows-x86_64-updater.exe.sig"
       - uses: actions/upload-artifact@v4
         with:
           name: narrant-windows-${{ needs.validate.outputs.version }}
-          path: release-assets/*-setup.exe
+          path: release-assets/*
           if-no-files-found: error
 
   draft-release:
@@ -172,67 +320,25 @@ jobs:
       TARGET_REPOSITORY: cyunlab/narrant
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+      NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+      NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - uses: actions/download-artifact@v4
         with:
           pattern: narrant-*-${{ needs.validate.outputs.version }}
           path: release-assets
           merge-multiple: true
-      - name: 生成公开 Release Notes 和校验和
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t stable_tags < <(
-            git tag --list 'v*' --sort=-v:refname |
-              grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          )
-          previous_tag=""
-          for tag in "${stable_tags[@]}"; do
-            if [[ "$tag" != "$RELEASE_TAG" ]]; then
-              previous_tag="$tag"
-              break
-            fi
-          done
-
-          {
-            echo "## Narrant ${RELEASE_VERSION}"
-            echo
-            echo "### 版本变动"
-            if [[ -n "$previous_tag" ]]; then
-              git log --pretty='- %s' "${previous_tag}..${RELEASE_TAG}"
-            else
-              git log --pretty='- %s' "$RELEASE_TAG"
-            fi
-            echo
-            echo "> Windows x64 安装包当前未进行 Authenticode 签名。"
-          } > release-notes.md
-
-          cd release-assets
-          sha256sum * > SHA256SUMS
-      - name: 创建或更新 Draft Release
-        shell: bash
-        run: |
-          set -euo pipefail
-          if release_json="$(gh release view "$RELEASE_TAG" --repo "$TARGET_REPOSITORY" --json isDraft 2>/dev/null)"; then
-            if [[ "$(jq -r '.isDraft' <<< "$release_json")" != "true" ]]; then
-              echo "目标仓库中的 $RELEASE_TAG 已公开，自动化不会修改它。" >&2
-              exit 1
-            fi
-            while IFS= read -r asset; do
-              [[ -z "$asset" ]] || gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$TARGET_REPOSITORY" --yes
-            done < <(gh release view "$RELEASE_TAG" --repo "$TARGET_REPOSITORY" --json assets --jq '.assets[].name')
-            gh release edit "$RELEASE_TAG" \
-              --repo "$TARGET_REPOSITORY" \
-              --title "Narrant $RELEASE_VERSION" \
-              --notes-file release-notes.md
-          else
-            gh release create "$RELEASE_TAG" \
-              --repo "$TARGET_REPOSITORY" \
-              --draft \
-              --title "Narrant $RELEASE_VERSION" \
-              --notes-file release-notes.md
-          fi
-          gh release upload "$RELEASE_TAG" release-assets/* --repo "$TARGET_REPOSITORY"
+      - name: 生成公开 Release Notes
+        run: node scripts/generate-public-release-notes.mjs "$RELEASE_TAG" release-notes.md
+      - name: 在任何远端变更前生成并验证完整 Draft 资产
+        run: node scripts/prepare-draft-assets.mjs release-assets release-notes.md
+      - name: 创建或完整替换公开仓库 Draft 并 API 回读资产集合
+        run: node scripts/reconcile-draft-release.mjs "$RELEASE_TAG" "$RELEASE_VERSION" release-notes.md release-assets/*

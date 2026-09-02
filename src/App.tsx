@@ -37,6 +37,10 @@ import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import { SettingsPage } from "@/components/settings-page";
 import { createTauriApplicationSettingsAdapter } from "@/infrastructure/tauri-application-settings-adapter";
 import { useApplicationSettings } from "@/settings/use-application-settings";
+import { createTauriApplicationUpdateAdapter } from "@/infrastructure/tauri-application-update-adapter";
+import { useApplicationUpdate } from "@/application-update/use-application-update";
+import { ApplicationUpdateAttention } from "@/components/application-update/application-update-attention";
+import { ApplicationUpdateSurface } from "@/components/application-update/application-update-surface";
 import "@/lib/i18n";
 
 const REVIEW_TREE_WIDTH_KEY = "narrant.review.fileTreeWidth";
@@ -58,6 +62,8 @@ export function App() {
   const testHarnessEnabled = import.meta.env.MODE === "test";
   const applicationSettings = useMemo(() => createTauriApplicationSettingsAdapter(tauriTransport), []);
   const applicationSettingsBinding = useApplicationSettings(applicationSettings, desktopRuntimeEnabled && !testHarnessEnabled);
+  const applicationUpdateApplication = useMemo(() => createTauriApplicationUpdateAdapter(tauriTransport), []);
+  const applicationUpdate = useApplicationUpdate(applicationUpdateApplication, desktopRuntimeEnabled && !testHarnessEnabled);
   const editorTheme = applicationSettingsBinding.editorTheme;
   const pullRequestDiscovery = useMemo(
     () => createTauriPullRequestDiscoveryApplicationAdapter(tauriTransport),
@@ -330,6 +336,7 @@ export function App() {
     enabled={desktopRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
     fallbackClassName="narrant-app"
     githubIdentityEntry={renderGitHubIdentityEntry()}
+    applicationUpdateAttention={<ApplicationUpdateAttention snapshot={applicationUpdate.snapshot} onOpen={applicationUpdate.openSurface} />}
   >
     <Toaster position="top-right" />
     {(!desktopRuntimeEnabled || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
@@ -406,9 +413,11 @@ export function App() {
       settings={applicationSettingsBinding}
       application={applicationSettings}
       githubIdentity={githubIdentity}
+      applicationUpdate={applicationUpdate}
       initialSection={appShell.destination.initialSection}
       onBack={() => void appShell.returnFromSettings()}
     />}
+    <ApplicationUpdateSurface update={applicationUpdate} />
     <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
       <DialogContent>
         <DialogHeader>

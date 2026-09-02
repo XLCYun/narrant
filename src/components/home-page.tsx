@@ -55,6 +55,7 @@ type HomePageProps = {
   onOpenRepository?: (repository: HomeRepository) => void;
   onOpenFolder: (path: string) => void;
   githubIdentityEntry?: ReactNode;
+  applicationUpdateAttention?: ReactNode;
   children?: ReactNode;
   showHome?: boolean;
   onOpenHome?: () => void;
@@ -75,6 +76,7 @@ type AppShellNavigation = Pick<AppShellNavigationBinding, "destination" | "navig
 type AppShellProps = {
   navigation: AppShellNavigation;
   githubIdentityEntry?: ReactNode;
+  applicationUpdateAttention?: ReactNode;
   children?: ReactNode;
   enabled?: boolean;
   fallbackClassName?: string;
@@ -295,6 +297,7 @@ export function HomeView({
 export function AppShell({
   navigation,
   githubIdentityEntry,
+  applicationUpdateAttention,
   children,
   enabled = true,
   fallbackClassName,
@@ -574,6 +577,7 @@ export function AppShell({
       <SidebarFooter className="border-t p-3">
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">{githubIdentityEntry}</div>
+          {applicationUpdateAttention}
           <Button
             variant="outline"
             size="icon"
@@ -615,6 +619,7 @@ export function HomePage({
   onOpenRepository = () => undefined,
   onOpenFolder,
   githubIdentityEntry,
+  applicationUpdateAttention,
   children,
   showHome = true,
   onOpenHome = () => undefined,
@@ -666,6 +671,7 @@ export function HomePage({
       },
     }}
     githubIdentityEntry={githubIdentityEntry}
+    applicationUpdateAttention={applicationUpdateAttention}
     enabled={enabled}
     fallbackClassName={fallbackClassName}
   >{children}</AppShell>;

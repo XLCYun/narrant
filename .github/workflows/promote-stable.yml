@@ -1,0 +1,165 @@
+name: Promote public Stable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: Private source stable tag
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character private source commit
+        required: true
+        type: string
+      public_release_id:
+        description: Fixed cyunlab/narrant Draft Release database ID
+        required: true
+        type: string
+      public_tag:
+        description: Public artifact Release tag
+        required: true
+        type: string
+      evidence_run_id:
+        description: Successful private update-smoke workflow run ID
+        required: true
+        type: string
+      mode:
+        description: Evidence admission mode
+        required: true
+        type: choice
+        options: [normal, bootstrap]
+      previous_stable_tag:
+        description: Required in normal mode
+        required: false
+        type: string
+      previous_stable_manifest_sha256:
+        description: Required lowercase SHA-256 in normal mode
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+
+concurrency:
+  group: narrant-stable-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Human-approved fixed-ID Stable promotion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: stable-promotion
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Validate trusted source and mode inputs before credentials are used
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          MODE: ${{ inputs.mode }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          PREVIOUS_MANIFEST_SHA256: ${{ inputs.previous_stable_manifest_sha256 }}
+          BOOTSTRAP_TAG: ${{ vars.NARRANT_FIRST_UPDATER_TAG }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PUBLIC_RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PUBLIC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          git cat-file -e "${SOURCE_SHA}^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"
+          test "$(git rev-parse "refs/tags/${SOURCE_TAG}^{}")" = "$SOURCE_SHA"
+          if [[ "$MODE" == bootstrap ]]; then
+            test "$SOURCE_TAG" = "$BOOTSTRAP_TAG"
+            test -z "$PREVIOUS_TAG"
+            test -z "$PREVIOUS_MANIFEST_SHA256"
+          else
+            test "$MODE" = normal
+            [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            [[ "$PREVIOUS_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          fi
+      - run: pnpm install --frozen-lockfile
+      - name: Download the exact aggregate evidence artifact from the private run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: narrant-update-smoke-${{ inputs.public_tag }}-${{ inputs.source_sha }}
+          path: smoke-evidence
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify GitHub artifact attestations before public credentials are used
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$(find smoke-evidence -maxdepth 1 -type f | wc -l | tr -d ' ')" = 4
+          evidence_files=(
+            smoke-evidence/darwin-aarch64.json
+            smoke-evidence/darwin-aarch64.json.sha256
+            smoke-evidence/windows-x86_64.json
+            smoke-evidence/windows-x86_64.json.sha256
+          )
+          for evidence_file in "${evidence_files[@]}"; do
+            test -f "$evidence_file"
+            gh attestation verify "$evidence_file" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/update-smoke.yml" \
+              --source-ref "refs/heads/$DEFAULT_BRANCH" \
+              --deny-self-hosted-runners
+          done
+      - name: Re-fetch, re-verify and publish the fixed public Draft as Latest
+        shell: bash
+        env:
+          CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
+          NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
+          NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY }}
+          NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          NARRANT_FIRST_UPDATER_TAG: ${{ vars.NARRANT_FIRST_UPDATER_TAG }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+          MODE: ${{ inputs.mode }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          PREVIOUS_MANIFEST_SHA256: ${{ inputs.previous_stable_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          version="${SOURCE_TAG#v}"
+          args=(
+            --mode "$MODE"
+            --source-tag "$SOURCE_TAG"
+            --source-sha "$SOURCE_SHA"
+            --public-release-id "$PUBLIC_RELEASE_ID"
+            --public-tag "$PUBLIC_TAG"
+            --version "$version"
+            --evidence-directory smoke-evidence
+            --draft-directory "$RUNNER_TEMP/promotion-draft"
+            --max-age-hours 24
+            --bootstrap-tag "$NARRANT_FIRST_UPDATER_TAG"
+          )
+          if [[ "$MODE" == normal ]]; then
+            args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
+          fi
+          node scripts/promote-stable-release.mjs "${args[@]}"
