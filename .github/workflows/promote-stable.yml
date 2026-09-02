@@ -47,7 +47,7 @@ concurrency:
 
 jobs:
   promote:
-    name: Human-approved fixed-ID Stable promotion
+    name: Fixed-ID Stable promotion
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: stable-promotion
