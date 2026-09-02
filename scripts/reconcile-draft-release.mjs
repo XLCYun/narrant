@@ -57,6 +57,26 @@ function assertDraftIdentity(release, tag, expectedId, context) {
   }
 }
 
+/** 从 GitHub Draft 身份推导该 Release 当下真实的 untagged 下载根路径。 */
+function draftDownloadBaseUrl(release, repository, releaseId) {
+  const expectedApiUrl = `https://api.github.com/repos/${repository}/releases/${releaseId}`;
+  const expectedUploadUrl = `https://uploads.github.com/repos/${repository}/releases/${releaseId}/assets{?name,label}`;
+  const htmlPrefix = `https://github.com/${repository}/releases/tag/`;
+  if (
+    release.url !== expectedApiUrl ||
+    release.upload_url !== expectedUploadUrl ||
+    typeof release.html_url !== "string" ||
+    !release.html_url.startsWith(htmlPrefix)
+  ) {
+    throw new Error("Draft Release 返回错误仓库或上传身份");
+  }
+  const draftIdentity = release.html_url.slice(htmlPrefix.length);
+  if (!/^untagged-[A-Za-z0-9]+$/.test(draftIdentity)) {
+    throw new Error("Draft Release 返回无效 untagged 身份");
+  }
+  return `https://github.com/${repository}/releases/download/${draftIdentity}`;
+}
+
 /** 解析 Release 列表响应，拒绝非数组结构。 */
 function parseReleaseList(result, context) {
   let releases;
@@ -132,7 +152,7 @@ function assertUploadedDraft(release, tag, releaseId, expectedNames) {
 }
 
 /** 验证 uploads.github.com 对单个二进制资产返回的固定仓库、名称、字节数和下载身份。 */
-function parseUploadedAsset(asset, { repository, tag, name, expectedSize }) {
+function parseUploadedAsset(asset, { repository, downloadBaseUrl, name, expectedSize }) {
   if (
     !asset ||
     !Number.isSafeInteger(asset.id) ||
@@ -146,7 +166,7 @@ function parseUploadedAsset(asset, { repository, tag, name, expectedSize }) {
     throw new Error(`上传资产 ${name} 返回无效 asset identity`);
   }
   const expectedApiUrl = `https://api.github.com/repos/${repository}/releases/assets/${asset.id}`;
-  const expectedDownloadUrl = `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}`;
+  const expectedDownloadUrl = `${downloadBaseUrl}/${encodeURIComponent(name)}`;
   if (
     asset.url !== expectedApiUrl ||
     asset.browser_download_url !== expectedDownloadUrl
@@ -294,10 +314,24 @@ async function readBoundedUploadResponse(response, name) {
 /** 直连官方 release-ID endpoint 上传一个资产；令牌只进入 Authorization header。 */
 export async function uploadReleaseAsset(options, dependencies = {}) {
   const { repository, tag, releaseId, artifact, token } = options;
+  const downloadBaseUrl = options.downloadBaseUrl ??
+    `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}`;
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
   const openBlob = dependencies.openBlob ?? openBlobFromDisk;
   if (repository !== PUBLIC_REPOSITORY || !Number.isSafeInteger(releaseId) || releaseId <= 0) {
     throw new Error("上传资产的仓库或 Release ID 无效");
+  }
+  const allowedDownloadPrefix = `https://github.com/${repository}/releases/download/`;
+  const downloadIdentity = typeof downloadBaseUrl === "string" &&
+    downloadBaseUrl.startsWith(allowedDownloadPrefix)
+    ? downloadBaseUrl.slice(allowedDownloadPrefix.length)
+    : "";
+  if (
+    !downloadIdentity ||
+    downloadIdentity.includes("/") ||
+    encodeURIComponent(downloadIdentity) !== downloadIdentity
+  ) {
+    throw new Error("上传资产的 Draft 下载身份无效");
   }
   if (typeof token !== "string" || token.length === 0 || token.trim() !== token) {
     throw new Error("上传 Draft 资产需要有效 GH_TOKEN");
@@ -341,7 +375,7 @@ export async function uploadReleaseAsset(options, dependencies = {}) {
   } catch {
     throw new Error(`上传资产 ${name} 返回无效 JSON`);
   }
-  return parseUploadedAsset(asset, { repository, tag, name, expectedSize });
+  return parseUploadedAsset(asset, { repository, downloadBaseUrl, name, expectedSize });
 }
 
 /**
@@ -387,6 +421,8 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
         "PATCH",
         `repos/${repository}/releases/${releaseId}`,
         "-f",
+        `tag_name=${tag}`,
+        "-f",
         `name=${title}`,
         "-F",
         `body=@${notesFile}`,
@@ -426,8 +462,9 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
 
   for (const artifact of artifacts) {
     const name = basename(artifact);
-    await readDraftById(runGh, repository, tag, releaseId, `上传 ${name} 前`);
-    await uploadAsset({ repository, tag, releaseId, artifact, token });
+    const guardedDraft = await readDraftById(runGh, repository, tag, releaseId, `上传 ${name} 前`);
+    const downloadBaseUrl = draftDownloadBaseUrl(guardedDraft, repository, releaseId);
+    await uploadAsset({ repository, tag, releaseId, artifact, token, downloadBaseUrl });
     await readDraftById(runGh, repository, tag, releaseId, `上传 ${name} 后`);
   }
   const uploaded = await readDraftById(runGh, repository, tag, releaseId, "全部上传后");

@@ -46,7 +46,16 @@ function isAssetUploadCall(call) {
 
 /** 创建有状态的内存 adapter，覆盖查询、创建、编辑、删除和上传语义。 */
 function createGhAdapter(initialRelease, hooks = {}) {
-  let release = initialRelease ? JSON.parse(JSON.stringify(initialRelease)) : undefined;
+  const withIdentity = (value) => {
+    if (!value) return undefined;
+    const release = JSON.parse(JSON.stringify(value));
+    const htmlIdentity = release.draft ? "untagged-testfixture" : release.tag_name;
+    release.url ??= `https://api.github.com/repos/cyunlab/narrant/releases/${release.id}`;
+    release.upload_url ??= `https://uploads.github.com/repos/cyunlab/narrant/releases/${release.id}/assets{?name,label}`;
+    release.html_url ??= `https://github.com/cyunlab/narrant/releases/tag/${htmlIdentity}`;
+    return release;
+  };
+  let release = withIdentity(initialRelease);
   let nextAssetId = 100;
   let idReadCount = 0;
   const calls = [];
@@ -95,7 +104,7 @@ function createGhAdapter(initialRelease, hooks = {}) {
       arguments_[3]?.endsWith("/releases")
     ) {
       const tag = arguments_[arguments_.findIndex((value) => value === "-f") + 1].slice("tag_name=".length);
-      release = { id: 42, draft: true, tag_name: tag, assets: [] };
+      release = withIdentity({ id: 42, draft: true, tag_name: tag, assets: [] });
       if (hooks.publishAfterCreate) release.draft = false;
       return { exitCode: 0, stdout: JSON.stringify(release), stderr: "" };
     }
@@ -227,6 +236,11 @@ test("不存在时创建 Draft、上传八文件并通过 API 回读精确集合
   assert.equal(uploads.length, 8);
   assert.equal(uploads.every((call) => call[1].releaseId === 42), true);
   assert.equal(uploads.every((call) => call[1].tag === "v2.3.4"), true);
+  assert.equal(
+    uploads.every((call) => call[1].downloadBaseUrl ===
+      "https://github.com/cyunlab/narrant/releases/download/untagged-testfixture"),
+    true,
+  );
   assert.equal(uploads.every((call) => call[1].token === "test-token"), true);
 });
 
@@ -245,7 +259,10 @@ test("已有 Draft 被完整替换，失败后的同 tag 重试保持幂等", as
   assert.equal(gh.release().assets.length, 8);
   const deleteCalls = gh.calls.filter((call) => call[0] === "api" && call.includes("DELETE"));
   assert.equal(deleteCalls.length, 10);
-  assert.equal(gh.calls.some((call) => call.includes("PATCH")), true);
+  assert.equal(
+    gh.calls.some((call) => call.includes("PATCH") && call.includes("tag_name=v2.3.4")),
+    true,
+  );
   assert.equal(gh.calls.filter((call) => call.includes("POST") && call.includes("draft=true")).length, 0);
 });
 
