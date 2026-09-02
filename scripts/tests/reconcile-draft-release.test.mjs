@@ -56,9 +56,20 @@ function createGhAdapter(initialRelease, hooks = {}) {
       if (hooks.lookupError) {
         return { exitCode: 1, stdout: "", stderr: hooks.lookupError };
       }
-      return release
+      return release && !release.draft
         ? { exitCode: 0, stdout: JSON.stringify(release), stderr: "" }
         : { exitCode: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
+    }
+    if (
+      arguments_[0] === "api" &&
+      arguments_[1]?.startsWith("repos/") &&
+      arguments_[1]?.includes("/releases?per_page=")
+    ) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify(release ? [release] : []),
+        stderr: "",
+      };
     }
     if (
       arguments_[0] === "api" &&

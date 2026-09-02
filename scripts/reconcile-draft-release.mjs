@@ -16,6 +16,8 @@ import {
 
 const PUBLIC_REPOSITORY = "cyunlab/narrant";
 const MAX_UPLOAD_RESPONSE_BYTES = 256 * 1024;
+const RELEASE_LOOKUP_PAGE_SIZE = 100;
+const MAX_RELEASE_LOOKUP_PAGES = 100;
 
 /** 要求 gh 命令成功，并把安全的标准错误传给调用方。 */
 async function requireSuccess(resultPromise, context) {
@@ -55,7 +57,24 @@ function assertDraftIdentity(release, tag, expectedId, context) {
   }
 }
 
-/** 读取指定 tag 的 Release；只有明确的 HTTP 404 才表示尚未创建。 */
+/** 解析 Release 列表响应，拒绝非数组结构。 */
+function parseReleaseList(result, context) {
+  let releases;
+  try {
+    releases = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`${context}返回无效 JSON`);
+  }
+  if (!Array.isArray(releases)) {
+    throw new Error(`${context}返回非数组结构`);
+  }
+  return releases;
+}
+
+/**
+ * 读取指定 tag 的 Release。GitHub 的 tag endpoint 不返回 Draft，
+ * 因此在明确 404 后必须分页扫描已授权列表，避免重复创建同 tag Draft。
+ */
 async function lookupRelease(runGh, repository, tag) {
   const result = await runGh([
     "api",
@@ -64,10 +83,34 @@ async function lookupRelease(runGh, repository, tag) {
   if (result.exitCode === 0) {
     return parseRelease(result, "Release 查询");
   }
-  if (/HTTP 404\b/i.test(result.stderr)) {
-    return undefined;
+  if (!/HTTP 404\b/i.test(result.stderr)) {
+    throw new Error(`无法检查 Release ${tag}：${result.stderr.trim() || `gh 退出码 ${result.exitCode}`}`);
   }
-  throw new Error(`无法检查 Release ${tag}：${result.stderr.trim() || `gh 退出码 ${result.exitCode}`}`);
+
+  let matched;
+  for (let page = 1; page <= MAX_RELEASE_LOOKUP_PAGES; page += 1) {
+    const pageResult = await requireSuccess(
+      runGh([
+        "api",
+        `repos/${repository}/releases?per_page=${RELEASE_LOOKUP_PAGE_SIZE}&page=${page}`,
+      ]),
+      `分页查询 Draft Release（第 ${page} 页）`,
+    );
+    const releases = parseReleaseList(pageResult, `Release 列表第 ${page} 页`);
+    for (const candidate of releases) {
+      if (candidate?.tag_name !== tag) continue;
+      const parsed = parseRelease(
+        { stdout: JSON.stringify(candidate) },
+        `Release 列表第 ${page} 页`,
+      );
+      if (matched && matched.id !== parsed.id) {
+        throw new Error(`Release 列表中存在重复 tag ${tag}`);
+      }
+      matched = parsed;
+    }
+    if (releases.length < RELEASE_LOOKUP_PAGE_SIZE) return matched;
+  }
+  throw new Error(`Release 列表超过 ${MAX_RELEASE_LOOKUP_PAGES} 页，拒绝不完整查询 ${tag}`);
 }
 
 /** 以 immutable release ID 紧邻 mutation 回读并复核 Draft 身份。 */
