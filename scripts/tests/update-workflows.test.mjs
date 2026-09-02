@@ -22,8 +22,7 @@ test("update-smoke 只有手动可信输入且 matrix 精确覆盖 macOS15 arm64
   assert.match(workflow, /runner: windows-2025\n\s+target: windows-x86_64/);
   assert.doesNotMatch(workflow, /linux-|darwin-x86_64|windows-aarch64/);
   assert.match(workflow, /permissions:\n\s+contents: read/);
-  assert.match(workflow, /id-token: write\n\s+attestations: write/);
-  assert.match(workflow, /attest-build-provenance@[0-9a-f]{40}/);
+  assert.doesNotMatch(workflow, /id-token: write|attestations: write|attest-build-provenance/);
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
   assert.match(workflow, /public-draft-assets\.mjs/);
   assert.match(workflow, /--draft-receipt aggregate-draft-receipt\.json/);
@@ -38,22 +37,22 @@ test("update-smoke 只有手动可信输入且 matrix 精确覆盖 macOS15 arm64
   assertPinnedActions(workflow);
 });
 
-test("promotion 使用受保护 Environment、fixed ID、private evidence attestation 且不监听 public event", async () => {
+test("promotion 使用受保护 Environment、fixed ID 与可信 private evidence run 且不监听 public event", async () => {
   const workflow = await readFile(promotionPath, "utf8");
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /release:\s*\n|types:\s*\[published\]/);
   assert.match(workflow, /environment: stable-promotion/);
   assert.match(workflow, /group: narrant-stable-promotion\n\s+cancel-in-progress: false/);
-  assert.match(workflow, /contents: read\n\s+actions: read\n\s+attestations: read/);
+  assert.match(workflow, /contents: read\n\s+actions: read/);
+  assert.doesNotMatch(workflow, /attestations: read|gh attestation|attest-build-provenance/);
+  assert.match(workflow, /verify-evidence-run\.mjs/);
+  assert.match(workflow, /trusted_workflow_sha="\$\(git rev-parse HEAD\)"/);
+  assert.match(workflow, /"\$EVIDENCE_RUN_ID" "\$PUBLIC_TAG" "\$SOURCE_SHA"/);
+  assert.match(workflow, /"\$DEFAULT_BRANCH" "\$trusted_workflow_sha"/);
   assert.match(workflow, /run-id: \$\{\{ inputs\.evidence_run_id \}\}/);
   assert.match(workflow, /evidence_files=\(\n\s+smoke-evidence\/darwin-aarch64\.json\n\s+smoke-evidence\/darwin-aarch64\.json\.sha256\n\s+smoke-evidence\/windows-x86_64\.json\n\s+smoke-evidence\/windows-x86_64\.json\.sha256/);
   assert.match(workflow, /for evidence_file in "\$\{evidence_files\[@\]\}"; do/);
-  assert.match(workflow, /gh attestation verify "\$evidence_file"/);
-  assert.doesNotMatch(workflow, /gh attestation verify smoke-evidence\/\*/);
-  assert.match(workflow, /--signer-workflow "github\.com\/\$GITHUB_REPOSITORY\/\.github\/workflows\/update-smoke\.yml"/);
-  assert.doesNotMatch(workflow, /--signer-workflow "https?:\/\//);
-  assert.match(workflow, /--source-ref "refs\/heads\/\$DEFAULT_BRANCH"/);
-  assert.match(workflow, /--deny-self-hosted-runners/);
+  assert.match(workflow, /sha256sum --check darwin-aarch64\.json\.sha256 windows-x86_64\.json\.sha256/);
   assert.match(workflow, /promote-stable-release\.mjs/);
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
   assert.match(workflow, /NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/);

@@ -40,7 +40,6 @@ on:
 permissions:
   contents: read
   actions: read
-  attestations: read
 
 concurrency:
   group: narrant-stable-promotion
@@ -99,6 +98,20 @@ jobs:
             [[ "$PREVIOUS_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
           fi
       - run: pnpm install --frozen-lockfile
+      - name: Bind evidence to the successful trusted private workflow run
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          PUBLIC_TAG: ${{ inputs.public_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          trusted_workflow_sha="$(git rev-parse HEAD)"
+          node scripts/verify-evidence-run.mjs \
+            "$EVIDENCE_RUN_ID" "$PUBLIC_TAG" "$SOURCE_SHA" \
+            "$DEFAULT_BRANCH" "$trusted_workflow_sha"
       - name: Download the exact aggregate evidence artifact from the private run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -106,11 +119,8 @@ jobs:
           path: smoke-evidence
           run-id: ${{ inputs.evidence_run_id }}
           github-token: ${{ github.token }}
-      - name: Verify GitHub artifact attestations before public credentials are used
+      - name: Verify exact checksummed evidence files before public credentials are used
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           test "$(find smoke-evidence -maxdepth 1 -type f | wc -l | tr -d ' ')" = 4
@@ -122,12 +132,11 @@ jobs:
           )
           for evidence_file in "${evidence_files[@]}"; do
             test -f "$evidence_file"
-            gh attestation verify "$evidence_file" \
-              --repo "$GITHUB_REPOSITORY" \
-              --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/update-smoke.yml" \
-              --source-ref "refs/heads/$DEFAULT_BRANCH" \
-              --deny-self-hosted-runners
           done
+          (
+            cd smoke-evidence
+            sha256sum --check darwin-aarch64.json.sha256 windows-x86_64.json.sha256
+          )
       - name: Re-fetch, re-verify and publish the fixed public Draft as Latest
         shell: bash
         env:

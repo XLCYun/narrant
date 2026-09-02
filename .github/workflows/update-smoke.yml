@@ -180,14 +180,12 @@ jobs:
           retention-days: 30
 
   aggregate:
-    name: Verify and attest exact two-target evidence
+    name: Verify exact two-target evidence
     needs: native-smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -249,10 +247,6 @@ jobs:
             args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
           fi
           node scripts/update-smoke-evidence.mjs "${args[@]}"
-      - name: Attest the exact evidence bytes to the private workflow identity
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-path: smoke-evidence/*
       - name: Upload verified aggregate evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
