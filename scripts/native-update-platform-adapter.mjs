@@ -163,12 +163,39 @@ async function inspectMacApplication(application, expectedVersion, command, envi
   return Object.freeze({ root: canonical, application: canonical, executable, version });
 }
 
+/** 接受 NSIS registry 常见的单对外层引号，并严格规范化绝对安装路径。 */
+export function normalizeWindowsInstallLocation(value) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.trim() !== value ||
+    /[\0\r\n]/.test(value)
+  ) {
+    throw new Error("Windows InstallLocation 格式无效");
+  }
+  const startsQuoted = value.startsWith('"');
+  const endsQuoted = value.endsWith('"');
+  if (startsQuoted !== endsQuoted) {
+    throw new Error("Windows InstallLocation 引号不配对");
+  }
+  const normalized = startsQuoted ? value.slice(1, -1) : value;
+  if (
+    !normalized ||
+    normalized.trim() !== normalized ||
+    normalized.includes('"') ||
+    !path.win32.isAbsolute(normalized)
+  ) {
+    throw new Error("Windows InstallLocation 不是有效绝对路径");
+  }
+  return normalized;
+}
+
 /** 从唯一 HKCU uninstall record 定位 current-user Narrant 安装。 */
 async function inspectWindowsInstallation(expectedVersion, command, environment) {
   const script = "$ErrorActionPreference='Stop';$cu=@(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'|Where-Object {$_.DisplayName -eq 'Narrant'});$lm=@(Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue|Where-Object {$_.DisplayName -eq 'Narrant'});if($cu.Count -ne 1 -or $lm.Count -ne 0){throw 'expected one HKCU Narrant install'};[Console]::Out.Write(($cu[0]|Select-Object InstallLocation,DisplayVersion,WindowsInstaller,UninstallString|ConvertTo-Json -Compress))";
   const record = JSON.parse(await command("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { environment }));
   if (record.DisplayVersion !== expectedVersion || record.WindowsInstaller === 1) throw new Error("Windows Narrant version/MSI identity 无效");
-  const root = await realpath(record.InstallLocation);
+  const root = await realpath(normalizeWindowsInstallLocation(record.InstallLocation));
   if (!root.toLowerCase().startsWith((environment.LOCALAPPDATA ?? environment.USERPROFILE).toLowerCase())) {
     throw new Error("Windows Narrant 不是 current-user installation");
   }
