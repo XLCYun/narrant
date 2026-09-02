@@ -89,10 +89,15 @@ function createGhAdapter(initialRelease, hooks = {}) {
       if (hooks.publishAfterDelete) release.draft = false;
       return { exitCode: 0, stdout: "", stderr: "" };
     }
-    if (arguments_[0] === "release" && arguments_[1] === "create") {
-      release = { id: 42, draft: true, tag_name: arguments_[2], assets: [] };
+    if (
+      arguments_[0] === "api" &&
+      arguments_.includes("POST") &&
+      arguments_[3]?.endsWith("/releases")
+    ) {
+      const tag = arguments_[arguments_.findIndex((value) => value === "-f") + 1].slice("tag_name=".length);
+      release = { id: 42, draft: true, tag_name: tag, assets: [] };
       if (hooks.publishAfterCreate) release.draft = false;
-      return { exitCode: 0, stdout: "", stderr: "" };
+      return { exitCode: 0, stdout: JSON.stringify(release), stderr: "" };
     }
     if (arguments_[0] === "api" && arguments_.includes("PATCH")) {
       if (hooks.publishAfterEdit) release.draft = false;
@@ -214,7 +219,10 @@ test("不存在时创建 Draft、上传八文件并通过 API 回读精确集合
     gh.release().assets.map((asset) => asset.name).sort(),
     artifactPaths().map((path) => path.split("/").at(-1)).sort(),
   );
-  assert.equal(gh.calls.some((call) => call[1] === "create" && call.includes("--draft")), true);
+  assert.equal(
+    gh.calls.some((call) => call.includes("POST") && call.includes("draft=true")),
+    true,
+  );
   const uploads = gh.calls.filter(isAssetUploadCall);
   assert.equal(uploads.length, 8);
   assert.equal(uploads.every((call) => call[1].releaseId === 42), true);
@@ -238,7 +246,7 @@ test("已有 Draft 被完整替换，失败后的同 tag 重试保持幂等", as
   const deleteCalls = gh.calls.filter((call) => call[0] === "api" && call.includes("DELETE"));
   assert.equal(deleteCalls.length, 10);
   assert.equal(gh.calls.some((call) => call.includes("PATCH")), true);
-  assert.equal(gh.calls.some((call) => call.includes("--draft") && call[1] !== "create"), false);
+  assert.equal(gh.calls.filter((call) => call.includes("POST") && call.includes("draft=true")).length, 0);
 });
 
 test("非 404 的 API 查找错误不会被误判为新 Draft", async () => {
@@ -247,7 +255,7 @@ test("非 404 的 API 查找错误不会被误判为新 Draft", async () => {
     reconcileDraftRelease(options(), adapterDependencies(gh)),
     /无法检查 Release.*403/,
   );
-  assert.equal(gh.calls.some((call) => call[1] === "create"), false);
+  assert.equal(gh.calls.some((call) => call.includes("POST") && call.includes("draft=true")), false);
 });
 
 test("发现 published Release 时拒绝任何修改和上传", async () => {

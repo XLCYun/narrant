@@ -396,25 +396,28 @@ export async function reconcileDraftRelease(options, dependencies = {}) {
     await readDraftById(runGh, repository, tag, releaseId, "更新元数据后");
     outcome = "updated";
   } else {
-    await requireSuccess(
+    const createResult = await requireSuccess(
       runGh([
-        "release",
-        "create",
-        tag,
-        "--repo",
-        repository,
-        "--draft",
-        "--title",
-        title,
-        "--notes-file",
-        notesFile,
+        "api",
+        "--method",
+        "POST",
+        `repos/${repository}/releases`,
+        "-f",
+        `tag_name=${tag}`,
+        "-f",
+        `name=${title}`,
+        "-F",
+        `body=@${notesFile}`,
+        "-F",
+        "draft=true",
+        "-F",
+        "prerelease=false",
+        "-F",
+        "generate_release_notes=false",
       ]),
       "创建 Draft",
     );
-    const created = await lookupRelease(runGh, repository, tag);
-    if (!created) {
-      throw new Error("创建后无法回读 Draft Release");
-    }
+    const created = parseRelease(createResult, "创建 Draft");
     assertDraftIdentity(created, tag, created.id, "创建后");
     releaseId = created.id;
     await readDraftById(runGh, repository, tag, releaseId, "创建后身份确认");
