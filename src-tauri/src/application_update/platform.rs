@@ -2,6 +2,11 @@ use super::{
     InstallError, InstallIntent, InstallKind, InstallOutcome, UpdateInstaller,
     VerifiedStagedPackage,
 };
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64"),
+    test
+))]
 use std::path::Path;
 
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
