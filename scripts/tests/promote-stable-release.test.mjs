@@ -40,6 +40,8 @@ function release({ id = 42, tag = "v2.0.0", draft = true, assets = receipt().ass
   return {
     id, tag_name: tag, draft, prerelease: false, body: "notes",
     url: `https://api.github.com/repos/cyunlab/narrant/releases/${id}`,
+    upload_url: `https://uploads.github.com/repos/cyunlab/narrant/releases/${id}/assets{?name,label}`,
+    html_url: "https://github.com/cyunlab/narrant/releases/tag/untagged-testfixture",
     assets: assets.map(({ id: assetId, name, size }) => ({ id: assetId, name, size, state: "uploaded" })),
   };
 }

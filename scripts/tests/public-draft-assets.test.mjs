@@ -87,10 +87,12 @@ async function assetsFixture(context) {
   const release = {
     id: 42, tag_name: "v2.0.0", draft: true, prerelease: false, body: "公开说明",
     url: "https://api.github.com/repos/cyunlab/narrant/releases/42",
+    upload_url: "https://uploads.github.com/repos/cyunlab/narrant/releases/42/assets{?name,label}",
+    html_url: "https://github.com/cyunlab/narrant/releases/tag/untagged-testfixture",
     assets: assetNames.map((name, index) => ({
       id: index + 100, name, state: "uploaded", size: bytes.get(name).length,
       url: `https://api.github.com/repos/cyunlab/narrant/releases/assets/${index + 100}`,
-      browser_download_url: `https://github.com/cyunlab/narrant/releases/download/v2.0.0/${encodeURIComponent(name)}`,
+      browser_download_url: `https://github.com/cyunlab/narrant/releases/download/untagged-testfixture/${encodeURIComponent(name)}`,
     })),
   };
   return { directory, output, key, bytes, release };
@@ -162,15 +164,41 @@ test("public Draft receipt 绑定 old signing 与 successor key 身份，且 boo
 });
 
 test("Draft identity 拒绝发布状态、tag/ID 漂移与错误仓库 API URL", () => {
-  const release = { id: 42, tag_name: "v2.0.0", draft: true, prerelease: false, body: "notes", url: "https://api.github.com/repos/cyunlab/narrant/releases/42" };
+  const release = {
+    id: 42, tag_name: "v2.0.0", draft: true, prerelease: false, body: "notes",
+    url: "https://api.github.com/repos/cyunlab/narrant/releases/42",
+    upload_url: "https://uploads.github.com/repos/cyunlab/narrant/releases/42/assets{?name,label}",
+    html_url: "https://github.com/cyunlab/narrant/releases/tag/untagged-testfixture",
+  };
   assert.doesNotThrow(() => validateDraftReleaseIdentity(release, { releaseId: 42, tag: "v2.0.0" }));
   for (const mutate of [
     (copy) => { copy.draft = false; }, (copy) => { copy.id = 43; },
     (copy) => { copy.tag_name = "v2.0.1"; }, (copy) => { copy.url = copy.url.replace("cyunlab", "other"); },
+    (copy) => { copy.upload_url = copy.upload_url.replace("cyunlab", "other"); },
+    (copy) => { copy.html_url = copy.html_url.replace("cyunlab", "other"); },
   ]) {
     const copy = { ...release }; mutate(copy);
     assert.throws(() => validateDraftReleaseIdentity(copy, { releaseId: 42, tag: "v2.0.0" }), /不匹配|已发布/);
   }
+  assert.throws(
+    () => validateDraftReleaseIdentity(
+      { ...release, html_url: "https://github.com/cyunlab/narrant/releases/tag/v2.0.0" },
+      { releaseId: 42, tag: "v2.0.0" },
+    ),
+    /untagged/,
+  );
+});
+
+test("Draft asset 下载身份必须绑定 Release 当前 untagged html identity", async (context) => {
+  const fixture = await assetsFixture(context);
+  fixture.release.assets[0].browser_download_url =
+    fixture.release.assets[0].browser_download_url.replace("untagged-testfixture", "v2.0.0");
+  await assert.rejects(() => downloadVerifiedPublicDraft({
+    releaseId: 42, tag: "v2.0.0", version: "2.0.0", outputDirectory: fixture.output,
+    token: "secret-token", mode: "normal",
+    releaseSigningPublicKey: fixture.key.publicKey,
+    candidateUpdaterPublicKey: fixture.key.publicKey, bridgeTag: "",
+  }, { fetchImpl: fetchMock(fixture).implementation }), /identity 无效/);
 });
 
 test("asset byte/size 变化 fail closed 且不留下部分文件", async (context) => {

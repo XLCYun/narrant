@@ -112,15 +112,27 @@ async function githubApiJson(pathname, token, fetchImpl) {
 /** 校验 API Release 始终是固定 public repository 中同一个 Draft。 */
 export function validateDraftReleaseIdentity(release, options) {
   requireDatabaseId(options.releaseId, "public Release ID");
+  const expectedApiUrl =
+    `${API_ORIGIN}/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/${options.releaseId}`;
+  const expectedUploadUrl =
+    `https://uploads.github.com/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/${options.releaseId}/assets{?name,label}`;
+  const htmlPrefix = `https://github.com/${PUBLIC_RELEASE_REPOSITORY}/releases/tag/`;
   if (
     !release ||
     release.id !== options.releaseId ||
     release.tag_name !== options.tag ||
     release.draft !== true ||
     release.prerelease !== false ||
-    release.url !== `${API_ORIGIN}/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/${options.releaseId}`
+    release.url !== expectedApiUrl ||
+    release.upload_url !== expectedUploadUrl ||
+    typeof release.html_url !== "string" ||
+    !release.html_url.startsWith(htmlPrefix)
   ) {
     throw new Error("public Release ID/tag 不匹配或 Release 已发布");
+  }
+  const draftIdentity = release.html_url.slice(htmlPrefix.length);
+  if (!/^untagged-[A-Za-z0-9]+$/.test(draftIdentity)) {
+    throw new Error("public Draft 返回无效 untagged 身份");
   }
   if (typeof release.body !== "string" || !release.body.trim()) {
     throw new Error("公开 Draft Release Notes 不能为空");
@@ -128,8 +140,15 @@ export function validateDraftReleaseIdentity(release, options) {
   return release;
 }
 
+/** 从已验证 Draft 的 html identity 构造该 Release 当前下载根路径。 */
+function draftDownloadBaseUrl(release) {
+  const htmlPrefix = `https://github.com/${PUBLIC_RELEASE_REPOSITORY}/releases/tag/`;
+  const draftIdentity = release.html_url.slice(htmlPrefix.length);
+  return `https://github.com/${PUBLIC_RELEASE_REPOSITORY}/releases/download/${draftIdentity}`;
+}
+
 /** 校验单个 Draft asset 的固定 API/download identity。 */
-function validateAssetIdentity(asset, release, expectedName) {
+function validateAssetIdentity(asset, downloadBaseUrl, expectedName) {
   requireDatabaseId(asset?.id, `Draft asset ${expectedName} ID`);
   if (
     asset.name !== expectedName ||
@@ -139,7 +158,7 @@ function validateAssetIdentity(asset, release, expectedName) {
     asset.size > MAX_ASSET_BYTES ||
     asset.url !== `${API_ORIGIN}/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/assets/${asset.id}` ||
     asset.browser_download_url !==
-      `https://github.com/${PUBLIC_RELEASE_REPOSITORY}/releases/download/${release.tag_name}/${encodeURIComponent(expectedName)}`
+      `${downloadBaseUrl}/${encodeURIComponent(expectedName)}`
   ) {
     throw new Error(`Draft asset ${expectedName} identity 无效`);
   }
@@ -318,13 +337,14 @@ export async function downloadVerifiedPublicDraft(options, dependencies = {}) {
     await githubApiJson(`/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/${releaseId}`, token, fetchImpl),
     { releaseId, tag },
   );
+  const downloadBaseUrl = draftDownloadBaseUrl(release);
   const expectedNames = expectedDraftAssetNames(version);
   assertExactNameSet((release.assets ?? []).map((asset) => asset.name), expectedNames, "public Draft 资产集合");
   const byName = new Map(release.assets.map((asset) => [asset.name, asset]));
   const receipts = [];
   try {
     for (const name of expectedNames) {
-      const asset = validateAssetIdentity(byName.get(name), release, name);
+      const asset = validateAssetIdentity(byName.get(name), downloadBaseUrl, name);
       receipts.push(await downloadAsset(asset, join(outputDirectory, name), token, fetchImpl));
     }
     const manifest = await verifyDownloadedDraft(
