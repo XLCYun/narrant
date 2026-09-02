@@ -85,6 +85,7 @@ impl UpdateInstaller for PlatformUpdateInstaller {
 }
 
 /// 把候选目录替换到原路径，并在替换或后处理失败时恢复旧目录。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 fn replace_with_rollback(
     rename: &mut impl RenameBoundary,
     destination: &Path,
@@ -117,14 +118,17 @@ fn replace_with_rollback(
 }
 
 /// 文件/目录移动的可测试系统边界。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 trait RenameBoundary {
     /// 把 source 原子移动到 destination。
     fn rename(&mut self, source: &Path, destination: &Path) -> std::io::Result<()>;
 }
 
 /// 生产环境使用同文件系统 rename 保持替换原子性。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 struct FileSystemRename;
 
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 impl RenameBoundary for FileSystemRename {
     /// 委托标准库执行原子移动。
     fn rename(&mut self, source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -133,6 +137,7 @@ impl RenameBoundary for FileSystemRename {
 }
 
 /// 描述原路径替换失败及旧版本能否恢复。
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplaceTransactionError {
     OriginalMoveFailed(std::io::ErrorKind),
