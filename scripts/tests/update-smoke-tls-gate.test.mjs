@@ -14,7 +14,7 @@ import {
   withUpdateSmokeTlsGate,
 } from "../update-smoke-tls-gate.mjs";
 
-const endpoint = "https://github.com/cyunlab/narrant/releases/latest/download/latest.json";
+const endpoint = "https://updates.cyunlab.com/narrant/channels/stable/latest.json";
 
 /** 创建两路由所需的最小本地文件与 manifest。 */
 async function fixture(context) {
@@ -24,11 +24,11 @@ async function fixture(context) {
     version: "2.0.0",
     platforms: {
       "darwin-aarch64": {
-        url: "https://github.com/cyunlab/narrant/releases/download/v2.0.0/narrant-darwin-aarch64-updater.app.tar.gz",
+        url: "https://updates.cyunlab.com/narrant/releases/2.0.0/darwin-aarch64/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-narrant-darwin-aarch64-updater.app.tar.gz",
         signature: "fixture",
       },
       "windows-x86_64": {
-        url: "https://github.com/cyunlab/narrant/releases/download/v2.0.0/narrant-windows-x86_64-updater.exe",
+        url: "https://updates.cyunlab.com/narrant/releases/2.0.0/windows-x86_64/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-narrant-windows-x86_64-updater.exe",
         signature: "fixture",
       },
     },
@@ -44,8 +44,8 @@ test("gate routes 只含 shipped latest 与当前 tag/target package", async (co
   const { directory, manifest } = await fixture(context);
   const routes = createCandidateGateRoutes({ target: "darwin-aarch64", tag: "v2.0.0", version: "2.0.0", directory, manifest });
   assert.deepEqual(routes.map((route) => route.pathname), [
-    "/cyunlab/narrant/releases/latest/download/latest.json",
-    "/cyunlab/narrant/releases/download/v2.0.0/narrant-darwin-aarch64-updater.app.tar.gz",
+    "/narrant/channels/stable/latest.json",
+    "/narrant/releases/2.0.0/darwin-aarch64/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-narrant-darwin-aarch64-updater.app.tar.gz",
   ]);
   assert.doesNotThrow(() => validateGateConfiguration({ endpoint, tag: "v2.0.0", routes }));
   assert.throws(() => validateGateConfiguration({ endpoint: "https://example.com/latest.json", tag: "v2.0.0", routes }), /shipped/);
@@ -106,11 +106,11 @@ test("cleanup 失败不会覆盖主错误，多个失败收敛为 AggregateError
   assert.equal(failure.errors.length, 3);
 });
 
-test("hosts bytes 只追加 exact github.com，拒绝已有映射和其他 host", () => {
+test("hosts bytes 只追加 exact updates.cyunlab.com，拒绝已有映射和其他 host", () => {
   const original = Buffer.from("127.0.0.1 localhost\n");
-  assert.equal(buildTemporaryHostsBytes(original, "github.com", "127.0.0.1").toString(), "127.0.0.1 localhost\n127.0.0.1 github.com\n");
-  assert.throws(() => buildTemporaryHostsBytes(Buffer.from("127.0.0.1 github.com\n"), "github.com", "127.0.0.1"), /已含/);
-  assert.throws(() => buildTemporaryHostsBytes(original, "api.github.com", "127.0.0.1"), /必须/);
+  assert.equal(buildTemporaryHostsBytes(original, "updates.cyunlab.com", "127.0.0.1").toString(), "127.0.0.1 localhost\n127.0.0.1 updates.cyunlab.com\n");
+  assert.throws(() => buildTemporaryHostsBytes(Buffer.from("127.0.0.1 updates.cyunlab.com\n"), "updates.cyunlab.com", "127.0.0.1"), /已含/);
+  assert.throws(() => buildTemporaryHostsBytes(original, "github.com", "127.0.0.1"), /必须/);
 });
 
 test("trust plan 只删除本次 CA fingerprint", () => {
@@ -137,9 +137,9 @@ test("system adapter 实际按原字节恢复 hosts 并只移除本次 CA", asyn
   });
   const identity = { authority: join(directory, "authority.pem"), sha1Fingerprint: "B".repeat(40) };
   await system.installCertificateAuthority(identity);
-  await system.prepareHostnameRoute("github.com", "127.0.0.1");
+  await system.prepareHostnameRoute("updates.cyunlab.com", "127.0.0.1");
   await system.routeHostname();
-  assert.match((await readFile(hostsPath, "utf8")), /127\.0\.0\.1 github\.com\r\n$/);
+  assert.match((await readFile(hostsPath, "utf8")), /127\.0\.0\.1 updates\.cyunlab\.com\r\n$/);
   await system.restoreHostname();
   assert.equal((await readFile(hostsPath)).equals(original), true);
   await system.removeCertificateAuthority(identity);
@@ -170,7 +170,7 @@ test("hosts 恢复失败时 CA cleanup 不删除可重试的原字节 backup", a
   });
   const identity = { authority: join(directory, "authority.pem"), sha1Fingerprint: "C".repeat(40) };
   await system.installCertificateAuthority(identity);
-  await system.prepareHostnameRoute("github.com", "127.0.0.1");
+  await system.prepareHostnameRoute("updates.cyunlab.com", "127.0.0.1");
   await system.routeHostname();
   await assert.rejects(() => system.restoreHostname(), /restore install failed/);
   await system.removeCertificateAuthority(identity);

@@ -1,5 +1,7 @@
 # Deliver staged Application Updates from public Releases
 
+Status: Superseded by [ADR-0029](0029-use-oss-as-the-stable-application-update-authority.md).
+
 Narrant uses published Releases in the public `cyunlab/narrant` artifact repository as
 its Stable Application Update channel while the private source repository remains the
 authority that builds and signs each release. The client provides the full staged update

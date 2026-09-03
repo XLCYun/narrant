@@ -51,6 +51,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: stable-promotion
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,7 +80,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
           PREVIOUS_MANIFEST_SHA256: ${{ inputs.previous_stable_manifest_sha256 }}
-          BOOTSTRAP_TAG: ${{ vars.NARRANT_FIRST_UPDATER_TAG }}
+          BOOTSTRAP_TAG: ${{ vars.NARRANT_OSS_BOOTSTRAP_TAG }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
@@ -137,6 +141,34 @@ jobs:
             cd smoke-evidence
             sha256sum --check darwin-aarch64.json.sha256 windows-x86_64.json.sha256
           )
+      - name: Install checksum-verified ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          OSSUTIL_ARCHIVE="$RUNNER_TEMP/ossutil-v1.7.19-linux-amd64.zip"
+          OSSUTIL_EXTRACT_DIR="$RUNNER_TEMP/ossutil-v1.7.19"
+          OSSUTIL_BIN_DIR="$RUNNER_TEMP/bin"
+          curl --fail --location --silent --show-error \
+            --output "$OSSUTIL_ARCHIVE" \
+            https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
+          printf '%s  %s\n' \
+            dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343 \
+            "$OSSUTIL_ARCHIVE" | sha256sum --check
+          mkdir -p "$OSSUTIL_EXTRACT_DIR" "$OSSUTIL_BIN_DIR"
+          unzip -q "$OSSUTIL_ARCHIVE" -d "$OSSUTIL_EXTRACT_DIR"
+          install -m 0755 \
+            "$OSSUTIL_EXTRACT_DIR/ossutil-v1.7.19-linux-amd64/ossutil" \
+            "$OSSUTIL_BIN_DIR/ossutil"
+          echo "$OSSUTIL_BIN_DIR" >> "$GITHUB_PATH"
+      - name: Exchange Narrant OSS promotion OIDC identity
+        id: oss-credentials
+        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0
+        with:
+          oidc-provider-arn: ${{ vars.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
+          role-to-assume: ${{ vars.ALIBABA_CLOUD_ROLE_ARN }}
+          role-session-name: narrant-promote-${{ github.run_id }}
+          role-session-expiration: 1800
+          audience: sts.aliyuncs.com
       - name: Re-fetch, re-verify and publish the fixed public Draft as Latest
         shell: bash
         env:
@@ -145,7 +177,13 @@ jobs:
           NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
           NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY }}
           NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
-          NARRANT_FIRST_UPDATER_TAG: ${{ vars.NARRANT_FIRST_UPDATER_TAG }}
+          NARRANT_FIRST_UPDATER_TAG: ${{ vars.NARRANT_OSS_BOOTSTRAP_TAG }}
+          NARRANT_OSS_BOOTSTRAP_TAG: ${{ vars.NARRANT_OSS_BOOTSTRAP_TAG }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ steps.oss-credentials.outputs.aliyun-access-key-id }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ steps.oss-credentials.outputs.aliyun-access-key-secret }}
+          ALIBABA_CLOUD_SECURITY_TOKEN: ${{ steps.oss-credentials.outputs.aliyun-security-token }}
+          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
+          OSS_REGION: ${{ vars.OSS_REGION }}
           SOURCE_TAG: ${{ inputs.source_tag }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           PUBLIC_RELEASE_ID: ${{ inputs.public_release_id }}

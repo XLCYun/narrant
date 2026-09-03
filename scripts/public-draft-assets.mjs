@@ -20,7 +20,7 @@ import {
 
 export const PUBLIC_RELEASE_REPOSITORY = "cyunlab/narrant";
 export const FIXED_STABLE_ENDPOINT =
-  "https://github.com/cyunlab/narrant/releases/latest/download/latest.json";
+  "https://updates.cyunlab.com/narrant/channels/stable/latest.json";
 const API_ORIGIN = "https://api.github.com";
 const MAX_JSON_BYTES = 512 * 1024;
 const MAX_ASSET_BYTES = 2 * 1024 * 1024 * 1024;
@@ -286,6 +286,7 @@ async function verifyDownloadedDraft(directory, release, version, releaseSigning
     version,
     notes: release.body,
     signatures,
+    assetDigests: sums,
   });
   await Promise.all([
     verifyTauriUpdaterSignature(

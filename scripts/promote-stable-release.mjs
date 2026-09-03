@@ -12,6 +12,11 @@ import {
 } from "./public-draft-assets.mjs";
 import { verifyUpdateSmokeEvidenceDirectory } from "./update-smoke-evidence.mjs";
 import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
+import {
+  createOssutilStorage,
+  finalizeNarrantOssCandidate,
+  prepareNarrantOssCandidate,
+} from "./narrant-oss-stable.mjs";
 
 const API_ORIGIN = "https://api.github.com";
 const RESPONSE_BOUND = 512 * 1024;
@@ -166,11 +171,6 @@ export async function promoteStableRelease(options, dependencies = {}) {
   let stableManifest;
   if (options.mode === "bootstrap") {
     assertBootstrapTransition(options.sourceTag, options.bootstrapTag);
-    await (dependencies.verifyBootstrapHistory ?? verifyBootstrapReleaseHistory)({
-      token,
-      candidateReleaseId: options.publicReleaseId,
-      candidateTag: options.publicTag,
-    }, { fetchImpl });
   } else {
     const latestBefore = await githubApi(`/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/latest`, token, fetchImpl, {
       allow404: true, context: "查询 promotion 前 Latest",
@@ -201,6 +201,22 @@ export async function promoteStableRelease(options, dependencies = {}) {
     now: options.now,
   });
 
+  if (options.requireOssPromotion && !dependencies.ossStorage) {
+    throw new Error("production promotion 缺少 Narrant OSS storage");
+  }
+  const ossCandidate = dependencies.ossStorage
+    ? await (dependencies.prepareOssCandidate ?? prepareNarrantOssCandidate)({
+      directory: options.draftDirectory,
+      version: options.version,
+      tag: options.publicTag,
+      candidateCommit: options.sourceSha,
+      bootstrapTag: options.ossBootstrapTag,
+      mode: options.mode,
+      previousTag: options.previousTag,
+      previousManifestSha256: options.previousManifestSha256,
+    }, dependencies.ossStorage)
+    : undefined;
+
   const immediatelyBefore = validateDraftReleaseIdentity(
     await githubApi(`/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/${options.publicReleaseId}`, token, fetchImpl, {
       context: "promotion 前固定 ID Draft 回读",
@@ -225,6 +241,13 @@ export async function promoteStableRelease(options, dependencies = {}) {
   if (latestAfter?.id !== options.publicReleaseId || latestAfter.tag_name !== options.publicTag || latestAfter.draft !== false) {
     throw new Error("published Release 未成为 Latest");
   }
+  if (ossCandidate) {
+    await (dependencies.finalizeOssCandidate ?? finalizeNarrantOssCandidate)(
+      ossCandidate,
+      dependencies.ossStorage,
+      { lockOwner: options.lockOwner },
+    );
+  }
   return Object.freeze({ releaseId: published.id, tag: published.tag_name, mode: options.mode });
 }
 
@@ -243,6 +266,16 @@ function parseArguments(arguments_) {
 /** 从受保护 workflow 环境读取 promotion 输入并发布固定 public Release。 */
 async function main() {
   const values = parseArguments(process.argv.slice(2));
+  const ossStorage = createOssutilStorage({
+    bucket: process.env.OSS_BUCKET,
+    region: process.env.OSS_REGION,
+    prefix: "narrant",
+    credentials: {
+      accessKeyId: process.env.ALIBABA_CLOUD_ACCESS_KEY_ID,
+      accessKeySecret: process.env.ALIBABA_CLOUD_ACCESS_KEY_SECRET,
+      securityToken: process.env.ALIBABA_CLOUD_SECURITY_TOKEN,
+    },
+  });
   const result = await promoteStableRelease({
     ...values,
     publicReleaseId: Number(values.publicReleaseId),
@@ -252,7 +285,10 @@ async function main() {
     candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
     bridgeTag: process.env.NARRANT_UPDATER_BRIDGE_TAG,
     previousReleaseSigningPublicKey: process.env.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY,
-  });
+    ossBootstrapTag: process.env.NARRANT_OSS_BOOTSTRAP_TAG,
+    lockOwner: `github:${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}`,
+    requireOssPromotion: true,
+  }, { ossStorage });
   process.stdout.write(`已发布 public Stable ${result.tag}（Release ${result.releaseId}）。\n`);
 }
 

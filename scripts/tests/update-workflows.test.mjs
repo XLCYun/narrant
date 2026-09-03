@@ -45,7 +45,7 @@ test("promotion 使用受保护 Environment、fixed ID 与可信 private evidenc
   assert.doesNotMatch(workflow, /release:\s*\n|types:\s*\[published\]/);
   assert.match(workflow, /environment: stable-promotion/);
   assert.match(workflow, /group: narrant-stable-promotion\n\s+cancel-in-progress: false/);
-  assert.match(workflow, /contents: read\n\s+actions: read/);
+  assert.match(workflow, /contents: read\n\s+actions: read\n\s+id-token: write/);
   assert.doesNotMatch(workflow, /attestations: read|gh attestation|attest-build-provenance/);
   assert.match(workflow, /verify-evidence-run\.mjs/);
   assert.match(workflow, /trusted_workflow_sha="\$\(git rev-parse HEAD\)"/);
@@ -60,7 +60,13 @@ test("promotion 使用受保护 Environment、fixed ID 与可信 private evidenc
   assert.match(workflow, /NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
   assert.match(workflow, /NARRANT_UPDATER_PUBLIC_KEY: \$\{\{ vars\.NARRANT_UPDATER_PUBLIC_KEY \}\}/);
   assert.match(workflow, /NARRANT_UPDATER_BRIDGE_TAG: \$\{\{ vars\.NARRANT_UPDATER_BRIDGE_TAG \}\}/);
-  assert.match(workflow, /NARRANT_FIRST_UPDATER_TAG: \$\{\{ vars\.NARRANT_FIRST_UPDATER_TAG \}\}/);
+  assert.match(workflow, /NARRANT_FIRST_UPDATER_TAG: \$\{\{ vars\.NARRANT_OSS_BOOTSTRAP_TAG \}\}/);
+  assert.match(workflow, /ALIBABA_CLOUD_OIDC_PROVIDER_ARN/);
+  assert.match(workflow, /ALIBABA_CLOUD_ROLE_ARN/);
+  assert.match(workflow, /OSS_BUCKET: \$\{\{ vars\.OSS_BUCKET \}\}/);
+  assert.match(workflow, /OSS_REGION: \$\{\{ vars\.OSS_REGION \}\}/);
+  assert.match(workflow, /configure-aliyun-credentials-action@[0-9a-f]{40}/);
+  assert.match(workflow, /ossutil-v1\.7\.19/);
   assert.match(workflow, /NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
   assert.match(workflow, /cyunlab\/narrant/);
   assert.match(workflow, /XLCYun\/narrant|private source/);

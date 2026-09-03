@@ -1,10 +1,10 @@
 # Application Update 发布运维
 
-Narrant 的源码与发布控制位于私有仓库 `XLCYun/narrant`，公开安装包与 Stable updater
-Release 位于 `cyunlab/narrant`。公开仓库不是源码镜像。客户端唯一 Stable endpoint 是：
+Narrant 的源码与发布控制位于私有仓库 `XLCYun/narrant`，公开 GitHub Release 位于
+`cyunlab/narrant`，作为公开制品归档而不是源码镜像。客户端和官网唯一 Stable endpoint 是：
 
 ```text
-https://github.com/cyunlab/narrant/releases/latest/download/latest.json
+https://updates.cyunlab.com/narrant/channels/stable/latest.json
 ```
 
 每次发布先在公开仓库形成完整 Draft；私有 `release.yml` 随后自动复用两平台真实原生 smoke，
@@ -51,10 +51,14 @@ reviewers，还应在该 Environment 增加独立审批；当前 user-owned priv
    `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY` 作为 repository variables 供自动 Draft/smoke 使用，
    同时在 Environment 中配置同名副本；Environment 副本是最终 promotion 的受保护授权，必须逐字匹配
    获批 tag 的预期值。bootstrap 期间不得设置 previous-release key。
-3. 首个 updater-capable 版本期间，在 repository 与 Environment 同时设置
-   `NARRANT_FIRST_UPDATER_TAG=vMAJOR.MINOR.PATCH`。第一次成功后删除两处变量。即使变量被误留，
-   promotion 也会在发现已有包含 `latest.json` 的 published Stable 时永久拒绝 bootstrap。
-4. workflow 始终 checkout 默认分支上的可信脚本，再把 source tag/SHA 当作不可信数据验证，
+3. OSS 首次 Stable 迁移期间，在 repository 与 Environment 同时设置
+   `NARRANT_OSS_BOOTSTRAP_TAG=vMAJOR.MINOR.PATCH`。第一次成功后删除两处变量；之后只允许 normal
+   promotion，不能用 GitHub Release 历史代替 OSS previous Stable 身份。
+4. Environment 还必须配置 `OSS_BUCKET=xlcyun-public`、`OSS_REGION=cn-shenzhen`、
+   `ALIBABA_CLOUD_OIDC_PROVIDER_ARN` 与只允许 Narrant 前缀写入的
+   `ALIBABA_CLOUD_ROLE_ARN`。OIDC role 不使用长期 AccessKey；bucket 必须启用 Versioning，公开策略
+   只读 `narrant/releases/*`、`narrant/candidates/*` 和 Stable manifest。
+5. workflow 始终 checkout 默认分支上的可信脚本，再把 source tag/SHA 当作不可信数据验证，
    不执行 tag 中的脚本。
 
 `update-smoke.yml` 需要读取 Draft，因此 runner 也使用 `CYUNLAB_RELEASE_TOKEN`。脚本只执行
@@ -97,7 +101,7 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 
    workflow 会在 `macos-15` arm64 和 Windows x64 上重新通过 API 下载 Draft 的八个资产，校验
    asset ID/size/完整 SHA-256、`SHA256SUMS`、manifest 和 minisign，再安装真实 previous Stable。
-   runner 临时 CA 只信任本次 `github.com` leaf，hosts 只增加 loopback mapping；gate 只服务固定
+   runner 临时 CA 只信任本次 `updates.cyunlab.com` leaf，hosts 只增加 loopback mapping；gate 只服务固定
    latest 路径和当前 tag/target package。无论成功失败，hosts 按原字节恢复、DNS 刷新、helper
    退出、临时 CA 删除。任何 cleanup 失败保留原 native 根因。
 5. 两个平台必须观察真实 check/download/durable staging、原生窗口正常关闭、共享 stop 完成后的
@@ -111,32 +115,32 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 7. 操作者核对 source tag/SHA、public Draft ID/tag、Release Notes、previous Stable 和 smoke run。
    job 先验证可信 workflow run 与该路径的 exact artifact set，再验证 exact-four 下载文件，随后通过
    固定 public Release ID 下载和验签八个 Draft assets，重验 freshness/两目标/previous identity，并在
-   mutation 紧前再次校验 Draft ID、tag、asset ID/size/state。最后只 PATCH 该 Release 为
-   `draft=false`、`prerelease=false`、Latest，并回读 `/releases/latest` 确认固定 ID。
+   mutation 紧前再次校验 Draft ID、tag、asset ID/size/state。它先把 content-addressed 安装包、updater、
+   签名、checksums 与 candidate manifest 写入 OSS 并逐字节回读；随后只 PATCH 该 Release 为 Latest。
+   回读 GitHub fixed ID 后，才在 append-only promotion lock 下原子替换 OSS Stable manifest，并写后回读。
 8. 从一台不带 Actions 凭据的机器匿名读取 Stable endpoint，确认 version、两 target URL 和签名。
    不要在已发布 Release 上“修补”资产；任何内容变化都发布更高 SemVer。
 
-## 一次性 first-updater bootstrap
+## 一次性 OSS Stable bootstrap
 
 v1.1.5 没有 updater，不能伪造 v1.1.5→候选的自动升级证据。首个 updater-capable 版本采用一次性
 bootstrap：
 
-1. 在 repository 与 `stable-promotion` Environment 同时设置 exact `NARRANT_FIRST_UPDATER_TAG`。
+1. 在 repository 与 `stable-promotion` Environment 同时设置 exact `NARRANT_OSS_BOOTSTRAP_TAG`。
 2. 正常生成该 tag 的完整 Draft。
 3. 运行 smoke 时选择 `mode=bootstrap`，previous Stable 两项必须留空。两平台证据只声明：签名安装包
    安装、exact installed candidate 启动、内嵌 endpoint/public key、候选版本、损坏 staging 被恢复清除、
    正常关闭后 clean relaunch；它不声明旧版本自动升级。
 4. promotion 也选择 `mode=bootstrap`。protected variable 必须与 source tag 完全相同，previous-release
-   key 必须缺失，而且有界扫描的全部公开 Release 历史中不得存在任何含 `latest.json` 的 published
-   Stable。任一条件不满足都在发布 mutation 前失败；当前 Latest 是否是 legacy 不能重新开放 bootstrap。
+   key 必须缺失，而且 OSS Stable object 必须不存在。其他 OSS 读取错误不能冒充 object 不存在。
 5. 第一次成功后删除 repository 与 Environment 两处 variable，并永久使用 `mode=normal`。保存 bootstrap
    workflow run、两份 evidence、checksums、Actions artifact identity 和 Release ID 作为一次性审计记录。
    若将来恢复 Artifact Attestations，也保存 attestation。不得因重跑方便而复用 bootstrap。
 
-首次 bootstrap 已于 2026-09-03 完成：source `v1.2.13` /
+旧 GitHub updater bootstrap 已于 2026-09-03 完成：source `v1.2.13` /
 `fc7ae6e060dc5520937edcd598971728f26f17d1`，release run `33648114309`，public Release ID
 `381418321`，成功 smoke run `33658283469`（aggregate artifact `9857902214`），promotion run
-`33659151005`。两处 `NARRANT_FIRST_UPDATER_TAG` 已删除；后续发布必须使用 `mode=normal`。
+`33659151005`。该记录不等于 OSS Stable 已 bootstrap；迁移时仍需按上节设置一次性 OSS tag。
 
 ## 失败与恢复
 
