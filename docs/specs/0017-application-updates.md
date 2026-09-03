@@ -130,7 +130,9 @@ Application Update 对前端发布有序快照，状态至少包含：
 - `SHA256SUMS`
 
 `latest.json` 只包含 `darwin-aarch64` 和 `windows-x86_64`。每项 `url` 是 content-addressed OSS
-updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`signature` 是对应 `.sig`
+updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`signature` 是对应 `.sig`。
+面向人工下载的 installer OSS 对象必须设置安全 ASCII `Content-Disposition` 文件名：
+`Narrant-<version>-macOS-arm64.dmg` 或 `Narrant-<version>-Windows-x64.exe`，避免浏览器暴露内容寻址 SHA 前缀。
 文件的字面内容。Draft 阶段
 没有最终 published time，因此 `pub_date` 可以省略；Notes 来自公开 Release body。
 
