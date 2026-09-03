@@ -143,6 +143,12 @@ export function createOssutilStorage(options) {
       await writeFile(source, body, { mode: 0o600 })
       const objectMetadata = [`Cache-Control:${metadata.cacheControl}`]
       if (metadata.contentType) objectMetadata.push(`Content-Type:${metadata.contentType}`)
+      if (metadata.downloadFilename) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(metadata.downloadFilename)) {
+          throw new Error('download filename must be a safe ASCII basename')
+        }
+        objectMetadata.push(`Content-Disposition:attachment; filename="${metadata.downloadFilename}"`)
+      }
       const args = ['cp', source, objectUri(key)]
       if (allowOverwrite) args.push('--force')
       args.push('--meta', objectMetadata.join('#'))
@@ -188,6 +194,13 @@ export function createOssutilStorage(options) {
   }
 }
 
+/** 返回浏览器保存人工安装包时使用的稳定、简洁文件名。 */
+function installerDownloadFilename(version, target) {
+  if (target === "darwin-aarch64") return `Narrant-${version}-macOS-arm64.dmg`;
+  if (target === "windows-x86_64") return `Narrant-${version}-Windows-x64.exe`;
+  throw new Error(`不支持的 Narrant 安装包 target：${target}`);
+}
+
 
 
 /** 从清单 URL 提取并严格校验 Narrant 内容寻址对象键。 */
@@ -227,7 +240,12 @@ export async function prepareNarrantOssCandidate(options, storage) {
     for (const [field, filename] of [["url", updaterName], ["installer_url", installerName]]) {
       const bytes = await readFile(path.join(options.directory, filename));
       const digest = createHash("sha256").update(bytes).digest("hex");
-      objects.push({ key: releaseKey(entry[field], version, target, filename, digest), body: bytes, contentType: "application/octet-stream" });
+      objects.push({
+        key: releaseKey(entry[field], version, target, filename, digest),
+        body: bytes,
+        contentType: "application/octet-stream",
+        downloadFilename: field === "installer_url" ? installerDownloadFilename(version, target) : undefined,
+      });
     }
     const signatureName = `${updaterName}.sig`;
     const signatureBody = await readFile(path.join(options.directory, signatureName));
@@ -248,6 +266,7 @@ export async function prepareNarrantOssCandidate(options, storage) {
     await storage.ensureObject(object.key, object.body, {
       cacheControl: "public, max-age=31536000, immutable",
       contentType: object.contentType,
+      downloadFilename: object.downloadFilename,
     });
   }
   for (const object of objects) {

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { finalizeNarrantOssCandidate, prepareNarrantOssCandidate } from "../narrant-oss-stable.mjs";
+import { createOssutilStorage, finalizeNarrantOssCandidate, prepareNarrantOssCandidate } from "../narrant-oss-stable.mjs";
 import { releaseAssetNames } from "../release-assets.mjs";
 
 /** 创建与公开 Draft 同形的最小 OSS candidate 资产。 */
@@ -53,10 +53,16 @@ async function fixture(context) {
 function storage() {
   const values = new Map();
   const events = [];
+  const writes = [];
   return {
     values,
     events,
-    async ensureObject(key, body) { events.push(`ensure:${key}`); values.set(key, Buffer.from(body)); },
+    writes,
+    async ensureObject(key, body, metadata) {
+      events.push(`ensure:${key}`);
+      values.set(key, Buffer.from(body));
+      writes.push({ key, metadata });
+    },
     async readObject(key) {
       if (!values.has(key)) throw new Error("NoSuchKey");
       return Buffer.from(values.get(key));
@@ -80,12 +86,48 @@ test("Narrant OSS bootstrap 先发布不可变对象，再以锁保护 Stable po
   }, target);
   assert.equal(target.events.some((event) => event.startsWith("replace:")), false);
   assert.equal(target.events.filter((event) => event.startsWith("ensure:")).length, 8);
+  assert.deepEqual(
+    target.writes.filter((write) => write.metadata.downloadFilename).map((write) => write.metadata.downloadFilename),
+    ["Narrant-2.3.4-macOS-arm64.dmg", "Narrant-2.3.4-Windows-x64.exe"],
+  );
 
   const manifest = await finalizeNarrantOssCandidate(candidate, target, {
     lockOwner: "test-run:1",
   });
   assert.deepEqual(manifest, source.manifest);
   assert.deepEqual(target.events.slice(-3).map((event) => event.split(":", 1)[0]), ["lock", "replace", "unlock"]);
+});
+
+test("OSS 上传为人工安装包设置安全的 Content-Disposition 文件名", async () => {
+  const calls = [];
+  const target = createOssutilStorage({
+    bucket: "example-bucket",
+    region: "cn-shenzhen",
+    prefix: "narrant",
+    credentials: {
+      accessKeyId: "temporary-id",
+      accessKeySecret: "temporary-secret",
+      securityToken: "temporary-token",
+    },
+    async runOssutil(args) {
+      calls.push(args);
+      if (args[1]?.startsWith("oss://")) throw new Error("NoSuchKey: object does not exist");
+      return { stdout: Buffer.alloc(0), stderr: "" };
+    },
+  });
+
+  await target.ensureObject("narrant/releases/2.3.4/darwin-aarch64/package.dmg", Buffer.from("dmg"), {
+    cacheControl: "public, max-age=31536000, immutable",
+    contentType: "application/octet-stream",
+    downloadFilename: "Narrant-2.3.4-macOS-arm64.dmg",
+  });
+  assert.ok(calls[1].includes("Cache-Control:public, max-age=31536000, immutable#Content-Type:application/octet-stream#Content-Disposition:attachment; filename=\"Narrant-2.3.4-macOS-arm64.dmg\""));
+
+  await assert.rejects(() => target.ensureObject(
+    "narrant/releases/2.3.4/darwin-aarch64/unsafe.dmg",
+    Buffer.from("dmg"),
+    { cacheControl: "no-cache", downloadFilename: "unsafe.dmg\r\nX-Test: injected" },
+  ), /safe ASCII basename/);
 });
 
 test("Narrant OSS 非 bootstrap 缺少 previous Stable 时失败", async (context) => {
