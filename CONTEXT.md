@@ -215,6 +215,18 @@ A partial Babysit Agent Provider result containing explanations only for request
 targets that were missing or blank in the preceding result.
 _Avoid_: Full response repair, regenerated explanation set
 
+**Session-Context Repair**:
+A Line Explanation repair round that reuses an Agent session containing the original
+File Change and sends only failed target identities, validation reasons, and output
+constraints. Codex and Built-in Agent Providers use this repair form.
+_Avoid_: Incremental prompt, source-free repair
+
+**Self-Contained Repair**:
+A Line Explanation repair round that starts without prior Agent conversation state and
+therefore carries the complete File Change together with failed target identities and
+output constraints. Claude Code uses this repair form.
+_Avoid_: Stateless patch, full response repair
+
 ## Relationships
 
 - A **Pull Request** selects the base and head revisions for one repository-local
@@ -288,6 +300,8 @@ _Avoid_: Full response repair, regenerated explanation set
 - Fresh **Application Settings** select the **Built-in Agent Provider**, which remains unavailable
   until the reviewer configures its **Model Service Connection** or explicitly selects another provider
 - Narrant merges a **Line Explanation Repair Patch** into its preceding provider result
+- A **Session-Context Repair** relies on the original File Change already retained by
+  the Agent session, while a **Self-Contained Repair** carries that File Change again
 - An **Installed Coding Agent Provider** reuses a reviewer-installed agent runtime and its authentication
 - A **Built-in Agent Provider** never grants its model service direct access to the Review Workspace
 - Narrant may keep multiple **Reviews** open while presenting exactly one **Presented Review**

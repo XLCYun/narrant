@@ -143,6 +143,12 @@ Coding Agent Provider in Application Settings.
   reuse one in-memory Rig conversation, and each generation or repair gives Rig at most
   16 model turns. Narrant does not wrap a Rig run in another model-turn or repository-tool
   dispatch loop; the whole File Change run retains the existing ten-minute deadline.
+- Custom uses session-context repair: each repair prompt relies on the complete File Change
+  retained in the same Rig conversation, carries only failed target identities, validation
+  reasons, and output constraints, and requests a `final_result` repair patch containing
+  exactly those failed targets. An entirely malformed result repeats all original target
+  identities without repeating source content. Missing conversation state fails the run
+  instead of silently resending the complete File Change.
 - Every model turn uses a 65,536-token output budget for both protocols. Narrant does not
   split targets into output batches, silently retry with a smaller budget, or delegate the
   budget to a provider default. A service that rejects the budget fails explicitly, and a

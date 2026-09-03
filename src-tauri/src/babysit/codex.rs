@@ -462,20 +462,21 @@ impl CodexAppServerProvider {
         )
     }
 
-    /// 在同一 thread 中请求结构重答或局部 patch，并重新附上完整编号源码。
+    /// 在同一 thread 中请求结构重答或局部 patch，源码只复用 generation 历史。
     fn repair_prompt(
         request: &BabysitProviderRequest,
         failures: &[ValidationFailure],
         malformed_output: bool,
     ) -> String {
-        let numbered_source = format!(
-            "Before content:\n{}\n\nAfter content:\n{}",
-            super::numbered_content(&request.before),
-            super::numbered_content(&request.after)
-        );
         let exploration_guidance = repository_exploration_guidance(request.repository_exploration);
         if malformed_output {
-            return format!("The previous response was not valid Babysit JSON. Regenerate the complete response in this same thread. {exploration_guidance} Return exactly one compact JSON object with `before` and `after`, covering every originally requested target exactly once, with no markdown or extra fields. Keep each explanation preferably within 240 Unicode characters.\n\n{numbered_source}");
+            let targets = request
+                .targets
+                .iter()
+                .map(format_target_identity)
+                .collect::<Vec<_>>()
+                .join("\n");
+            return format!("The previous response was not valid Babysit JSON. Regenerate the complete response in this same thread using the file content already present in the conversation. {exploration_guidance} Return exactly one compact JSON object with `before` and `after`, covering every target listed below exactly once, with no markdown, extra fields, or source text. Keep each explanation preferably within 240 Unicode characters.\n\nRequested targets:\n{targets}");
         }
         let requested = failures
             .iter()
@@ -483,7 +484,7 @@ impl CodexAppServerProvider {
             .collect::<Vec<_>>()
             .join("；");
         format!(
-            "The previous Babysit response needs explanations only for these targets: {requested}. {exploration_guidance} Return one compact JSON patch with both `before` and `after`, containing exactly these targets and no others. Do not repeat already valid targets. Return no markdown, extra fields, or source text. Keep each explanation plain text and preferably at most 240 Unicode characters.\n\n{numbered_source}"
+            "The previous Babysit response needs explanations only for these targets: {requested}. Use the file content already present in this conversation. {exploration_guidance} Return one compact JSON patch with both `before` and `after`, containing exactly these targets and no others. Do not repeat already valid targets. Return no markdown, extra fields, or source text. Keep each explanation plain text and preferably at most 240 Unicode characters."
         )
     }
 
@@ -884,6 +885,15 @@ fn format_target(target: &LineTarget) -> String {
         FileSide::After => "after",
     };
     format!("{side} line {}: {}", target.line_number, target.source)
+}
+
+/// 将 target 格式化为无源码身份，供同会话 repair 重申完整目标集合。
+fn format_target_identity(target: &LineTarget) -> String {
+    let side = match target.side {
+        FileSide::Before => "before",
+        FileSide::After => "after",
+    };
+    format!("{side} line {}", target.line_number)
 }
 
 /// 将 provider 内部类别投影为稳定、脱敏的领域错误。

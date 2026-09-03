@@ -225,19 +225,15 @@ When finished, call final_result with both before and after maps.",
     )
 }
 
-/// 修复阶段只请求上层 validation 指出的目标，保持同一模型会话上下文。
+/// 修复阶段依赖同一模型会话中的源码，只请求上层 validation 指出的 patch。
 fn repair_prompt(request: &BabysitProviderRequest, failures: &[ValidationFailure]) -> String {
     format!(
         "Repair the previous Line Explanation result for this file change.\n\
-File ({path}) before:\n{before}\n\
-File ({path}) after:\n{after}\n\
+Use the file content already present in this conversation.\n\
 Only these validation failures require new explanations:\n{failures}\n\
 Write every repaired line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN. Keep every repaired explanation preferably within 240 Unicode characters.\n\
 {exploration_guidance}\n\
-Return the complete result by calling final_result; preserve valid prior explanations.",
-        path = request.path,
-        before = crate::babysit::numbered_content(&request.before),
-        after = crate::babysit::numbered_content(&request.after),
+Call final_result with only the requested repair patch. Include both before and after maps, containing exactly the failed targets and no already valid targets.",
         locale = request.locale,
         failures = failures
             .iter()

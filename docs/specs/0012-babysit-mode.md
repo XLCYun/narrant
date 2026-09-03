@@ -153,6 +153,11 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   rounds, but the progress, repair budget, deadline, validation, and final result remain
   provider-independent. After the third failed repair, the run fails and the user may
   retry manually.
+- Codex uses session-context repair: each repair turn relies on the original File Change
+  already present in the same thread and sends only failed target identities, validation
+  reasons, and output constraints. An entirely malformed response repeats every original
+  target identity without repeating `before` or `after` source content. A missing thread
+  fails the run instead of silently falling back to a self-contained repair.
 - Stable user-visible run phases are `generating`, `repairing`, and `completed`.
   Failed and cancelled runs end in `failed` and `cancelled` outcomes rather than
   introducing provider-specific progress phases. Provider-specific tool, message, and

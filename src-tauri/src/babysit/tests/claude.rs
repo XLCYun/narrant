@@ -198,6 +198,8 @@ async fn malformed_generation_is_repaired_by_a_fresh_self_contained_process() {
         events.contains(r#""targets":[{"lineNumber":1,"side":"before","source":"let old = 1;"}]"#)
     );
     let repair_round = events.split("round:2").nth(1).unwrap();
+    assert!(repair_round.contains("0001|let old = 1;"));
+    assert!(repair_round.contains("0001|let next = 2;"));
     assert!(
         repair_round.contains(
             r#""after":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}"#

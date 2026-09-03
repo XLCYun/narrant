@@ -84,9 +84,24 @@ fn codex_generation_and_repair_prompts_discourage_repository_exploration() {
         }],
         false,
     );
+    assert!(repair.contains("Before 缺少第 1 行解释"));
+    assert!(!repair.contains("const old = 1;"));
+    assert!(!repair.contains("const next = 2;"));
     let repair = repair.to_ascii_lowercase();
     assert!(repair.contains("do not explore the repository by default"));
     assert!(repair.contains("do not repeat or broaden a query"));
+}
+
+#[test]
+fn codex_malformed_repair_repeats_all_target_identities_without_source() {
+    let request = request();
+
+    let repair = CodexAppServerProvider::repair_prompt(&request, &[], true);
+
+    assert!(repair.contains("before line 1"));
+    assert!(repair.contains("after line 1"));
+    assert!(!repair.contains("const old = 1;"));
+    assert!(!repair.contains("const next = 2;"));
 }
 
 #[test]
@@ -527,7 +542,9 @@ async fn malformed_structured_output_can_be_repaired_on_the_same_thread() {
     assert_eq!(repaired.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "json-error-feedback"));
-    assert!(events.lines().any(|line| line == "repair-numbered-content"));
+    assert!(events
+        .lines()
+        .any(|line| line == "repair-targets-without-source"));
     assert_eq!(
         events
             .lines()

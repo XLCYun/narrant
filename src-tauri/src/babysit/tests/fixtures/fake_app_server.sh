@@ -152,8 +152,8 @@ while IFS= read -r line; do
       turn_count=$((turn_count + 1))
       if [ "$turn_count" -gt 1 ]; then
         record "turn/start:repair"
-        if contains '0001|const old = 1;' && contains '0001|const next = 2;'; then
-          record "repair-numbered-content"
+        if contains 'before line 1' && contains 'after line 1' && ! contains '0001|const old = 1;' && ! contains '0001|const next = 2;'; then
+          record "repair-targets-without-source"
         fi
       fi
       if contains 'previous response was not valid Babysit JSON'; then
