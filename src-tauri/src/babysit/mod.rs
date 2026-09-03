@@ -286,6 +286,9 @@ pub struct BabysitProviderRequest {
     pub locale: String,
     /// 当前 Review Workspace 的绝对路径；provider 只能把它作为只读 cwd 使用。
     pub workspace_path: String,
+    /// 本轮是否允许 provider 探索 File Change 之外的仓库内容。
+    #[serde(default)]
+    pub repository_exploration: bool,
     pub before: String,
     pub after: String,
     pub targets: Vec<LineTarget>,
@@ -382,6 +385,7 @@ fn build_provider_request(
         path: request.path.clone(),
         locale,
         workspace_path: request.workspace_path.clone(),
+        repository_exploration: false,
         before: before.to_owned(),
         after: after.to_owned(),
         targets,

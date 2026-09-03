@@ -217,6 +217,14 @@ impl ApplicationSettingsApplication {
         self.update(|settings| settings.babysit.provider = provider)
     }
 
+    /// 原子保存未来 Babysit 分析是否允许探索 Review Workspace。
+    pub(crate) fn update_repository_exploration(
+        &self,
+        enabled: bool,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        self.update(|settings| settings.babysit.repository_exploration = enabled)
+    }
+
     /// 原子替换一个 provider 的完整 executable/model/effort 组合。
     pub(crate) fn update_provider_settings(
         &self,

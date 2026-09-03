@@ -348,6 +348,7 @@ impl AppServerProcess {
             path: "__narrant_babysit_capability_probe__".to_owned(),
             locale: "en".to_owned(),
             workspace_path: workspace.to_string_lossy().into_owned(),
+            repository_exploration: true,
             before: String::new(),
             after: String::new(),
             targets: Vec::new(),

@@ -145,6 +145,7 @@ struct RecordingBundle {
     prepare_calls: AtomicUsize,
     shutdown_calls: AtomicUsize,
     observed_models: Mutex<Vec<Option<String>>>,
+    observed_workspaces: Mutex<Vec<std::path::PathBuf>>,
 }
 
 impl RecordingBundle {
@@ -155,6 +156,7 @@ impl RecordingBundle {
             prepare_calls: AtomicUsize::new(0),
             shutdown_calls: AtomicUsize::new(0),
             observed_models: Mutex::new(Vec::new()),
+            observed_workspaces: Mutex::new(Vec::new()),
         }
     }
 }
@@ -164,10 +166,14 @@ impl BabysitProviderCapabilities for RecordingBundle {
     /// 记录准备次数及传入的设置快照，并返回确定性分析快照。
     async fn prepare_analysis(
         &self,
-        _workspace_path: &Path,
+        workspace_path: &Path,
         preference: Option<&crate::application_settings::BabysitProviderPreference<'_>>,
     ) -> Result<PreparedBabysitAnalysis, BabysitError> {
         self.prepare_calls.fetch_add(1, Ordering::AcqRel);
+        self.observed_workspaces
+            .lock()
+            .unwrap()
+            .push(workspace_path.to_path_buf());
         self.observed_models
             .lock()
             .unwrap()
@@ -425,6 +431,64 @@ async fn provider_switch_keeps_completed_cache_identities_isolated() {
 
     assert_eq!(codex.generate_calls(), 1);
     assert_eq!(claude.generate_calls(), 1);
+}
+
+/// 仓库探索偏好只隔离未来请求的 workspace 与缓存，不清除任一既有结果。
+#[tokio::test]
+async fn repository_exploration_switches_future_workspace_and_preserves_both_cache_identities() {
+    let directory = tempfile::tempdir().unwrap();
+    let real_workspace = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    let settings = ApplicationSettingsApplication::new(settings_path.clone());
+    settings.update_provider(BabysitProvider::Codex).unwrap();
+    let bundle = Arc::new(RecordingBundle::new());
+    let application = TestBabysitApplication::with_capabilities_at(
+        settings_path,
+        [(
+            BabysitProvider::Codex,
+            bundle.clone() as Arc<dyn BabysitProviderCapabilities>,
+        )],
+    );
+    let mut request = request("r", "s", "src/lib.rs");
+    request.workspace_path = real_workspace.path().to_string_lossy().into_owned();
+    let content = text_change("src/lib.rs", None, Some("fn main() {}"));
+
+    application
+        .explain_file(
+            request.clone(),
+            content.clone(),
+            &OperationContext::background().cancellation().clone(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    settings.update_repository_exploration(true).unwrap();
+    application
+        .explain_file(
+            request.clone(),
+            content.clone(),
+            &OperationContext::background().cancellation().clone(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    settings.update_repository_exploration(false).unwrap();
+    application
+        .explain_file(
+            request,
+            content,
+            &OperationContext::background().cancellation().clone(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(bundle.provider.generate_calls(), 2);
+    let workspaces = bundle.observed_workspaces.lock().unwrap();
+    assert_ne!(workspaces[0], real_workspace.path());
+    assert!(workspaces[0].starts_with(std::env::temp_dir()));
+    assert_eq!(workspaces[1], real_workspace.path());
+    assert_ne!(workspaces[0], workspaces[1]);
 }
 
 /// 设置切换只影响后续分析，运行中的 provider/model 快照保持不变。

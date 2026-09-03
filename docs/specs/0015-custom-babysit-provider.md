@@ -13,8 +13,9 @@ Narrant adds a Built-in Agent Provider displayed as Custom. It uses Rig inside t
 backend to call one user-configured OpenAI Chat Completions-compatible or Anthropic
 Messages-compatible endpoint. The reviewer supplies a base URL, optional API key,
 model identifier, and reasoning-parameter preference. Custom implements the existing whole-File-
-Change Babysit contract, explores only the active Review Workspace through bounded
-Narrant-owned Read, Glob, and Grep tools, validates a schema-bearing final tool result,
+Change Babysit contract, optionally explores the active Review Workspace through bounded
+Narrant-owned Read, Glob, and Grep tools when the device-level preference is enabled,
+validates a schema-bearing final tool result,
 and keeps all analysis state in memory.
 
 Fresh settings select Custom but do not make a network request. Babysit remains
@@ -117,9 +118,10 @@ Coding Agent Provider in Application Settings.
   Narrant does not retry a rejected explicit effort with a different request shape.
 - Saving settings performs local validation only. Protocol, authentication, model, tool,
   and schema compatibility errors surface on the first real analysis request.
-- Rig registers only Narrant-owned Read, Glob, and Grep repository tools plus an
-  internal schema-bearing final-output tool. No shell, write, edit, Web, MCP, or generic
-  filesystem tool is registered.
+- Rig always registers the internal schema-bearing final-output tool. It registers the
+  Narrant-owned Read, Glob, and Grep tools only when repository exploration is enabled;
+  otherwise the request uses the shared empty workspace. No shell, write, edit, Web,
+  MCP, or generic filesystem tool is registered.
 - Read and Grep resolve actual filesystem paths with `canonicalize` and accept them only
   when `strip_prefix` proves they remain below the canonical Review Workspace. Glob
   starts at the workspace root and applies the same check to each match.

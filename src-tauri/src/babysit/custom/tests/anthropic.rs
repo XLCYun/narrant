@@ -109,6 +109,54 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
     assert!(!result.conversation.is_empty());
 }
 
+#[tokio::test]
+async fn disabled_repository_exploration_registers_only_anthropic_final_output_tool() {
+    let server = MockServer::start_async().await;
+    let response = json!({
+        "id": "msg_fixture", "type": "message", "role": "assistant", "model": "fixture-model",
+        "content": [{"type": "tool_use", "id": "final_fixture", "name": "final_result", "input": {"before": {}, "after": {}}}],
+        "stop_reason": "tool_use", "stop_sequence": null,
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    });
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/messages").matches(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body.as_deref().expect("请求应包含 JSON body"))
+                        .expect("请求应为 JSON");
+                let names = body["tools"]
+                    .as_array()
+                    .expect("tools 应为数组")
+                    .iter()
+                    .filter_map(|tool| tool["name"].as_str())
+                    .collect::<Vec<_>>();
+                names == vec!["final_result"]
+            });
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(response);
+        })
+        .await;
+    let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
+        server.base_url(),
+        Some("fixture-key".to_owned()),
+        "fixture-model",
+        CustomProviderEffort::ProviderDefault,
+    ))
+    .expect("fixture adapter should build");
+
+    adapter
+        .run_agent(AnthropicAdapterRequest::without_repository_tools(
+            "Explain this changed line.",
+            Vec::new(),
+            CancellationSignal::default(),
+        ))
+        .await
+        .expect("fixture response should complete");
+
+    mock.assert_async().await;
+}
+
 /// Provider 默认值保留 Anthropic tools，但不发送 Narrant 的 thinking/effort 覆盖。
 #[tokio::test]
 async fn adapter_provider_default_omits_thinking_configuration() {

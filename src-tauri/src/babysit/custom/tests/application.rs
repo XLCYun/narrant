@@ -116,6 +116,9 @@ fn application_for_connection_with_options(
     settings
         .update_provider(BabysitProvider::Custom)
         .expect("选择 fixture Custom provider");
+    settings
+        .update_repository_exploration(true)
+        .expect("既有 Custom application fixture 显式开启 repository exploration");
     let bundle = match tool_cancellation {
         Some(cancellation) => Arc::new(CustomCapabilityBundle::with_tool_boundary_cancellation(
             settings.clone(),

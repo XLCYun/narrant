@@ -163,7 +163,7 @@ impl AnthropicAdapterConfig {
 pub(crate) struct AnthropicAdapterRequest {
     prompt: Message,
     history: Vec<Message>,
-    repository_tools: RepositoryTools,
+    repository_tools: Option<RepositoryTools>,
     cancellation: CancellationSignal,
 }
 
@@ -179,7 +179,21 @@ impl AnthropicAdapterRequest {
         Self {
             prompt: Message::user(prompt.into()),
             history,
-            repository_tools,
+            repository_tools: Some(repository_tools),
+            cancellation,
+        }
+    }
+
+    /// 构造不注册仓库工具的测试请求，模拟关闭仓库探索。
+    pub(crate) fn without_repository_tools(
+        prompt: impl Into<String>,
+        history: Vec<Message>,
+        cancellation: CancellationSignal,
+    ) -> Self {
+        Self {
+            prompt: Message::user(prompt.into()),
+            history,
+            repository_tools: None,
             cancellation,
         }
     }
@@ -247,16 +261,23 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
         request: CustomRunRequest,
         cancellation: &CancellationSignal,
     ) -> Result<CustomRunResult, CustomAdapterError> {
-        let repository_tools = RepositoryTools::new(&self.workspace).map_err(|_| {
-            CustomAdapterError::Transport(CustomTransportFailure::new(
-                self.connection.protocol(),
-                CustomRequestPhase::Setup,
-                CustomStatusCategory::InvalidEndpoint,
-            ))
-        })?;
+        let repository_tools = request
+            .repository_exploration()
+            .then(|| {
+                RepositoryTools::new(&self.workspace).map_err(|_| {
+                    CustomAdapterError::Transport(CustomTransportFailure::new(
+                        self.connection.protocol(),
+                        CustomRequestPhase::Setup,
+                        CustomStatusCategory::InvalidEndpoint,
+                    ))
+                })
+            })
+            .transpose()?;
         #[cfg(test)]
         let repository_tools = match self.tool_boundary_cancellation.clone() {
-            Some(cancellation) => repository_tools.with_execute_cancellation(cancellation),
+            Some(cancellation) => {
+                repository_tools.map(|tools| tools.with_execute_cancellation(cancellation))
+            }
             None => repository_tools,
         };
         let response = self
@@ -381,7 +402,6 @@ impl AnthropicAdapter {
             .http_client(http_client)
             .build()
             .map_err(|_| AnthropicAdapterError::Client)?;
-        let tools = request.repository_tools.rig_tools(&request.cancellation);
         let cancellation = request.cancellation.clone();
         let prompt = request.prompt;
         let history = request.history;
@@ -395,16 +415,23 @@ impl AnthropicAdapter {
             })),
             None => builder,
         };
-        let agent = builder
+        let builder = builder
             // 与 OpenAI-compatible adapter 保持一致，禁止 Rig 记录模型内容。
             .record_content_telemetry(false)
             .default_max_turns(MAX_MODEL_TURNS)
             .output_schema::<LineExplanationOutput>()
-            .output_mode(OutputMode::Tool)
-            .tool(tools.read)
-            .tool(tools.glob)
-            .tool(tools.grep)
-            .build();
+            .output_mode(OutputMode::Tool);
+        let agent = match request.repository_tools {
+            Some(repository_tools) => {
+                let tools = repository_tools.rig_tools(&request.cancellation);
+                builder
+                    .tool(tools.read)
+                    .tool(tools.glob)
+                    .tool(tools.grep)
+                    .build()
+            }
+            None => builder.build(),
+        };
         let completion = async move {
             agent
                 .prompt(prompt)

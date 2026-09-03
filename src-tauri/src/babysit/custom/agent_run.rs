@@ -20,12 +20,21 @@ pub(crate) fn reached_output_limit(calls: &[rig::agent::CompletionCall]) -> bool
 pub(crate) struct CustomRunRequest {
     prompt: Message,
     history: Vec<Message>,
+    repository_exploration: bool,
 }
 
 impl CustomRunRequest {
     /// 构造由 adapter 自己持有工具集合的单次 Rig agent-loop 请求。
-    pub(crate) fn from_prompt(prompt: Message, history: Vec<Message>) -> Self {
-        Self { prompt, history }
+    pub(crate) fn from_prompt(
+        prompt: Message,
+        history: Vec<Message>,
+        repository_exploration: bool,
+    ) -> Self {
+        Self {
+            prompt,
+            history,
+            repository_exploration,
+        }
     }
 
     /// 返回本轮 prompt 的 provider-neutral 消息。
@@ -35,6 +44,10 @@ impl CustomRunRequest {
     /// 返回同一会话的既有消息历史。
     pub(super) fn history(&self) -> &[Message] {
         &self.history
+    }
+    /// 返回本轮是否注册仓库探索工具。
+    pub(super) const fn repository_exploration(&self) -> bool {
+        self.repository_exploration
     }
 }
 

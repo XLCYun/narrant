@@ -32,6 +32,7 @@ fn request() -> BabysitProviderRequest {
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-review-workspace".to_owned(),
+        repository_exploration: true,
         before: "const old = 1;".to_owned(),
         after: "const next = 2;".to_owned(),
         targets: vec![
@@ -83,8 +84,19 @@ fn codex_generation_and_repair_prompts_discourage_repository_exploration() {
         }],
         false,
     );
+    let repair = repair.to_ascii_lowercase();
     assert!(repair.contains("do not explore the repository by default"));
     assert!(repair.contains("do not repeat or broaden a query"));
+}
+
+#[test]
+fn codex_prompt_forbids_repository_exploration_when_disabled() {
+    let mut request = request();
+    request.repository_exploration = false;
+
+    let generation = CodexAppServerProvider::generation_prompt(&request);
+    assert!(generation.contains("Do not call tools or explore the repository"));
+    assert!(!generation.contains("Explore only when"));
 }
 
 /// 启动确定性 shell JSONL fixture，并将事件写入临时文件供断言读取。

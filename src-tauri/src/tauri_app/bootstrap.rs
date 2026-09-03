@@ -127,6 +127,7 @@ pub fn run() {
             application_settings_commands::update_application_theme,
             application_settings_commands::update_application_language,
             application_settings_commands::update_application_babysit_provider,
+            application_settings_commands::update_application_babysit_repository_exploration,
             application_settings_commands::update_application_babysit_preferences,
             application_update_commands::application_update_snapshot,
             application_update_commands::application_update_manual_check,

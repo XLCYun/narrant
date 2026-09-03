@@ -42,6 +42,7 @@ export type TauriCommandContract = {
   update_application_language: { args: { language: ApplicationLanguage }; result: ApplicationSettings };
   list_babysit_models: { args: { provider: BabysitProvider }; result: BabysitModelCatalog; error: { code: string; detail: string } };
   update_application_babysit_provider: { args: { provider: BabysitProvider }; result: ApplicationSettings; error: { code: string; detail: string } };
+  update_application_babysit_repository_exploration: { args: { enabled: boolean }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_preferences: { args: { provider: BabysitProvider; preference: BabysitProviderPreference; catalogRevision: string | null }; result: ApplicationSettings; error: { code: string; detail: string } };
   load_application_custom_connection: { args: EmptyArgs; result: CustomProviderConnection; error: { code: string; detail: string } };
   save_application_custom_connection: { args: { connection: CustomProviderConnection }; result: ApplicationSettings; error: { code: string; detail: string } };
@@ -109,6 +110,7 @@ export const TAURI_COMMAND_NAMES = [
   "update_application_language",
   "list_babysit_models",
   "update_application_babysit_provider",
+  "update_application_babysit_repository_exploration",
   "update_application_babysit_preferences",
   "load_application_custom_connection",
   "save_application_custom_connection",

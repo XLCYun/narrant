@@ -10,8 +10,10 @@ Narrant into an automated reviewer or modifying the code being reviewed.
 ## Solution
 
 Babysit Mode lets a reviewer ask the agent provider selected in Application Settings
-to explain the current File Change. The provider receives the complete before-and-after text as one analysis batch,
-may explore the trusted Review Workspace through a restricted read-only sandbox, and
+to explain the current File Change. The provider receives the complete before-and-after
+text as one analysis batch. By default it receives an isolated empty workspace and must
+use only that supplied content. A device-level preference may allow it to explore the
+trusted Review Workspace through a restricted read-only sandbox. The provider
 returns a short explanation for every non-empty line. Narrant validates the complete
 response, caches it only for the current process, and presents explanations above the
 corresponding Monaco lines while preserving the immutable Review Snapshot.
@@ -90,9 +92,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
   File Change in one exact Review Snapshot.
 - Enabling the mode asks a backend Babysit Agent Provider to analyze the whole File
   Change as one batch.
-- The analysis covers every non-empty line on both the before and after sides. The
-  Agent may explore the trusted Review Workspace read-only to understand repository
-  context.
+- The analysis covers every non-empty line on both the before and after sides. Repository
+  exploration is disabled by default. When enabled in Application Settings, the Agent may
+  explore the trusted Review Workspace read-only and only as needed to understand context.
 - The Review Reader initially shows explanations only above changed non-empty lines. A
   toggle reveals explanations above every analyzed line without starting another run.
 - Line Explanations help the reviewer understand code. They do not judge quality,
@@ -131,6 +133,9 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - Narrant creates one provider-independent request for the entire File Change. The
   request contains both file sides and a complete inventory of Narrant-owned line
   targets; it never invokes the provider once per line.
+- Each request freezes the device-level repository-exploration preference. Disabled
+  requests use a process-owned empty workspace and prompts that forbid exploration;
+  enabled requests retain the existing minimal, read-only exploration policy.
 - A line target identifies its before-or-after side, one-based line number, and
   non-empty source text. The provider returns one short explanation for every
   target in one structured response. The response is a compact JSON object whose
@@ -234,7 +239,10 @@ corresponding Monaco lines while preserving the immutable Review Snapshot.
 - Narrant terminates its App Server child process during application exit.
 - A completed result is cached only in backend memory. The cache identity includes the
   Review Snapshot, File Change path, provider, resolved model, resolved effort,
-  provider process generation, and analysis-contract version.
+  provider process generation, repository-exploration preference, and analysis-contract version.
+- Changing the repository-exploration preference affects only analyses started after
+  the change. It neither cancels an in-flight analysis nor clears results produced under
+  either preference; each cache identity remains independently reusable.
 - Provider changes are persisted immediately and affect only analyses started after
   the change. An in-flight run retains its frozen provider/model/effort snapshot;
   provider changes invalidate catalog revisions and completed explanation caches.

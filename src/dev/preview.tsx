@@ -160,6 +160,7 @@ function SettingsPreview({
       : { protocol: "openai_chat_completions", baseUrl: "https://api.example.test/v1", apiKey: "sk-preview-key", model: "gpt-5-mini", effort: "medium" });
   const [babysit, setBabysit] = useState<BabysitSettings>({
     provider: customState ? "custom" : babysitSection ? "claude-code" : "codex",
+    repositoryExploration: false,
     codex: { executable: codexExecutable, model: null, reasoningEffort: null },
     claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
     custom: { protocol: customConnection.protocol, baseUrl: customConnection.baseUrl, model: customConnection.model, effort: customConnection.effort },
@@ -188,6 +189,10 @@ function SettingsPreview({
     },
     updateBabysitProvider: async (provider) => {
       const next = { ...babysit, provider }; setBabysit(next); return snapshot(savedTheme, next);
+    },
+    updateBabysitRepositoryExploration: async (repositoryExploration) => {
+      if (saveFails) throw new Error("预览中的 settings.json 无法写入");
+      const next = { ...babysit, repositoryExploration }; setBabysit(next); return snapshot(savedTheme, next);
     },
     chooseBabysitExecutable: async (provider, preference) => {
       if (saveFails) throw new Error("预览中的 provider 版本验证失败");

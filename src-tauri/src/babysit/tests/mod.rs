@@ -113,6 +113,7 @@ async fn executable_invalidation_discards_catalog_and_analysis_cache() {
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
             provider_id: "provider".to_owned(),
             process_generation: "generation".to_owned(),
+            repository_exploration: true,
         },
         BabysitFileExplanations::default(),
     );
@@ -633,6 +634,7 @@ fn response_validation_rejects_extra_and_missing_but_accepts_soft_text_limits() 
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
+        repository_exploration: true,
         before: "const value = 1;".to_owned(),
         after: "const value = 2;".to_owned(),
         targets: vec![
@@ -684,6 +686,7 @@ fn provider_output_canonicalizes_zero_padded_requested_line_keys_before_repair()
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
+        repository_exploration: true,
         before: "const value = 1;".to_owned(),
         after: "const value = 2;".to_owned(),
         targets: vec![

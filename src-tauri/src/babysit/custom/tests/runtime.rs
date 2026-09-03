@@ -58,6 +58,7 @@ fn fixture_request(run_id: u64, workspace_path: &str) -> BabysitProviderRequest 
         path: "src/example.rs".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: workspace_path.to_owned(),
+        repository_exploration: true,
         before: "old();".to_owned(),
         after: "new();".to_owned(),
         targets: vec![

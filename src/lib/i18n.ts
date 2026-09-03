@@ -126,6 +126,10 @@ export const resources = {
     },
     settings: {
       provider: { custom: "自定义" },
+      repositoryExploration: {
+        label: "允许仓库探索",
+        description: "开启后，Agent 可以只读搜索当前 Review Workspace 以获取更多上下文，但生成可能明显变慢，并会向模型服务发送额外代码内容。",
+      },
       custom: {
         title: "自定义模型服务",
         description: "填写一个 OpenAI Chat Completions 或 Anthropic Messages 兼容的模型服务连接。",
@@ -240,6 +244,10 @@ export const resources = {
     },
     settings: {
       provider: { custom: "Custom" },
+      repositoryExploration: {
+        label: "Allow repository exploration",
+        description: "When enabled, the Agent may search the current Review Workspace read-only for more context. Generation can take significantly longer and may send additional code to the model service.",
+      },
       custom: {
         title: "Custom model service",
         description: "Configure an OpenAI Chat Completions or Anthropic Messages compatible model service.",

@@ -60,6 +60,7 @@ pub(super) struct CacheKey {
     pub(super) contract_version: String,
     pub(super) model: String,
     pub(super) reasoning_effort: String,
+    pub(super) repository_exploration: bool,
 }
 
 /// 一次分析启动时从同一 Application Settings 快照冻结的 provider/runtime/language 组合。
@@ -70,6 +71,10 @@ struct FrozenBabysitAnalysis {
     prepared: PreparedBabysitAnalysis,
     /// 生成开始时读取的设备级 Application Language；运行期间不再重读设置。
     language: crate::application_settings::ApplicationLanguage,
+    /// 本轮是否允许 provider 读取 File Change 之外的仓库内容。
+    repository_exploration: bool,
+    /// 本轮实际暴露给 provider 的 workspace；关闭探索时指向进程级空目录。
+    provider_workspace_path: String,
 }
 
 /// 负责 eligibility、provider orchestration、校验和 process-local cache 的深模块。
@@ -86,6 +91,8 @@ pub struct BabysitApplication {
     registry:
         HashMap<crate::application_settings::BabysitProvider, Arc<dyn BabysitProviderCapabilities>>,
     settings: Option<crate::application_settings::ApplicationSettingsApplication>,
+    /// 关闭仓库探索时复用的进程级空目录；惰性创建失败不得回退真实工作区。
+    isolated_workspace: Mutex<Option<tempfile::TempDir>>,
 }
 
 /// 构造 Codex App Server 的 provider-independent setup failure。
@@ -108,6 +115,7 @@ impl BabysitApplication {
             cache: Mutex::new(HashMap::new()),
             registry,
             settings,
+            isolated_workspace: Mutex::new(None),
         }
     }
     /// 构造由 Application Settings 选择的生产 provider registry；此过程不探测任何 CLI。
@@ -351,6 +359,8 @@ impl BabysitApplication {
             provider_identity,
             prepared,
             language,
+            repository_exploration,
+            provider_workspace_path,
         } = self
             .prepare_selected_analysis(Path::new(&request.workspace_path))
             .await?;
@@ -369,6 +379,7 @@ impl BabysitApplication {
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
             model: resolved.model.clone(),
             reasoning_effort: resolved.reasoning_effort.clone(),
+            repository_exploration,
         };
         if request.generation_policy == BabysitGenerationPolicy::ReuseCached {
             if let Some(result) = self
@@ -395,6 +406,8 @@ impl BabysitApplication {
         )?;
         provider_request.model = resolved.model;
         provider_request.reasoning_effort = resolved.reasoning_effort;
+        provider_request.repository_exploration = repository_exploration;
+        provider_request.workspace_path = provider_workspace_path;
         let mut output = selected_provider
             .generate(provider_request.clone(), cancellation)
             .await?;
@@ -472,30 +485,38 @@ impl BabysitApplication {
             .transpose()
             // 语言是 provider request 的权威输入；无法读取设置时必须在 provider 启动前失败。
             .map_err(|_| BabysitError::SettingsPersistenceFailed)?;
-        let (selected_identity, selected_preference, language) = match selected_settings.as_ref() {
-            Some(settings) => {
-                let selected_identity = settings.babysit.provider;
-                (
-                    selected_identity,
-                    Some(settings.babysit.provider_preference(selected_identity)),
-                    settings.language,
-                )
-            }
-            None => {
-                // 省略设置的构造入口仅供既有 provider 单元测试；生产实例不能隐式回退语言。
-                #[cfg(test)]
-                {
+        let (selected_identity, selected_preference, language, repository_exploration) =
+            match selected_settings.as_ref() {
+                Some(settings) => {
+                    let selected_identity = settings.babysit.provider;
                     (
-                        crate::application_settings::BabysitProvider::Codex,
-                        None,
-                        crate::application_settings::ApplicationLanguage::English,
+                        selected_identity,
+                        Some(settings.babysit.provider_preference(selected_identity)),
+                        settings.language,
+                        settings.babysit.repository_exploration,
                     )
                 }
-                #[cfg(not(test))]
-                {
-                    return Err(BabysitError::SettingsPersistenceFailed);
+                None => {
+                    // 省略设置的构造入口仅供既有 provider 单元测试；生产实例不能隐式回退语言。
+                    #[cfg(test)]
+                    {
+                        (
+                            crate::application_settings::BabysitProvider::Codex,
+                            None,
+                            crate::application_settings::ApplicationLanguage::English,
+                            true,
+                        )
+                    }
+                    #[cfg(not(test))]
+                    {
+                        return Err(BabysitError::SettingsPersistenceFailed);
+                    }
                 }
-            }
+            };
+        let provider_workspace = if repository_exploration {
+            workspace_path.to_path_buf()
+        } else {
+            self.isolated_workspace_path()?
         };
         let selected_bundle = self
             .registry
@@ -508,13 +529,41 @@ impl BabysitApplication {
                 )
             })?;
         let prepared = selected_bundle
-            .prepare_analysis(workspace_path, selected_preference.as_ref())
+            .prepare_analysis(&provider_workspace, selected_preference.as_ref())
             .await?;
         Ok(FrozenBabysitAnalysis {
             provider_identity: selected_identity,
             prepared,
             language,
+            repository_exploration,
+            provider_workspace_path: provider_workspace.to_string_lossy().into_owned(),
         })
+    }
+
+    /// 惰性创建并持有关闭探索请求共用的空 workspace。
+    fn isolated_workspace_path(&self) -> Result<std::path::PathBuf, BabysitError> {
+        let mut workspace = self
+            .isolated_workspace
+            .lock()
+            .map_err(|_| BabysitError::Provider {
+                detail: "isolated_workspace_unavailable".to_owned(),
+            })?;
+        if workspace.is_none() {
+            *workspace = Some(
+                tempfile::Builder::new()
+                    .prefix("narrant-babysit-isolated-")
+                    .tempdir()
+                    .map_err(|_| BabysitError::Provider {
+                        detail: "isolated_workspace_unavailable".to_owned(),
+                    })?,
+            );
+        }
+        workspace
+            .as_ref()
+            .map(|directory| directory.path().to_path_buf())
+            .ok_or_else(|| BabysitError::Provider {
+                detail: "isolated_workspace_unavailable".to_owned(),
+            })
     }
 
     /// 暴露缓存清理 seam；Review 关闭和应用退出时由后续生命周期 issue 调用。

@@ -190,6 +190,13 @@ The automatic or explicit model and reasoning-effort selection retained independ
 for one Babysit agent provider and applied to that provider's future analyses.
 _Avoid_: Review model, account model, global Babysit model
 
+**Babysit Repository Exploration Preference**:
+The device-local, provider-independent choice that determines whether future Babysit
+analyses may inspect the current Review Workspace beyond the supplied File Change.
+It is disabled by default; when enabled, exploration remains read-only and limited to
+the smallest repository context needed for accurate Line Explanations.
+_Avoid_: Repository access, deep analysis, enhanced explanations
+
 **Built-in Agent Provider**:
 A Babysit Agent Provider implemented inside Narrant that calls a user-configured model
 service directly without requiring an external Coding Agent runtime. It does not imply
