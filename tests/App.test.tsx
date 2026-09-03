@@ -864,6 +864,15 @@ describe("App", () => {
     await openFileChanges();
     expect(await screen.findByText(/二进制文件/)).toBeInTheDocument();
     expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
+    localStorage.setItem("narrant.review.editorZoomLevel", "3");
+    const zoomEvent = new KeyboardEvent("keydown", { key: "-", code: "Minus", ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(zoomEvent);
+    expect(zoomEvent.defaultPrevented).toBe(true);
+    expect(localStorage.getItem("narrant.review.editorZoomLevel")).toBe("2");
+    expect(setWebviewZoom).not.toHaveBeenCalled();
+    const paletteEvent = new KeyboardEvent("keydown", { key: "p", code: "KeyP", ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(paletteEvent);
+    expect(paletteEvent.defaultPrevented).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /library.*修改/ }));
     expect(await screen.findByText("Submodule commit 变更")).toBeInTheDocument();
     expect(screen.getByText("abc1234 → def5678")).toBeInTheDocument();

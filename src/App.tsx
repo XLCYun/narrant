@@ -33,6 +33,7 @@ import { useGitHubIdentityLifecycle } from "@/github/use-github-identity-lifecyc
 import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
 import { useBranchSelectionContinuation } from "@/review/use-branch-selection-continuation";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
+import { changeReviewEditorZoomLevel } from "@/review/editor-zoom";
 import { useRepositoryOverview } from "@/repository/use-repository-overview";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import { SettingsPage } from "@/components/settings-page";
@@ -180,21 +181,25 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!desktopRuntimeEnabled) return;
-    /** Reader 之外用桌面 WebView 缩放页面；Reader 自己优先接管同一组按键。 */
+    /** 文本 Reader 优先接管快捷键；其余 Reader 保存字号，其他页面缩放 WebView。 */
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || visibleReviewReader || (!event.ctrlKey && !event.metaKey) || event.altKey) return;
+      if (event.defaultPrevented || (!event.ctrlKey && !event.metaKey) || event.altKey) return;
       if (event.code === "KeyP") {
         event.preventDefault();
         return;
       }
-      const direction = event.code === "Equal" || event.code === "NumpadAdd"
+      const direction: -1 | 0 | 1 = event.code === "Equal" || event.code === "NumpadAdd"
         ? 1
         : event.code === "Minus" || event.code === "NumpadSubtract"
           ? -1
           : 0;
       if (direction === 0 && event.code !== "Digit0" && event.code !== "Numpad0") return;
       event.preventDefault();
+      if (visibleReviewReader) {
+        changeReviewEditorZoomLevel(direction);
+        return;
+      }
+      if (!desktopRuntimeEnabled) return;
       const nextLevel = direction === 0
         ? 1
         : Math.min(10, Math.max(0.2, Math.round((webviewZoomLevel.current + direction * 0.2) * 10) / 10));

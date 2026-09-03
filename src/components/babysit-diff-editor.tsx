@@ -4,10 +4,9 @@ import { DiffEditor, type DiffOnMount, type Monaco, type MonacoDiffEditor } from
 import type { BabysitFileExplanations } from "@/babysit/types";
 import { configureLocalMonaco } from "@/infrastructure/local-monaco";
 import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
+import { readReviewEditorZoomLevel, saveReviewEditorZoomLevel } from "@/review/editor-zoom";
 
 configureLocalMonaco();
-
-const EDITOR_ZOOM_LEVEL_KEY = "narrant.review.editorZoomLevel";
 
 /** 控制当前 File Change 显示改变行还是完整解释集合。 */
 export type BabysitExplanationFilter = "changed" | "all";
@@ -209,8 +208,8 @@ export function BabysitDiffEditor({
       if (action === "editor.action.quickCommand" && !target.hasWidgetFocus()) target.focus();
       target.trigger("narrant", action, undefined);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [mounted]);
 
   /** 从设备偏好恢复 Monaco 全局缩放，并持久化后续内置字号命令产生的变化。 */
@@ -218,12 +217,9 @@ export function BabysitDiffEditor({
     if (!mounted) return;
     const editorZoom = mounted.monaco?.editor?.EditorZoom;
     if (!editorZoom) return;
-    const savedLevel = Number(localStorage.getItem(EDITOR_ZOOM_LEVEL_KEY));
-    if (Number.isInteger(savedLevel) && savedLevel >= -5 && savedLevel <= 20) {
-      editorZoom.setZoomLevel(savedLevel);
-    }
+    editorZoom.setZoomLevel(readReviewEditorZoomLevel());
     const subscription = editorZoom.onDidChangeZoomLevel((level: number) => {
-      localStorage.setItem(EDITOR_ZOOM_LEVEL_KEY, String(level));
+      saveReviewEditorZoomLevel(level);
     });
     return () => subscription.dispose();
   }, [mounted]);
