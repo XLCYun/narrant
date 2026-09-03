@@ -39,6 +39,12 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(backend).not.toMatch(/StateFlags::FULLSCREEN/);
   });
 
+  it("主窗口只授予应用层页面缩放所需的 WebView 权限", () => {
+    const capability = JSON.parse(read("src-tauri/capabilities/default.json"));
+
+    expect(capability.permissions).toContain("core:webview:allow-set-webview-zoom");
+  });
+
   it("Windows release 使用 GUI 子系统，避免启动时出现控制台窗口", () => {
     const main = read("src-tauri/src/main.rs");
 

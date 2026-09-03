@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,7 @@ export function App() {
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
   const visibleReviewReader = appShell.destination.kind === "review" ? reviewLifecycle.reader : null;
+  const webviewZoomLevel = useRef(1);
   const snapshot = visibleReviewReader?.snapshot;
   const refreshingReview = visibleReviewReader?.transition.kind === "refreshing";
   const currentReaderDiffMode = reviewLifecycle.reader?.diffMode;
@@ -176,6 +178,32 @@ export function App() {
     window.addEventListener("resize", updateReviewWidth);
     return () => window.removeEventListener("resize", updateReviewWidth);
   }, []);
+
+  useEffect(() => {
+    if (!desktopRuntimeEnabled) return;
+    /** Reader 之外用桌面 WebView 缩放页面；Reader 自己优先接管同一组按键。 */
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || visibleReviewReader || (!event.ctrlKey && !event.metaKey) || event.altKey) return;
+      if (event.code === "KeyP") {
+        event.preventDefault();
+        return;
+      }
+      const direction = event.code === "Equal" || event.code === "NumpadAdd"
+        ? 1
+        : event.code === "Minus" || event.code === "NumpadSubtract"
+          ? -1
+          : 0;
+      if (direction === 0 && event.code !== "Digit0" && event.code !== "Numpad0") return;
+      event.preventDefault();
+      const nextLevel = direction === 0
+        ? 1
+        : Math.min(10, Math.max(0.2, Math.round((webviewZoomLevel.current + direction * 0.2) * 10) / 10));
+      webviewZoomLevel.current = nextLevel;
+      void getCurrentWebview().setZoom(nextLevel);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [desktopRuntimeEnabled, visibleReviewReader]);
 
   useEffect(() => {
     if (!currentReaderDiffMode || currentReaderTreeWidth === undefined) return;

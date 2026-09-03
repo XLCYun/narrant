@@ -7,6 +7,8 @@ import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
 
 configureLocalMonaco();
 
+const EDITOR_ZOOM_LEVEL_KEY = "narrant.review.editorZoomLevel";
+
 /** 控制当前 File Change 显示改变行还是完整解释集合。 */
 export type BabysitExplanationFilter = "changed" | "all";
 
@@ -184,6 +186,47 @@ export function BabysitDiffEditor({
     const subscription = mounted.editor.onDidUpdateDiff?.(refresh);
     return () => subscription?.dispose();
   }, [mounted, original, modified]);
+
+  /** Review Reader 可见时接管字号快捷键，避免 WebView 同时缩放整个应用界面。 */
+  useEffect(() => {
+    if (!mounted) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.altKey) return;
+      const action = event.code === "Equal" || event.code === "NumpadAdd"
+        ? "editor.action.fontZoomIn"
+        : event.code === "Minus" || event.code === "NumpadSubtract"
+          ? "editor.action.fontZoomOut"
+          : event.code === "Digit0" || event.code === "Numpad0"
+            ? "editor.action.fontZoomReset"
+            : event.code === "KeyP"
+              ? "editor.action.quickCommand"
+              : undefined;
+      if (!action) return;
+      event.preventDefault();
+      const originalEditor = mounted.editor.getOriginalEditor();
+      const modifiedEditor = mounted.editor.getModifiedEditor();
+      const target = originalEditor.hasWidgetFocus() ? originalEditor : modifiedEditor;
+      if (action === "editor.action.quickCommand" && !target.hasWidgetFocus()) target.focus();
+      target.trigger("narrant", action, undefined);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mounted]);
+
+  /** 从设备偏好恢复 Monaco 全局缩放，并持久化后续内置字号命令产生的变化。 */
+  useEffect(() => {
+    if (!mounted) return;
+    const editorZoom = mounted.monaco?.editor?.EditorZoom;
+    if (!editorZoom) return;
+    const savedLevel = Number(localStorage.getItem(EDITOR_ZOOM_LEVEL_KEY));
+    if (Number.isInteger(savedLevel) && savedLevel >= -5 && savedLevel <= 20) {
+      editorZoom.setZoomLevel(savedLevel);
+    }
+    const subscription = editorZoom.onDidChangeZoomLevel((level: number) => {
+      localStorage.setItem(EDITOR_ZOOM_LEVEL_KEY, String(level));
+    });
+    return () => subscription.dispose();
+  }, [mounted]);
 
   const selectedEntries = useMemo(() => {
     if (!explanations) return { before: [], after: [] } as const;

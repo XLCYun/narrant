@@ -214,7 +214,9 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 标题、正文、分支、路径与 revision 统一使用 Oxanium；只有 Monaco Diff 中的代码内容使用 JetBrains Mono。
 - File Change 状态使用一致语义颜色：新增绿色、删除红色、修改橙色或黄色、重命名蓝色，并同时提供文字或图标，不能仅依赖颜色。
 - 最小可用窗口目标为 900×600。1200px 以上同时展示主侧边栏、文件树和双栏 Diff；900–1199px 默认收起主侧边栏并允许 Diff 临时单栏。
-- 第一版不增加产品级键盘快捷键，但所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。
+- 主修饰键在 macOS 使用 Command、Windows 和 Linux 使用 Ctrl。Review Reader 可见时，主修饰键加号、减号和 0 分别调用 Monaco 内置的字体增大、减小和重置命令，主修饰键 P 打开当前 Diff pane 的 Monaco Command Palette；Reader 之外，加号、减号和 0 缩放或重置整个 WebView，P 不触发打印。
+- Reader 字体缩放沿用 Monaco 的内置技术边界，作为所有 Review 共享的设备偏好跨应用重启保留。命令优先发给当前聚焦的 Diff pane；没有 pane 获得焦点时使用 modified pane。
+- 所有 shadcn/Base UI 控件、文件树、菜单和 Dialog 必须保持标准键盘与焦点可访问性。
 - 主视图切换不额外编排键盘焦点，沿用按钮和侧边栏组件的标准焦点行为；为显示当前 Review 而自动滚动侧边栏时不主动抢占焦点。
 - 应用只呈现一个 Review，但保留本次进程中全部已打开 Review 的运行时状态；详细生命周期由 [Spec 0012](0012-process-lifetime-open-reviews.md) 定义。
 
@@ -229,6 +231,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 主视图导航测试验证三个主视图共用常驻侧边栏，品牌区、Repository 和 Review 可切换对应内容，仓库树中只有当前项高亮且“最近审核”永不高亮，打开 Review 后所属 Repository 展开、选中项可见且 Review 按更新后的最近打开时间排序。同时覆盖异步加载、打开失败保留原视图、重复点击不重载，以及小窗口切换后临时侧栏保持打开。测试不断言 `AppShell`、`MainSidebar` 或主视图状态的内部组件结构。
 - React 测试覆盖 Pull Request 离线缓存、局部 GitHub 失败、不可用 Repository、Review 切换失败保留当前内容，以及不同错误作用域。
 - React 测试覆盖文件树自动选择、零变更、特殊 File Change、单栏与双栏切换、响应式降级和前端偏好恢复。
+- React 测试覆盖 Reader 内 Monaco 字号快捷键、Command Palette pane 选择、字号缩放恢复，以及 Reader 外 WebView 页面缩放分流。
 - i18n 单元测试覆盖 locale 规范化、显式偏好优先级、未知语言回退、namespace loader 白名单、绝对时间和相对时间格式。
 - 每个 i18n 组件测试创建独立 i18next 实例并注入同步内存资源，避免全局实例在并行测试之间泄漏。
 - 中文测试显式使用 `zh-CN`；首页、Repository 空状态和 Review 更新至少各有英文 smoke test。
@@ -250,7 +253,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 不可用 Repository 的重新定位 UI。
 - 多个同时可见的 Review、标签页式 Review 或跨进程恢复 Review 运行时状态。
 - 文件树搜索、状态筛选、已读或未读状态、隐藏已查看文件。
-- 产品级键盘快捷键和快捷键自定义。
+- 键盘快捷键自定义，以及本规格未列出的产品级快捷键。
 - 手动语言选择器、独立设置页、繁体中文或简体中文与英文之外的翻译。
 - 远程翻译资源、翻译管理云服务或第一版强制引入翻译供应商工作流。
 - Pull Request 完整发现列表的离线缓存；离线只保证已经创建 Review 的 Pull Request 元数据可见。
