@@ -37,7 +37,7 @@ fn manifest_version(target: &str, version: &str) -> String {
         "notes": "safe",
         "platforms": {
             target: {
-                "url": "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.exe",
+                "url": "https://updates.cyunlab.com/narrant/releases/2.0.0/windows-x86_64/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-narrant-windows-x86_64-updater.exe",
                 "signature": "trusted-signature"
             }
         }

@@ -54,7 +54,7 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      NARRANT_UPDATER_ENDPOINT: https://github.com/cyunlab/narrant/releases/latest/download/latest.json
+      NARRANT_UPDATER_ENDPOINT: https://updates.cyunlab.com/narrant/channels/stable/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
       NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
       NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
@@ -71,7 +71,7 @@ jobs:
           if [[ "$NARRANT_RELEASE_SIGNING_PUBLIC_KEY" != "$NARRANT_UPDATER_PUBLIC_KEY" ]]; then
             test "$NARRANT_UPDATER_BRIDGE_TAG" = "$GITHUB_REF_NAME"
           fi
-          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://github.com/cyunlab/narrant/releases/latest/download/latest.json" ]] || {
+          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://updates.cyunlab.com/narrant/channels/stable/latest.json" ]] || {
             echo "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。" >&2
             exit 1
           }
@@ -253,7 +253,7 @@ jobs:
       NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      NARRANT_UPDATER_ENDPOINT: https://github.com/cyunlab/narrant/releases/latest/download/latest.json
+      NARRANT_UPDATER_ENDPOINT: https://updates.cyunlab.com/narrant/channels/stable/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
       NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
       NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
@@ -278,7 +278,7 @@ jobs:
               ($env:NARRANT_UPDATER_BRIDGE_TAG -ne $env:GITHUB_REF_NAME)) {
             throw "updater key bridge 缺少 exact tag 授权"
           }
-          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://github.com/cyunlab/narrant/releases/latest/download/latest.json") {
+          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://updates.cyunlab.com/narrant/channels/stable/latest.json") {
             throw "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。"
           }
       - uses: pnpm/action-setup@v4
@@ -343,6 +343,7 @@ jobs:
       - run: pnpm install --frozen-lockfile --prod
       - name: 在任何远端变更前固定当前 published Stable 身份
         id: previous-stable
+        if: github.ref_name != vars.NARRANT_OSS_BOOTSTRAP_TAG
         run: node scripts/read-public-stable-identity.mjs
       - uses: actions/download-artifact@v4
         with:
@@ -365,7 +366,7 @@ jobs:
       source_sha: ${{ needs.validate.outputs.source_sha }}
       public_release_id: ${{ needs.draft-release.outputs.public_release_id }}
       public_tag: ${{ github.ref_name }}
-      mode: normal
+      mode: ${{ github.ref_name == vars.NARRANT_OSS_BOOTSTRAP_TAG && 'bootstrap' || 'normal' }}
       previous_stable_tag: ${{ needs.draft-release.outputs.previous_stable_tag }}
       previous_stable_manifest_sha256: ${{ needs.draft-release.outputs.previous_stable_manifest_sha256 }}
     secrets:

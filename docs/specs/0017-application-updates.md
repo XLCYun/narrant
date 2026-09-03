@@ -94,7 +94,7 @@ Application Update 对前端发布有序快照，状态至少包含：
 ### Update trust and staging
 
 - 正式 endpoint 固定为
-  `https://github.com/cyunlab/narrant/releases/latest/download/latest.json`，只允许 HTTPS。
+  `https://updates.cyunlab.com/narrant/channels/stable/latest.json`，只允许 HTTPS、固定 host 与 exact path。
 - 使用 Narrant 独立的 Tauri updater minisign 密钥。公钥编译进应用；私钥、密码及离线
   备份不进入源码、公开仓库或 Release。
 - Rust 同时把 endpoint 与公钥提供给 updater plugin 和 Application Update adapter；缺失、
@@ -129,8 +129,9 @@ Application Update 对前端发布有序快照，状态至少包含：
 - `latest.json`
 - `SHA256SUMS`
 
-`latest.json` 只包含 `darwin-aarch64` 和 `windows-x86_64`，每项 URL 使用公开仓库的
-tag-specific HTTPS Release URL，`signature` 是对应 `.sig` 文件的字面内容。Draft 阶段
+`latest.json` 只包含 `darwin-aarch64` 和 `windows-x86_64`。每项 `url` 是 content-addressed OSS
+updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`signature` 是对应 `.sig`
+文件的字面内容。Draft 阶段
 没有最终 published time，因此 `pub_date` 可以省略；Notes 来自公开 Release body。
 
 ### Cross-repository authority

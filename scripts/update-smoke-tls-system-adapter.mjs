@@ -70,16 +70,16 @@ function selectCommandEnvironment(environment) {
   return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
 }
 
-/** 在不改变原字节的前提下追加唯一 github.com loopback 映射。 */
+/** 在不改变原字节的前提下追加唯一 updates.cyunlab.com loopback 映射。 */
 export function buildTemporaryHostsBytes(original, hostname, address) {
   if (!Buffer.isBuffer(original) || original.length > HOSTS_BOUND || original.includes(0)) throw new Error("runner hosts 文件无效");
-  if (hostname !== "github.com" || address !== "127.0.0.1") throw new Error("hosts mapping 必须是 github.com→loopback");
+  if (hostname !== "updates.cyunlab.com" || address !== "127.0.0.1") throw new Error("hosts mapping 必须是 updates.cyunlab.com→loopback");
   const body = original.toString("utf8");
   const existing = body.split(/\r?\n/).some((line) => {
     const fields = line.split("#", 1)[0].trim().split(/\s+/);
     return fields.slice(1).includes(hostname);
   });
-  if (existing) throw new Error("runner hosts 已含 github.com，拒绝覆盖未知路由");
+  if (existing) throw new Error("runner hosts 已含 updates.cyunlab.com，拒绝覆盖未知路由");
   const newline = body.includes("\r\n") ? "\r\n" : "\n";
   return Buffer.from(`${body}${body.length === 0 || body.endsWith("\n") ? "" : newline}${address} ${hostname}${newline}`);
 }
@@ -104,9 +104,9 @@ function parseFingerprint(output) {
   return value;
 }
 
-/** 创建一天有效、SAN 只含 github.com 的 runner 临时 CA/leaf。 */
+/** 创建一天有效、SAN 只含 updates.cyunlab.com 的 runner 临时 CA/leaf。 */
 async function createTlsIdentity(config, command, environment) {
-  if (config.hostname !== "github.com") throw new Error("临时 TLS identity hostname 无效");
+  if (config.hostname !== "updates.cyunlab.com") throw new Error("临时 TLS identity hostname 无效");
   const authority = path.join(config.directory, "authority.pem");
   const authorityKey = path.join(config.directory, "authority.key");
   const certificate = path.join(config.directory, "leaf.pem");

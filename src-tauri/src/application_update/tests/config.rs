@@ -17,28 +17,18 @@ fn manifest_redirect_allowlist_requires_https_default_port_and_known_path() {
         &PRODUCTION_UPDATE_ENDPOINT.parse().unwrap()
     ));
     assert!(trusted_manifest_url(
-        &"https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json"
-            .parse()
-            .unwrap()
-    ));
-    assert!(trusted_manifest_url(
-        &"https://release-assets.githubusercontent.com/github-production-release-asset/123/token"
+        &"https://updates.cyunlab.com/narrant/channels/stable/latest.json"
             .parse()
             .unwrap()
     ));
     for denied in [
-        "http://github.com/cyunlab/narrant/releases/latest/download/latest.json",
-        "https://github.com:444/cyunlab/narrant/releases/latest/download/latest.json",
-        "https://user@github.com/cyunlab/narrant/releases/latest/download/latest.json",
-        "https://github.com/cyunlab/other/releases/latest/download/latest.json",
-        "https://github.com/other/narrant/releases/download/v1.1.5/latest.json",
-        "https://github.com/cyunlab/narrant/releases/download//latest.json",
-        "https://github.com/cyunlab/narrant/releases/download/../latest.json",
-        "https://github.com/cyunlab/narrant/releases/download/%2F/latest.json",
-        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/other.json",
-        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json?download=1",
-        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json#fragment",
-        "https://evil.example/github-production-release-asset/123/token",
+        "http://updates.cyunlab.com/narrant/channels/stable/latest.json",
+        "https://updates.cyunlab.com:444/narrant/channels/stable/latest.json",
+        "https://user@updates.cyunlab.com/narrant/channels/stable/latest.json",
+        "https://updates.cyunlab.com/dsh-desktop/channels/stable/latest.json",
+        "https://updates.cyunlab.com/narrant/channels/stable/other.json",
+        "https://updates.cyunlab.com/narrant/channels/stable/latest.json?download=1",
+        "https://updates.cyunlab.com/narrant/channels/stable/latest.json#fragment",
     ] {
         assert!(!trusted_manifest_url(&denied.parse().unwrap()), "{denied}");
     }
@@ -46,11 +36,7 @@ fn manifest_redirect_allowlist_requires_https_default_port_and_known_path() {
 
 #[test]
 fn production_manifest_policy_accepts_latest_tagged_and_asset_chain() {
-    let chain = [
-        PRODUCTION_UPDATE_ENDPOINT,
-        "https://github.com/cyunlab/narrant/releases/download/v1.1.5/latest.json",
-        "https://release-assets.githubusercontent.com/github-production-release-asset/123/abcdef?sp=r&sig=opaque",
-    ];
+    let chain = [PRODUCTION_UPDATE_ENDPOINT];
     assert!(chain
         .iter()
         .all(|url| trusted_manifest_url(&url.parse().unwrap())));
@@ -81,15 +67,15 @@ fn production_config_fails_closed_when_build_inputs_are_missing_or_changed() {
 #[test]
 fn package_allowlist_accepts_only_narrant_tag_specific_https_assets() {
     for denied in [
-        "http://github.com/cyunlab/narrant/releases/download/v1.2.0/update.tar.gz",
-        "https://example.com/cyunlab/narrant/releases/download/v1.2.0/update.tar.gz",
-        "https://github.com/other/narrant/releases/download/v1.2.0/update.tar.gz",
-        "https://github.com/cyunlab/narrant/releases/latest/download/update.tar.gz",
+        "http://updates.cyunlab.com/narrant/releases/1.2.0/darwin-aarch64/hash-update.tar.gz",
+        "https://example.com/narrant/releases/1.2.0/darwin-aarch64/hash-update.tar.gz",
+        "https://updates.cyunlab.com/dsh-desktop/releases/1.2.0/darwin-aarch64/hash-update.tar.gz",
+        "https://updates.cyunlab.com/narrant/channels/stable/update.tar.gz",
     ] {
         assert!(!trusted_package_url(&denied.parse().unwrap()), "{denied}");
     }
     assert!(trusted_package_url(
-        &"https://github.com/cyunlab/narrant/releases/download/v1.2.0/narrant-darwin-aarch64-updater.app.tar.gz"
+        &"https://updates.cyunlab.com/narrant/releases/1.2.0/darwin-aarch64/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-narrant-darwin-aarch64-updater.app.tar.gz"
             .parse()
             .unwrap()
     ));

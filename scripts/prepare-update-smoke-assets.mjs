@@ -14,15 +14,15 @@ import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
 const MAX_MANIFEST_BYTES = 512 * 1024;
 const MAX_PACKAGE_BYTES = 2 * 1024 * 1024 * 1024;
 
-/** 确认 anonymous response 最终仍在 GitHub 官方 release asset 链路。 */
+/** 确认匿名响应仍在 Narrant OSS 公开发布边界。 */
 function validateFinalUrl(urlText, kind) {
   let url;
   try { url = new URL(urlText); } catch { throw new Error(`${kind} 最终 URL 无效`); }
   if (
     url.protocol !== "https:" || url.username || url.password || url.port ||
-    !["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(url.hostname)
+    url.hostname !== "updates.cyunlab.com" || !url.pathname.startsWith("/narrant/")
   ) {
-    throw new Error(`${kind} 最终 URL 离开 GitHub 官方链路`);
+    throw new Error(`${kind} 最终 URL 离开 Narrant OSS 发布边界`);
   }
 }
 
@@ -95,7 +95,7 @@ export async function preparePreviousStable(options, dependencies = {}) {
     throw new Error("published Stable manifest version/targets 不匹配");
   }
   const entry = manifest.platforms[target];
-  const expectedPrefix = `https://github.com/cyunlab/narrant/releases/download/${expectedTag}/`;
+  const expectedPrefix = `https://updates.cyunlab.com/narrant/releases/${version}/${target}/`;
   if (typeof entry?.url !== "string" || !entry.url.startsWith(expectedPrefix) || typeof entry.signature !== "string" || !entry.signature) {
     throw new Error("published Stable target entry 无效");
   }

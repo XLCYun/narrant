@@ -7,7 +7,7 @@
 - Implement the complete staged lifecycle in the governing spec; do not substitute direct
   frontend use of the stock Tauri updater plugin or a check-only MVP.
 - Stable metadata is read from
-  `https://github.com/cyunlab/narrant/releases/latest/download/latest.json` and supports
+  `https://updates.cyunlab.com/narrant/channels/stable/latest.json` and supports
   exactly `darwin-aarch64` and `windows-x86_64` initially.
 - Endpoint, public key, package URL, signature and install path remain Rust-owned. Frontend
   callers can only observe snapshots and send the narrow inputs named by the spec.

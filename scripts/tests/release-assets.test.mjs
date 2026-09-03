@@ -185,7 +185,11 @@ test("完整准备生成固定两目标 manifest 并字面保留 canonical ED �
   assert.equal(Buffer.from(signatureFile, "base64").toString("base64"), signatureFile);
   assert.match(
     manifest.platforms["windows-x86_64"].url,
-    /cyunlab\/narrant\/releases\/download\/v2\.3\.4\/narrant-windows-x86_64-updater\.exe$/,
+    /^https:\/\/updates\.cyunlab\.com\/narrant\/releases\/2\.3\.4\/windows-x86_64\/[0-9a-f]{64}-narrant-windows-x86_64-updater\.exe$/,
+  );
+  assert.match(
+    manifest.platforms["darwin-aarch64"].installer_url,
+    /^https:\/\/updates\.cyunlab\.com\/narrant\/releases\/2\.3\.4\/darwin-aarch64\/[0-9a-f]{64}-Narrant_2\.3\.4_aarch64\.dmg$/,
   );
   assert.equal(result.names.length, 8);
   assert.equal(result.updaterTrust.bridgeAuthorized, false);
@@ -427,11 +431,19 @@ test("manifest 校验拒绝 URL、名称、版本、notes 和签名映射偏差"
     version: "2.3.4",
     notes: "发布说明\n保留换行。\n",
     signatures,
+    assetDigests: Object.fromEntries([
+      fixture.names.installer.darwin,
+      fixture.names.installer.windows,
+      fixture.names.updater.darwin,
+      fixture.names.updater.windows,
+    ].map((name) => [name, createHash("sha256").update(readFileSync(join(fixture.directory, name))).digest("hex")])),
   };
   assert.doesNotThrow(() => validateUpdaterManifest(manifest, options));
   for (const mutate of [
     (copy) => { copy.platforms["darwin-aarch64"].url = "https://example.com/wrong"; },
     (copy) => { copy.platforms["darwin-aarch64"].url = copy.platforms["darwin-aarch64"].url.replace("darwin", "macos"); },
+    (copy) => { delete copy.platforms["darwin-aarch64"].installer_url; },
+    (copy) => { copy.platforms["windows-x86_64"].installer_url = "https://example.com/setup.exe"; },
     (copy) => { copy.version = "2.3.5"; },
     (copy) => { copy.notes = "other"; },
     (copy) => { copy.platforms["windows-x86_64"].signature = "other"; },

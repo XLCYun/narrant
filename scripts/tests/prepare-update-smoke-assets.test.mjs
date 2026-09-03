@@ -49,18 +49,18 @@ function previousFixture() {
   const packageBytes = Buffer.from("bridge-B-archive-signed-by-old");
   const old = signingFixture(packageBytes, "0102030405060708");
   const successor = signingFixture(Buffer.from("candidate-C"), "1112131415161718");
-  const packageUrl = "https://github.com/cyunlab/narrant/releases/download/v2.0.0/narrant-windows-x86_64-updater.exe";
+  const packageUrl = "https://updates.cyunlab.com/narrant/releases/2.0.0/windows-x86_64/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-narrant-windows-x86_64-updater.exe";
   const manifest = {
     version: "2.0.0",
     platforms: {
-      "darwin-aarch64": { url: "https://github.com/cyunlab/narrant/releases/download/v2.0.0/narrant-darwin-aarch64-updater.app.tar.gz", signature: old.signature },
+      "darwin-aarch64": { url: "https://updates.cyunlab.com/narrant/releases/2.0.0/darwin-aarch64/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-narrant-darwin-aarch64-updater.app.tar.gz", signature: old.signature },
       "windows-x86_64": { url: packageUrl, signature: old.signature },
     },
   };
   const manifestBytes = Buffer.from(JSON.stringify(manifest));
   const fetchImpl = async (url) => String(url) === packageUrl
     ? response(packageBytes, packageUrl)
-    : response(manifestBytes, "https://github.com/cyunlab/narrant/releases/latest/download/latest.json", "application/json");
+    : response(manifestBytes, "https://updates.cyunlab.com/narrant/channels/stable/latest.json", "application/json");
   return { packageBytes, old, successor, packageUrl, fetchImpl };
 }
 

@@ -149,10 +149,9 @@ test("bootstrap protected tag 必须与 candidate 完全匹配", async () => {
 });
 
 test("bootstrap promotion 不要求 previous Stable，但 normal evidence 不能混入", async () => {
-  const latestLegacy = release({ id: 1, tag: "v1.1.5", draft: false, assets: [] });
   const draft = release();
   const published = release({ draft: false });
-  const fetch = queuedFetch([{ body: [draft, latestLegacy] }, { body: draft }, { body: published }, { body: published }]);
+  const fetch = queuedFetch([{ body: draft }, { body: published }, { body: published }]);
   let mode;
   await promoteStableRelease(options("bootstrap"), {
     fetchImpl: fetch.implementation,
@@ -172,18 +171,46 @@ test("bootstrap promotion 拒绝 protected Environment 中的 previous release k
   assert.equal(downloaded, false);
 });
 
-test("历史 published updater Stable 会永久关闭 bootstrap，即使当前 Latest 是 legacy", async () => {
+test("OSS 首次 bootstrap 不依赖 GitHub 历史 Stable", async () => {
   const draft = release();
-  const historical = release({ id: 9, tag: "v1.9.0", draft: false, assets: [{ id: 91, name: "latest.json", size: 10 }] });
-  const legacyLatest = release({ id: 1, tag: "v1.1.5", draft: false, assets: [] });
-  const fetch = queuedFetch([{ body: [draft, historical, legacyLatest] }]);
-  await assert.rejects(() => promoteStableRelease(options("bootstrap"), {
+  const published = release({ draft: false });
+  const fetch = queuedFetch([{ body: draft }, { body: published }, { body: published }]);
+  await promoteStableRelease(options("bootstrap"), {
     fetchImpl: fetch.implementation,
     downloadDraft: async () => receipt(),
     verifyEvidence: async () => {},
-  }), /永久关闭/);
-  assert.equal(fetch.calls.some((call) => call.init.method === "PATCH"), false);
-  assert.match(fetch.calls[0].url, /releases\?per_page=100&page=1$/);
+  });
+  assert.equal(fetch.calls.some((call) => call.init.method === "PATCH"), true);
+  assert.equal(fetch.calls.some((call) => call.url.includes("releases?per_page=")), false);
+});
+
+test("OSS candidate 在 GitHub publication 前准备，Stable pointer 只在 Latest 回读后切换", async () => {
+  const draft = release();
+  const published = release({ draft: false });
+  const queued = queuedFetch([{ body: draft }, { body: published }, { body: published }]);
+  const events = [];
+  const fetchImpl = async (url, init) => {
+    if (init.method === "PATCH") events.push("github-publish");
+    else if (String(url).endsWith("/releases/latest")) events.push("github-latest-readback");
+    return queued.implementation(url, init);
+  };
+  const ossStorage = {};
+  await promoteStableRelease({ ...options("bootstrap"), ossBootstrapTag: "v2.0.0" }, {
+    fetchImpl,
+    ossStorage,
+    downloadDraft: async () => receipt(),
+    verifyEvidence: async () => {},
+    prepareOssCandidate: async (_input, storage) => {
+      assert.equal(storage, ossStorage);
+      events.push("oss-prepare");
+      return { manifest_sha256: "f".repeat(64) };
+    },
+    finalizeOssCandidate: async (_candidate, storage) => {
+      assert.equal(storage, ossStorage);
+      events.push("oss-finalize");
+    },
+  });
+  assert.deepEqual(events, ["oss-prepare", "github-publish", "github-latest-readback", "oss-finalize"]);
 });
 
 test("bootstrap history scan 有界分页并在后续 API 错误时 fail closed", async () => {
