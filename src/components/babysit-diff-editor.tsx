@@ -4,6 +4,7 @@ import { DiffEditor, type DiffOnMount, type Monaco, type MonacoDiffEditor } from
 import type { BabysitFileExplanations } from "@/babysit/types";
 import { configureLocalMonaco } from "@/infrastructure/local-monaco";
 import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
+import { readReviewEditorZoomLevel, saveReviewEditorZoomLevel } from "@/review/editor-zoom";
 
 configureLocalMonaco();
 
@@ -184,6 +185,44 @@ export function BabysitDiffEditor({
     const subscription = mounted.editor.onDidUpdateDiff?.(refresh);
     return () => subscription?.dispose();
   }, [mounted, original, modified]);
+
+  /** Review Reader 可见时接管字号快捷键，避免 WebView 同时缩放整个应用界面。 */
+  useEffect(() => {
+    if (!mounted) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.altKey) return;
+      const action = event.code === "Equal" || event.code === "NumpadAdd"
+        ? "editor.action.fontZoomIn"
+        : event.code === "Minus" || event.code === "NumpadSubtract"
+          ? "editor.action.fontZoomOut"
+          : event.code === "Digit0" || event.code === "Numpad0"
+            ? "editor.action.fontZoomReset"
+            : event.code === "KeyP"
+              ? "editor.action.quickCommand"
+              : undefined;
+      if (!action) return;
+      event.preventDefault();
+      const originalEditor = mounted.editor.getOriginalEditor();
+      const modifiedEditor = mounted.editor.getModifiedEditor();
+      const target = originalEditor.hasWidgetFocus() ? originalEditor : modifiedEditor;
+      if (action === "editor.action.quickCommand" && !target.hasWidgetFocus()) target.focus();
+      target.trigger("narrant", action, undefined);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [mounted]);
+
+  /** 从设备偏好恢复 Monaco 全局缩放，并持久化后续内置字号命令产生的变化。 */
+  useEffect(() => {
+    if (!mounted) return;
+    const editorZoom = mounted.monaco?.editor?.EditorZoom;
+    if (!editorZoom) return;
+    editorZoom.setZoomLevel(readReviewEditorZoomLevel());
+    const subscription = editorZoom.onDidChangeZoomLevel((level: number) => {
+      saveReviewEditorZoomLevel(level);
+    });
+    return () => subscription.dispose();
+  }, [mounted]);
 
   const selectedEntries = useMemo(() => {
     if (!explanations) return { before: [], after: [] } as const;

@@ -16,6 +16,10 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const openUrl = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
+const setWebviewZoom = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({ setZoom: setWebviewZoom }),
+}));
 
 import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
@@ -53,6 +57,7 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
   openUrl.mockReset();
+  setWebviewZoom.mockReset();
   localStorage.clear();
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
   document.documentElement.classList.remove("dark");
@@ -91,6 +96,32 @@ async function openOverview() {
 }
 
 describe("App", () => {
+  it("Reader 之外使用主修饰键缩放和重置整个 WebView", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invoke.mockResolvedValue({ repositories: [], recentReviews: [] });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Repositories" });
+
+    fireEvent.keyDown(window, { key: "=", code: "Equal", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "-", code: "Minus", metaKey: true });
+    fireEvent.keyDown(window, { key: "0", code: "Digit0", ctrlKey: true });
+
+    expect(setWebviewZoom.mock.calls).toEqual([[1.2], [1], [1]]);
+  });
+
+  it("Reader 之外阻止主修饰键 P 触发 WebView 打印", async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invoke.mockResolvedValue({ repositories: [], recentReviews: [] });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Repositories" });
+
+    const event = new KeyboardEvent("keydown", { key: "p", code: "KeyP", metaKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(setWebviewZoom).not.toHaveBeenCalled();
+  });
+
   it("打开 Review Snapshot 时在入口显示 Loading 图标并保留来源页面", async () => {
     mockSystemTheme(false);
     let resolveComparison!: (value: unknown) => void;
@@ -833,6 +864,15 @@ describe("App", () => {
     await openFileChanges();
     expect(await screen.findByText(/二进制文件/)).toBeInTheDocument();
     expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
+    localStorage.setItem("narrant.review.editorZoomLevel", "3");
+    const zoomEvent = new KeyboardEvent("keydown", { key: "-", code: "Minus", ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(zoomEvent);
+    expect(zoomEvent.defaultPrevented).toBe(true);
+    expect(localStorage.getItem("narrant.review.editorZoomLevel")).toBe("2");
+    expect(setWebviewZoom).not.toHaveBeenCalled();
+    const paletteEvent = new KeyboardEvent("keydown", { key: "p", code: "KeyP", ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(paletteEvent);
+    expect(paletteEvent.defaultPrevented).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /library.*修改/ }));
     expect(await screen.findByText("Submodule commit 变更")).toBeInTheDocument();
     expect(screen.getByText("abc1234 → def5678")).toBeInTheDocument();

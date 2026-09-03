@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ import { useGitHubIdentityLifecycle } from "@/github/use-github-identity-lifecyc
 import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
 import { useBranchSelectionContinuation } from "@/review/use-branch-selection-continuation";
 import { useReviewLifecycle } from "@/review/use-review-lifecycle";
+import { changeReviewEditorZoomLevel } from "@/review/editor-zoom";
 import { useRepositoryOverview } from "@/repository/use-repository-overview";
 import { useAppShellNavigation } from "@/app/use-app-shell-navigation";
 import { SettingsPage } from "@/components/settings-page";
@@ -107,6 +109,7 @@ export function App() {
     signedIn: githubIdentity.status?.signedIn ?? false,
   });
   const visibleReviewReader = appShell.destination.kind === "review" ? reviewLifecycle.reader : null;
+  const webviewZoomLevel = useRef(1);
   const snapshot = visibleReviewReader?.snapshot;
   const refreshingReview = visibleReviewReader?.transition.kind === "refreshing";
   const currentReaderDiffMode = reviewLifecycle.reader?.diffMode;
@@ -176,6 +179,36 @@ export function App() {
     window.addEventListener("resize", updateReviewWidth);
     return () => window.removeEventListener("resize", updateReviewWidth);
   }, []);
+
+  useEffect(() => {
+    /** 文本 Reader 优先接管快捷键；其余 Reader 保存字号，其他页面缩放 WebView。 */
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || (!event.ctrlKey && !event.metaKey) || event.altKey) return;
+      if (event.code === "KeyP") {
+        event.preventDefault();
+        return;
+      }
+      const direction: -1 | 0 | 1 = event.code === "Equal" || event.code === "NumpadAdd"
+        ? 1
+        : event.code === "Minus" || event.code === "NumpadSubtract"
+          ? -1
+          : 0;
+      if (direction === 0 && event.code !== "Digit0" && event.code !== "Numpad0") return;
+      event.preventDefault();
+      if (visibleReviewReader) {
+        changeReviewEditorZoomLevel(direction);
+        return;
+      }
+      if (!desktopRuntimeEnabled) return;
+      const nextLevel = direction === 0
+        ? 1
+        : Math.min(10, Math.max(0.2, Math.round((webviewZoomLevel.current + direction * 0.2) * 10) / 10));
+      webviewZoomLevel.current = nextLevel;
+      void getCurrentWebview().setZoom(nextLevel);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [desktopRuntimeEnabled, visibleReviewReader]);
 
   useEffect(() => {
     if (!currentReaderDiffMode || currentReaderTreeWidth === undefined) return;
