@@ -183,7 +183,7 @@ function ProviderIdentity({ provider }: { provider: BabysitProvider }) {
   const custom = provider === "custom";
   return <span className="flex items-center gap-3">
     <span className="flex size-10 shrink-0 items-center justify-center" aria-hidden="true">
-      {custom ? <Icon icon={Settings02Icon} className="size-7 text-primary" /> : <img src={codex ? "/icons/agents/codex.svg" : "/icons/agents/claude-code.svg"} alt="" className={cn("size-10 max-w-none object-contain", codex && "size-14 dark:invert")} />}
+      {custom ? <Icon icon={Settings02Icon} className="size-10 text-primary" /> : <img src={codex ? "/icons/agents/codex.svg" : "/icons/agents/claude-code.svg"} alt="" className={cn("size-10 max-w-none object-contain", codex && "size-14 dark:invert")} />}
     </span>
     <span>{codex ? "Codex" : custom ? t("provider.custom") : "Claude Code"}</span>
   </span>;

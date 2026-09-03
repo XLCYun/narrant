@@ -36,7 +36,7 @@ export function CustomProviderFields({ connection, loading, saving, initialApiKe
         <div><h3 className="font-heading text-lg font-semibold">{t("custom.title")}</h3><p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("custom.description")}</p></div>
         {loading && <p role="status" className="text-sm text-muted-foreground">{t("custom.loading")}</p>}
       </div>
-      <div className="mt-5 grid min-w-0 gap-5 sm:grid-cols-2">
+      <div className="mt-5 grid min-w-0 items-start gap-5 sm:grid-cols-2">
         <label htmlFor="custom-protocol" className="grid min-w-0 gap-2 text-sm font-medium">{t("custom.protocol")}
           <Select value={connection.protocol} disabled={disabled} onValueChange={(value) => {
             if (value === "openai_chat_completions" || value === "anthropic_messages") update("protocol", value);

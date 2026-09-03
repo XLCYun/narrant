@@ -22,8 +22,8 @@ export function ApplicationUpdateSettings({ update }: { update: ApplicationUpdat
   const preferenceBusy = update.pending === "preference";
   const checking = snapshot.state.kind === "checking" || update.pending === "manual-check";
   return <section aria-labelledby="application-update-settings-title" className="space-y-7">
-    <div className="flex items-center gap-3">
-      <Icon icon={DownloadCircle01Icon} className="size-5" aria-hidden />
+    <div className="flex items-center gap-4">
+      <Icon icon={DownloadCircle01Icon} className="size-8 shrink-0" aria-hidden />
       <div>
         <h2 id="application-update-settings-title" className="font-heading text-xl font-semibold">{t("settings.title")}</h2>
         <p className="text-sm text-muted-foreground">{t("settings.description")}</p>

@@ -66,7 +66,7 @@ export function SettingsPage({
         {section === "babysit" && <BabysitProviderSettings application={application} initialCustomApiKeyVisible={initialCustomApiKeyVisible} autoSaveCustomConnection={autoSaveCustomConnection} />}
         {section === "application-update" && (applicationUpdate
           ? <ApplicationUpdateSettings update={applicationUpdate} />
-          : <section><div className="flex items-center gap-3"><Icon icon={DownloadCircle01Icon} className="size-5" /><h2 className="font-heading text-xl font-semibold">应用更新</h2></div><p className="mt-4 text-sm text-muted-foreground">应用更新状态仅在桌面应用中可用。</p></section>)}
+          : <section><div className="flex items-center gap-4"><Icon icon={DownloadCircle01Icon} className="size-8 shrink-0" /><h2 className="font-heading text-xl font-semibold">应用更新</h2></div><p className="mt-4 text-sm text-muted-foreground">应用更新状态仅在桌面应用中可用。</p></section>)}
       </div>
     </div>
   </section>;
