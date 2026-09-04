@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -7,28 +7,26 @@ import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 /** Review 更新操作向 Reader 暴露的紧凑展示模型。 */
 export type ReviewUpdatePresentation = {
   label: string;
-  statusLabel?: string;
-  statusTone: "neutral" | "warning";
   busy: boolean;
   run(): void;
 };
 
-/** 收拢更新状态映射、用户动作选择与非阻断通知。 */
+/** 仅把用户本轮检查接续为刷新，后台检查仍只报告更新状态。 */
 export function useReviewUpdatePresentation(
-  review: Pick<ReviewReaderBinding, "update" | "transition" | "checkForUpdate" | "refresh">,
+  review: Pick<ReviewReaderBinding, "snapshot" | "update" | "transition" | "checkForUpdate" | "refresh">,
 ): ReviewUpdatePresentation {
   const { t } = useTranslation("review");
-  const refreshing = review.transition.kind === "refreshing";
-  const checking = review.update.kind === "checking";
-  const refreshAvailable = review.update.kind === "available" || review.update.kind === "refresh-failed";
-  const label = refreshing ? t("refreshing")
-    : checking ? t("checkingUpdate")
-    : review.update.kind === "refresh-failed" ? t("retryRefresh")
-    : review.update.kind === "confirmation-stale" ? t("recheck")
-    : refreshAvailable ? t("refresh")
-    : review.update.kind === "failed" ? t("retryCheck")
-    : t("checkUpdate");
+  const [pending, setPending] = useState(false);
+  const request = useRef<symbol>();
   const notifiedFailure = useRef<ReviewReaderBinding["update"]>();
+  const refreshing = review.transition.kind === "refreshing";
+  const busy = pending || review.update.kind === "checking" || review.transition.kind !== "stable";
+  const label = refreshing ? t("refreshing") : busy ? t("checkingUpdate") : t("checkUpdate");
+
+  useEffect(() => {
+    setPending(false);
+    return () => { request.current = undefined; };
+  }, [review.snapshot.reviewId, review.snapshot.snapshotId]);
 
   useEffect(() => {
     if (notifiedFailure.current === review.update) return;
@@ -38,24 +36,30 @@ export function useReviewUpdatePresentation(
     if (review.update.kind === "confirmation-stale") toast.warning(t("confirmationStale"));
   }, [review.update, t]);
 
-  /** 根据展示状态执行唯一可用的检查或刷新动作。 */
+  /** 串行完成检查与刷新，阻止重复点击，并忽略离开旧审核后的检查结果。 */
   const run = useCallback(() => {
-    if (!refreshAvailable) {
-      review.checkForUpdate();
-      return;
-    }
-    void review.refresh().then((result) => {
-      if (result.kind === "refreshed") toast.success(t("refreshed"));
-    });
-  }, [refreshAvailable, review, t]);
+    if (busy || request.current) return;
+    const token = Symbol();
+    request.current = token;
+    setPending(true);
+    void (async () => {
+      try {
+        const available = await review.checkForUpdate();
+        if (request.current !== token || available === undefined) return;
+        if (!available) {
+          toast.success(t("latest"));
+          return;
+        }
+        const result = await review.refresh();
+        if (result.kind === "refreshed") toast.success(t("refreshed"));
+      } finally {
+        if (request.current === token) {
+          request.current = undefined;
+          setPending(false);
+        }
+      }
+    })();
+  }, [busy, review, t]);
 
-  return {
-    label,
-    statusLabel: review.update.kind === "current" ? t("latest")
-      : refreshAvailable ? t("updateAvailable")
-      : undefined,
-    statusTone: refreshAvailable ? "warning" : "neutral",
-    busy: checking || review.transition.kind !== "stable",
-    run,
-  };
+  return { label, busy, run };
 }

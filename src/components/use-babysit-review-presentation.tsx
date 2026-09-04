@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Copy01Icon, RefreshIcon } from "@hugeicons/core-free-icons";
+import { Copy01Icon, RefreshIcon, MoreHorizontalIcon } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
 import type { BabysitChangedRange } from "@/babysit/types";
 import type { ReviewFileIdentity } from "@/review/types";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isBabysitRunning } from "@/babysit/types";
@@ -27,7 +28,7 @@ type BabysitReviewPresentationInput = {
 
 /** Babysit 对 Review Reader 暴露的紧凑展示投影。 */
 type BabysitReviewPresentation = {
-  headerActions: ReactNode;
+  toolbarActions: ReactNode;
   footer: ReactNode;
   explanations: BabysitFileExplanations | undefined;
   onDiffChange(identity: ReviewFileIdentity, ranges: BabysitChangedRange[] | null): void;
@@ -174,18 +175,18 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   }, [start, visible]);
 
 
-  const headerActions = babysit ? <div className="ml-auto flex min-w-0 items-center gap-1.5">
-    <div className={cn("inline-flex", visible && "overflow-hidden rounded-4xl bg-primary")}>
+  const toolbarActions = babysit ? <div className="flex shrink-0 items-center gap-2">
+    <div className="inline-flex items-center gap-2">
       <Tooltip>
         <TooltipTrigger render={<Button
           variant={visible ? "default" : "outline"}
-          size="sm"
-          aria-label={visible ? t("review:babysitDisable") : t("review:babysit")}
+          size="icon-sm"
+          aria-label={t("review:babysit")}
           aria-pressed={visible}
           aria-disabled={!enabled}
           aria-describedby={!enabled ? reasonId : undefined}
           aria-busy={running || undefined}
-          className={cn(!enabled && "cursor-not-allowed opacity-50", visible && "rounded-r-none pr-0.5")}
+          className={cn("rounded-full", !enabled && "cursor-not-allowed opacity-50")}
           onClick={() => {
             if (!enabled) return;
             if (visible) {
@@ -197,25 +198,21 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
             setVisible(true);
           }}
         />}>
-          <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 -translate-y-px object-contain" data-icon="inline-start" aria-hidden />
-          <span className="hidden sm:inline">{visible ? t("review:babysitDisable") : t("review:babysit")}</span>
+          <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 -translate-y-px object-contain" aria-hidden />
         </TooltipTrigger>
         <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
       </Tooltip>
-      {visible && <Tooltip>
-        <TooltipTrigger render={<Button
-          variant="default"
-          size="icon-sm"
-          className="w-8 justify-start rounded-l-none pl-0.5 pr-0"
-          aria-label={t("review:babysitRegenerate")}
-          disabled={state?.kind !== "completed"}
-          aria-busy={running || undefined}
-          onClick={() => ranges && babysit.regenerate(ranges)}
-        />}>
-          <Icon icon={RefreshIcon} className="-translate-y-px" aria-hidden />
-        </TooltipTrigger>
-        <TooltipContent>{t("review:babysitRegenerate")}</TooltipContent>
-      </Tooltip>}
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="outline" size="icon-sm" className="rounded-full" aria-label={t("review:moreActions")} />}>
+          <Icon icon={MoreHorizontalIcon} className="-translate-y-px" aria-hidden />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem disabled={!visible || state?.kind !== "completed" || !ranges} onClick={() => ranges && babysit.regenerate(ranges)}>
+            <Icon icon={RefreshIcon} className="size-4 -translate-y-px" aria-hidden />
+            <span className="leading-5">{t("review:babysitRegenerate")}</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
     {!enabled && <span id={reasonId} className="sr-only">{eligibilityReason}</span>}
   </div> : null;
@@ -246,7 +243,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   />;
 
   return {
-    headerActions,
+    toolbarActions,
     footer,
     explanations: visible && state?.kind === "completed" ? state.explanations : undefined,
     onDiffChange,

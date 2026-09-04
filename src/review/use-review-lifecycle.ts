@@ -114,7 +114,8 @@ export type ReviewReaderBinding = {
   selectFileChange(path: string): void;
   retryFileChange(): void;
   /** 显式重新解析当前 Review Selection，但不改变 Snapshot 或 Workspace。 */
-  checkForUpdate(): void;
+  /** 返回本轮有效检查结果；失败、取消或重复请求返回 undefined。 */
+  checkForUpdate(): Promise<boolean | undefined>;
   refresh(): Promise<ReviewRefreshResult>;
   close(): Promise<ReviewCloseResult>;
 };
@@ -251,7 +252,7 @@ export function useReviewLifecycle(
   }, [updateEntry]);
 
   /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
-  const checkForUpdate = useCallback((current: ReviewSnapshot) => {
+  const checkForUpdate = useCallback(async (current: ReviewSnapshot): Promise<boolean | undefined> => {
     if (refreshOperation.current) return;
     const running = updateOperation.current;
     if (running?.reviewId === current.reviewId && running.snapshotId === current.snapshotId) return;
@@ -263,7 +264,7 @@ export function useReviewLifecycle(
     const previous = entries.current.get(reviewId)?.update ?? { kind: "current" };
     updateOperation.current = { reviewId, snapshotId: current.snapshotId, generation, previous, abort };
     updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "checking" } }));
-    void adapter.checkReviewUpdate(current, abort.signal).then((available) => {
+    return adapter.checkReviewUpdate(current, abort.signal).then((available) => {
       const latest = entries.current.get(reviewId);
       if (abort.signal.aborted || updateOperation.current?.generation !== generation
         || activeReviewIdRef.current !== reviewId
@@ -273,7 +274,8 @@ export function useReviewLifecycle(
         ...entry,
         update: available ? { kind: "available", update: available } : { kind: "current" },
       }));
-    }).catch((reason) => {
+      return Boolean(available);
+    }).catch((reason): undefined => {
       if (abort.signal.aborted || updateOperation.current?.generation !== generation || activeReviewIdRef.current !== reviewId) return;
       updateOperation.current = undefined;
       updateEntry(reviewId, (entry) => ({ ...entry, update: { kind: "failed", failure: operationFailure(reason) } }));

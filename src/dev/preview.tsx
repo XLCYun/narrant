@@ -515,8 +515,8 @@ function ReviewReaderPreview({
     setFileViewState: () => undefined,
     selectFileChange: setSelectedPath,
     retryFileChange: () => undefined,
-    checkForUpdate: () => undefined,
-    refresh: async () => ({ kind: "unchanged" }),
+    checkForUpdate: async () => updateState === "available",
+    refresh: async () => ({ kind: "refreshed", reviewId: snapshot.reviewId, snapshotId: "preview-refreshed" }),
     close: async () => ({ kind: "closed" }),
   };
   return <div className="h-[calc(100vh-8.5rem)]">

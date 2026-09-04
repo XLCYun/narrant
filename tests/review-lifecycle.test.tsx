@@ -117,7 +117,7 @@ describe("Review lifecycle module", () => {
     await act(async () => { await result.current.reader!.refresh(); });
     expect(result.current.reader?.update.kind).toBe("idle");
     expect(checkReviewUpdate).toHaveBeenCalledOnce();
-    act(() => result.current.reader?.checkForUpdate());
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
     expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
   });

@@ -400,7 +400,7 @@ describe("App", () => {
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/草稿.*#42.*octocat/s);
   });
 
-  it("检查更新不切换 Snapshot，只有显式刷新才替换 Review", async () => {
+  it("自动检查不切换 Snapshot，单击更新图标检查并刷新 Review", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
@@ -445,9 +445,10 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Refreshable/ }));
-    expect(await screen.findByText("有更新")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled());
     expect(screen.getByLabelText("审核阅读器")).not.toHaveTextContent("base-1 → head-1");
-    fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
+    expect(invoke.mock.calls.some(([command]) => command === "refresh_pull_request_review" || command === "refresh_branch_review")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", {
       operationId: expect.any(String),
       reviewId: "review-42",
@@ -812,7 +813,7 @@ describe("App", () => {
 
     await i18n.changeLanguage("en");
     expect(screen.getByLabelText("Review reader")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Switch to inline" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Side by side" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "File tree" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /a-first.txt.*Added/ })).toBeInTheDocument();
   });
@@ -934,10 +935,11 @@ describe("App", () => {
     await openFileChanges();
     expect(await screen.findByRole("button", { name: /old.txt/ })).toBeInTheDocument();
 
-    expect(await screen.findByText("有更新")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled());
     expect(screen.getByRole("button", { name: /old.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new.txt/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "刷新审核" }));
+    expect(invoke.mock.calls.some(([command]) => command === "refresh_pull_request_review" || command === "refresh_branch_review")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
 
     expect(await screen.findByRole("button", { name: /new.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /old.txt/ })).not.toBeInTheDocument();
@@ -984,17 +986,17 @@ describe("App", () => {
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "side-by-side");
     expect(screen.getByRole("separator", { name: "调整文件树宽度" })).toHaveAttribute("aria-valuenow", "31");
     expect(screen.getByRole("button", { name: "退出审核" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "切换为单栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "双栏" }));
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "inline");
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("inline");
-    fireEvent.click(screen.getByRole("button", { name: "切换为双栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "双栏" }));
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
 
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
     fireEvent(window, new Event("resize"));
     await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "inline"));
-    expect(screen.getByRole("button", { name: "切换为双栏" })).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "切换为双栏" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "双栏" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "双栏" })).toBeDisabled();
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
 
     changeSystemTheme(true);
