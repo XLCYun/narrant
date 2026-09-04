@@ -149,6 +149,18 @@ fn fixture_input(workspace: &Path) -> (BabysitFileRequest, FileChangeContent) {
             workspace_path: workspace.to_string_lossy().into_owned(),
             detected_language: Some("rust".to_owned()),
             generation_policy: BabysitGenerationPolicy::ReuseCached,
+            changed_ranges: vec![
+                crate::babysit::ChangedLineRange {
+                    side: crate::babysit::FileSide::Before,
+                    start_line_number: 1,
+                    end_line_number: 1,
+                },
+                crate::babysit::ChangedLineRange {
+                    side: crate::babysit::FileSide::After,
+                    start_line_number: 1,
+                    end_line_number: 1,
+                },
+            ],
         },
         FileChangeContent {
             path,

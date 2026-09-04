@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isBabysitError, type BabysitApplicationAdapter, type BabysitBinding, type BabysitError, type BabysitFileExplanations } from "@/babysit/types";
+import { isBabysitError, type BabysitApplicationAdapter, type BabysitError, type BabysitFileExplanations } from "@/babysit/types";
 import { i18n } from "@/lib/i18n";
 import { useReviewLifecycle, type ReviewApplicationAdapter } from "@/review/use-review-lifecycle";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
@@ -33,6 +33,7 @@ function createAdapter(reviewSnapshot = snapshot, fileContent = content) {
   let resolveExplanation!: (value: BabysitFileExplanations) => void;
   let requested: { request: Parameters<BabysitApplicationAdapter["explainFile"]>[0]; signal: AbortSignal } | undefined;
   let eligibilityLanguage: string | undefined;
+  let requestedRanges: Parameters<BabysitApplicationAdapter["explainFile"]>[0]["changedRanges"] | undefined;
   const reviewAdapter: ReviewApplicationAdapter = {
     async switchReview() { return reviewSnapshot; },
     async checkReviewUpdate() { return null; },
@@ -50,7 +51,8 @@ function createAdapter(reviewSnapshot = snapshot, fileContent = content) {
         ? { eligible: true, reason: null }
         : { eligible: false, reason: "unsupported_language" };
     },
-    explainFile({ file: request }, onProgress, signal) {
+    explainFile({ file: request, changedRanges }, onProgress, signal) {
+      requestedRanges = changedRanges;
       requested = { request, signal };
       onProgress({ phase: "generating" });
       return new Promise((resolve) => { resolveExplanation = resolve; });
@@ -61,6 +63,7 @@ function createAdapter(reviewSnapshot = snapshot, fileContent = content) {
     babysitAdapter,
     resolve(value: BabysitFileExplanations) { resolveExplanation(value); },
     requested: () => requested,
+    requestedRanges: () => requestedRanges,
     eligibilityLanguage: () => eligibilityLanguage,
   };
 }
@@ -132,7 +135,9 @@ describe("Babysit contract spine", () => {
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
 
-    act(() => result.current.reader?.babysit?.explain());
+    const ranges = [{ side: "after" as const, startLineNumber: 1, endLineNumber: 1 }];
+    act(() => result.current.reader?.babysit?.explain(ranges));
+    expect(provider.requestedRanges()).toEqual(ranges);
     expect(result.current.reader?.babysit?.state.kind).toBe("generating");
     expect(provider.requested()?.request).toMatchObject({ reviewId: "review-1", snapshotId: "snapshot-1", path: "src/example.ts" });
 
@@ -153,13 +158,13 @@ describe("Babysit contract spine", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     await act(async () => {
       provider.resolve({ before: { "1": "旧解释" }, after: { "1": "旧解释" } });
     });
     await waitFor(() => expect(result.current.reader?.babysit?.state.kind).toBe("completed"));
 
-    act(() => (result.current.reader?.babysit as BabysitBinding & { regenerate(): void }).regenerate());
+    act(() => result.current.reader?.babysit?.regenerate([]));
 
     expect(result.current.reader?.babysit?.state.kind).toBe("generating");
     expect(explainFile).toHaveBeenCalledTimes(2);
@@ -176,7 +181,7 @@ describe("Babysit contract spine", () => {
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
 
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     const oldSignal = provider.requested()!.signal;
     act(() => result.current.reader?.babysit?.cancel());
     expect(oldSignal.aborted).toBe(true);
@@ -203,7 +208,7 @@ describe("Babysit contract spine", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
     await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "src/example.ts" }));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     const oldSignal = provider.requested()!.signal;
 
     act(() => result.current.reader?.selectFileChange("src/next.ts"));
@@ -211,7 +216,7 @@ describe("Babysit contract spine", () => {
     await waitFor(() => expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "src/next.ts" }));
     expect(provider.requested()?.request.path).toBe("src/example.ts");
 
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     expect(provider.requested()?.request.path).toBe("src/next.ts");
   });
 
@@ -271,7 +276,7 @@ describe("Babysit contract spine", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
 
     expect(provider.requested()?.request).not.toHaveProperty("locale");
   });
@@ -285,7 +290,7 @@ describe("Babysit contract spine", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     await act(async () => {
       provider.resolve({ before: { "1": "旧解释" }, after: { "1": "新解释" } });
     });
@@ -309,7 +314,7 @@ describe("Babysit contract spine", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     const request = provider.requested();
     expect(request).toBeDefined();
 
@@ -338,7 +343,7 @@ describe("Babysit contract spine", () => {
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
     await waitFor(() => expect(result.current.reader?.babysit?.eligibility).toMatchObject({ kind: "resolved", result: { eligible: true } }));
     expect(provider.eligibilityLanguage()).toBe("python");
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     expect(provider.requested()?.request.detectedLanguage).toBe("python");
   });
 
@@ -377,7 +382,7 @@ describe("Babysit contract spine", () => {
     const { result } = renderHook(() => useReviewLifecycle(provider.reviewAdapter, {}, provider.babysitAdapter));
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
     await waitFor(() => expect(result.current.reader?.babysit?.eligibility).toMatchObject({ kind: "resolved", result: { eligible: false } }));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
     expect(provider.requested()).toBeUndefined();
   });
 
@@ -399,7 +404,7 @@ describe("Babysit contract spine", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
-    act(() => result.current.reader?.babysit?.explain());
+    act(() => result.current.reader?.babysit?.explain([]));
 
     await waitFor(() => expect(result.current.reader?.babysit?.state).toMatchObject({
       kind: "failed",

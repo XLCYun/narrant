@@ -26,7 +26,7 @@ use application::codex_setup_error;
 use application::CacheKey;
 pub use application::{
     BabysitApplication, BabysitEligibility, BabysitEligibilityReason, BabysitFileRequest,
-    BabysitGenerationPolicy, ReviewIdentity,
+    BabysitGenerationPolicy, ChangedLineRange, ReviewIdentity,
 };
 use eligibility::{eligibility, ensure_eligible};
 pub use error::{BabysitError, BabysitErrorPayload, BabysitProviderDiagnostic};
@@ -406,6 +406,34 @@ fn non_empty_targets(side: FileSide, text: &str) -> Vec<LineTarget> {
             })
         })
         .collect()
+}
+
+/// 校验编辑器范围后，仅保留其覆盖的非空 targets，不接收前端源码。
+fn restrict_to_changed_ranges(
+    request: &mut BabysitProviderRequest,
+    ranges: &[ChangedLineRange],
+) -> Result<(), BabysitError> {
+    for range in ranges {
+        let text = match range.side {
+            FileSide::Before => &request.before,
+            FileSide::After => &request.after,
+        };
+        if range.start_line_number == 0
+            || range.end_line_number < range.start_line_number
+            || range.end_line_number > text.split('\n').count()
+        {
+            return Err(BabysitError::InvalidProviderOutput {
+                detail: "invalid_changed_line_range".to_owned(),
+            });
+        }
+    }
+    request.targets.retain(|target| {
+        ranges.iter().any(|range| {
+            range.side == target.side
+                && (range.start_line_number..=range.end_line_number).contains(&target.line_number)
+        })
+    });
+    Ok(())
 }
 
 /// 验证 Narrant 自己生成的 target identity 不重复且行号合法。

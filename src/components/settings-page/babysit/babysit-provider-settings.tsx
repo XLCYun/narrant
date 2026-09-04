@@ -151,6 +151,22 @@ export function BabysitProviderSettings({ application, initialCustomApiKeyVisibl
       </label>
       <div className="flex max-w-2xl items-start justify-between gap-5 rounded-xl border p-4">
         <div className="min-w-0">
+          <span id="babysit-all-non-empty-lines-label" className="block font-medium">{t("allNonEmptyLines.label")}</span>
+          <span id="babysit-all-non-empty-lines-description" className="mt-1 block text-sm text-muted-foreground">{t("allNonEmptyLines.description")}</span>
+        </div>
+        <Switch
+          checked={saved.allNonEmptyLines}
+          disabled={saving}
+          onCheckedChange={(enabled) => void commit(
+            { ...saved, allNonEmptyLines: enabled },
+            () => application.updateBabysitAllNonEmptyLines(enabled),
+          )}
+          aria-labelledby="babysit-all-non-empty-lines-label"
+          aria-describedby="babysit-all-non-empty-lines-description"
+        />
+      </div>
+      <div className="flex max-w-2xl items-start justify-between gap-5 rounded-xl border p-4">
+        <div className="min-w-0">
           <span id="babysit-repository-exploration-label" className="block font-medium">{t("repositoryExploration.label")}</span>
           <span id="babysit-repository-exploration-description" className="mt-1 block text-sm text-muted-foreground">{t("repositoryExploration.description")}</span>
         </div>

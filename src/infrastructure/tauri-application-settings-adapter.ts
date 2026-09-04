@@ -17,6 +17,7 @@ export function createTauriApplicationSettingsAdapter(
     listBabysitModels: (provider: BabysitProvider) => transport.invoke("list_babysit_models", { provider }),
     updateBabysitProvider: (provider: BabysitProvider) => transport.invoke("update_application_babysit_provider", { provider }),
     updateBabysitRepositoryExploration: (enabled: boolean) => transport.invoke("update_application_babysit_repository_exploration", { enabled }),
+    updateBabysitAllNonEmptyLines: (enabled: boolean) => transport.invoke("update_application_babysit_all_non_empty_lines", { enabled }),
     async chooseBabysitExecutable(provider: BabysitProvider, preference: BabysitProviderPreference) {
       const executable = await pickCodexExecutable();
       if (typeof executable !== "string" || executable.length === 0) return null;

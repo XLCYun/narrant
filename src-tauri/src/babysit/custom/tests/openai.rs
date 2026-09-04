@@ -656,6 +656,18 @@ async fn custom_application_surfaces_openai_output_limit_without_repair() {
         workspace_path: workspace.path().to_string_lossy().into_owned(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::Regenerate,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),
@@ -917,6 +929,18 @@ async fn custom_registry_http_generation_populates_and_reuses_completed_cache() 
         workspace_path: workspace.path().to_string_lossy().into_owned(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),
@@ -953,6 +977,18 @@ async fn custom_registry_http_generation_populates_and_reuses_completed_cache() 
                 workspace_path: workspace.path().to_string_lossy().into_owned(),
                 detected_language: Some("rust".to_owned()),
                 generation_policy: BabysitGenerationPolicy::ReuseCached,
+                changed_ranges: vec![
+                    crate::babysit::ChangedLineRange {
+                        side: crate::babysit::FileSide::Before,
+                        start_line_number: 1,
+                        end_line_number: 1,
+                    },
+                    crate::babysit::ChangedLineRange {
+                        side: crate::babysit::FileSide::After,
+                        start_line_number: 1,
+                        end_line_number: 1,
+                    },
+                ],
             },
             FileChangeContent {
                 path: "src/example.rs".to_owned(),
@@ -1015,6 +1051,18 @@ async fn custom_registry_cancels_before_tool_dispatch_and_does_not_cache() {
         workspace_path: workspace.path().to_string_lossy().into_owned(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),

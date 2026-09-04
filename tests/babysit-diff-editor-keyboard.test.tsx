@@ -60,7 +60,6 @@ const props = {
   theme: "vs",
   height: "400px",
   renderSideBySide: true,
-  filter: "changed" as const,
   identity: { reviewId: "review", snapshotId: "snapshot", path: "src/a.ts" },
   viewState: null,
   onSaveViewState: vi.fn(),

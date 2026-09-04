@@ -106,6 +106,17 @@ fn update_babysit_provider(
     Ok(settings)
 }
 
+/// 保存解释生成范围；既有缓存与运行不受影响。
+#[tauri::command]
+pub(crate) fn update_application_babysit_all_non_empty_lines(
+    application: State<'_, ApplicationSettingsApplication>,
+    enabled: bool,
+) -> Result<ApplicationSettings, String> {
+    application
+        .update_all_non_empty_lines(enabled)
+        .map_err(|error| error.to_string())
+}
+
 /// 原子保存未来 Babysit 分析是否允许探索 Review Workspace；既有缓存与运行不受影响。
 #[tauri::command]
 pub(crate) fn update_application_babysit_repository_exploration(

@@ -159,6 +159,13 @@ export type BabysitFileExplanations = {
 /** 控制同 identity 的分析复用现有结果，或明确请求一套新解释。 */
 export type BabysitGenerationPolicy = "reuse_cached" | "regenerate";
 
+/** Monaco 一侧变更行的一基闭区间，不包含源码。 */
+export type BabysitChangedRange = {
+  side: "before" | "after";
+  startLineNumber: number;
+  endLineNumber: number;
+};
+
 /** 绑定精确 Review Snapshot 与 File Change path 的请求 identity。 */
 export type BabysitFileRequest = ReviewIdentity & {
   path: string;
@@ -169,6 +176,7 @@ export type BabysitFileRequest = ReviewIdentity & {
 export type BabysitAnalysisRequest = {
   file: BabysitFileRequest;
   generationPolicy: BabysitGenerationPolicy;
+  changedRanges: BabysitChangedRange[];
 };
 
 /** 后端唯一判定的文件 eligibility reason；UI 只负责本地化。 */
@@ -231,11 +239,11 @@ export type BabysitBinding = {
   /** 当前选中文件是否满足 adapter 与文本 eligibility 的最小前置条件。 */
   eligibility: BabysitEligibilityState;
   /** 启动当前 File Change 的完整分析。 */
-  explain(): void;
+  explain(changedRanges: BabysitChangedRange[]): void;
   /** 绕过当前文件缓存，重新生成并替换 Line Explanations。 */
-  regenerate(): void;
+  regenerate(changedRanges: BabysitChangedRange[]): void;
   /** 取消当前分析并丢弃未完成结果。 */
   cancel(): void;
   /** 重试最后一次失败的分析。 */
-  retry(): void;
+  retry(changedRanges: BabysitChangedRange[]): void;
 };

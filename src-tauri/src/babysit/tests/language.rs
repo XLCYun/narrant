@@ -17,6 +17,18 @@ fn request() -> BabysitFileRequest {
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
         detected_language: None,
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     }
 }
 

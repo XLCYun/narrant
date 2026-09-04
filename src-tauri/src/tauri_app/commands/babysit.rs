@@ -86,6 +86,7 @@ pub(crate) async fn explain_review_file_change(
     path: String,
     detected_language: Option<String>,
     generation_policy: BabysitGenerationPolicy,
+    changed_ranges: Vec<crate::babysit::ChangedLineRange>,
     progress: Channel<BabysitProgress>,
 ) -> Result<BabysitFileExplanations, BabysitErrorPayload> {
     run_babysit_command(&operations, operation_id, |operation| async move {
@@ -110,6 +111,7 @@ pub(crate) async fn explain_review_file_change(
                     workspace_path: workspace_path.to_string_lossy().into_owned(),
                     detected_language,
                     generation_policy,
+                    changed_ranges,
                 },
                 content,
                 operation.cancellation(),

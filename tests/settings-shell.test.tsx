@@ -35,7 +35,7 @@ function mockSystemTheme(initialDark: boolean) {
 function application(theme: "system" | "light" | "dark" = "system"): ApplicationSettingsApplication {
   const babysit = {
     provider: "codex" as const,
-    repositoryExploration: false,
+    repositoryExploration: false, allNonEmptyLines: false,
     codex: { executable: null, model: null, reasoningEffort: null },
     claudeCode: { executable: null, model: null, reasoningEffort: null },
     custom: { protocol: "openai_chat_completions" as const, baseUrl: "", model: "", effort: "medium" as const },
@@ -50,6 +50,7 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
     ] })),
     updateBabysitProvider: vi.fn(async (provider) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, provider } })),
     updateBabysitRepositoryExploration: vi.fn(async (repositoryExploration) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, repositoryExploration } })),
+    updateBabysitAllNonEmptyLines: vi.fn(async (allNonEmptyLines) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, allNonEmptyLines } })),
     chooseBabysitExecutable: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
     updateBabysitPreferences: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
     loadCustomConnection: vi.fn(async () => ({ ...babysit.custom, apiKey: "" })),
@@ -92,6 +93,22 @@ describe("Settings application-shell UI", () => {
     fireEvent.click(toggle);
 
     await waitFor(() => expect(settings.updateBabysitRepositoryExploration).toHaveBeenCalledWith(true));
+    expect(toggle).toBeChecked();
+  });
+
+  it("默认关闭全部行生成并立即保存用户选择", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      updateBabysitAllNonEmptyLines: ReturnType<typeof vi.fn>;
+    };
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    const toggle = await screen.findByRole("switch", { name: "生成全部非空行的注释" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/生成时间和用量可能增加/)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(settings.updateBabysitAllNonEmptyLines).toHaveBeenCalledWith(true));
     expect(toggle).toBeChecked();
   });
 

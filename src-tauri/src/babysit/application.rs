@@ -27,6 +27,17 @@ pub struct BabysitFileRequest {
     pub detected_language: Option<String>,
     /// 决定复用精确缓存，或请求 provider 生成并替换一套新解释。
     pub generation_policy: BabysitGenerationPolicy,
+    /// 当前固定文件由 Monaco 计算的一基闭区间；空数组表示无变更行。
+    pub changed_ranges: Vec<ChangedLineRange>,
+}
+
+/// 编辑器提供的一侧非空变更范围；后端仍从快照读取行内容。
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedLineRange {
+    pub side: FileSide,
+    pub start_line_number: usize,
+    pub end_line_number: usize,
 }
 
 /// UI 查询文件是否可进入 Babysit 的 provider-independent 结果。
@@ -61,6 +72,7 @@ pub(super) struct CacheKey {
     pub(super) model: String,
     pub(super) reasoning_effort: String,
     pub(super) repository_exploration: bool,
+    pub(super) all_non_empty_lines: bool,
 }
 
 /// 一次分析启动时从同一 Application Settings 快照冻结的 provider/runtime/language 组合。
@@ -180,7 +192,15 @@ impl BabysitApplication {
         &self,
         workspace_path: &Path,
     ) -> Result<(), BabysitError> {
-        let frozen = self.prepare_selected_analysis(workspace_path).await?;
+        let settings = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.load())
+            .transpose()
+            .map_err(|_| BabysitError::SettingsPersistenceFailed)?;
+        let frozen = self
+            .prepare_selected_analysis(workspace_path, settings.as_ref())
+            .await?;
         drop(frozen);
         Ok(())
     }
@@ -355,6 +375,25 @@ impl BabysitApplication {
             &content,
             request.detected_language.as_deref(),
         )?;
+        let selected_settings = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.load())
+            .transpose()
+            .map_err(|_| BabysitError::SettingsPersistenceFailed)?;
+        let all_non_empty_lines = selected_settings
+            .as_ref()
+            .map(|settings| settings.babysit.all_non_empty_lines)
+            .unwrap_or(cfg!(test));
+        let mut provider_request =
+            build_provider_request(&request, &content, analysis_run_id, String::new())?;
+        if !all_non_empty_lines {
+            restrict_to_changed_ranges(&mut provider_request, &request.changed_ranges)?;
+        }
+        if provider_request.targets.is_empty() {
+            notify(BabysitProgress::Completed)?;
+            return Ok(BabysitFileExplanations::default());
+        }
         let FrozenBabysitAnalysis {
             provider_identity,
             prepared,
@@ -362,7 +401,10 @@ impl BabysitApplication {
             repository_exploration,
             provider_workspace_path,
         } = self
-            .prepare_selected_analysis(Path::new(&request.workspace_path))
+            .prepare_selected_analysis(
+                Path::new(&request.workspace_path),
+                selected_settings.as_ref(),
+            )
             .await?;
         lifecycle.bind(provider_identity.identity(), prepared.protocol);
         let selected_provider = prepared.provider;
@@ -380,6 +422,7 @@ impl BabysitApplication {
             model: resolved.model.clone(),
             reasoning_effort: resolved.reasoning_effort.clone(),
             repository_exploration,
+            all_non_empty_lines,
         };
         if request.generation_policy == BabysitGenerationPolicy::ReuseCached {
             if let Some(result) = self
@@ -397,13 +440,7 @@ impl BabysitApplication {
 
         lifecycle.generation();
         notify(BabysitProgress::Generating)?;
-        let mut provider_request = build_provider_request(
-            &request,
-            &content,
-            analysis_run_id,
-            // Provider transport 只在边界处接收稳定 BCP-47 tag 的 owned String。
-            language.as_str().to_owned(),
-        )?;
+        provider_request.locale = language.as_str().to_owned();
         provider_request.model = resolved.model;
         provider_request.reasoning_effort = resolved.reasoning_effort;
         provider_request.repository_exploration = repository_exploration;
@@ -477,14 +514,8 @@ impl BabysitApplication {
     async fn prepare_selected_analysis(
         &self,
         workspace_path: &Path,
+        selected_settings: Option<&crate::application_settings::ApplicationSettings>,
     ) -> Result<FrozenBabysitAnalysis, BabysitError> {
-        let selected_settings = self
-            .settings
-            .as_ref()
-            .map(|settings| settings.load())
-            .transpose()
-            // 语言是 provider request 的权威输入；无法读取设置时必须在 provider 启动前失败。
-            .map_err(|_| BabysitError::SettingsPersistenceFailed)?;
         let (selected_identity, selected_preference, language, repository_exploration) =
             match selected_settings.as_ref() {
                 Some(settings) => {

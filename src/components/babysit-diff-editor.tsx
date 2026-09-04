@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor, type DiffOnMount, type Monaco, type MonacoDiffEditor } from "@monaco-editor/react";
 
-import type { BabysitFileExplanations } from "@/babysit/types";
+import type { BabysitChangedRange, BabysitFileExplanations } from "@/babysit/types";
 import { configureLocalMonaco } from "@/infrastructure/local-monaco";
 import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
 import { readReviewEditorZoomLevel, saveReviewEditorZoomLevel } from "@/review/editor-zoom";
 
 configureLocalMonaco();
-
-/** 控制当前 File Change 显示改变行还是完整解释集合。 */
-export type BabysitExplanationFilter = "changed" | "all";
 
 type ExplanationSide = keyof BabysitFileExplanations;
 type LineChange = NonNullable<ReturnType<MonacoDiffEditor["getLineChanges"]>>[number];
@@ -42,35 +39,19 @@ type BabysitDiffEditorProps = {
   height: string;
   renderSideBySide: boolean;
   explanations?: BabysitFileExplanations;
-  filter: BabysitExplanationFilter;
+  onDiffChange?(identity: ReviewFileIdentity, ranges: BabysitChangedRange[] | null): void;
   identity: ReviewFileIdentity;
   viewState: ReviewFileViewState | null;
   onSaveViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
 };
 
-/** Monaco Diff 的单行改变范围，使用统一 before/after 字段避免 UI 依赖 provider。 */
-export function isChangedLine(
-  side: ExplanationSide,
-  lineNumber: number,
-  changes: readonly LineChange[],
-): boolean {
-  return changes.some((change) => {
-    const start = side === "before" ? change.originalStartLineNumber : change.modifiedStartLineNumber;
-    const end = side === "before" ? change.originalEndLineNumber : change.modifiedEndLineNumber;
-    return start > 0 && end >= start && lineNumber >= start && lineNumber <= end;
-  });
-}
-
-/** 将完整解释结果按 Monaco 自己计算的行变化筛选，切换筛选不会重新请求 Agent。 */
-export function selectBabysitExplanations(
-  side: ExplanationSide,
+/** 将后端返回的全部解释按有效行号排序。 */
+function sortedExplanations(
   explanations: Record<string, string>,
-  filter: BabysitExplanationFilter,
-  changes: readonly LineChange[],
 ): Array<[number, string]> {
   return Object.entries(explanations)
     .map(([line, explanation]) => [Number(line), explanation] as [number, string])
-    .filter(([line]) => Number.isInteger(line) && line > 0 && (filter === "all" || isChangedLine(side, line, changes)))
+    .filter(([line]) => Number.isInteger(line) && line > 0)
     .sort(([left], [right]) => left - right);
 }
 
@@ -153,7 +134,7 @@ export function BabysitDiffEditor({
   height,
   renderSideBySide,
   explanations,
-  filter,
+  onDiffChange,
   identity,
   viewState,
   onSaveViewState,
@@ -162,7 +143,7 @@ export function BabysitDiffEditor({
   const [mounted, setMounted] = useState<{ editor: MonacoDiffEditor; monaco: Monaco }>();
   const [lineChanges, setLineChanges] = useState<readonly LineChange[]>([]);
 
-  /** 记录 Monaco 实例并让后续 diff 更新重新计算 changed-only 过滤。 */
+  /** 记录 Monaco 实例，供后续 diff 范围捕获和解释布局使用。 */
   const onMount = useCallback<DiffOnMount>((editor, monaco) => {
     editorRef.current = editor;
     if (viewState) editor.restoreViewState?.(viewState as NonNullable<ReturnType<MonacoDiffEditor["saveViewState"]>>);
@@ -180,11 +161,25 @@ export function BabysitDiffEditor({
   useEffect(() => {
     if (!mounted) return;
     if (typeof mounted.editor.getOriginalEditor !== "function" || typeof mounted.editor.getModifiedEditor !== "function") return;
-    const refresh = () => setLineChanges(mounted.editor.getLineChanges?.() ?? []);
+    const refresh = () => {
+      const changes = mounted.editor.getLineChanges?.() ?? null;
+      setLineChanges(changes ?? []);
+      const ranges: BabysitChangedRange[] | null = changes === null ? null : changes.flatMap((change) => {
+        const result: BabysitChangedRange[] = [];
+        if (change.originalEndLineNumber >= change.originalStartLineNumber && change.originalStartLineNumber > 0) {
+          result.push({ side: "before", startLineNumber: change.originalStartLineNumber, endLineNumber: change.originalEndLineNumber });
+        }
+        if (change.modifiedEndLineNumber >= change.modifiedStartLineNumber && change.modifiedStartLineNumber > 0) {
+          result.push({ side: "after", startLineNumber: change.modifiedStartLineNumber, endLineNumber: change.modifiedEndLineNumber });
+        }
+        return result;
+      });
+      onDiffChange?.({ reviewId, snapshotId, path }, ranges);
+    };
     refresh();
     const subscription = mounted.editor.onDidUpdateDiff?.(refresh);
     return () => subscription?.dispose();
-  }, [mounted, original, modified]);
+  }, [mounted, original, modified, onDiffChange, reviewId, snapshotId, path]);
 
   /** Review Reader 可见时接管字号快捷键，避免 WebView 同时缩放整个应用界面。 */
   useEffect(() => {
@@ -227,12 +222,12 @@ export function BabysitDiffEditor({
   const selectedEntries = useMemo(() => {
     if (!explanations) return { before: [], after: [] } as const;
     return {
-      before: selectBabysitExplanations("before", explanations.before, filter, lineChanges),
-      after: selectBabysitExplanations("after", explanations.after, filter, lineChanges),
+      before: sortedExplanations(explanations.before),
+      after: sortedExplanations(explanations.after),
     } as const;
-  }, [explanations, filter, lineChanges]);
+  }, [explanations]);
 
-  /** 每次结果或筛选改变时重建两侧行尾解释 decoration。 */
+  /** 每次结果改变时重建两侧行尾解释 decoration。 */
   useEffect(() => {
     if (!mounted) return;
     if (typeof mounted.editor.getOriginalEditor !== "function" || typeof mounted.editor.getModifiedEditor !== "function") return;

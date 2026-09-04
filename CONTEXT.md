@@ -197,6 +197,11 @@ It is disabled by default; when enabled, exploration remains read-only and limit
 the smallest repository context needed for accurate Line Explanations.
 _Avoid_: Repository access, deep analysis, enhanced explanations
 
+**Line Explanation Scope Preference**:
+The device-local, provider-independent choice between explaining changed non-empty
+lines by default and explaining all non-empty lines of a File Change.
+_Avoid_: Display filter, Review scope, provider scope
+
 **Built-in Agent Provider**:
 A Babysit Agent Provider implemented inside Narrant that calls a user-configured model
 service directly without requiring an external Coding Agent runtime. It does not imply

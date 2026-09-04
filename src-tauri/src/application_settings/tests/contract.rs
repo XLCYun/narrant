@@ -44,6 +44,22 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
 }
 
 #[test]
+fn all_non_empty_lines_defaults_off_and_round_trips() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application = ApplicationSettingsApplication::new(path.clone());
+    assert!(!application.load().unwrap().babysit.all_non_empty_lines);
+    application.update_all_non_empty_lines(true).unwrap();
+    assert!(
+        ApplicationSettingsApplication::new(path)
+            .load()
+            .unwrap()
+            .babysit
+            .all_non_empty_lines
+    );
+}
+
+#[test]
 fn repository_exploration_defaults_off_and_round_trips_when_enabled() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
