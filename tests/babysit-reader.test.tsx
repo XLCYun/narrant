@@ -172,6 +172,7 @@ describe("Babysit Review Reader presentation", () => {
       explanations: { before: { "2": "旧解释" }, after: { "2": "旧解释" } },
     });
     render(<ReviewReader review={review} appearance={appearance} />);
+    expect(screen.getByRole("button", { name: "更多操作" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
 
     const closeButton = screen.getByRole("button", { name: "宝宝模式" });

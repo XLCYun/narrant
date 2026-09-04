@@ -202,17 +202,17 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
         </TooltipTrigger>
         <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
       </Tooltip>
-      {visible && <DropdownMenu>
+      <DropdownMenu>
         <DropdownMenuTrigger render={<Button variant="outline" size="icon-sm" className="rounded-full" aria-label={t("review:moreActions")} />}>
           <Icon icon={MoreHorizontalIcon} className="-translate-y-px" aria-hidden />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={state?.kind !== "completed" || !ranges} onClick={() => ranges && babysit.regenerate(ranges)}>
+          <DropdownMenuItem disabled={!visible || state?.kind !== "completed" || !ranges} onClick={() => ranges && babysit.regenerate(ranges)}>
             <Icon icon={RefreshIcon} className="size-4 -translate-y-px" aria-hidden />
             <span className="leading-5">{t("review:babysitRegenerate")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
-      </DropdownMenu>}
+      </DropdownMenu>
     </div>
     {!enabled && <span id={reasonId} className="sr-only">{eligibilityReason}</span>}
   </div> : null;
