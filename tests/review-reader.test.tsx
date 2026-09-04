@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
@@ -63,7 +63,7 @@ function reviewBinding(overrides: Partial<ReviewReaderBinding> = {}): ReviewRead
     setFileViewState: vi.fn(),
     selectFileChange: vi.fn(),
     retryFileChange: vi.fn(),
-    checkForUpdate: vi.fn(),
+    checkForUpdate: vi.fn(async () => false),
     refresh: vi.fn(async () => ({ kind: "unchanged" as const })),
     close: vi.fn(async () => ({ kind: "closed" as const })),
     ...overrides,
@@ -87,30 +87,67 @@ beforeEach(async () => { vi.clearAllMocks(); await i18n.changeLanguage("zh-CN");
 afterEach(() => { cleanup(); monacoEditors.length = 0; });
 
 describe("ReviewReader", () => {
-  it("始终用同一个文字按钮呈现检查、无更新和发现更新状态", () => {
-    const checkForUpdate = vi.fn();
-    const { rerender } = render(<ReviewReader review={reviewBinding({ checkForUpdate })} appearance={appearance} />);
+  it("单击图标先检查再刷新，后台发现更新不会自行刷新", async () => {
+    const checkForUpdate = vi.fn(async () => true);
+    const refresh = vi.fn(async () => ({ kind: "refreshed" as const, reviewId: "review-1", snapshotId: "snapshot-2" }));
+    render(<ReviewReader review={reviewBinding({ update: { kind: "available", update: availableUpdate }, checkForUpdate, refresh })} appearance={appearance} />);
+    expect(refresh).not.toHaveBeenCalled();
     const check = screen.getByRole("button", { name: "检查更新" });
-    expect(check).toHaveTextContent("检查更新");
+    expect(check.textContent).toBe("");
     fireEvent.click(check);
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     expect(checkForUpdate).toHaveBeenCalledOnce();
+    expect(toast.success).toHaveBeenCalledWith("Review 已刷新");
+    expect(screen.queryByText("有更新")).not.toBeInTheDocument();
+  });
 
-    rerender(<ReviewReader review={reviewBinding({ update: { kind: "checking" }, checkForUpdate })} appearance={appearance} />);
-    expect(screen.getByRole("button", { name: "正在检查更新" })).toBeDisabled();
+  it("检查期间阻止重复点击，无更新只通过通知反馈", async () => {
+    let finish!: (available: boolean) => void;
+    const checkForUpdate = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const refresh = vi.fn(async () => ({ kind: "unchanged" as const }));
+    render(<ReviewReader review={reviewBinding({ checkForUpdate, refresh })} appearance={appearance} />);
+    const button = screen.getByRole("button", { name: "检查更新" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(checkForUpdate).toHaveBeenCalledOnce();
+    await act(async () => { finish(false); });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith("已是最新");
+    expect(button).toBeEnabled();
+    expect(screen.queryByText("已是最新")).not.toBeInTheDocument();
+  });
 
-    rerender(<ReviewReader review={reviewBinding({ update: { kind: "current" }, checkForUpdate })} appearance={appearance} />);
-    expect(screen.getByText("已是最新")).toBeVisible();
-    expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled();
+  it("失败或取消的检查不会继续刷新或提示已是最新", async () => {
+    const refresh = vi.fn(async () => ({ kind: "unchanged" as const }));
+    render(<ReviewReader review={reviewBinding({ checkForUpdate: vi.fn(async () => undefined), refresh })} appearance={appearance} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "检查更新" })); });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 
-    rerender(<ReviewReader review={reviewBinding({ update: { kind: "available", update: availableUpdate }, checkForUpdate })} appearance={appearance} />);
-    expect(screen.getByText("有更新")).toBeVisible();
-    expect(screen.getByRole("button", { name: "刷新审核" })).toBeEnabled();
+  it("离开当前审核后忽略迟到的手动检查结果", async () => {
+    let finish!: (available: boolean) => void;
+    const refresh = vi.fn(async () => ({ kind: "unchanged" as const }));
+    const { rerender } = render(<ReviewReader review={reviewBinding({ checkForUpdate: () => new Promise((resolve) => { finish = resolve; }), refresh })} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    rerender(<ReviewReader review={reviewBinding({ snapshot: { ...snapshot, reviewId: "review-2" } })} appearance={appearance} />);
+    await act(async () => { finish(true); });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 
-    rerender(<ReviewReader review={reviewBinding({ transition: { kind: "switching", target: { kind: "saved-review", reviewId: "review-2" } }, checkForUpdate })} appearance={appearance} />);
-    expect(screen.getByRole("button", { name: "检查更新" })).toBeDisabled();
-
-    rerender(<ReviewReader review={reviewBinding({ transition: { kind: "closing" }, checkForUpdate })} appearance={appearance} />);
-    expect(screen.getByRole("button", { name: "检查更新" })).toBeDisabled();
+  it("窄窗口禁用双栏，并保留图标退出按钮的关闭行为", () => {
+    const close = vi.fn(async () => ({ kind: "closed" as const }));
+    render(<ReviewReader review={reviewBinding({ view: "file-changes", diffMode: "side-by-side", close })} appearance={{ ...appearance, narrow: true }} />);
+    const toggle = screen.getByRole("button", { name: "双栏" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    const exit = screen.getByRole("button", { name: "退出审核" });
+    expect(exit.textContent).toBe("");
+    fireEvent.click(exit);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("用 toast 反馈失败与刷新成功，同时把恢复动作留在主按钮", async () => {
@@ -118,16 +155,16 @@ describe("ReviewReader", () => {
     const failure = { kind: "operation-failed" as const, detail: "network down", retryable: true };
     const { rerender } = render(<ReviewReader review={reviewBinding({ update: { kind: "failed", failure } })} appearance={appearance} />);
     expect(toast.error).toHaveBeenCalledWith("检查更新失败", { description: "network down" });
-    expect(screen.getByRole("button", { name: "重试检查" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled();
 
-    rerender(<ReviewReader review={reviewBinding({ update: { kind: "refresh-failed", update: availableUpdate, failure }, refresh })} appearance={appearance} />);
+    rerender(<ReviewReader review={reviewBinding({ update: { kind: "refresh-failed", update: availableUpdate, failure }, checkForUpdate: vi.fn(async () => true), refresh })} appearance={appearance} />);
     expect(toast.error).toHaveBeenCalledWith("刷新失败，当前版本未改变", { description: "network down" });
-    fireEvent.click(screen.getByRole("button", { name: "重试刷新" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
     await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith("Review 已刷新"));
 
     rerender(<ReviewReader review={reviewBinding({ update: { kind: "confirmation-stale", failure: { ...failure, kind: "update-confirmation-stale" } } })} appearance={appearance} />);
     expect(toast.warning).toHaveBeenCalledWith("上游版本已再次变化，请重新检查");
-    expect(screen.getByRole("button", { name: "重新检查" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled();
   });
   it("默认展示概览，并通过标签切换到文件改动", () => {
     render(<ReviewReaderHarness />);
@@ -154,23 +191,23 @@ describe("ReviewReader", () => {
     expect(screen.queryByRole("heading", { name: "#42 Review tabs" })).not.toBeInTheDocument();
     const toolbar = screen.getByRole("toolbar", { name: "审核工具栏" });
     expect(within(toolbar).getByRole("tab", { name: "审核概览" })).toBeVisible();
-    expect(within(toolbar).getByRole("button", { name: "刷新审核" })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: "检查更新" })).toBeVisible();
     expect(within(toolbar).getByRole("button", { name: "退出审核" })).toBeVisible();
-    expect(within(toolbar).queryByRole("button", { name: "切换为双栏" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "双栏" })).not.toBeInTheDocument();
 
     fireEvent.click(within(toolbar).getByRole("tab", { name: "文件改动" }));
-    expect(within(toolbar).getByRole("button", { name: "切换为双栏" })).toBeVisible();
-    expect(within(toolbar).getByRole("button", { name: "切换为双栏" })).toHaveTextContent("双栏");
+    expect(within(toolbar).getByRole("button", { name: "双栏" })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: "双栏" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("布局按钮展示点击后将切换到的目标布局", () => {
+  it("固定双栏按钮通过按下状态表达实际布局", () => {
     render(<ReviewReaderHarness overrides={{ diffMode: "side-by-side" }} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
-    const switchToInline = screen.getByRole("button", { name: "切换为单栏" });
-    expect(switchToInline).toHaveTextContent("单栏");
+    const switchToInline = screen.getByRole("button", { name: "双栏" });
+    expect(switchToInline).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(switchToInline);
-    expect(screen.getByRole("button", { name: "切换为双栏" })).toHaveTextContent("双栏");
+    expect(screen.getByRole("button", { name: "双栏" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("把 Overview、文件树和外层内容区的真实滚动位置交给 lifecycle 并恢复", () => {

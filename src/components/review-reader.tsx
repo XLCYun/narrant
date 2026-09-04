@@ -8,7 +8,7 @@ import {
   FileSyncIcon,
   LayoutTwoColumnIcon,
   Logout02Icon,
-  ViewAgendaIcon,
+  RefreshIcon,
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
@@ -18,7 +18,6 @@ import { FileTypeIcon } from "@/components/file-type-icon";
 import { ReviewOverview } from "@/components/review-overview";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { Spinner } from "@/components/ui/spinner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -105,10 +104,15 @@ export function ReviewReader(input: ReviewReaderProps) {
     firstFileChangePath: review.fileChange.kind === "failed" ? review.fileChange.path : undefined,
     navigationBusy: review.transition.kind !== "stable",
     ...appearance,
-    updateAction: <div role="status" className="flex min-w-0 items-center gap-2 text-sm">
-      {updatePresentation.statusLabel && <span className={updatePresentation.statusTone === "warning" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}>{updatePresentation.statusLabel}</span>}
-      <Button aria-label={updatePresentation.label} disabled={updatePresentation.busy} aria-busy={updatePresentation.busy || undefined} onClick={updatePresentation.run}>{updatePresentation.busy && <Spinner aria-hidden />}<span>{updatePresentation.label}</span></Button>
-    </div>,
+    updateAction: <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex" />}>
+        <Button variant="outline" size="icon-sm" className="rounded-full" aria-label={updatePresentation.label}
+          disabled={updatePresentation.busy} aria-busy={updatePresentation.busy || undefined} onClick={updatePresentation.run}>
+          <Icon icon={RefreshIcon} className={cn("-translate-y-px", updatePresentation.busy && "animate-spin")} aria-hidden />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{updatePresentation.label}</TooltipContent>
+    </Tooltip>,
     notice: undefined,
     onSelectFile: review.selectFileChange,
     onRetryFile: review.retryFileChange,
@@ -206,19 +210,20 @@ export function ReviewReader(input: ReviewReaderProps) {
         {props.updateAction}
         {activeView === "file-changes" && <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
-            <Button variant="outline" aria-label={effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}
+            <Button variant={effectiveDiffMode === "side-by-side" ? "default" : "outline"} size="icon-sm" className="rounded-full" aria-label={t("review:sideBySide")}
               aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow}
               onClick={() => review.setDiffMode(effectiveDiffMode === "side-by-side" ? "inline" : "side-by-side")}>
-              <Icon icon={effectiveDiffMode === "side-by-side" ? ViewAgendaIcon : LayoutTwoColumnIcon} className="-translate-y-px" data-icon="inline-start" aria-hidden />
-              <span className="hidden sm:inline">{effectiveDiffMode === "side-by-side" ? t("review:inline") : t("review:sideBySide")}</span>
+              <Icon icon={LayoutTwoColumnIcon} className="-translate-y-px" aria-hidden />
             </Button>
           </TooltipTrigger>
           <TooltipContent>{props.narrow ? t("review:narrowInlineOnly") : effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}</TooltipContent>
         </Tooltip>}
-        <Button variant="outline" aria-label={t("review:exit")} onClick={props.onClose}>
-          <Icon icon={Logout02Icon} className="-translate-y-px" data-icon="inline-start" aria-hidden />
-          <span className="hidden sm:inline">{t("review:exit")}</span>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger render={<Button variant="outline" size="icon-sm" className="rounded-full" aria-label={t("review:exit")} onClick={props.onClose} />}>
+            <Icon icon={Logout02Icon} className="-translate-y-px" aria-hidden />
+          </TooltipTrigger>
+          <TooltipContent>{t("review:exit")}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}
