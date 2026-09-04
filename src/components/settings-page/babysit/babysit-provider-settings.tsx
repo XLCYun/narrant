@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/ui/icon";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { ApplicationSettingsApplication, BabysitProvider, BabysitProviderPreference, BabysitSettings, CustomProviderConnection, CustomProviderSettings } from "@/settings/application-settings";
 
@@ -148,6 +149,38 @@ export function BabysitProviderSettings({ application, initialCustomApiKeyVisibl
           });
         }}><SelectTrigger aria-label="使用的 Agent" className="h-16! w-full rounded-2xl bg-background px-4 text-base"><SelectValue><ProviderIdentity provider={provider} /></SelectValue></SelectTrigger><SelectContent align="start" alignItemWithTrigger={false}><SelectItem value="codex"><ProviderIdentity provider="codex" /></SelectItem><SelectItem value="claude-code"><ProviderIdentity provider="claude-code" /></SelectItem><SelectItem value="custom"><ProviderIdentity provider="custom" /></SelectItem></SelectContent></Select>
       </label>
+      <div className="flex max-w-2xl items-start justify-between gap-5 rounded-xl border p-4">
+        <div className="min-w-0">
+          <span id="babysit-all-non-empty-lines-label" className="block font-medium">{t("allNonEmptyLines.label")}</span>
+          <span id="babysit-all-non-empty-lines-description" className="mt-1 block text-sm text-muted-foreground">{t("allNonEmptyLines.description")}</span>
+        </div>
+        <Switch
+          checked={saved.allNonEmptyLines}
+          disabled={saving}
+          onCheckedChange={(enabled) => void commit(
+            { ...saved, allNonEmptyLines: enabled },
+            () => application.updateBabysitAllNonEmptyLines(enabled),
+          )}
+          aria-labelledby="babysit-all-non-empty-lines-label"
+          aria-describedby="babysit-all-non-empty-lines-description"
+        />
+      </div>
+      <div className="flex max-w-2xl items-start justify-between gap-5 rounded-xl border p-4">
+        <div className="min-w-0">
+          <span id="babysit-repository-exploration-label" className="block font-medium">{t("repositoryExploration.label")}</span>
+          <span id="babysit-repository-exploration-description" className="mt-1 block text-sm text-muted-foreground">{t("repositoryExploration.description")}</span>
+        </div>
+        <Switch
+          checked={saved.repositoryExploration}
+          disabled={saving}
+          onCheckedChange={(enabled) => void commit(
+            { ...saved, repositoryExploration: enabled },
+            () => application.updateBabysitRepositoryExploration(enabled),
+          )}
+          aria-labelledby="babysit-repository-exploration-label"
+          aria-describedby="babysit-repository-exploration-description"
+        />
+      </div>
       {provider === "codex" && preference
         ? <CodexProviderFields application={application} preference={preference} saving={saving} onUpdate={updatePreference} onChooseExecutable={chooseExecutable} onError={setError} />
         : provider === "claude-code" && preference

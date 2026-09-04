@@ -35,6 +35,7 @@ function mockSystemTheme(initialDark: boolean) {
 function application(theme: "system" | "light" | "dark" = "system"): ApplicationSettingsApplication {
   const babysit = {
     provider: "codex" as const,
+    repositoryExploration: false, allNonEmptyLines: false,
     codex: { executable: null, model: null, reasoningEffort: null },
     claudeCode: { executable: null, model: null, reasoningEffort: null },
     custom: { protocol: "openai_chat_completions" as const, baseUrl: "", model: "", effort: "medium" as const },
@@ -48,6 +49,8 @@ function application(theme: "system" | "light" | "dark" = "system"): Application
       { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", isDefault: false, supportedReasoningEfforts: ["low", "medium"], defaultReasoningEffort: "medium" },
     ] })),
     updateBabysitProvider: vi.fn(async (provider) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, provider } })),
+    updateBabysitRepositoryExploration: vi.fn(async (repositoryExploration) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, repositoryExploration } })),
+    updateBabysitAllNonEmptyLines: vi.fn(async (allNonEmptyLines) => ({ version: 1, theme, language: "zh-CN" as const, babysit: { ...babysit, allNonEmptyLines } })),
     chooseBabysitExecutable: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
     updateBabysitPreferences: vi.fn(async () => ({ version: 1, theme, language: "zh-CN" as const, babysit })),
     loadCustomConnection: vi.fn(async () => ({ ...babysit.custom, apiKey: "" })),
@@ -77,6 +80,38 @@ function githubIdentity(): GitHubIdentityLifecycleBinding {
 }
 
 describe("Settings application-shell UI", () => {
+  it("默认关闭仓库探索并立即保存用户选择", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      updateBabysitRepositoryExploration: ReturnType<typeof vi.fn>;
+    };
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    const toggle = await screen.findByRole("switch", { name: "允许仓库探索" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/生成可能明显变慢/)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(settings.updateBabysitRepositoryExploration).toHaveBeenCalledWith(true));
+    expect(toggle).toBeChecked();
+  });
+
+  it("默认关闭全部行生成并立即保存用户选择", async () => {
+    const settings = application() as ApplicationSettingsApplication & {
+      updateBabysitAllNonEmptyLines: ReturnType<typeof vi.fn>;
+    };
+    render(<ApplicationSettingsDestination application={settings} initialSection="babysit" onBack={() => undefined} />);
+
+    const toggle = await screen.findByRole("switch", { name: "生成全部非空行的注释" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/生成时间和用量可能增加/)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(settings.updateBabysitAllNonEmptyLines).toHaveBeenCalledWith(true));
+    expect(toggle).toBeChecked();
+  });
+
   it("选择 Custom 后显示完整连接编辑器并读取当前连接", async () => {
     const settings = application() as ApplicationSettingsApplication & {
       loadCustomConnection: ReturnType<typeof vi.fn>;
@@ -378,16 +413,18 @@ describe("Settings application-shell UI", () => {
     const adapter = createTauriApplicationSettingsAdapter({ invoke } as never, vi.fn(async () => "C:\\Tools\\claude.exe"));
 
     await adapter.updateBabysitProvider("claude-code");
+    await adapter.updateBabysitRepositoryExploration(true);
     await adapter.chooseBabysitExecutable("claude-code", { executable: null, model: "sonnet", reasoningEffort: "high" });
     await adapter.updateBabysitPreferences("claude-code", { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, "claude-catalog-1");
     await adapter.loadCustomConnection();
     await adapter.saveCustomConnection({ protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", apiKey: "secret", model: "model", effort: "medium" });
 
     expect(invoke).toHaveBeenNthCalledWith(1, "update_application_babysit_provider", { provider: "claude-code" });
-    expect(invoke).toHaveBeenNthCalledWith(2, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "sonnet", reasoningEffort: "high" }, catalogRevision: null });
-    expect(invoke).toHaveBeenNthCalledWith(3, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, catalogRevision: "claude-catalog-1" });
-    expect(invoke).toHaveBeenNthCalledWith(4, "load_application_custom_connection", {});
-    expect(invoke).toHaveBeenNthCalledWith(5, "save_application_custom_connection", { connection: { protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", apiKey: "secret", model: "model", effort: "medium" } });
+    expect(invoke).toHaveBeenNthCalledWith(2, "update_application_babysit_repository_exploration", { enabled: true });
+    expect(invoke).toHaveBeenNthCalledWith(3, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "sonnet", reasoningEffort: "high" }, catalogRevision: null });
+    expect(invoke).toHaveBeenNthCalledWith(4, "update_application_babysit_preferences", { provider: "claude-code", preference: { executable: "C:\\Tools\\claude.exe", model: "opus", reasoningEffort: "max" }, catalogRevision: "claude-catalog-1" });
+    expect(invoke).toHaveBeenNthCalledWith(5, "load_application_custom_connection", {});
+    expect(invoke).toHaveBeenNthCalledWith(6, "save_application_custom_connection", { connection: { protocol: "openai_chat_completions", baseUrl: "https://example.test/v1", apiKey: "secret", model: "model", effort: "medium" } });
   });
 
   it("只呈现当前 provider，并即时保存完整组合且失败时回滚", async () => {

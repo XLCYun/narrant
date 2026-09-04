@@ -116,6 +116,9 @@ fn application_for_connection_with_options(
     settings
         .update_provider(BabysitProvider::Custom)
         .expect("选择 fixture Custom provider");
+    settings
+        .update_repository_exploration(true)
+        .expect("既有 Custom application fixture 显式开启 repository exploration");
     let bundle = match tool_cancellation {
         Some(cancellation) => Arc::new(CustomCapabilityBundle::with_tool_boundary_cancellation(
             settings.clone(),
@@ -146,6 +149,18 @@ fn fixture_input(workspace: &Path) -> (BabysitFileRequest, FileChangeContent) {
             workspace_path: workspace.to_string_lossy().into_owned(),
             detected_language: Some("rust".to_owned()),
             generation_policy: BabysitGenerationPolicy::ReuseCached,
+            changed_ranges: vec![
+                crate::babysit::ChangedLineRange {
+                    side: crate::babysit::FileSide::Before,
+                    start_line_number: 1,
+                    end_line_number: 1,
+                },
+                crate::babysit::ChangedLineRange {
+                    side: crate::babysit::FileSide::After,
+                    start_line_number: 1,
+                    end_line_number: 1,
+                },
+            ],
         },
         FileChangeContent {
             path,

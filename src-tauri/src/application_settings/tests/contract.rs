@@ -20,6 +20,7 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
     assert_eq!(settings.theme, ThemePreference::System);
     assert_eq!(settings.language, ApplicationLanguage::English);
     assert_eq!(settings.babysit.provider, BabysitProvider::Custom);
+    assert!(!settings.babysit.repository_exploration);
     assert_eq!(settings.babysit.codex, BabysitProviderSettings::default());
     assert_eq!(
         settings.babysit.claude_code,
@@ -40,6 +41,36 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
         Some(&serde_json::json!("provider_default"))
     );
     assert!(!path.exists());
+}
+
+#[test]
+/// 验证全部非空行生成默认关闭，开启后可从持久化设置恢复。
+fn all_non_empty_lines_defaults_off_and_round_trips() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application = ApplicationSettingsApplication::new(path.clone());
+    assert!(!application.load().unwrap().babysit.all_non_empty_lines);
+    application.update_all_non_empty_lines(true).unwrap();
+    assert!(
+        ApplicationSettingsApplication::new(path)
+            .load()
+            .unwrap()
+            .babysit
+            .all_non_empty_lines
+    );
+}
+
+#[test]
+fn repository_exploration_defaults_off_and_round_trips_when_enabled() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application = ApplicationSettingsApplication::new(path.clone());
+
+    let saved = application.update_repository_exploration(true).unwrap();
+    let reloaded = ApplicationSettingsApplication::new(path).load().unwrap();
+
+    assert!(saved.babysit.repository_exploration);
+    assert!(reloaded.babysit.repository_exploration);
 }
 
 #[test]
@@ -203,10 +234,12 @@ fn failed_language_write_keeps_the_previous_authoritative_snapshot() {
 
 #[test]
 fn settings_v1_round_trip_uses_stable_provider_ids_and_explicit_substructures() {
-    let payload = serde_json::json!({"version":1,"theme":"dark","language":"en-US","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium","credentialGeneration":0}}});
-    let settings: super::ApplicationSettings = serde_json::from_value(payload.clone()).unwrap();
+    let legacy_payload = serde_json::json!({"version":1,"theme":"dark","language":"en-US","babysit":{"provider":"claude-code","codex":{"executable":null,"model":"gpt-5","reasoningEffort":"high"},"claudeCode":{"executable":null,"model":"sonnet","reasoningEffort":null},"custom":{"protocol":"openai_chat_completions","baseUrl":"https://example.test/v1","model":"fixture-model","effort":"medium","credentialGeneration":0}}});
+    let settings: super::ApplicationSettings = serde_json::from_value(legacy_payload).unwrap();
     assert_eq!(settings.babysit.provider, BabysitProvider::ClaudeCode);
-    assert_eq!(serde_json::to_value(settings).unwrap(), payload);
+    assert!(!settings.babysit.repository_exploration);
+    let serialized = serde_json::to_value(settings).unwrap();
+    assert_eq!(serialized["babysit"]["repositoryExploration"], false);
 }
 
 #[test]

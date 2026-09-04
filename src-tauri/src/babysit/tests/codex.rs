@@ -32,6 +32,7 @@ fn request() -> BabysitProviderRequest {
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-review-workspace".to_owned(),
+        repository_exploration: true,
         before: "const old = 1;".to_owned(),
         after: "const next = 2;".to_owned(),
         targets: vec![
@@ -83,8 +84,34 @@ fn codex_generation_and_repair_prompts_discourage_repository_exploration() {
         }],
         false,
     );
+    assert!(repair.contains("Before 缺少第 1 行解释"));
+    assert!(!repair.contains("const old = 1;"));
+    assert!(!repair.contains("const next = 2;"));
+    let repair = repair.to_ascii_lowercase();
     assert!(repair.contains("do not explore the repository by default"));
     assert!(repair.contains("do not repeat or broaden a query"));
+}
+
+#[test]
+fn codex_malformed_repair_repeats_all_target_identities_without_source() {
+    let request = request();
+
+    let repair = CodexAppServerProvider::repair_prompt(&request, &[], true);
+
+    assert!(repair.contains("before line 1"));
+    assert!(repair.contains("after line 1"));
+    assert!(!repair.contains("const old = 1;"));
+    assert!(!repair.contains("const next = 2;"));
+}
+
+#[test]
+fn codex_prompt_forbids_repository_exploration_when_disabled() {
+    let mut request = request();
+    request.repository_exploration = false;
+
+    let generation = CodexAppServerProvider::generation_prompt(&request);
+    assert!(generation.contains("Do not call tools or explore the repository"));
+    assert!(!generation.contains("Explore only when"));
 }
 
 /// 启动确定性 shell JSONL fixture，并将事件写入临时文件供断言读取。
@@ -147,6 +174,22 @@ async fn wait_for_active_thread(provider: &CodexAppServerProvider) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("provider did not register an active thread");
+}
+
+/// 等待 repair 新 turn 完成登记，不能把 generation 留下的旧 turn 当作就绪。
+async fn wait_for_active_turn(provider: &CodexAppServerProvider, turn_id: &str) {
+    for _ in 0..1000 {
+        if provider
+            .active_threads
+            .lock()
+            .map(|active| active.values().any(|run| run.turn_id == turn_id))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("provider did not register active turn {turn_id}");
 }
 
 #[tokio::test]
@@ -243,7 +286,7 @@ async fn cancelled_repair_is_cleaned_before_provider_shutdown() {
             .await
     });
     wait_for_event_count(&events, "turn/start:real", 2).await;
-    wait_for_active_thread(&provider).await;
+    wait_for_active_turn(&provider, "turn-2").await;
     cancellation.cancel();
     provider.shutdown().await;
 
@@ -515,7 +558,9 @@ async fn malformed_structured_output_can_be_repaired_on_the_same_thread() {
     assert_eq!(repaired.after["1"], "after explanation");
     let events = std::fs::read_to_string(events).unwrap();
     assert!(events.lines().any(|line| line == "json-error-feedback"));
-    assert!(events.lines().any(|line| line == "repair-numbered-content"));
+    assert!(events
+        .lines()
+        .any(|line| line == "repair-targets-without-source"));
     assert_eq!(
         events
             .lines()

@@ -87,6 +87,12 @@ pub(crate) struct BabysitProviderSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BabysitSettings {
     pub provider: BabysitProvider,
+    /// 未来 Babysit 分析是否可以读取 File Change 之外的 Review Workspace 内容。
+    #[serde(default)]
+    pub repository_exploration: bool,
+    /// 是否为全部非空行生成解释；关闭时使用编辑器提供的变更范围。
+    #[serde(default)]
+    pub all_non_empty_lines: bool,
     pub codex: BabysitProviderSettings,
     pub claude_code: BabysitProviderSettings,
     /// Custom 连接的非 secret 快照。
@@ -98,6 +104,8 @@ impl Default for BabysitSettings {
     fn default() -> Self {
         Self {
             provider: BabysitProvider::Custom,
+            repository_exploration: false,
+            all_non_empty_lines: false,
             codex: BabysitProviderSettings::default(),
             claude_code: BabysitProviderSettings::default(),
             custom: CustomProviderSettings::default(),

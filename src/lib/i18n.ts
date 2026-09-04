@@ -105,7 +105,7 @@ export const resources = {
       currentAvailable: "当前 {{current}} · 可用 {{available}}", pullRequestBranchesUpdated: "检测到 PR 分支有更新", selectedBranchesUpdated: "检测到所选分支有更新", pullRequestUpdate: "Pull Request 更新", branchUpdate: "Branch Review 更新",
       switchToInline: "切换为单栏", switchToSideBySide: "切换为双栏", narrowInlineOnly: "当前窗口宽度仅支持单栏",
       babysit: "宝宝模式", babysitDisable: "关闭宝宝模式", babysitCancel: "取消宝宝模式", babysitExplanations: "逐行解释", babysitBefore: "变更前", babysitAfter: "变更后",
-      babysitFilter: "逐行解释显示范围", babysitChanged: "仅改变行", babysitAll: "全部非空行", babysitExpand: "展开", babysitCollapse: "收起",
+      babysitExpand: "展开", babysitCollapse: "收起",
       babysitGenerating: "正在生成逐行解释…", babysitRepairing: "正在修复逐行解释（第 {{attempt}} 次）…", babysitFailed: "逐行解释失败",
       babysitCodexMissing: "未找到可用的 Codex，请前往应用设置的宝宝模式分区配置", babysitCodexSignedOut: "Codex 尚未登录，请运行 codex login 后重试", babysitCodexIncompatible: "当前 Codex 缺少宝宝模式所需能力，请升级后重试", babysitCodexInitializationFailed: "Codex 初始化失败，请重试",
       babysitClaudeMissing: "未找到可用的 Claude Code，请前往应用设置的宝宝模式分区配置", babysitClaudeSignedOut: "Claude Code 尚未登录，请先在终端完成登录", babysitClaudeIncompatible: "当前 Claude Code 缺少宝宝模式所需能力，请升级后重试", babysitClaudeInitializationFailed: "Claude Code 初始化失败，请重试",
@@ -126,6 +126,11 @@ export const resources = {
     },
     settings: {
       provider: { custom: "自定义" },
+      allNonEmptyLines: { label: "生成全部非空行的注释", description: "关闭时仅解释变更的非空行；开启后解释全部非空行，生成时间和用量可能增加。" },
+      repositoryExploration: {
+        label: "允许仓库探索",
+        description: "开启后，Agent 可以只读搜索当前 Review Workspace 以获取更多上下文，但生成可能明显变慢，并会向模型服务发送额外代码内容。",
+      },
       custom: {
         title: "自定义模型服务",
         description: "填写一个 OpenAI Chat Completions 或 Anthropic Messages 兼容的模型服务连接。",
@@ -219,7 +224,7 @@ export const resources = {
       currentAvailable: "Current {{current}} · available {{available}}", pullRequestBranchesUpdated: "PR branches have updates", selectedBranchesUpdated: "Selected branches have updates", pullRequestUpdate: "Pull Request update", branchUpdate: "Branch review update",
       switchToInline: "Switch to inline", switchToSideBySide: "Switch to side by side", narrowInlineOnly: "Only inline layout is available at this window width",
       babysit: "Babysit", babysitDisable: "Close Babysit", babysitCancel: "Cancel Babysit", babysitExplanations: "Line explanations", babysitBefore: "Before", babysitAfter: "After",
-      babysitFilter: "Line explanation visibility", babysitChanged: "Changed lines", babysitAll: "All non-empty lines", babysitExpand: "Expand", babysitCollapse: "Collapse",
+      babysitExpand: "Expand", babysitCollapse: "Collapse",
       babysitGenerating: "Generating line explanations…", babysitRepairing: "Repairing line explanations (attempt {{attempt}})…", babysitFailed: "Line explanations failed",
       babysitCodexMissing: "No usable Codex found; configure it in Application Settings under Babysit", babysitCodexSignedOut: "Codex is not signed in; run codex login and retry", babysitCodexIncompatible: "This Codex lacks Babysit capabilities; upgrade and retry", babysitCodexInitializationFailed: "Codex initialization failed; retry",
       babysitClaudeMissing: "No usable Claude Code found; configure it in Application Settings under Babysit", babysitClaudeSignedOut: "Claude Code is not signed in; sign in from a terminal", babysitClaudeIncompatible: "This Claude Code lacks Babysit capabilities; upgrade and retry", babysitClaudeInitializationFailed: "Claude Code initialization failed; retry",
@@ -240,6 +245,11 @@ export const resources = {
     },
     settings: {
       provider: { custom: "Custom" },
+      allNonEmptyLines: { label: "Explain all non-empty lines", description: "When disabled, explain only changed non-empty lines. Enabling this explains all non-empty lines and may increase generation time and usage." },
+      repositoryExploration: {
+        label: "Allow repository exploration",
+        description: "When enabled, the Agent may search the current Review Workspace read-only for more context. Generation can take significantly longer and may send additional code to the model service.",
+      },
       custom: {
         title: "Custom model service",
         description: "Configure an OpenAI Chat Completions or Anthropic Messages compatible model service.",

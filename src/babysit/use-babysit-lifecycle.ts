@@ -4,6 +4,7 @@ import { detectBabysitLanguage } from "@/babysit/detected-language";
 import {
   isBabysitError,
   type BabysitApplicationAdapter,
+  type BabysitChangedRange,
   type BabysitBinding,
   type BabysitError,
   type BabysitEligibilityState,
@@ -100,7 +101,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
   }, [adapter, fileChange, snapshot]);
 
   /** 对当前 immutable File Change 发起完整文件分析，并丢弃 stale response。 */
-  const generate = useCallback((generationPolicy: BabysitGenerationPolicy) => {
+  const generate = useCallback((generationPolicy: BabysitGenerationPolicy, changedRanges: BabysitChangedRange[]) => {
     if (!snapshot || fileChange.kind !== "ready" || !adapter) return;
     if (eligibility.kind !== "resolved" || !eligibility.result.eligible) return;
     const request: BabysitFileRequest = {
@@ -114,7 +115,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     const requestId = explanationRequest.current;
     explanationAbort.current = abort;
     setState({ kind: "generating", request });
-    void adapter.explainFile({ file: request, generationPolicy }, (progress: BabysitProgress) => {
+    void adapter.explainFile({ file: request, generationPolicy, changedRanges }, (progress: BabysitProgress) => {
       if (abort.signal.aborted || requestId !== explanationRequest.current) return;
       setState(progress.phase === "repairing"
         ? { kind: "repairing", request, attempt: progress.attempt }
@@ -131,11 +132,11 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
   }, [adapter, eligibility, fileChange, invalidateExplanation, snapshot]);
 
   /** 普通开启允许复用精确 identity 的已完成结果。 */
-  const explain = useCallback(() => generate("reuse_cached"), [generate]);
+  const explain = useCallback((ranges: BabysitChangedRange[]) => generate("reuse_cached", ranges), [generate]);
 
   /** 主动重新生成只对已完成结果开放，并立即替换展示状态。 */
-  const regenerate = useCallback(() => {
-    if (state.kind === "completed") generate("regenerate");
+  const regenerate = useCallback((ranges: BabysitChangedRange[]) => {
+    if (state.kind === "completed") generate("regenerate", ranges);
   }, [generate, state.kind]);
 
   /** Module 卸载时只终止在途请求；Review cache 由宿主的 close/switch 协调。 */
@@ -150,7 +151,7 @@ export function useBabysitLifecycle(input: BabysitLifecycleInput): BabysitLifecy
     explain,
     regenerate,
     cancel: invalidateExplanation,
-    retry: () => { if (state.kind === "failed") generate(lastGenerationPolicy.current); },
+    retry: (ranges) => { if (state.kind === "failed") generate(lastGenerationPolicy.current, ranges); },
   } : undefined, [adapter, eligibility, explain, generate, invalidateExplanation, regenerate, state]);
 
   /** 清理动作不阻塞 Review 主流程，provider cleanup 失败由 adapter 自行记录。 */

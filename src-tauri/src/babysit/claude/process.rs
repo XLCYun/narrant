@@ -11,6 +11,7 @@ pub(super) fn configure_round_command(
     prefix_args: &[OsString],
     resolved_model: &ResolvedClaudeModel,
     schema: &Value,
+    repository_exploration: bool,
 ) {
     command
         .args(prefix_args)
@@ -22,9 +23,16 @@ pub(super) fn configure_round_command(
         .arg("--permission-mode")
         .arg("dontAsk")
         .arg("--tools")
-        .arg("Read,Glob,Grep")
-        .arg("--disallowedTools")
-        .arg("Bash,Write,Edit,Web,mcp__*");
+        .arg(if repository_exploration {
+            "Read,Glob,Grep"
+        } else {
+            ""
+        });
+    if repository_exploration {
+        command
+            .arg("--disallowedTools")
+            .arg("Bash,Write,Edit,Web,mcp__*");
+    }
     if let Some(model) = &resolved_model.model {
         command.arg("--model").arg(model);
     }

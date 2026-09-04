@@ -179,7 +179,7 @@ async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
     .expect("冻结连接");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
         .run_agent(request, &TestCancellation::default())
@@ -252,7 +252,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
     let response = adapter
         .run_agent(request, &TestCancellation::default())
         .await
@@ -263,6 +263,62 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
         response.tool_calls()[0].function.name,
         FINAL_OUTPUT_TOOL_NAME
     );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn disabled_repository_exploration_registers_only_the_final_output_tool() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/v1/chat/completions").matches(|request| {
+                let body: serde_json::Value = serde_json::from_slice(
+                    request.body.as_deref().expect("请求应包含 JSON body"),
+                ).expect("请求应为 JSON");
+                let names = body["tools"].as_array().expect("tools 应为数组")
+                    .iter()
+                    .filter_map(|tool| tool["function"]["name"].as_str())
+                    .collect::<Vec<_>>();
+                names == vec![FINAL_OUTPUT_TOOL_NAME]
+            });
+            then.status(200).json_body(json!({
+                "id": "fixture-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "tool_calls": [{
+                        "id": "call-final", "type": "function",
+                        "function": {"name": FINAL_OUTPUT_TOOL_NAME, "arguments": "{\"before\":{},\"after\":{}}"}
+                    }]},
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }));
+        })
+        .await;
+    let connection = CustomConnectionSnapshot::new(
+        CustomProtocol::OpenaiChatCompletions,
+        format!("{}/v1", server.url("")),
+        "fixture-key",
+        "fixture-model",
+        CustomEffort::ProviderDefault,
+        "credential-no-exploration",
+    )
+    .expect("冻结连接");
+    let workspace = tempfile::tempdir().expect("创建 workspace");
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
+
+    adapter
+        .run_agent(
+            CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), false),
+            &TestCancellation::default(),
+        )
+        .await
+        .expect("fixture response");
+
     mock.assert_async().await;
 }
 
@@ -309,7 +365,7 @@ async fn openai_length_finish_reason_is_an_output_limit_error() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
         .run_agent(request, &TestCancellation::default())
@@ -379,7 +435,7 @@ async fn openai_provider_default_omits_reasoning_effort() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     adapter
         .run_agent(request, &TestCancellation::default())
@@ -445,7 +501,7 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
         .run_agent(request, &TestCancellation::default())
@@ -515,7 +571,7 @@ async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
         .run_agent(request, &TestCancellation::default())
@@ -600,6 +656,18 @@ async fn custom_application_surfaces_openai_output_limit_without_repair() {
         workspace_path: workspace.path().to_string_lossy().into_owned(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::Regenerate,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),
@@ -687,7 +755,7 @@ async fn empty_key_omits_the_authorization_header() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     adapter
         .run_agent(request, &TestCancellation::default())
@@ -724,7 +792,7 @@ async fn openai_http_client_failure_keeps_redacted_transport_classification() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
         .run_agent(request, &TestCancellation::default())
@@ -774,7 +842,7 @@ async fn openai_success_status_error_envelope_is_invalid_response() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let adapter =
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
-    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new());
+    let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
     let error = adapter
         .run_agent(request, &TestCancellation::default())
         .await
@@ -861,6 +929,18 @@ async fn custom_registry_http_generation_populates_and_reuses_completed_cache() 
         workspace_path: workspace.path().to_string_lossy().into_owned(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),
@@ -897,6 +977,18 @@ async fn custom_registry_http_generation_populates_and_reuses_completed_cache() 
                 workspace_path: workspace.path().to_string_lossy().into_owned(),
                 detected_language: Some("rust".to_owned()),
                 generation_policy: BabysitGenerationPolicy::ReuseCached,
+                changed_ranges: vec![
+                    crate::babysit::ChangedLineRange {
+                        side: crate::babysit::FileSide::Before,
+                        start_line_number: 1,
+                        end_line_number: 1,
+                    },
+                    crate::babysit::ChangedLineRange {
+                        side: crate::babysit::FileSide::After,
+                        start_line_number: 1,
+                        end_line_number: 1,
+                    },
+                ],
             },
             FileChangeContent {
                 path: "src/example.rs".to_owned(),
@@ -959,6 +1051,18 @@ async fn custom_registry_cancels_before_tool_dispatch_and_does_not_cache() {
         workspace_path: workspace.path().to_string_lossy().into_owned(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),

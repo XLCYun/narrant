@@ -112,6 +112,10 @@ fn invoke_explain(
         "path": "src/example.ts",
         "detectedLanguage": "typescript",
         "generationPolicy": "reuse_cached",
+        "changedRanges": [
+            { "side": "before", "startLineNumber": 1, "endLineNumber": 1 },
+            { "side": "after", "startLineNumber": 1, "endLineNumber": 1 }
+        ],
         "progress": "__CHANNEL__:0",
     });
     let response = tauri::test::get_ipc_response(

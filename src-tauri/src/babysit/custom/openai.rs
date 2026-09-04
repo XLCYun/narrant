@@ -226,7 +226,31 @@ impl OpenAiChatCompletionsAdapter {
         workspace: impl AsRef<Path>,
         cancellation: &CancellationSignal,
         preamble: impl Into<String>,
+        repository_exploration: bool,
     ) -> Result<rig::Agent, CustomAdapterError> {
+        let preamble = preamble.into();
+        let builder = self
+            .client
+            .agent(self.connection.model().to_owned())
+            .preamble(&preamble);
+        let builder = match self.connection.effort().wire_value() {
+            Some(effort) => builder.additional_params(serde_json::json!({
+                "reasoning_effort": effort
+            })),
+            None => builder,
+        };
+        let builder = builder
+            // Rig 的 content telemetry 会把 prompt、tool args/results 写入 span；
+            // Custom provider 的安全契约固定关闭该选项，只保留结构与 token usage。
+            .record_content_telemetry(false)
+            .default_max_turns(MAX_MODEL_TURNS)
+            .max_tokens(MAX_OUTPUT_TOKENS);
+        if !repository_exploration {
+            return Ok(builder
+                .output_schema_raw(line_explanation_schema())
+                .output_mode(rig::agent::OutputMode::Tool)
+                .build());
+        }
         let tools = RepositoryTools::new(workspace.as_ref()).map_err(|_| {
             CustomAdapterError::Transport(CustomTransportFailure::new(
                 self.connection.protocol(),
@@ -240,23 +264,7 @@ impl OpenAiChatCompletionsAdapter {
             None => tools,
         };
         let rig_tools = tools.rig_tools(cancellation);
-        let preamble = preamble.into();
-        let builder = self
-            .client
-            .agent(self.connection.model().to_owned())
-            .preamble(&preamble);
-        let builder = match self.connection.effort().wire_value() {
-            Some(effort) => builder.additional_params(serde_json::json!({
-                "reasoning_effort": effort
-            })),
-            None => builder,
-        };
         Ok(builder
-            // Rig 的 content telemetry 会把 prompt、tool args/results 写入 span；
-            // Custom provider 的安全契约固定关闭该选项，只保留结构与 token usage。
-            .record_content_telemetry(false)
-            .default_max_turns(MAX_MODEL_TURNS)
-            .max_tokens(MAX_OUTPUT_TOKENS)
             .tool(rig_tools.read)
             .tool(rig_tools.glob)
             .tool(rig_tools.grep)
@@ -275,7 +283,12 @@ impl OpenAiChatCompletionsAdapter {
             .agent_for_workspace(
                 &self.workspace,
                 cancellation,
-                "Only use the registered read-only repository tools. Submit the final answer through the schema-bearing final_result tool.",
+                if request.repository_exploration() {
+                    "Only use the registered read-only repository tools. Submit the final answer through the schema-bearing final_result tool."
+                } else {
+                    "No repository tools are available. Use only the supplied before/after content and submit the final answer through the schema-bearing final_result tool."
+                },
+                request.repository_exploration(),
             )
             .map_err(OpenAiPromptAttemptError::Adapter)?;
         let future = agent

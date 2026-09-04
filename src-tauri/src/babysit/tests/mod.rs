@@ -113,6 +113,8 @@ async fn executable_invalidation_discards_catalog_and_analysis_cache() {
             contract_version: ANALYSIS_CONTRACT_VERSION.to_owned(),
             provider_id: "provider".to_owned(),
             process_generation: "generation".to_owned(),
+            repository_exploration: true,
+            all_non_empty_lines: false,
         },
         BabysitFileExplanations::default(),
     );
@@ -209,7 +211,119 @@ fn request(review_id: &str, snapshot_id: &str, path: &str) -> BabysitFileRequest
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
         detected_language: None,
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     }
+}
+
+#[tokio::test]
+/// 验证变更范围保留非空行，并且两种生成范围的缓存可独立复用。
+async fn changed_targets_skip_empty_lines_and_keep_scope_caches_separate() {
+    use crate::application_settings::{ApplicationSettingsApplication, BabysitProvider};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let settings = ApplicationSettingsApplication::new(path.clone());
+    settings.update_provider(BabysitProvider::Codex).unwrap();
+    let provider = Arc::new(FakeBabysitProvider::default());
+    let application = TestBabysitApplication::with_providers_at(
+        path,
+        [(BabysitProvider::Codex, provider.clone())],
+    );
+    let mut input = request("review", "snapshot", "src/lib.rs");
+    input.changed_ranges = vec![ChangedLineRange {
+        side: FileSide::After,
+        start_line_number: 2,
+        end_line_number: 3,
+    }];
+    let content = text_change(
+        "src/lib.rs",
+        Some("same();\nold();\n"),
+        Some("same();\nnew();\n  \n"),
+    );
+    let cancellation = OperationContext::background().cancellation().clone();
+    let changed = application
+        .explain_file(input.clone(), content.clone(), &cancellation, |_| Ok(()))
+        .await
+        .unwrap();
+    assert!(changed.before.is_empty());
+    assert_eq!(changed.after.keys().cloned().collect::<Vec<_>>(), vec!["2"]);
+    settings.update_all_non_empty_lines(true).unwrap();
+    let all = application
+        .explain_file(input.clone(), content.clone(), &cancellation, |_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(all.before.len(), 2);
+    assert_eq!(all.after.len(), 2);
+    settings.update_all_non_empty_lines(false).unwrap();
+    assert_eq!(
+        application
+            .explain_file(input, content, &cancellation, |_| Ok(()))
+            .await
+            .unwrap(),
+        changed
+    );
+    assert_eq!(provider.generate_calls(), 2);
+}
+
+#[tokio::test]
+/// 验证非法编辑器范围在 provider 准备前被拒绝。
+async fn invalid_changed_ranges_fail_before_provider_preparation() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings = crate::application_settings::ApplicationSettingsApplication::new(
+        directory.path().join("settings.json"),
+    );
+    let application = BabysitApplication::from_registry(Default::default(), Some(settings));
+    for (start, end) in [(0, 1), (2, 1), (1, 2)] {
+        let mut input = request("review", "snapshot", "src/lib.rs");
+        input.changed_ranges = vec![ChangedLineRange {
+            side: FileSide::After,
+            start_line_number: start,
+            end_line_number: end,
+        }];
+        let result = application
+            .explain_file(
+                input,
+                text_change("src/lib.rs", Some("old();"), Some("new();")),
+                &OperationContext::background().cancellation().clone(),
+                |_| Ok(()),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(BabysitError::InvalidProviderOutput { detail }) if detail == "invalid_changed_line_range")
+        );
+    }
+}
+
+#[tokio::test]
+/// 验证没有目标行时无需配置 provider 即可完成空结果。
+async fn zero_targets_complete_without_configured_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings = crate::application_settings::ApplicationSettingsApplication::new(
+        directory.path().join("settings.json"),
+    );
+    let application = BabysitApplication::from_registry(Default::default(), Some(settings));
+    let mut input = request("review", "snapshot", "src/lib.rs");
+    input.changed_ranges.clear();
+    let output = application
+        .explain_file(
+            input,
+            text_change("src/lib.rs", Some("same();"), Some("same();")),
+            &OperationContext::background().cancellation().clone(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output, BabysitFileExplanations::default());
 }
 
 #[tokio::test]
@@ -633,6 +747,7 @@ fn response_validation_rejects_extra_and_missing_but_accepts_soft_text_limits() 
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
+        repository_exploration: true,
         before: "const value = 1;".to_owned(),
         after: "const value = 2;".to_owned(),
         targets: vec![
@@ -684,6 +799,7 @@ fn provider_output_canonicalizes_zero_padded_requested_line_keys_before_repair()
         path: "src/example.ts".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: "/tmp/narrant-test-workspace".to_owned(),
+        repository_exploration: true,
         before: "const value = 1;".to_owned(),
         after: "const value = 2;".to_owned(),
         targets: vec![

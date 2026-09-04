@@ -12,6 +12,8 @@ const fakeDecorations: Record<"original" | "modified", FakeDecoration[]> = { ori
 let fakeLineChanges = [
   { originalStartLineNumber: 2, originalEndLineNumber: 2, modifiedStartLineNumber: 2, modifiedEndLineNumber: 2 },
 ];
+let diffPending = false;
+let notifyDiff: (() => void) | undefined;
 
 /** 在 jsdom 中模拟 Monaco view-zone API，让测试验证可见行和展开行为。 */
   vi.mock("@monaco-editor/react", () => ({
@@ -27,8 +29,8 @@ let fakeLineChanges = [
         },
       });
       const fakeEditor = {
-        getLineChanges: () => fakeLineChanges,
-        onDidUpdateDiff: () => ({ dispose: () => undefined }),
+        getLineChanges: () => diffPending ? null : fakeLineChanges,
+        onDidUpdateDiff: (callback: () => void) => { notifyDiff = callback; return { dispose: () => undefined }; },
         getOriginalEditor: () => createEditor("original"),
         getModifiedEditor: () => createEditor("modified"),
       };
@@ -99,6 +101,8 @@ const appearance = {
 };
 
 beforeEach(async () => {
+  diffPending = false;
+  notifyDiff = undefined;
   await i18n.changeLanguage("zh-CN");
   fakeDecorations.original = [];
   fakeDecorations.modified = [];
@@ -109,6 +113,29 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe("Babysit Review Reader presentation", () => {
+  it("等待当前 Monaco diff 就绪并传递原始范围", () => {
+    diffPending = true;
+    const review = makeReview({ kind: "idle" });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    expect(review.babysit?.explain).not.toHaveBeenCalled();
+    act(() => { diffPending = false; notifyDiff?.(); });
+    expect(review.babysit?.explain).toHaveBeenCalledWith([
+      { side: "before", startLineNumber: 2, endLineNumber: 2 },
+      { side: "after", startLineNumber: 2, endLineNumber: 2 },
+    ]);
+  });
+
+  it("Monaco 返回空范围时仍提交零 targets 请求", () => {
+    fakeLineChanges = [];
+    const review = makeReview({ kind: "idle" });
+    render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    expect(review.babysit?.explain).toHaveBeenCalledWith([]);
+  });
+
   it("中等宽度 side-by-side 禁用 Monaco 自动 inline 回退", () => {
     const review = makeReview({ kind: "idle" });
     render(<ReviewReader review={review} appearance={{ ...appearance, narrow: false, diffMode: "side-by-side" }} />);
@@ -117,7 +144,7 @@ describe("Babysit Review Reader presentation", () => {
     expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute("data-inline-breakpoint", "0");
   });
 
-  it("默认只显示改变行，并可切换到全部非空行而不重新请求", () => {
+  it("显示全部返回注释且没有展示范围按钮", () => {
     const review = makeReview({
       kind: "completed",
       request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
@@ -135,15 +162,7 @@ describe("Babysit Review Reader presentation", () => {
 
     expect(review.babysit?.explain).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "仅改变行" })).not.toBeInTheDocument();
-    const allLinesButton = screen.getByRole("button", { name: "全部非空行" });
-    const disableButton = screen.getByRole("button", { name: "关闭宝宝模式" });
-    expect(allLinesButton.compareDocumentPosition(disableButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(fakeDecorations.original.map((item) => item.range.startLineNumber)).toEqual([2]);
-    expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([2]);
-
-    fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
     expect(screen.queryByRole("button", { name: "全部非空行" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "仅改变行" })).toBeInTheDocument();
     expect(fakeDecorations.original.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
     expect(fakeDecorations.modified.map((item) => item.range.startLineNumber)).toEqual([1, 2]);
   });
@@ -401,7 +420,24 @@ describe("Babysit Review Reader presentation", () => {
     }
   });
 
-  it("同一 Review 切换文件时保留 changed/all 过滤选择", () => {
+  it("切换文件后忽略旧 diff 回调并等待新文件范围", () => {
+    const review = makeReview({ kind: "idle" });
+    const rendered = render(<ReviewReader review={review} appearance={appearance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
+    fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
+    const staleCallback = notifyDiff;
+    vi.mocked(review.babysit!.explain).mockClear();
+    diffPending = true;
+    const nextContent = { ...content, path: "src/next.ts" };
+    rendered.rerender(<ReviewReader review={{ ...review, fileChange: { kind: "ready", path: nextContent.path, content: nextContent } }} appearance={appearance} />);
+    expect(review.babysit?.explain).not.toHaveBeenCalled();
+    act(() => { diffPending = false; staleCallback?.(); });
+    expect(review.babysit?.explain).not.toHaveBeenCalled();
+    act(() => { fakeLineChanges = []; notifyDiff?.(); });
+    expect(review.babysit?.explain).toHaveBeenCalledWith([]);
+  });
+
+  it("同一 Review 切换文件时仍没有范围按钮", () => {
     const state: BabysitBinding["state"] = {
       kind: "completed",
       request: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: content.path },
@@ -411,10 +447,9 @@ describe("Babysit Review Reader presentation", () => {
     const rendered = render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
-    fireEvent.click(screen.getByRole("button", { name: "全部非空行" }));
 
     const nextContent = { ...content, path: "src/next.ts" };
     rendered.rerender(<ReviewReader review={{ ...review, fileChange: { kind: "ready", path: nextContent.path, content: nextContent } }} appearance={appearance} />);
-    expect(screen.getByRole("button", { name: "仅改变行" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "仅改变行" })).not.toBeInTheDocument();
   });
 });

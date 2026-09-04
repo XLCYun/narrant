@@ -28,6 +28,7 @@ fn request(workspace_path: String) -> BabysitProviderRequest {
         path: "src/example.rs".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path,
+        repository_exploration: true,
         before: "let old = 1;".to_owned(),
         after: "let next = 2;".to_owned(),
         targets: vec![
@@ -93,6 +94,28 @@ async fn structured_output_uses_non_persistent_read_only_claude_process() {
     assert!(events.contains("不要重复查询或扩大搜索范围"));
     assert!(events.contains("一到两个短句"));
     assert!(events.contains("最多 240 个 Unicode 字符"));
+}
+
+#[tokio::test]
+async fn disabled_repository_exploration_removes_claude_repository_tools() {
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/babysit/tests/fixtures/fake_claude.sh");
+    let temp = tempfile::tempdir().unwrap();
+    let events = temp.path().join("events.log");
+    let provider =
+        ClaudeCodeProvider::for_test(fixture, "success", events.clone(), Duration::from_secs(5));
+    let mut request = request(temp.path().to_string_lossy().into_owned());
+    request.repository_exploration = false;
+
+    provider
+        .generate(request, OperationContext::background().cancellation())
+        .await
+        .unwrap();
+
+    let events = std::fs::read_to_string(events).unwrap();
+    assert_flag_value(&events, "--tools", "");
+    assert!(events.contains("只能根据当前请求提供的 before/after 内容"));
+    assert!(!events.contains("只有某个具体且尚未解析"));
 }
 
 #[tokio::test]
@@ -175,6 +198,8 @@ async fn malformed_generation_is_repaired_by_a_fresh_self_contained_process() {
         events.contains(r#""targets":[{"lineNumber":1,"side":"before","source":"let old = 1;"}]"#)
     );
     let repair_round = events.split("round:2").nth(1).unwrap();
+    assert!(repair_round.contains("0001|let old = 1;"));
+    assert!(repair_round.contains("0001|let next = 2;"));
     assert!(
         repair_round.contains(
             r#""after":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}"#

@@ -149,6 +149,18 @@ async fn custom_typed_command_seam_round_trips_connection_and_invalidates_comple
         workspace_path: directory.path().display().to_string(),
         detected_language: Some("rust".to_owned()),
         generation_policy: BabysitGenerationPolicy::ReuseCached,
+        changed_ranges: vec![
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::Before,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+            crate::babysit::ChangedLineRange {
+                side: crate::babysit::FileSide::After,
+                start_line_number: 1,
+                end_line_number: 1,
+            },
+        ],
     };
     let content = FileChangeContent {
         path: request.path.clone(),

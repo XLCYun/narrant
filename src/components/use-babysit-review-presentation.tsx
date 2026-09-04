@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Copy01Icon, GitCompareIcon, ListViewIcon, RefreshIcon } from "@hugeicons/core-free-icons";
+import { Copy01Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
-import type { BabysitExplanationFilter } from "@/components/babysit-diff-editor";
+import type { BabysitChangedRange } from "@/babysit/types";
+import type { ReviewFileIdentity } from "@/review/types";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,7 +30,7 @@ type BabysitReviewPresentation = {
   headerActions: ReactNode;
   footer: ReactNode;
   explanations: BabysitFileExplanations | undefined;
-  filter: BabysitExplanationFilter;
+  onDiffChange(identity: ReviewFileIdentity, ranges: BabysitChangedRange[] | null): void;
 };
 
 /** Babysit sticky footer 的状态、动作与本地化文本输入。 */
@@ -124,14 +125,23 @@ function BabysitFooter({ state, onCancel, onRetry, onOpenApplicationSettings, la
   </footer>;
 }
 
-/** 收拢 Babysit 的启动、筛选和状态 UI，让 Review Reader 只消费展示投影。 */
+/** 收拢 Babysit 的启动、生成范围和状态 UI，让 Review Reader 只消费展示投影。 */
 export function useBabysitReviewPresentation(input: BabysitReviewPresentationInput): BabysitReviewPresentation {
   const { t } = useTranslation(["common", "review"]);
   const { babysit, reviewId, snapshotId, selectedPath, onOpenApplicationSettings } = input;
   const state = babysit?.state;
   const running = state ? isBabysitRunning(state) : false;
   const [visible, setVisible] = useState(false);
-  const [filter, setFilter] = useState<BabysitExplanationFilter>("changed");
+  const [diff, setDiff] = useState<{ identity: string; ranges: BabysitChangedRange[] | null }>();
+  const fileIdentity = JSON.stringify([reviewId, snapshotId, selectedPath]);
+  const currentFileIdentity = useRef(fileIdentity);
+  currentFileIdentity.current = fileIdentity;
+  const ranges = diff?.identity === fileIdentity ? diff.ranges : null;
+  /** 只接收当前固定文件的 Monaco 范围，拒绝卸载后旧回调。 */
+  const onDiffChange = useCallback((identity: ReviewFileIdentity, ranges: BabysitChangedRange[] | null) => {
+    const key = JSON.stringify([identity.reviewId, identity.snapshotId, identity.path]);
+    if (key === currentFileIdentity.current) setDiff({ identity: key, ranges });
+  }, []);
   const explainedIdentity = useRef<string>();
   const reasonId = useId();
   const eligibility = babysit?.eligibility;
@@ -148,12 +158,12 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
 
   /** 对当前文件只启动一次分析，首次点击与后续换文件共用同一入口。 */
   const start = useCallback(() => {
-    if (!babysit || !enabled || !selectedPath || state?.kind !== "idle") return;
+    if (!babysit || !enabled || !selectedPath || !ranges || state?.kind !== "idle") return;
     const identity = `${reviewId}:${snapshotId}:${selectedPath}`;
     if (explainedIdentity.current === identity) return;
     explainedIdentity.current = identity;
-    babysit.explain();
-  }, [babysit, enabled, reviewId, selectedPath, snapshotId, state?.kind]);
+    babysit.explain(ranges);
+  }, [babysit, enabled, reviewId, selectedPath, snapshotId, state?.kind, ranges]);
 
   useEffect(() => {
     if (!visible) {
@@ -163,20 +173,8 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
     start();
   }, [start, visible]);
 
-  useEffect(() => {
-    if (!visible) setFilter("changed");
-  }, [visible]);
 
   const headerActions = babysit ? <div className="ml-auto flex min-w-0 items-center gap-1.5">
-    {visible && state?.kind === "completed" && <Button
-      variant="outline"
-      size="sm"
-      aria-label={filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}
-      onClick={() => setFilter((current) => current === "changed" ? "all" : "changed")}
-    >
-      <Icon icon={filter === "changed" ? ListViewIcon : GitCompareIcon} aria-hidden />
-      <span className="hidden sm:inline">{filter === "changed" ? t("review:babysitAll") : t("review:babysitChanged")}</span>
-    </Button>}
     <div className={cn("inline-flex", visible && "overflow-hidden rounded-4xl bg-primary")}>
       <Tooltip>
         <TooltipTrigger render={<Button
@@ -212,7 +210,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
           aria-label={t("review:babysitRegenerate")}
           disabled={state?.kind !== "completed"}
           aria-busy={running || undefined}
-          onClick={() => babysit.regenerate()}
+          onClick={() => ranges && babysit.regenerate(ranges)}
         />}>
           <Icon icon={RefreshIcon} className="-translate-y-px" aria-hidden />
         </TooltipTrigger>
@@ -225,7 +223,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   const footer = <BabysitFooter
     state={visible ? state : undefined}
     onCancel={() => babysit?.cancel()}
-    onRetry={() => babysit?.retry()}
+    onRetry={() => ranges && babysit?.retry(ranges)}
     onOpenApplicationSettings={onOpenApplicationSettings}
     labels={{
       generating: t("review:babysitGenerating"),
@@ -251,6 +249,6 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
     headerActions,
     footer,
     explanations: visible && state?.kind === "completed" ? state.explanations : undefined,
-    filter,
+    onDiffChange,
   };
 }

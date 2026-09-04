@@ -190,6 +190,18 @@ The automatic or explicit model and reasoning-effort selection retained independ
 for one Babysit agent provider and applied to that provider's future analyses.
 _Avoid_: Review model, account model, global Babysit model
 
+**Babysit Repository Exploration Preference**:
+The device-local, provider-independent choice that determines whether future Babysit
+analyses may inspect the current Review Workspace beyond the supplied File Change.
+It is disabled by default; when enabled, exploration remains read-only and limited to
+the smallest repository context needed for accurate Line Explanations.
+_Avoid_: Repository access, deep analysis, enhanced explanations
+
+**Line Explanation Scope Preference**:
+The device-local, provider-independent choice between explaining changed non-empty
+lines by default and explaining all non-empty lines of a File Change.
+_Avoid_: Display filter, Review scope, provider scope
+
 **Built-in Agent Provider**:
 A Babysit Agent Provider implemented inside Narrant that calls a user-configured model
 service directly without requiring an external Coding Agent runtime. It does not imply
@@ -207,6 +219,18 @@ _Avoid_: Provider account, installed provider, model preference
 A partial Babysit Agent Provider result containing explanations only for requested
 targets that were missing or blank in the preceding result.
 _Avoid_: Full response repair, regenerated explanation set
+
+**Session-Context Repair**:
+A Line Explanation repair round that reuses an Agent session containing the original
+File Change and sends only failed target identities, validation reasons, and output
+constraints. Codex and Built-in Agent Providers use this repair form.
+_Avoid_: Incremental prompt, source-free repair
+
+**Self-Contained Repair**:
+A Line Explanation repair round that starts without prior Agent conversation state and
+therefore carries the complete File Change together with failed target identities and
+output constraints. Claude Code uses this repair form.
+_Avoid_: Stateless patch, full response repair
 
 ## Relationships
 
@@ -281,6 +305,8 @@ _Avoid_: Full response repair, regenerated explanation set
 - Fresh **Application Settings** select the **Built-in Agent Provider**, which remains unavailable
   until the reviewer configures its **Model Service Connection** or explicitly selects another provider
 - Narrant merges a **Line Explanation Repair Patch** into its preceding provider result
+- A **Session-Context Repair** relies on the original File Change already retained by
+  the Agent session, while a **Self-Contained Repair** carries that File Change again
 - An **Installed Coding Agent Provider** reuses a reviewer-installed agent runtime and its authentication
 - A **Built-in Agent Provider** never grants its model service direct access to the Review Workspace
 - Narrant may keep multiple **Reviews** open while presenting exactly one **Presented Review**

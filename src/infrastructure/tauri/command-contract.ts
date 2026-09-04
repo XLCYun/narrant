@@ -3,7 +3,7 @@ import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oaut
 import type { PullRequestGroup } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchSelectionUpdate } from "@/review/review-application";
-import type { BabysitEligibility, BabysitError, BabysitFileExplanations, BabysitGenerationPolicy, BabysitProgress } from "@/babysit/types";
+import type { BabysitChangedRange, BabysitEligibility, BabysitError, BabysitFileExplanations, BabysitGenerationPolicy, BabysitProgress } from "@/babysit/types";
 import type { Channel } from "@tauri-apps/api/core";
 import type {
   BranchRefs,
@@ -42,6 +42,8 @@ export type TauriCommandContract = {
   update_application_language: { args: { language: ApplicationLanguage }; result: ApplicationSettings };
   list_babysit_models: { args: { provider: BabysitProvider }; result: BabysitModelCatalog; error: { code: string; detail: string } };
   update_application_babysit_provider: { args: { provider: BabysitProvider }; result: ApplicationSettings; error: { code: string; detail: string } };
+  update_application_babysit_repository_exploration: { args: { enabled: boolean }; result: ApplicationSettings; error: { code: string; detail: string } };
+  update_application_babysit_all_non_empty_lines: { args: { enabled: boolean }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_preferences: { args: { provider: BabysitProvider; preference: BabysitProviderPreference; catalogRevision: string | null }; result: ApplicationSettings; error: { code: string; detail: string } };
   load_application_custom_connection: { args: EmptyArgs; result: CustomProviderConnection; error: { code: string; detail: string } };
   save_application_custom_connection: { args: { connection: CustomProviderConnection }; result: ApplicationSettings; error: { code: string; detail: string } };
@@ -57,7 +59,7 @@ export type TauriCommandContract = {
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot; error: { code: "update-confirmation-stale" | "operation-failed"; detail: string } };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
-  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
+  explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; changedRanges: BabysitChangedRange[]; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
   clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
@@ -109,6 +111,8 @@ export const TAURI_COMMAND_NAMES = [
   "update_application_language",
   "list_babysit_models",
   "update_application_babysit_provider",
+  "update_application_babysit_repository_exploration",
+  "update_application_babysit_all_non_empty_lines",
   "update_application_babysit_preferences",
   "load_application_custom_connection",
   "save_application_custom_connection",

@@ -123,7 +123,11 @@ impl CustomRuntime {
         ensure_not_cancelled(cancellation)?;
         let (adapter, history) = self.session_context(run_id)?;
         let prompt = Message::user(prompt(&request));
-        let run = CustomRunRequest::from_prompt(prompt.clone(), history.clone());
+        let run = CustomRunRequest::from_prompt(
+            prompt.clone(),
+            history.clone(),
+            request.repository_exploration,
+        );
         let response = adapter
             .run_agent(run, cancellation)
             .await
@@ -210,38 +214,43 @@ Before ({path}):\n{before}\n\
 After ({path}):\n{after}\n\
 Requested targets:\n{targets}\n\
 Write every line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN. Keep every explanation to one or two short sentences and at most 240 Unicode characters.\n\
-The complete before/after content is already provided and is normally sufficient. Do not explore the repository by default.\n\
-Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate line explanation. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available.\n\
+{exploration_guidance}\n\
 When finished, call final_result with both before and after maps.",
         path = request.path,
         before = crate::babysit::numbered_content(&request.before),
         after = crate::babysit::numbered_content(&request.after),
         targets = format_targets(&request.targets),
         locale = request.locale,
+        exploration_guidance = repository_exploration_guidance(request.repository_exploration),
     )
 }
 
-/// 修复阶段只请求上层 validation 指出的目标，保持同一模型会话上下文。
+/// 修复阶段依赖同一模型会话中的源码，只请求上层 validation 指出的 patch。
 fn repair_prompt(request: &BabysitProviderRequest, failures: &[ValidationFailure]) -> String {
     format!(
         "Repair the previous Line Explanation result for this file change.\n\
-File ({path}) before:\n{before}\n\
-File ({path}) after:\n{after}\n\
+Use the file content already present in this conversation.\n\
 Only these validation failures require new explanations:\n{failures}\n\
 Write every repaired line explanation in the language specified by locale {locale}; use Simplified Chinese for zh-CN. Keep every repaired explanation preferably within 240 Unicode characters.\n\
-The supplied file content and existing conversation are normally sufficient. Do not explore the repository by default.\n\
-Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate repair. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available.\n\
-Return the complete result by calling final_result; preserve valid prior explanations.",
-        path = request.path,
-        before = crate::babysit::numbered_content(&request.before),
-        after = crate::babysit::numbered_content(&request.after),
+{exploration_guidance}\n\
+Call final_result with only the requested repair patch. Include both before and after maps, containing exactly the failed targets and no already valid targets.",
         locale = request.locale,
         failures = failures
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n"),
+        exploration_guidance = repository_exploration_guidance(request.repository_exploration),
     )
+}
+
+/// 按冻结偏好切换 Custom prompt 的仓库探索约束。
+fn repository_exploration_guidance(enabled: bool) -> &'static str {
+    if enabled {
+        "The complete before/after content is already provided and is normally sufficient. Do not explore the repository by default. Use read, glob, or grep only when one specific unresolved symbol or behavior prevents an accurate line explanation. Query the smallest relevant scope, and do not repeat or broaden a query after the required information is available."
+    } else {
+        "Use only the supplied before/after content. Do not call tools or explore the repository."
+    }
 }
 
 /// 格式化目标 inventory，不把 source 再复制进 repair 诊断。

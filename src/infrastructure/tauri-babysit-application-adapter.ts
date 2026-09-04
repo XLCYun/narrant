@@ -17,7 +17,7 @@ export function createTauriBabysitApplicationAdapter(
       }, signal);
     },
     /** 将完整 File Change analysis 映射为带 progress channel 的 cancellable command。 */
-    explainFile({ file, generationPolicy }, onProgress, signal) {
+    explainFile({ file, generationPolicy, changedRanges }, onProgress, signal) {
       const progress = createChannel<BabysitProgress>(onProgress);
       return transport.invokeCancellable("explain_review_file_change", {
         reviewId: file.reviewId,
@@ -25,6 +25,7 @@ export function createTauriBabysitApplicationAdapter(
         path: file.path,
         detectedLanguage: file.detectedLanguage,
         generationPolicy,
+        changedRanges,
         progress,
       }, signal);
     },

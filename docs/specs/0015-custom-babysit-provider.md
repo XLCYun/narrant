@@ -13,8 +13,9 @@ Narrant adds a Built-in Agent Provider displayed as Custom. It uses Rig inside t
 backend to call one user-configured OpenAI Chat Completions-compatible or Anthropic
 Messages-compatible endpoint. The reviewer supplies a base URL, optional API key,
 model identifier, and reasoning-parameter preference. Custom implements the existing whole-File-
-Change Babysit contract, explores only the active Review Workspace through bounded
-Narrant-owned Read, Glob, and Grep tools, validates a schema-bearing final tool result,
+Change Babysit contract, optionally explores the active Review Workspace through bounded
+Narrant-owned Read, Glob, and Grep tools when the device-level preference is enabled,
+validates a schema-bearing final tool result,
 and keeps all analysis state in memory.
 
 Fresh settings select Custom but do not make a network request. Babysit remains
@@ -117,9 +118,10 @@ Coding Agent Provider in Application Settings.
   Narrant does not retry a rejected explicit effort with a different request shape.
 - Saving settings performs local validation only. Protocol, authentication, model, tool,
   and schema compatibility errors surface on the first real analysis request.
-- Rig registers only Narrant-owned Read, Glob, and Grep repository tools plus an
-  internal schema-bearing final-output tool. No shell, write, edit, Web, MCP, or generic
-  filesystem tool is registered.
+- Rig always registers the internal schema-bearing final-output tool. It registers the
+  Narrant-owned Read, Glob, and Grep tools only when repository exploration is enabled;
+  otherwise the request uses the shared empty workspace. No shell, write, edit, Web,
+  MCP, or generic filesystem tool is registered.
 - Read and Grep resolve actual filesystem paths with `canonicalize` and accept them only
   when `strip_prefix` proves they remain below the canonical Review Workspace. Glob
   starts at the workspace root and applies the same check to each match.
@@ -141,6 +143,12 @@ Coding Agent Provider in Application Settings.
   reuse one in-memory Rig conversation, and each generation or repair gives Rig at most
   16 model turns. Narrant does not wrap a Rig run in another model-turn or repository-tool
   dispatch loop; the whole File Change run retains the existing ten-minute deadline.
+- Custom uses session-context repair: each repair prompt relies on the complete File Change
+  retained in the same Rig conversation, carries only failed target identities, validation
+  reasons, and output constraints, and requests a `final_result` repair patch containing
+  exactly those failed targets. An entirely malformed result repeats all original target
+  identities without repeating source content. Missing conversation state fails the run
+  instead of silently resending the complete File Change.
 - Every model turn uses a 65,536-token output budget for both protocols. Narrant does not
   split targets into output batches, silently retry with a smaller budget, or delegate the
   budget to a provider default. A service that rejects the budget fails explicitly, and a

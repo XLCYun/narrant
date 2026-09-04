@@ -58,6 +58,7 @@ fn fixture_request(run_id: u64, workspace_path: &str) -> BabysitProviderRequest 
         path: "src/example.rs".to_owned(),
         locale: "zh-CN".to_owned(),
         workspace_path: workspace_path.to_owned(),
+        repository_exploration: true,
         before: "old();".to_owned(),
         after: "new();".to_owned(),
         targets: vec![
@@ -353,10 +354,16 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
         .repair(
             request,
             malformed,
-            vec![ValidationFailure::MissingLine {
-                side: FileSide::Before,
-                line_number: 1,
-            }],
+            vec![
+                ValidationFailure::MissingLine {
+                    side: FileSide::Before,
+                    line_number: 1,
+                },
+                ValidationFailure::MissingLine {
+                    side: FileSide::After,
+                    line_number: 1,
+                },
+            ],
             &TestCancellation::default(),
         )
         .await
@@ -366,7 +373,15 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
     let requests = requests.lock().expect("请求锁");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].history().len(), 2);
+    let generation_prompt = user_message_text(&requests[1].history()[0]);
+    assert!(generation_prompt.contains("old();"));
+    assert!(generation_prompt.contains("new();"));
     let repair_prompt = user_message_text(requests[1].prompt());
+    assert!(!repair_prompt.contains("old();"));
+    assert!(!repair_prompt.contains("new();"));
+    assert!(repair_prompt.contains("Before 缺少第 1 行解释"));
+    assert!(repair_prompt.contains("After 缺少第 1 行解释"));
+    assert!(repair_prompt.contains("only the requested repair patch"));
     assert!(repair_prompt.contains("zh-CN"));
     assert!(repair_prompt.contains("Do not explore the repository by default"));
     assert!(repair_prompt.contains("do not repeat or broaden a query"));
