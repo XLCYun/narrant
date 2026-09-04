@@ -186,7 +186,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
           aria-disabled={!enabled}
           aria-describedby={!enabled ? reasonId : undefined}
           aria-busy={running || undefined}
-          className={cn("min-w-28 rounded-full", !enabled && "cursor-not-allowed opacity-50", visible && "border-green-200 bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-300 dark:hover:bg-green-900 dark:hover:text-green-200")}
+          className={cn("relative min-w-28 justify-center rounded-full px-7", !enabled && "cursor-not-allowed opacity-50", visible && "border-primary/20 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary")}
           onClick={() => {
             if (!enabled) return;
             if (visible) {
@@ -198,7 +198,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
             setVisible(true);
           }}
         />}>
-          <Icon icon={running ? RefreshIcon : Tick02Icon} className={cn("size-4 -translate-y-px", !visible && "invisible", visible && running && "animate-spin")} aria-hidden />
+          {visible && <Icon icon={running ? RefreshIcon : Tick02Icon} className={cn("absolute left-2 size-3.5 -translate-y-px", running && "animate-spin")} aria-hidden />}
           <span>{t("review:babysit")}</span>
         </TooltipTrigger>
         <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
