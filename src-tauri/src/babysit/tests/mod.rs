@@ -227,6 +227,7 @@ fn request(review_id: &str, snapshot_id: &str, path: &str) -> BabysitFileRequest
 }
 
 #[tokio::test]
+/// 验证变更范围保留非空行，并且两种生成范围的缓存可独立复用。
 async fn changed_targets_skip_empty_lines_and_keep_scope_caches_separate() {
     use crate::application_settings::{ApplicationSettingsApplication, BabysitProvider};
     let directory = tempfile::tempdir().unwrap();
@@ -275,6 +276,7 @@ async fn changed_targets_skip_empty_lines_and_keep_scope_caches_separate() {
 }
 
 #[tokio::test]
+/// 验证非法编辑器范围在 provider 准备前被拒绝。
 async fn invalid_changed_ranges_fail_before_provider_preparation() {
     let directory = tempfile::tempdir().unwrap();
     let settings = crate::application_settings::ApplicationSettingsApplication::new(
@@ -303,6 +305,7 @@ async fn invalid_changed_ranges_fail_before_provider_preparation() {
 }
 
 #[tokio::test]
+/// 验证没有目标行时无需配置 provider 即可完成空结果。
 async fn zero_targets_complete_without_configured_provider() {
     let directory = tempfile::tempdir().unwrap();
     let settings = crate::application_settings::ApplicationSettingsApplication::new(

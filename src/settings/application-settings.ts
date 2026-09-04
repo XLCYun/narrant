@@ -79,6 +79,7 @@ export interface ApplicationSettingsApplication {
   updateBabysitProvider(provider: BabysitProvider): Promise<ApplicationSettings>;
   /** 保存未来 Babysit 分析是否允许探索 Review Workspace。 */
   updateBabysitRepositoryExploration(enabled: boolean): Promise<ApplicationSettings>;
+  /** 保存未来分析的注释生成范围，保留已有结果和缓存。 */
   updateBabysitAllNonEmptyLines(enabled: boolean): Promise<ApplicationSettings>;
   /** 通过原生 picker 更新指定 provider 的 executable，并保留其模型组合。 */
   chooseBabysitExecutable(provider: BabysitProvider, preference: BabysitProviderPreference): Promise<ApplicationSettings | null>;

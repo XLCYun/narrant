@@ -44,6 +44,7 @@ fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
 }
 
 #[test]
+/// 验证全部非空行生成默认关闭，开启后可从持久化设置恢复。
 fn all_non_empty_lines_defaults_off_and_round_trips() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");

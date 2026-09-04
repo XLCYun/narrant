@@ -176,6 +176,22 @@ async fn wait_for_active_thread(provider: &CodexAppServerProvider) {
     panic!("provider did not register an active thread");
 }
 
+/// 等待 repair 新 turn 完成登记，不能把 generation 留下的旧 turn 当作就绪。
+async fn wait_for_active_turn(provider: &CodexAppServerProvider, turn_id: &str) {
+    for _ in 0..1000 {
+        if provider
+            .active_threads
+            .lock()
+            .map(|active| active.values().any(|run| run.turn_id == turn_id))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("provider did not register active turn {turn_id}");
+}
+
 #[tokio::test]
 async fn app_server_generates_structured_output_and_deletes_thread() {
     let (provider, _temp, events) = provider("complete", CODEX_ANALYSIS_TIMEOUT);
@@ -270,7 +286,7 @@ async fn cancelled_repair_is_cleaned_before_provider_shutdown() {
             .await
     });
     wait_for_event_count(&events, "turn/start:real", 2).await;
-    wait_for_active_thread(&provider).await;
+    wait_for_active_turn(&provider, "turn-2").await;
     cancellation.cancel();
     provider.shutdown().await;
 
