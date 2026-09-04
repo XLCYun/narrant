@@ -208,8 +208,8 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem disabled={state?.kind !== "completed" || !ranges} onClick={() => ranges && babysit.regenerate(ranges)}>
-            <Icon icon={RefreshIcon} aria-hidden />
-            {t("review:babysitRegenerate")}
+            <Icon icon={RefreshIcon} className="size-4 -translate-y-px" aria-hidden />
+            <span className="leading-5">{t("review:babysitRegenerate")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>}
