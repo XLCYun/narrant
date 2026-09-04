@@ -155,7 +155,7 @@ describe("Babysit Review Reader presentation", () => {
     });
     render(<ReviewReader review={review} appearance={appearance} />);
     fireEvent.click(screen.getByRole("tab", { name: "文件改动" }));
-    expect(screen.getByRole("button", { name: "宝宝模式" }).querySelector("img")).toBeNull();
+    expect(screen.getByRole("button", { name: "宝宝模式" }).querySelector("img")).toHaveAttribute("src", "/icons/babysit-baby.svg");
     fireEvent.click(screen.getByRole("button", { name: "宝宝模式" }));
 
     expect(review.babysit?.explain).not.toHaveBeenCalled();
@@ -178,7 +178,9 @@ describe("Babysit Review Reader presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
     const regenerateButton = screen.getByRole("menuitem", { name: "重新生成逐行解释" });
     expect(regenerateButton).toBeEnabled();
-    expect(closeButton).toHaveTextContent("宝宝模式");
+    expect(closeButton.textContent).toBe("");
+    expect(closeButton.closest("[role=toolbar]")).toBe(screen.getByRole("toolbar", { name: "审核工具栏" }));
+    expect(screen.getByRole("button", { name: "更多操作" }).closest("[role=toolbar]")).toBe(closeButton.closest("[role=toolbar]"));
 
     fireEvent.click(regenerateButton);
     expect(review.babysit?.regenerate).toHaveBeenCalledTimes(1);

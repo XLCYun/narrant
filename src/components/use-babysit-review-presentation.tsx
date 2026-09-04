@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Copy01Icon, RefreshIcon, Tick02Icon, MoreHorizontalIcon } from "@hugeicons/core-free-icons";
+import { Copy01Icon, RefreshIcon, MoreHorizontalIcon } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
 import type { BabysitChangedRange } from "@/babysit/types";
@@ -28,7 +28,7 @@ type BabysitReviewPresentationInput = {
 
 /** Babysit 对 Review Reader 暴露的紧凑展示投影。 */
 type BabysitReviewPresentation = {
-  headerActions: ReactNode;
+  toolbarActions: ReactNode;
   footer: ReactNode;
   explanations: BabysitFileExplanations | undefined;
   onDiffChange(identity: ReviewFileIdentity, ranges: BabysitChangedRange[] | null): void;
@@ -175,18 +175,18 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   }, [start, visible]);
 
 
-  const headerActions = babysit ? <div className="ml-auto flex min-w-0 items-center gap-1.5">
-    <div className="inline-flex items-center gap-1.5">
+  const toolbarActions = babysit ? <div className="flex shrink-0 items-center gap-2">
+    <div className="inline-flex items-center gap-2">
       <Tooltip>
         <TooltipTrigger render={<Button
-          variant="outline"
-          size="sm"
+          variant={visible ? "default" : "outline"}
+          size="icon-sm"
           aria-label={t("review:babysit")}
           aria-pressed={visible}
           aria-disabled={!enabled}
           aria-describedby={!enabled ? reasonId : undefined}
           aria-busy={running || undefined}
-          className={cn("relative min-w-28 justify-center rounded-full px-7", !enabled && "cursor-not-allowed opacity-50", visible && "border-primary/20 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary")}
+          className={cn("rounded-full", !enabled && "cursor-not-allowed opacity-50")}
           onClick={() => {
             if (!enabled) return;
             if (visible) {
@@ -198,8 +198,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
             setVisible(true);
           }}
         />}>
-          {visible && <Icon icon={running ? RefreshIcon : Tick02Icon} className={cn("absolute left-2 size-3.5 -translate-y-px", running && "animate-spin")} aria-hidden />}
-          <span>{t("review:babysit")}</span>
+          <img src="/icons/babysit-baby.svg" alt="" className="size-4 shrink-0 -translate-y-px object-contain" aria-hidden />
         </TooltipTrigger>
         <TooltipContent>{enabled ? (visible ? t("review:babysitDisable") : t("review:babysit")) : eligibilityReason}</TooltipContent>
       </Tooltip>
@@ -244,7 +243,7 @@ export function useBabysitReviewPresentation(input: BabysitReviewPresentationInp
   />;
 
   return {
-    headerActions,
+    toolbarActions,
     footer,
     explanations: visible && state?.kind === "completed" ? state.explanations : undefined,
     onDiffChange,

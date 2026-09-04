@@ -218,6 +218,7 @@ export function ReviewReader(input: ReviewReaderProps) {
           </TooltipTrigger>
           <TooltipContent>{props.narrow ? t("review:narrowInlineOnly") : effectiveDiffMode === "side-by-side" ? t("review:switchToInline") : t("review:switchToSideBySide")}</TooltipContent>
         </Tooltip>}
+        {activeView === "file-changes" && props.fileChange && !props.fileChangeLoading && babysitPresentation.toolbarActions}
         <Tooltip>
           <TooltipTrigger render={<Button variant="outline" size="icon-sm" className="rounded-full" aria-label={t("review:exit")} onClick={props.onClose} />}>
             <Icon icon={Logout02Icon} className="-translate-y-px" aria-hidden />
@@ -251,7 +252,7 @@ export function ReviewReader(input: ReviewReaderProps) {
           {props.fileChangeLoading && <FileChangeLoading label={t("review:loadingFileChange")} />}
           {props.fileChangeError && <div role="alert" className="grid min-h-72 place-content-center gap-3 px-6 text-center"><h3>{t("review:fileChangeError")}</h3><p className="text-sm text-muted-foreground">{props.fileChangeError}</p>{props.firstFileChangePath && <Button variant="outline" onClick={props.onRetryFile}>{t("common:retry")}</Button>}</div>}
           {props.fileChange && !props.fileChangeLoading && <section className="flex h-full min-w-0 flex-col" aria-label={t("review:fileChange")} data-before={import.meta.env.VITE_WDIO ? props.fileChange.before ?? "" : undefined} data-after={import.meta.env.VITE_WDIO ? props.fileChange.after ?? "" : undefined}>
-            <header className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-1"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3>{babysitPresentation.headerActions}</header>
+            <header className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-1"><h3 className="flex min-w-0 flex-1 items-center gap-2 truncate font-mono text-sm font-medium"><FileTypeIcon path={props.fileChange.path} kind="file" theme={fileTypeIconTheme} />{props.fileChange.path} {renderChangeStatus(props.fileChange.status)}</h3></header>
             {props.fileChange.contentKind === "binary" && <div className="grid min-h-72 place-content-center px-6 text-center"><p>{t("review:binary", { before: props.fileChange.beforeSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.beforeSize }), after: props.fileChange.afterSize === null ? t("review:none") : t("review:bytes", { count: props.fileChange.afterSize }) })}</p></div>}
             {props.fileChange.contentKind === "submodule" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:submodule")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
             {props.fileChange.contentKind === "symlink" && <div className="grid min-h-72 place-content-center px-6 text-center"><h4 className="font-medium">{t("review:symlink")}</h4><p className="font-mono text-sm text-muted-foreground">{props.fileChange.before ?? t("review:none")} → {props.fileChange.after ?? t("review:none")}</p></div>}
