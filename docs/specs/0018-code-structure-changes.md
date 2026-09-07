@@ -207,6 +207,8 @@ Tree-sitter 是解析库，不需要语言服务器。语言服务器是对编�
 
 GitHub Issues 分别链接下列范围及 A 编号，避免复制完整规格：
 
+实施 tickets：[解析基础 #173](https://github.com/XLCYun/narrant/issues/173)、[Snapshot 源码 #174](https://github.com/XLCYun/narrant/issues/174)、[结构与匹配 #175](https://github.com/XLCYun/narrant/issues/175)、[关系与生命周期 #176](https://github.com/XLCYun/narrant/issues/176)、[图视图 #177](https://github.com/XLCYun/narrant/issues/177)、[Peek 与验收 #178](https://github.com/XLCYun/narrant/issues/178)。[实施计划](../plans/2026-09-08-code-structure-view.md) 记录执行顺序和验证边界。
+
 1. 固定候选版本并验证结构提取、错误信息、离线打包与 Narrant 规模；冻结分析结果契约和性能测量基线。
 2. 补足 Snapshot 两侧 tree 内容发现 / 读取、覆盖与取消；支持未修改文件和准确来源引用。
 3. 实现原生结构提取、跨文件归属和版本匹配 / 变化分类，包括父级汇总与防误配样例。

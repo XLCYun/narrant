@@ -4,6 +4,10 @@ Spec: [0018-code-structure-changes](../specs/0018-code-structure-changes.md), ac
 Architecture: [ADR-0030](../adr/0030-encapsulate-code-structure-analysis.md).
 Workspace: `/Users/lizhanfa/projects/narrant/.worktrees/ast-structure-review`, branch `codex/ast-structure-review`, base `da4f583089350b6fe8632fb83dcc9d7558e77286`.
 
+Execution follows the user-requested `implement` skill: TDD where practical at the accepted analysis-module and observable UI boundaries; regular typechecking and focused tests; a final full suite and independent Standards/Spec code review; commits on the current branch. The per-task ledger preserves progress and review evidence across context boundaries.
+
+GitHub backlog: [#173](https://github.com/XLCYun/narrant/issues/173) Task 1; [#174](https://github.com/XLCYun/narrant/issues/174) Task 2; [#175](https://github.com/XLCYun/narrant/issues/175) Tasks 3–4; [#176](https://github.com/XLCYun/narrant/issues/176) Tasks 5–6; [#177](https://github.com/XLCYun/narrant/issues/177) Task 7; [#178](https://github.com/XLCYun/narrant/issues/178) Tasks 8–9.
+
 ## Global Constraints
 
 - All work stays in this isolated worktree. Do not merge, push, close Issues, or change the user's other checkout from a task.
