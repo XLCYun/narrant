@@ -5,6 +5,7 @@ import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { createReviewRustLanguage } from "@/infrastructure/review-rust-language";
 
 /** 让 Monaco 及其 Worker 全部由 Vite 打进安装包，不访问默认 CDN。 */
 export function configureLocalMonaco(): void {
@@ -18,5 +19,12 @@ export function configureLocalMonaco(): void {
     },
   };
   loader.config({ monaco });
+  // 继续按需加载 Rust，避免主题增强增加编辑器的首次启动体积。
+  monaco.languages.registerTokensProviderFactory("rust", {
+    async create() {
+      const { language } = await import("monaco-editor/esm/vs/basic-languages/rust/rust.js");
+      return createReviewRustLanguage(language);
+    },
+  });
   void loader.init();
 }

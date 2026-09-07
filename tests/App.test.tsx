@@ -981,7 +981,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始审核" }));
 
     await openFileChanges();
-    expect(await screen.findByTestId("diff-editor")).toHaveAttribute("data-theme", "light");
+    expect(await screen.findByTestId("diff-editor")).toHaveAttribute("data-theme", "narrant-github-light");
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-font-family", "'JetBrains Mono Variable', monospace");
     expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-layout", "side-by-side");
     expect(screen.getByRole("separator", { name: "调整文件树宽度" })).toHaveAttribute("aria-valuenow", "31");
@@ -1000,6 +1000,8 @@ describe("App", () => {
     expect(localStorage.getItem("narrant.review.diffMode")).toBe("side-by-side");
 
     changeSystemTheme(true);
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-theme", "vs-dark"));
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-theme", "narrant-github-dark"));
+    changeSystemTheme(false);
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toHaveAttribute("data-theme", "narrant-github-light"));
   });
 });

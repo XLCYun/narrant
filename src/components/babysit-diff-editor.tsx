@@ -5,6 +5,7 @@ import type { BabysitChangedRange, BabysitFileExplanations } from "@/babysit/typ
 import { configureLocalMonaco } from "@/infrastructure/local-monaco";
 import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
 import { readReviewEditorZoomLevel, saveReviewEditorZoomLevel } from "@/review/editor-zoom";
+import { registerReviewEditorThemes, REVIEW_DARK_THEME, REVIEW_LIGHT_THEME } from "@/review/editor-theme";
 
 configureLocalMonaco();
 
@@ -274,7 +275,8 @@ export function BabysitDiffEditor({
 
   return <>
     <DiffEditor
-    theme={theme}
+    theme={theme === "light" ? REVIEW_LIGHT_THEME : theme === "vs-dark" ? REVIEW_DARK_THEME : theme}
+    beforeMount={registerReviewEditorThemes}
     height={height}
     language={language}
     original={original}
@@ -283,6 +285,8 @@ export function BabysitDiffEditor({
     options={{
       readOnly: true,
       renderSideBySide,
+      // 通过底色表达增删，隐藏行号旁的加减号。
+      renderIndicators: false,
       // 产品层已经根据窗口决定 side-by-side/inline；禁用 Monaco 约 900px 的自动回退，
       // 避免 UI 仍创建双 pane zones 时 original pane 实际只剩 gutter。
       renderSideBySideInlineBreakpoint: 0,

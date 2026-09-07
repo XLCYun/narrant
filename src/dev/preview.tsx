@@ -425,6 +425,7 @@ function ReviewReaderPreview({
   updateState = "current",
   initialView = "overview",
   shortContent = false,
+  themeSample = false,
   babysitKind,
 }: {
   empty?: boolean;
@@ -432,9 +433,12 @@ function ReviewReaderPreview({
   updateState?: "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes";
   shortContent?: boolean;
+  themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
 }) {
-  const fileChanges = shortContent
+  const fileChanges = themeSample === "rust"
+    ? [{ path: "src-tauri/src/review.rs", oldPath: null, status: "modified" as const }]
+    : shortContent
     ? readerSnapshot.fileChanges.slice(0, 2)
     : readerSnapshot.fileChanges;
   const snapshot = {
@@ -448,15 +452,27 @@ function ReviewReaderPreview({
     change.path,
     {
       ...change, contentKind: "text", beforeSize: 48, afterSize: 78,
-      before: shortContent
+      before: themeSample === "rust"
+        ? "// 读取当前审核的展示数据。\nasync fn review() {\n    let presentation = load_review()\n        .await\n        .map(map_presentation)\n        .map_err(|error| error.to_string());\n    presentation\n}\n"
+        : themeSample
+        ? "/** 读取审核配置。 */\nexport interface ReviewOptions {\n  readonly label: string;\n  readonly legacy: boolean;\n}\n\nexport function review(options: ReviewOptions) {\n  const limit = 10;\n  return 'old reader';\n}\n"
+        : shortContent
         ? "return 'old';\n"
         : "export function review() {\n  return 'old reader';\n}\n",
-      after: shortContent
+      after: themeSample === "rust"
+        ? "// 读取当前审核的展示数据。\nasync fn review() {\n    let presentation = load_review()\n        .await\n        .map_err(|error| error.to_string())?;\n    let _ = babysit.clear_snapshot(&review_id, &previous_snapshot_id);\n    Ok(map_presentation(presentation))\n}\n"
+        : themeSample
+        ? "/** 读取审核配置并限制有效时间。 */\nexport interface ReviewOptions {\n  readonly label: string;\n  readonly validFrom: string;\n  readonly validUntil: string;\n}\n\nexport function review(options: ReviewOptions) {\n  const limit = 20;\n  // 长内容：保留完整分支名称、审核状态与上下文，方便确认水平滚动时差异背景与行尾解释仍然清晰可读。\n  return 'focused review reader';\n}\n"
+        : shortContent
         ? "return 'new';\n"
         : "export function review() {\n  return 'focused review reader';\n}\n",
     },
   ]));
-  const [selectedPath, setSelectedPath] = useState(snapshot.fileChanges[0]?.path);
+  const [selectedPath, setSelectedPath] = useState(themeSample === "rust"
+    ? "src-tauri/src/review.rs"
+    : themeSample
+    ? "src/components/review-reader.tsx"
+    : snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
   const [view, setView] = useState<"overview" | "file-changes">(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
@@ -672,6 +688,8 @@ const previews: Record<string, PreviewDefinition> = {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
       "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
       "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },
+      "diff-theme": { label: "Diff 主题与长行", render: () => <ReviewReaderPreview initialView="file-changes" themeSample babysitKind="completed" /> },
+      "diff-theme-rust": { label: "Rust Diff 主题", render: () => <ReviewReaderPreview initialView="file-changes" themeSample="rust" /> },
       babysit: { label: "宝宝模式完成", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="completed" /> },
       "babysit-generating": { label: "宝宝模式生成中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="generating" /> },
       "babysit-repairing": { label: "宝宝模式修复中", render: () => <ReviewReaderPreview initialView="file-changes" babysitKind="repairing" /> },
