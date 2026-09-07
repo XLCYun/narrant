@@ -451,15 +451,6 @@ export function App() {
       onBack={() => void appShell.returnFromSettings()}
     />}
     <ApplicationUpdateSurface update={applicationUpdate} />
-    <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="font-mono">{t("github:connect")}</DialogTitle>
-          {!authStatus && <DialogDescription>{t("github:installHelp")}</DialogDescription>}
-        </DialogHeader>
-        {renderGitHubControls()}
-      </DialogContent>
-    </Dialog>
     {!desktopRuntimeEnabled && !testHarnessEnabled && <p role="alert">Narrant 需要在桌面应用中运行。</p>}
     {(testHarnessEnabled || selectedRepository) && <>
     {testHarnessEnabled && <section aria-label="打开 GitHub Pull Request">{renderGitHubControls()}</section>}
@@ -502,6 +493,16 @@ export function App() {
     </div>}
     </>}
   </AppShell>
+  {/* 全局连接弹窗独立于页面内容挂载，首页替换 children 时仍可显示。 */}
+    <Dialog open={githubDialogOpen} onOpenChange={setGitHubDialogOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="font-mono">{t("github:connect")}</DialogTitle>
+          {!authStatus && <DialogDescription>{t("github:installHelp")}</DialogDescription>}
+        </DialogHeader>
+        {renderGitHubControls()}
+      </DialogContent>
+    </Dialog>
   {pendingRepository && <RepositoryTrustDialog
     open
     canonicalPath={pendingRepository.canonicalPath}

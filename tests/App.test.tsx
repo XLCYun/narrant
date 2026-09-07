@@ -96,6 +96,23 @@ async function openOverview() {
 }
 
 describe("App", () => {
+  it("首页侧栏连接 GitHub 立即显示授权弹窗，无需进入设置", async () => {
+    vi.stubEnv("MODE", "development");
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invoke.mockImplementation((command: string) => {
+      if (command === "github_auth_status") return Promise.resolve({ configured: true, signedIn: false, appInstallUrl: "https://github.com/apps/narrant-dev/installations/new" });
+      return Promise.resolve({ repositories: [], recentReviews: [] });
+    });
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole("button", { name: "连接 GitHub" }));
+      await waitFor(() => expect(openUrl).toHaveBeenCalledWith("https://github.com/apps/narrant-dev/installations/new"));
+      expect(await screen.findByRole("dialog", { name: "连接 GitHub" })).toBeVisible();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("Reader 之外使用主修饰键缩放和重置整个 WebView", async () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invoke.mockResolvedValue({ repositories: [], recentReviews: [] });
