@@ -64,14 +64,49 @@ _Avoid_: Entry, File Entry, File Version
 
 **Review Reader**:
 The application view that presents one open **Review Snapshot**, including its
-collection of **File Changes** and the freely selected **File Change** content. It
-does not assign reading progress or an approval state to File Changes.
+peer **Review Views**, collection of **File Changes**, and freely selected source
+content. It does not assign reading progress or an approval state to File Changes.
 _Avoid_: File Changes page, Diff page
 
 **Review View**:
 One peer presentation of the **Review Snapshot** currently open in the **Review Reader**.
-The available views are Overview and File Changes; switching views does not create another Review.
+It presents Overview, File Changes, or the **Code Structure View**; switching views
+does not create another Review.
 _Avoid_: Review mode, sidebar panel
+
+**Code Structure View**:
+A **Review View** that presents changes to native code declarations and their
+relationships within one **Review Snapshot**, with related unchanged code as context.
+_Avoid_: AST viewer, UML-only view, separate structural Review
+
+**Structure Change**:
+The before-and-after difference to one code declaration or its associated documentation
+within a **Review Snapshot**, excluding changes that affect formatting alone.
+An added declaration is confirmed absent before, and a deleted declaration is confirmed
+absent after. Incomplete analysis or unavailable content does not establish absence.
+_Avoid_: File Change, line change, AST edit
+
+**Documentation Change**:
+A change to comments associated with a code declaration within a **Review Snapshot**,
+distinguished from changes to its signature or implementation.
+_Avoid_: Formatting change, implementation change
+
+**Structure Context**:
+Unchanged code declarations presented alongside **Structure Changes** to explain
+their ownership and relationships within the same **Review Snapshot**.
+_Avoid_: Additional changes, affected changes
+
+**Relationship Change**:
+A relationship confirmed present on one side and absent on the other side of a
+**Review Snapshot**, independently of whether its endpoint declarations have a
+**Structure Change**. Unknown targets or incomplete analysis do not establish absence.
+_Avoid_: Implementation change, affected declaration
+
+**Structure Peek**:
+A source-reading panel opened from the **Code Structure View** that shows the relevant
+file content and differences at a selected declaration or relationship location within
+the same **Review Snapshot**, while retaining the graph context.
+_Avoid_: Method excerpt, source edit
 
 **Review Snapshot**:
 An immutable **Change Comparison** that became current for a **Review**, pinned to exact
@@ -248,8 +283,19 @@ _Avoid_: Stateless patch, full response repair
   **Comparison Base** from the current base and head commits; a Pull Request does not
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
-- A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
-- A **Review Reader** provides Overview and File Changes as peer **Review Views** over the same open **Review Snapshot**
+- A **Review Reader** presents one open **Review Snapshot**; its File Changes view
+  presents one selected **File Change** at a time
+- A **Review Reader** provides peer **Review Views** for overview information, File Changes,
+  and the **Code Structure View** over the same open **Review Snapshot**
+- A **Code Structure View** presents **Structure Changes** with expandable **Structure Context**
+- A declaration displayed as **Structure Context** is not a **Structure Change** merely
+  because it calls, or is called by, a changed declaration
+- A **Relationship Change** can connect unchanged declarations without making them
+  **Structure Changes**
+- A **Structure Peek** retains full-file context and the selected structure's source
+  location from the same **Review Snapshot** as its **Code Structure View**
+- A **Structure Peek** selects its source independently of the File Changes view and
+  may present unchanged context files without creating a **File Change**
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
   mark that change as viewed, reviewed, or approved
 - A **Repository** owns zero or more **Reviews**
