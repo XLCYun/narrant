@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
@@ -7,6 +7,10 @@ vi.mock("sonner", () => ({ toast }));
 
 import { i18n } from "@/lib/i18n";
 import { ReviewReader } from "@/components/review-reader";
+import { createStructurePreviewResult } from "@/dev/scenarios/structure-preview-data";
+import { resolveStructurePeekNavigation, type StructurePeekState } from "@/review/structure-peek";
+import { createStructureGraphPresentation } from "@/review/structure-graph";
+import type { StructureReaderBinding } from "@/review/structure-runtime";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 
 const monacoEditors = vi.hoisted(() => [] as Array<{
@@ -70,6 +74,32 @@ function reviewBinding(overrides: Partial<ReviewReaderBinding> = {}): ReviewRead
   };
 }
 
+/** 给纯 Reader 组件提供完整受控结构动作，不替代生产生命周期。 */
+function structureBinding(overrides: Partial<StructureReaderBinding> = {}): StructureReaderBinding {
+  return {
+    analysis: { status: "idle", result: null }, presentation: createStructureGraphPresentation(), peek: null,
+    peekSize: 42, peekViewState: null, setPresentation: vi.fn(), navigate: vi.fn(), cancel: vi.fn(), retry: vi.fn(),
+    selectLocation: vi.fn(), retrySource: vi.fn(), closePeek: vi.fn(), setPeekSize: vi.fn(), savePeekViewState: vi.fn(),
+    ...overrides,
+  };
+}
+
+/** 通过真实图搜索按钮和 Peek DOM 验证键盘焦点往返，布局另由浏览器验收。 */
+function ReviewStructureFocusHarness() {
+  const [analysis] = useState(() => createStructurePreviewResult());
+  const [presentation, setPresentation] = useState(() => createStructureGraphPresentation(analysis));
+  const [peek, setPeek] = useState<StructurePeekState | null>(null);
+  const structure = structureBinding({
+    analysis: { status: "completed", result: analysis }, presentation, setPresentation, peek,
+    navigate: (intent) => {
+      const selection = resolveStructurePeekNavigation(analysis, intent);
+      if (selection) setPeek({ selection, locationIndex: 0, requestId: 1, load: { status: "loading" } });
+    },
+    closePeek: () => setPeek(null),
+  });
+  return <ReviewReader review={reviewBinding({ snapshot: { ...snapshot, reviewId: analysis.reviewId, snapshotId: analysis.snapshotId, fileChanges: analysis.sources.flatMap((source) => source.classification.kind === "file-change" ? [source.classification.fileChange] : []) }, view: "code-structure", structure })} appearance={appearance} />;
+}
+
 const appearance = {
   narrow: false,
   editorTheme: "vs",
@@ -87,6 +117,40 @@ beforeEach(async () => { vi.clearAllMocks(); await i18n.changeLanguage("zh-CN");
 afterEach(() => { cleanup(); monacoEditors.length = 0; });
 
 describe("ReviewReader", () => {
+  it("键盘关闭 Peek 后把焦点还给真实图搜索触发按钮", async () => {
+    render(<ReviewStructureFocusHarness />);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索全部已分析结构" }), { target: { value: "welcome" } });
+    const trigger = screen.getByRole("button", { name: "welcome", exact: true });
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    const close = screen.getByRole("button", { name: "关闭源码预览" });
+    close.focus();
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "关闭源码预览" })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("第三个同级视图保留文件选择，只有显式源码动作才跳转 File Changes", () => {
+    const selectFileChange = vi.fn();
+    const source = { id: "source-example", before: { state: "present" as const, path: "src/example.ts", revision: snapshot.comparisonBase }, after: { state: "present" as const, path: "src/example.ts", revision: snapshot.headRevision }, classification: { kind: "file-change" as const, fileChange: snapshot.fileChanges[0] } };
+    const structure = structureBinding({
+      analysis: { status: "running", result: null }, presentation: createStructureGraphPresentation(),
+      peek: { selection: { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, title: "example", locations: [{ sourceId: source.id, side: "after", range: { startLine: 4, startColumn: 1, endLine: 6, endColumn: 2 }, role: "declaration" }], sources: [source], targetDefinition: null, unavailableReason: null }, locationIndex: 0, requestId: 1, load: { status: "loading" } },
+    });
+    render(<ReviewReaderHarness overrides={{ structure, selectFileChange }} />);
+    const tab = screen.getByRole("tab", { name: "代码结构" });
+    expect(screen.getAllByRole("tab")).toHaveLength(3);
+    fireEvent.click(tab);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("separator", { name: "调整源码预览高度" })).toBeInTheDocument();
+    expect(selectFileChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "在文件改动中打开" }));
+    expect(selectFileChange).toHaveBeenCalledWith("src/example.ts");
+    expect(screen.getByRole("tab", { name: "文件改动" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("单击图标先检查再刷新，后台发现更新不会自行刷新", async () => {
     const checkForUpdate = vi.fn(async () => true);
     const refresh = vi.fn(async () => ({ kind: "refreshed" as const, reviewId: "review-1", snapshotId: "snapshot-2" }));

@@ -3,7 +3,9 @@ import { DiffEditor, type DiffOnMount, type Monaco, type MonacoDiffEditor } from
 
 import type { BabysitChangedRange, BabysitFileExplanations } from "@/babysit/types";
 import { configureLocalMonaco } from "@/infrastructure/local-monaco";
-import type { ReviewFileIdentity, ReviewFileViewState } from "@/review/types";
+import type { ReviewFileViewState } from "@/review/types";
+import { installReviewSourceReveal, reviewEditorIdentityKey, type ReviewEditorIdentity, type ReviewEditorReveal } from "@/review/editor-source-reveal";
+import "@/review/editor-source-reveal.css";
 import { readReviewEditorZoomLevel, saveReviewEditorZoomLevel } from "@/review/editor-zoom";
 import { registerReviewEditorThemes, REVIEW_DARK_THEME, REVIEW_LIGHT_THEME } from "@/review/editor-theme";
 
@@ -32,7 +34,7 @@ export function setBabysitExpansion(
 }
 
 /** Babysit Diff Editor 的受控输入；解释状态由 Review Reader 持有。 */
-type BabysitDiffEditorProps = {
+type BabysitDiffEditorProps<Identity extends ReviewEditorIdentity> = {
   original: string;
   modified: string;
   language: string;
@@ -40,10 +42,12 @@ type BabysitDiffEditorProps = {
   height: string;
   renderSideBySide: boolean;
   explanations?: BabysitFileExplanations;
-  onDiffChange?(identity: ReviewFileIdentity, ranges: BabysitChangedRange[] | null): void;
-  identity: ReviewFileIdentity;
+  onDiffChange?(identity: Identity, ranges: BabysitChangedRange[] | null): void;
+  identity: Identity;
+  reveal?: ReviewEditorReveal;
+  onRevealApplied?(request: ReviewEditorReveal): void;
   viewState: ReviewFileViewState | null;
-  onSaveViewState(identity: ReviewFileIdentity, state: ReviewFileViewState): void;
+  onSaveViewState(identity: Identity, state: ReviewFileViewState): void;
 };
 
 /** 将后端返回的全部解释按有效行号排序。 */
@@ -127,7 +131,7 @@ export function syncInlineDeletedExplanations(
 }
 
 /** 将 AI Line Explanations 作为行尾 injected text 渲染，不修改 Review Snapshot 源文本。 */
-export function BabysitDiffEditor({
+export function BabysitDiffEditor<Identity extends ReviewEditorIdentity>({
   original,
   modified,
   language,
@@ -139,7 +143,9 @@ export function BabysitDiffEditor({
   identity,
   viewState,
   onSaveViewState,
-}: BabysitDiffEditorProps) {
+  reveal,
+  onRevealApplied,
+}: BabysitDiffEditorProps<Identity>) {
   const editorRef = useRef<MonacoDiffEditor>();
   const [mounted, setMounted] = useState<{ editor: MonacoDiffEditor; monaco: Monaco }>();
   const [lineChanges, setLineChanges] = useState<readonly LineChange[]>([]);
@@ -150,13 +156,29 @@ export function BabysitDiffEditor({
     if (viewState) editor.restoreViewState?.(viewState as NonNullable<ReturnType<MonacoDiffEditor["saveViewState"]>>);
     setMounted({ editor, monaco });
   }, [viewState]);
-  const { reviewId, snapshotId, path } = identity;
-  /** 在 Monaco 卸载边界保存当前文件的滚动、折叠和光标状态。 */
+  const identityKey = reviewEditorIdentityKey(identity);
+  // 同一身份的对象重建不触发卸载保存，也不会覆盖显式源码定位。
+  // identityKey 完整编码联合身份；忽略父组件仅对象引用变化。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stableIdentity = useMemo(() => identity, [identityKey]);
+  const viewStateOwner = useRef({ identity: stableIdentity, save: onSaveViewState });
+  /** 保存回调变化只更新接收方，不得清理仍在阅读的 Monaco 实例。 */
+  useLayoutEffect(() => {
+    viewStateOwner.current = { identity: stableIdentity, save: onSaveViewState };
+  }, [onSaveViewState, stableIdentity]);
+  /** 在 wrapper 的被动卸载之前保存状态，并按 Monaco 契约先解绑再释放文件模型。 */
   useLayoutEffect(() => () => {
-    const state = editorRef.current?.saveViewState?.();
-    if (state) onSaveViewState({ reviewId, snapshotId, path }, state);
+    const editor = editorRef.current;
+    const state = editor?.saveViewState?.();
+    if (state) viewStateOwner.current.save(viewStateOwner.current.identity, state);
+    const models = editor?.getModel?.();
+    if (models) {
+      editor!.setModel(null);
+      models.original.dispose();
+      if (models.modified !== models.original) models.modified.dispose();
+    }
     editorRef.current = undefined;
-  }, [onSaveViewState, path, reviewId, snapshotId]);
+  }, []);
 
   /** 监听 Monaco 的 diff 计算完成事件，确保 changed-only 不依赖字符串猜测。 */
   useEffect(() => {
@@ -175,12 +197,18 @@ export function BabysitDiffEditor({
         }
         return result;
       });
-      onDiffChange?.({ reviewId, snapshotId, path }, ranges);
+      onDiffChange?.(stableIdentity, ranges);
     };
     refresh();
     const subscription = mounted.editor.onDidUpdateDiff?.(refresh);
     return () => subscription?.dispose();
-  }, [mounted, original, modified, onDiffChange, reviewId, snapshotId, path]);
+  }, [mounted, original, modified, onDiffChange, stableIdentity]);
+
+  /** 源码定位在恢复 viewState 之后排队，并且只能命中当前模型身份。 */
+  useEffect(() => {
+    if (!mounted || !reveal || reviewEditorIdentityKey(reveal.identity) !== identityKey) return;
+    return installReviewSourceReveal(mounted.editor, mounted.monaco, reveal, renderSideBySide, { before: original, after: modified }, onRevealApplied);
+  }, [mounted, reveal, identityKey, renderSideBySide, original, modified, onRevealApplied]);
 
   /** Review Reader 可见时接管字号快捷键，避免 WebView 同时缩放整个应用界面。 */
   useEffect(() => {
@@ -281,6 +309,8 @@ export function BabysitDiffEditor({
     language={language}
     original={original}
     modified={modified}
+    keepCurrentOriginalModel
+    keepCurrentModifiedModel
     onMount={onMount}
     options={{
       readOnly: true,
@@ -291,6 +321,7 @@ export function BabysitDiffEditor({
       // 避免 UI 仍创建双 pane zones 时 original pane 实际只剩 gutter。
       renderSideBySideInlineBreakpoint: 0,
       ignoreTrimWhitespace: false,
+      ...(reveal ? { wordWrap: "off" as const, diffWordWrap: "off" as const, experimental: { useTrueInlineView: false } } : {}),
       fontFamily: "'JetBrains Mono Variable', monospace",
       padding: { top: 4 },
     }}

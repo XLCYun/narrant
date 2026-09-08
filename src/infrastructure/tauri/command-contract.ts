@@ -17,6 +17,7 @@ import type {
 } from "@/repository/repository-application";
 import type { ApplicationLanguage, ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 import type { ApplicationUpdateSnapshot } from "@/application-update/application-update";
+import type { StructureEvent, StructurePeekContent, StructureResult, StructureSide } from "@/review/structure-types";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -59,6 +60,8 @@ export type TauriCommandContract = {
   refresh_pull_request_review: { args: { operationId: string; reviewId: string; confirmation: ConfirmedPullRequestUpdate }; result: ReviewSnapshot; error: { code: "update-confirmation-stale" | "operation-failed"; detail: string } };
   list_local_refs: { args: { operationId: string; repositoryId: number }; result: BranchRefs };
   read_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string }; result: FileChangeContent };
+  analyze_review_structure: { args: { operationId: string; reviewId: string; snapshotId: string; progress: Channel<StructureEvent> }; result: StructureResult };
+  read_review_structure_source: { args: { operationId: string; reviewId: string; snapshotId: string; side: StructureSide; path: string }; result: StructurePeekContent };
   explain_review_file_change: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string; generationPolicy: BabysitGenerationPolicy; changedRanges: BabysitChangedRange[]; progress: Channel<BabysitProgress> }; result: BabysitFileExplanations; error: BabysitError };
   check_babysit_file_eligibility: { args: { operationId: string; reviewId: string; snapshotId: string; path: string; detectedLanguage?: string }; result: BabysitEligibility; error: BabysitError };
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
@@ -89,6 +92,8 @@ export type CancellableTauriCommandName =
   | "refresh_pull_request_review"
   | "list_local_refs"
   | "read_review_file_change"
+  | "analyze_review_structure"
+  | "read_review_structure_source"
   | "explain_review_file_change"
   | "check_babysit_file_eligibility";
   // Setup recovery is initiated by the native picker and does not hold an analysis operation.
@@ -140,6 +145,8 @@ export const TAURI_COMMAND_NAMES = [
   "complete_github_authorization",
   "sign_out_github",
   "read_review_file_change",
+  "analyze_review_structure",
+  "read_review_structure_source",
   "explain_review_file_change",
   "check_babysit_file_eligibility",
   "clear_babysit_snapshot_cache",

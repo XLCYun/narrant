@@ -1,3 +1,5 @@
+import { peekZh, peekEn } from "@/review/structure-peek-i18n";
+import { structureZh, structureEn } from "@/lib/structure-i18n";
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
@@ -56,6 +58,7 @@ export function formatRelativeTime(
 
 export const resources = {
   "zh-CN": {
+    structure: { ...structureZh, peek: peekZh },
     common: {
       brand: "纳言", subtitle: "好工程，纳良言", recent: "最近审核", emptyTitle: "纳言",
       emptyDescription: "好工程，纳良言", openFolder: "打开仓库文件夹",
@@ -175,6 +178,7 @@ export const resources = {
     },
   },
   en: {
+    structure: { ...structureEn, peek: peekEn },
     common: {
       brand: "Narrant", subtitle: "Read-only code review", recent: "Recent reviews", emptyTitle: "Narrant",
       emptyDescription: "Read-only code review", openFolder: "Open repository folder",
@@ -301,7 +305,7 @@ void i18n.use(initReactI18next).init({
   lng: "zh-CN",
   fallbackLng: "zh-CN",
   defaultNS: "common",
-  ns: ["common", "repository", "review", "github", "settings", "applicationUpdate"],
+  ns: ["common", "repository", "review", "github", "settings", "applicationUpdate", "structure"],
   interpolation: { escapeValue: false },
 });
 document.documentElement.lang = "zh-CN";

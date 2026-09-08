@@ -1,0 +1,6 @@
+.monaco-editor .structure-peek-line-highlight,
+.monaco-editor .structure-peek-deleted-highlight {
+  background: color-mix(in srgb, #eab308 22%, transparent);
+  outline: 1px solid #ca8a04;
+  outline-offset: -1px;
+}

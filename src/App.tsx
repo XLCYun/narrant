@@ -21,6 +21,7 @@ import {
 } from "@/components/review-reader";
 import type { DiscoveredPullRequest, PullRequestGroup, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 import { createTauriReviewApplicationAdapter } from "@/infrastructure/tauri-review-application-adapter";
+import { createTauriStructureApplicationAdapter } from "@/infrastructure/tauri-structure-application-adapter";
 import { createTauriBabysitApplicationAdapter } from "@/infrastructure/tauri-babysit-application-adapter";
 import { createTauriRepositoryApplicationAdapter } from "@/infrastructure/tauri-repository-application-adapter";
 import { createTauriGitHubOAuthApplicationAdapter } from "@/infrastructure/tauri-github-oauth-application-adapter";
@@ -93,10 +94,12 @@ export function App() {
     ? savedTreeWidth
     : 24;
   const repositoryOverview = useRepositoryOverview(repositoryApplication, { enabled: desktopRuntimeEnabled });
+  const structureApplicationAdapter = useMemo(() => createTauriStructureApplicationAdapter(tauriTransport), []);
   const reviewLifecycle = useReviewLifecycle(
     reviewApplicationAdapter,
     { initialDiffMode, initialTreeWidth },
     babysitApplicationAdapter,
+    structureApplicationAdapter,
   );
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { StructureApplicationAdapter } from "@/review/structure-application";
+import { StructureRuntime, type StructureReaderBinding } from "@/review/structure-runtime";
+
 import type { BabysitApplicationAdapter, BabysitBinding } from "@/babysit/types";
 import { useBabysitLifecycle } from "@/babysit/use-babysit-lifecycle";
 
@@ -65,6 +68,7 @@ export type { ReviewDiffMode, ReviewView } from "@/review/types";
 /** 进程内一个 Review 的完整 Reader runtime 状态。 */
 type ReviewRuntimeEntry = {
   snapshot: ReviewSnapshot;
+  structure?: StructureRuntime;
   fileChange: FileChangeBinding;
   update: ReviewUpdateBinding;
   view: ReviewView;
@@ -93,6 +97,8 @@ export type ReviewReaderBinding = {
   update: ReviewUpdateBinding;
   /** 当前文件的宝宝模式状态与动作。 */
   babysit?: BabysitBinding;
+  /** 当前 Snapshot 的独立后台分析、图及源码 Peek。 */
+  structure?: StructureReaderBinding;
   /** 当前 Review 的 peer view，以及用于保留它的 setter。 */
   view: ReviewView;
   setView(view: ReviewView): void;
@@ -156,6 +162,7 @@ export function useReviewLifecycle(
   adapter: ReviewApplicationAdapter,
   options: ReviewLifecycleOptions = {},
   babysitAdapter?: BabysitApplicationAdapter,
+  structureAdapter?: StructureApplicationAdapter,
 ): ReviewLifecycleBinding {
   const initialDiffMode = options.initialDiffMode ?? "side-by-side";
   const initialTreeWidth = options.initialTreeWidth ?? 24;
@@ -300,9 +307,18 @@ export function useReviewLifecycle(
       entries.current.set(next.reviewId, { ...previous, snapshot: next });
       return false;
     }
+    existing?.structure?.dispose();
+    if (structureAdapter) {
+      const structure: StructureRuntime = new StructureRuntime(
+        { reviewId: next.reviewId, snapshotId: next.snapshotId }, structureAdapter,
+        () => entries.current.get(next.reviewId)?.structure === structure && entries.current.get(next.reviewId)?.snapshot.snapshotId === next.snapshotId,
+        () => updateEntry(next.reviewId, (current) => ({ ...current })), existing?.structure?.binding(),
+      );
+      entry.structure = structure;
+    }
     entries.current.set(next.reviewId, entry);
     return true;
-  }, [initialDiffMode, initialTreeWidth]);
+  }, [initialDiffMode, initialTreeWidth, structureAdapter, updateEntry]);
 
   /** 新 Snapshot 首次呈现时清空旧内容，并按稳定路径读取首个 File Change。 */
   const resetSnapshotReader = useCallback((snapshot: ReviewSnapshot) => {
@@ -312,6 +328,8 @@ export function useReviewLifecycle(
       fileChange: { kind: "empty" },
       update: { kind: "idle" },
     }));
+    const current = entries.current.get(snapshot.reviewId);
+    if (current?.view === "code-structure") current.structure?.start();
     const firstPath = firstFileChangePath(snapshot);
     if (firstPath) selectFileChange(firstPath);
   }, [selectFileChange, updateEntry]);
@@ -320,6 +338,7 @@ export function useReviewLifecycle(
   const releaseEntry = useCallback((reviewId: string) => {
     fileRequests.current.get(reviewId)?.abort.abort();
     fileRequests.current.delete(reviewId);
+    entries.current.get(reviewId)?.structure?.dispose();
     entries.current.delete(reviewId);
     if (activeReviewIdRef.current === reviewId) {
       activeReviewIdRef.current = undefined;
@@ -480,7 +499,10 @@ export function useReviewLifecycle(
   /** 更新当前 Review 的 peer view，而不触碰其 Snapshot 或 reader content。 */
   const setView = useCallback((view: ReviewView) => {
     const reviewId = activeReviewIdRef.current;
-    if (reviewId) updateEntry(reviewId, (entry) => ({ ...entry, view }));
+    if (reviewId) {
+      updateEntry(reviewId, (entry) => ({ ...entry, view }));
+      if (view === "code-structure") entries.current.get(reviewId)?.structure?.start();
+    }
   }, [updateEntry]);
 
   /** 更新当前 Review 的 diff layout，而不影响其他 Open Review。 */
@@ -541,6 +563,7 @@ export function useReviewLifecycle(
     updateOperation.current?.abort.abort();
     lifecycleAbort.current?.abort();
     for (const [reviewId, entry] of entries.current) {
+      entry.structure?.dispose();
       fileRequests.current.get(reviewId)?.abort.abort();
       void adapter.closeReview(
         { reviewId, snapshotId: entry.snapshot.snapshotId },
@@ -558,6 +581,7 @@ export function useReviewLifecycle(
     fileChange: activeEntry.fileChange,
     update: activeEntry.update,
     babysit,
+    structure: activeEntry.structure?.binding(),
     view: activeEntry.view,
     setView,
     diffMode: activeEntry.diffMode,

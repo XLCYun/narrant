@@ -1,7 +1,7 @@
 import type { PullRequestMetadata } from "@/lib/review-types";
 
 /** Review Reader 的稳定 peer view。 */
-export type ReviewView = "overview" | "file-changes";
+export type ReviewView = "overview" | "file-changes" | "code-structure";
 
 /** Monaco Diff 阅读器支持的持久化展示布局。 */
 export type ReviewDiffMode = "side-by-side" | "inline";

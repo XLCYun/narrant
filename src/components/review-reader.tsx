@@ -12,6 +12,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { useTranslation } from "react-i18next";
 
+import { ReviewStructureView } from "@/components/code-structure/review-structure-view";
 import { FileChangeLoading } from "@/components/file-change-loading";
 import { BabysitDiffEditor } from "@/components/babysit-diff-editor";
 import { FileTypeIcon } from "@/components/file-type-icon";
@@ -92,7 +93,7 @@ function editorLanguage(path: string) {
 
 /** 呈现满高、自由浏览且无审核进度语义的 Review Reader。 */
 export function ReviewReader(input: ReviewReaderProps) {
-  const { t } = useTranslation(["common", "review"]);
+  const { t } = useTranslation(["common", "review", "structure"]);
   const { review, appearance } = input;
   const updatePresentation = useReviewUpdatePresentation(review);
   const props = {
@@ -201,14 +202,15 @@ export function ReviewReader(input: ReviewReaderProps) {
   }
 
   return <Tabs value={activeView} onValueChange={(value) => review.setView(value as ReviewView)} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
-    <div role="toolbar" aria-label={t("review:toolbar")} className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-      <TabsList variant="line" aria-label={t("review:reviewViews")} className="!h-full shrink-0 p-0">
+    <div role="toolbar" aria-label={t("review:toolbar")} className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3">
+      <TabsList variant="line" aria-label={t("review:reviewViews")} className="!h-12 min-w-0 shrink-0 p-0">
         <TabsTrigger value="overview" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("review:overview")}</TabsTrigger>
         <TabsTrigger value="file-changes" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
+        {review.structure && <TabsTrigger value="code-structure" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("structure:title")}</TabsTrigger>}
       </TabsList>
       <div className="ml-auto flex min-w-0 shrink-0 items-center justify-end gap-2">
         {props.updateAction}
-        {activeView === "file-changes" && <Tooltip>
+        {(activeView === "file-changes" || (activeView === "code-structure" && review.structure?.peek)) && <Tooltip>
           <TooltipTrigger render={<span className="inline-flex" />}>
             <Button variant={effectiveDiffMode === "side-by-side" ? "default" : "outline"} size="icon-sm" className="rounded-full" aria-label={t("review:sideBySide")}
               aria-pressed={effectiveDiffMode === "side-by-side"} disabled={props.narrow}
@@ -262,5 +264,13 @@ export function ReviewReader(input: ReviewReaderProps) {
         </div></ResizablePanel>
       </ResizablePanelGroup>}
     </TabsContent>
+    {review.structure && <TabsContent value="code-structure" className="flex min-h-0 flex-col overflow-hidden">
+      <ReviewStructureView structure={review.structure} narrow={props.narrow} diffMode={effectiveDiffMode} editorTheme={props.editorTheme}
+        onOpenFileChange={(path) => {
+          if (!review.snapshot.fileChanges.some((change) => change.path === path)) return;
+          review.selectFileChange(path);
+          review.setView("file-changes");
+        }} />
+    </TabsContent>}
   </Tabs>;
 }

@@ -1,3 +1,6 @@
+import { ReviewStructurePreview, type ReviewStructureScenario } from "@/dev/scenarios/review-structure-preview";
+import { StructurePeekPreview, type StructurePeekScenario } from "@/dev/scenarios/structure-peek-preview";
+import { CodeStructurePreview, type CodeStructureScenario } from "@/dev/scenarios/code-structure-preview";
 import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -10,6 +13,7 @@ import { HomePage } from "@/components/home-page";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { RepositoryTrustDialog } from "@/components/repository-trust-dialog";
 import { ReviewReader, type DiffMode, type FileChangeContent, type ReviewReaderSnapshot } from "@/components/review-reader";
+import type { ReviewView } from "@/review/types";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { BabysitBinding, BabysitFileExplanations } from "@/babysit/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -474,7 +478,7 @@ function ReviewReaderPreview({
     ? "src/components/review-reader.tsx"
     : snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
-  const [view, setView] = useState<"overview" | "file-changes">(initialView);
+  const [view, setView] = useState<ReviewView>(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
   const babysitRequest = selectedPath
     ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, detectedLanguage: "typescript" }
@@ -549,6 +553,18 @@ function ReviewReaderPreview({
 }
 
 const previews: Record<string, PreviewDefinition> = {
+  "review-structure": {
+    label: "代码结构 · 完整 Review Reader",
+    scenarios: Object.fromEntries((["changed", "deleted", "moved", "renamed", "unchanged", "unavailable", "long", "loading", "file-added", "file-deleted", "empty-file", "long-path", "multiple-impls", "multiple-occurrences"] as ReviewStructureScenario[]).map((scenario) => [scenario, { label: scenario, render: () => <ReviewStructurePreview scenario={scenario} /> }])),
+  },
+  "structure-peek": {
+    label: "结构源码预览",
+    scenarios: Object.fromEntries((["changed", "deleted", "moved", "renamed", "unchanged", "unavailable", "loading", "error", "external", "relationship", "long", "file-added", "file-deleted", "empty-file", "long-path", "multiple-impls", "multiple-occurrences"] as StructurePeekScenario[]).map((scenario) => [scenario, { label: scenario, render: () => <StructurePeekPreview scenario={scenario} /> }])),
+  },
+  "code-structure": {
+    label: "代码结构图",
+    scenarios: Object.fromEntries((["default", "empty", "loading", "partial", "cancelled", "error", "relationship-only", "large", "long-label", "relationship-controls", "missing-side", "long-path", "multiple-impls", "multiple-occurrences"] as CodeStructureScenario[]).map((scenario) => [scenario, { label: scenario, render: () => <CodeStructurePreview scenario={scenario} /> }])),
+  },
   settings: {
     label: "应用设置",
     scenarios: {

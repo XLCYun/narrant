@@ -1,0 +1,43 @@
+.structure-filters[open] { flex-basis: 100%; }
+.structure-details-toggle { display: none; }
+.structure-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 280px; }
+.structure-workspace:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }
+.structure-node { height: 100%; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); box-shadow: 0 2px 8px #0000000a; }
+.structure-node-header { padding: 10px 12px; }
+.structure-container { background: color-mix(in srgb, var(--muted) 35%, var(--background)); border-style: dashed; }
+.structure-selected { outline: 2px solid var(--ring); outline-offset: 2px; }
+.structure-change-added { color: #15803d; }
+.structure-change-deleted { color: #b91c1c; }
+.structure-change-modified { color: #1d4ed8; }
+.structure-change-renamed { color: #7e22ce; }
+.structure-change-moved { color: #0f766e; }
+.structure-change-documentation { color: #9a3412; }
+.structure-change-retained { color: #475569; }
+.structure-change-indeterminate { color: #a16207; }
+.structure-edge-added { --structure-edge-color: #15803d; }
+.structure-edge-deleted { --structure-edge-color: #b91c1c; }
+.structure-edge-retained { --structure-edge-color: #64748b; }
+.structure-edge-indeterminate { --structure-edge-color: #a16207; }
+.structure-view .react-flow__edge-path { stroke: var(--structure-edge-color); }
+.structure-view .react-flow__edge-text { fill: var(--foreground); font-size: 11px; }
+.structure-view .react-flow__edge-textbg { fill: var(--background); }
+.dark .structure-change-added { color: #86efac; }
+.dark .structure-change-deleted { color: #fca5a5; }
+.dark .structure-change-modified { color: #93c5fd; }
+.dark .structure-change-renamed { color: #d8b4fe; }
+.dark .structure-change-moved { color: #5eead4; }
+.dark .structure-change-documentation { color: #fdba74; }
+.dark .structure-change-retained { color: #cbd5e1; }
+.dark .structure-change-indeterminate { color: #fcd34d; }
+.dark .structure-edge-added { --structure-edge-color: #86efac; }
+.dark .structure-edge-deleted { --structure-edge-color: #fca5a5; }
+.dark .structure-edge-retained { --structure-edge-color: #cbd5e1; }
+.dark .structure-edge-indeterminate { --structure-edge-color: #fcd34d; }
+@media (max-width: 800px) {
+  .structure-toolbar { flex-wrap: nowrap; overflow-x: auto; }
+  .structure-details-toggle { display: inline-flex; }
+  .structure-inspector[data-expanded="false"] { display: none; }
+  .structure-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .structure-workspace > :first-child { flex: 1; min-height: 0; }
+  .structure-inspector { flex: 0 1 auto; border-left: none; border-top: 1px solid var(--border); max-height: 30%; }
+}
