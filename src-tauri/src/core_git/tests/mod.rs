@@ -3,6 +3,31 @@ use super::workspace::worktree_field_matches_path;
 use super::*;
 use crate::operation::{OperationContext, TestCancellation};
 
+#[cfg(unix)]
+#[path = "input.rs"]
+mod input;
+
+/// Git 提前关闭输入时立即报告写入失败，不把断管误作可重试的空管道而等到超时。
+#[tokio::test]
+async fn early_git_exit_reports_input_failure_without_waiting_for_timeout() {
+    let fixture = repository();
+    let started = Instant::now();
+    let error = CoreGitProcess::default()
+        .execute(
+            GitInvocation::new(
+                fixture.path(),
+                ["rev-parse", "--git-dir"],
+                GitOperationClass::Query,
+            )
+            .with_input(vec![b'x'; 1024 * 1024]),
+            OperationContext::background().cancellation(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CoreGitFailureKind::InputWriteFailed);
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
 #[test]
 fn core_git_commands_disable_interactive_credential_prompts() {
     let mut command = std::process::Command::new("git");

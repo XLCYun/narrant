@@ -1,6 +1,24 @@
 use super::*;
 
 impl ReviewStore {
+    /// 只读取已激活 current Snapshot 的身份，供后台工作频繁校验且不加载 File Changes。
+    pub fn current_snapshot_identity(&self, review_id: &str) -> Result<String, PersistenceError> {
+        let row_id = parse_review_id(review_id)?;
+        let connection = self.lock_connection()?;
+        connection
+            .query_row(
+                "SELECT s.id FROM reviews r
+                 JOIN review_snapshots s ON s.id = r.current_snapshot_id
+                 WHERE r.id = ?1 AND s.activated_at_millis IS NOT NULL",
+                [row_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(map_sqlite_error)?
+            .map(|id| format!("snapshot-{id}"))
+            .ok_or_else(|| PersistenceError::new("Review 不存在或尚无 current Snapshot。"))
+    }
+
     /// 返回一个 Review 曾成功激活的 Snapshot identities，不暴露失败候选。
     #[cfg(test)]
     pub fn list_review_snapshot_identities(

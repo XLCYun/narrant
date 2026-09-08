@@ -2,6 +2,7 @@ use super::commands::{
     application_settings as application_settings_commands,
     application_update as application_update_commands, babysit as babysit_commands,
     github as github_commands, repository, review as review_commands,
+    structure as structure_commands,
 };
 use super::shutdown::{self, ApplicationShutdown, PostStopCoordinator};
 use crate::{
@@ -161,6 +162,8 @@ pub fn run() {
             github_commands::complete_github_authorization,
             github_commands::sign_out_github,
             review_commands::read_review_file_change,
+            structure_commands::analyze_review_structure,
+            structure_commands::read_review_structure_source,
             babysit_commands::explain_review_file_change,
             babysit_commands::check_babysit_file_eligibility,
             babysit_commands::list_babysit_models,

@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "input.rs"]
+mod input;
+use input::InputWriter;
+
 impl CoreGitProcess {
     /// 异步执行 Core Git，同时避免阻塞调用方的异步运行时线程。
     pub async fn execute(
@@ -45,6 +49,24 @@ impl CoreGitProcess {
 }
 
 impl GitProcessAdapter {
+    /// 在既有查询限制下并发写入批处理输入、读取两条输出管道。
+    pub(crate) fn run_with_input<I, S>(
+        &self,
+        arguments: I,
+        input: Vec<u8>,
+        cancellation: &CancellationSignal,
+    ) -> Result<GitOutput, GitCommandError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        CoreGitProcess::default().execute_blocking(
+            GitInvocation::new(&self.repository_path, arguments, GitOperationClass::Query)
+                .with_input(input),
+            cancellation,
+        )
+    }
+
     /// 使用参数数组运行 Core Git；命令永远不会经过 shell。
     pub(crate) fn run<I, S>(
         &self,
@@ -120,6 +142,7 @@ impl GitProcessAdapter {
 }
 
 enum ReaderEvent {
+    InputFailed(String),
     LimitExceeded(GitOutputStream),
     Completed(GitOutputStream, std::io::Result<Vec<u8>>),
 }
@@ -136,7 +159,11 @@ fn execute_core_git(
         .arg("-C")
         .arg(&invocation.repository_path)
         .args(invocation.arguments)
-        .stdin(Stdio::null())
+        .stdin(if invocation.input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::child_process::configure_std_command(&mut command);
@@ -175,6 +202,13 @@ fn execute_core_git(
         ));
     };
     let (events, reader_events) = mpsc::channel();
+    let input_writer = invocation.input.map(|input| {
+        let stdin = child
+            .stdin
+            .take()
+            .expect("piped stdin was configured for batch input");
+        InputWriter::start(stdin, input, events.clone())
+    });
     read_stream(
         stdout,
         GitOutputStream::Stdout,
@@ -188,7 +222,13 @@ fn execute_core_git(
     let mut stderr = None;
     let mut failure = None;
 
-    while status.is_none() || stdout.is_none() || stderr.is_none() {
+    while status.is_none()
+        || stdout.is_none()
+        || stderr.is_none()
+        || input_writer
+            .as_ref()
+            .is_some_and(|writer| !writer.is_finished())
+    {
         while let Ok(event) = reader_events.try_recv() {
             record_reader_event(event, output_limit, &mut stdout, &mut stderr, &mut failure);
         }
@@ -278,6 +318,9 @@ fn execute_core_git(
             },
         ));
     }
+    if let Some(writer) = input_writer {
+        writer.finish()?;
+    }
     Ok(GitOutput { stdout })
 }
 
@@ -334,6 +377,14 @@ fn record_reader_event(
     failure: &mut Option<CoreGitFailure>,
 ) {
     match event {
+        ReaderEvent::InputFailed(message) => {
+            if failure.is_none() {
+                *failure = Some(CoreGitFailure::from_kind(
+                    CoreGitFailureKind::InputWriteFailed,
+                    format!("写入 Core Git 输入失败：{message}"),
+                ));
+            }
+        }
         ReaderEvent::LimitExceeded(stream) => {
             if failure.is_none() {
                 *failure = Some(CoreGitFailure::from_kind(

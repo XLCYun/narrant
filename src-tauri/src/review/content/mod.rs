@@ -94,3 +94,8 @@ pub(crate) use comparison::{
 };
 
 mod comparison;
+mod source_tree;
+
+pub(crate) use source_tree::{
+    SnapshotSide, SnapshotSourceEntry, SnapshotSourceError, SnapshotSourceRead, SnapshotSourceTree,
+};

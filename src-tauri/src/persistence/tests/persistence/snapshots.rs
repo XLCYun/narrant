@@ -22,7 +22,12 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     let head_ref = "refs/heads/topic";
     let initial = snapshot_for_refs(repository.path(), base_ref, head_ref);
     let saved = store.save_branch_review(entry.id, &initial).unwrap();
+    assert!(store.current_snapshot_identity(&saved.review_id).is_err());
     store.activate_initial_snapshot(&saved).unwrap();
+    assert_eq!(
+        store.current_snapshot_identity(&saved.review_id).unwrap(),
+        saved.snapshot_identity()
+    );
     let old_head = saved.head_revision.clone();
     let workspace = store.review_workspace_path(&saved.review_id).unwrap();
     GitProcessAdapter::new(repository.path())
@@ -53,6 +58,10 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
         .stage_branch_refresh_candidate(&saved.review_id, &latest)
         .unwrap();
     assert_eq!(
+        store.current_snapshot_identity(&saved.review_id).unwrap(),
+        saved.snapshot_identity()
+    );
+    assert_eq!(
         store.open_review(&saved.review_id).unwrap().head_revision,
         old_head
     );
@@ -81,6 +90,10 @@ fn refresh_candidate_stays_non_current_until_explicit_activation() {
     store
         .activate_refresh_candidate(&candidate, &saved)
         .unwrap();
+    assert_eq!(
+        store.current_snapshot_identity(&saved.review_id).unwrap(),
+        candidate.snapshot_identity()
+    );
     let refreshed = store.open_review(&saved.review_id).unwrap();
     assert_eq!(refreshed.head_revision, latest.head_revision);
     assert_ne!(refreshed.head_revision, old_head);

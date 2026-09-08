@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex};
 pub(super) struct OpenReviewRuntime {
     pub(super) snapshot_id: String,
     pub(super) reader: Arc<SnapshotContentReader>,
+    /// 每次安装均使用独立令牌；同一 Snapshot 关闭再打开也不能接收旧后台结果。
+    pub(super) valid: Arc<AtomicBool>,
 }
 
 /// 进程内所有已打开 Review 及唯一 Presented Review 的状态。
@@ -223,7 +225,7 @@ pub struct ReviewLifecycle {
     /// 生命周期 gate 允许 Review 操作并发，但让 shutdown 等待全部操作安全收敛。
     operation_gate: tokio::sync::RwLock<()>,
     /// shutdown 开始后立即拒绝尚未进入 gate 的新操作。
-    shutting_down: AtomicBool,
+    shutting_down: Arc<AtomicBool>,
     /// 测试专用同步点，让操作持有 read gate 后暂停，不进入生产构建。
     #[cfg(test)]
     operation_gate_barrier: Mutex<Option<Arc<tests::LifecycleOperationGateBarrier>>>,
@@ -273,7 +275,7 @@ impl ReviewLifecycle {
             }),
             review_locks: Mutex::new(HashMap::new()),
             operation_gate: tokio::sync::RwLock::new(()),
-            shutting_down: AtomicBool::new(false),
+            shutting_down: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             operation_gate_barrier: Mutex::new(None),
             active_refreshes: Mutex::new(HashSet::new()),
@@ -375,11 +377,15 @@ impl ReviewLifecycle {
                 "Review 已关闭或失效，请重新打开。".to_owned(),
             ));
         }
+        if let Some(previous) = runtime.open_reviews.get(&review_id) {
+            previous.valid.store(false, Ordering::Release);
+        }
         runtime.open_reviews.insert(
             review_id.clone(),
             OpenReviewRuntime {
                 snapshot_id,
                 reader,
+                valid: Arc::new(AtomicBool::new(true)),
             },
         );
         match update {
@@ -457,7 +463,9 @@ impl ReviewLifecycle {
             .runtime
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
-        runtime.open_reviews.remove(review_id);
+        if let Some(previous) = runtime.open_reviews.remove(review_id) {
+            previous.valid.store(false, Ordering::Release);
+        }
         if runtime.presented_review_id.as_deref() == Some(review_id) {
             runtime.presented_review_id = None;
             runtime.presentation_generation = runtime.presentation_generation.wrapping_add(1);
@@ -471,6 +479,9 @@ impl ReviewLifecycle {
             .runtime
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
+        for previous in runtime.open_reviews.values() {
+            previous.valid.store(false, Ordering::Release);
+        }
         runtime.open_reviews.clear();
         runtime.presented_review_id = None;
         runtime.presentation_generation = runtime.presentation_generation.wrapping_add(1);
@@ -480,6 +491,7 @@ impl ReviewLifecycle {
 
 mod presentation;
 mod refresh;
+mod structure;
 mod workspace;
 
 #[cfg(test)]

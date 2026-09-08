@@ -37,13 +37,14 @@ pub enum CoreGitFailureKind {
         code: Option<i32>,
     },
     OutputReadFailed,
+    InputWriteFailed,
     WaitFailed,
     TerminationFailed,
     InvalidData,
 }
 
 /// Core Git 命令失败，消息只用于诊断，不参与业务分支判断。
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CoreGitFailure {
     kind: CoreGitFailureKind,
     message: String,
@@ -59,7 +60,7 @@ impl CoreGitFailure {
     }
 
     /// 构造由调用方取消产生的稳定错误类别。
-    fn cancelled() -> Self {
+    pub(crate) fn cancelled() -> Self {
         Self {
             kind: CoreGitFailureKind::Cancelled,
             message: "Core Git 操作已取消".to_owned(),
@@ -130,6 +131,7 @@ pub struct GitInvocation {
     repository_path: PathBuf,
     arguments: Vec<OsString>,
     class: GitOperationClass,
+    input: Option<Vec<u8>>,
 }
 
 impl GitInvocation {
@@ -146,7 +148,14 @@ impl GitInvocation {
                 .map(|argument| argument.as_ref().to_owned())
                 .collect(),
             class,
+            input: None,
         }
+    }
+
+    /// 为批处理命令提供完整标准输入，由执行器并发写入并关闭管道。
+    pub fn with_input(mut self, input: Vec<u8>) -> Self {
+        self.input = Some(input);
+        self
     }
 }
 

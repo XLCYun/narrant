@@ -7,11 +7,16 @@ use std::path::Path;
 /// 从不可变 Snapshot 恢复并按固定对象 ID 读取内容的运行时 reader。
 #[derive(Clone)]
 pub struct SnapshotContentReader {
-    adapter: GitProcessAdapter,
-    comparison: ChangeComparison,
+    pub(super) adapter: GitProcessAdapter,
+    pub(super) comparison: ChangeComparison,
 }
 
 impl SnapshotContentReader {
+    /// 借用此 reader 固定的比较元数据，避免来源配对混入另一份 Snapshot 状态。
+    pub(crate) fn comparison(&self) -> &ChangeComparison {
+        &self.comparison
+    }
+
     /// 从持久化 Snapshot 恢复 reader，不重新解析任何可移动 ref。
     pub fn restore(repository_path: &Path, comparison: ChangeComparison) -> Self {
         Self {
@@ -103,12 +108,21 @@ pub(crate) fn build_comparison(
     let base_revision = peel_to_commit_id(&adapter, &revisions.base_revision, cancellation)?;
     let head_revision = peel_to_commit_id(&adapter, &revisions.head_revision, cancellation)?;
     let comparison_base = parse_single_line_output(
-        adapter.run(["merge-base", &base_revision, &head_revision], cancellation)?,
+        adapter.run(
+            [
+                "--no-replace-objects",
+                "merge-base",
+                &base_revision,
+                &head_revision,
+            ],
+            cancellation,
+        )?,
         "merge-base",
     )?;
     validate_object_id(&comparison_base)?;
     let raw = adapter.run(
         [
+            "--no-replace-objects",
             "diff",
             "--raw",
             "-z",
@@ -139,7 +153,10 @@ fn peel_to_commit_id(
     validate_object_id(object_id)?;
     let revision = format!("{object_id}^{{commit}}");
     let commit = parse_single_line_output(
-        adapter.run(["rev-parse", "--verify", &revision], cancellation)?,
+        adapter.run(
+            ["--no-replace-objects", "rev-parse", "--verify", &revision],
+            cancellation,
+        )?,
         "revision",
     )?;
     validate_object_id(&commit)?;
@@ -160,10 +177,9 @@ fn parse_single_line_output(
     Ok(text.to_owned())
 }
 
-/// 验证 object ID 只包含 Git 十六进制机器格式。
-fn validate_object_id(object_id: &str) -> Result<(), GitCommandError> {
-    if (40..=64).contains(&object_id.len())
-        && object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+/// 仅接受完整 SHA-1 或 SHA-256，拒绝移动 ref、缩写和 revision 表达式。
+pub(super) fn validate_object_id(object_id: &str) -> Result<(), GitCommandError> {
+    if matches!(object_id.len(), 40 | 64) && object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         Ok(())
     } else {
@@ -264,16 +280,41 @@ fn read_content(
         }));
     }
     let size_text = parse_single_line_output(
-        adapter.run(["cat-file", "-s", &content_ref.object_id], cancellation)?,
+        adapter.run(
+            [
+                "--no-replace-objects",
+                "cat-file",
+                "-s",
+                &content_ref.object_id,
+            ],
+            cancellation,
+        )?,
         "blob size",
     )?;
     let size = size_text
         .parse::<usize>()
         .map_err(|_| GitCommandError::new("blob size 输出无效"))?;
     let content = adapter
-        .run(["cat-file", "blob", &content_ref.object_id], cancellation)?
+        .run(
+            [
+                "--no-replace-objects",
+                "cat-file",
+                "blob",
+                &content_ref.object_id,
+            ],
+            cancellation,
+        )?
         .stdout;
-    let content = if content_ref.mode == 0o120000 {
+    decode_blob(content_ref.mode, size, content).map(Some)
+}
+
+/// 保持 File Changes 与完整 Snapshot 来源读取一致的原始文本、二进制和链接语义。
+pub(super) fn decode_blob(
+    mode: u32,
+    size: usize,
+    content: Vec<u8>,
+) -> Result<FileContent, GitCommandError> {
+    let content = if mode == 0o120000 {
         FileContent::Symlink {
             size,
             target: String::from_utf8(content)
@@ -288,7 +329,7 @@ fn read_content(
                 .map_err(|_| GitCommandError::new("文本 blob 不是有效的 UTF-8"))?,
         }
     };
-    Ok(Some(content))
+    Ok(content)
 }
 
 #[cfg(test)]

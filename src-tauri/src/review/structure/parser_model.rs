@@ -11,6 +11,19 @@ pub(crate) enum SourceLanguage {
     Rust,
 }
 
+impl SourceLanguage {
+    /// 发现源码和验证缺侧覆盖共用同一语言范围，避免支持后缀偏离后误判增删。
+    pub(crate) fn from_path(path: &str) -> Option<Self> {
+        match path.rsplit_once('.')?.1 {
+            "ts" | "mts" | "cts" => Some(Self::TypeScript),
+            "tsx" => Some(Self::Tsx),
+            "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "rs" => Some(Self::Rust),
+            _ => None,
+        }
+    }
+}
+
 /// 原文件中的零基行号和 UTF-8 字节列；不能直接当成 Monaco UTF-16 列。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourcePosition {
