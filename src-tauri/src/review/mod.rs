@@ -1,6 +1,7 @@
 mod content;
 mod lifecycle;
 mod selection;
+pub(crate) mod structure;
 
 pub(crate) use content::{
     build_comparison, ChangeComparison, FileChange, FileContentRef, ResolvedRevisions,

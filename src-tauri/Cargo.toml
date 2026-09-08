@@ -18,6 +18,9 @@ dotenvy = "0.15"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+ast-grep-core = "=0.45.1"
+ast-grep-language = { version = "=0.45.1", default-features = false, features = ["tree-sitter-javascript", "tree-sitter-typescript", "tree-sitter-rust"] }
+ast-grep-outline = "=0.45.1"
 base64 = "0.22"
 bytes = "1"
 async-trait = "0.1"
