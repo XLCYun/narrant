@@ -8,6 +8,12 @@ Execution follows the user-requested `implement` skill: TDD where practical at t
 
 GitHub backlog: [#173](https://github.com/XLCYun/narrant/issues/173) Task 1; [#174](https://github.com/XLCYun/narrant/issues/174) Task 2; [#175](https://github.com/XLCYun/narrant/issues/175) Tasks 3–4; [#176](https://github.com/XLCYun/narrant/issues/176) Tasks 5–6; [#177](https://github.com/XLCYun/narrant/issues/177) Task 7; [#178](https://github.com/XLCYun/narrant/issues/178) Tasks 8–9.
 
+Completed locally on 2026-09-08 at implementation revision
+`92c124beef39872898b4f27845e956d66f08b1ce`. All nine tasks have implementation,
+review and executed verification evidence in
+[the final validation report](../research/code-structure-validation.md), including
+[fixed-revision measurements](../research/code-structure-benchmark.json).
+
 ## Global Constraints
 
 - All work stays in this isolated worktree. Do not merge, push, close Issues, or change the user's other checkout from a task.

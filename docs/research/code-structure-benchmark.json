@@ -1,0 +1,362 @@
+{
+  "afterRevision": "92c124beef39872898b4f27845e956d66f08b1ce",
+  "beforeRevision": "da4f583089350b6fe8632fb83dcc9d7558e77286",
+  "build": "cargo test debug; incremental and sccache enabled",
+  "cacheMeaning": "Second analysis reuses thread-local parser rules and OS caches, not cached analysis results.",
+  "cancellation": {
+    "requestToTerminalMs": 17.34825,
+    "status": "cancelled",
+    "summary": {
+      "changedDeclarations": 0,
+      "complete": false,
+      "incompleteDeclarations": 36,
+      "relationshipChanges": 0,
+      "unresolvedOccurrences": 0
+    },
+    "totalElapsedMs": 993,
+    "trigger": "after the first extracted source file"
+  },
+  "comparisonBase": "da4f583089350b6fe8632fb83dcc9d7558e77286",
+  "runs": [
+    {
+      "elapsedMs": 34081,
+      "firstUsableResultMs": 34025,
+      "implementationGroups": 350,
+      "label": "cold-analysis",
+      "nodes": 9375,
+      "phaseStarts": [
+        [
+          "discovery",
+          0
+        ],
+        [
+          "extraction",
+          181
+        ],
+        [
+          "matching",
+          27274
+        ],
+        [
+          "relationships",
+          28966
+        ]
+      ],
+      "relationships": 17078,
+      "summary": {
+        "changedDeclarations": 1738,
+        "complete": false,
+        "incompleteDeclarations": 9,
+        "relationshipChanges": 1780,
+        "unresolvedOccurrences": 53536
+      },
+      "coverageSummary": {
+        "discovery": {
+          "after": "complete",
+          "before": "complete"
+        },
+        "sides": {
+          "before": 378,
+          "after": 447
+        },
+        "extraction": {
+          "complete": 813,
+          "partial": 12
+        },
+        "relationships": {
+          "partial": 738,
+          "complete": 75,
+          "not-started": 12
+        },
+        "diagnostics": {
+          "configuration-unavailable": 1179,
+          "dynamic-target": 51745,
+          "unreliable-scope": 14,
+          "ambiguous-target": 588,
+          "unsupported-language": 12
+        }
+      }
+    },
+    {
+      "elapsedMs": 32760,
+      "firstUsableResultMs": 32688,
+      "implementationGroups": 350,
+      "label": "warm-analysis",
+      "nodes": 9375,
+      "phaseStarts": [
+        [
+          "discovery",
+          1
+        ],
+        [
+          "extraction",
+          210
+        ],
+        [
+          "matching",
+          25678
+        ],
+        [
+          "relationships",
+          27647
+        ]
+      ],
+      "relationships": 17078,
+      "summary": {
+        "changedDeclarations": 1738,
+        "complete": false,
+        "incompleteDeclarations": 9,
+        "relationshipChanges": 1780,
+        "unresolvedOccurrences": 53536
+      },
+      "coverageSummary": {
+        "discovery": {
+          "after": "complete",
+          "before": "complete"
+        },
+        "sides": {
+          "before": 378,
+          "after": 447
+        },
+        "extraction": {
+          "complete": 813,
+          "partial": 12
+        },
+        "relationships": {
+          "partial": 738,
+          "complete": 75,
+          "not-started": 12
+        },
+        "diagnostics": {
+          "configuration-unavailable": 1179,
+          "dynamic-target": 51745,
+          "unreliable-scope": 14,
+          "ambiguous-target": 588,
+          "unsupported-language": 12
+        }
+      }
+    }
+  ],
+  "measuredOn": "2026-09-08",
+  "environment": {
+    "hardware": "Mac14,2 / Apple M2",
+    "cpuCores": 8,
+    "memoryBytes": 8589934592,
+    "os": "macOS 26.6.2",
+    "architecture": "arm64",
+    "rust": "1.97.1 (8bab26f4f 2026-07-14)",
+    "profile": "debug test binary; already compiled; one test thread"
+  },
+  "measurementNotes": [
+    "cold-analysis is the first analysis in a new process, not a cold filesystem: independent Git blob counting had already read both revisions.",
+    "warm-analysis reuses parser rules and OS caches; no cached analysis result is used.",
+    "Per-run elapsed time excludes optional full-result JSON export. The first usable checkpoint arrives near completion; earlier progress events do not contain a usable graph.",
+    "Memory measurements cover both rounds, optional result export and cancellation in one already-compiled test process, excluding Cargo and compiler memory.",
+    "Both analysis rounds completed, but summary.complete is false because relation resolution and changed unsupported files retain explicit coverage gaps.",
+    "This is one pair of debug measurements on one machine, not a release-build latency guarantee."
+  ],
+  "presentation": {
+    "nodeBatchSize": 60,
+    "occurrenceBatchSize": 20,
+    "sampleNodes": 181,
+    "searchMatches": 180,
+    "visibleCounts": [
+      61,
+      121,
+      181
+    ],
+    "pendingCounts": [
+      120,
+      60,
+      0
+    ],
+    "searchActionAndObservationMs": 586,
+    "firstExpansionActionAndObservationMs": 2364,
+    "timingMeaning": "CUA action plus DOM observation; includes automation overhead, not isolated frontend rendering or real-result IPC timing."
+  },
+  "resourcePolicy": {
+    "gitBatchTargetBytes": 8388608,
+    "gitBatchMaxObjects": 512,
+    "gitOutputLimitBytes": 16777216,
+    "overflow": "Explicit resource-limit coverage; cannot infer absence or a deletion."
+  },
+  "scope": [
+    {
+      "revision": "da4f583089350b6fe8632fb83dcc9d7558e77286",
+      "languages": {
+        "TypeScript": {
+          "files": 152,
+          "bytes": 1902555,
+          "physicalLines": 46305
+        },
+        "JavaScript": {
+          "files": 46,
+          "bytes": 378997,
+          "physicalLines": 8720
+        },
+        "Rust": {
+          "files": 177,
+          "bytes": 1657098,
+          "physicalLines": 45394
+        }
+      },
+      "total": {
+        "files": 375,
+        "bytes": 3938650,
+        "physicalLines": 100419
+      },
+      "generatedManifestIncluded": {
+        "path": "src/lib/file-type-icon-manifest.ts",
+        "bytes": 934138,
+        "physicalLines": 25527
+      }
+    },
+    {
+      "revision": "92c124beef39872898b4f27845e956d66f08b1ce",
+      "languages": {
+        "TypeScript": {
+          "files": 179,
+          "bytes": 2135508,
+          "physicalLines": 49540
+        },
+        "JavaScript": {
+          "files": 46,
+          "bytes": 378997,
+          "physicalLines": 8720
+        },
+        "Rust": {
+          "files": 213,
+          "bytes": 2315485,
+          "physicalLines": 63152
+        }
+      },
+      "total": {
+        "files": 438,
+        "bytes": 4829990,
+        "physicalLines": 121412
+      },
+      "generatedManifestIncluded": {
+        "path": "src/lib/file-type-icon-manifest.ts",
+        "bytes": 934138,
+        "physicalLines": 25527
+      }
+    }
+  ],
+  "process": {
+    "wallSeconds": 74.99,
+    "userSeconds": 69.62,
+    "systemSeconds": 2.21,
+    "maximumResidentSetSizeBytes": 372490240,
+    "peakMemoryFootprintBytes": 557728776,
+    "swaps": 0,
+    "measurementTool": "macOS /usr/bin/time -l; already-compiled application test binary under repository lock"
+  },
+  "independentAudit": {
+    "sourceCoverage": {
+      "before": {
+        "gitFiles": 375,
+        "catalogFiles": 375,
+        "coverageFiles": 375,
+        "completeExtractions": 375,
+        "missingPaths": 0,
+        "extraPaths": 0
+      },
+      "after": {
+        "gitFiles": 438,
+        "catalogFiles": 438,
+        "coverageFiles": 438,
+        "completeExtractions": 438,
+        "missingPaths": 0,
+        "extraPaths": 0
+      }
+    },
+    "reviewLifecycle": {
+      "before": {
+        "implementationGroups": 4,
+        "callableMembers": 39,
+        "nativeKinds": {
+          "associated-function": 5,
+          "method": 34
+        },
+        "files": [
+          {
+            "path": "src-tauri/src/review/lifecycle/mod.rs",
+            "implementationStartLine": 233,
+            "implementationEndLine": 479,
+            "callableMembers": 15
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/presentation.rs",
+            "implementationStartLine": 9,
+            "implementationEndLine": 308,
+            "callableMembers": 10
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/refresh.rs",
+            "implementationStartLine": 4,
+            "implementationEndLine": 273,
+            "callableMembers": 9
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/workspace.rs",
+            "implementationStartLine": 3,
+            "implementationEndLine": 86,
+            "callableMembers": 5
+          }
+        ]
+      },
+      "after": {
+        "implementationGroups": 5,
+        "callableMembers": 44,
+        "nativeKinds": {
+          "associated-function": 5,
+          "method": 39
+        },
+        "files": [
+          {
+            "path": "src-tauri/src/review/lifecycle/mod.rs",
+            "implementationStartLine": 235,
+            "implementationEndLine": 490,
+            "callableMembers": 15
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/presentation.rs",
+            "implementationStartLine": 9,
+            "implementationEndLine": 307,
+            "callableMembers": 10
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/refresh.rs",
+            "implementationStartLine": 4,
+            "implementationEndLine": 273,
+            "callableMembers": 9
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/structure.rs",
+            "implementationStartLine": 28,
+            "implementationEndLine": 174,
+            "callableMembers": 5
+          },
+          {
+            "path": "src-tauri/src/review/lifecycle/workspace.rs",
+            "implementationStartLine": 3,
+            "implementationEndLine": 86,
+            "callableMembers": 5
+          }
+        ]
+      },
+      "memberOwnershipProblems": []
+    },
+    "branchName": {
+      "resolvedRetainedCallEdges": 10,
+      "occurrencesPerSide": 20,
+      "crossFileOccurrencesPerSide": 18
+    },
+    "toaster": {
+      "path": "src/components/ui/sonner.tsx",
+      "language": "typescript",
+      "category": "function",
+      "nativeName": "arrow-function"
+    }
+  }
+}
