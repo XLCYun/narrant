@@ -652,6 +652,155 @@ fn syntax_and_resource_gaps_preserve_unknown_facts_and_original_source() {
     ));
 }
 
+/// Narrant 的子模块通过 super::* 扩展同一类型，旧四组和新五组必须各自保留完整来源。
+#[test]
+fn rust_parent_glob_aggregates_lifecycle_implementations_across_snapshot_sides() {
+    let repository = repository();
+    let lifecycle_before = "mod presentation;\nmod refresh;\nmod workspace;\npub struct ReviewLifecycle;\nimpl ReviewLifecycle { pub fn new() -> Self { Self } }\n";
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"lifecycle-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("src/lib.rs", "mod lifecycle;\n"),
+        ("src/lifecycle/mod.rs", lifecycle_before),
+        (
+            "src/lifecycle/presentation.rs",
+            "use super::*;\nimpl ReviewLifecycle { pub fn present(&self) -> i32 { 1 } }\n",
+        ),
+        (
+            "src/lifecycle/refresh.rs",
+            "use super::*;\nimpl ReviewLifecycle { pub fn refresh(&self) -> i32 { 2 } }\n",
+        ),
+        (
+            "src/lifecycle/workspace.rs",
+            "use super::*;\nimpl ReviewLifecycle { pub fn workspace(&self) -> i32 { 3 } }\n",
+        ),
+    ] {
+        write(repository.path(), path, text);
+    }
+    let before = commit(repository.path(), "four lifecycle implementations");
+    write(
+        repository.path(),
+        "src/lifecycle/mod.rs",
+        &format!("{lifecycle_before}mod structure;\n"),
+    );
+    write(
+        repository.path(),
+        "src/lifecycle/structure.rs",
+        "use super::*;\nimpl ReviewLifecycle { pub fn analyze(&self) -> i32 { 4 } }\n",
+    );
+    let after = commit(repository.path(), "fifth lifecycle implementation");
+    let reader = reader(repository.path(), &before, &after);
+    let result = analyze_structure(
+        &reader,
+        &OperationContext::background(),
+        "lifecycle-review",
+        "lifecycle-snapshot",
+        || true,
+        |_| {},
+    )
+    .unwrap();
+    let named = |name: &str| {
+        result.nodes.iter().find_map(|node| match node {
+            StructureNode::Declaration(node)
+                if matches!(&node.after, StructureFact::Present { value } if value.name == name && value.native_kind.category != StructureCategory::Module) => Some(node),
+            _ => None,
+        }).unwrap()
+    };
+    let owner = named("ReviewLifecycle");
+    // 新增impl头可标记聚合类型变化，类型声明本身的原生签名仍然相同。
+    let (
+        StructureFact::Present {
+            value: owner_before,
+        },
+        StructureFact::Present { value: owner_after },
+    ) = (&owner.before, &owner.after)
+    else {
+        panic!("ReviewLifecycle declaration must remain present on both sides")
+    };
+    assert_eq!(owner_before.signature, owner_after.signature);
+    for (side, expected_count) in [(StructureSide::Before, 4), (StructureSide::After, 5)] {
+        let groups: Vec<_> = result
+            .implementation_groups
+            .iter()
+            .filter_map(|group| {
+                let fact = if side == StructureSide::Before {
+                    &group.before
+                } else {
+                    &group.after
+                };
+                match fact {
+                    StructureFact::Present { value } if value.owner_id == owner.id => {
+                        Some((group, value))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            groups.len(),
+            expected_count,
+            "{side:?} must aggregate every known impl"
+        );
+        let source_ids: std::collections::HashSet<_> = groups
+            .iter()
+            .map(|(_, value)| &value.locations[0].source_id)
+            .collect();
+        assert_eq!(
+            source_ids.len(),
+            expected_count,
+            "impl sources must stay distinct"
+        );
+        for (name, path) in [
+            ("new", "src/lifecycle/mod.rs"),
+            ("present", "src/lifecycle/presentation.rs"),
+            ("refresh", "src/lifecycle/refresh.rs"),
+            ("workspace", "src/lifecycle/workspace.rs"),
+            ("analyze", "src/lifecycle/structure.rs"),
+        ] {
+            let node = named(name);
+            let fact = if side == StructureSide::Before {
+                &node.before
+            } else {
+                &node.after
+            };
+            if name == "analyze" && side == StructureSide::Before {
+                assert!(matches!(fact, StructureFact::Absent));
+                continue;
+            }
+            let StructureFact::Present { value: member } = fact else {
+                panic!("{name} must retain its native member identity on {side:?}")
+            };
+            assert_eq!(member.parent_id, owner.id);
+            let (group, implementation) = groups
+                .iter()
+                .find(|(group, _)| member.implementation_group_id.as_ref() == Some(&group.id))
+                .expect("each member must retain its own implementation group");
+            assert_eq!(
+                member.locations[0].source_id,
+                implementation.locations[0].source_id
+            );
+            assert_eq!(member.locations[0].side, side);
+            let source = result
+                .sources
+                .iter()
+                .find(|source| source.id == member.locations[0].source_id)
+                .unwrap();
+            let source_side = if side == StructureSide::Before {
+                &source.before
+            } else {
+                &source.after
+            };
+            assert!(
+                matches!(source_side, StructureSourceSide::Present { path: actual, .. } if actual == path),
+                "{:?} must point at {path}",
+                group.id
+            );
+        }
+    }
+}
+
 /// 用显式固定 revisions 测量真实仓库；默认测试不读取开发者当前 checkout 或产生性能承诺。
 #[test]
 #[ignore = "仅在最终 Narrant 验收时提供固定仓库、revisions 和输出路径后运行"]

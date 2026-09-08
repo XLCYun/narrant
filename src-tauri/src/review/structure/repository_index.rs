@@ -44,6 +44,7 @@ pub(crate) struct RepositoryIndex<'a> {
     configs: Vec<TsConfig>,
     rust_modules: HashMap<(String, String), Vec<String>>,
     rust_locations: HashMap<String, Vec<(String, String)>>,
+    rust_module_declarations: HashMap<(String, String), Vec<DeclarationKey>>,
     rust_no_prelude: HashSet<String>,
     impl_members: HashMap<DeclarationKey, HashMap<String, Vec<DeclarationKey>>>,
     trait_members: HashSet<DeclarationKey>,
@@ -62,6 +63,7 @@ impl<'a> RepositoryIndex<'a> {
             configs: Vec::new(),
             rust_modules: HashMap::new(),
             rust_locations: HashMap::new(),
+            rust_module_declarations: HashMap::new(),
             rust_no_prelude: HashSet::new(),
             impl_members: HashMap::new(),
             trait_members: HashSet::new(),
@@ -143,6 +145,7 @@ impl<'a> RepositoryIndex<'a> {
             .configs
             .sort_by_key(|config| std::cmp::Reverse(config.directory.len()));
         index.build_rust_modules(config);
+        index.index_rust_module_declarations();
         for file in files {
             for (group_index, group) in file.impl_groups.iter().enumerate() {
                 if !group.reliable {
@@ -593,60 +596,78 @@ impl<'a> RepositoryIndex<'a> {
     ) -> BindingResolution {
         let path = file.path.as_str();
         let (head, tail) = split_head(name);
-        if let Some(bindings) = self.nearest_bindings(path, scope, head, offset) {
-            let mut keys = Vec::new();
-            let mut imports = Vec::new();
-            for binding in bindings {
-                if let Some(index) = binding.declaration {
-                    if file
-                        .declarations
-                        .get(index)
-                        .is_some_and(|item| item.reliable)
-                    {
-                        keys.push((file.path.clone(), index));
-                    } else {
-                        return BindingResolution::Unknown(
-                            StructureDiagnosticReason::UnreliableScope,
-                        );
-                    }
-                } else if binding.kind == ExtractedBindingKind::Import {
-                    imports.extend(
-                        file.imports
-                            .iter()
-                            .filter(|import| import.scope == binding.scope && import.local == head),
-                    );
-                } else {
-                    return unknown();
-                }
-            }
-            if !keys.is_empty() {
-                let binding = collapse(keys);
-                return tail.map_or(binding.clone(), |tail| self.resolve_members(binding, tail));
-            }
-            if !imports.is_empty() {
-                return self.resolve_imports(file, imports, tail, visited);
-            }
-        }
         let mut current = Some(scope);
-        while let Some(scope) = current {
-            let Some(context) = file.scopes.get(scope) else {
+        while let Some(current_scope) = current {
+            let Some(context) = file.scopes.get(current_scope) else {
                 return BindingResolution::Unknown(StructureDiagnosticReason::UnreliableScope);
             };
             if !context.reliable {
                 return BindingResolution::Unknown(StructureDiagnosticReason::UnreliableScope);
+            }
+            // 逐层处理显式绑定与glob，内层glob不能被外层同名声明抢先截获。
+            if let Some(bindings) = self
+                .nearest_bindings(path, current_scope, head, offset)
+                .filter(|bindings| {
+                    bindings
+                        .first()
+                        .is_some_and(|binding| binding.scope == current_scope)
+                })
+            {
+                let mut keys = Vec::new();
+                let mut imports = Vec::new();
+                for binding in bindings {
+                    if let Some(index) = binding.declaration {
+                        if file
+                            .declarations
+                            .get(index)
+                            .is_some_and(|item| item.reliable)
+                        {
+                            keys.push((file.path.clone(), index));
+                        } else {
+                            return BindingResolution::Unknown(
+                                StructureDiagnosticReason::UnreliableScope,
+                            );
+                        }
+                    } else if binding.kind == ExtractedBindingKind::Import {
+                        imports.extend(file.imports.iter().filter(|import| {
+                            import.scope == binding.scope && import.local == head
+                        }));
+                    } else {
+                        return unknown();
+                    }
+                }
+                if !keys.is_empty() {
+                    let binding = collapse(keys);
+                    return tail
+                        .map_or(binding.clone(), |tail| self.resolve_members(binding, tail));
+                }
+                if !imports.is_empty() {
+                    return self.resolve_imports(file, imports, tail, visited);
+                }
             }
             let imports: Vec<_> = file
                 .imports
                 .iter()
                 .filter(|import| {
                     !import.reexport
-                        && import.scope == scope
+                        && import.scope == current_scope
                         && import.local == head
                         && import.local != "*"
                 })
                 .collect();
             if !imports.is_empty() {
                 return self.resolve_imports(file, imports, tail, visited);
+            }
+            if path.ends_with(".rs") && !matches!(head, "crate" | "self" | "super") {
+                let globs = file
+                    .imports
+                    .iter()
+                    .filter(|import| import.scope == current_scope && import.imported == "*")
+                    .collect();
+                if let Some(binding) = self.rust_globs(file, globs, head, path, scope, visited) {
+                    return tail
+                        .map_or(binding.clone(), |tail| self.resolve_members(binding, tail));
+                }
             }
             current = context.parent;
         }
@@ -665,6 +686,204 @@ impl<'a> RepositoryIndex<'a> {
             return self.rust_symbol(path, scope, name, visited);
         }
         unknown()
+    }
+
+    /// glob仅枚举已连入同侧模块图的作用域；未知分支与已证明不存在分别保留。
+    fn rust_globs(
+        &self,
+        file: &ExtractedFile,
+        imports: Vec<&ExtractedImport>,
+        name: &str,
+        requester_path: &str,
+        requester_scope: usize,
+        visited: &mut HashSet<String>,
+    ) -> Option<BindingResolution> {
+        let mut results = Vec::new();
+        for import in imports {
+            match self.rust_module(&file.path, import.scope, &import.module) {
+                ModuleResolution::Files(paths) => {
+                    let (root, parts) =
+                        self.rust_module_coordinates(&file.path, import.scope, &import.module);
+                    if !self.rust_module_path_visible(
+                        &root,
+                        &parts,
+                        requester_path,
+                        requester_scope,
+                    ) {
+                        results.push(unknown());
+                        continue;
+                    }
+                    for path in paths {
+                        let (target_root, physical) = self.file_module(&path);
+                        if target_root != root {
+                            results.push(unknown());
+                            continue;
+                        }
+                        let physical_count =
+                            physical.split("::").filter(|part| !part.is_empty()).count();
+                        let Some(suffix) = parts.get(physical_count..) else {
+                            results.push(unknown());
+                            continue;
+                        };
+                        let parent = if suffix.is_empty() {
+                            None
+                        } else {
+                            self.find_inline_module(&path, suffix)
+                        };
+                        if !suffix.is_empty() && parent.is_none() {
+                            results.push(unknown());
+                            continue;
+                        }
+                        if let Some(found) = self.rust_glob_symbol(
+                            &path,
+                            parent,
+                            name,
+                            requester_path,
+                            requester_scope,
+                            visited,
+                        ) {
+                            results.push(found);
+                        }
+                    }
+                }
+                // 外部包的具体导出不在本侧源码中，不能把任意名称当成它的成员。
+                ModuleResolution::External(_) => results.push(unknown()),
+                ModuleResolution::Unknown(reason) => {
+                    results.push(BindingResolution::Unknown(reason))
+                }
+            }
+        }
+        (!results.is_empty()).then(|| combine(results))
+    }
+
+    /// 统一逻辑模块坐标，显式path属性只改变物理位置，不改变super层级。
+    fn rust_module_coordinates(
+        &self,
+        path: &str,
+        scope: usize,
+        written: &str,
+    ) -> (String, Vec<String>) {
+        let (root, mut context) = self.rust_context(path, scope);
+        let mut parts: Vec<String> = written
+            .split("::")
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if parts.first().is_some_and(|part| part == "crate") {
+            context.clear();
+            parts.remove(0);
+        } else if parts.first().is_some_and(|part| part == "self") {
+            parts.remove(0);
+        } else {
+            while parts.first().is_some_and(|part| part == "super") {
+                context.pop();
+                parts.remove(0);
+            }
+        }
+        context.extend(parts);
+        (root, context)
+    }
+
+    /// 查找模块可见导出；返回None仅表示该完整模块已证明没有这个名称。
+    fn rust_glob_symbol(
+        &self,
+        path: &str,
+        parent: Option<usize>,
+        name: &str,
+        requester_path: &str,
+        requester_scope: usize,
+        visited: &mut HashSet<String>,
+    ) -> Option<BindingResolution> {
+        let file = self.files[path];
+        let scope = match parent {
+            None => 0,
+            Some(parent) => match file
+                .scopes
+                .iter()
+                .position(|scope| scope.declaration == Some(parent))
+            {
+                Some(scope) => scope,
+                None => return Some(unknown()),
+            },
+        };
+        let visit = format!("glob:{path}:{scope}:{name}:{requester_path}:{requester_scope}");
+        if !visited.insert(visit.clone()) {
+            return Some(unknown());
+        }
+        let (target_root, target_parts) = self.rust_context(path, scope);
+        let (requester_root, requester_parts) = self.rust_context(requester_path, requester_scope);
+        let descendant =
+            target_root == requester_root && requester_parts.starts_with(&target_parts);
+        let mut results = Vec::new();
+        let mut direct_name = false;
+        for (index, declaration) in
+            file.declarations
+                .iter()
+                .enumerate()
+                .filter(|(_, declaration)| {
+                    declaration.parent == parent
+                        && declaration.name == name
+                        && declaration.impl_group.is_none()
+                })
+        {
+            direct_name = true;
+            if !declaration.reliable {
+                results.push(unknown());
+            } else {
+                let visible = if declaration.exported {
+                    rust_visibility(
+                        &declaration.signature,
+                        &target_root,
+                        &target_parts,
+                        &requester_root,
+                        &requester_parts,
+                    )
+                } else {
+                    Some(descendant)
+                };
+                match visible {
+                    Some(true) => results.push(BindingResolution::Local((path.to_owned(), index))),
+                    Some(false) => {}
+                    None => results.push(unknown()),
+                }
+            }
+        }
+        // 私有同名声明也会遮蔽pub glob，不能因为它对请求者不可见就寻找另一个目标。
+        if !direct_name {
+            let imports: Vec<_> = file
+                .imports
+                .iter()
+                .filter(|import| import.scope == scope && import.local == name)
+                .collect();
+            if !imports.is_empty() {
+                if descendant {
+                    results.push(self.resolve_imports(file, imports, None, visited));
+                } else if imports.iter().any(|import| import.reexport) {
+                    // reexport布尔值未区分pub与pub(in ...)，跨域时不据此宣称可见。
+                    results.push(unknown());
+                }
+            } else {
+                let globs: Vec<_> = file
+                    .imports
+                    .iter()
+                    .filter(|import| import.scope == scope && import.imported == "*")
+                    .collect();
+                if descendant {
+                    if let Some(found) =
+                        self.rust_globs(file, globs, name, requester_path, requester_scope, visited)
+                    {
+                        results.push(found);
+                    }
+                } else if globs.iter().any(|import| import.reexport) {
+                    results.push(unknown());
+                }
+            }
+        }
+        if !file.complete || !file.scopes.get(scope).is_some_and(|scope| scope.reliable) {
+            results.push(unknown());
+        }
+        visited.remove(&visit);
+        (!results.is_empty()).then(|| combine(results))
     }
 
     /// 隐式 prelude 只作为最后兜底；glob 或任何已知禁用域都不提供唯一性证明。
@@ -1058,6 +1277,98 @@ impl<'a> RepositoryIndex<'a> {
         }
     }
 
+    /// 每条逻辑mod边记录原声明，inline与外部文件统一用于逐段可见性检查。
+    fn index_rust_module_declarations(&mut self) {
+        let mut declarations: HashMap<(String, String), Vec<DeclarationKey>> = HashMap::new();
+        for file in self.files.values() {
+            let Some([location]) = self.rust_locations.get(&file.path).map(Vec::as_slice) else {
+                continue;
+            };
+            for (index, declaration) in
+                file.declarations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, declaration)| {
+                        declaration.native_kind.category == StructureCategory::Module
+                    })
+            {
+                let mut names = vec![declaration.name.clone()];
+                let mut current = declaration.parent;
+                let mut valid = true;
+                let mut visited = HashSet::new();
+                while let Some(parent) = current {
+                    if !visited.insert(parent) {
+                        valid = false;
+                        break;
+                    }
+                    let ancestor = &file.declarations[parent];
+                    if ancestor.native_kind.category != StructureCategory::Module {
+                        valid = false;
+                        break;
+                    }
+                    names.push(ancestor.name.clone());
+                    current = ancestor.parent;
+                }
+                if !valid {
+                    continue;
+                }
+                names.reverse();
+                let logical = if location.1.is_empty() {
+                    names.join("::")
+                } else {
+                    format!("{}::{}", location.1, names.join("::"))
+                };
+                declarations
+                    .entry((location.0.clone(), logical))
+                    .or_default()
+                    .push((file.path.clone(), index));
+            }
+        }
+        self.rust_module_declarations = declarations;
+    }
+
+    /// 公开叶声明也不能穿过私有中间mod；每一段必须有唯一可靠的可见性证据。
+    fn rust_module_path_visible(
+        &self,
+        root: &str,
+        parts: &[String],
+        requester_path: &str,
+        requester_scope: usize,
+    ) -> bool {
+        let (requester_root, requester_parts) = self.rust_context(requester_path, requester_scope);
+        if root != requester_root {
+            return false;
+        }
+        for depth in 0..parts.len() {
+            let key = (root.to_owned(), parts[..=depth].join("::"));
+            let Some([key]) = self.rust_module_declarations.get(&key).map(Vec::as_slice) else {
+                return false;
+            };
+            let declaration = &self.files[&key.0].declarations[key.1];
+            if !declaration.reliable
+                || matches!(declaration.module_path, Some(ExtractedModulePath::Unknown))
+            {
+                return false;
+            }
+            let parent_parts = &parts[..depth];
+            let visible = if declaration.exported {
+                rust_visibility(
+                    &declaration.signature,
+                    root,
+                    parent_parts,
+                    &requester_root,
+                    &requester_parts,
+                )
+            } else {
+                Some(requester_parts.starts_with(parent_parts))
+            };
+            if visible != Some(true) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Rust 模块坐标由同侧文件及 inline mod 祖先组成，crate/self/super 不跨 crate。
     fn rust_context(&self, path: &str, scope: usize) -> (String, Vec<String>) {
         let (root, module) = self.file_module(path);
@@ -1313,6 +1624,44 @@ impl<'a> RepositoryIndex<'a> {
             }
         }
     }
+}
+
+/// 只读取声明头的pub修饰，空白及括号合法变体不改变受限可见性范围。
+fn rust_visibility(
+    signature: &str,
+    target_root: &str,
+    target_parts: &[String],
+    requester_root: &str,
+    requester_parts: &[String],
+) -> Option<bool> {
+    let suffix = signature.trim_start().strip_prefix("pub")?;
+    if !suffix.starts_with(|character: char| character.is_whitespace() || character == '(') {
+        return None;
+    }
+    let suffix = suffix.trim_start();
+    // 注释可位于pub与括号之间；未解码的前缀不能被误当成无限制pub。
+    if suffix.starts_with('/') {
+        return None;
+    }
+    if !suffix.starts_with('(') {
+        return Some(true);
+    }
+    let restriction = suffix.strip_prefix('(')?.split_once(')')?.0;
+    let tokens: Vec<_> = restriction.split_whitespace().collect();
+    let domain = match tokens.as_slice() {
+        ["crate"] => Vec::new(),
+        ["self"] => target_parts.to_vec(),
+        ["super"] if !target_parts.is_empty() => target_parts[..target_parts.len() - 1].to_vec(),
+        ["in", path] if *path == "crate" || path.starts_with("crate::") => {
+            path.split("::").skip(1).map(str::to_owned).collect()
+        }
+        _ => return None,
+    };
+    Some(
+        target_root == requester_root
+            && target_parts.starts_with(&domain)
+            && requester_parts.starts_with(&domain),
+    )
 }
 
 /// 从真实作用域找词法this所属类与static空间，缺少成员上下文时保守覆盖两种空间。

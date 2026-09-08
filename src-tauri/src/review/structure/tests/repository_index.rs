@@ -490,10 +490,17 @@ fn custom_trait_and_disabled_or_shadowed_prelude_are_respected() {
         "src/lib.rs",
         "mod custom { pub trait Default {} } use custom::*; struct Item; impl Default for Item {}",
     )];
-    assert!(matches!(
+    assert_eq!(
         RepositoryIndex::new(&glob, &HashMap::new()).resolve_type("src/lib.rs", 0, "Default"),
-        BindingResolution::Unknown(_)
-    ));
+        BindingResolution::Local((
+            "src/lib.rs".into(),
+            glob[0]
+                .declarations
+                .iter()
+                .position(|item| item.name == "Default")
+                .unwrap()
+        ))
+    );
 }
 
 /// 未证明trait可见性时保留成员候选；明确的固有方法优先于同名trait成员。
@@ -737,4 +744,356 @@ fn declared_loop_target_does_not_rebind_outer_function() {
         ),
         BindingResolution::Local(("src/main.ts".into(), 0))
     );
+}
+
+/// 真实父模块glob为分散在子文件的impl提供同一类型与trait身份。
+#[test]
+fn rust_parent_glob_resolves_cross_file_implementation_owners() {
+    let files = vec![
+        source("src/lib.rs", "mod lifecycle; mod other { pub trait Known {} }"),
+        source("src/lifecycle/mod.rs", "struct ReviewLifecycle; trait Known {} mod presentation; mod refresh; mod workspace; mod structure;"),
+        source("src/lifecycle/presentation.rs", "use super::*; impl ReviewLifecycle { fn present(&self) {} } impl Known for ReviewLifecycle {}"),
+        source("src/lifecycle/refresh.rs", "use super::*; impl ReviewLifecycle { fn refresh(&self) {} }"),
+        source("src/lifecycle/workspace.rs", "use super::*; impl ReviewLifecycle { fn workspace(&self) {} }"),
+        source("src/lifecycle/structure.rs", "use super::*; impl ReviewLifecycle { fn structure(&self) {} }"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    let owner = BindingResolution::Local(("src/lifecycle/mod.rs".into(), 0));
+    let known = BindingResolution::Local(("src/lifecycle/mod.rs".into(), 1));
+    for file in &files[2..] {
+        assert_eq!(index.resolve_type(&file.path, 0, "ReviewLifecycle"), owner);
+        assert_eq!(index.resolve_type(&file.path, 0, "Known"), known);
+        let other_trait = index.resolve_type(&file.path, 0, "crate::other::Known");
+        assert!(matches!(other_trait, BindingResolution::Local(_)));
+        assert_ne!(other_trait, known);
+        let member = &file.declarations[0];
+        assert_eq!(
+            index.resolve_member(owner.clone(), &member.name),
+            BindingResolution::Local((file.path.clone(), 0))
+        );
+    }
+}
+
+/// 两个glob提供同名声明时必须保留冲突，不能按扫描顺序选第一个。
+#[test]
+fn rust_conflicting_globs_do_not_prove_unique_binding() {
+    let files = vec![source(
+        "src/lib.rs",
+        "mod a { pub struct Item; } mod b { pub struct Item; } use a::*; use b::*;",
+    )];
+    assert!(matches!(
+        RepositoryIndex::new(&files, &HashMap::new()).resolve_type("src/lib.rs", 0, "Item"),
+        BindingResolution::Candidates(_) | BindingResolution::Unknown(_)
+    ));
+}
+
+/// 显式导入与本地声明均优先于glob提供的同名声明。
+#[test]
+fn rust_explicit_bindings_shadow_glob_candidates() {
+    let files = vec![
+        source(
+            "src/lib.rs",
+            "mod a { pub struct Item; } mod b { pub struct Item; } mod explicit; mod local;",
+        ),
+        source("src/explicit.rs", "use crate::a::*; use crate::b::Item;"),
+        source("src/local.rs", "use crate::a::*; struct Item;"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    assert_eq!(
+        index.resolve_type("src/explicit.rs", 0, "Item"),
+        index.resolve_type("src/lib.rs", 0, "b::Item")
+    );
+    assert!(matches!(
+        index.resolve_type("src/explicit.rs", 0, "Item"),
+        BindingResolution::Local(_)
+    ));
+    assert_eq!(
+        index.resolve_type("src/local.rs", 0, "Item"),
+        BindingResolution::Local(("src/local.rs".into(), 0))
+    );
+}
+
+/// 未连入真实模块图、循环或部分未知glob都不能提供唯一性证明。
+#[test]
+fn rust_unlinked_cyclic_and_incomplete_globs_remain_unknown() {
+    let files = vec![
+        source(
+            "src/lib.rs",
+            "struct Item; mod a; mod b; mod known { pub struct Item; } mod partial;",
+        ),
+        source("src/a.rs", "pub use super::b::*;"),
+        source("src/b.rs", "pub use super::a::*;"),
+        source("src/orphan.rs", "use super::*;"),
+        source("src/partial.rs", "use super::known::*; use missing::*;"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    for path in ["src/a.rs", "src/b.rs", "src/orphan.rs", "src/partial.rs"] {
+        assert!(
+            matches!(
+                index.resolve_type(path, 0, "Item"),
+                BindingResolution::Unknown(_) | BindingResolution::Candidates(_)
+            ),
+            "{path}"
+        );
+    }
+}
+
+/// 同级模块的私有声明不属于glob可见集合，不能误连同名类型。
+#[test]
+fn rust_sibling_private_declarations_are_not_glob_exports() {
+    let files = vec![
+        source("src/lib.rs", "mod secret; mod consumer;"),
+        source("src/secret.rs", "struct Private; pub struct Public;"),
+        source("src/consumer.rs", "use super::secret::*;"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    assert!(matches!(
+        index.resolve_type("src/consumer.rs", 0, "Private"),
+        BindingResolution::Unknown(_)
+    ));
+    assert_eq!(
+        index.resolve_type("src/consumer.rs", 0, "Public"),
+        BindingResolution::Local(("src/secret.rs".into(), 1))
+    );
+}
+
+/// 多条glob路径指向同一原始声明时去重，已知不含该名称的模块不会制造未知。
+#[test]
+fn rust_globs_deduplicate_same_target_and_proven_absence() {
+    let files = vec![
+        source(
+            "src/lib.rs",
+            "mod model; mod left; mod right; mod empty; mod consumer;",
+        ),
+        source("src/model.rs", "pub struct Item;"),
+        source("src/left.rs", "pub use super::model::Item;"),
+        source("src/right.rs", "pub use super::model::Item;"),
+        source("src/empty.rs", "pub struct Other;"),
+        source(
+            "src/consumer.rs",
+            "use super::model::*; use crate::model::*; use super::empty::*;",
+        ),
+    ];
+    assert_eq!(
+        RepositoryIndex::new(&files, &HashMap::new()).resolve_type("src/consumer.rs", 0, "Item"),
+        BindingResolution::Local(("src/model.rs".into(), 0))
+    );
+}
+
+/// 内层glob先于外层显式导入，但内层顺序let生效后仍遮蔽它。
+#[test]
+fn rust_inner_glob_precedes_outer_import_until_local_binding() {
+    let files = vec![source("src/lib.rs", "mod outer { pub fn work() {} } mod inner { pub fn work() {} } use outer::work; fn run() { use crate::inner::*; work(); let work = 1; work(); }")];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    let inner_work = files[0]
+        .declarations
+        .iter()
+        .position(|item| item.qualified_name == "inner::work")
+        .unwrap();
+    let calls: Vec<_> = files[0]
+        .occurrences
+        .iter()
+        .filter(|item| {
+            item.kind == StructureRelationshipKind::Calls && item.written_target == "work"
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        index.resolve_occurrence(
+            "src/lib.rs",
+            calls[0].scope,
+            "work",
+            calls[0].range.bytes.start,
+            calls[0].kind
+        ),
+        BindingResolution::Local(("src/lib.rs".into(), inner_work))
+    );
+    assert!(matches!(
+        index.resolve_occurrence(
+            "src/lib.rs",
+            calls[1].scope,
+            "work",
+            calls[1].range.bytes.start,
+            calls[1].kind
+        ),
+        BindingResolution::Unknown(_)
+    ));
+}
+
+/// glob沿path属性的逻辑父模块，不把物理目录或另一个crate根混入绑定。
+#[test]
+fn rust_parent_glob_uses_path_attribute_and_separate_crate_roots() {
+    let files = vec![
+        source(
+            "src/lib.rs",
+            "struct Item; #[path=\"tests/helpers.rs\"] mod helpers;",
+        ),
+        source("src/tests/helpers.rs", "use super::*;"),
+        source(
+            "src/main.rs",
+            "struct Item; #[path=\"bin_child.rs\"] mod child;",
+        ),
+        source("src/bin_child.rs", "use super::*;"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    assert_eq!(
+        index.resolve_type("src/tests/helpers.rs", 0, "Item"),
+        BindingResolution::Local(("src/lib.rs".into(), 0))
+    );
+    assert_eq!(
+        index.resolve_type("src/bin_child.rs", 0, "Item"),
+        BindingResolution::Local(("src/main.rs".into(), 0))
+    );
+}
+
+/// 外部glob或条件路径未知时不能凭名称猜导出，也不能回退成prelude。
+#[test]
+fn rust_external_and_conditional_globs_do_not_invent_prelude_targets() {
+    let files = vec![
+        source(
+            "src/lib.rs",
+            "#[cfg_attr(feature=\"alternate\", path=\"alternate.rs\")] mod child; mod external;",
+        ),
+        source("src/child.rs", "use super::*;"),
+        source("src/external.rs", "use std::anything::*;"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    for path in ["src/child.rs", "src/external.rs"] {
+        assert!(matches!(
+            index.resolve_type(path, 0, "Default"),
+            BindingResolution::Unknown(_)
+        ));
+    }
+}
+
+/// pub与括号之间的空白不改变crate/super/self可见性，也不扩大私有域。
+#[test]
+fn rust_glob_respects_spaced_restricted_visibility() {
+    let files = vec![
+        source("src/lib.rs", "mod owner { pub mod secret { pub (super) struct ParentOnly; pub (crate) struct Shared; pub (self) struct Hidden; } } mod consumer;"),
+        source("src/consumer.rs", "use crate::owner::secret::*;"),
+    ];
+    let index = RepositoryIndex::new(&files, &HashMap::new());
+    for name in ["ParentOnly", "Hidden"] {
+        assert!(matches!(
+            index.resolve_type("src/consumer.rs", 0, name),
+            BindingResolution::Unknown(_)
+        ));
+    }
+    let shared = files[0]
+        .declarations
+        .iter()
+        .position(|item| item.name == "Shared")
+        .unwrap();
+    assert_eq!(
+        index.resolve_type("src/consumer.rs", 0, "Shared"),
+        BindingResolution::Local(("src/lib.rs".into(), shared))
+    );
+}
+
+/// 隐藏同名声明会遮蔽公开glob导出，不能跳过它选中被遮蔽目标。
+#[test]
+fn rust_private_direct_name_blocks_public_glob_fallback() {
+    let files = vec![
+        source("src/lib.rs", "mod original { pub struct Item; } mod hidden { struct Item; pub use crate::original::*; } mod consumer;"),
+        source("src/consumer.rs", "use crate::hidden::*;"),
+    ];
+    assert!(matches!(
+        RepositoryIndex::new(&files, &HashMap::new()).resolve_type("src/consumer.rs", 0, "Item"),
+        BindingResolution::Unknown(_)
+    ));
+}
+
+/// 重导出的pub范围尚未成为owned证据，非后代不能把受限重导出当公开导出。
+#[test]
+fn rust_restricted_reexport_is_unknown_across_glob_boundary() {
+    for declaration in [
+        "pub (self) use crate::original::Item;",
+        "pub (self) use crate::original::*;",
+    ] {
+        let files = vec![
+            source("src/lib.rs", &format!("mod original {{ pub struct Item; }} mod hidden {{ {declaration} }} mod consumer;")),
+            source("src/consumer.rs", "use crate::hidden::*;"),
+        ];
+        assert!(matches!(
+            RepositoryIndex::new(&files, &HashMap::new()).resolve_type(
+                "src/consumer.rs",
+                0,
+                "Item"
+            ),
+            BindingResolution::Unknown(_)
+        ));
+    }
+}
+
+/// 公开类型不能跨越不可见的中间私有模块，inline及外部mod路径都检查声明边。
+#[test]
+fn rust_glob_rejects_invisible_intermediate_module_paths() {
+    let inline = vec![source("src/lib.rs", "mod owner { mod hidden { pub struct Item; } } mod consumer { use crate::owner::hidden::*; impl Item {} }")];
+    let index = RepositoryIndex::new(&inline, &HashMap::new());
+    let group = &inline[0].impl_groups[0];
+    assert!(matches!(
+        index.resolve_type("src/lib.rs", group.scope, "Item"),
+        BindingResolution::Unknown(_)
+    ));
+    let external = vec![
+        source("src/lib.rs", "mod owner; mod consumer;"),
+        source("src/owner.rs", "mod hidden;"),
+        source("src/owner/hidden.rs", "pub struct Item;"),
+        source("src/consumer.rs", "use crate::owner::hidden::*;"),
+    ];
+    assert!(matches!(
+        RepositoryIndex::new(&external, &HashMap::new()).resolve_type("src/consumer.rs", 0, "Item"),
+        BindingResolution::Unknown(_)
+    ));
+}
+
+/// 中间模块公开或对crate可见时仍可解析，私有路径对其所属模块后代仍有效。
+#[test]
+fn rust_glob_allows_proven_module_visibility_and_private_descendants() {
+    for visibility in ["pub", "pub (crate)"] {
+        let files = vec![
+            source(
+                "src/lib.rs",
+                &format!(
+                    "mod owner {{ {visibility} mod shared {{ pub struct Item; }} }} mod consumer;"
+                ),
+            ),
+            source("src/consumer.rs", "use crate::owner::shared::*;"),
+        ];
+        assert!(matches!(
+            RepositoryIndex::new(&files, &HashMap::new()).resolve_type(
+                "src/consumer.rs",
+                0,
+                "Item"
+            ),
+            BindingResolution::Local(_)
+        ));
+    }
+    let files = vec![source("src/lib.rs", "mod owner { mod hidden { pub struct Item; } mod consumer { use super::hidden::*; impl Item {} } }")];
+    let group = &files[0].impl_groups[0];
+    assert!(matches!(
+        RepositoryIndex::new(&files, &HashMap::new()).resolve_type(
+            "src/lib.rs",
+            group.scope,
+            "Item"
+        ),
+        BindingResolution::Local(_)
+    ));
+}
+
+/// pub和受限括号之间含注释时，未解码可见性应为未知而不能误当公开。
+#[test]
+fn rust_commented_visibility_prefix_does_not_become_public() {
+    let files = vec![
+        source(
+            "src/lib.rs",
+            "mod owner { pub mod secret { pub /* scope */ (super) struct Item; } } mod consumer;",
+        ),
+        source("src/consumer.rs", "use crate::owner::secret::*;"),
+    ];
+    assert!(matches!(
+        RepositoryIndex::new(&files, &HashMap::new()).resolve_type("src/consumer.rs", 0, "Item"),
+        BindingResolution::Unknown(_)
+    ));
 }
