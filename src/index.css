@@ -12,6 +12,11 @@ body { margin: 0; background: Canvas; color: CanvasText; }
 .narrant-app > header { display: flex; align-items: baseline; gap: 1rem; }
 [aria-label="File Change"] { display: flex; }
 
+/* Monaco 单栏把新增行左侧的空行号占位区标成 gutter-delete；仅纠正该占位区，保留真实删除行的红色。 */
+.monaco-diff-editor:not(.side-by-side) .editor.original .gutter-delete[monaco-view-zone] {
+  background-color: var(--vscode-diffEditorGutter-insertedLineBackground, var(--vscode-diffEditor-insertedLineBackground));
+}
+
 /* 只在 Babysit zone 存在时把该命中层抬到 view-lines 上方；空白区域仍由 Monaco 接收选择。 */
 .monaco-editor .view-zones:has([data-babysit-zone]) {
   z-index: 10 !important;
