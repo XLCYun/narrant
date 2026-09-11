@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 .worktrees/
+.tools/
 public/file-type-icons/
 dist/
 src-tauri/target/

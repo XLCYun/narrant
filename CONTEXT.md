@@ -68,6 +68,11 @@ scope, type, callable, data declaration, or execution region. Its specific form 
 on the language.
 _Avoid_: AST node, line change
 
+**Code Object Content**:
+The declaration and implementation content directly owned by a **Code Object**,
+excluding the content of its separately represented child Code Objects.
+_Avoid_: Entire subtree source, full-file content
+
 **Code Graph**:
 A representation of **Code Objects** and their relationships within a selected file
 scope at one fixed side of a **Change Comparison**.

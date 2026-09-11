@@ -39,12 +39,13 @@ Each CodeNode variant initially carries the same CodeNodeData:
 
 - stable id;
 - language, native kind, and optional declared name;
-- optional normalized declaration signature;
+- optional normalized declaration signature and own implementation code;
 - directly contained node IDs;
 - outgoing references;
 - a simple map of language-semantic extensions.
 
-Source locations are deferred. The first version does not expose body source.
+Source locations are deferred. The common payload now includes `code: Option<String>`
+for normalized own implementation content, following the accepted Rust analyzer design.
 A single node can still stand for a semantic module assembled from selected files;
 the first version simply does not supply navigation to its multiple source locations.
 
@@ -80,8 +81,8 @@ A signature never embeds separately represented children or a callable's body.
 
 ## Containers and execution
 
-Container has organizational responsibilities in this model; there is no own_code
-field. Actual module-level executable statements, if represented as graph objects,
+Container has organizational responsibilities in this model; it has no implementation
+body (`code: None` in the Rust mapping). Actual module-level executable statements, if represented as graph objects,
 can belong to an ExecutionRegion under that Container. An explicit constructor or
 initialization method remains Callable.
 
@@ -129,8 +130,9 @@ convention explicitly normalizes a semantic set.
 ## Comparison limit
 
 Declaration and relationship comparison alone cannot detect a body-only change that
-does not alter those facts. The optional addition of a non-source content fingerprint
-is still under review; see the [body comparison decision](0018-structure-review-code-graph.md#body-comparison-decision).
+does not alter those facts. The user selected storing language-normalized own code
+instead of an opaque fingerprint; it is now included in the common comparison.
+See the [body comparison decision](0018-structure-review-code-graph.md#body-comparison-decision).
 
 The current shape supersedes the earlier structured-payload proposal. See the
 [Rust Interface](0018c-rust-interface.md) for the compact definitions and

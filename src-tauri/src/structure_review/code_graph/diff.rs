@@ -5,16 +5,16 @@ use super::{CodeNode, CodeReference, NodeId};
 /// 按节点组织的差异，配合前后两张原图使用。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodeGraphDiff {
-    /// 仅包含自身声明、直接包含关系或引用关系发生变化的节点。
+    /// 仅包含自身内容、直接包含关系或引用关系发生变化的节点。
     pub nodes: Vec<NodeDiff>,
 }
 
-/// 一个节点的自身声明、直接包含关系与引用各自的变化。
+/// 一个节点的自身内容、直接包含关系与引用各自的变化。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeDiff {
     pub id: NodeId,
-    /// None 表示自身声明未变，即使子节点或引用发生了变化。
-    pub declaration: Option<ChangeKind>,
+    /// None 表示自身内容未变，即使子节点或引用发生了变化。
+    pub content: Option<ChangeKind>,
     pub contains: Vec<SetChange<NodeId>>,
     pub references: Vec<SetChange<CodeReference>>,
 }
@@ -44,10 +44,10 @@ pub(super) fn compare(
     for id in ids {
         let old = before.get(id);
         let new = after.get(id);
-        let declaration = match (old, new) {
+        let content = match (old, new) {
             (None, Some(_)) => Some(ChangeKind::Added),
             (Some(_), None) => Some(ChangeKind::Removed),
-            (Some(old), Some(new)) if !same_declaration(old, new) => Some(ChangeKind::Modified),
+            (Some(old), Some(new)) if !same_content(old, new) => Some(ChangeKind::Modified),
             _ => None,
         };
         let contains = set_changes(
@@ -58,10 +58,10 @@ pub(super) fn compare(
             old.map_or(&[], |node| node.data().references.as_slice()),
             new.map_or(&[], |node| node.data().references.as_slice()),
         );
-        if declaration.is_some() || !contains.is_empty() || !references.is_empty() {
+        if content.is_some() || !contains.is_empty() || !references.is_empty() {
             nodes.push(NodeDiff {
                 id: id.clone(),
-                declaration,
+                content,
                 contains,
                 references,
             });
@@ -71,7 +71,7 @@ pub(super) fn compare(
 }
 
 /// 只比较节点自身字段，不将子节点、引用或它们的变化递归算入声明。
-fn same_declaration(before: &CodeNode, after: &CodeNode) -> bool {
+fn same_content(before: &CodeNode, after: &CodeNode) -> bool {
     let old = before.data();
     let new = after.data();
     before.category() == after.category()
@@ -79,6 +79,7 @@ fn same_declaration(before: &CodeNode, after: &CodeNode) -> bool {
         && old.native_kind == new.native_kind
         && old.name == new.name
         && old.signature == new.signature
+        && old.code == new.code
         && old.extensions == new.extensions
 }
 
