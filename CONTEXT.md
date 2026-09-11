@@ -62,6 +62,32 @@ An immutable reference from one side of a **File Change** to content pinned by a
 **Review Snapshot**. A File Change may have a before reference, an after reference, or both.
 _Avoid_: Entry, File Entry, File Version
 
+**Code Object**:
+A high-level source-code element represented in a **Code Graph**, such as a language
+scope, type, callable, data declaration, or execution region. Its specific form depends
+on the language.
+_Avoid_: AST node, line change
+
+**Code Graph**:
+A representation of **Code Objects** and their relationships within a selected file
+scope at one fixed side of a **Change Comparison**.
+_Avoid_: Text diff, syntax tree
+
+**Code Object Kind**:
+The code-semantic classification of a **Code Object**, combining a common category
+with the language's specific construct.
+_Avoid_: Parser node tag, generic graph node type
+
+**Code Relationship**:
+A typed association from a **Code Object** to another object or referenced symbol in
+a **Code Graph**, expressing structural containment, ownership, or another code fact.
+_Avoid_: Untyped edge, visual connector
+
+**Code Graph Difference**:
+The additions, removals, and changes to Code Objects and their relationships between
+the before and after **Code Graphs** of one **Change Comparison**.
+_Avoid_: Change Comparison, patch
+
 **Review Reader**:
 The application view that presents one open **Review Snapshot**, including its
 collection of **File Changes** and the freely selected **File Change** content. It
@@ -248,6 +274,10 @@ _Avoid_: Stateless patch, full response repair
   **Comparison Base** from the current base and head commits; a Pull Request does not
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
+- A **Code Graph** represents **Code Objects** at the Comparison Base or Head revision
+  of a **Change Comparison**
+- A **Code Graph Difference** compares the before Code Graph to the after Code Graph
+  of the same **Change Comparison**
 - A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
 - A **Review Reader** provides Overview and File Changes as peer **Review Views** over the same open **Review Snapshot**
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
