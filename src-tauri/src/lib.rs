@@ -8,6 +8,7 @@ mod operation;
 mod persistence;
 mod repository;
 mod review;
+pub mod structure_review;
 mod tauri_app;
 pub(crate) mod telemetry;
 
