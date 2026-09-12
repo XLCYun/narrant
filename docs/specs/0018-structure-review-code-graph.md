@@ -27,8 +27,9 @@ the resulting data. The Rust adapter is implemented separately under
   receivers, generic constraints, visibility, or value types in the common model.
 - Store language-normalized own code to support body-only comparison, following the
   user's Rust-analyzer design decision, in the optional `CodeNodeData.code` field.
-- Defer source locations, a separate attributes object, a graph-wide symbol table,
-  and extension-field version envelopes.
+- Defer source locations, a separate attributes object, and extension-field version
+  envelopes. Optional descriptions of referenced External symbols provide readable
+  names and repository scope without introducing additional code nodes.
 - Keep identity matching conservative. Do not infer object renames or moves.
 - Consumers decide display, filtering, layout, and ancestor-impact presentation.
 
@@ -63,6 +64,13 @@ directory and the analyzer's view of it remain consistent for the duration of an
 files selects which files contribute objects to the output graph. It does not prevent
 an analyzer from reading other source, configuration, or dependencies for semantic
 context. A resolved target outside the selected graph remains an External reference.
+External does not imply that the target is outside the repository. An analyzer can
+attach `ExternalSymbol { name, scope }` descriptions through
+`CodeGraph::with_external_symbols`. `SymbolScope::Repository` identifies unselected
+repository source; `Dependency` identifies source outside that repository, including
+standard libraries and third-party dependencies. Missing descriptions mean unknown
+scope. Descriptions do not participate in graph comparison, and opaque symbol IDs
+retain their original encoding.
 The input paths are relative, stay within the root, and identify existing source files
 on that side. A new file appears only in the after input; a deleted file only in the
 before input. Empty files are included when selected. Failure to read a requested

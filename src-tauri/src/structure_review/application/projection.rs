@@ -1,5 +1,10 @@
 use super::super::code_graph::{self, CodeCategory, CodeGraph, CodeGraphDiff, ReferenceTarget};
 use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[cfg(test)]
+#[path = "tests/projection.rs"]
+mod tests;
 
 /// WebView 使用的结构比较结果；不携带 checkout 路径或布局数据。
 #[derive(Clone, Debug, Serialize)]
@@ -27,9 +32,18 @@ pub(crate) struct FileCoverage {
 
 /// 已验证代码图的传输投影，父子和引用仍按不透明身份关联。
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Graph {
     pub root: Vec<String>,
     pub nodes: Vec<Node>,
+    pub external_symbols: BTreeMap<String, Symbol>,
+}
+
+/// 由语言分析器提供可读名称和仓库范围，前端不需要识别任何语言的符号编码。
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct Symbol {
+    pub name: String,
+    pub scope: &'static str,
 }
 
 /// 单个高层对象的代码语义，不将显示位置写回通用代码图。
@@ -125,6 +139,22 @@ impl From<&CodeGraph> for Graph {
                 .map(|id| id.0.clone())
                 .collect(),
             nodes,
+            external_symbols: graph
+                .external_symbols()
+                .iter()
+                .map(|(id, symbol)| {
+                    (
+                        id.clone(),
+                        Symbol {
+                            name: symbol.name.clone(),
+                            scope: match symbol.scope {
+                                code_graph::SymbolScope::Repository => "repository",
+                                code_graph::SymbolScope::Dependency => "dependency",
+                            },
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }

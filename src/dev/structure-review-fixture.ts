@@ -17,16 +17,24 @@ export function structureReviewFixture(): StructureComparison {
     node("load", "callable", [], { name: "load_snapshot" }),
     node("long", "callable", [], { name: "recover_all_previously_opened_review_workspaces_with_very_long_descriptive_names", signature: "pub async fn recover_all_previously_opened_review_workspaces_with_very_long_descriptive_names(&self) -> Result<(), RecoveryError>" }),
   ];
-  const before = { root: ["narrant"], nodes: [...shared,
+  const before: StructureComparison["before"] = { root: ["narrant"], externalSymbols: {}, nodes: [...shared,
     node("review", "container", ["Review", "impl", "old", "keep"]),
     node("old", "callable", [], { name: "load_legacy_state" }),
     node("run", "callable", [], { name: "run_review", code: "{ let state = load_legacy_state(); save_snapshot(state); }", references: [call("old"), call("save")] }),
   ] };
   const unresolved: CodeReference = { semantic: "code.references", target: { kind: "unresolved", name: "generated::on_review_opened" } };
-  const external: CodeReference = { semantic: "code.calls", target: { kind: "external", symbol: "rust:serde_json::to_string" } };
-  const after = { root: ["narrant"], nodes: [...shared,
+  const external = { semantic: "code.calls", target: { kind: "external", symbol: "rust:registry:serde_json-1.0%2Fsrc%2Fser.rs::fn:to_string" } } satisfies CodeReference;
+  const standard = { semantic: "code.calls", target: { kind: "external", symbol: "rust:sysroot:alloc%2Fsrc%2Fsync.rs::impl:Arc%3CT%3E::fn:new" } } satisfies CodeReference;
+  const repository = { semantic: "code.calls", target: { kind: "external", symbol: "rust:repo:src%2Fidentity.rs::fn:verify_snapshot" } } satisfies CodeReference;
+  const imported: CodeReference = { semantic: "code.imports", target: { kind: "node", id: "load" } };
+  const addedReferences = [call("save"), external, standard, repository, imported];
+  const after: StructureComparison["after"] = { root: ["narrant"], externalSymbols: {
+    [external.target.symbol]: { name: "serde_json::to_string", scope: "dependency" },
+    [standard.target.symbol]: { name: "Arc<T>::new", scope: "dependency" },
+    [repository.target.symbol]: { name: "verify_snapshot", scope: "repository" },
+  }, nodes: [...shared,
     node("review", "container", ["Review", "impl", "new", "keep"]),
-    node("new", "callable", [], { name: "prepare_snapshot", code: "{ save_snapshot(Snapshot::new()); }", references: [call("save"), external] }),
+    node("new", "callable", [], { name: "prepare_snapshot", code: "{ save_snapshot(Snapshot::new()); }", references: addedReferences }),
     node("run", "callable", [], { name: "run_review", code: "{ let state = prepare_snapshot(); save_snapshot(state); generated::on_review_opened(); }", references: [call("new"), call("save"), unresolved] }),
   ] };
   return {
@@ -34,7 +42,7 @@ export function structureReviewFixture(): StructureComparison {
     diff: { nodes: [
       { id: "review", content: null, contains: [{ kind: "removed", value: "old" }, { kind: "added", value: "new" }], references: [] },
       { id: "old", content: "removed", contains: [], references: [] },
-      { id: "new", content: "added", contains: [], references: [{ kind: "added", value: call("save") }, { kind: "added", value: external }] },
+      { id: "new", content: "added", contains: [], references: addedReferences.map((value) => ({ kind: "added", value })) },
       { id: "run", content: "modified", contains: [], references: [{ kind: "removed", value: call("old") }, { kind: "added", value: call("new") }, { kind: "added", value: unresolved }] },
     ] },
     coverage: [

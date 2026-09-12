@@ -4,8 +4,9 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { layoutStructureComparison, objectDetails, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
+import { externalSymbol, isReferenceVisible, layoutStructureComparison, objectDetails, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, StructureBinding, StructureComparison } from "@/structure-review/types";
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
@@ -20,16 +21,17 @@ const statusClasses: Record<ObjectStatus, string> = {
 function CodeObjectNode({ data, selected }: NodeProps<ObjectNode>) {
   const { t } = useTranslation("structure");
   const actions = useContext(ObjectActions);
+  const targetDescription = data.targetScope === "repository" ? t("repositoryTarget") : data.targetScope === "dependency" ? t("dependencyTarget") : t(data.targetKind ?? "external");
   return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", selected && "structure-selected")}
     data-object-id={data.objectId} data-object-status={data.status}>
     <Handle type="target" position={Position.Left} style={{ top: data.targetY }} isConnectable={false} />
     <div className="flex items-center justify-between gap-2 text-[10px]">
-      <span className="min-w-0 truncate text-muted-foreground">{data.targetKind ? t(data.targetKind) : data.nativeKind}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{data.targetKind ? targetDescription : data.nativeKind}</span>
       {!data.targetKind && <span className="structure-status shrink-0">{t(`status.${data.status}`)}</span>}
     </div>
     {data.objectId ? <Button variant="ghost" className="nodrag nopan mt-1 h-7 w-full justify-start overflow-hidden px-0 font-mono text-sm font-medium hover:bg-transparent hover:underline"
       title={data.label} onClick={(event) => { event.stopPropagation(); actions.open(data.objectId!); }}><span className="truncate">{data.label}</span></Button>
-      : <div className="mt-2 truncate font-mono text-sm font-medium" title={data.label}>{data.label}</div>}
+      : <div className="mt-2 truncate font-mono text-sm font-medium" title={data.label || targetDescription}>{data.label || targetDescription}</div>}
     {data.hiddenChildren > 0 && data.objectId && <Button variant="ghost" size="sm" className="nodrag nopan mt-1 h-6 px-1 text-[10px]"
       onClick={(event) => { event.stopPropagation(); actions.expand(data.objectId!); }}>{t("expandChildren", { count: data.hiddenChildren })}</Button>}
     <Handle type="source" position={Position.Right} style={{ top: data.sourceY }} isConnectable={false} />
@@ -65,13 +67,15 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
   const { t } = useTranslation("structure");
   const [showAll, setShowAll] = useState(false);
   const [showUnchangedReferences, setShowUnchangedReferences] = useState(false);
+  const [showImports, setShowImports] = useState(false);
+  const [showDependencies, setShowDependencies] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selection, setSelection] = useState<{ kind: "object"; id: string } | { kind: "coverage" }>();
   const [layout, setLayout] = useState<StructureLayout>();
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
-  const options = useMemo(() => ({ showAll, showUnchangedReferences, expanded }), [expanded, showAll, showUnchangedReferences]);
+  const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, showDependencies, expanded }), [expanded, showAll, showUnchangedReferences, showImports, showDependencies]);
   useEffect(() => {
     let current = true;
     const abort = new AbortController();
@@ -89,6 +93,8 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
   const changed = comparison.diff.nodes.length;
   const details = selection?.kind === "object" ? objectDetails(comparison, selection.id) : undefined;
   const selected = details?.after ?? details?.before;
+  const referenceChanges = details?.difference?.references.filter((change) => isReferenceVisible(comparison, change.value, options)) ?? [];
+  const selectedReferences = selected?.references.filter((reference) => isReferenceVisible(comparison, reference, options)) ?? [];
   return <div className="structure-view flex min-h-0 flex-1 flex-col" aria-label={t("title")}>
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-3 py-2">
       <div className="mr-auto flex min-w-0 flex-wrap items-center gap-2 text-xs">
@@ -98,10 +104,16 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
           {t(partial ? "partialCoverage" : "coverage", { count: analyzed, total: comparison.coverage.length })}
         </Button>
       </div>
-      <div className="flex flex-wrap gap-1">
-        <Button variant={showAll ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" aria-pressed={showAll} onClick={() => setShowAll(!showAll)}>{t("showAll")}</Button>
-        <Button variant={showUnchangedReferences ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" aria-pressed={showUnchangedReferences} onClick={() => setShowUnchangedReferences(!showUnchangedReferences)}>{t("showUnchangedReferences")}</Button>
-      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-7 text-xs" />}>{t("displayOptions")}</DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">
+          <DropdownMenuCheckboxItem checked={showAll} onCheckedChange={setShowAll}>{t("showAll")}</DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem checked={showUnchangedReferences} onCheckedChange={setShowUnchangedReferences}>{t("showUnchangedReferences")}</DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem checked={showImports} onCheckedChange={setShowImports}>{t("showImports")}</DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem checked={showDependencies} onCheckedChange={setShowDependencies}>{t("showDependencies")}</DropdownMenuCheckboxItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
     <div className="relative min-h-0 flex-1" data-testid="structure-canvas">
       {layoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
@@ -144,13 +156,13 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
               <DeclarationSide title={t("after")} node={details.after} />
             </div>
             <h4 className="mb-2 mt-6 text-sm font-medium">{t("relationshipChanges")}</h4>
-            {(details.difference?.contains.length ?? 0) + (details.difference?.references.length ?? 0) === 0
+            {(details.difference?.contains.length ?? 0) + referenceChanges.length === 0
               ? <p className="text-xs text-muted-foreground">{t("noRelationshipChanges")}</p>
               : <ul className="space-y-2 text-xs">{details.difference?.contains.map((change) => <li key={`${change.kind}-${change.value}`} className="break-words"><span className="font-medium">{t(`status.${change.kind}`)}</span> · contains → {objectName(comparison, change.value)}</li>)}
-                {details.difference?.references.map((change, index) => <li key={index} className="break-words"><span className="font-medium">{t(`status.${change.kind}`)}</span> · {referenceLabel(comparison, change.value, t)}</li>)}
+                {referenceChanges.map((change, index) => <li key={index} className="break-words"><span className="font-medium">{t(`status.${change.kind}`)}</span> · {referenceLabel(comparison, change.value, t)}</li>)}
               </ul>}
             <h4 className="mb-2 mt-6 text-sm font-medium">{t("referencesTitle")}</h4>
-            <ul className="space-y-2 break-words text-xs text-muted-foreground">{selected.references.map((reference, index) => <li key={index}>{referenceLabel(comparison, reference, t)}</li>)}</ul>
+            {selectedReferences.length ? <ul className="space-y-2 break-words text-xs text-muted-foreground">{selectedReferences.map((reference, index) => <li key={index}>{referenceLabel(comparison, reference, t)}</li>)}</ul> : <p className="text-xs text-muted-foreground">{t("noVisibleReferences")}</p>}
           </>}
         </div>
       </SheetContent>
@@ -181,6 +193,9 @@ function objectName(comparison: StructureComparison, id: string): string {
 /** 详情中的图外与未解析引用保留明确文字，避免两种语义混淆。 */
 function referenceLabel(comparison: StructureComparison, reference: CodeReference, t: (key: string) => string): string {
   const target = reference.target;
-  return `${reference.semantic} → ${target.kind === "node" ? objectName(comparison, target.id)
-    : target.kind === "external" ? `${target.symbol} (${t("external")})` : `${target.name} (${t("unresolved")})`}`;
+  if (target.kind === "node") return `${reference.semantic} → ${objectName(comparison, target.id)}`;
+  if (target.kind === "unresolved") return `${reference.semantic} → ${target.name} (${t("unresolved")})`;
+  const symbol = externalSymbol(comparison, target.symbol);
+  const scope = t(symbol?.scope === "repository" ? "repositoryTarget" : symbol?.scope === "dependency" ? "dependencyTarget" : "external");
+  return `${reference.semantic} → ${symbol ? `${symbol.name} (${scope})` : scope}`;
 }

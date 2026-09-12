@@ -38,6 +38,13 @@ placement plus reachability from the root rules out containment cycles, includin
 cycles disconnected from the root. Traversal uses an explicit stack. Reference cycles
 and repeated identical reference observations are allowed.
 
+`CodeGraph::with_external_symbols` optionally attaches a map from opaque External
+symbol identity to `ExternalSymbol { name, scope }`. `external_symbols()` exposes
+these descriptions read-only. `SymbolScope::{Repository, Dependency}` distinguishes
+repository symbols outside the selected graph from source outside the repository.
+Names and scope are analyzer-provided descriptions, not additional nodes or fields
+in reference identity; changing them alone does not create a graph difference.
+
 CodeGraph::diff produces stable output: nodes are sorted by NodeId, and set changes
 list sorted removals followed by sorted additions. It ignores input array order and
 duplicate reference observations. Own data is compared separately from relationships,

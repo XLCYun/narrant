@@ -7,6 +7,7 @@ use std::{
 use crate::structure_review::{
     code_graph::{
         AnalysisInput, ChangeKind, CodeGraph, CodeNode, LanguageAnalyzer, NodeId, ReferenceTarget,
+        SymbolScope,
     },
     rust_analyzer::RustLanguageAnalyzer,
 };
@@ -214,6 +215,50 @@ declare!(generated);
         &reference.target,
         ReferenceTarget::External { symbol } if symbol.contains("mirror")
     )));
+}
+
+/// 真实 LSP 解析得到的目标同时携带可读名称与仓库范围，保持未选文件和标准库可区分。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer、Rust 工具链和 rust-src，单独串行运行"]
+fn real_server_describes_external_symbols() {
+    let repository = repository(
+        "mod store; use std::sync::Arc; pub fn run() -> Arc<u32> { Arc::new(store::helper()) }",
+    );
+    let graph = analyzer()
+        .analyze(&AnalysisInput {
+            repository_root: repository.path().to_path_buf(),
+            files: vec![PathBuf::from("src/lib.rs")],
+        })
+        .unwrap();
+    let all = nodes(&graph);
+    let references = all.values().flat_map(|node| &node.data().references);
+    for reference in references {
+        if let ReferenceTarget::External { symbol } = &reference.target {
+            let description = graph
+                .external_symbols()
+                .get(symbol)
+                .expect("每个已解析图外目标都应有描述");
+            assert!(!description.name.contains("%2F"), "{description:?}");
+        }
+    }
+    assert!(graph
+        .external_symbols()
+        .values()
+        .any(|symbol| symbol.name == "helper" && symbol.scope == SymbolScope::Repository));
+    assert!(
+        graph
+            .external_symbols()
+            .values()
+            .any(|symbol| symbol.name.starts_with("Arc<")
+                && symbol.name.ends_with("::new")
+                && symbol.scope == SymbolScope::Dependency),
+        "{:#?}",
+        graph.external_symbols()
+    );
+    assert!(!all
+        .values()
+        .any(|node| node.data().name.as_deref() == Some("helper")));
+    save("external-symbols", &graph);
 }
 
 /// 当前仓库回归覆盖较大的真实类型、模块与关联，不依赖穿刺时固定的 crate 名。

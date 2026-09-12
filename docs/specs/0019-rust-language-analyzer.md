@@ -304,6 +304,14 @@ work supported by fixtures, not further user capability-selection questions.
 
 ## Verification obligations for the implementation
 
+Resolved External references also receive readable names and explicit repository
+scope. The Rust adapter derives names from actual declarations, including enclosing
+types for methods, and compares actual source paths against the analysis repository.
+Standard-library, registry and Git dependency source outside that root is marked
+`Dependency`; unselected repository source remains `Repository`. Only referenced
+targets receive descriptions. The adapter preserves encoded symbol identities, and
+the frontend neither displays nor reverse-engineers those IDs as names.
+
 Use the current repository and small prepared before/after fixtures with the real server,
 in addition to focused tests of the common own-content comparison and source projection.
 The actual pinned server/library combination must be exercised. At minimum verify:

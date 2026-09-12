@@ -1,7 +1,7 @@
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
-import type { ChangeKind, CodeNode, CodeReference, NodeDifference, ReferenceTarget, StructureComparison } from "./types";
+import type { ChangeKind, CodeNode, CodeReference, ExternalSymbol, NodeDifference, ReferenceTarget, StructureComparison } from "./types";
 
 export type ObjectStatus = ChangeKind | "relations" | "unchanged";
 /** React Flow 所需的展示数据；代码对象与变化详情仍引用原始比较。 */
@@ -13,13 +13,26 @@ export type ObjectData = Record<string, unknown> & {
   group: boolean;
   hiddenChildren: number;
   targetKind?: "external" | "unresolved";
+  targetScope?: ExternalSymbol["scope"];
   sourceY?: number;
   targetY?: number;
 };
 export type ObjectNode = Node<ObjectData, "codeObject">;
 export type StructureEdge = Edge<{ route?: { path: string; labelX: number; labelY: number } }>;
 export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number };
-export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; expanded: ReadonlySet<string> };
+export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; showDependencies: boolean; expanded: ReadonlySet<string> };
+
+/** 已解析符号使用分析器描述；任何语言的内部 ID 都不作为可读名称解码。 */
+export function externalSymbol(comparison: StructureComparison, id: string): ExternalSymbol | undefined {
+  return comparison.after.externalSymbols[id] ?? comparison.before.externalSymbols[id];
+}
+
+/** 仓库外依赖和导入分别按需显示，缺少范围信息的目标保持可见而不猜测归属。 */
+export function isReferenceVisible(comparison: StructureComparison, reference: CodeReference, options: Pick<GraphOptions, "showImports" | "showDependencies">): boolean {
+  if (reference.semantic === "code.imports" && !options.showImports) return false;
+  return options.showDependencies || reference.target.kind !== "external"
+    || externalSymbol(comparison, reference.target.symbol)?.scope !== "dependency";
+}
 
 /** 关联集合按明确字段编码，不依赖对象属性序列化顺序。 */
 export function referenceKey(reference: CodeReference): string {
@@ -51,13 +64,13 @@ export async function layoutStructureComparison(comparison: StructureComparison,
   for (const id of options.showAll ? objects.keys() : differences.keys()) include(id);
   for (const difference of differences.values()) {
     for (const change of difference.contains) include(change.value);
-    for (const change of difference.references) if (change.value.target.kind === "node") include(change.value.target.id);
+    for (const change of difference.references) if (isReferenceVisible(comparison, change.value, options) && change.value.target.kind === "node") include(change.value.target.id);
   }
   for (const id of options.expanded) for (const child of children.get(id) ?? []) include(child);
   if (options.showUnchangedReferences) {
     for (const id of [...visible]) {
       for (const reference of [...(before.get(id)?.references ?? []), ...(after.get(id)?.references ?? [])]) {
-        if (reference.target.kind === "node") include(reference.target.id);
+        if (isReferenceVisible(comparison, reference, options) && reference.target.kind === "node") include(reference.target.id);
       }
     }
   }
@@ -85,8 +98,9 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     if (!id) {
       id = `target-${externalIds.size}`;
       externalIds.set(key, id);
-      data.set(id, { label: target.kind === "external" ? target.symbol : target.name,
-        nativeKind: target.kind, status: "unchanged", group: false, hiddenChildren: 0, targetKind: target.kind });
+      const descriptor = target.kind === "external" ? externalSymbol(comparison, target.symbol) : undefined;
+      data.set(id, { label: target.kind === "external" ? descriptor?.name ?? "" : target.name,
+        nativeKind: target.kind, status: "unchanged", group: false, hiddenChildren: 0, targetKind: target.kind, targetScope: descriptor?.scope });
     }
     return id;
   };
@@ -108,6 +122,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     for (const [key, reference] of references) {
       const status = changes.get(key);
       if (!status && !options.showUnchangedReferences) continue;
+      if (!isReferenceVisible(comparison, reference, options)) continue;
       const target = targetId(reference.target, id);
       if (target) addEdge(visualIds.get(id)!, target, reference.semantic, status);
     }

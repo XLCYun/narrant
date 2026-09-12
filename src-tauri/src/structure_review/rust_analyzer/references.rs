@@ -216,7 +216,23 @@ pub(super) fn analyze(
     }
     root.contains.sort();
     root.contains.dedup();
-    CodeGraph::new(root, nodes.into_values().collect()).map_err(failure)
+    let referenced = nodes
+        .values()
+        .flat_map(|node| &node.data().references)
+        .filter_map(|reference| match &reference.target {
+            ReferenceTarget::External { symbol } => Some(symbol.as_str()),
+            _ => None,
+        })
+        .collect();
+    let symbols = resolver
+        .documents
+        .iter()
+        .chain(resolver.external.values())
+        .flat_map(|document| super::symbols::describe(repository, document, &referenced))
+        .collect();
+    CodeGraph::new(root, nodes.into_values().collect())
+        .map(|graph| graph.with_external_symbols(symbols))
+        .map_err(failure)
 }
 
 impl Resolver<'_> {

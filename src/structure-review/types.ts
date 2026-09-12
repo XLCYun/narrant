@@ -29,7 +29,9 @@ export type CodeNode = {
   extensions: Record<string, unknown>;
 };
 /** 完整图按不透明身份连接节点，root 只提供遍历入口。 */
-export type CodeGraph = { root: string[]; nodes: CodeNode[] };
+export type CodeGraph = { root: string[]; nodes: CodeNode[]; externalSymbols: Record<string, ExternalSymbol> };
+/** 已解析图外符号的可读名称和仓库范围，描述不参与关系身份比较。 */
+export type ExternalSymbol = { name: string; scope: "repository" | "dependency" };
 /** 自身内容与两类关系的变化独立传输。 */
 export type NodeDifference = {
   id: string;

@@ -13,7 +13,7 @@ mod validation;
 pub use analyzer::{AnalysisInput, LanguageAnalyzer};
 pub use diff::{ChangeKind, CodeGraphDiff, NodeDiff, SetChange};
 pub use error::{AnalysisError, CompareError, InvalidGraph};
-pub use graph::{CodeGraph, CodeRoot};
+pub use graph::{CodeGraph, CodeRoot, ExternalSymbol, SymbolScope};
 pub use node::{
     CodeCategory, CodeNode, CodeNodeData, CodeReference, ExtensionFields, LanguageId, NodeId,
     ReferenceTarget,

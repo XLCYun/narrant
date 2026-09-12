@@ -170,6 +170,24 @@ navigation from its opaque ID. Layout is read-only, with pan, zoom, fit and cont
 expansion. These defaults implement the accepted scope without additional language
 implementations, persistent graph storage or a new file-scope picker.
 
+### Reference display defaults
+
+Following the user's local review feedback, imports and references outside the
+repository are hidden by default. A Display options menu offers independent controls
+for all objects, unchanged relationships, imports and dependencies outside the
+repository. The first two controls do not override the dependency filter. Standard
+library and third-party references require the dependency option; a repository symbol
+outside the selected graph remains visible under the usual changed-reference rules.
+Hidden references do not create floating target cards. Object details apply the same
+import/dependency filters and identify when no relations match the current filters.
+
+Both graphs carry `externalSymbols`, keyed by the unchanged opaque External identity.
+The language analyzer supplies each name and `repository`/`dependency` scope. Cards
+and details display those names rather than percent-encoded IDs such as `%2F`.
+If a description is unavailable, show a generic resolved-target label and retain
+unknown scope; never guess a dependency from a language's ID format. These are display
+choices: complete graphs, graph differences and changed-object counts remain intact.
+
 ## Acceptance criteria
 
 - The Structure Changes tab preserves the open Review and Snapshot, respects existing
@@ -228,3 +246,20 @@ implementations, persistent graph storage or a new file-scope picker.
 - Browser interactions verified context expansion, all objects, unchanged relationships
   including `code.member_of`, node details, per-file coverage, loading/cancellation/retry,
   failure, no structural changes and unsupported-only coverage in light and dark themes.
+
+### Reference display follow-up verification on 2026-09-12
+
+- Rust full library suite: 555 passed, 4 real-server tests opt-in. The new real
+  rust-analyzer test passed separately, confirming a readable `Arc<T>::new` dependency
+  and an unselected repository `helper` target with distinct scopes.
+- Frontend: 341 tests passed across the full run and a focused rerun of the release
+  preparation test after restoring Cargo to PATH. TypeScript, ESLint, Rustfmt, Clippy
+  with warnings denied and the production frontend build passed.
+- The in-app preview request remained queued in this session. Independent Chrome
+  rendered the same Preview Harness at 1440×1000, 900×800 and 520×800 instead. Ten
+  screenshot/accessibility-tree captures and element measurements verified light/dark
+  themes, the English menu's wrapped label, long-name details, independent filter
+  toggles and names in graph cards and details. No browser exceptions or horizontal
+  overflow were found in the toolbar, menu or details panel. Viewport overrides were
+  cleared after checking. In-app interaction verification of these follow-up controls
+  remains pending.

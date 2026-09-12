@@ -2,6 +2,7 @@
 
 mod lsp;
 mod references;
+mod symbols;
 mod syntax;
 
 use std::{

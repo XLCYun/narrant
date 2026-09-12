@@ -507,7 +507,7 @@ function ReviewReaderPreview({
     if (structureKind === "loading") return { kind: "loading" };
     if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
     if (structureKind === "empty") return { kind: "ready", comparison: { ...comparison, before: comparison.after, diff: { nodes: [] } } };
-    if (structureKind === "unsupported") return { kind: "ready", comparison: { ...comparison, before: { root: [], nodes: [] }, after: { root: [], nodes: [] }, diff: { nodes: [] }, coverage: comparison.coverage.slice(-1) } };
+    if (structureKind === "unsupported") return { kind: "ready", comparison: { ...comparison, before: { root: [], nodes: [], externalSymbols: {} }, after: { root: [], nodes: [], externalSymbols: {} }, diff: { nodes: [] }, coverage: comparison.coverage.slice(-1) } };
     return { kind: "ready", comparison };
   });
   const review: ReviewReaderBinding = {
