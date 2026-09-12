@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { structureReviewFixture } from "@/dev/structure-review-fixture";
-import { layoutStructureComparison } from "@/structure-review/graph-presentation";
+import { layoutStructureComparison, objectDetails } from "@/structure-review/graph-presentation";
 
 const options = { showAll: false, showUnchangedReferences: false, showImports: false, showDependencies: false, expanded: new Set<string>() };
 
@@ -79,6 +79,45 @@ it("only includes import-only targets when imports are enabled", async () => {
   const shown = await layoutStructureComparison(comparison, { ...options, showImports: true });
   expect(shown.nodes.some((node) => node.data.objectId === "load")).toBe(true);
   expect(shown.edges.some((edge) => edge.label === "+ code.imports")).toBe(true);
+});
+
+it("omits Rust use declarations and incident relations from every display mode without changing the analysis", async () => {
+  const comparison = structureReviewFixture();
+  const typeUse = { semantic: "code.type_use", target: { kind: "node" as const, id: "Review" } };
+  const useReference = { semantic: "code.references", target: { kind: "node" as const, id: "use-new" } };
+  comparison.after.nodes.find((node) => node.id === "new")!.references.push(typeUse, useReference);
+  comparison.diff.nodes.find((node) => node.id === "new")!.references.push(
+    { kind: "added", value: typeUse }, { kind: "added", value: useReference });
+  const original = structuredClone(comparison);
+  for (const overrides of [{}, { expanded: new Set(["review", "storage"]) }, { showAll: true, showImports: true, showDependencies: true, showUnchangedReferences: true }]) {
+    const layout = await layoutStructureComparison(comparison, { ...options, ...overrides });
+    expect(layout.nodes.some((node) => node.data.nativeKind === "use" || node.data.label === "imported_but_unused")).toBe(false);
+    expect(layout.changed).toBe(4);
+    expect(layout.total).toBe(12);
+    const source = layout.nodes.find((node) => node.data.objectId === "new")!;
+    const target = layout.nodes.find((node) => node.data.objectId === "Review")!;
+    expect(layout.edges.some((edge) => edge.source === source.id && edge.target === target.id && edge.label === "+ code.type_use")).toBe(true);
+    const ids = new Set(layout.nodes.map((node) => node.id));
+    expect(layout.edges.every((edge) => ids.has(edge.source) && ids.has(edge.target))).toBe(true);
+  }
+  const details = objectDetails(comparison, "review");
+  expect(details.difference?.contains.map((change) => change.value)).toEqual(["old", "new"]);
+  expect(details.after?.contains).not.toContain("use-new");
+  expect(objectDetails(comparison, "new").after?.references).not.toContainEqual(useReference);
+  expect(objectDetails(comparison, "use-new").after).toBeUndefined();
+  expect(comparison).toEqual(original);
+});
+
+it("keeps import-only changes out of parent status, counts and expansion hints", async () => {
+  const comparison = structureReviewFixture({ importsOnly: true });
+  const hidden = await layoutStructureComparison(comparison, options);
+  expect(hidden).toMatchObject({ nodes: [], edges: [], changed: 0, total: 1, visible: 0 });
+  const all = await layoutStructureComparison(comparison, { ...options, showAll: true, showImports: true, expanded: new Set(["review"]) });
+  expect(all.nodes).toHaveLength(1);
+  expect(all.nodes[0].data).toMatchObject({ objectId: "review", status: "unchanged", hiddenChildren: 0 });
+  expect(all.edges).toEqual([]);
+  expect(objectDetails(comparison, "review").difference).toBeUndefined();
+  expect(comparison.diff.nodes).toHaveLength(3);
 });
 
 it("uses declared symbol scope and names instead of interpreting opaque identity strings", async () => {

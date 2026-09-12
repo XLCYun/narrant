@@ -186,7 +186,17 @@ The language analyzer supplies each name and `repository`/`dependency` scope. Ca
 and details display those names rather than percent-encoded IDs such as `%2F`.
 If a description is unavailable, show a generic resolved-target label and retain
 unknown scope; never guess a dependency from a language's ID format. These are display
-choices: complete graphs, graph differences and changed-object counts remain intact.
+choices: complete graphs and graph differences remain intact. Import/dependency
+reference toggles do not change the changed-object count.
+
+Rust `use` Extension nodes, including `pub use`, are always omitted from this view,
+including Show all objects, expansion and Show imports. Their incident relationships
+and import-only targets do not enter the layout. Object totals, changed-object counts,
+expansion hints and relationship details apply the same projection. A parent whose
+only relationship changes involve hidden `use` nodes is unchanged in the projection.
+An otherwise empty graph explains that source changes can still be read in File
+Changes. The complete analyzer graphs still retain import declarations and their
+differences. Actual type uses and calls on displayed objects remain available.
 
 Rust closures no longer appear as separate Callable or ExecutionRegion nodes. Their
 content changes and outgoing calls remain on the nearest modeled declaration. This
@@ -268,3 +278,18 @@ follow it before computing the difference.
   overflow were found in the toolbar, menu or details panel. Viewport overrides were
   cleared after checking. In-app interaction verification of these follow-up controls
   remains pending.
+
+### Import declaration display follow-up verification
+
+- Fourteen focused graph-presentation and analysis-lifecycle tests passed, including
+  added/removed/unchanged `use` nodes, all display controls, parent-only import changes,
+  preserved type-use edges, consistent details and unchanged complete input graphs.
+- TypeScript, production build and repository ESLint passed. The 1168 bundled icons
+  matched the generated source assets. ESLint excluded the ignored `.tools` and
+  `.spikes` directories containing local tools and Cargo sources.
+- The in-app preview request remained queued. Independent Chrome checked the same
+  Preview Harness at 1440×1000, 900×800 and 520×800 with light and dark themes. Eighteen
+  screenshots and accessibility trees covered defaults, expansion, all display
+  options enabled, parent details, long-name details, import-only empty state and
+  unchanged parent context. Geometry checks found no toolbar, menu or detail overflow;
+  the browser reported no exceptions. The viewport override was cleared afterward.

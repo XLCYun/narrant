@@ -19,7 +19,7 @@ export type ObjectData = Record<string, unknown> & {
 };
 export type ObjectNode = Node<ObjectData, "codeObject">;
 export type StructureEdge = Edge<{ route?: { path: string; labelX: number; labelY: number } }>;
-export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number };
+export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number };
 export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; showDependencies: boolean; expanded: ReadonlySet<string> };
 
 /** 已解析符号使用分析器描述；任何语言的内部 ID 都不作为可读名称解码。 */
@@ -41,8 +41,30 @@ export function referenceKey(reference: CodeReference): string {
     target.kind === "node" ? target.id : target.kind === "external" ? target.symbol : target.name]);
 }
 
+/** use 声明留在完整分析结果中；画布、计数和详情仅投影其余对象之间的关系。 */
+function displayComparison(comparison: StructureComparison): StructureComparison {
+  const objects = new Map([...comparison.before.nodes, ...comparison.after.nodes].map((node) => [node.id, node]));
+  const hidden = new Set([...objects.values()]
+    .filter((node) => node.language === "rust" && node.category === "extension" && node.nativeKind === "use")
+    .map((node) => node.id));
+  const keepsNode = (id: string) => !hidden.has(id);
+  const keepsReference = (reference: CodeReference) => reference.target.kind !== "node" || keepsNode(reference.target.id);
+  const graph = (source: StructureComparison["before"]): StructureComparison["before"] => ({
+    ...source, root: source.root.filter(keepsNode),
+    nodes: source.nodes.filter((node) => keepsNode(node.id)).map((node) => ({
+      ...node, contains: node.contains.filter(keepsNode), references: node.references.filter(keepsReference),
+    })),
+  });
+  const differences = comparison.diff.nodes.filter((node) => keepsNode(node.id)).map((node) => ({
+    ...node, contains: node.contains.filter((change) => keepsNode(change.value)),
+    references: node.references.filter((change) => keepsReference(change.value)),
+  })).filter((node) => node.content !== null || node.contains.length > 0 || node.references.length > 0);
+  return { ...comparison, before: graph(comparison.before), after: graph(comparison.after), diff: { nodes: differences } };
+}
+
 /** 合并展示优先采用 after 的包含树；删除对象保留 before 的归属。 */
 export async function layoutStructureComparison(comparison: StructureComparison, options: GraphOptions, signal?: AbortSignal): Promise<StructureLayout> {
+  comparison = displayComparison(comparison);
   const before = new Map(comparison.before.nodes.map((node) => [node.id, node]));
   const after = new Map(comparison.after.nodes.map((node) => [node.id, node]));
   const objects = new Map([...before, ...after]);
@@ -150,7 +172,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
   };
   const roots = [...visible].filter((id) => !parents.has(id)).sort().map(elkObject);
   for (const id of externalIds.values()) roots.push({ id, width: 280, height: 92, ports: ports(id), layoutOptions: { "elk.portConstraints": "FIXED_SIDE" } });
-  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0 };
+  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0, changed: differences.size };
   /** ancestor 边不参加层次求解，避免包含容器同时成为自身层次约束。 */
   const isAncestor = (ancestor: string, child: string) => {
     let parent = parents.get(child);
@@ -197,13 +219,14 @@ export async function layoutStructureComparison(comparison: StructureComparison,
       labelY: label?.y === undefined ? points[0].y : label.y + origin.y + (label.height ?? 0) / 2,
     } };
   }
-  return { nodes, edges, total: objects.size, visible: visible.size };
+  return { nodes, edges, total: objects.size, visible: visible.size, changed: differences.size };
 }
 
-/** 详情读取两侧原始声明，保持内容变化和关系集合差异相互独立。 */
+/** 详情保留两侧声明内容，并与画布使用相同的对象及关系投影。 */
 export function objectDetails(comparison: StructureComparison, id: string): {
   before?: CodeNode; after?: CodeNode; difference?: NodeDifference;
 } {
+  comparison = displayComparison(comparison);
   return { before: comparison.before.nodes.find((node) => node.id === id),
     after: comparison.after.nodes.find((node) => node.id === id),
     difference: comparison.diff.nodes.find((node) => node.id === id) };

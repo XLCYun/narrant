@@ -435,7 +435,7 @@ function ReviewReaderPreview({
   merged?: boolean;
   updateState?: "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes" | "structure-changes";
-  structureKind?: "ready" | "loading" | "failed" | "empty" | "unsupported";
+  structureKind?: "ready" | "loading" | "failed" | "empty" | "unsupported" | "imports-only";
   shortContent?: boolean;
   themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
@@ -503,7 +503,7 @@ function ReviewReaderPreview({
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
   const [structureState, setStructureState] = useState<StructureState>(() => {
-    const comparison = { ...structureReviewFixture(), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
+    const comparison = { ...structureReviewFixture({ importsOnly: structureKind === "imports-only" }), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
     if (structureKind === "loading") return { kind: "loading" };
     if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
     if (structureKind === "empty") return { kind: "ready", comparison: { ...comparison, before: comparison.after, diff: { nodes: [] } } };
@@ -703,6 +703,7 @@ const previews: Record<string, PreviewDefinition> = {
       "structure-loading": { label: "结构分析中", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="loading" /> },
       "structure-failed": { label: "结构分析失败", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="failed" /> },
       "structure-empty": { label: "没有结构变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="empty" /> },
+      "structure-imports-only": { label: "仅导入声明变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="imports-only" /> },
       "structure-unsupported": { label: "结构分析未支持", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="unsupported" /> },
       "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
       "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },

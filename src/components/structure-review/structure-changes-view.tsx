@@ -90,7 +90,9 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
   }, [comparison, options]);
   const analyzed = comparison.coverage.filter((file) => file.before === "analyzed" || file.after === "analyzed").length;
   const partial = comparison.coverage.some((file) => file.before.startsWith("unsupported") || file.after.startsWith("unsupported"));
-  const changed = comparison.diff.nodes.length;
+  const changed = layout?.changed ?? 0;
+  const emptyState = analyzed === 0 && comparison.coverage.length > 0 ? "unsupported"
+    : comparison.diff.nodes.length > 0 ? "filtered" : "empty";
   const details = selection?.kind === "object" ? objectDetails(comparison, selection.id) : undefined;
   const selected = details?.after ?? details?.before;
   const referenceChanges = details?.difference?.references.filter((change) => isReferenceVisible(comparison, change.value, options)) ?? [];
@@ -129,8 +131,8 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
           <Controls showInteractive={false} />
         </ReactFlow>
       </ObjectActions.Provider> : !layingOut && <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" role="status">
-        <h3 className="font-medium">{t(analyzed === 0 && comparison.coverage.length > 0 ? "unsupportedTitle" : "emptyTitle")}</h3>
-        <p className="max-w-md text-sm text-muted-foreground">{t(analyzed === 0 && comparison.coverage.length > 0 ? "unsupportedDescription" : "emptyDescription")}</p>
+        <h3 className="font-medium">{t(`${emptyState}Title`)}</h3>
+        <p className="max-w-md text-sm text-muted-foreground">{t(`${emptyState}Description`)}</p>
       </div>}
       {layingOut && <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/80 text-sm" role="status"><Spinner />{t("layoutLoading")}</div>}
     </div>
