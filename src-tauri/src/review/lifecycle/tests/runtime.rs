@@ -231,7 +231,7 @@ async fn close_is_logical_success_when_workspace_cleanup_must_be_deferred() {
         .unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
 
-    let outcome = lifecycle.close(&saved.review_id).unwrap();
+    let outcome = lifecycle.close(&saved.review_id).await.unwrap();
 
     assert!(matches!(
         outcome.workspace_cleanup,

@@ -30,6 +30,8 @@ impl OperationId {
 struct CancellationState {
     cancelled: AtomicBool,
     notified: Notify,
+    parent: Option<CancellationSignal>,
+    revoked: Option<Arc<AtomicBool>>,
 }
 
 /// 可 clone 的只读取消信号，同时支持同步轮询与异步唤醒。
@@ -46,6 +48,12 @@ impl CancellationSignal {
     /// 返回调用方是否已经请求取消。
     pub(crate) fn is_cancelled(&self) -> bool {
         self.0.cancelled.load(Ordering::Acquire)
+            || self
+                .0
+                .revoked
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
+            || self.0.parent.as_ref().is_some_and(Self::is_cancelled)
     }
 
     /// 异步等待取消，并用 enable-before-check 避免通知丢失。
@@ -57,7 +65,14 @@ impl CancellationSignal {
             if self.is_cancelled() {
                 return;
             }
-            notified.await;
+            if self.0.parent.is_some() || self.0.revoked.is_some() {
+                tokio::select! {
+                    _ = notified => {},
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {},
+                }
+            } else {
+                notified.await;
+            }
         }
     }
 }
@@ -151,6 +166,17 @@ impl OperationContext {
     /// 从当前上下文派生一个保留未来字段但不响应取消的收敛上下文。
     pub fn without_cancellation(&self) -> Self {
         Self::background()
+    }
+
+    /// 派生只观察资源撤销标记的上下文，保留用户取消且不授予取消上层操作的权限。
+    pub(crate) fn with_revocation(&self, revoked: Arc<AtomicBool>) -> Self {
+        Self {
+            cancellation: CancellationSignal(Arc::new(CancellationState {
+                parent: Some(self.cancellation.clone()),
+                revoked: Some(revoked),
+                ..CancellationState::default()
+            })),
+        }
     }
 
     /// 返回跨越本次应用操作全部可取消阶段的只读共享信号。

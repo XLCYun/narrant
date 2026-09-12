@@ -1,3 +1,5 @@
+import { structureReviewFixture } from "@/dev/structure-review-fixture";
+import type { StructureState } from "@/structure-review/types";
 import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -427,11 +429,13 @@ function ReviewReaderPreview({
   shortContent = false,
   themeSample = false,
   babysitKind,
+  structureKind = "ready",
 }: {
   empty?: boolean;
   merged?: boolean;
   updateState?: "current" | "checking" | "failed" | "available";
-  initialView?: "overview" | "file-changes";
+  initialView?: "overview" | "file-changes" | "structure-changes";
+  structureKind?: "ready" | "loading" | "failed" | "empty" | "unsupported";
   shortContent?: boolean;
   themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
@@ -474,7 +478,7 @@ function ReviewReaderPreview({
     ? "src/components/review-reader.tsx"
     : snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
-  const [view, setView] = useState<"overview" | "file-changes">(initialView);
+  const [view, setView] = useState<"overview" | "file-changes" | "structure-changes">(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
   const babysitRequest = selectedPath
     ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, detectedLanguage: "typescript" }
@@ -498,7 +502,16 @@ function ReviewReaderPreview({
         : babysitKind === "failed"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
+  const [structureState, setStructureState] = useState<StructureState>(() => {
+    const comparison = { ...structureReviewFixture(), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
+    if (structureKind === "loading") return { kind: "loading" };
+    if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
+    if (structureKind === "empty") return { kind: "ready", comparison: { ...comparison, before: comparison.after, diff: { nodes: [] } } };
+    if (structureKind === "unsupported") return { kind: "ready", comparison: { ...comparison, before: { root: [], nodes: [] }, after: { root: [], nodes: [] }, diff: { nodes: [] }, coverage: comparison.coverage.slice(-1) } };
+    return { kind: "ready", comparison };
+  });
   const review: ReviewReaderBinding = {
+    structure: { state: structureState, cancel: () => setStructureState({ kind: "cancelled" }), retry: () => setStructureState({ kind: "ready", comparison: { ...structureReviewFixture(), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision } }) },
     snapshot,
     transition: { kind: "stable" },
     fileChange: selectedPath
@@ -686,6 +699,11 @@ const previews: Record<string, PreviewDefinition> = {
     label: "Review 阅读器",
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
+      "structure-changes": { label: "结构改动与嵌套关系", render: () => <ReviewReaderPreview initialView="structure-changes" /> },
+      "structure-loading": { label: "结构分析中", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="loading" /> },
+      "structure-failed": { label: "结构分析失败", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="failed" /> },
+      "structure-empty": { label: "没有结构变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="empty" /> },
+      "structure-unsupported": { label: "结构分析未支持", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="unsupported" /> },
       "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
       "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },
       "diff-theme": { label: "Diff 主题与长行", render: () => <ReviewReaderPreview initialView="file-changes" themeSample babysitKind="completed" /> },

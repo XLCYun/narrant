@@ -32,7 +32,12 @@ fn requires_rust_capabilities_and_utf16() {
     utf8["positionEncoding"] = json!("utf-8");
     for capabilities in [missing_parent, missing_definition, utf8] {
         let server = FakeServer::new(vec![vec![initialized(capabilities)], vec![]]);
-        assert!(RustLsp::start(&server.workspace().join("server"), server.workspace()).is_err());
+        assert!(RustLsp::start(
+            &server.workspace().join("server"),
+            server.workspace(),
+            std::sync::Arc::new(|| false)
+        )
+        .is_err());
         // SAFETY: 信号 0 只查询本测试服务器是否仍存在。
         assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
     }
@@ -46,8 +51,12 @@ fn rejects_degraded_project_loading() {
             vec![initialized(capabilities())],
             vec![status(health)],
         ]);
-        let mut client =
-            RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+        let mut client = RustLsp::start(
+            &server.workspace().join("server"),
+            server.workspace(),
+            std::sync::Arc::new(|| false),
+        )
+        .unwrap();
         assert!(client
             .wait_ready()
             .unwrap_err()
@@ -69,8 +78,12 @@ fn configures_rust_and_only_queries_after_loading() {
         vec![json!({"jsonrpc":"2.0", "id":2, "result":[]})],
         vec![json!({"jsonrpc":"2.0", "id":3, "result":null})],
     ]);
-    let mut client =
-        RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+    let mut client = RustLsp::start(
+        &server.workspace().join("server"),
+        server.workspace(),
+        std::sync::Arc::new(|| false),
+    )
+    .unwrap();
     assert!(client
         .definitions("file:///lib.rs", Position::default())
         .unwrap_err()
@@ -107,8 +120,12 @@ fn rust_extension_queries_check_status_changes() {
             json!({"jsonrpc":"2.0", "id":2, "result":[]}),
         ],
     ]);
-    let mut client =
-        RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+    let mut client = RustLsp::start(
+        &server.workspace().join("server"),
+        server.workspace(),
+        std::sync::Arc::new(|| false),
+    )
+    .unwrap();
     client.wait_ready().unwrap();
     assert!(client
         .parent_modules("file:///lib.rs")

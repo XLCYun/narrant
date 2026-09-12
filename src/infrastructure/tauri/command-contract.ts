@@ -1,3 +1,4 @@
+import type { StructureComparison } from "@/structure-review/types";
 import type { GitHubIdentity } from "@/components/github-identity-entry";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type { PullRequestGroup } from "@/lib/review-types";
@@ -32,6 +33,7 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
+  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string }; result: StructureComparison; error: { code: string; detail: string } };
   application_update_snapshot: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_manual_check: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_set_automatic_download: { args: { enabled: boolean }; result: ApplicationUpdateSnapshot };
@@ -80,6 +82,7 @@ export type TauriCommandContract = {
 
 export type TauriCommandName = keyof TauriCommandContract;
 export type CancellableTauriCommandName =
+  | "analyze_structure_review"
   | "compare_local_refs"
   | "check_branch_review_updates"
   | "reopen_and_refresh_branch_review"
@@ -101,6 +104,7 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "analyze_structure_review",
   "application_update_snapshot",
   "application_update_manual_check",
   "application_update_set_automatic_download",

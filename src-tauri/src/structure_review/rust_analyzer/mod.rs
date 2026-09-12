@@ -12,6 +12,7 @@ use std::{
 };
 
 use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer};
+use crate::lsp::CancellationCheck;
 
 type Result<T> = std::result::Result<T, AnalysisError>;
 
@@ -19,9 +20,10 @@ type Result<T> = std::result::Result<T, AnalysisError>;
 ///
 /// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。分析同步执行，可能加载
 /// Cargo 依赖及运行构建脚本，应用应在其工作线程和已有 Workspace Trust 范围内调用。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RustLanguageAnalyzer {
     executable: PathBuf,
+    cancelled: CancellationCheck,
 }
 
 impl RustLanguageAnalyzer {
@@ -29,19 +31,36 @@ impl RustLanguageAnalyzer {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         Self {
             executable: executable.into(),
+            cancelled: std::sync::Arc::new(|| false),
         }
+    }
+
+    /// 为本次应用操作注入只读取消观察，覆盖 LSP 等待和源码处理阶段。
+    pub fn with_cancellation(mut self, cancelled: CancellationCheck) -> Self {
+        self.cancelled = cancelled;
+        self
+    }
+
+    /// 取消不能被解释为一张成功的空代码图。
+    fn check_cancelled(&self) -> Result<()> {
+        if (self.cancelled)() {
+            return Err(failure("Rust 结构分析已取消"));
+        }
+        Ok(())
     }
 }
 
 impl LanguageAnalyzer for RustLanguageAnalyzer {
     /// 校验文件范围，固定文档内容，提取对象与关联后交由公共模块验证图结构。
     fn analyze(&self, input: &AnalysisInput) -> Result<CodeGraph> {
+        self.check_cancelled()?;
         let repository = input.repository_root.canonicalize().map_err(failure)?;
         if !repository.is_dir() {
             return Err(failure("仓库根路径不是目录"));
         }
         let mut sources = BTreeMap::new();
         for relative in &input.files {
+            self.check_cancelled()?;
             if relative.as_os_str().is_empty()
                 || relative.is_absolute()
                 || relative
@@ -93,9 +112,10 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
         }
         let mut documents = Vec::new();
         for (path, source) in sources {
+            self.check_cancelled()?;
             documents.push(syntax::Document::parse(&repository, path, source)?);
         }
-        let mut client = lsp::RustLsp::start(&executable, &repository)?;
+        let mut client = lsp::RustLsp::start(&executable, &repository, self.cancelled.clone())?;
         for document in &documents {
             client.open(&document.uri, &document.source)?;
         }
@@ -109,6 +129,7 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
                 )));
             }
         }
+        self.check_cancelled()?;
         client.shutdown()?;
         Ok(graph)
     }

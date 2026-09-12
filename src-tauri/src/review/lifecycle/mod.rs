@@ -221,13 +221,13 @@ pub struct ReviewLifecycle {
     /// 每个 Review 的操作锁允许同一 Review 串行收敛，同时不阻塞其他 Review。
     review_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// 生命周期 gate 允许 Review 操作并发，但让 shutdown 等待全部操作安全收敛。
-    operation_gate: tokio::sync::RwLock<()>,
+    operation_gate: Arc<tokio::sync::RwLock<()>>,
     /// shutdown 开始后立即拒绝尚未进入 gate 的新操作。
     shutting_down: AtomicBool,
     /// 测试专用同步点，让操作持有 read gate 后暂停，不进入生产构建。
     #[cfg(test)]
     operation_gate_barrier: Mutex<Option<Arc<tests::LifecycleOperationGateBarrier>>>,
-    active_refreshes: Mutex<HashSet<String>>,
+    workspace_access: Arc<Mutex<workspace_use::WorkspaceAccess>>,
 }
 
 impl ReviewLifecycle {
@@ -272,11 +272,11 @@ impl ReviewLifecycle {
                 presentation_generation: 0,
             }),
             review_locks: Mutex::new(HashMap::new()),
-            operation_gate: tokio::sync::RwLock::new(()),
+            operation_gate: Arc::new(tokio::sync::RwLock::new(())),
             shutting_down: AtomicBool::new(false),
             #[cfg(test)]
             operation_gate_barrier: Mutex::new(None),
-            active_refreshes: Mutex::new(HashSet::new()),
+            workspace_access: Arc::new(Mutex::new(workspace_use::WorkspaceAccess::default())),
         }
     }
 
@@ -481,6 +481,8 @@ impl ReviewLifecycle {
 mod presentation;
 mod refresh;
 mod workspace;
+mod workspace_use;
+pub(crate) use workspace_use::SnapshotWorkspaceLease;
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

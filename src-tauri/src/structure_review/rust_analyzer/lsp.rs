@@ -5,7 +5,7 @@ use std::{path::Path, process::Command, time::Duration};
 use serde_json::{json, Value};
 
 use super::{failure, Result};
-use crate::lsp::{Location, LspClient, LspOptions, OutgoingCall, Position};
+use crate::lsp::{CancellationCheck, Location, LspClient, LspOptions, OutgoingCall, Position};
 
 const SERVER_STATUS: &str = "experimental/serverStatus";
 const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
@@ -18,13 +18,18 @@ pub(super) struct RustLsp {
 
 impl RustLsp {
     /// 使用 Rust 初始化约定建立会话，并检查本分析器依赖的能力。
-    pub fn start(executable: &Path, repository: &Path) -> Result<Self> {
+    pub fn start(
+        executable: &Path,
+        repository: &Path,
+        cancelled: CancellationCheck,
+    ) -> Result<Self> {
         let mut options = LspOptions {
             initialization_options: json!({
                 "checkOnSave": false,
                 "cachePriming": {"enable": false},
                 "diagnostics": {"enable": false}
             }),
+            cancelled,
             ..LspOptions::default()
         };
         options.capabilities["experimental"] = json!({"serverStatusNotification": true});

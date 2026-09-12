@@ -219,3 +219,27 @@ fn derived_convergence_context_ignores_parent_cancellation() {
     assert!(operation.cancellation().is_cancelled());
     assert!(!convergence.cancellation().is_cancelled());
 }
+
+/// 派生操作同时观察上层用户取消和生命周期撤销，不改变根操作的取消状态。
+#[tokio::test]
+async fn linked_context_observes_both_cancellation_sources() {
+    for revoke_resource in [false, true] {
+        let (controller, signal) = test_cancellation_signal();
+        let root = OperationContext {
+            cancellation: signal,
+        };
+        let revoked = Arc::new(AtomicBool::new(false));
+        let linked = root.with_revocation(revoked.clone());
+        let waiting = tokio::spawn(async move { linked.cancellation().cancelled().await });
+        if revoke_resource {
+            revoked.store(true, Ordering::Release);
+        } else {
+            controller.cancel();
+        }
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(root.cancellation().is_cancelled(), !revoke_resource);
+    }
+}

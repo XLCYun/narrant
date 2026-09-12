@@ -2,6 +2,7 @@ use super::commands::{
     application_settings as application_settings_commands,
     application_update as application_update_commands, babysit as babysit_commands,
     github as github_commands, repository, review as review_commands,
+    structure_review as structure_review_commands,
 };
 use super::shutdown::{self, ApplicationShutdown, PostStopCoordinator};
 use crate::{
@@ -104,6 +105,26 @@ pub fn run() {
             );
             let _ = lifecycle.recover();
             app.manage(lifecycle);
+            use crate::structure_review::code_graph::LanguageAnalyzer;
+            let rust_executable = std::env::var_os("NARRANT_RUST_ANALYZER")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+                        "../.tools/rust-analyzer.exe"
+                    } else {
+                        "../.tools/rust-analyzer"
+                    })
+                });
+            let rust_analyzer =
+                crate::structure_review::rust_analyzer::RustLanguageAnalyzer::new(rust_executable);
+            app.manage(crate::structure_review::StructureReview::new(Arc::new(
+                move |input, cancelled| {
+                    rust_analyzer
+                        .clone()
+                        .with_cancellation(cancelled)
+                        .analyze(input)
+                },
+            )));
             app.manage(repository_application);
             app.manage(auth);
             let application_settings = ApplicationSettingsApplication::new(settings_path.clone());
@@ -121,6 +142,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            structure_review_commands::analyze_structure_review,
             application_settings_commands::load_application_settings,
             application_settings_commands::load_application_custom_connection,
             application_settings_commands::save_application_custom_connection,

@@ -1,0 +1,14 @@
+.structure-view .react-flow { --xy-background-color: var(--background); --xy-controls-button-background-color: var(--background); --xy-controls-button-background-color-hover: var(--muted); --xy-controls-button-color: var(--foreground); --xy-controls-button-border-color: var(--border); }
+.structure-added { --structure-color: #059669; }
+.structure-removed { --structure-color: #e11d48; }
+.structure-modified { --structure-color: #2563eb; }
+.structure-relations { --structure-color: #9333ea; }
+.structure-unchanged { --structure-color: #64748b; }
+.structure-object { width: 100%; height: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--structure-color) 65%, var(--border)); border-left: 3px solid var(--structure-color); border-radius: 8px; padding: 12px 14px; background: var(--background); color: var(--foreground); box-shadow: 0 2px 6px #00000008; }
+.structure-object.structure-group { background: color-mix(in srgb, var(--structure-color) 4%, var(--background)); }
+.structure-object.structure-removed { border-style: dashed; }
+.structure-object.structure-selected { outline: 2px solid var(--structure-color); outline-offset: 3px; }
+.structure-status { color: var(--structure-color); }
+.structure-object .react-flow__handle { background: var(--structure-color); width: 5px; height: 5px; border: 0; }
+.structure-legend { display: inline-flex; align-items: center; gap: 5px; }
+.structure-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--structure-color); }

@@ -4,12 +4,12 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver, SyncSender},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::Value;
 
-use super::{failure, Result};
+use super::{failure, CancellationCheck, Result};
 
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
@@ -119,18 +119,42 @@ impl Transport {
     }
 
     /// Content-Length 按 UTF-8 字节计数，避免中文和 emoji 导致协议错帧。
-    pub fn send(&mut self, message: Value, timeout: Duration) -> Result<()> {
+    pub fn send(
+        &mut self,
+        message: Value,
+        timeout: Duration,
+        cancelled: &CancellationCheck,
+    ) -> Result<()> {
+        if cancelled() {
+            return Err(failure("LSP 操作已取消"));
+        }
         let bytes = serde_json::to_vec(&message).map_err(failure)?;
         let (complete, completed) = mpsc::channel();
         self.outgoing.try_send((bytes, complete)).map_err(failure)?;
-        completed
-            .recv_timeout(timeout)
-            .map_err(|error| failure(format!("向 LSP 服务器发送消息失败：{error}")))?
+        wait(&completed, timeout, cancelled)?
     }
 
     /// 等待下一帧；EOF 和超时都通过同一个错误出口交给会话。
-    pub fn receive(&mut self, timeout: Duration) -> Result<Value> {
-        self.incoming.recv_timeout(timeout).map_err(failure)?
+    pub fn receive(&mut self, timeout: Duration, cancelled: &CancellationCheck) -> Result<Value> {
+        wait(&self.incoming, timeout, cancelled)?
+    }
+}
+
+/// 短等待片段响应取消，同时保留整个读写阶段的固定截止时间。
+fn wait<T>(receiver: &Receiver<T>, timeout: Duration, cancelled: &CancellationCheck) -> Result<T> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancelled() {
+            return Err(failure("LSP 操作已取消"));
+        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| failure("等待 LSP 消息超时"))?;
+        match receiver.recv_timeout(remaining.min(Duration::from_millis(50))) {
+            Ok(value) => return Ok(value),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(error) => return Err(failure(error)),
+        }
     }
 }
 

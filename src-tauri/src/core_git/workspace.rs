@@ -1,6 +1,22 @@
 use super::*;
 
 impl GitProcessAdapter {
+    /// 验证借用的 checkout 仍属于本仓库并固定在所请求的精确提交。
+    pub(crate) fn validate_worktree_revision(
+        &self,
+        workspace_path: &Path,
+        expected_common_directory: &Path,
+        expected_head_object_id: &str,
+        cancellation: &CancellationSignal,
+    ) -> Result<(), GitCommandError> {
+        self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
+        self.validate_registered_worktree(workspace_path, expected_head_object_id, cancellation)?;
+        Self::new(workspace_path)
+            .run(["diff", "--quiet", "HEAD", "--"], cancellation)
+            .map(|_| ())
+            .map_err(|error| error.with_context("Review checkout 的已跟踪源码与固定提交不一致"))
+    }
+
     /// 在精确受管路径创建 detached linked worktree，并校验其 HEAD。
     pub fn create_detached_worktree(
         &self,

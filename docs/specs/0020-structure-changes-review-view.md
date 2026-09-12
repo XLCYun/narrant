@@ -1,13 +1,13 @@
 ---
-status: draft
+status: accepted
 ---
 
 # Structure Changes Review View
 
 This specification records the design interview started on 2026-09-12. The preceding
 Rust LanguageAnalyzer and shared LSP implementation was merged in PR #181 at
-`a010f7150c19e85eca42f40236a835687d43b801`. Product choices below remain pending;
-this draft does not authorize an assumed answer to an interview question.
+`a010f7150c19e85eca42f40236a835687d43b801`. The user accepted Q1–Q3 and required reuse
+of the existing head checkout on 2026-09-12. The design now proceeds to implementation.
 
 ## Requested outcome and settled scope
 
@@ -63,60 +63,60 @@ See [the graph specification](0018-structure-review-code-graph.md),
   rust-analyzer process. Cancellation must reach the running analysis before checkout
   cleanup can be considered safe.
 
-## Proposed deep Module
+## Application Module
 
 The frontend asks the Structure Review Module to analyze one `reviewId + snapshotId`.
 The backend resolves the saved comparison, verifies Trust and availability, prepares
 the two source states, runs the language Adapters, compares the graphs and returns one
 Structure Comparison result. Repository paths, Git commands and LSP sequencing remain
-behind that Interface. An operation context owns cancellation and progress.
+behind that Interface. An operation context provides cancellation.
 
 The result contains the pinned comparison identity, both graphs, their difference,
 and coverage explaining which changed files were analyzed or unsupported. React Flow
 receives a presentation projection of this result. The serialized transport follows
 the existing [typed Tauri and application Adapter policy](../adr/0014-use-a-typed-tauri-transport-and-domain-application-adapters.md).
 
-Default file scope is proposed as all changed source files supported by an available
+Default file scope is all changed source files supported by an available
 language Adapter in the current Snapshot. Both sides use the same scope policy, with
 side-specific existence and paths: before uses `oldPath ?? path` when before content
 exists; after uses `path` when after content exists. Additions, deletions and renames
 must not produce nonexistent analyzer inputs. Complete repository checkouts supply
 semantic context without expanding the graph to every file in the repository.
 
-## Proposed checkout preparation
+## Checkout preparation: reuse head
 
-Prepare two analysis-owned detached worktrees that share the registered Repository's
-Git object database. A proposed application-data layout is:
+Reuse the Review's existing head checkout. Create only one analysis-owned detached
+worktree at the exact comparison-base commit, sharing the Repository's Git object
+database. The application-data layout is:
 
 ```text
 reviews/<review-id>/
-  repo/                                  existing head Review Workspace
-  structure/<snapshot-id>/<analysis-id>/
-    before/                              exact comparison-base commit
-    after/                               exact head commit
+  repo/                                  existing head, used under a Snapshot lease
+  before/                                exact comparison-base commit
 ```
 
-The two extra checkouts hold complete project sources so Cargo manifests, module
-files and build inputs remain available. They are not independent clones and are not
-checked out in the user's development directory. Their lifetime belongs to one
-analysis attempt; an attempt identifier prevents a cancelled attempt's cleanup from
-removing the files of a later retry.
+Both sides expose complete project sources so Cargo manifests, module files and build
+inputs remain available. The additional before checkout belongs to one analysis attempt;
+the Review lease serializes actual workers, so an old worker finishes cleanup before a retry can acquire the same path. No second
+head checkout or independent clone is created.
 
-Reusing the existing head `repo/` would save one checkout, but currently requires a
-new lease across analysis and refresh. Holding the Review lifecycle lock during LSP
-startup would also couple optional analysis latency to ordinary review operations.
-Dedicated before/after paths let the current Review refresh without modifying the
-sources being analyzed. This is the recommended trade-off, pending the final shared
-design confirmation.
+The Review Lifecycle grants a Snapshot-scoped use of its existing head directory. It
+verifies Review/Snapshot identity, Trust and the expected head while establishing the
+protection. Refresh and close revoke active analysis, wait for its worker and language
+server processes to stop, and only then mutate or remove head. Releasing the use does
+not remove head; normal Review lifecycle remains its owner. A bare path lookup is not
+sufficient, and cancelling only the frontend await is not sufficient.
 
 Preparation and release must be owned by one Module:
 
 - Verify the Review is open, the requested Snapshot is current and its Repository is
   trusted before materialization. Use the Snapshot's saved commit identities.
-- Create each checkout through Core Git. If the second fails, compensate the first.
-- Stop the analysis and its language-server/build processes before removing checkouts.
-  Success, error, cancellation, refresh, Repository deletion and application exit all
-  need an explicit release path.
+- Create the before checkout through Core Git; failure releases any partial before
+  state and head usage without deleting the existing head checkout.
+- Stop the analysis and its language-server/build processes before removing before
+  or permitting head to change.
+  Success, error, cancellation, refresh and application exit all use this release path.
+  A future Repository deletion operation must drain these uses before deleting its workspaces.
 - Check precise application path, Repository Git common directory and linked-worktree
   registration before removal. Never broadly prune unrelated worktrees.
 - Record enough ownership information to recover a process crash and retry cleanup;
@@ -124,13 +124,12 @@ Preparation and release must be owned by one Module:
 - Keep successful graph results in process memory under Snapshot identity, file scope
   and analyzer configuration. Tab switching can reuse a completed result. A refreshed
   Snapshot must never display a late result from its predecessor.
-- Release the analysis checkouts after completion. Reusable tool state, if retained,
+- Release the before checkout after completion. Reusable tool state, if retained,
   belongs outside these disposable source directories; persistent graph storage and
-  long-lived two-sided checkouts are not assumed.
+  an additional long-lived checkout is not assumed.
 
-This preserves the existing meaning and lifetime of Review Workspace. If this
-trade-off is accepted, record the analysis-checkout decision separately because it
-affects refresh concurrency, disk use and crash recovery.
+This preserves the existing meaning and lifetime of Review Workspace and implements
+the user's explicit instruction not to repeat the head checkout. See [ADR-0031](../adr/0031-reuse-review-head-for-structure-analysis.md).
 
 ## React Flow projection facts
 
@@ -141,35 +140,37 @@ crossing those groups. Parent dimensions and automatic layout are application wo
 
 React Flow does not include automatic layout. Its documentation notes Dagre's limitation
 for sub-flows connected to outside nodes; ELK supports compound layout and edge routing.
-An ELK integration is a candidate Implementation choice to validate with the real graph,
-not a product decision for the user. [Official layout documentation](https://reactflow.dev/learn/layouting/layouting).
+The Implementation uses ELK for compound layout and routing in a local Web Worker. [Official layout documentation](https://reactflow.dev/learn/layouting/layouting).
 
 `contains` supplies nesting; references supply typed edges. Own-content status and
 contains/reference changes must remain distinguishable: a parent whose child changed
-does not thereby have modified own code. If Q1 selects a combined graph, the projection
+does not thereby have modified own code. In the combined graph, the projection
 must handle changed containment without blindly unioning two parent trees into a
 multi-parent or cyclic visual hierarchy.
 
-## Design tree and first frontier
+## Accepted design tree
 
 | Decision | Recommendation | Status |
 | --- | --- | --- |
 | Peer tab and library | Structure Changes immediately after File Changes; React Flow | Explicit user request |
 | Comparison identity | Existing Snapshot's comparison-base and head commits | Existing contract |
-| Checkout strategy | Two attempt-owned detached worktrees, release after analysis | Proposal; facts verified |
-| Q1: presentation | One combined difference graph with explicit added/removed/modified states | Awaiting answer |
-| Q2: initial visible objects | Changed objects and their containing context; allow expansion of unchanged objects | Awaiting answer |
-| Q3: first language coverage | Existing Rust Adapter; explicitly show unsupported changed-file coverage | Awaiting answer |
+| Checkout strategy | Reuse existing head under lifecycle protection; create only before | Explicit user correction |
+| Q1: presentation | One combined difference graph with explicit added/removed/modified states | Accepted |
+| Q2: initial visible objects | Changed objects and their containing context; allow expansion of unchanged objects | Accepted |
+| Q3: first language coverage | Existing Rust Adapter; explicitly show unsupported changed-file coverage | Accepted |
 
-Q1 asks combined versus side-by-side before/after graphs. Q2 changes the initial
-presentation only, not the complete extraction inside the chosen file scope. Q3 asks
-whether other language implementations belong in this slice.
+Q1 chooses a combined graph. Q2 changes the initial
+presentation only, not the complete extraction inside the chosen file scope. Q3 limits
+the first implementation to the existing Rust Adapter.
 
-After these answers, recompute the frontier for any genuinely unsettled product
-choices, particularly scope controls and interactions affected by the chosen view.
-Do not reopen settled comparison, Trust or graph extraction contracts as questions.
+The first entry to this tab requests analysis lazily. A completed result is reused for
+the same Snapshot; the page offers retry after failure and cancellation while running.
+Selecting a node displays its declaration/content details rather than inventing source
+navigation from its opaque ID. Layout is read-only, with pan, zoom, fit and context
+expansion. These defaults implement the accepted scope without additional language
+implementations, persistent graph storage or a new file-scope picker.
 
-## Acceptance outline to refine after the interview
+## Acceptance criteria
 
 - The Structure Changes tab preserves the open Review and Snapshot, respects existing
   Review navigation, and uses React Flow to display containment and typed relationships.
@@ -179,10 +180,51 @@ Do not reopen settled comparison, Trust or graph extraction contracts as questio
   parent changes, nesting, cross-group references and unchanged contextual objects.
 - Loading, error, retry, cancellation, no structural differences and unsupported-only
   scope are distinguishable. Missing analysis is never displayed as a proven empty diff.
-- Refresh during analysis, stale completion, failure during the second checkout and
+- Refresh during analysis, stale completion, before-checkout creation failure and
   cleanup after process interruption are verified at the application Interface.
 - Reuse the Preview Harness for wide/narrow windows, long names, nested objects, cross-
   group edges and meaningful interactions. Verify actual browser rendering in addition
   to frontend tests, type checking, lint and production build.
 
-No implementation ticket or new PR has been created during this first design round.
+## Implementation and local verification
+
+- Backend entry: `structure_review::StructureReview::analyze`. The actual blocking
+  worker owns the Snapshot lease; dropping its async waiter revokes its linked
+  cancellation signal without releasing the head early. Common LSP reads/writes
+  observe cancellation at bounded intervals and process cleanup retains ownership.
+- Transport: `analyze_structure_review` returns both complete graphs, the existing
+  graph difference and per-side coverage. Frontend `StructureReviewAdapter` keeps
+  Tauri calls outside the view; `useStructureReview` caches one result per open Review's
+  current Snapshot and rejects stale results.
+- Presentation: React Flow uses after containment for surviving objects and before
+  containment for deleted objects. Removed containment that cannot be expressed by
+  the combined tree remains an explicit edge. Expansion does not change analysis scope.
+- Local tool configuration: `NARRANT_RUST_ANALYZER` overrides the development default
+  `<build-repository>/.tools/rust-analyzer` (`.exe` on Windows). Automatic installation
+  and packaged tool distribution remain deferred by specification 0019. Missing or
+  failed language tooling produces a retryable analysis failure, never an empty diff.
+- Automated acceptance covers one additional checkout, exact merge-base, side-specific
+  additions/deletions, body changes, stale Snapshot rejection, cleanup failures,
+  refresh/close revocation, abandoned async waiters and crash recovery. The ignored
+  `real_server_builds_review_structure_comparison` test exercises the application
+  Interface with a real rust-analyzer process and real Git worktrees.
+- The generic Preview Harness contains structure graph, loading/cancellation, failure/
+  retry, no-change and unsupported-only scenarios. Representative data includes
+  nested `impl` objects, long names and relationships across containing groups.
+
+### Verification on 2026-09-12
+
+- Rust full suite: 551 passed, 3 opt-in language-server tests ignored. The new real
+  rust-analyzer application test was then run separately and passed (3 before nodes,
+  3 after nodes, 5 changes, including body-only change and declarations added/removed).
+- Frontend full suite: 41 files, 337 tests passed with two workers. Type checking,
+  ESLint, Rustfmt and Clippy with warnings denied passed. The production frontend
+  build passed; Vite retains its large-chunk advisory for Monaco and the lazy graph view.
+- In-app browser checks used explicit 1440×1000, 900×800 and 520×800 viewport overrides
+  (reported CSS viewports were 1309×909, 818×727 and 472×727 at the existing browser zoom).
+  Tabs and toolbars stayed within the viewport. Long names truncated in graph cards,
+  wrapped in details, and code scrolled within its own panel. The narrow details panel
+  had no horizontal overflow. The temporary viewport override was reset after testing.
+- Browser interactions verified context expansion, all objects, unchanged relationships
+  including `code.member_of`, node details, per-file coverage, loading/cancellation/retry,
+  failure, no structural changes and unsupported-only coverage in light and dark themes.

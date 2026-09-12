@@ -1,3 +1,4 @@
+import { createTauriStructureReviewAdapter } from "@/infrastructure/tauri-structure-review-adapter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -75,6 +76,7 @@ export function App() {
     () => createTauriReviewApplicationAdapter(tauriTransport),
     [],
   );
+  const structureApplicationAdapter = useMemo(() => createTauriStructureReviewAdapter(tauriTransport), []);
   const babysitApplicationAdapter = useMemo(
     () => createTauriBabysitApplicationAdapter(tauriTransport),
     [],
@@ -97,6 +99,7 @@ export function App() {
     reviewApplicationAdapter,
     { initialDiffMode, initialTreeWidth },
     babysitApplicationAdapter,
+    structureApplicationAdapter,
   );
   const appShell = useAppShellNavigation(repositoryOverview, reviewLifecycle);
   const selectedRepository = repositoryOverview.current?.repository;
