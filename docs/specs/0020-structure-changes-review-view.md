@@ -188,6 +188,11 @@ If a description is unavailable, show a generic resolved-target label and retain
 unknown scope; never guess a dependency from a language's ID format. These are display
 choices: complete graphs, graph differences and changed-object counts remain intact.
 
+Rust closures no longer appear as separate Callable or ExecutionRegion nodes. Their
+content changes and outgoing calls remain on the nearest modeled declaration. This
+is an analyzer extraction policy, not a frontend filter; both complete input graphs
+follow it before computing the difference.
+
 ## Acceptance criteria
 
 - The Structure Changes tab preserves the open Review and Snapshot, respects existing

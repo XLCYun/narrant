@@ -109,17 +109,10 @@ declare!(generated);
     };
     let helper = find("helper").data().id.clone();
     assert!(find("storage").data().contains.contains(&helper));
-    let closure = all
+    assert!(!all
         .values()
-        .find(|node| node.data().native_kind == "closure")
-        .unwrap();
-    assert!(closure
-        .data()
-        .references
-        .iter()
-        .any(|reference| reference.semantic == "code.calls"
-            && reference.target == ReferenceTarget::Node(helper.clone())));
-    assert!(!find("run")
+        .any(|node| node.data().native_kind == "closure"));
+    assert!(find("run")
         .data()
         .references
         .iter()
@@ -143,8 +136,12 @@ declare!(generated);
         .iter()
         .any(|reference| reference.semantic == "code.references"
             && reference.target == ReferenceTarget::Node(helper.clone())));
-    assert!(find("direct_closure").data().references.iter().any(|reference| reference.semantic == "code.calls"
-        && matches!(&reference.target, ReferenceTarget::Node(id) if old.node(id).unwrap().data().native_kind == "closure")));
+    assert!(find("direct_closure")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.calls"
+            && reference.target == ReferenceTarget::Node(helper.clone())));
     assert!(find("copy")
         .data()
         .references
@@ -217,6 +214,89 @@ declare!(generated);
     )));
 }
 
+/// 闭包不建模，仍经真实 LSP 保留跨文件关联，并将闭包编辑准确计入其外层对象。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_keeps_closure_references_without_closure_nodes() {
+    let source = r#"
+mod store;
+pub fn run() -> u32 { let f = |x| store::helper() + x; f(1) }
+pub fn immediate() -> u32 { (|| store::helper())() }
+pub fn wrapped() -> u32 { let f = (|| store::helper()) as fn() -> u32; f() }
+pub const CALLBACK: fn() -> u32 = || store::helper();
+pub fn constant() -> u32 { CALLBACK() }
+pub fn parameter() { let invoke = |f: fn() -> u32| f(); invoke(store::helper); }
+"#;
+    let before = repository(source);
+    let after = repository(&source.replace("store::helper() + x", "store::replacement() + x"));
+    let analyze = |directory: &Path| {
+        fs::write(
+            directory.join("src/store.rs"),
+            "pub fn helper() -> u32 { 1 } pub fn replacement() -> u32 { 2 }",
+        )
+        .unwrap();
+        analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: directory.to_path_buf(),
+                files: vec!["src/lib.rs".into()],
+            })
+            .unwrap()
+    };
+    let old = analyze(before.path());
+    let new = analyze(after.path());
+    let all = nodes(&old);
+    assert!(all.values().all(|node| node.data().native_kind != "closure"
+        && !matches!(node, CodeNode::ExecutionRegion(_))));
+    let find = |name: &str| {
+        *all.values()
+            .find(|node| node.data().name.as_deref() == Some(name))
+            .unwrap()
+    };
+    let helper = old
+        .external_symbols()
+        .iter()
+        .find(|(_, symbol)| symbol.name == "helper")
+        .unwrap()
+        .0;
+    let calls_helper = |node: &CodeNode| {
+        node.data().references.iter().any(|reference| {
+            reference.semantic == "code.calls"
+                && reference.target
+                    == ReferenceTarget::External {
+                        symbol: helper.clone(),
+                    }
+        })
+    };
+    for name in ["run", "immediate", "wrapped", "CALLBACK"] {
+        assert!(calls_helper(find(name)), "{name}: {:?}", find(name));
+    }
+    for name in ["run", "immediate", "wrapped", "constant"] {
+        let node = find(name);
+        assert!(
+            node.data().references.iter().all(|reference| !matches!(
+                reference.target,
+                ReferenceTarget::Unresolved { .. }
+            ) && reference.target
+                != ReferenceTarget::Node(node.data().id.clone())),
+            "{name}: {node:?}"
+        );
+    }
+    assert!(find("parameter")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.calls"
+            && reference.target == ReferenceTarget::Unresolved { name: "f".into() }));
+    let changes = old.diff(&new).unwrap().nodes;
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(changes[0].id, find("run").data().id);
+    assert_eq!(changes[0].content, Some(ChangeKind::Modified));
+    assert!(changes[0].contains.is_empty());
+    assert_eq!(changes[0].references.len(), 2, "{changes:?}");
+    save("closures-before", &old);
+    save("closures-after", &new);
+}
+
 /// 真实 LSP 解析得到的目标同时携带可读名称与仓库范围，保持未选文件和标准库可区分。
 #[test]
 #[ignore = "需要已提供的 rust-analyzer、Rust 工具链和 rust-src，单独串行运行"]
@@ -281,11 +361,10 @@ fn real_server_analyzes_current_repository() {
     };
     let graph = analyzer().analyze(&input).unwrap();
     let all = nodes(&graph);
-    assert!(all.len() > 90, "仅提取到 {} 个对象", all.len());
     assert!(all
         .values()
         .any(|node| node.data().name.as_deref() == Some("CodeGraph")));
-    assert!(all
+    assert!(!all
         .values()
         .any(|node| node.data().native_kind == "closure"));
     assert!(all.values().flat_map(|node| &node.data().references).any(|reference| matches!(&reference.target, ReferenceTarget::External { symbol } if symbol.contains("validate"))));

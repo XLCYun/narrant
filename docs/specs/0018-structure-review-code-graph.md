@@ -195,6 +195,11 @@ an ExecutionRegion wrapper. Comparison still distinguishes a node's own content 
 the content of separately modeled children, so a child edit does not automatically
 modify every ancestor's own declaration.
 
+The Rust mapping now keeps closures as expressions in the enclosing object's code,
+following the user's 2026-09-13 decision. Their changes and outgoing references belong
+to the nearest modeled declaration; no separate Callable or ExecutionRegion is emitted
+for the closure. Named declarations nested inside a closure remain independently modeled.
+
 The user selected language-normalized own code in the
 [Rust analyzer design](0019-rust-language-analyzer.md). It preserves significant syntax
 and literal contents while ignoring pure formatting/comment changes, consistent with

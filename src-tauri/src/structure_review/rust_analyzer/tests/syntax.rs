@@ -28,14 +28,14 @@ fn graph(source: &str) -> CodeGraph {
     .unwrap()
 }
 
-/// 成员、嵌套函数、局部常量和闭包都单独比较，不重复修改整个外层函数。
+/// 具名子声明独立比较，闭包内容变化归属于外层函数。
 #[test]
 fn nested_body_edits_belong_only_to_their_owner() {
     let before = "struct S { n: u32 } impl S { fn run() { const N: u32 = 1; fn helper() -> u32 { 2 } let f = || 3; consume(N + helper() + f()); } }";
     for (from, to, name, kind) in [
         ("= 1", "= 9", Some("N"), "const"),
         ("{ 2 }", "{ 8 }", Some("helper"), "fn"),
-        ("|| 3", "|| 7", None, "closure"),
+        ("|| 3", "|| 7", Some("run"), "fn"),
     ] {
         let old = graph(before);
         let after = graph(&before.replace(from, to));
@@ -45,6 +45,74 @@ fn nested_body_edits_belong_only_to_their_owner() {
         let changed = after.node(&diff.nodes[0].id).unwrap().data();
         assert_eq!(changed.name.as_deref(), name);
         assert_eq!(changed.native_kind, kind);
+    }
+}
+
+/// 不为闭包或嵌套闭包创建节点、执行区域或占位；其参数和实现完整参与外层比较。
+#[test]
+fn closures_are_code_of_their_enclosing_function_or_value() {
+    for (before, from, to) in [
+        (
+            "fn run() { let f = |x: u32| x + 1; f(2); }",
+            "x + 1",
+            "x + 9",
+        ),
+        ("const F: fn(u32) -> u32 = |x| x + 1;", "x + 1", "x + 9"),
+        ("static F: fn(u32) -> u32 = |x| x + 1;", "x + 1", "x + 9"),
+        (
+            "fn run() { let f = move |x: u32| move |y: u32| x + y; }",
+            "x + y",
+            "x - y",
+        ),
+        ("fn run() { let f = |x: u32| x; }", "x: u32", "x: u64"),
+    ] {
+        let old = graph(before);
+        let new = graph(&before.replace(from, to));
+        assert_eq!(old.root().contains.len(), 1);
+        assert_eq!(new.root().contains.len(), 1);
+        let owner = new.node(&new.root().contains[0]).unwrap();
+        assert!(owner.data().contains.is_empty());
+        let code = owner.data().code.as_ref().unwrap();
+        assert!(!code.contains("@code_graph_child"));
+        assert!(code.contains('|'), "{code}");
+        let changes = old.diff(&new).unwrap().nodes;
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].id, owner.data().id);
+        assert_eq!(changes[0].content, Some(ChangeKind::Modified));
+        assert!(changes[0].contains.is_empty());
+    }
+    assert!(graph("fn run(){let f=|x| { x + 1 };}")
+        .diff(&graph("fn run() { let f = |x| { /*注释*/ x+1 }; }"))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 闭包不截断具名声明的提取；最近的实际声明继续拥有自己的实现和关联。
+#[test]
+fn named_items_inside_closures_keep_their_own_content() {
+    let before = "fn run() { let f = || { fn helper() -> u32 { 1 } helper() }; }";
+    let after = graph(&before.replace("{ 1 }", "{ 2 }"));
+    let changes = graph(before).diff(&after).unwrap().nodes;
+    assert_eq!(changes.len(), 1);
+    let helper = after.node(&changes[0].id).unwrap();
+    assert_eq!(helper.data().name.as_deref(), Some("helper"));
+    let run = after.node(&after.root().contains[0]).unwrap();
+    assert_eq!(run.data().contains, vec![helper.data().id.clone()]);
+}
+
+/// 闭包内部语义查询的源码位置归属最近的声明，不转移到其他同名对象。
+#[test]
+fn closure_references_belong_to_the_nearest_modeled_declaration() {
+    let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+    let source = "fn run() { let f = || { fn helper() { inside(); } outside(); }; }";
+    let document = Document::parse(repository, repository.join("lib.rs"), source.into()).unwrap();
+    for (name, owner) in [("inside", "helper"), ("outside", "run")] {
+        let offset = ra_ap_syntax::TextSize::from(source.find(name).unwrap() as u32);
+        assert_eq!(
+            document.owner(offset).unwrap().node.data().name.as_deref(),
+            Some(owner)
+        );
     }
 }
 

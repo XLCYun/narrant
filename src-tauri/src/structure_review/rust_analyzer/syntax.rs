@@ -70,13 +70,7 @@ impl Document {
                 let children = declarations
                     .iter()
                     .filter(|child| child.parent.as_ref() == Some(&declaration.node.data().id))
-                    .map(|child| {
-                        (
-                            child.syntax.text_range(),
-                            child.node.data().id.clone(),
-                            child.syntax.kind() == SyntaxKind::CLOSURE_EXPR,
-                        )
-                    })
+                    .map(|child| (child.syntax.text_range(), child.node.data().id.clone()))
                     .collect();
                 (declaration.node.data().id.clone(), children)
             })
@@ -87,7 +81,7 @@ impl Document {
             let data = data_mut(&mut declaration.node);
             data.signature = Some(signature(&declaration.syntax, own_children));
             data.code = body.as_ref().map(|body| normalize(body, own_children));
-            data.contains = own_children.iter().map(|(_, id, _)| id.clone()).collect();
+            data.contains = own_children.iter().map(|(_, id)| id.clone()).collect();
         }
         Ok(Self {
             uri: file_uri(&path).map_err(failure)?,
@@ -98,7 +92,7 @@ impl Document {
         })
     }
 
-    /// 查找最内层声明，保证闭包和嵌套 item 的引用不会归入外层函数。
+    /// 查找最内层已建模声明；闭包是普通表达式，内部关联自然归属外层对象。
     pub fn owner(&self, offset: TextSize) -> Option<&Declaration> {
         self.declarations
             .iter()
@@ -145,7 +139,7 @@ fn category(syntax: &SyntaxNode) -> Option<CodeCategory> {
     Some(match syntax.kind() {
         MODULE => CodeCategory::Container,
         STRUCT | ENUM | TRAIT | TYPE_ALIAS | UNION => CodeCategory::Type,
-        FN | CLOSURE_EXPR => CodeCategory::Callable,
+        FN => CodeCategory::Callable,
         RECORD_FIELD | TUPLE_FIELD | VARIANT | CONST | STATIC => CodeCategory::Value,
         IMPL | MACRO_RULES | MACRO_DEF | USE | EXTERN_CRATE | EXTERN_BLOCK => {
             CodeCategory::Extension
@@ -164,7 +158,7 @@ fn category(syntax: &SyntaxNode) -> Option<CodeCategory> {
     })
 }
 
-/// 收集所有显式声明，包含 cfg 未启用的分支；不解析宏展开后的生成对象。
+/// 收集显式声明，包含 cfg 未启用的分支；闭包本身不建模，其中具名声明仍独立提取。
 fn collect(
     syntax: &SyntaxNode,
     scope: &str,
@@ -176,7 +170,6 @@ fn collect(
         let name_node = child(syntax, SyntaxKind::NAME);
         let name = name_node.as_ref().map(|name| name.text().to_string());
         let native_kind = match syntax.kind() {
-            SyntaxKind::CLOSURE_EXPR => "closure".to_owned(),
             SyntaxKind::MACRO_CALL => "macro_invocation".to_owned(),
             kind => format!("{kind:?}").to_lowercase(),
         };
@@ -252,18 +245,6 @@ fn identity_key(syntax: &SyntaxNode, signature: &str) -> String {
             .collect::<Vec<_>>()
             .join(" for ");
     }
-    if syntax.kind() == SyntaxKind::CLOSURE_EXPR {
-        if let Some(binding) = syntax
-            .ancestors()
-            .skip(1)
-            .take_while(|node| category(node).is_none())
-            .find(|node| node.kind() == SyntaxKind::LET_STMT)
-            .and_then(|statement| child(&statement, SyntaxKind::IDENT_PAT))
-        {
-            return normalize(&binding, &[]);
-        }
-        return "anonymous".into();
-    }
     if syntax.kind() == SyntaxKind::MACRO_CALL {
         return child(syntax, SyntaxKind::PATH)
             .map_or_else(|| "macro".into(), |path| normalize(&path, &[]));
@@ -282,7 +263,7 @@ fn implementation(syntax: &SyntaxNode) -> Option<SyntaxNode> {
     use SyntaxKind::*;
     match syntax.kind() {
         FN => child(syntax, BLOCK_EXPR),
-        CLOSURE_EXPR | CONST | STATIC => syntax
+        CONST | STATIC => syntax
             .children()
             .find(|node| ast::Expr::can_cast(node.kind())),
         VARIANT => child(syntax, CONST_ARG),
@@ -292,7 +273,7 @@ fn implementation(syntax: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// 声明签名排除实现和成员内容，但保留括号形态、修饰符及语言特有标注。
-fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> String {
+fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId)]) -> String {
     let body = implementation(syntax);
     let mut tokens = Vec::new();
     for element in syntax.children_with_tokens() {
@@ -341,23 +322,21 @@ fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> Str
         .join(" ")
 }
 
-/// 输出可读的规范化代码投影；子闭包保留身份占位，具名子声明整体排除。
-fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> String {
-    let mut tokens = Vec::<(String, Option<TextRange>, bool)>::new();
+/// 输出可读的规范化代码；闭包内容原样参与外层比较，独立的具名子声明整体排除。
+fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId)]) -> String {
+    let mut tokens = Vec::<(String, TextRange, bool)>::new();
     normalized_tokens(syntax, children, &mut tokens);
     let mut output = String::new();
     let mut previous: Option<(TextRange, bool)> = None;
     for (text, range, punctuation) in tokens {
-        let joint = previous
-            .zip(range)
-            .is_some_and(|((left, was_punctuation), right)| {
-                was_punctuation && punctuation && left.end() == right.start()
-            });
+        let joint = previous.is_some_and(|(left, was_punctuation)| {
+            was_punctuation && punctuation && left.end() == range.start()
+        });
         if !output.is_empty() && !joint {
             output.push(' ');
         }
         output.push_str(&text);
-        previous = range.map(|range| (range, punctuation));
+        previous = Some((range, punctuation));
     }
     output
 }
@@ -365,20 +344,13 @@ fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> Str
 /// 只删除真正的空白/注释 token；字面量和宏中有意义的标点粘连保持原样。
 fn normalized_tokens(
     syntax: &SyntaxNode,
-    children: &[(TextRange, NodeId, bool)],
-    output: &mut Vec<(String, Option<TextRange>, bool)>,
+    children: &[(TextRange, NodeId)],
+    output: &mut Vec<(String, TextRange, bool)>,
 ) {
-    if let Some((_, id, expression)) = children
+    if children
         .iter()
-        .find(|(range, _, _)| *range == syntax.text_range())
+        .any(|(range, _)| *range == syntax.text_range())
     {
-        if *expression {
-            output.push((
-                format!("/*@code_graph_child:{}*/", component(&id.0)),
-                None,
-                false,
-            ));
-        }
         return;
     }
     for element in syntax.children_with_tokens() {
@@ -390,7 +362,7 @@ fn normalized_tokens(
                     .any(|parent| parent.kind() == SyntaxKind::TOKEN_TREE);
                 output.push((
                     token.text().to_string(),
-                    Some(token.text_range()),
+                    token.text_range(),
                     in_macro
                         && token.kind().is_punct()
                         && !matches!(

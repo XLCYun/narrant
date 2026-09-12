@@ -144,21 +144,24 @@ independent, not mutually exclusive. Rename `NodeDiff.declaration` to `NodeDiff.
 to reflect declaration and body changes together. This retains the existing own-data status rather than adding
 field-level diffs or a fourth diff dimension.
 
-Child-content exclusion must preserve the parent's observable code structure. For an
-independently represented closure, keep its use position in the parent projection via
-an unambiguous child-identity placeholder. For example, the conceptual projection
-`choose(flag, <child:A>, <child:B>)` differs from `choose(flag, <child:B>, <child:A>)`
-without embedding either child's signature or body. This illustrates a projection,
-not valid Rust source. The implementation uses `/*@code_graph_child:<encoded-id>*/`;
-ordinary source comments are removed, so they cannot impersonate these placeholders.
-Plain ellipses are insufficient. Retaining
-execution order here does not change unordered contains/reference set comparison.
+On 2026-09-13 the user requested removing standalone closure objects and confirmed
+that calls from inside closures must still be resolved. Closures are now expressions
+in their enclosing object's normalized code, with no Callable or ExecutionRegion
+node and no child-identity placeholder. Changing closure parameters, capture syntax,
+body or use order modifies that enclosing object's own content. References inside
+closures are still resolved through LSP and belong to the nearest modeled declaration.
+This records call sites in the owner's code; it does not claim that constructing a
+closure executes its body immediately.
 
-In contrast, nested named items such as `fn helper` and `const N` are independently
+Directly invoking a closure, or invoking a binding known to initialize one, does not
+create a synthetic target or a self-call to the containing function. Unknown dynamic
+callables, including function-pointer parameters, retain Unresolved references.
+
+Nested named items such as `fn helper` and `const N` are independently
 declared children: reordering those declarations alone must not fabricate a parent-code
 modification. A reference to `helper()` or `N` in the parent's executing expression still
 belongs to the parent. These projection details implement the accepted own-content
-boundary; they do not reopen whether closures or nested declarations are graph objects.
+boundary, including named items declared inside a closure.
 
 ### Analysis context and failure handling
 
@@ -294,8 +297,8 @@ Q8 prevents `declare_items!(A)` becoming `declare_items!(B)` from disappearing f
 graph. Macro definitions can already use Extension. The accepted mapping adds a subject
 for the explicit invocation itself, not nodes for all generated objects.
 
-Existing decisions such as representing closures as Callable are not reopened merely
-because the spike omitted them. Source/project identity must be derived without the
+The later closure policy above supersedes the original standalone-Callable mapping.
+Source/project identity must be derived without the
 spike's fixed crate name or absolute checkout paths. Cases with several crate/module
 contexts must not select an arbitrary first match; conservative identity matching does
 not promise inference across anonymous-object reorderings or impl-block splits/merges.
@@ -320,8 +323,9 @@ The actual pinned server/library combination must be exercised. At minimum verif
   yield no differences; formatting and comments do not create modifications.
 - Function-body and Value-initializer literal/operator edits modify their owning nodes.
   Call replacements produce both code changes and the appropriate reference delta.
-- Editing a child method, nested function, constant or closure does not recursively modify
-  ancestors; changing the parent's use order of children remains detectable.
+- Editing a separately modeled child method, nested function or constant does not
+  recursively modify ancestors. Editing an inline closure modifies its enclosing
+  object's code; its calls remain visible without closure or ExecutionRegion nodes.
 - Literal contents, token boundaries and Unicode/UTF-16 positions survive normalization
   and semantic lookup. Requested-file read/parse failures produce analysis errors.
 - Selecting a resolved target's file changes its representation from External to Node
@@ -434,6 +438,24 @@ The synchronous call belongs on an application worker thread. Server project loa
 retains default Cargo build-script and procedural-macro behavior and therefore belongs
 under the application's existing Workspace Trust boundary. This adapter does not add
 an executable downloader, frontend command, or snapshot-preparation operation.
+
+## Closure extraction verification on 2026-09-13
+
+- The affected Structure Review suite passed: 59 tests, with 5 real-server tests
+  excluded from the ordinary run. Tests cover closure body/signature changes in
+  functions and const/static values, nested closures, formatting, and named items
+  declared inside closures.
+- A dedicated real rust-analyzer comparison verified no closure or ExecutionRegion
+  nodes, preserved outgoing calls to an unselected repository file, and a single
+  modified enclosing function plus reference removal/addition when a closure's call
+  target changes. Direct, bound, cast and const closures do not create fake unresolved
+  targets or enclosing-function self-calls; dynamic function-pointer parameters still
+  retain unresolved calls.
+- The prepared-repository integration regression passed. A real analysis of seven
+  selected files in this repository produced 130 nodes and 261 relationships with no
+  closure nodes. This count describes that source scope, not the complete PR.
+- Rustfmt and all-target Clippy with warnings denied passed. The frontend transport
+  and rendering contract are unchanged by this extraction policy.
 
 ## Implementation verification on 2026-09-12
 

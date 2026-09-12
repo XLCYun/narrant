@@ -12,7 +12,7 @@ Keep the user's six common categories as CodeNode enum variants:
 | --- | --- | --- |
 | Container | CodeNode::Container | Packages, modules, namespaces |
 | Type | CodeNode::Type | Classes, structs, interfaces, traits, enums, aliases |
-| Callable | CodeNode::Callable | Functions, methods, constructors, accessors, closures |
+| Callable | CodeNode::Callable | Functions, methods, constructors, accessors |
 | Value | CodeNode::Value | Fields, properties, constants, global bindings, enum members |
 | ExecutionRegion | CodeNode::ExecutionRegion | Separately represented non-callable execution regions |
 | Extension | CodeNode::Extension | Native constructs without a suitable category above |
@@ -25,7 +25,7 @@ value, not an independently mutable field on the input node.
 
 Both the virtual root and node children use a single Vec<NodeId>. Each node value
 lives once in the graph-owned node table. A module's types and functions are obtained
-by looking up its child IDs and matching the variants. Nested types, closures, and
+by looking up its child IDs and matching the variants. Nested types, named functions, and
 other declarations use the same adjacency structure.
 
 The earlier CodeNodes buckets were intended to expose grouped children directly.
@@ -90,9 +90,13 @@ This is a modeling choice, not a claim that module source cannot execute stateme
 Python modules can include executable initialization statements.
 [Python More on Modules](https://docs.python.org/3/tutorial/modules.html#more-on-modules).
 
-Class static blocks may be ExecutionRegion children of a Type. Closures remain
-Callable nodes. A reference from inside a nested closure belongs to that closure,
-not automatically to the module or value that creates it.
+Class static blocks may be ExecutionRegion children of a Type. The current Rust
+mapping treats closures as ordinary expressions in the enclosing object, following
+the user's decision on 2026-09-13. It creates neither Callable nor ExecutionRegion
+nodes for closures. Their normalized code and outgoing references belong to the
+nearest modeled declaration. Explicit named items inside a closure still have their
+own nodes and content. The common category enum does not force language adapters to
+represent every callable expression as a separate object.
 
 No execution-phase taxonomy is required. No synthetic method declaration or semantic
 module is invented merely because source text needs an organizational parent.

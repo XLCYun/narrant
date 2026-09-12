@@ -138,31 +138,21 @@ pub(super) fn analyze(
                 continue;
             }
             if node.kind() == SyntaxKind::CALL_EXPR {
-                if let Some(mut callee) = node
+                // 直接执行闭包不生成目标节点；其内部调用仍由下方的语法遍历提取。
+                let dynamic_target = node
                     .children()
                     .find(|child| ast::Expr::can_cast(child.kind()))
-                {
-                    if callee.kind() != SyntaxKind::PATH_EXPR {
-                        while callee.kind() == SyntaxKind::PAREN_EXPR {
-                            let Some(inner) = callee
-                                .children()
-                                .find(|child| ast::Expr::can_cast(child.kind()))
-                            else {
-                                break;
-                            };
-                            callee = inner;
-                        }
-                        if let Some(owner) = document.owner(node.text_range().start()) {
-                            let target = document
-                                .declarations
-                                .iter()
-                                .find(|declaration| declaration.syntax == callee)
-                                .map(|declaration| {
-                                    resolver.reference(declaration.node.data().id.clone())
-                                })
-                                .unwrap_or_else(|| unknown("<dynamic callable>"));
-                            add(&mut nodes, &owner.node.data().id, "code.calls", target);
-                        }
+                    .is_some_and(|callee| {
+                        callee.kind() != SyntaxKind::PATH_EXPR && !is_closure_expression(&callee)
+                    });
+                if dynamic_target {
+                    if let Some(owner) = document.owner(node.text_range().start()) {
+                        add(
+                            &mut nodes,
+                            &owner.node.data().id,
+                            "code.calls",
+                            unknown("<dynamic callable>"),
+                        );
                     }
                 }
             }
@@ -419,6 +409,9 @@ impl Resolver<'_> {
         if let Some(declaration) = document.declared_at(offset) {
             let category = declaration.node.category();
             if semantic == "code.calls" && category != CodeCategory::Callable {
+                if closure_initializer(&declaration.syntax) {
+                    return Ok(Vec::new());
+                }
                 return Ok(vec![unknown(observed)]);
             }
             if semantic == "code.writes" && category != CodeCategory::Value {
@@ -426,7 +419,7 @@ impl Resolver<'_> {
             }
             return Ok(vec![self.reference(declaration.node.data().id.clone())]);
         }
-        // 对局部闭包绑定的调用，定义指向绑定名；由其实际初始化表达式定位闭包对象。
+        // 已确认的闭包没有独立图目标；不制造 Unresolved 节点，也不回指其外层对象。
         let token = document.tree.token_at_offset(offset).right_biased();
         if let Some(token) = token {
             let ancestors: Vec<_> = token.parent_ancestors().collect();
@@ -435,16 +428,19 @@ impl Resolver<'_> {
                     .iter()
                     .find(|node| node.kind() == SyntaxKind::LET_STMT)
                 {
-                    if let Some(closure) =
-                        child(statement, SyntaxKind::CLOSURE_EXPR).and_then(|closure| {
-                            document
-                                .declarations
-                                .iter()
-                                .find(|declaration| declaration.syntax == closure)
-                        })
+                    // 只匹配 let 的绑定位置，闭包参数中的函数指针仍是未解析动态调用。
+                    if ast::LetStmt::cast(statement.clone())
+                        .and_then(|statement| statement.pat())
+                        .is_some_and(|pattern| pattern.syntax().text_range().contains(offset))
+                        && closure_initializer(statement)
                     {
-                        return Ok(vec![self.reference(closure.node.data().id.clone())]);
+                        return Ok(Vec::new());
                     }
+                }
+                if ancestors.iter().any(|node| {
+                    node.kind() == SyntaxKind::CLOSURE_EXPR && node.text_range().start() == offset
+                }) {
+                    return Ok(Vec::new());
                 }
             }
             if semantic != "code.calls"
@@ -486,6 +482,28 @@ impl Resolver<'_> {
             }
         }
         Ok(vec![unknown(observed)])
+    }
+}
+
+/// 识别绑定或值声明直接提供的闭包，不猜测函数指针参数和返回值的运行时目标。
+fn closure_initializer(declaration: &SyntaxNode) -> bool {
+    declaration
+        .children()
+        .find(|node| ast::Expr::can_cast(node.kind()))
+        .is_some_and(|expression| is_closure_expression(&expression))
+}
+
+/// 括号和函数指针转换不改变匿名闭包的对象边界。
+fn is_closure_expression(expression: &SyntaxNode) -> bool {
+    match ast::Expr::cast(expression.clone()) {
+        Some(ast::Expr::ClosureExpr(_)) => true,
+        Some(ast::Expr::ParenExpr(parenthesized)) => parenthesized
+            .expr()
+            .is_some_and(|inner| is_closure_expression(inner.syntax())),
+        Some(ast::Expr::CastExpr(cast)) => cast
+            .expr()
+            .is_some_and(|inner| is_closure_expression(inner.syntax())),
+        _ => false,
     }
 }
 
