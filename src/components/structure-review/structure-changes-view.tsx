@@ -68,6 +68,7 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
   const [showAll, setShowAll] = useState(false);
   const [showUnchangedReferences, setShowUnchangedReferences] = useState(false);
   const [showImports, setShowImports] = useState(false);
+  const [showTypeUses, setShowTypeUses] = useState(false);
   const [showDependencies, setShowDependencies] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selection, setSelection] = useState<{ kind: "object"; id: string } | { kind: "coverage" }>();
@@ -75,7 +76,7 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
-  const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, showDependencies, expanded }), [expanded, showAll, showUnchangedReferences, showImports, showDependencies]);
+  const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, showTypeUses, showDependencies, expanded }), [expanded, showAll, showUnchangedReferences, showImports, showTypeUses, showDependencies]);
   useEffect(() => {
     let current = true;
     const abort = new AbortController();
@@ -113,6 +114,7 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
           <DropdownMenuCheckboxItem checked={showUnchangedReferences} onCheckedChange={setShowUnchangedReferences}>{t("showUnchangedReferences")}</DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuCheckboxItem checked={showImports} onCheckedChange={setShowImports}>{t("showImports")}</DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem checked={showTypeUses} onCheckedChange={setShowTypeUses}>{t("showTypeUses")}</DropdownMenuCheckboxItem>
           <DropdownMenuCheckboxItem checked={showDependencies} onCheckedChange={setShowDependencies}>{t("showDependencies")}</DropdownMenuCheckboxItem>
         </DropdownMenuContent>
       </DropdownMenu>

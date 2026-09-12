@@ -172,21 +172,23 @@ implementations, persistent graph storage or a new file-scope picker.
 
 ### Reference display defaults
 
-Following the user's local review feedback, imports and references outside the
+Following the user's local review feedback, imports, type uses and references outside the
 repository are hidden by default. A Display options menu offers independent controls
-for all objects, unchanged relationships, imports and dependencies outside the
-repository. The first two controls do not override the dependency filter. Standard
-library and third-party references require the dependency option; a repository symbol
+for all objects, unchanged relationships, imports, type uses and dependencies outside the
+repository. Showing all objects, unchanged relationships, imports or dependencies does
+not enable `code.type_use` edges. Type-use targets outside the repository additionally
+require the dependency option. The first two controls do not override the dependency
+filter. Standard library and third-party references require the dependency option; a repository symbol
 outside the selected graph remains visible under the usual changed-reference rules.
 Hidden references do not create floating target cards. Object details apply the same
-import/dependency filters and identify when no relations match the current filters.
+import/type-use/dependency filters and identify when no relations match the current filters.
 
 Both graphs carry `externalSymbols`, keyed by the unchanged opaque External identity.
 The language analyzer supplies each name and `repository`/`dependency` scope. Cards
 and details display those names rather than percent-encoded IDs such as `%2F`.
 If a description is unavailable, show a generic resolved-target label and retain
 unknown scope; never guess a dependency from a language's ID format. These are display
-choices: complete graphs and graph differences remain intact. Import/dependency
+choices: complete graphs and graph differences remain intact. Import/type-use/dependency
 reference toggles do not change the changed-object count.
 
 Rust `use` Extension nodes, including `pub use`, are always omitted from this view,
@@ -293,3 +295,17 @@ follow it before computing the difference.
   options enabled, parent details, long-name details, import-only empty state and
   unchanged parent context. Geometry checks found no toolbar, menu or detail overflow;
   the browser reported no exceptions. The viewport override was cleared afterward.
+
+### Type-use display follow-up verification
+
+- Fifteen focused graph-presentation and analysis-lifecycle tests passed. The type-use
+  filter hides edges and targets introduced only by those edges, applies to both
+  details lists, preserves calls and complete comparison data, and can be enabled
+  independently of other display controls.
+- TypeScript, repository ESLint (excluding ignored local tools/caches) and the
+  production frontend build passed. No application installer was built.
+- The in-app request remained queued. Independent Chrome verified the Preview Harness
+  at 1440×1000, 900×800 and 520×800 in light/dark themes. Sixteen screenshot and
+  accessibility captures checked default visibility, other enabled controls, the new
+  checkbox, graph/details toggling and the English narrow menu. Geometry checks found
+  no toolbar/menu/details overflow or browser exceptions; viewport overrides were reset.

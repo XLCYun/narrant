@@ -30,16 +30,19 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
   const repository = { semantic: "code.calls", target: { kind: "external", symbol: "rust:repo:src%2Fidentity.rs::fn:verify_snapshot" } } satisfies CodeReference;
   const imported: CodeReference = { semantic: "code.imports", target: { kind: "node", id: "load" } };
   const unusedImport = { semantic: "code.imports", target: { kind: "external", symbol: "import-only-target" } } satisfies CodeReference;
-  const addedReferences = [call("save"), external, standard, repository, imported];
+  const typeUse: CodeReference = { semantic: "code.type_use", target: { kind: "node", id: "Review" } };
+  const externalType = { semantic: "code.type_use", target: { kind: "external", symbol: "snapshot-options-type" } } satisfies CodeReference;
+  const addedReferences = [call("save"), external, standard, repository, imported, typeUse, externalType];
   const after: StructureComparison["after"] = { root: ["narrant"], externalSymbols: {
     [external.target.symbol]: { name: "serde_json::to_string", scope: "dependency" },
     [standard.target.symbol]: { name: "Arc<T>::new", scope: "dependency" },
     [repository.target.symbol]: { name: "verify_snapshot", scope: "repository" },
     [unusedImport.target.symbol]: { name: "imported_but_unused", scope: "repository" },
+    [externalType.target.symbol]: { name: "SnapshotOptions", scope: "repository" },
   }, nodes: [...shared,
     node("review", "container", ["Review", "impl", "new", "keep", "use-new"]),
     node("use-new", "extension", [], { nativeKind: "use", name: null, signature: "pub use crate::storage::load;", references: [unusedImport] }),
-    node("new", "callable", [], { name: "prepare_snapshot", code: "{ save_snapshot(Snapshot::new()); }", references: addedReferences }),
+    node("new", "callable", [], { name: "prepare_snapshot", signature: "fn prepare_snapshot(review: Review, options: SnapshotOptions)", code: "{ save_snapshot(Snapshot::new()); }", references: addedReferences }),
     node("run", "callable", [], { name: "run_review", code: "{ let state = prepare_snapshot(); save_snapshot(state); generated::on_review_opened(); }", references: [call("new"), call("save"), unresolved] }),
   ] };
   const comparison: StructureComparison = {
