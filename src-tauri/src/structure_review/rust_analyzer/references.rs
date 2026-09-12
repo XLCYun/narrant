@@ -156,13 +156,14 @@ pub(super) fn analyze(
                     }
                 }
             }
-            for (semantic, name) in reference_sites(&node) {
+            if let Some((semantic, name)) = reference_site(&node) {
                 let Some(owner) = document.owner(name.text_range().start()) else {
                     continue;
                 };
                 for target in resolver.definition(&document.uri, &name, semantic)? {
-                    let semantic = resolver.relation_semantic(semantic, &target);
-                    add(&mut nodes, &owner.node.data().id, semantic, target);
+                    if resolver.includes_reference(semantic, &target) {
+                        add(&mut nodes, &owner.node.data().id, semantic, target);
+                    }
                 }
             }
         }
@@ -269,20 +270,17 @@ impl Resolver<'_> {
         }
     }
 
-    /// 把已解析的函数值或类型使用与数据读取区分开，保留非调用的高层关联。
-    fn relation_semantic(&self, semantic: &'static str, target: &ReferenceTarget) -> &'static str {
+    /// 路径表达式仍可能引用函数值；已确认的类型和数据值直接省略，不改名为普通引用。
+    fn includes_reference(&self, semantic: &str, target: &ReferenceTarget) -> bool {
+        if semantic != "code.references" {
+            return true;
+        }
         let category = match target {
             ReferenceTarget::Node(id) => self.categories.get(id),
             ReferenceTarget::External { symbol } => self.categories.get(&NodeId(symbol.clone())),
             ReferenceTarget::Unresolved { .. } => None,
         };
-        match (semantic, category) {
-            ("code.reads", Some(CodeCategory::Value)) => "code.reads",
-            ("code.reads", Some(CodeCategory::Type)) => "code.type_use",
-            ("code.reads", _) => "code.references",
-            ("code.type_use", Some(CodeCategory::Value)) => "code.references",
-            _ => semantic,
-        }
+        !matches!(category, Some(CodeCategory::Type | CodeCategory::Value))
     }
 
     /// 父模块信息来自 rust-analyzer，覆盖 #[path]，不根据文件名伪造模块层次。
@@ -321,15 +319,6 @@ impl Resolver<'_> {
         semantic: &str,
     ) -> Result<Vec<ReferenceTarget>> {
         let text = name.text().to_string();
-        if semantic == "code.type_use"
-            && [
-                "bool", "str", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16",
-                "i32", "i64", "i128", "isize", "f32", "f64",
-            ]
-            .contains(&text.as_str())
-        {
-            return Ok(Vec::new());
-        }
         if text == "Self" {
             if let Some(enclosing) = name.ancestors().find(|node| {
                 matches!(
@@ -529,14 +518,10 @@ fn add(
     }
 }
 
-/// 提取有明确源码位置的类型、调用、导入、数据访问和宏使用。
-fn reference_sites(node: &SyntaxNode) -> Vec<(&'static str, SyntaxNode)> {
+/// 只查询调用、导入、写入、函数值候选和宏使用；类型位置与只读字段无需 LSP 查询。
+fn reference_site(node: &SyntaxNode) -> Option<(&'static str, SyntaxNode)> {
     use SyntaxKind::*;
-    let site = match node.kind() {
-        PATH_TYPE => type_name(node).map(|name| ("code.type_use", name)),
-        RECORD_EXPR | RECORD_PAT => child(node, PATH)
-            .and_then(|path| path_name(&path))
-            .map(|name| ("code.type_use", name)),
+    match node.kind() {
         USE_TREE if child(node, USE_TREE_LIST).is_none() => child(node, PATH)
             .and_then(|path| path_name(&path))
             .map(|name| ("code.imports", name)),
@@ -558,49 +543,46 @@ fn reference_sites(node: &SyntaxNode) -> Vec<(&'static str, SyntaxNode)> {
         {
             child(node, PATH)
                 .and_then(|path| path_name(&path))
-                .map(|name| ("code.reads", name))
+                .map(|name| {
+                    let semantic = if is_write_target(node) {
+                        "code.writes"
+                    } else {
+                        "code.references"
+                    };
+                    (semantic, name)
+                })
         }
-        FIELD_EXPR => child(node, NAME_REF).map(|name| ("code.reads", name)),
+        FIELD_EXPR if is_write_target(node) => {
+            child(node, NAME_REF).map(|name| ("code.writes", name))
+        }
         _ => None,
-    };
-    let Some((semantic, name)) = site else {
-        return Vec::new();
-    };
-    if semantic == "code.reads" {
-        if let Some(parent) = node.parent().filter(|parent| parent.kind() == BIN_EXPR) {
-            let is_left = parent
-                .children()
-                .find(|child| ast::Expr::can_cast(child.kind()))
-                .as_ref()
-                == Some(node);
-            if is_left {
-                let operator = parent
-                    .children_with_tokens()
-                    .filter_map(|element| element.into_token())
-                    .find(|token| {
-                        matches!(
-                            token.text(),
-                            "=" | "+="
-                                | "-="
-                                | "*="
-                                | "/="
-                                | "%="
-                                | "&="
-                                | "|="
-                                | "^="
-                                | "<<="
-                                | ">>="
-                        )
-                    });
-                if let Some(operator) = operator {
-                    let mut result = vec![("code.writes", name.clone())];
-                    if operator.text() != "=" {
-                        result.push(("code.reads", name));
-                    }
-                    return result;
-                }
-            }
-        }
     }
-    vec![(semantic, name)]
 }
+
+/// 赋值和复合赋值只保留左侧目标的写入，不额外产生读取关系。
+fn is_write_target(node: &SyntaxNode) -> bool {
+    let Some(parent) = node
+        .parent()
+        .filter(|parent| parent.kind() == SyntaxKind::BIN_EXPR)
+    else {
+        return false;
+    };
+    parent
+        .children()
+        .find(|child| ast::Expr::can_cast(child.kind()))
+        .as_ref()
+        == Some(node)
+        && parent
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| {
+                matches!(
+                    token.text(),
+                    "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
+                )
+            })
+}
+
+#[cfg(test)]
+#[path = "tests/references.rs"]
+mod tests;

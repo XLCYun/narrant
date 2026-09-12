@@ -20,17 +20,16 @@ export type ObjectData = Record<string, unknown> & {
 export type ObjectNode = Node<ObjectData, "codeObject">;
 export type StructureEdge = Edge<{ route?: { path: string; labelX: number; labelY: number } }>;
 export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number };
-export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; showTypeUses: boolean; showDependencies: boolean; expanded: ReadonlySet<string> };
+export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; showDependencies: boolean; expanded: ReadonlySet<string> };
 
 /** 已解析符号使用分析器描述；任何语言的内部 ID 都不作为可读名称解码。 */
 export function externalSymbol(comparison: StructureComparison, id: string): ExternalSymbol | undefined {
   return comparison.after.externalSymbols[id] ?? comparison.before.externalSymbols[id];
 }
 
-/** 导入、类型使用和仓库外依赖分别按需显示，缺少范围信息时不猜测目标归属。 */
-export function isReferenceVisible(comparison: StructureComparison, reference: CodeReference, options: Pick<GraphOptions, "showImports" | "showTypeUses" | "showDependencies">): boolean {
+/** 导入和仓库外依赖分别按需显示，缺少范围信息时不猜测目标归属。 */
+export function isReferenceVisible(comparison: StructureComparison, reference: CodeReference, options: Pick<GraphOptions, "showImports" | "showDependencies">): boolean {
   if (reference.semantic === "code.imports" && !options.showImports) return false;
-  if (reference.semantic === "code.type_use" && !options.showTypeUses) return false;
   return options.showDependencies || reference.target.kind !== "external"
     || externalSymbol(comparison, reference.target.symbol)?.scope !== "dependency";
 }

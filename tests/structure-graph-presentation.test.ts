@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { structureReviewFixture } from "@/dev/structure-review-fixture";
-import { isReferenceVisible, layoutStructureComparison, objectDetails } from "@/structure-review/graph-presentation";
+import { layoutStructureComparison, objectDetails } from "@/structure-review/graph-presentation";
 
-const options = { showAll: false, showUnchangedReferences: false, showImports: false, showTypeUses: false, showDependencies: false, expanded: new Set<string>() };
+const options = { showAll: false, showUnchangedReferences: false, showImports: false, showDependencies: false, expanded: new Set<string>() };
 
 describe("Structure Graph presentation Interface", () => {
   it("keeps own content changes separate from relationship changes and includes containing context", async () => {
@@ -88,13 +88,13 @@ it("omits Rust use declarations and incident relations from every display mode w
   comparison.diff.nodes.find((node) => node.id === "new")!.references.push({ kind: "added", value: useReference });
   const original = structuredClone(comparison);
   for (const overrides of [{}, { expanded: new Set(["review", "storage"]) }, { showAll: true, showImports: true, showDependencies: true, showUnchangedReferences: true }]) {
-    const layout = await layoutStructureComparison(comparison, { ...options, showTypeUses: true, ...overrides });
+    const layout = await layoutStructureComparison(comparison, { ...options, ...overrides });
     expect(layout.nodes.some((node) => node.data.nativeKind === "use" || node.data.label === "imported_but_unused")).toBe(false);
     expect(layout.changed).toBe(4);
     expect(layout.total).toBe(12);
     const source = layout.nodes.find((node) => node.data.objectId === "new")!;
-    const target = layout.nodes.find((node) => node.data.objectId === "Review")!;
-    expect(layout.edges.some((edge) => edge.source === source.id && edge.target === target.id && edge.label === "+ code.type_use")).toBe(true);
+    const target = layout.nodes.find((node) => node.data.objectId === "save")!;
+    expect(layout.edges.some((edge) => edge.source === source.id && edge.target === target.id && edge.label === "+ code.calls")).toBe(true);
     const ids = new Set(layout.nodes.map((node) => node.id));
     expect(layout.edges.every((edge) => ids.has(edge.source) && ids.has(edge.target))).toBe(true);
   }
@@ -116,31 +116,6 @@ it("keeps import-only changes out of parent status, counts and expansion hints",
   expect(all.edges).toEqual([]);
   expect(objectDetails(comparison, "review").difference).toBeUndefined();
   expect(comparison.diff.nodes).toHaveLength(3);
-});
-
-it("hides type-use relationships and their exclusive targets until explicitly enabled", async () => {
-  const comparison = structureReviewFixture();
-  const original = structuredClone(comparison);
-  for (const overrides of [{}, { showAll: true, showUnchangedReferences: true }, { showImports: true, showDependencies: true }]) {
-    const displayOptions = { ...options, ...overrides };
-    const hidden = await layoutStructureComparison(comparison, displayOptions);
-    expect(hidden.edges.some((edge) => String(edge.label).includes("code.type_use"))).toBe(false);
-    expect(hidden.nodes.some((node) => node.data.label === "SnapshotOptions")).toBe(false);
-    expect(hidden.edges.some((edge) => String(edge.label).includes("code.calls"))).toBe(true);
-    const details = objectDetails(comparison, "new");
-    expect(details.after?.references.filter((reference) => isReferenceVisible(comparison, reference, displayOptions))
-      .some((reference) => reference.semantic === "code.type_use")).toBe(false);
-    expect(details.difference?.references.filter((change) => isReferenceVisible(comparison, change.value, displayOptions))
-      .some((change) => change.value.semantic === "code.type_use")).toBe(false);
-  }
-  const displayOptions = { ...options, showTypeUses: true };
-  const shown = await layoutStructureComparison(comparison, displayOptions);
-  expect(shown.edges.filter((edge) => edge.label === "+ code.type_use")).toHaveLength(2);
-  expect(shown.nodes.some((node) => node.data.label === "SnapshotOptions")).toBe(true);
-  expect(shown.nodes.some((node) => node.data.targetScope === "dependency")).toBe(false);
-  const reference = comparison.after.nodes.find((node) => node.id === "new")!.references.find((reference) => reference.semantic === "code.type_use")!;
-  expect(isReferenceVisible(comparison, reference, displayOptions)).toBe(true);
-  expect(comparison).toEqual(original);
 });
 
 it("uses declared symbol scope and names instead of interpreting opaque identity strings", async () => {

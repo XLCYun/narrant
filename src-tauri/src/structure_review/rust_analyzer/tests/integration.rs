@@ -6,8 +6,8 @@ use std::{
 
 use crate::structure_review::{
     code_graph::{
-        AnalysisInput, ChangeKind, CodeGraph, CodeNode, LanguageAnalyzer, NodeId, ReferenceTarget,
-        SymbolScope,
+        AnalysisInput, ChangeKind, CodeCategory, CodeGraph, CodeNode, LanguageAnalyzer, NodeId,
+        ReferenceTarget, SymbolScope,
     },
     rust_analyzer::RustLanguageAnalyzer,
 };
@@ -295,6 +295,101 @@ pub fn parameter() { let invoke = |f: fn() -> u32| f(); invoke(store::helper); }
     assert_eq!(changes[0].references.len(), 2, "{changes:?}");
     save("closures-before", &old);
     save("closures-after", &new);
+}
+
+/// 省略类型使用和读取关系，同时保留调用、写入、函数值、实现归属及源码 diff。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_omits_type_uses_and_reads() {
+    let source = r#"
+mod store;
+trait Run {}
+struct Unit;
+struct State { value: u32 }
+const LOCAL: u32 = 1;
+impl Run for State {}
+impl State {
+    fn update(&mut self) -> u32 {
+        self.value += store::helper();
+        self.value + LOCAL + store::VALUE
+    }
+}
+fn callback() -> fn() -> u32 { store::helper }
+fn mentions_type(_: State) -> State { State { value: LOCAL } }
+fn mentions_unit() { let _ = Unit; let _ = store::Unit; }
+fn closure(state: &State) -> u32 { let f = || store::helper() + state.value + LOCAL; f() }
+"#;
+    let before = repository(source);
+    let after = repository(&source.replace("LOCAL + store::VALUE", "LOCAL + 2"));
+    let analyze = |directory: &Path| {
+        fs::write(
+            directory.join("src/store.rs"),
+            "pub fn helper() -> u32 { 1 } pub const VALUE: u32 = 2; pub struct Unit;",
+        )
+        .unwrap();
+        analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: directory.to_path_buf(),
+                files: vec![PathBuf::from("src/lib.rs")],
+            })
+            .unwrap()
+    };
+    let old = analyze(before.path());
+    let new = analyze(after.path());
+    let all = nodes(&old);
+    let find = |name: &str| {
+        *all.values()
+            .find(|node| node.data().name.as_deref() == Some(name))
+            .unwrap()
+    };
+    let references: Vec<_> = all
+        .values()
+        .flat_map(|node| &node.data().references)
+        .collect();
+    assert!(references
+        .iter()
+        .all(|reference| !matches!(reference.semantic.as_str(), "code.type_use" | "code.reads")));
+    assert_eq!(find("State").category(), CodeCategory::Type);
+    assert_eq!(find("value").category(), CodeCategory::Value);
+    assert!(find("mentions_type").data().references.is_empty());
+    assert!(find("mentions_unit").data().references.is_empty());
+    assert!(find("update")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.writes"));
+    assert!(find("update")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.calls"));
+    assert!(find("closure")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.calls"));
+    assert!(find("callback")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.references"));
+    assert!(references
+        .iter()
+        .any(|reference| reference.semantic == "code.implements"));
+    assert!(references
+        .iter()
+        .any(|reference| reference.semantic == "code.applies_to"));
+    assert!(old
+        .external_symbols()
+        .values()
+        .all(|symbol| symbol.name == "helper"));
+    let diff = old.diff(&new).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(diff.nodes[0].id, find("update").data().id);
+    assert_eq!(diff.nodes[0].content, Some(ChangeKind::Modified));
+    assert!(diff.nodes[0].references.is_empty());
+    save("omitted-relations-before", &old);
+    save("omitted-relations-after", &new);
 }
 
 /// 真实 LSP 解析得到的目标同时携带可读名称与仓库范围，保持未选文件和标准库可区分。

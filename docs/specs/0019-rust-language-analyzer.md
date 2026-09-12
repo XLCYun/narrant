@@ -163,6 +163,25 @@ modification. A reference to `helper()` or `N` in the parent's executing express
 belongs to the parent. These projection details implement the accepted own-content
 boundary, including named items declared inside a closure.
 
+### Relationship extraction scope
+
+The Rust adapter no longer emits `code.type_use` or `code.reads`. It skips definition
+queries for type annotations, bounds, record literal/pattern type names and read-only
+fields. Types and data declarations remain Code Objects, and their signatures and own
+code are still compared. Reading a different value can change an owner's code without
+producing a separate read edge.
+
+Calls, imports, writes, macro use and structural relationships (`code.applies_to`,
+`code.implements`, `code.member_of`) remain. Compound assignments emit a write edge
+without a read edge. General path expressions still need semantic resolution to
+distinguish function values from data/type values: function-value references remain
+`code.references`, while confirmed data/type targets are omitted rather than relabeled.
+Unresolved general references retain their existing uncertainty.
+
+Skipping those source queries reduces LSP round trips and target-description work;
+rust-analyzer still loads the workspace and performs the semantic analysis needed for
+the retained queries. No fixed end-to-end speedup is guaranteed.
+
 ### Analysis context and failure handling
 
 rust-analyzer normally analyzes an effective Cargo/cfg/platform configuration, rather
@@ -407,7 +426,8 @@ the complete composition.
   annotation or a type declaration is not evidence that the generated method is that
   Type node.
 - Taking a function as a value uses `code.references`; only a call expression or LSP
-  outgoing-call observation uses `code.calls`. Data reads and writes remain distinct.
+  outgoing-call observation uses `code.calls`. Data writes use `code.writes`; data reads
+  and general type uses are omitted from graph relationships.
 
 ### Calling the adapter
 
@@ -438,6 +458,21 @@ The synchronous call belongs on an application worker thread. Server project loa
 retains default Cargo build-script and procedural-macro behavior and therefore belongs
 under the application's existing Workspace Trust boundary. This adapter does not add
 an executable downloader, frontend command, or snapshot-preparation operation.
+
+## Relationship scope verification on 2026-09-13
+
+- The affected Structure Review suite passed: 60 tests, with 6 real-server tests
+  excluded from the ordinary run. A stdio protocol test verifies that type mentions,
+  a record constructor and a read-only field make no definition requests; the retained
+  call is the only definition request in that fixture. Signatures and code remain intact.
+- A dedicated real rust-analyzer comparison passed, covering local and unselected-file
+  type/data targets, field reads, compound writes, closure calls, function values and
+  implementation relationships. Neither removed semantic appears in the result, nor
+  are confirmed type/data reads relabeled as general references. Changing a read
+  expression still modifies only the owning method's code, with no read-edge delta.
+- The prepared-repository real-server regression passed separately. These fixtures
+  verify behavior and omitted request sites; they do not measure a repository-wide
+  speedup. Rustfmt and all-target Clippy with warnings denied passed.
 
 ## Closure extraction verification on 2026-09-13
 

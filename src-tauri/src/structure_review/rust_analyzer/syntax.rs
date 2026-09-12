@@ -395,7 +395,7 @@ pub(super) fn path_name(path: &SyntaxNode) -> Option<SyntaxNode> {
     child(&segment, SyntaxKind::NAME_REF)
 }
 
-/// 取得类型表达式的主体名字，泛型实参另行遍历提取。
+/// 取得实现目标或 trait 类型表达式的主体名字，泛型实参不单独生成类型使用关系。
 pub(super) fn type_name(node: &SyntaxNode) -> Option<SyntaxNode> {
     if node.kind() == SyntaxKind::PATH_TYPE {
         return child(node, SyntaxKind::PATH).and_then(|path| path_name(&path));
