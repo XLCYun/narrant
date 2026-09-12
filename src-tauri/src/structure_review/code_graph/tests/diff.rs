@@ -65,7 +65,7 @@ fn signature_change_does_not_modify_ancestors_or_callees() {
         before.diff(&after).unwrap().nodes,
         vec![NodeDiff {
             id: id("method"),
-            declaration: Some(ChangeKind::Modified),
+            content: Some(ChangeKind::Modified),
             contains: vec![],
             references: vec![],
         }]
@@ -97,19 +97,19 @@ fn child_additions_and_removals_do_not_modify_parent_declarations() {
         vec![
             NodeDiff {
                 id: id("new"),
-                declaration: Some(ChangeKind::Added),
+                content: Some(ChangeKind::Added),
                 contains: vec![],
                 references: vec![]
             },
             NodeDiff {
                 id: id("old"),
-                declaration: Some(ChangeKind::Removed),
+                content: Some(ChangeKind::Removed),
                 contains: vec![],
                 references: vec![]
             },
             NodeDiff {
                 id: id("parent"),
-                declaration: None,
+                content: None,
                 contains: vec![SetChange::Removed(id("old")), SetChange::Added(id("new"))],
                 references: vec![]
             },
@@ -133,13 +133,13 @@ fn added_and_removed_nodes_include_their_relationship_deltas() {
         vec![
             NodeDiff {
                 id: id("child"),
-                declaration: Some(ChangeKind::Added),
+                content: Some(ChangeKind::Added),
                 contains: vec![],
                 references: vec![]
             },
             NodeDiff {
                 id: id("parent"),
-                declaration: Some(ChangeKind::Added),
+                content: Some(ChangeKind::Added),
                 contains: vec![SetChange::Added(id("child"))],
                 references: vec![SetChange::Added(calls("child"))]
             },
@@ -150,13 +150,13 @@ fn added_and_removed_nodes_include_their_relationship_deltas() {
         vec![
             NodeDiff {
                 id: id("child"),
-                declaration: Some(ChangeKind::Removed),
+                content: Some(ChangeKind::Removed),
                 contains: vec![],
                 references: vec![]
             },
             NodeDiff {
                 id: id("parent"),
-                declaration: Some(ChangeKind::Removed),
+                content: Some(ChangeKind::Removed),
                 contains: vec![SetChange::Removed(id("child"))],
                 references: vec![SetChange::Removed(calls("child"))]
             },
@@ -194,7 +194,7 @@ fn reference_changes_report_removed_and_added_facts() {
             before.diff(&after).unwrap().nodes,
             vec![NodeDiff {
                 id: id("owner"),
-                declaration: None,
+                content: None,
                 contains: vec![],
                 references: vec![SetChange::Removed(old), SetChange::Added(new)],
             }]
@@ -232,7 +232,7 @@ fn own_declaration_fields_are_compared_without_relationships() {
             before.diff(&after).unwrap().nodes,
             vec![NodeDiff {
                 id: id("item"),
-                declaration: Some(ChangeKind::Modified),
+                content: Some(ChangeKind::Modified),
                 contains: vec![],
                 references: vec![],
             }]
@@ -263,7 +263,7 @@ fn extensions_ignore_object_key_order_but_preserve_array_order() {
     let changed = graph(&["item"], vec![CodeNode::Extension(changed)]);
     assert!(before.diff(&reordered).unwrap().nodes.is_empty());
     assert_eq!(
-        before.diff(&changed).unwrap().nodes[0].declaration,
+        before.diff(&changed).unwrap().nodes[0].content,
         Some(ChangeKind::Modified)
     );
 }
@@ -278,7 +278,7 @@ fn significant_whitespace_inside_signature_literals_is_preserved() {
     let before = graph(&["text"], vec![CodeNode::Value(before)]);
     let after = graph(&["text"], vec![CodeNode::Value(after)]);
     assert_eq!(
-        before.diff(&after).unwrap().nodes[0].declaration,
+        before.diff(&after).unwrap().nodes[0].content,
         Some(ChangeKind::Modified)
     );
 }
@@ -296,13 +296,13 @@ fn different_identity_is_removed_and_added_even_with_identical_content() {
         vec![
             NodeDiff {
                 id: id("new"),
-                declaration: Some(ChangeKind::Added),
+                content: Some(ChangeKind::Added),
                 contains: vec![],
                 references: vec![]
             },
             NodeDiff {
                 id: id("old"),
-                declaration: Some(ChangeKind::Removed),
+                content: Some(ChangeKind::Removed),
                 contains: vec![],
                 references: vec![]
             },
@@ -325,7 +325,7 @@ fn adding_a_language_is_a_normal_node_addition() {
         before.diff(&after).unwrap().nodes,
         vec![NodeDiff {
             id: id("new_language"),
-            declaration: Some(ChangeKind::Added),
+            content: Some(ChangeKind::Added),
             contains: vec![],
             references: vec![SetChange::Added(calls("existing"))],
         }]
@@ -351,7 +351,7 @@ fn placement_changes_keep_node_declarations_unchanged() {
         before.diff(&after).unwrap().nodes,
         vec![NodeDiff {
             id: id("parent"),
-            declaration: None,
+            content: None,
             contains: vec![SetChange::Added(id("child"))],
             references: vec![],
         }]
@@ -413,4 +413,54 @@ fn graph_with_reference(reference: CodeReference) -> CodeGraph {
             node(Callable, "b", &[]),
         ],
     )
+}
+/// 自身实现变化独立于签名与关联，不把子对象的代码递归比较到父节点。
+#[test]
+fn body_only_changes_modify_only_the_owning_node() {
+    let make = |code: &str| {
+        let mut callable = data("method", &[]);
+        callable.code = Some(code.into());
+        graph(
+            &["type"],
+            vec![
+                node(Type, "type", &["method"]),
+                CodeNode::Callable(callable),
+            ],
+        )
+    };
+    let diff = make("{ 1 }").diff(&make("{ 2 }")).unwrap();
+    assert_eq!(
+        diff.nodes,
+        vec![NodeDiff {
+            id: id("method"),
+            content: Some(ChangeKind::Modified),
+            contains: vec![],
+            references: vec![]
+        }]
+    );
+}
+
+/// 调用替换可以同时改变自身代码和引用集合，两个维度并不互斥。
+#[test]
+fn call_replacement_changes_content_and_references() {
+    let make = |callee: &str| {
+        let mut caller = data("caller", &[]);
+        caller.code = Some(format!("{{ {callee} ( ) }}"));
+        caller.references = vec![calls(callee)];
+        graph(
+            &["caller", "a", "b"],
+            vec![
+                CodeNode::Callable(caller),
+                node(Callable, "a", &[]),
+                node(Callable, "b", &[]),
+            ],
+        )
+    };
+    let diff = make("a").diff(&make("b")).unwrap();
+    assert_eq!(diff.nodes.len(), 1);
+    assert_eq!(diff.nodes[0].content, Some(ChangeKind::Modified));
+    assert_eq!(
+        diff.nodes[0].references,
+        vec![SetChange::Removed(calls("a")), SetChange::Added(calls("b"))]
+    );
 }

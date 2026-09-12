@@ -28,6 +28,9 @@ pub struct CodeNodeData {
     pub name: Option<String>,
     /// 语言实现生成的规范化声明代码，不包含函数体或嵌套子对象。
     pub signature: Option<String>,
+    /// 自身实现内容的规范化代码，例如函数体或初始化表达式；不重复嵌入子对象内容。
+    /// None 表示没有实现内容，不能用来掩盖提取失败；子表达式可由语言实现投影为身份占位。
+    pub code: Option<String>,
     /// 直接包含的声明节点，分类从目标节点的枚举变体读取。
     pub contains: Vec<NodeId>,
     /// 当前节点发出的非包含关联，允许指向自身或形成引用环。

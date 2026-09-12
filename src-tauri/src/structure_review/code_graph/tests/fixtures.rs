@@ -16,6 +16,7 @@ pub(super) fn data(name: &str, children: &[&str]) -> CodeNodeData {
         native_kind: "declaration".into(),
         name: Some(name.into()),
         signature: Some(format!("declare {name}")),
+        code: None,
         contains: children.iter().map(|name| id(name)).collect(),
         references: Vec::new(),
         extensions: ExtensionFields::new(),

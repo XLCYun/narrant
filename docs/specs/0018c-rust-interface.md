@@ -10,13 +10,11 @@ node-local references, declaration signatures, and language on each node. One
 graph-owned node table stores each node exactly once. The root remains the navigation
 entry point; a rooted hierarchy does not require recursively owning node values.
 
-The common declaration/tree/reference interface is implemented. It intentionally
-does not claim body-only change detection yet. See the
-[body comparison decision](0018-structure-review-code-graph.md#body-comparison-decision):
-the callable should own its body comparison content, but the representation of that
-content is still being discussed.
-
-Concrete language/LSP implementations and frontend transport remain later work.
+The common content/tree/reference interface is implemented, including normalized
+`CodeNodeData.code` for body-only change detection. See the
+[body comparison decision](0018-structure-review-code-graph.md#body-comparison-decision).
+The concrete Rust LSP adapter lives in the sibling `rust_analyzer` module; frontend
+transport remains later work.
 
 ## Rust implementation
 
@@ -50,9 +48,9 @@ of validated in-memory graphs has no additional fallible operation and returns O
 the Result signature is preserved. Matching analysis and normalization conventions is
 a caller precondition, not something inferred from absent protocol-version metadata.
 
-AnalysisInput and LanguageAnalyzer define the language-implementation seam. No dummy
-parser or LSP connection is supplied. Path checks, source reads, workspace preparation,
-and source normalization belong to the responsible caller or concrete analyzer.
+AnalysisInput and LanguageAnalyzer define the language-implementation seam. Path checks,
+source reads and normalization belong to the concrete analyzer; workspace preparation
+remains with the caller. RustLanguageAnalyzer implements this seam in its own module.
 Serialization and deserialization are not added by this implementation; any future
 wire adapter must preserve graph construction validation.
 
@@ -74,7 +72,7 @@ Every variant initially carries CodeNodeData because the current proposal keeps
 the same common fields and textual signatures for all six categories. Six identical
 payload structs would add duplication. A variant may receive its own payload when
 a concrete category-specific requirement is agreed; this does not justify adding
-structured parameters, generic constraints, or body fields prematurely.
+unrelated structured parameters or generic constraints prematurely.
 
 A struct with one category enum field could express today's identical payloads too.
 The sum type is useful here because it makes the six alternatives explicit and can
@@ -165,7 +163,7 @@ See the [language interface discussion](0018-structure-review-code-graph.md#lang
 
 ## Difference meaning
 
-NodeDiff.declaration reports only the kind of own-data change, without copies of the
+NodeDiff.content reports only the kind of own-data change, without copies of the
 before/after declaration. Added and Removed indicate node existence changes; Modified
 means a retained ID has different own data. None means the own data is unchanged,
 even when the node has changed child membership or outgoing references. A method
@@ -192,7 +190,7 @@ graphs, not a standalone patch that reconstructs the entire after graph.
 The shared module matches node-table entries by stable IDs and compares each child-ID
 list by identity/membership, not by incidental array order. Changing the category of
 a retained node modifies that node's own declaration, not its parent's containment
-edge. It compares normalized signatures and semantic extensions
+edge. It compares normalized signatures, implementation code and semantic extensions
 for own changes. It does not claim to infer whole-program semantic equivalence.
 
 ## Bodies and execution regions
@@ -208,15 +206,16 @@ callable, such as module-level statements or a class static block. A distinct re
 inside a callable can be considered only if independently analyzing that region later
 becomes a requirement.
 
-Owning body content and returning raw body source are separate choices. The original
-request excluded public body source. An opaque normalized-content fingerprint would
-preserve body-only detection without exposing that source. If body source is later
-included, it still belongs on the Callable rather than a mandatory wrapper child.
+The user has now selected storing language-normalized own code instead of an opaque
+fingerprint, superseding the initial exclusion of public body source. Function
+implementation content remains owned by the Callable. The
+[Rust analyzer design](0019-rust-language-analyzer.md) records this decision and the
+remaining implementation boundaries.
 
-The minimal definitions above have no such fingerprint/body field yet. It must be
-added to node own-comparison data, and reflected in the own-change result, before
-claiming support for body-only modifications. This pending choice is explicit rather
-than hidden in a fake implementation.
+`CodeNodeData.code` is optional normalized implementation content. `NodeDiff.content`
+(formerly `declaration`) reports changes to either declarations or implementation code.
+The returned status remains Added/Removed/Modified; it does not introduce field-level
+diffs or duplicate before/after snapshots. The production source remains authoritative.
 
 ## Removed from the first version
 
@@ -226,7 +225,7 @@ than hidden in a fake implementation.
 - Duplicate NodeDeclaration snapshots and virtual-root membership deltas in the diff.
 - A single graph-level language, source locations, and a shared attributes structure.
 - Per-category typed signature decomposition and a separate Receiver model.
-- Public body source, container own_code, and initialization-phase enums.
+- Container own_code and initialization-phase enums.
 - VersionedFields and extension schema-version envelopes.
 
 These removals do not remove native signature information or semantic reference

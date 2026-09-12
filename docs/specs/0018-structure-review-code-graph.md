@@ -14,8 +14,8 @@ The latest proposal uses one language-neutral virtual root, a graph-owned node t
 six CodeNode enum variants, child IDs, language on each node, and outgoing references.
 Language implementations supply the
 language-native declaration signatures; the common module validates and compares
-the resulting data. Concrete language analyzers and frontend rendering remain later
-work.
+the resulting data. The Rust adapter is implemented separately under
+`structure_review::rust_analyzer`; frontend rendering remains later work.
 
 - Extract all supported high-level objects in the selected files before comparison.
   Do not preselect affected functions from diff hunks.
@@ -25,8 +25,10 @@ work.
   the source node, with an explicit semantic and an inline target.
 - Supply a normalized declaration signature rather than decomposing parameters,
   receivers, generic constraints, visibility, or value types in the common model.
-- Do not expose body source, source locations, a separate attributes object, a
-  graph-wide symbol table, or extension-field version envelopes in the first version.
+- Store language-normalized own code to support body-only comparison, following the
+  user's Rust-analyzer design decision, in the optional `CodeNodeData.code` field.
+- Defer source locations, a separate attributes object, a graph-wide symbol table,
+  and extension-field version envelopes.
 - Keep identity matching conservative. Do not infer object renames or moves.
 - Consumers decide display, filtering, layout, and ancestor-impact presentation.
 
@@ -42,10 +44,13 @@ difference calculation are implemented in
 [structure_review::code_graph](../../src-tauri/src/structure_review/code_graph/mod.rs).
 Tests use the public interface and live in the module's tests/ directory.
 
-LanguageAnalyzer and AnalysisInput are contracts for later language implementations.
-Concrete parsers/LSP adapters, prepared before/after repository directories, and
-frontend transport are not supplied by this slice. Body-only change detection still
-requires the pending own-content representation described below.
+LanguageAnalyzer and AnalysisInput remain the language-implementation contract. The Rust
+adapter implements it through rust-analyzer LSP and a local syntax library. Preparing
+before/after repository directories and frontend transport remain caller responsibilities.
+The common comparison includes normalized own code and can detect body-only changes.
+
+The accepted [Rust Language Analyzer](0019-rust-language-analyzer.md) specification
+records the adapter scope and the real-server verification obligations.
 
 ## Language interface and input
 
@@ -154,8 +159,8 @@ partial or fabricated source-location mapping.
 ## Own-content comparison
 
 Each node has a stable identity, language, native kind, optional name, optional signature,
-and a simple map of semantic extensions. Its common category comes from its enum
-variant. The derived CodeCategory is used for querying; it is
+optional normalized own code, and a simple map of semantic extensions. Its common
+category comes from its enum variant. The derived CodeCategory is used for querying; it is
 not a second independently editable category on the input node.
 
 The signature is readable declaration code normalized by the language implementation.
@@ -173,19 +178,22 @@ content would incorrectly mark that parent modified for every descendant change.
 
 ## Body comparison decision
 
-The user has excluded body source from the public model. The original scope still
-included changes inside bodies. These are distinct decisions.
+During the Rust analyzer design, the user chose to store code instead of an opaque
+content fingerprint. This supersedes the earlier exclusion of public body source.
+Body-only change detection remains part of the intended capability.
 
-For the follow-up choice between keeping a callable's body and adding an
-ExecutionRegion child, the recommendation is to keep body comparison content owned
-by the Callable. A mandatory child region would move the direct body change to that
-child. Returning raw body source versus only a comparison value is a separate choice.
+Ordinary function implementation content belongs to its Callable, without requiring
+an ExecutionRegion wrapper. Comparison still distinguishes a node's own content from
+the content of separately modeled children, so a child edit does not automatically
+modify every ancestor's own declaration.
 
-The proposed way to preserve that detection is an opaque per-node content fingerprint,
-computed by the language implementation from normalized own content while excluding
-separately modeled child content. It contains no source code. The fingerprint proposal
-is still being reviewed; the current minimal declaration/tree/reference shape alone
-does not detect changes that leave all those visible facts equal.
+The user selected language-normalized own code in the
+[Rust analyzer design](0019-rust-language-analyzer.md). It preserves significant syntax
+and literal contents while ignoring pure formatting/comment changes, consistent with
+the existing signature convention. No opaque comparison fingerprint is required.
+The implemented `CodeNodeData.code` participates in own-content comparison. `None` means
+that the object has no implementation content, not that extraction failed. A callable
+with an empty body still has comparable code.
 
 For example, changing a callable body from returning one literal to another while
 leaving its signature and references unchanged cannot be detected from signatures and
@@ -193,7 +201,7 @@ references alone. Do not claim otherwise or silently remove the original capabil
 
 ## Difference result
 
-The proposed result groups changes by node identity. NodeDiff.declaration is an
+The proposed result groups changes by node identity. NodeDiff.content is an
 Option<ChangeKind> containing Added, Removed, or Modified for the node's own data.
 None indicates unchanged own data, even when direct-child membership or outgoing
 references changed. NodeDeclaration snapshots are omitted: callers already retain
@@ -245,10 +253,10 @@ declaration placements, unreachable stored nodes, mixed-language roots and
 references, deriving root entry membership from both retained graphs, deep containment,
 deterministic difference ordering, and unordered or repeated reference observations.
 
-Concrete language/caller implementations must later verify repository-relative path
+Concrete language/caller implementations must verify repository-relative path
 validation, missing requested-file errors, per-side selection for added/removed files,
-and stable identities across different checkout roots. Body-only tests depend on the
-eventual agreed representation.
+and stable identities across different checkout roots. The code-content extension
+includes focused tests for body-only modifications and independent reference changes.
 
 Document Rust types and methods in Chinese. Keep Rust tests in module tests/
 directories; all Cargo validation uses scripts/cargo-agent.sh. Concrete implementation
