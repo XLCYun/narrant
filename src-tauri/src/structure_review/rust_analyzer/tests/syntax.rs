@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde_json::json;
+use crate::lsp::Position;
 
 use super::{byte_offset, position, Document};
 use crate::structure_review::code_graph::{ChangeKind, CodeGraph, CodeRoot};
@@ -174,9 +174,18 @@ fn positions_round_trip_and_reject_invalid_boundaries() {
         );
     }
     for invalid in [
-        json!({"line":0,"character":2}),
-        json!({"line":0,"character":99}),
-        json!({"line":9,"character":0}),
+        Position {
+            line: 0,
+            character: 2,
+        },
+        Position {
+            line: 0,
+            character: 99,
+        },
+        Position {
+            line: 9,
+            character: 0,
+        },
     ] {
         assert!(byte_offset(source, &invalid).is_err());
     }

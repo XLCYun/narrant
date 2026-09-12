@@ -333,9 +333,44 @@ The concrete adapter lives in `src-tauri/src/structure_review/rust_analyzer/`, b
 the language-neutral `code_graph` module. `RustLanguageAnalyzer::new(executable)`
 accepts the already provisioned server; its LanguageAnalyzer implementation owns
 source validation, a fresh server session per snapshot, syntax extraction and semantic
-resolution. Protocol, syntax and resolution helpers remain private. The syntax crate
-is pinned to `ra_ap_syntax =0.0.349` (MSRV 1.95), compatible with the current Rust 1.97.1
-toolchain; the newer 0.0.350/351 require 1.98.
+resolution. Syntax extraction and graph resolution remain private to this Adapter.
+The syntax crate is pinned to `ra_ap_syntax =0.0.349` (MSRV 1.95), compatible with the
+current Rust 1.97.1 toolchain; the newer 0.0.350/351 require 1.98.
+
+### Shared LSP Module and Rust Adapter
+
+The dependency direction is `RustLanguageAnalyzer → RustLsp → LspClient`.
+`src-tauri/src/lsp/` exposes a language-independent synchronous stdio session.
+Its Interface accepts a configured process `Command`, workspace path and `LspOptions`;
+document opening takes an explicit language identifier and version. It owns the
+initialize/initialized handshake, request matching, fixed request deadlines, standard
+reverse-request handling, bounded Content-Length framing, and process-tree cleanup.
+Its private `transport.rs` hides the process and I/O workers; `protocol.rs` normalizes
+standard positions, definition locations and outgoing-call responses. Call hierarchy
+queries preserve the server's complete prepared item, including opaque `data`.
+
+`LspClient` provides standard definition and outgoing-call queries, plus request/notify
+methods for extensions. Latest notification parameters are retained by method name;
+an Adapter can wait for its own predicate without adding language rules to the shared
+Module. This is a snapshot-analysis session, not a complete editor client or event log.
+The common Module does not require a particular language, graph contract, provider or
+project-readiness extension.
+
+`structure_review/rust_analyzer/lsp.rs` defines the private `RustLsp` Adapter by
+composition. It supplies rust-analyzer initialization options, opens Rust documents,
+requires the definition/call-hierarchy/parent-module capabilities and UTF-16 positions,
+and interprets `experimental/serverStatus`. Semantic queries require a quiescent server
+with health `ok`; degradation during a query is an analysis failure. The Rust-only
+`experimental/parentModule` request and conversion into the analyzer's error type stay
+here. `references.rs` calls named semantic methods and maps their typed results into
+graph relationships without assembling JSON-RPC requests or decoding protocol variants.
+
+Tests cross each Interface through a local stdio server. Shared-session tests use
+non-Rust documents and a server without Rust capabilities, and cover interleaved reverse
+requests/notifications, opaque call data, malformed frames, query failures, timeouts and
+cleanup. Rust Adapter tests separately cover its configuration, capability checks,
+readiness order and degraded status. The existing real rust-analyzer graph tests cover
+the complete composition.
 
 ### Concrete extraction conventions
 
@@ -398,26 +433,29 @@ Verified on macOS arm64 with Rust and rust-analyzer 1.97.1 (8bab26f4 2026-07-14)
 using the pinned `ra_ap_syntax 0.0.349`. The tool executable and local graph evidence
 are Git-ignored under `.tools/` in the `codex/rust-language-analyzer` worktree.
 
-- Focused `structure_review` tests: 45 passed. The two real-server tests are ignored
-  in normal Cargo runs and are executed explicitly against the supplied binary.
+- Focused shared `lsp` and `structure_review` tests: 52 passed. The two real-server
+  tests are ignored in normal Cargo runs and executed explicitly against the supplied
+  binary.
 - Clippy for all targets with warnings denied passed.
 - Both real-server tests passed. Seven selected files in the current repository
   produced 123 nodes and 246 outgoing relationships. Prepared repositories verified
   stable identities across absolute checkout roots, a body-only modification on `run`,
   closure call ownership, imports and data writes, generated/inactive unresolved targets,
   external-versus-selected target identity, and multiple module parents.
-- The full Rust suite had 533 passed, one failure, and two ignored at the time of its
-  run. The failure was the unchanged
+- After the LSP separation, the full Rust suite passed: 542 passed, zero failures,
+  and the two explicitly run real-server tests ignored in the normal suite.
+- The initial implementation's earlier full Rust run had 533 passed, one failure,
+  and two ignored. The failure was the unchanged
   `core_git::tests::cancelled_workspace_creation_removes_its_partial_worktree` test:
   cancellation encountered an initializing Git worktree whose `.git` file was not yet
-  ready for cleanup. An exact focused retry passed. This is recorded as a full-suite
-  failure followed by a passing retry, not as an entirely green full-suite run or a
-  proven diagnosis of a pre-existing race.
+  ready for cleanup. An exact focused retry passed, and the current full-suite run
+  also passed. This historical failure does not establish a proven diagnosis of a
+  pre-existing race.
 
 Normal checks use the repository's shared Cargo lock and cache wrapper:
 
 ```sh
-scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --lib structure_review --quiet
+scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --lib --quiet -- lsp:: structure_review::
 scripts/cargo-agent.sh clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 

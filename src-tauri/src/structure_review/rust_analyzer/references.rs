@@ -7,29 +7,22 @@ use std::{
 };
 
 use ra_ap_syntax::{ast, AstNode, SyntaxKind, SyntaxNode, TextSize};
-use serde_json::{json, Value};
 use url::Url;
 
 use super::{
     failure,
-    lsp::{file_uri, Lsp},
+    lsp::RustLsp,
     syntax::{self, child, path_name, type_name, Document},
     Result,
 };
+use crate::lsp::{file_uri, Location, Position};
 use crate::structure_review::code_graph::{
     CodeCategory, CodeGraph, CodeNode, CodeReference, CodeRoot, NodeId, ReferenceTarget,
 };
 
-/// 已解析的位置证据，兼容 LSP Location 和 LocationLink。
-#[derive(Clone)]
-struct Location {
-    uri: String,
-    position: Value,
-}
-
 /// 单次构图的临时解析材料；图外文件只用来确认身份，不扩大输出范围。
 struct Resolver<'a> {
-    client: &'a mut Lsp,
+    client: &'a mut RustLsp,
     repository: &'a Path,
     documents: &'a [Document],
     external: BTreeMap<String, Document>,
@@ -40,7 +33,7 @@ struct Resolver<'a> {
 
 /// 组装词法包含和非包含关联，最后通过公共构造函数校验全部图约束。
 pub(super) fn analyze(
-    client: &mut Lsp,
+    client: &mut RustLsp,
     repository: &Path,
     documents: &[Document],
 ) -> Result<CodeGraph> {
@@ -189,36 +182,26 @@ pub(super) fn analyze(
             .iter()
             .filter(|declaration| declaration.syntax.kind() == SyntaxKind::FN)
         {
-            let prepared = resolver.client.request("textDocument/prepareCallHierarchy", json!({
-                "textDocument":{"uri":document.uri}, "position":syntax::position(&document.source, declaration.selection.start())
-            }))?;
-            for item in optional_array(&prepared, "prepareCallHierarchy")? {
-                let outgoing = resolver
-                    .client
-                    .request("callHierarchy/outgoingCalls", json!({"item":item}))?;
-                for call in optional_array(&outgoing, "outgoingCalls")? {
-                    let to = &call["to"];
-                    let uri = to["uri"]
-                        .as_str()
-                        .ok_or_else(|| failure("调用层级目标缺少 URI"))?;
-                    let name = to["name"]
-                        .as_str()
-                        .ok_or_else(|| failure("调用层级目标缺少名称"))?;
-                    let targets =
-                        resolver.target(uri, &to["selectionRange"]["start"], name, "code.calls")?;
-                    for range in optional_array(&call["fromRanges"], "fromRanges")? {
-                        let offset = syntax::byte_offset(&document.source, &range["start"])?;
-                        let Some(owner) = document.owner(offset) else {
-                            continue;
-                        };
-                        for target in &targets {
-                            add(
-                                &mut nodes,
-                                &owner.node.data().id,
-                                "code.calls",
-                                target.clone(),
-                            );
-                        }
+            let position = syntax::position(&document.source, declaration.selection.start());
+            for call in resolver.client.outgoing_calls(&document.uri, position)? {
+                let targets = resolver.target(
+                    &call.to.uri,
+                    &call.to.selection_range.start,
+                    &call.to.name,
+                    "code.calls",
+                )?;
+                for range in &call.from_ranges {
+                    let offset = syntax::byte_offset(&document.source, &range.start)?;
+                    let Some(owner) = document.owner(offset) else {
+                        continue;
+                    };
+                    for target in &targets {
+                        add(
+                            &mut nodes,
+                            &owner.node.data().id,
+                            "code.calls",
+                            target.clone(),
+                        );
                     }
                 }
             }
@@ -298,14 +281,8 @@ impl Resolver<'_> {
 
     /// 父模块信息来自 rust-analyzer，覆盖 #[path]，不根据文件名伪造模块层次。
     fn module_parents(&mut self, uri: &str) -> Result<Vec<ReferenceTarget>> {
-        let response = self.client.request(
-            "experimental/parentModule",
-            json!({
-                "textDocument":{"uri":uri}, "position":{"line":0,"character":0}
-            }),
-        )?;
         let mut targets = Vec::new();
-        for location in locations(response)? {
+        for location in self.client.parent_modules(uri)? {
             if location.uri == uri || !self.load(&location.uri)? {
                 continue;
             }
@@ -386,11 +363,8 @@ impl Resolver<'_> {
                 .document(uri)
                 .ok_or_else(|| failure("引用来源文档不存在"))?;
             let position = syntax::position(&document.source, name.text_range().start());
-            let response = self.client.request(
-                "textDocument/definition",
-                json!({"textDocument":{"uri":uri}, "position":position}),
-            )?;
-            self.definitions.insert(key.clone(), locations(response)?);
+            let locations = self.client.definitions(uri, position)?;
+            self.definitions.insert(key.clone(), locations);
         }
         let locations = self.definitions[&key].clone();
         if locations.is_empty() {
@@ -409,7 +383,7 @@ impl Resolver<'_> {
     fn target(
         &mut self,
         uri: &str,
-        position: &Value,
+        position: &Position,
         observed: &str,
         semantic: &str,
     ) -> Result<Vec<ReferenceTarget>> {
@@ -519,44 +493,6 @@ fn add(
             target,
         });
     }
-}
-
-/// 规范化两种标准定义响应，畸形响应不能冒充未找到目标。
-fn locations(value: Value) -> Result<Vec<Location>> {
-    let values = match value {
-        Value::Null => Vec::new(),
-        Value::Array(values) => values,
-        Value::Object(_) => vec![value],
-        _ => return Err(failure("LSP 位置响应类型无效")),
-    };
-    values
-        .into_iter()
-        .map(|value| {
-            let (uri, position) = if value.get("targetUri").is_some() {
-                (&value["targetUri"], &value["targetSelectionRange"]["start"])
-            } else {
-                (&value["uri"], &value["range"]["start"])
-            };
-            Ok(Location {
-                uri: uri
-                    .as_str()
-                    .ok_or_else(|| failure("LSP 位置缺少 URI"))?
-                    .to_owned(),
-                position: position.clone(),
-            })
-        })
-        .collect()
-}
-
-/// 可选列表只允许 null 或数组，协议错误不能变成空关联。
-fn optional_array<'a>(value: &'a Value, method: &str) -> Result<&'a [Value]> {
-    if value.is_null() {
-        return Ok(&[]);
-    }
-    value
-        .as_array()
-        .map(Vec::as_slice)
-        .ok_or_else(|| failure(format!("LSP {method} 未返回列表")))
 }
 
 /// 提取有明确源码位置的类型、调用、导入、数据访问和宏使用。

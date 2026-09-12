@@ -8,9 +8,9 @@ use std::{
 use ra_ap_syntax::{
     ast, AstNode, Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange, TextSize,
 };
-use serde_json::{json, Value};
 
-use super::{failure, lsp::file_uri, Result};
+use super::{failure, Result};
+use crate::lsp::{file_uri, Position};
 use crate::structure_review::code_graph::{
     CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
 };
@@ -90,7 +90,7 @@ impl Document {
             data.contains = own_children.iter().map(|(_, id, _)| id.clone()).collect();
         }
         Ok(Self {
-            uri: file_uri(&path)?,
+            uri: file_uri(&path).map_err(failure)?,
             path,
             source,
             tree,
@@ -432,21 +432,23 @@ pub(super) fn type_name(node: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// 将 UTF-8 语法位置转换成协商后的 LSP UTF-16 位置。
-pub(super) fn position(source: &str, offset: TextSize) -> Value {
+pub(super) fn position(source: &str, offset: TextSize) -> Position {
     let preceding = &source[..usize::from(offset)];
-    json!({"line": preceding.bytes().filter(|byte| *byte == b'\n').count(),
-        "character": preceding.rsplit('\n').next().unwrap_or_default().encode_utf16().count()})
+    Position {
+        line: preceding.bytes().filter(|byte| *byte == b'\n').count() as u32,
+        character: preceding
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .encode_utf16()
+            .count() as u32,
+    }
 }
 
 /// 严格校验行和 UTF-16 边界，拒绝跨行、越界或落在代理对中间的位置。
-pub(super) fn byte_offset(source: &str, position: &Value) -> Result<TextSize> {
-    let line = position["line"]
-        .as_u64()
-        .and_then(|value| usize::try_from(value).ok())
-        .ok_or_else(|| failure("LSP line 无效"))?;
-    let column = position["character"]
-        .as_u64()
-        .ok_or_else(|| failure("LSP character 无效"))?;
+pub(super) fn byte_offset(source: &str, position: &Position) -> Result<TextSize> {
+    let line = position.line as usize;
+    let column = u64::from(position.character);
     let mut starts = vec![0];
     starts.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
     let start = *starts.get(line).ok_or_else(|| failure("LSP 行号越界"))?;

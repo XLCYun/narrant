@@ -95,7 +95,7 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
         for (path, source) in sources {
             documents.push(syntax::Document::parse(&repository, path, source)?);
         }
-        let mut client = lsp::Lsp::start(&executable, &repository)?;
+        let mut client = lsp::RustLsp::start(&executable, &repository)?;
         for document in &documents {
             client.open(&document.uri, &document.source)?;
         }

@@ -1,112 +1,119 @@
-use std::io::Cursor;
+#![cfg(unix)]
 
-use serde_json::json;
+use super::RustLsp;
+use crate::lsp::{test_support::FakeServer, Position};
+use serde_json::{json, Value};
 
-use super::read_message;
-
-/// 多帧和多字节内容必须按字节边界读取，后一个响应不能被吞掉。
-#[test]
-fn reads_utf8_and_consecutive_frames() {
-    let messages = [json!({"result":"中文😀"}), json!({"result":null})];
-    let bytes = messages.iter().map(|message| {
-        let body = message.to_string();
-        format!("Content-Length: {}\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n{body}", body.len())
-    }).collect::<String>();
-    let mut input = Cursor::new(bytes);
-    assert_eq!(read_message(&mut input).unwrap(), messages[0]);
-    assert_eq!(read_message(&mut input).unwrap(), messages[1]);
-    assert!(read_message(&mut input).is_err());
+/// Rust Adapter 所需能力，通用客户端测试无需这些字段。
+fn capabilities() -> Value {
+    json!({"definitionProvider":true, "callHierarchyProvider":true, "experimental":{"parentModule":true}})
 }
 
-/// 不完整、重复长度和畸形正文都必须成为协议错误。
+/// 标准握手结果在 Rust Adapter 中按分析需求校验。
+fn initialized(capabilities: Value) -> Value {
+    json!({"jsonrpc":"2.0", "id":1, "result":{"capabilities":capabilities}})
+}
+
+/// 健康度和就绪条件属于 Rust 扩展。
+fn status(health: &str) -> Value {
+    json!({"jsonrpc":"2.0", "method":"experimental/serverStatus", "params":{
+        "quiescent":true, "health":health, "message":"test project loading"
+    }})
+}
+
+/// 缺少必要能力或位置编码不匹配时应失败并回收服务器。
 #[test]
-fn rejects_invalid_frames() {
-    for frame in [
-        "\r\n{}",
-        "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
-        "Content-Length: 99\r\n\r\n{}",
-        "Content-Length: 2\r\n\r\nx!",
-        "Content-Length: 999999999\r\n\r\n",
-    ] {
-        assert!(read_message(&mut Cursor::new(frame)).is_err(), "{frame}");
+fn requires_rust_capabilities_and_utf16() {
+    let mut missing_parent = capabilities();
+    missing_parent["experimental"] = json!({});
+    let mut missing_definition = capabilities();
+    missing_definition["definitionProvider"] = json!(false);
+    let mut utf8 = capabilities();
+    utf8["positionEncoding"] = json!("utf-8");
+    for capabilities in [missing_parent, missing_definition, utf8] {
+        let server = FakeServer::new(vec![vec![initialized(capabilities)], vec![]]);
+        assert!(RustLsp::start(&server.workspace().join("server"), server.workspace()).is_err());
+        // SAFETY: 信号 0 只查询本测试服务器是否仍存在。
+        assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
     }
 }
 
-/// 可控的 stdio 服务器验证加载警告和请求错误，避免仅覆盖正常解析结果。
-#[cfg(unix)]
-fn fake_server(
-    health: &str,
-    response: Option<serde_json::Value>,
-) -> (tempfile::TempDir, super::Lsp) {
-    use std::{fs, os::unix::fs::PermissionsExt};
-    let directory = tempfile::tempdir().unwrap();
-    let mut messages = vec![
-        json!({"jsonrpc":"2.0", "id":1, "result":{"capabilities":{
-            "definitionProvider":true, "callHierarchyProvider":true, "experimental":{"parentModule":true}
-        }}}),
-        json!({"jsonrpc":"2.0", "method":"experimental/serverStatus", "params":{
-            "quiescent":true, "health":health, "message":"test project loading"
-        }}),
-    ];
-    messages.extend(response);
-    let frames = messages
-        .into_iter()
-        .map(|message| {
-            let body = message.to_string();
-            format!("Content-Length: {}\r\n\r\n{body}", body.len())
-        })
-        .collect::<String>();
-    let responses = directory.path().join("responses");
-    fs::write(&responses, frames).unwrap();
-    let script = directory.path().join("server");
-    let quoted = responses.to_string_lossy().replace('\'', "'\\''");
-    fs::write(
-        &script,
-        format!("#!/bin/sh\ncat '{quoted}'\ncat >/dev/null\n"),
-    )
-    .unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-    let client = super::Lsp::start(&script, directory.path()).unwrap();
-    (directory, client)
+/// warning 也可能是依赖或宏加载失败，不能进入构图阶段。
+#[test]
+fn rejects_degraded_project_loading() {
+    for health in ["warning", "error"] {
+        let server = FakeServer::new(vec![
+            vec![initialized(capabilities())],
+            vec![status(health)],
+        ]);
+        let mut client =
+            RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+        assert!(client
+            .wait_ready()
+            .unwrap_err()
+            .message
+            .contains("项目未完整加载"));
+        drop(client);
+        // SAFETY: 信号 0 只查询本测试服务器是否仍存在。
+        assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
+    }
 }
 
-/// warning 也可能表示依赖或宏加载失败，必须失败并回收服务器。
-#[cfg(unix)]
+/// 通过对端收到的消息验证 Rust 配置、语言名称与就绪顺序。
 #[test]
-fn failed_project_loading_does_not_return_a_graph() {
-    let (_directory, mut client) = fake_server("warning", None);
-    let pid = client._process.0.id();
+fn configures_rust_and_only_queries_after_loading() {
+    let server = FakeServer::new(vec![
+        vec![initialized(capabilities())],
+        vec![],
+        vec![status("ok")],
+        vec![json!({"jsonrpc":"2.0", "id":2, "result":[]})],
+        vec![json!({"jsonrpc":"2.0", "id":3, "result":null})],
+    ]);
+    let mut client =
+        RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
     assert!(client
-        .wait_ready()
+        .definitions("file:///lib.rs", Position::default())
+        .unwrap_err()
+        .message
+        .contains("尚未就绪"));
+    client.open("file:///lib.rs", "fn f() {}").unwrap();
+    client.wait_ready().unwrap();
+    assert!(client.open("file:///late.rs", "").is_err());
+    assert!(client
+        .definitions("file:///lib.rs", Position::default())
+        .unwrap()
+        .is_empty());
+    client.shutdown().unwrap();
+    let requests = server.requests();
+    assert_eq!(
+        requests[0]["params"]["initializationOptions"]["checkOnSave"],
+        false
+    );
+    assert_eq!(
+        requests[0]["params"]["capabilities"]["experimental"]["serverStatusNotification"],
+        true
+    );
+    assert_eq!(requests[2]["params"]["textDocument"]["languageId"], "rust");
+}
+
+/// 查询中的成功响应不能掩盖期间到达的降级通知。
+#[test]
+fn rust_extension_queries_check_status_changes() {
+    let server = FakeServer::new(vec![
+        vec![initialized(capabilities())],
+        vec![status("ok")],
+        vec![
+            status("warning"),
+            json!({"jsonrpc":"2.0", "id":2, "result":[]}),
+        ],
+    ]);
+    let mut client =
+        RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+    client.wait_ready().unwrap();
+    assert!(client
+        .parent_modules("file:///lib.rs")
         .unwrap_err()
         .message
         .contains("项目未完整加载"));
-    drop(client);
-    // SAFETY: 信号 0 只查询刚回收的测试进程是否存在，不发送实际信号。
-    assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
-}
-
-/// 错误响应和超时均不能伪装成成功的 null/空列表。
-#[cfg(unix)]
-#[test]
-fn query_errors_and_timeouts_are_explicit() {
-    let (_directory, mut client) = fake_server(
-        "ok",
-        Some(json!({"jsonrpc":"2.0", "id":2,
-        "error":{"code":-32603,"message":"query failed"}})),
-    );
-    client.wait_ready().unwrap();
-    assert!(client
-        .request("textDocument/definition", json!({}))
-        .unwrap_err()
-        .message
-        .contains("query failed"));
-    let error = client
-        .request_with_timeout(
-            "textDocument/definition",
-            json!({}),
-            std::time::Duration::from_millis(50),
-        )
-        .unwrap_err();
-    assert!(error.message.contains("textDocument/definition"));
+    assert_eq!(server.requests()[2]["method"], "experimental/parentModule");
 }
