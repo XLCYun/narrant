@@ -17,24 +17,42 @@ const statusClasses: Record<ObjectStatus, string> = {
   relations: "structure-relations", unchanged: "structure-unchanged",
 };
 
-/** 统一对象卡片，容器尺寸由布局提供；原语言类型与自身变化状态分别展示。 */
+/** 类图卡片用紧凑行展示字段和方法；每行保留原对象的详情入口与独立端口。 */
 function CodeObjectNode({ data, selected }: NodeProps<ObjectNode>) {
   const { t } = useTranslation("structure");
   const actions = useContext(ObjectActions);
   const targetDescription = data.targetScope === "repository" ? t("repositoryTarget") : data.targetScope === "dependency" ? t("dependencyTarget") : t(data.targetKind ?? "external");
-  return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", selected && "structure-selected")}
+  const markers: Record<ObjectStatus, string> = { added: "+", removed: "−", modified: "~", relations: "↔", unchanged: "·" };
+  return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", data.table && "structure-member-table", selected && "structure-selected")}
     data-object-id={data.objectId} data-object-status={data.status}>
-    <Handle type="target" position={Position.Left} style={{ top: data.targetY }} isConnectable={false} />
+    {!data.table && <div className="structure-object-header" style={{ height: data.headerHeight }}>
     <div className="flex items-center justify-between gap-2 text-[10px]">
       <span className="min-w-0 truncate text-muted-foreground">{data.targetKind ? targetDescription : data.nativeKind}</span>
       {!data.targetKind && <span className="structure-status shrink-0">{t(`status.${data.status}`)}</span>}
     </div>
-    {data.objectId ? <Button variant="ghost" className="nodrag nopan mt-1 h-7 w-full justify-start overflow-hidden px-0 font-mono text-sm font-medium hover:bg-transparent hover:underline"
+    {data.objectId ? <Button variant="ghost" className="nodrag nopan mt-0.5 h-6 w-full justify-start overflow-hidden px-0 font-mono text-sm font-semibold hover:bg-transparent hover:underline"
       title={data.label} onClick={(event) => { event.stopPropagation(); actions.open(data.objectId!); }}><span className="truncate">{data.label}</span></Button>
       : <div className="mt-2 truncate font-mono text-sm font-medium" title={data.label || targetDescription}>{data.label || targetDescription}</div>}
     {data.hiddenChildren > 0 && data.objectId && <Button variant="ghost" size="sm" className="nodrag nopan mt-1 h-6 px-1 text-[10px]"
       onClick={(event) => { event.stopPropagation(); actions.expand(data.objectId!); }}>{t("expandChildren", { count: data.hiddenChildren })}</Button>}
-    <Handle type="source" position={Position.Right} style={{ top: data.sourceY }} isConnectable={false} />
+    </div>}
+    {data.rows.map((row, index) => row.kind === "section"
+      ? <div key={`section-${index}`} className="structure-member-section" style={{ top: row.top, height: row.height }}>
+        {t(`memberSections.${row.section === "values" ? data.category === "type" ? "attributes" : "values" : data.category === "type" ? "methods" : "functions"}`)}
+      </div>
+      : <div key={row.objectId} className={cn("structure-member-row", statusClasses[row.status], row.kind === "implementation" && "structure-implementation")}
+        style={{ top: row.top, height: row.height }} data-object-id={row.objectId} data-object-status={row.status}>
+        <Button variant="ghost" className="nodrag nopan structure-member-button" title={`${row.label} · ${t(`status.${row.status}`)}`}
+          aria-label={`${row.label} · ${t(`status.${row.status}`)}`}
+          onClick={(event) => { event.stopPropagation(); actions.open(row.objectId!); }}>
+          <span className="structure-member-marker" aria-hidden>{markers[row.status]}</span><span className="truncate">{row.label}</span>
+        </Button>
+        {row.hiddenChildren > 0 && <Button variant="ghost" className="nodrag nopan h-6 shrink-0 px-2 text-[10px]"
+          aria-label={t("expandChildren", { count: row.hiddenChildren })}
+          onClick={(event) => { event.stopPropagation(); actions.expand(row.objectId!); }}>+{row.hiddenChildren}</Button>}
+      </div>)}
+    {data.ports.map((port) => <Handle key={port.id} id={port.id} type={port.side} position={port.side === "source" ? Position.Right : Position.Left}
+      style={{ top: port.y, opacity: port.connected ? 1 : 0 }} isConnectable={false} />)}
   </div>;
 }
 const nodeTypes = { codeObject: CodeObjectNode };

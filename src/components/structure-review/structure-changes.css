@@ -4,7 +4,8 @@
 .structure-modified { --structure-color: #2563eb; }
 .structure-relations { --structure-color: #9333ea; }
 .structure-unchanged { --structure-color: #64748b; }
-.structure-object { width: 100%; height: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--structure-color) 65%, var(--border)); border-left: 3px solid var(--structure-color); border-radius: 8px; padding: 12px 14px; background: var(--background); color: var(--foreground); box-shadow: 0 2px 6px #00000008; }
+.structure-object { position: relative; width: 100%; height: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--structure-color) 65%, var(--border)); border-radius: 6px; background: var(--background); color: var(--foreground); box-shadow: 0 2px 6px #00000008; }
+.structure-object-header { box-sizing: border-box; padding: 8px 12px; }
 .structure-object.structure-group { background: color-mix(in srgb, var(--structure-color) 4%, var(--background)); }
 .structure-object.structure-removed { border-style: dashed; }
 .structure-object.structure-selected { outline: 2px solid var(--structure-color); outline-offset: 3px; }
@@ -12,3 +13,11 @@
 .structure-object .react-flow__handle { background: var(--structure-color); width: 5px; height: 5px; border: 0; }
 .structure-legend { display: inline-flex; align-items: center; gap: 5px; }
 .structure-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--structure-color); }
+.structure-member-section { position: absolute; left: 0; right: 0; display: flex; align-items: center; border-top: 1px solid var(--border); padding: 0 12px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 500; }
+.structure-member-row { position: absolute; left: 0; right: 0; display: flex; align-items: center; padding: 0 4px; border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent); background: color-mix(in srgb, var(--structure-color) 5%, var(--background)); }
+.structure-member-row.structure-unchanged { background: var(--background); }
+.structure-member-row.structure-removed { border-top-style: dashed; }
+.structure-member-button { flex: 1 1 0; width: 0; height: 100%; min-width: 0; justify-content: flex-start; gap: 7px; padding: 0 8px; border-radius: 0; font-family: var(--font-mono); font-size: 12px; font-weight: 400; overflow: hidden; }
+.structure-member-marker { width: 12px; flex-shrink: 0; color: var(--structure-color); font-size: 12px; font-weight: 600; text-align: center; }
+.structure-implementation .structure-member-button { font-size: 10px; font-weight: 600; color: var(--muted-foreground); }
+.structure-member-table { border-color: var(--border); }

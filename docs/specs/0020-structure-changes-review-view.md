@@ -142,11 +142,11 @@ React Flow does not include automatic layout. Its documentation notes Dagre's li
 for sub-flows connected to outside nodes; ELK supports compound layout and edge routing.
 The Implementation uses ELK for compound layout and routing in a local Web Worker. [Official layout documentation](https://reactflow.dev/learn/layouting/layouting).
 
-`contains` supplies nesting; references supply typed edges. Own-content status and
-contains/reference changes must remain distinguishable: a parent whose child changed
-does not thereby have modified own code. In the combined graph, the projection
-must handle changed containment without blindly unioning two parent trees into a
-multi-parent or cyclic visual hierarchy.
+`contains` supplies the declaration hierarchy; semantic ownership can additionally
+group members in a type card as described below. Own-content status and
+contains/reference changes remain distinguishable: a parent whose child changed does
+not thereby have modified own code. The combined projection handles changed
+containment without unioning two parent trees into a multi-parent or cyclic hierarchy.
 
 ## Accepted design tree
 
@@ -169,6 +169,46 @@ Selecting a node displays its declaration/content details rather than inventing 
 navigation from its opaque ID. Layout is read-only, with pan, zoom, fit and context
 expansion. These defaults implement the accepted scope without additional language
 implementations, persistent graph storage or a new file-scope picker.
+
+### Compact class-diagram presentation
+
+The user requested class-diagram-style cards after finding the individual object
+boxes too spacious. A visible Type now has a name/header followed by compact
+attribute and method sections. Each ordinary field or callable occupies a 30-pixel
+row with its source signature, change marker and a button opening that exact
+object's before/after details. Long signatures truncate in the diagram and remain
+fully available in the title and details. Type status still describes that Type's
+own difference, independently of its members' statuses.
+
+An Extension with one unambiguous `code.applies_to` target that is a Type in the
+graph can be grouped with that Type. Rust `impl` declarations become clickable
+subsection rows, retaining their signature, status and method grouping. Explicit
+`code.member_of` can also place a member with its Type. Surviving objects use the
+after graph's ownership, while removed objects use before; the projection never
+infers ownership from names or opaque IDs. Ambiguous, unresolved or graph-external
+ownership keeps the implementation separate. A candidate that would introduce
+a visual containment cycle is rejected.
+
+Declarations that contain nested named objects retain their container and nested
+cards, so compacting methods does not discard local functions or nested types.
+Free functions and data declarations use compact lists inside their visible module;
+root declarations share a presentation-only list without acquiring a fake module
+identity. Modules retain their nesting. Counts refer to Code Objects, including
+member rows, rather than the smaller number of React Flow cards. Existing visibility
+filters and expansion remain available, including expanding an implementation's
+methods from its Type card.
+
+Each member has distinct incoming/outgoing handles at its row, so grouping does not
+merge method calls into class-level relationships. Calls within one card, recursive
+calls, removed placement and former implementation-target relationships remain
+representable. Ownership already expressed by the containing card is not drawn as
+a duplicate edge; all original relationship changes remain in object details.
+The graph contract and Rust extraction are unchanged by this presentation policy.
+
+ELK arranges cards while member ports have fixed positions. React Flow connects
+`sourceHandle` and `targetHandle` to those exact members. See the
+[React Flow handle documentation](https://reactflow.dev/learn/customization/handles)
+and [ELK port constraints](https://eclipse.dev/elk/reference/options/org-eclipse-elk-portConstraints.html).
 
 ### Reference display defaults
 
@@ -330,3 +370,24 @@ read extraction in the current Rust adapter.
   removed relationship or exclusive target appeared, including with all controls on.
   Toolbar/menu/details had no horizontal overflow or browser exceptions; viewport
   overrides were reset. In-app interaction verification remains pending.
+
+### Class-diagram follow-up verification
+
+- The full frontend suite passed: 41 files, 350 tests. Public presentation tests
+  cover compact attributes/methods, per-member ports, calls within one card and
+  recursive calls, changed type/implementation ownership, ambiguous ownership,
+  nested declarations, root function lists, expansion and unchanged analysis data.
+  A class with four properties and eight methods occupies one card below 500 pixels
+  high, while all thirteen Code Objects retain their identities.
+- TypeScript, repository ESLint (excluding ignored local tools/caches) and the
+  production frontend build passed. Rust extraction and transport were not changed;
+  this follow-up did not rebuild the application installer.
+- The in-app preview request remained queued. Independent Chrome checked the same
+  Preview Harness at 1440×1000, 900×800 and 520×800 in light/dark themes, with 28
+  screenshot/accessibility/geometry captures. Checks cover default and expanded
+  members, all display options, dense multi-implementation cards, long signatures,
+  separate method/field/implementation details and the English menu. Member buttons
+  stay inside each row, ports align with row centers, and routed edges do not cross
+  unrelated leaf-card interiors in these fixtures. No browser exceptions or toolbar,
+  menu or details overflow were found; viewport overrides were cleared afterward.
+  In-app interaction verification remains pending.
