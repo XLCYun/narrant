@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
+    time::{Duration, Instant},
 };
 
 use ra_ap_syntax::{ast, AstNode, SyntaxKind, SyntaxNode, TextSize, WalkEvent};
@@ -21,6 +22,13 @@ use crate::structure_review::code_graph::{
     LanguageId, NodeId, ReferenceTarget,
 };
 
+/// 按关联用途统计实际定义查询，区分调用解析和稍后可能被过滤的候选引用。
+#[derive(Default)]
+struct DefinitionTiming {
+    requests: usize,
+    elapsed: Duration,
+}
+
 /// 单次构图的临时解析材料；图外文件只用来确认身份，不扩大输出范围。
 struct Resolver<'a> {
     client: &'a mut RustLsp,
@@ -34,6 +42,9 @@ struct Resolver<'a> {
     options: AnalysisOptions,
     test_files: BTreeMap<String, bool>,
     visiting_files: BTreeSet<String>,
+    external_parse_time: Duration,
+    definition_cache_hits: usize,
+    definition_timings: BTreeMap<String, DefinitionTiming>,
 }
 
 /// 组装词法包含和非包含关联，最后通过公共构造函数校验全部图约束。
@@ -55,6 +66,9 @@ pub(super) fn analyze(
         options,
         test_files: BTreeMap::new(),
         visiting_files: BTreeSet::new(),
+        external_parse_time: Duration::ZERO,
+        definition_cache_hits: 0,
+        definition_timings: BTreeMap::new(),
     };
     // 先确认文件的所有模块归属，再创建图节点，避免测试文件内的辅助声明逃逸到根。
     for document in documents {
@@ -81,6 +95,7 @@ pub(super) fn analyze(
         if resolver.test_files.get(&document.uri) == Some(&true) {
             continue;
         }
+        let file_started = Instant::now();
         let parents = resolver.module_parents(&document.uri)?;
         let local_parents: Vec<_> = parents
             .iter()
@@ -250,7 +265,11 @@ pub(super) fn analyze(
                 }
             }
         }
+        tracing::info!(target: "narrant::structure_review", event = "file_resolved",
+            file = %document.path.strip_prefix(repository).unwrap_or(&document.path).display(),
+            declarations = document.declarations.len(), elapsed_ms = file_started.elapsed().as_secs_f64() * 1000.0, "Rust 文件关联提取完成");
     }
+    let finishing_started = Instant::now();
     for (id, node) in &resolver.crate_roots {
         nodes.entry(id.clone()).or_insert_with(|| node.clone());
         root.contains.push(id.clone());
@@ -278,6 +297,15 @@ pub(super) fn analyze(
         .chain(resolver.external.values())
         .flat_map(|document| super::symbols::describe(repository, document, &referenced))
         .collect();
+    tracing::info!(target: "narrant::structure_review", event = "graph_summary", nodes = nodes.len(),
+        references = nodes.values().map(|node| node.data().references.len()).sum::<usize>(),
+        external_files = resolver.external.len(), external_parse_ms = resolver.external_parse_time.as_secs_f64() * 1000.0,
+        definition_cache_hits = resolver.definition_cache_hits,
+        finalize_ms = finishing_started.elapsed().as_secs_f64() * 1000.0, "Rust 构图统计");
+    for (semantic, timing) in &resolver.definition_timings {
+        tracing::info!(target: "narrant::structure_review", event = "definition_summary", semantic,
+            requests = timing.requests, total_ms = timing.elapsed.as_secs_f64() * 1000.0, "按关联用途统计定义查询");
+    }
     CodeGraph::new(root, nodes.into_values().collect())
         .map(|graph| graph.with_external_symbols(symbols))
         .map_err(failure)
@@ -355,8 +383,10 @@ impl Resolver<'_> {
         {
             return Ok(false);
         }
+        let started = Instant::now();
         let source = fs::read_to_string(&path).map_err(failure)?;
         let document = Document::parse(self.repository, path, source, self.options)?;
+        self.external_parse_time += started.elapsed();
         self.categories
             .extend(document.declarations.iter().map(|declaration| {
                 (
@@ -522,8 +552,17 @@ impl Resolver<'_> {
                 .document(uri)
                 .ok_or_else(|| failure("引用来源文档不存在"))?;
             let position = syntax::position(&document.source, name.text_range().start());
+            let started = Instant::now();
             let locations = self.client.definitions(uri, position)?;
+            let timing = self
+                .definition_timings
+                .entry(semantic.to_owned())
+                .or_default();
+            timing.requests += 1;
+            timing.elapsed += started.elapsed();
             self.definitions.insert(key.clone(), locations);
+        } else {
+            self.definition_cache_hits += 1;
         }
         let locations = self.definitions[&key].clone();
         if locations.is_empty() {

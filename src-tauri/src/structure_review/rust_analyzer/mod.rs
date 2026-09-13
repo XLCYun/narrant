@@ -14,6 +14,7 @@ use std::{
 };
 
 use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer};
+use super::observability::measure;
 use crate::lsp::CancellationCheck;
 
 type Result<T> = std::result::Result<T, AnalysisError>;
@@ -55,90 +56,111 @@ impl RustLanguageAnalyzer {
 impl LanguageAnalyzer for RustLanguageAnalyzer {
     /// 校验文件范围，固定文档内容，提取对象与关联后交由公共模块验证图结构。
     fn analyze(&self, input: &AnalysisInput) -> Result<CodeGraph> {
-        self.check_cancelled()?;
-        let repository = input.repository_root.canonicalize().map_err(failure)?;
-        if !repository.is_dir() {
-            return Err(failure("仓库根路径不是目录"));
-        }
-        let mut sources = BTreeMap::new();
-        for relative in &input.files {
-            self.check_cancelled()?;
-            if relative.as_os_str().is_empty()
-                || relative.is_absolute()
-                || relative
-                    .components()
-                    .any(|part| matches!(part, Component::ParentDir))
-            {
+        let _span = tracing::info_span!(target: "narrant::structure_review", "rust_analysis", files = input.files.len(), include_tests = input.options.include_tests).entered();
+        measure("rust_total", || {
+            let (repository, sources) = measure("read_sources", || {
+                self.check_cancelled()?;
+                let repository = input.repository_root.canonicalize().map_err(failure)?;
+                if !repository.is_dir() {
+                    return Err(failure("仓库根路径不是目录"));
+                }
+                let mut sources = BTreeMap::new();
+                for relative in &input.files {
+                    self.check_cancelled()?;
+                    if relative.as_os_str().is_empty()
+                        || relative.is_absolute()
+                        || relative
+                            .components()
+                            .any(|part| matches!(part, Component::ParentDir))
+                    {
+                        return Err(failure(format!(
+                            "文件必须是仓库内的相对路径：{}",
+                            relative.display()
+                        )));
+                    }
+                    let path = repository.join(relative).canonicalize().map_err(|error| {
+                        failure(format!("无法读取 {}：{error}", relative.display()))
+                    })?;
+                    if !path.starts_with(&repository) {
+                        return Err(failure("选中文件的符号链接指向仓库外部"));
+                    }
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                        return Err(failure(format!(
+                            "Rust 分析器只接受 .rs 文件：{}",
+                            relative.display()
+                        )));
+                    }
+                    sources.insert(path.clone(), fs::read_to_string(&path).map_err(failure)?);
+                }
+                Ok::<_, AnalysisError>((repository, sources))
+            })?;
+            if sources.is_empty() {
+                return CodeGraph::new(CodeRoot::default(), Vec::new()).map_err(failure);
+            }
+            // 保留启动器的文件名与符号链接，避免 rustup 等代理因 argv[0] 改变而失效。
+            let executable = if self.executable.is_absolute() {
+                self.executable.clone()
+            } else {
+                std::env::current_dir()
+                    .map_err(failure)?
+                    .join(&self.executable)
+            };
+            let metadata = fs::metadata(&executable).map_err(|error| {
+                failure(format!(
+                    "rust-analyzer 二进制不可用 {}：{error}",
+                    executable.display()
+                ))
+            })?;
+            if !metadata.is_file() {
                 return Err(failure(format!(
-                    "文件必须是仓库内的相对路径：{}",
-                    relative.display()
+                    "rust-analyzer 二进制路径不是文件：{}",
+                    executable.display()
                 )));
             }
-            let path = repository
-                .join(relative)
-                .canonicalize()
-                .map_err(|error| failure(format!("无法读取 {}：{error}", relative.display())))?;
-            if !path.starts_with(&repository) {
-                return Err(failure("选中文件的符号链接指向仓库外部"));
-            }
-            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-                return Err(failure(format!(
-                    "Rust 分析器只接受 .rs 文件：{}",
-                    relative.display()
-                )));
-            }
-            sources.insert(path.clone(), fs::read_to_string(&path).map_err(failure)?);
-        }
-        if sources.is_empty() {
-            return CodeGraph::new(CodeRoot::default(), Vec::new()).map_err(failure);
-        }
-        // 保留启动器的文件名与符号链接，避免 rustup 等代理因 argv[0] 改变而失效。
-        let executable = if self.executable.is_absolute() {
-            self.executable.clone()
-        } else {
-            std::env::current_dir()
-                .map_err(failure)?
-                .join(&self.executable)
-        };
-        let metadata = fs::metadata(&executable).map_err(|error| {
-            failure(format!(
-                "rust-analyzer 二进制不可用 {}：{error}",
-                executable.display()
-            ))
-        })?;
-        if !metadata.is_file() {
-            return Err(failure(format!(
-                "rust-analyzer 二进制路径不是文件：{}",
-                executable.display()
-            )));
-        }
-        let mut documents = Vec::new();
-        for (path, source) in sources {
-            self.check_cancelled()?;
-            documents.push(syntax::Document::parse(
-                &repository,
-                path,
-                source,
-                input.options,
-            )?);
-        }
-        let mut client = lsp::RustLsp::start(&executable, &repository, self.cancelled.clone())?;
-        for document in &documents {
-            client.open(&document.uri, &document.source)?;
-        }
-        client.wait_ready()?;
-        let graph = references::analyze(&mut client, &repository, &documents, input.options)?;
-        for document in &documents {
-            if fs::read_to_string(&document.path).map_err(failure)? != document.source {
-                return Err(failure(format!(
-                    "分析期间源文件已改变：{}",
-                    document.path.display()
-                )));
-            }
-        }
-        self.check_cancelled()?;
-        client.shutdown()?;
-        Ok(graph)
+            let documents = measure("parse_sources", || {
+                let mut documents = Vec::new();
+                for (path, source) in sources {
+                    self.check_cancelled()?;
+                    documents.push(syntax::Document::parse(
+                        &repository,
+                        path,
+                        source,
+                        input.options,
+                    )?);
+                }
+                Ok::<_, AnalysisError>(documents)
+            })?;
+            tracing::info!(target: "narrant::structure_review", event = "source_summary", files = documents.len(),
+            bytes = documents.iter().map(|document| document.source.len()).sum::<usize>(),
+            declarations = documents.iter().map(|document| document.declarations.len()).sum::<usize>(), "Rust 分析输入");
+            let mut client = measure("lsp_start", || {
+                lsp::RustLsp::start(&executable, &repository, self.cancelled.clone())
+            })?;
+            measure("open_documents", || {
+                for document in &documents {
+                    client.open(&document.uri, &document.source)?;
+                }
+                Ok::<_, AnalysisError>(())
+            })?;
+            measure("wait_ready", || client.wait_ready())?;
+            let graph = measure("resolve_graph", || {
+                references::analyze(&mut client, &repository, &documents, input.options)
+            })?;
+            measure("verify_sources", || {
+                for document in &documents {
+                    if fs::read_to_string(&document.path).map_err(failure)? != document.source {
+                        return Err(failure(format!(
+                            "分析期间源文件已改变：{}",
+                            document.path.display()
+                        )));
+                    }
+                }
+                self.check_cancelled()?;
+                Ok::<_, AnalysisError>(())
+            })?;
+            measure("shutdown", || client.shutdown())?;
+            Ok(graph)
+        })
     }
 }
 

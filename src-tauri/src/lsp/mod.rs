@@ -1,6 +1,7 @@
 //! 可复用的同步 stdio LSP 会话；语言配置与服务器扩展由各语言 Adapter 决定。
 
 mod protocol;
+mod timing;
 mod transport;
 
 use std::{
@@ -76,6 +77,7 @@ pub struct LspClient {
     next_id: u64,
     request_timeout: Duration,
     cancelled: CancellationCheck,
+    timing: timing::SessionTiming,
 }
 
 impl LspClient {
@@ -90,6 +92,7 @@ impl LspClient {
             next_id: 0,
             request_timeout: options.request_timeout,
             cancelled: options.cancelled,
+            timing: timing::SessionTiming::default(),
         };
         let initialized = client.request(
             "initialize",
@@ -134,6 +137,15 @@ impl LspClient {
 
     /// 发出标准或扩展请求；处理等待期间到达的通知，错误响应不会变成空结果。
     pub fn request(&mut self, method: &str, params: Value) -> Result<Value> {
+        let started = Instant::now();
+        let result = self.request_inner(method, params);
+        self.timing
+            .request(method, self.next_id, started.elapsed(), result.is_err());
+        result
+    }
+
+    /// 请求计时包住完整发送和等待过程，超时、取消及协议错误走同一条记录路径。
+    fn request_inner(&mut self, method: &str, params: Value) -> Result<Value> {
         self.next_id += 1;
         let id = self.next_id;
         let deadline = Instant::now() + self.request_timeout;
@@ -258,6 +270,9 @@ impl LspClient {
                     .ok_or_else(|| failure("LSP 反向请求处理超时"))?;
                 self.transport.send(response, remaining, &self.cancelled)?;
             } else {
+                if method == "$/progress" {
+                    self.timing.progress(&message["params"]);
+                }
                 self.notifications
                     .insert(method.to_owned(), message["params"].clone());
             }
