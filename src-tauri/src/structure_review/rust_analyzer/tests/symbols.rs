@@ -26,9 +26,9 @@ fn repository_symbols_have_readable_names_without_rewriting_ids() {
     assert_eq!(descriptions[symbol].scope, SymbolScope::Repository);
 }
 
-/// 标准库、registry 和 Git 依赖统一位于仓库外，不按符号显示名猜测来源。
+/// 标准库、registry 和 Git 依赖不再进入源码声明解析。
 #[test]
-fn standard_library_and_third_party_symbols_are_dependencies() {
+fn rejects_standard_library_and_third_party_sources() {
     let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
     let outside = Path::new(if cfg!(windows) { "C:/tools" } else { "/tools" });
     for path in [
@@ -36,16 +36,12 @@ fn standard_library_and_third_party_symbols_are_dependencies() {
         "registry/src/index/library-1.0/src/lib.rs",
         "git/checkouts/library/revision/src/lib.rs",
     ] {
-        let document = Document::parse(repository, outside.join(path), "pub struct Arc<T>(T); impl<T> Arc<T> { pub fn new(value: T) -> Self { Self(value) } pub fn unused() {} }".into(), Default::default()).unwrap();
-        let declaration = document
-            .declarations
-            .iter()
-            .find(|item| item.node.data().name.as_deref() == Some("new"))
-            .unwrap();
-        let symbol = declaration.node.data().id.0.as_str();
-        let descriptions = describe(repository, &document, &BTreeSet::from([symbol]));
-        assert_eq!(descriptions.len(), 1);
-        assert_eq!(descriptions[symbol].name, "Arc<T>::new");
-        assert_eq!(descriptions[symbol].scope, SymbolScope::Dependency);
+        assert!(Document::parse(
+            repository,
+            outside.join(path),
+            "pub struct Arc<T>(T);".into(),
+            Default::default()
+        )
+        .is_err());
     }
 }

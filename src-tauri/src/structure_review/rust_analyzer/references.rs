@@ -342,7 +342,7 @@ impl Resolver<'_> {
             .or_else(|| self.external.get(uri))
     }
 
-    /// 无法稳定命名的虚拟/外部源码返回 false，由目标解析显式保留 Unresolved。
+    /// 仅读取仓库内源码；仓库外目标和越界符号链接显式保留为 Unresolved。
     fn load(&mut self, uri: &str) -> Result<bool> {
         if self.document(uri).is_some() {
             return Ok(true);
@@ -351,8 +351,12 @@ impl Resolver<'_> {
             return Ok(false);
         };
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs")
-            || syntax::file_scope(self.repository, &path).is_none()
+            || !path.starts_with(self.repository)
         {
+            return Ok(false);
+        }
+        let path = path.canonicalize().map_err(failure)?;
+        if !path.starts_with(self.repository) {
             return Ok(false);
         }
         let source = fs::read_to_string(&path).map_err(failure)?;

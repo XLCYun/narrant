@@ -1,5 +1,6 @@
 mod crate_roots;
 mod integration;
+mod repository_scope;
 mod test_scope;
 
 use std::fs;

@@ -17,7 +17,7 @@ records the agreed scope and the implementation obligations.
   and [Code Graph contract](0018c-rust-interface.md). The caller supplies the repository
   root and repository-relative files for one fixed side of a Change Comparison.
 - Extract all supported Code Objects in those files before graph comparison. Semantic
-  resolution may read the wider project without adding every resolved object to the graph.
+  resolution may read other repository files without adding them to the graph.
 - Keep the existing common categories, native kind, language per node, single containment
   placement, outgoing references, and distinction between Node, External, and Unresolved.
 - Preserve node and external-target identities across different absolute checkout paths.
@@ -41,6 +41,42 @@ records the agreed scope and the implementation obligations.
 The common module now implements normalized own-code comparison. The concrete adapter
 is implemented under `structure_review::rust_analyzer`; real-server verification is
 recorded separately from the historical spike below.
+
+## Repository-only analysis (2026-09-14)
+
+The user requested a separate branch to disable dependency downloads, third-party
+analysis and standard-library analysis, and measure PR31. This branch changes the
+Rust Adapter's analysis context; it does not change the language-independent contract.
+
+- Initialize rust-analyzer with `cargo.noDeps=true`, `cargo.sysroot=null`,
+  `cargo.buildScripts.enable=false` and `procMacro.enable=false`. Both build scripts
+  and procedural macros must be disabled because enabling procedural macros also
+  enables build scripts. Existing diagnostic/check/cache-priming settings remain off.
+- Set `CARGO_NET_OFFLINE=true` and `RUSTUP_AUTO_INSTALL=0` for the server process and
+  its children, without modifying global toolchain or Cargo settings.
+- The adapter reads definition/parent context only when the canonical source path
+  is inside the repository. Outside targets, including escaping symlinks, do not
+  enter source parsing or external-symbol descriptions. Unselected repository
+  sources still provide stable External identities; selected sources still become Nodes.
+- Keep the same readiness and protocol-error checks. Intentional omission of dependencies
+  does not permit treating a failed request or degraded server as a successful empty graph.
+
+Explicit declarations and their normalized content are retained. Semantic completeness
+changes: methods reached through external wrappers/traits, macro-generated code and
+build-script-provided configuration may remain unresolved. `noDeps` omits Cargo's
+dependency resolve graph and enabled-feature results, including connections between
+workspace packages. Loading both packages does not guarantee cross-package resolution.
+Do not infer a target from its spelling to conceal this loss.
+
+The existing Cargo/rustc toolchain is still needed for project metadata and target
+configuration; rust-src is no longer loaded. These are language-server loading settings,
+not a filesystem sandbox. Non-Cargo project descriptions that explicitly supply
+external roots need separate scope enforcement; strict isolation of arbitrary server
+project inputs is not established by this experiment.
+
+See [PR31 measurements and semantic comparison](../research/rust-analyzer-repository-scope.md)
+for the measured tradeoff and reproducibility details. Earlier full-context observations
+below are historical evidence, not promises for this restricted context.
 
 ## Test-code analysis scope
 
@@ -75,7 +111,8 @@ Excluded declarations and expressions are also removed from the parent's normali
 content, so editing tests alone cannot change retained business objects. Setting
 include_tests to true restores the supported declarations and their relationships.
 The language server may still load test source as part of workspace context; this
-option does not promise to eliminate its project-loading or build-script work.
+option does not promise to eliminate its project-loading work. The separate repository
+policy above disables build-script execution.
 
 ## Clarifications accepted during the first round
 
@@ -235,8 +272,9 @@ Cargo default features, no extra requested features, the configured target platf
 host platform, and enabled build scripts/procedural macros. Local crates also receive
 test and analyzer cfg settings. Cargo `allTargets` refers to lib/bin/test target kinds,
 not every target platform. The production adapter must record/test its chosen server
-configuration; the spike's explicitly disabled build scripts/macros are not an accepted
-production default.
+configuration. The repository-only policy above now explicitly overrides dependency,
+sysroot, build-script and procedural-macro loading; the original spike did not by itself
+establish these defaults.
 [Configuration](https://rust-analyzer.github.io/book/configuration.html),
 [Crate configuration](https://github.com/rust-lang/rust-analyzer/blob/master/crates/project-model/src/workspace.rs).
 

@@ -601,9 +601,9 @@ fn closure(state: &State) -> u32 { let f = || store::helper() + state.value + LO
     save("omitted-relations-after", &new);
 }
 
-/// 真实 LSP 解析得到的目标同时携带可读名称与仓库范围，保持未选文件和标准库可区分。
+/// 只描述仓库内未选文件，标准库调用保持未知，不再读取标准库源码。
 #[test]
-#[ignore = "需要已提供的 rust-analyzer、Rust 工具链和 rust-src，单独串行运行"]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
 fn real_server_describes_external_symbols() {
     let repository = repository(
         "mod store; use std::sync::Arc; pub fn run() -> Arc<u32> { Arc::new(store::helper()) }",
@@ -636,12 +636,14 @@ fn real_server_describes_external_symbols() {
         graph
             .external_symbols()
             .values()
-            .any(|symbol| symbol.name.starts_with("Arc<")
-                && symbol.name.ends_with("::new")
-                && symbol.scope == SymbolScope::Dependency),
+            .all(|symbol| symbol.scope == SymbolScope::Repository),
         "{:#?}",
         graph.external_symbols()
     );
+    assert!(all.values().flat_map(|node| &node.data().references).any(|reference| {
+        reference.semantic == "code.calls"
+            && matches!(&reference.target, ReferenceTarget::Unresolved { name } if name == "new")
+    }));
     assert!(!all
         .values()
         .any(|node| node.data().name.as_deref() == Some("helper")));

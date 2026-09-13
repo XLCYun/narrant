@@ -78,6 +78,18 @@ fn configures_rust_and_only_queries_after_loading() {
         vec![json!({"jsonrpc":"2.0", "id":2, "result":[]})],
         vec![json!({"jsonrpc":"2.0", "id":3, "result":null})],
     ]);
+    // 只记录分析策略相关的环境变量，验证限制实际传给子进程。
+    let executable = server.workspace().join("server");
+    let script = std::fs::read_to_string(&executable).unwrap();
+    std::fs::write(
+        &executable,
+        script.replacen(
+            "#!/bin/sh\n",
+            "#!/bin/sh\nprintf '%s\\n' \"${CARGO_NET_OFFLINE-unset}\" \"${RUSTUP_AUTO_INSTALL-unset}\" > analysis-environment\n",
+            1,
+        ),
+    )
+    .unwrap();
     let mut client = RustLsp::start(
         &server.workspace().join("server"),
         server.workspace(),
@@ -98,6 +110,15 @@ fn configures_rust_and_only_queries_after_loading() {
         .is_empty());
     client.shutdown().unwrap();
     let requests = server.requests();
+    let configuration = &requests[0]["params"]["initializationOptions"];
+    assert_eq!(configuration["cargo"]["noDeps"], true);
+    assert_eq!(configuration["cargo"].get("sysroot"), Some(&Value::Null));
+    assert_eq!(configuration["cargo"]["buildScripts"]["enable"], false);
+    assert_eq!(configuration["procMacro"]["enable"], false);
+    assert_eq!(
+        std::fs::read_to_string(server.workspace().join("analysis-environment")).unwrap(),
+        "true\n0\n"
+    );
     assert_eq!(
         requests[0]["params"]["initializationOptions"]["checkOnSave"],
         false

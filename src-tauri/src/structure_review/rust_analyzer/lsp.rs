@@ -17,7 +17,7 @@ pub(super) enum ModuleParent {
     CrateRoot,
 }
 
-/// 在通用会话上提供 Rust 语义查询，保证构图阶段始终使用完整加载的项目。
+/// 在通用会话上提供 Rust 语义查询，等待限定分析范围内的项目就绪。
 pub(super) struct RustLsp {
     client: LspClient,
     ready: bool,
@@ -35,14 +35,25 @@ impl RustLsp {
             initialization_options: json!({
                 "checkOnSave": false,
                 "cachePriming": {"enable": false},
-                "diagnostics": {"enable": false}
+                "diagnostics": {"enable": false},
+                // noDeps 跳过依赖元数据；sysroot=null 禁止加载标准库源码。
+                "cargo": {
+                    "noDeps": true,
+                    "sysroot": null,
+                    "buildScripts": {"enable": false}
+                },
+                // 启用过程宏会隐式启用 build scripts，必须同时关闭。
+                "procMacro": {"enable": false}
             }),
             cancelled,
             ..LspOptions::default()
         };
         options.capabilities["experimental"] = json!({"serverStatusNotification": true});
-        let client =
-            LspClient::start(Command::new(executable), repository, options).map_err(failure)?;
+        let mut command = Command::new(executable);
+        // 只约束本次分析进程及其子进程，不修改用户的 Cargo/rustup 全局设置。
+        command.env("CARGO_NET_OFFLINE", "true");
+        command.env("RUSTUP_AUTO_INSTALL", "0");
+        let client = LspClient::start(command, repository, options).map_err(failure)?;
         let capabilities = client.capabilities();
         for capability in ["definitionProvider", "callHierarchyProvider"] {
             if capabilities[capability] != true && !capabilities[capability].is_object() {

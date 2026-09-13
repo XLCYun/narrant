@@ -160,23 +160,10 @@ fn extract(tree: &SyntaxNode, scope: &str, excluded: &[TextRange]) -> Vec<Declar
     declarations
 }
 
-/// 构造源码位置无关的文件命名空间；未知的图外路径由解析层保留为 Unresolved。
+/// 仅为仓库内源码构造稳定命名空间，不再提取标准库或第三方源码的声明身份。
 pub(super) fn file_scope(repository: &Path, path: &Path) -> Option<String> {
-    if let Ok(relative) = path.strip_prefix(repository) {
-        return Some(format!("rust:repo:{}", component(relative.to_str()?)));
-    }
-    let path = path.to_str()?.replace('\\', "/");
-    if let Some((_, relative)) = path.split_once("/lib/rustlib/src/rust/library/") {
-        return Some(format!("rust:sysroot:{}", component(relative)));
-    }
-    if let Some((_, relative)) = path.split_once("/registry/src/") {
-        let (_, relative) = relative.split_once('/')?;
-        return Some(format!("rust:registry:{}", component(relative)));
-    }
-    if let Some((_, relative)) = path.split_once("/git/checkouts/") {
-        return Some(format!("rust:git-dependency:{}", component(relative)));
-    }
-    None
+    let relative = path.strip_prefix(repository).ok()?;
+    Some(format!("rust:repo:{}", component(relative.to_str()?)))
 }
 
 /// 对身份分段转义，防止 Rust 名称、路径和类型语法与层级分隔符碰撞。

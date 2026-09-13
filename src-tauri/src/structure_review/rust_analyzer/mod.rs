@@ -20,8 +20,9 @@ type Result<T> = std::result::Result<T, AnalysisError>;
 
 /// 已有 rust-analyzer 可执行文件的轻量配置；每次分析独立加载一侧仓库快照。
 ///
-/// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。分析同步执行，可能加载
-/// Cargo 依赖及运行构建脚本，应用应在其工作线程和已有 Workspace Trust 范围内调用。
+/// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。分析同步执行，仅加载
+/// 仓库项目，不下载依赖、不加载标准库、不运行构建脚本和过程宏。依赖外部类型推断或
+/// Cargo 依赖解析的仓库内调用也可能无法解析；显式声明仍保留，未知目标不猜测。
 #[derive(Clone)]
 pub struct RustLanguageAnalyzer {
     executable: PathBuf,
