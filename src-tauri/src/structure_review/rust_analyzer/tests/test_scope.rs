@@ -225,3 +225,71 @@ fn ignores_call_hierarchy_ranges_inside_excluded_tests() {
         .iter()
         .any(|request| request["method"] == "textDocument/definition"));
 }
+
+/// 通配导入后的属性先确认身份；内置测试不发出体内查询，未知属性及显式开启的测试保留。
+#[test]
+fn resolves_shadowed_test_attributes_before_querying_their_bodies() {
+    let sysroot = tempfile::tempdir().unwrap();
+    let core_file = "lib/rustlib/src/rust/library/core/src/macros/mod.rs";
+    let builtin = "#[rustc_builtin_macro] pub macro test($item:item) {}";
+    fs::create_dir_all(sysroot.path().join(core_file).parent().unwrap()).unwrap();
+    fs::write(sysroot.path().join(core_file), builtin).unwrap();
+    let source = "use scope::*; #[test] fn checks(){ only_test(); } fn live() {}";
+    for (include_tests, resolved) in [(false, true), (false, false), (true, true)] {
+        let mut results = Vec::new();
+        if !include_tests {
+            results.push(if resolved {
+                json!([location(
+                    sysroot.path(),
+                    core_file,
+                    builtin.find("macro test").unwrap() + 6
+                )])
+            } else {
+                json!([])
+            });
+        }
+        results.extend([json!([]), json!([])]); // 父模块和 use 的定义查询。
+        let excluded = !include_tests && resolved;
+        if !excluded {
+            results.extend([json!([]), json!([])]); // 测试体调用及其调用层级。
+        }
+        results.extend([json!([]), Value::Null]); // 业务函数调用层级和 shutdown。
+        let server = FakeServer::new(steps(results));
+        fs::write(server.workspace().join("lib.rs"), source).unwrap();
+        let graph = analyze(&server, "lib.rs", include_tests);
+        assert_eq!(
+            graph
+                .root()
+                .contains
+                .iter()
+                .any(|id| graph.node(id).unwrap().data().name.as_deref() == Some("checks")),
+            !excluded
+        );
+        let requests = server.requests();
+        let definitions: Vec<_> = requests
+            .iter()
+            .filter(|request| request["method"] == "textDocument/definition")
+            .collect();
+        assert_eq!(
+            definitions
+                .iter()
+                .any(|request| request["params"]["position"]["character"]
+                    == source.find("[test]").unwrap() + 1),
+            !include_tests
+        );
+        assert_eq!(
+            definitions
+                .iter()
+                .any(|request| request["params"]["position"]["character"]
+                    == source.find("only_test").unwrap()),
+            !excluded
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["method"] == "textDocument/prepareCallHierarchy")
+                .count(),
+            if excluded { 1 } else { 2 }
+        );
+    }
+}

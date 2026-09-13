@@ -52,13 +52,18 @@ conservatively with other cfg flags unknown: `all(test, unix)` is test-only, whi
 `any(test, feature = "support")` and `cfg_attr(test, test)` do not establish that the
 whole declaration is test-only. Always-disabled general cfg branches are retained.
 
-Attribute aliases, potentially shadowed short-name `test` imports, framework macros,
-Cargo test targets and file/function naming conventions do not provide additional
-classification in this increment. No per-function macro identity query is introduced.
-Uncertain declarations remain included. Potential imported-attribute shadowing is
-tracked per lexical scope; an import inside another module or a function body does
-not suppress recognition of an outer test. Explicit test-only cfg still applies even
-when an attribute macro's identity is unknown.
+Potentially shadowed short-name `test` attributes are confirmed through LSP definition
+queries before graph assembly. A target must identify the `test` macro in sysroot source
+with `rustc_builtin_macro`; a custom same-name procedural attribute, unavailable source
+or unresolved definition stays included. The result for each definition is cached, so
+several test functions reuse one source-identity check. Ordinary unshadowed tests and
+explicit test-only cfg scopes do not need these additional attribute queries.
+
+Potential imported-attribute shadowing is tracked per lexical scope; an import inside
+another module or a function body does not suppress recognition of an outer test.
+Attribute aliases with other names, framework macros, Cargo test targets and file/function
+naming conventions do not provide additional classification. Explicit test-only cfg
+still applies when an attribute macro's identity is unknown.
 
 File-level inheritance follows rust-analyzer's parentModule responses, including
 `#[path]` and parents outside the selected files. Parent responses and file decisions
@@ -67,7 +72,7 @@ when every reported parent context is positively test-only. Cycles or missing
 ownership evidence do not establish exclusion. Context reads do not enlarge the graph.
 
 Local test subtrees are skipped during object extraction. Files with inherited test
-scope contribute no graph nodes. Both omit definition and call-hierarchy queries for
+scope contribute no graph nodes. Both omit body-definition and call-hierarchy queries for
 excluded code; returned call ranges inside excluded code are not assigned to an outer
 production object. Excluded targets are not replaced by synthetic unknown objects.
 Excluded declarations and expressions are also removed from the parent's normalized
@@ -612,3 +617,32 @@ and cross-checkout real-server regression also passes. The full Rust suite passe
   test scope, shared files and an empty tests-only diff. The existing prepared-repository
   regression also passes with tests included. The current repository regression also
   passes, producing 133 nodes and 112 references from the selected files.
+
+
+### PR31 wildcard-import regression
+
+The original policy treated `use httpmock::prelude::*` as possible attribute shadowing
+and kept all four built-in test functions in PR31's `tests/github_discovery.rs`. A
+reduction to one empty test function reproduces it; removing only the wildcard import
+or using explicit cfg(test) restores exclusion. This failure also reproduces through
+the public analyzer with the original PR source and real rust-analyzer.
+
+The adapter now confirms ambiguous test attributes before graph nodes and relationship
+queries are assembled, including for context documents. Confirmed ranges are merged
+with syntax-based exclusions and declarations are rebuilt with the same normalization
+rules, so no removed child identity or parent content remains. Custom attributes and
+unknown definitions retain the conservative behavior. This does not infer that an
+unannotated helper is test-only merely because it is under tests/ or called by tests.
+
+- The real-server public-interface regression fails before the fix and passes after
+  it using the original PR31 source. All four built-in tests are excluded by default
+  and restored when requested; the unannotated helper and a same-name custom
+  procedural attribute remain included. The existing real-server cross-file cfg
+  regression also passes.
+- A stdio regression verifies attribute identity queries, omitted test-body queries,
+  unresolved attributes being retained and no extra attribute queries when tests are
+  included. A syntax regression verifies that semantic exclusions merge with nested
+  cfg exclusions without dangling containment or changes to the retained parent.
+- The affected structure-review suite passes 76 tests with 10 real-server tests
+  ignored in the ordinary run. Rustfmt and all-target Clippy with warnings denied
+  pass. The public graph contract and frontend are unchanged by this correction.

@@ -74,39 +74,7 @@ impl Document {
         } else {
             super::test_code::excluded_ranges(&tree)
         };
-        let mut declarations = Vec::new();
-        collect(&tree, &scope, None, &excluded, &mut declarations);
-        let children: BTreeMap<_, Vec<_>> = declarations
-            .iter()
-            .map(|declaration| {
-                let children = declarations
-                    .iter()
-                    .filter(|child| child.parent.as_ref() == Some(&declaration.node.data().id))
-                    .map(|child| (child.syntax.text_range(), child.node.data().id.clone()))
-                    .collect();
-                (declaration.node.data().id.clone(), children)
-            })
-            .collect();
-        for declaration in &mut declarations {
-            let own_children = &children[&declaration.node.data().id];
-            let mut ignored: Vec<_> = own_children
-                .iter()
-                .map(|(range, _)| *range)
-                .chain(
-                    excluded
-                        .iter()
-                        .copied()
-                        .filter(|range| declaration.syntax.text_range().contains_range(*range)),
-                )
-                .collect();
-            ignored.sort_unstable_by_key(range_key);
-            ignored.dedup();
-            let body = implementation(&declaration.syntax);
-            let data = data_mut(&mut declaration.node);
-            data.signature = Some(signature(&declaration.syntax, &ignored));
-            data.code = body.as_ref().map(|body| normalize(body, &ignored));
-            data.contains = own_children.iter().map(|(_, id)| id.clone()).collect();
-        }
+        let declarations = extract(&tree, &scope, &excluded);
         Ok(Self {
             uri: file_uri(&path).map_err(failure)?,
             path,
@@ -115,6 +83,30 @@ impl Document {
             declarations,
             excluded,
         })
+    }
+
+    /// 补入语义确认的测试范围；合并嵌套范围后重建声明，避免留下子节点或旧的父对象内容。
+    pub fn exclude_ranges(&mut self, repository: &Path, ranges: Vec<TextRange>) -> Result<()> {
+        if ranges.is_empty() {
+            return Ok(());
+        }
+        self.excluded.extend(ranges);
+        self.excluded
+            .sort_unstable_by_key(|range| (range.start(), std::cmp::Reverse(range.end())));
+        let mut merged: Vec<TextRange> = Vec::new();
+        for range in self.excluded.drain(..) {
+            if !merged
+                .last()
+                .is_some_and(|parent| parent.contains_range(range))
+            {
+                merged.push(range);
+            }
+        }
+        self.excluded = merged;
+        let scope = file_scope(repository, &self.path)
+            .ok_or_else(|| failure("测试范围文档失去文件身份"))?;
+        self.declarations = extract(&self.tree, &scope, &self.excluded);
+        Ok(())
     }
 
     /// 范围按源码顺序且互不重叠，查询不随测试声明数量线性增长。
@@ -151,6 +143,44 @@ impl Document {
                 || declaration.selection.is_empty() && declaration.selection.start() == offset
         })
     }
+}
+
+/// 所有排除范围共用同一套提取规则，语义确认后重新计算身份、包含关系和父对象自身内容。
+fn extract(tree: &SyntaxNode, scope: &str, excluded: &[TextRange]) -> Vec<Declaration> {
+    let mut declarations = Vec::new();
+    collect(tree, scope, None, excluded, &mut declarations);
+    let children: BTreeMap<_, Vec<_>> = declarations
+        .iter()
+        .map(|declaration| {
+            let children = declarations
+                .iter()
+                .filter(|child| child.parent.as_ref() == Some(&declaration.node.data().id))
+                .map(|child| (child.syntax.text_range(), child.node.data().id.clone()))
+                .collect();
+            (declaration.node.data().id.clone(), children)
+        })
+        .collect();
+    for declaration in &mut declarations {
+        let own_children = &children[&declaration.node.data().id];
+        let mut ignored: Vec<_> = own_children
+            .iter()
+            .map(|(range, _)| *range)
+            .chain(
+                excluded
+                    .iter()
+                    .copied()
+                    .filter(|range| declaration.syntax.text_range().contains_range(*range)),
+            )
+            .collect();
+        ignored.sort_unstable_by_key(range_key);
+        ignored.dedup();
+        let body = implementation(&declaration.syntax);
+        let data = data_mut(&mut declaration.node);
+        data.signature = Some(signature(&declaration.syntax, &ignored));
+        data.code = body.as_ref().map(|body| normalize(body, &ignored));
+        data.contains = own_children.iter().map(|(_, id)| id.clone()).collect();
+    }
+    declarations
 }
 
 /// 构造源码位置无关的文件命名空间；未知的图外路径由解析层保留为 Unresolved。

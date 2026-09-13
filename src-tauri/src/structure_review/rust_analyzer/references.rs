@@ -13,6 +13,7 @@ use super::{
     failure,
     lsp::{ModuleParent, RustLsp},
     syntax::{self, child, path_name, type_name, Document},
+    test_code::TestAttributeResolver,
     Result,
 };
 use crate::lsp::{file_uri, Location, Position};
@@ -34,15 +35,22 @@ struct Resolver<'a> {
     options: AnalysisOptions,
     test_files: BTreeMap<String, bool>,
     visiting_files: BTreeSet<String>,
+    test_attributes: TestAttributeResolver,
 }
 
 /// 组装词法包含和非包含关联，最后通过公共构造函数校验全部图约束。
 pub(super) fn analyze(
     client: &mut RustLsp,
     repository: &Path,
-    documents: &[Document],
+    documents: &mut [Document],
     options: AnalysisOptions,
 ) -> Result<CodeGraph> {
+    let mut test_attributes = TestAttributeResolver::default();
+    if !options.include_tests {
+        for document in documents.iter_mut() {
+            test_attributes.resolve(client, repository, document)?;
+        }
+    }
     let mut resolver = Resolver {
         client,
         repository,
@@ -55,9 +63,10 @@ pub(super) fn analyze(
         options,
         test_files: BTreeMap::new(),
         visiting_files: BTreeSet::new(),
+        test_attributes,
     };
     // 先确认文件的所有模块归属，再创建图节点，避免测试文件内的辅助声明逃逸到根。
-    for document in documents {
+    for document in documents.iter() {
         resolver.test_only_file(&document.uri)?;
     }
     let mut nodes: BTreeMap<NodeId, CodeNode> = documents
@@ -77,7 +86,7 @@ pub(super) fn analyze(
         .categories
         .extend(nodes.iter().map(|(id, node)| (id.clone(), node.category())));
     let mut root = CodeRoot::default();
-    for document in documents {
+    for document in documents.iter() {
         if resolver.test_files.get(&document.uri) == Some(&true) {
             continue;
         }
@@ -344,7 +353,11 @@ impl Resolver<'_> {
             return Ok(false);
         }
         let source = fs::read_to_string(&path).map_err(failure)?;
-        let document = Document::parse(self.repository, path, source, self.options)?;
+        let mut document = Document::parse(self.repository, path, source, self.options)?;
+        if !self.options.include_tests {
+            self.test_attributes
+                .resolve(self.client, self.repository, &mut document)?;
+        }
         self.categories
             .extend(document.declarations.iter().map(|declaration| {
                 (

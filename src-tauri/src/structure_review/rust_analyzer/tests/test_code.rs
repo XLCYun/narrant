@@ -115,7 +115,7 @@ fn includes_tests_only_when_requested() {
 
 /// 未确认导入属性宏身份时不把自定义 test 当作内置属性；明确 cfg(test) 仍然生效。
 #[test]
-fn preserves_potentially_shadowed_test_attributes() {
+fn defers_potentially_shadowed_test_attributes_to_semantic_resolution() {
     for import in [
         "use framework::test;",
         "use framework::check as test;",
@@ -160,7 +160,11 @@ fn production() { use framework::test; #[test] fn local_custom() {} }
 
 /// 构造真实公共图，验证被排除的测试改动不会泄漏为父对象的内容或包含变化。
 fn graph(source: &str, include_tests: bool) -> CodeGraph {
-    let document = document(source, include_tests);
+    graph_from_document(document(source, include_tests))
+}
+
+/// 使用当前提取结果组装公共图，语义补充后的文档也必须满足相同的图约束。
+fn graph_from_document(document: Document) -> CodeGraph {
     CodeGraph::new(
         CodeRoot {
             contains: document
@@ -177,6 +181,30 @@ fn graph(source: &str, include_tests: bool) -> CodeGraph {
             .collect(),
     )
     .unwrap()
+}
+
+/// 语义排除外层测试时合并已有内层 cfg 范围，新增测试不得留下父对象修改或悬空包含。
+#[test]
+fn semantic_confirmation_rebuilds_parent_content_and_containment() {
+    let before = "use scope::*; fn live() {}";
+    let after = "use scope::*; fn live() { #[test] fn checks() { #[cfg(test)] struct Fixture; } }";
+    let mut parsed = document(after, false);
+    let test_range = parsed
+        .declarations
+        .iter()
+        .find(|item| item.node.data().name.as_deref() == Some("checks"))
+        .unwrap()
+        .syntax
+        .text_range();
+    let repository = parsed.path.parent().unwrap().to_path_buf();
+    parsed
+        .exclude_ranges(&repository, vec![test_range])
+        .unwrap();
+    assert!(graph(before, false)
+        .diff(&graph_from_document(parsed))
+        .unwrap()
+        .nodes
+        .is_empty());
 }
 
 /// 单独新增或修改嵌套测试都不应产生业务函数的结构 diff。

@@ -29,6 +29,76 @@ fn analyzer() -> RustLanguageAnalyzer {
     RustLanguageAnalyzer::new(executable)
 }
 
+/// 复现 PR31 的真实测试文件：通配导入不妨碍识别内置测试，自定义属性宏和辅助函数保留。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_excludes_builtin_tests_with_glob_imports() {
+    let source = "pub mod github_discovery { pub fn discover_pull_requests() {} }\nmod custom;\n";
+    let directory = repository(source);
+    let manifest = directory.path().join("Cargo.toml");
+    fs::write(&manifest, format!("{}\n[lib]\nname=\"narrant_lib\"\n[dependencies]\nmacros = {{ path = \"macros\" }}\n[dev-dependencies]\nhttpmock=\"0.7\"\nsecrecy=\"0.10\"\ntempfile=\"3\"\n", fs::read_to_string(&manifest).unwrap())).unwrap();
+    fs::create_dir(directory.path().join("macros")).unwrap();
+    fs::write(directory.path().join("macros/Cargo.toml"), "[package]\nname=\"macros\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\nproc-macro=true\npath=\"lib.rs\"\n").unwrap();
+    fs::write(directory.path().join("macros/lib.rs"), "use proc_macro::TokenStream; #[proc_macro_attribute] pub fn test(_: TokenStream, item: TokenStream) -> TokenStream { item }").unwrap();
+    fs::write(
+        directory.path().join("src/custom.rs"),
+        "use macros::*;\n#[test]\npub fn custom() {}",
+    )
+    .unwrap();
+    fs::create_dir(directory.path().join("tests")).unwrap();
+    fs::write(
+        directory.path().join("tests/github_discovery.rs"),
+        include_str!("fixtures/pr31_github_discovery.rs"),
+    )
+    .unwrap();
+    let analyze = |include_tests| {
+        analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: directory.path().to_owned(),
+                files: vec!["tests/github_discovery.rs".into(), "src/custom.rs".into()],
+                options: crate::structure_review::code_graph::AnalysisOptions { include_tests },
+            })
+            .unwrap()
+    };
+    let filtered = analyze(false);
+    let retained = nodes(&filtered);
+    let known_tests = [
+        "discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_only",
+        "rejects_code_content_endpoints_by_only_listing_pull_requests",
+        "reports_offline_discovery_per_repository_without_losing_groups",
+        "uses_authenticated_metadata_access_and_keeps_permission_failures_local",
+    ];
+    for name in known_tests {
+        assert!(
+            !retained
+                .values()
+                .any(|node| node.data().name.as_deref() == Some(name)),
+            "默认关闭时仍生成测试节点: {name}"
+        );
+    }
+    for name in ["repository_with_remotes", "custom"] {
+        assert!(
+            retained
+                .values()
+                .any(|node| node.category() == CodeCategory::Callable
+                    && node.data().name.as_deref() == Some(name)),
+            "不应排除: {name}"
+        );
+    }
+    let included = analyze(true);
+    let complete = nodes(&included);
+    for name in known_tests {
+        assert!(
+            complete
+                .values()
+                .any(|node| node.data().name.as_deref() == Some(name)),
+            "启用后应恢复: {name}"
+        );
+    }
+    save("pr31-test-filter-excluded", &filtered);
+    save("pr31-test-filter-included", &included);
+}
+
 /// 通过公共根和节点查询遍历结果，验收不依赖图内部存储。
 fn nodes(graph: &CodeGraph) -> BTreeMap<NodeId, &CodeNode> {
     let mut result = BTreeMap::new();
