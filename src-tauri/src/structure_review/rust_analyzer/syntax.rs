@@ -12,7 +12,7 @@ use ra_ap_syntax::{
 use super::{failure, Result};
 use crate::lsp::{file_uri, Position};
 use crate::structure_review::code_graph::{
-    CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
+    AnalysisOptions, CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
 };
 
 /// 临时源码位置只用于 LSP 关联，不进入图和节点身份。
@@ -31,11 +31,18 @@ pub(super) struct Document {
     pub source: String,
     pub tree: SyntaxNode,
     pub declarations: Vec<Declaration>,
+    /// 已确认的测试范围不生成对象，也不归入外层对象的代码或引用。
+    excluded: Vec<TextRange>,
 }
 
 impl Document {
     /// 本地库只负责语法；尝试语言版本以兼容仍使用旧版保留字的依赖源码。
-    pub fn parse(repository: &Path, path: PathBuf, source: String) -> Result<Self> {
+    pub fn parse(
+        repository: &Path,
+        path: PathBuf,
+        source: String,
+        options: AnalysisOptions,
+    ) -> Result<Self> {
         let scope = file_scope(repository, &path)
             .ok_or_else(|| failure("无法构造不依赖绝对路径的 Rust 文件身份"))?;
         let mut parsed = None;
@@ -62,8 +69,13 @@ impl Document {
                 errors
             ))
         })?;
+        let excluded = if options.include_tests {
+            Vec::new()
+        } else {
+            super::test_code::excluded_ranges(&tree)
+        };
         let mut declarations = Vec::new();
-        collect(&tree, &scope, None, &mut declarations);
+        collect(&tree, &scope, None, &excluded, &mut declarations);
         let children: BTreeMap<_, Vec<_>> = declarations
             .iter()
             .map(|declaration| {
@@ -77,10 +89,22 @@ impl Document {
             .collect();
         for declaration in &mut declarations {
             let own_children = &children[&declaration.node.data().id];
+            let mut ignored: Vec<_> = own_children
+                .iter()
+                .map(|(range, _)| *range)
+                .chain(
+                    excluded
+                        .iter()
+                        .copied()
+                        .filter(|range| declaration.syntax.text_range().contains_range(*range)),
+                )
+                .collect();
+            ignored.sort_unstable_by_key(range_key);
+            ignored.dedup();
             let body = implementation(&declaration.syntax);
             let data = data_mut(&mut declaration.node);
-            data.signature = Some(signature(&declaration.syntax, own_children));
-            data.code = body.as_ref().map(|body| normalize(body, own_children));
+            data.signature = Some(signature(&declaration.syntax, &ignored));
+            data.code = body.as_ref().map(|body| normalize(body, &ignored));
             data.contains = own_children.iter().map(|(_, id)| id.clone()).collect();
         }
         Ok(Self {
@@ -89,11 +113,31 @@ impl Document {
             source,
             tree,
             declarations,
+            excluded,
         })
+    }
+
+    /// 范围按源码顺序且互不重叠，查询不随测试声明数量线性增长。
+    pub fn excludes(&self, offset: TextSize) -> bool {
+        let index = self
+            .excluded
+            .partition_point(|range| range.start() <= offset);
+        index > 0 && self.excluded[index - 1].contains(offset)
+    }
+
+    /// 父节点可能从测试声明相同位置开始，必须确认整个范围被排除才能跳过子树。
+    pub fn excludes_range(&self, range: TextRange) -> bool {
+        let index = self
+            .excluded
+            .partition_point(|excluded| excluded.start() <= range.start());
+        index > 0 && self.excluded[index - 1].contains_range(range)
     }
 
     /// 查找最内层已建模声明；闭包是普通表达式，内部关联自然归属外层对象。
     pub fn owner(&self, offset: TextSize) -> Option<&Declaration> {
+        if self.excludes(offset) {
+            return None;
+        }
         self.declarations
             .iter()
             .filter(|declaration| declaration.syntax.text_range().contains(offset))
@@ -158,13 +202,20 @@ fn category(syntax: &SyntaxNode) -> Option<CodeCategory> {
     })
 }
 
-/// 收集显式声明，包含 cfg 未启用的分支；闭包本身不建模，其中具名声明仍独立提取。
+/// 收集分析范围内的显式声明；未知 cfg 分支保留，明确排除的测试子树不提取。
 fn collect(
     syntax: &SyntaxNode,
     scope: &str,
     parent: Option<NodeId>,
+    excluded: &[TextRange],
     output: &mut Vec<Declaration>,
 ) {
+    if excluded
+        .binary_search_by_key(&range_key(&syntax.text_range()), range_key)
+        .is_ok()
+    {
+        return;
+    }
     let mut next_parent = parent.clone();
     if let Some(category) = category(syntax) {
         let name_node = child(syntax, SyntaxKind::NAME);
@@ -173,10 +224,10 @@ fn collect(
             SyntaxKind::MACRO_CALL => "macro_invocation".to_owned(),
             kind => format!("{kind:?}").to_lowercase(),
         };
-        let signature = signature(syntax, &[]);
+        let signature = signature(syntax, excluded);
         let key = name
             .clone()
-            .unwrap_or_else(|| identity_key(syntax, &signature));
+            .unwrap_or_else(|| identity_key(syntax, &signature, excluded));
         let owner = parent.as_ref().map_or(scope, |id| id.0.as_str());
         let base = format!(
             "{owner}::{native_kind}:{}",
@@ -231,23 +282,23 @@ fn collect(
         next_parent = Some(id);
     }
     for child in syntax.children() {
-        collect(&child, scope, next_parent.clone(), output);
+        collect(&child, scope, next_parent.clone(), excluded, output);
     }
 }
 
 /// 匿名对象使用词法归属和结构锚点，不把行列或实现代码当成身份。
-fn identity_key(syntax: &SyntaxNode, signature: &str) -> String {
+fn identity_key(syntax: &SyntaxNode, signature: &str, excluded: &[TextRange]) -> String {
     if let Some(implementation) = ast::Impl::cast(syntax.clone()) {
         return [implementation.trait_(), implementation.self_ty()]
             .into_iter()
             .flatten()
-            .map(|ty| normalize(ty.syntax(), &[]))
+            .map(|ty| normalize(ty.syntax(), excluded))
             .collect::<Vec<_>>()
             .join(" for ");
     }
     if syntax.kind() == SyntaxKind::MACRO_CALL {
         return child(syntax, SyntaxKind::PATH)
-            .map_or_else(|| "macro".into(), |path| normalize(&path, &[]));
+            .map_or_else(|| "macro".into(), |path| normalize(&path, excluded));
     }
     if matches!(
         syntax.kind(),
@@ -273,7 +324,7 @@ fn implementation(syntax: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// 声明签名排除实现和成员内容，但保留括号形态、修饰符及语言特有标注。
-fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId)]) -> String {
+fn signature(syntax: &SyntaxNode, children: &[TextRange]) -> String {
     let body = implementation(syntax);
     let mut tokens = Vec::new();
     for element in syntax.children_with_tokens() {
@@ -323,7 +374,7 @@ fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId)]) -> String {
 }
 
 /// 输出可读的规范化代码；闭包内容原样参与外层比较，独立的具名子声明整体排除。
-fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId)]) -> String {
+fn normalize(syntax: &SyntaxNode, children: &[TextRange]) -> String {
     let mut tokens = Vec::<(String, TextRange, bool)>::new();
     normalized_tokens(syntax, children, &mut tokens);
     let mut output = String::new();
@@ -344,12 +395,12 @@ fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId)]) -> String {
 /// 只删除真正的空白/注释 token；字面量和宏中有意义的标点粘连保持原样。
 fn normalized_tokens(
     syntax: &SyntaxNode,
-    children: &[(TextRange, NodeId)],
+    children: &[TextRange],
     output: &mut Vec<(String, TextRange, bool)>,
 ) {
     if children
-        .iter()
-        .any(|(range, _)| *range == syntax.text_range())
+        .binary_search_by_key(&range_key(&syntax.text_range()), range_key)
+        .is_ok()
     {
         return;
     }
@@ -379,6 +430,11 @@ fn normalized_tokens(
             _ => {}
         }
     }
+}
+
+/// TextRange 没有全序，明确按起止偏移排序以便二分查询排除范围。
+fn range_key(range: &TextRange) -> (TextSize, TextSize) {
+    (range.start(), range.end())
 }
 
 /// 获取直接语法子节点，避免混入更深层对象的名称或类型。

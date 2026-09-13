@@ -136,6 +136,44 @@ fn analyze_files(input: &AnalysisInput, _: CancellationCheck) -> Result<CodeGrap
     .unwrap())
 }
 
+/// 同一比较的两侧接收完全相同的通用选项，显式开启和默认关闭均向下传递。
+#[tokio::test]
+async fn passes_the_same_analysis_options_to_both_sides() {
+    let fixture = Fixture::new().await;
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = observed.clone();
+    let application = StructureReview::new(Arc::new(move |input, cancelled| {
+        captured.lock().unwrap().push(input.options);
+        analyze_files(input, cancelled)
+    }));
+    for options in [
+        AnalysisOptions::default(),
+        AnalysisOptions {
+            include_tests: true,
+        },
+    ] {
+        application
+            .analyze(
+                &fixture.lifecycle,
+                &OperationContext::background(),
+                &fixture.presentation.review_id,
+                &fixture.presentation.snapshot_id,
+                options,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        observed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|options| options.include_tests)
+            .collect::<Vec<_>>(),
+        [false, false, true, true]
+    );
+}
+
 /// 确认只增加 before，并使用固定分叉提交和各侧真实存在的文件。
 #[tokio::test]
 async fn reuses_head_and_compares_exact_merge_base_with_side_specific_files() {
@@ -162,6 +200,7 @@ async fn reuses_head_and_compares_exact_merge_base_with_side_specific_files() {
             &OperationContext::background(),
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
+            AnalysisOptions::default(),
         )
         .await
         .unwrap();
@@ -285,6 +324,7 @@ async fn assert_workspace_drain(action: &str) {
                 &OperationContext::background(),
                 &review,
                 &snapshot,
+                AnalysisOptions::default(),
             )
             .await
     });
@@ -343,6 +383,7 @@ async fn analysis_failure_cleans_before_without_closing_review() {
             &OperationContext::background(),
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
+            AnalysisOptions::default(),
         )
         .await;
     assert_eq!(result.unwrap_err().code, "analysis-failed");
@@ -371,6 +412,7 @@ async fn refuses_foreign_before_directory_and_stale_snapshot() {
             &OperationContext::background(),
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
+            AnalysisOptions::default(),
         )
         .await;
     assert_eq!(result.unwrap_err().code, "cleanup-failed");
@@ -385,6 +427,7 @@ async fn refuses_foreign_before_directory_and_stale_snapshot() {
             &OperationContext::background(),
             &fixture.presentation.review_id,
             "stale",
+            AnalysisOptions::default(),
         )
         .await;
     assert_eq!(result.unwrap_err().code, "review-unavailable");
@@ -438,6 +481,7 @@ async fn real_server_builds_review_structure_comparison() {
             &OperationContext::background(),
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
+            AnalysisOptions::default(),
         )
         .await
         .unwrap();

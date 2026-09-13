@@ -10,7 +10,7 @@ mod graph;
 mod node;
 mod validation;
 
-pub use analyzer::{AnalysisInput, LanguageAnalyzer};
+pub use analyzer::{AnalysisInput, AnalysisOptions, LanguageAnalyzer};
 pub use diff::{ChangeKind, CodeGraphDiff, NodeDiff, SetChange};
 pub use error::{AnalysisError, CompareError, InvalidGraph};
 pub use graph::{CodeGraph, CodeRoot, ExternalSymbol, SymbolScope};

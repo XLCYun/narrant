@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureClassDiagramFixture, structureHiddenReferencesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureHiddenReferencesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 
@@ -24,11 +24,39 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
 
 /** 用完整的比较结果驱动公开结构视图接口。 */
 function binding(comparison = structureReviewFixture()): StructureBinding {
-  return { state: { kind: "ready", comparison }, retry: vi.fn(), cancel: vi.fn() };
+  return { state: { kind: "ready", comparison }, options: { includeTests: false }, setOptions: vi.fn(), retry: vi.fn(), cancel: vi.fn() };
 }
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(cleanup);
+
+it("offers a controlled analysis switch in ready, empty, loading, failed and cancelled states", async () => {
+  const current = binding();
+  const view = render(<StructureChangesView binding={current} dark={false} />);
+  const toggle = screen.getByRole("switch", { name: "分析测试代码" });
+  expect(toggle).not.toBeChecked();
+  fireEvent.click(toggle);
+  expect(current.setOptions).toHaveBeenCalledWith({ includeTests: true });
+  for (const state of [{ kind: "loading" }, { kind: "cancelled" }, { kind: "failed", detail: "unavailable" }, { kind: "ready", comparison: structureHiddenReferencesFixture() }] as const) {
+    view.rerender(<StructureChangesView binding={{ ...current, state, options: { includeTests: true } }} dark={false} />);
+    const toggle = screen.getByRole("switch", { name: "分析测试代码" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(current.setOptions).toHaveBeenLastCalledWith({ includeTests: false });
+  }
+  await waitFor(() => expect(screen.getByText("没有可显示的结构变化")).toBeInTheDocument());
+});
+
+it("shows both test implementations when the analysis result includes a test-only change", async () => {
+  const base = structureReviewFixture();
+  const comparison = structureTestCodeFixture({ ...base, before: base.after, diff: { nodes: [] } }, true);
+  render(<StructureChangesView binding={{ ...binding(comparison), options: { includeTests: true } }} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  fireEvent.click(within(graph).getByRole("button", { name: /checks_snapshot_identity.*自身修改/ }));
+  const sidebar = screen.getByRole("complementary", { name: "结构详情" });
+  expect(sidebar).toHaveTextContent("{ assert!(snapshot.is_ready()); }");
+  expect(sidebar).toHaveTextContent("{ assert!(snapshot.has_matching_identity()); }");
+});
 
 it("keeps details beside the graph and switches exact objects without remounting the canvas", async () => {
   render(<StructureChangesView binding={binding()} dark={false} />);

@@ -1,5 +1,21 @@
 import type { CodeNode, CodeReference, StructureComparison } from "@/structure-review/types";
 
+/** 为预览提供开关前后的两种分析结果；测试节点由结果提供，不在真实展示层过滤。 */
+export function structureTestCodeFixture(comparison: StructureComparison, includeTests: boolean): StructureComparison {
+  if (!includeTests || !comparison.coverage.some((file) => file.before === "analyzed" || file.after === "analyzed")) return comparison;
+  const result = { ...structuredClone(comparison), before: structuredClone(comparison.before), after: structuredClone(comparison.after) };
+  for (const side of ["before", "after"] as const) {
+    const common = { language: "rust", references: [], extensions: {} };
+    result[side].root.push("preview-tests");
+    result[side].nodes.push(
+      { ...common, id: "preview-tests", category: "container", nativeKind: "mod", name: "tests", signature: "#[cfg(test)] mod tests", code: null, contains: ["preview-test"] },
+      { ...common, id: "preview-test", category: "callable", nativeKind: "fn", name: "checks_snapshot_identity", signature: "#[test] fn checks_snapshot_identity()", code: side === "before" ? "{ assert!(snapshot.is_ready()); }" : "{ assert!(snapshot.has_matching_identity()); }", contains: [] },
+    );
+  }
+  result.diff.nodes.push({ id: "preview-test", content: "modified", contains: [], references: [] });
+  return result;
+}
+
 /** 预览和应用测试共用的代表性图，包含高层对象、导入声明和独立的关系变化。 */
 export function structureReviewFixture({ importsOnly = false }: { importsOnly?: boolean } = {}): StructureComparison {
   const call = (id: string): CodeReference => ({ semantic: "code.calls", target: { kind: "node", id } });

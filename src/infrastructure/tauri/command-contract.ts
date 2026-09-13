@@ -33,7 +33,7 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
-  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string }; result: StructureComparison; error: { code: string; detail: string } };
+  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string; includeTests: boolean }; result: StructureComparison; error: { code: string; detail: string } };
   application_update_snapshot: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_manual_check: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_set_automatic_download: { args: { enabled: boolean }; result: ApplicationUpdateSnapshot };

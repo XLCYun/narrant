@@ -1,10 +1,11 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useState } from "react";
 import { Background, BaseEdge, Controls, Handle, Position, ReactFlow, getSmoothStepPath, type EdgeProps, type NodeProps } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { StructureDetails, type StructureSelection } from "./structure-details";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
@@ -67,22 +68,37 @@ function RoutedRelationEdge(props: EdgeProps<StructureEdge>) {
 }
 const edgeTypes = { routedRelation: RoutedRelationEdge };
 
+/** 分析范围开关在加载、失败和空图时同样可用，切换由应用层重新分析两侧。 */
+function TestCodeSwitch({ binding }: { binding: StructureBinding }) {
+  const { t } = useTranslation("structure");
+  const id = useId();
+  return <div className="flex shrink-0 items-center gap-2 text-xs" title={t("includeTestsDescription")}>
+    <Switch id={id} size="sm" checked={binding.options.includeTests}
+      onCheckedChange={(includeTests) => binding.setOptions({ ...binding.options, includeTests })}
+      aria-description={t("includeTestsDescription")} />
+    <label htmlFor={id} className="cursor-pointer">{t("includeTests")}</label>
+  </div>;
+}
+
 /** loading、失败、取消与已证明的空 diff 使用不同状态，避免把分析失败当作无变化。 */
 export default function StructureChangesView({ binding, dark }: { binding?: StructureBinding; dark: boolean }) {
   const { t } = useTranslation(["structure", "common"]);
   const state = binding?.state;
-  if (state?.kind === "ready") return <ComparisonView key={JSON.stringify([state.comparison.reviewId, state.comparison.snapshotId])} comparison={state.comparison} dark={dark} />;
+  if (state?.kind === "ready" && binding) return <ComparisonView key={JSON.stringify([state.comparison.reviewId, state.comparison.snapshotId, binding.options.includeTests])} comparison={state.comparison} binding={binding} dark={dark} />;
   const loading = state?.kind === "loading" || state?.kind === "idle";
-  return <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto p-6 text-center" role={state?.kind === "failed" ? "alert" : "status"}>
+  return <div className="flex min-h-0 flex-1 flex-col">
+    {binding && <div className="flex shrink-0 justify-end border-b px-3 py-3"><TestCodeSwitch binding={binding} /></div>}
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto p-6 text-center" role={state?.kind === "failed" ? "alert" : "status"}>
     {loading && <Spinner className="size-6" />}
     <h3 className="font-medium">{t(!state ? "unavailable" : loading ? "loading" : state.kind === "cancelled" ? "cancelled" : "failed")}</h3>
     <p className="max-w-xl whitespace-pre-wrap break-words text-sm text-muted-foreground">{state?.kind === "failed" ? state.detail : loading ? t("loadingDescription") : t("retryDescription")}</p>
     {binding && <Button variant="outline" onClick={loading ? binding.cancel : binding.retry}>{loading ? t("common:cancel") : t("common:retry")}</Button>}
+    </div>
   </div>;
 }
 
 /** 只读 combined graph，布局、展开和选中状态留在展示层。 */
-function ComparisonView({ comparison, dark }: { comparison: StructureComparison; dark: boolean }) {
+function ComparisonView({ comparison, binding, dark }: { comparison: StructureComparison; binding: StructureBinding; dark: boolean }) {
   const { t } = useTranslation("structure");
   const [showAll, setShowAll] = useState(false);
   const [showUnchangedReferences, setShowUnchangedReferences] = useState(false);
@@ -128,6 +144,7 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
           {t(partial ? "partialCoverage" : "coverage", { count: analyzed, total: comparison.coverage.length })}
         </Button>
       </div>
+      <TestCodeSwitch binding={binding} />
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-7 text-xs" />}>{t("displayOptions")}</DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">

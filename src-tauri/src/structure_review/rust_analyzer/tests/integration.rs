@@ -84,6 +84,9 @@ declare!(generated);
     let analyze = |directory: &Path, files: &[&str]| {
         analyzer()
             .analyze(&AnalysisInput {
+                options: crate::structure_review::code_graph::AnalysisOptions {
+                    include_tests: true,
+                },
                 repository_root: directory.to_path_buf(),
                 files: files.iter().map(PathBuf::from).collect(),
             })
@@ -237,6 +240,9 @@ pub fn parameter() { let invoke = |f: fn() -> u32| f(); invoke(store::helper); }
         .unwrap();
         analyzer()
             .analyze(&AnalysisInput {
+                options: crate::structure_review::code_graph::AnalysisOptions {
+                    include_tests: true,
+                },
                 repository_root: directory.to_path_buf(),
                 files: vec!["src/lib.rs".into()],
             })
@@ -329,6 +335,9 @@ fn closure(state: &State) -> u32 { let f = || store::helper() + state.value + LO
         .unwrap();
         analyzer()
             .analyze(&AnalysisInput {
+                options: crate::structure_review::code_graph::AnalysisOptions {
+                    include_tests: true,
+                },
                 repository_root: directory.to_path_buf(),
                 files: vec![PathBuf::from("src/lib.rs")],
             })
@@ -401,6 +410,9 @@ fn real_server_describes_external_symbols() {
     );
     let graph = analyzer()
         .analyze(&AnalysisInput {
+            options: crate::structure_review::code_graph::AnalysisOptions {
+                include_tests: true,
+            },
             repository_root: repository.path().to_path_buf(),
             files: vec![PathBuf::from("src/lib.rs")],
         })
@@ -454,6 +466,9 @@ fn real_server_preserves_crate_roots() {
     let analyze = |directory: &Path, files: &[&str]| {
         analyzer()
             .analyze(&AnalysisInput {
+                options: crate::structure_review::code_graph::AnalysisOptions {
+                    include_tests: true,
+                },
                 repository_root: directory.to_owned(),
                 files: files.iter().map(PathBuf::from).collect(),
             })
@@ -537,6 +552,9 @@ fn real_server_recognizes_custom_and_empty_crate_roots() {
     .unwrap();
     let graph = analyzer()
         .analyze(&AnalysisInput {
+            options: crate::structure_review::code_graph::AnalysisOptions {
+                include_tests: true,
+            },
             repository_root: directory.path().to_owned(),
             files: vec!["library_entry.rs".into(), "test_entry.rs".into()],
         })
@@ -559,6 +577,82 @@ fn real_server_recognizes_custom_and_empty_crate_roots() {
             && root.data().contains.len() == 1));
 }
 
+/// 真实服务器验证跨文件测试继承、共享源码和开关恢复；测试修改不污染排除后的 diff。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_excludes_test_code_before_graph_analysis() {
+    let prepare = |value| {
+        let directory = repository(
+            r#"
+pub fn run() {}
+#[cfg(test)] #[path = "specs.rs"] mod specifications;
+#[path = "shared.rs"] pub mod live;
+#[cfg(test)] #[path = "shared.rs"] mod test_copy;
+pub mod runtime;
+"#,
+        );
+        fs::write(directory.path().join("src/specs.rs"), format!("#[path = \"helpers.rs\"] mod deep; struct Fixture; fn setup() -> u32 {{ {value} }} #[test] fn checks() {{ crate::run(); }}")).unwrap();
+        fs::write(
+            directory.path().join("src/helpers.rs"),
+            "pub fn helper() { crate::run(); }",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("src/shared.rs"),
+            "pub fn shared() { crate::run(); }",
+        )
+        .unwrap();
+        fs::write(directory.path().join("src/runtime.rs"), format!("pub fn run_live() {{ crate::run(); }} #[test] fn direct_test() {{ assert_eq!({value}, {value}); }}")).unwrap();
+        directory
+    };
+    let before = prepare(1);
+    let after = prepare(2);
+    let analyze = |root: &Path, include_tests| {
+        analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: root.to_owned(),
+                files: [
+                    "src/specs.rs",
+                    "src/helpers.rs",
+                    "src/shared.rs",
+                    "src/runtime.rs",
+                ]
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+                options: crate::structure_review::code_graph::AnalysisOptions { include_tests },
+            })
+            .unwrap()
+    };
+    let old = analyze(before.path(), false);
+    let new = analyze(after.path(), false);
+    assert!(old.diff(&new).unwrap().nodes.is_empty());
+    let retained = nodes(&new);
+    let names: Vec<_> = retained
+        .values()
+        .filter_map(|node| node.data().name.as_deref())
+        .collect();
+    assert!(
+        names.contains(&"shared") && names.contains(&"run_live"),
+        "{names:?}"
+    );
+    for name in ["Fixture", "setup", "checks", "helper", "direct_test"] {
+        assert!(!names.contains(&name), "{names:?}");
+    }
+    let complete = analyze(after.path(), true);
+    let complete_nodes = nodes(&complete);
+    for name in ["Fixture", "setup", "checks", "helper", "direct_test"] {
+        assert!(
+            complete_nodes
+                .values()
+                .any(|node| node.data().name.as_deref() == Some(name)),
+            "{name}"
+        );
+    }
+    save("test-scope-excluded", &new);
+    save("test-scope-included", &complete);
+}
+
 /// 当前仓库回归覆盖较大的真实类型、模块与关联，不依赖穿刺时固定的 crate 名。
 #[test]
 #[ignore = "需要已提供的 rust-analyzer 和当前仓库的完整依赖，单独串行运行"]
@@ -574,6 +668,9 @@ fn real_server_analyzes_current_repository() {
         "src-tauri/src/structure_review/code_graph/error.rs",
     ];
     let input = AnalysisInput {
+        options: crate::structure_review::code_graph::AnalysisOptions {
+            include_tests: true,
+        },
         repository_root: repository.to_path_buf(),
         files: files.into_iter().map(PathBuf::from).collect(),
     };

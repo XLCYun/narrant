@@ -3,7 +3,7 @@
 mod projection;
 mod workspace;
 
-use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot};
+use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
 use crate::{
     lsp::CancellationCheck,
     operation::OperationContext,
@@ -59,6 +59,7 @@ impl StructureReview {
         operation: &OperationContext,
         review_id: &str,
         snapshot_id: &str,
+        options: AnalysisOptions,
     ) -> Result<StructureComparison, StructureReviewError> {
         let lease = lifecycle
             .lease_workspace(operation, review_id, snapshot_id)
@@ -72,9 +73,11 @@ impl StructureReview {
         let analyze = self.analyze_rust.clone();
         let review_id = review_id.to_owned();
         let snapshot_id = snapshot_id.to_owned();
-        tokio::task::spawn_blocking(move || run(lease, context, analyze, review_id, snapshot_id))
-            .await
-            .map_err(|error| StructureReviewError::new("analysis-failed", error))?
+        tokio::task::spawn_blocking(move || {
+            run(lease, context, analyze, review_id, snapshot_id, options)
+        })
+        .await
+        .map_err(|error| StructureReviewError::new("analysis-failed", error))?
     }
 }
 
@@ -94,6 +97,7 @@ fn run(
     analyze: Arc<AnalyzeGraph>,
     review_id: String,
     snapshot_id: String,
+    options: AnalysisOptions,
 ) -> Result<StructureComparison, StructureReviewError> {
     let (before_files, after_files, coverage) = scope(&lease);
     let mut before_checkout = None;
@@ -103,8 +107,14 @@ fn run(
         }
         let cancelled_signal = operation.cancellation().clone();
         let cancelled: CancellationCheck = Arc::new(move || cancelled_signal.is_cancelled());
-        let before = analyze_side(&analyze, &lease.before_path, before_files, &cancelled)?;
-        let after = analyze_side(&analyze, &lease.head_path, after_files, &cancelled)?;
+        let before = analyze_side(
+            &analyze,
+            &lease.before_path,
+            before_files,
+            options,
+            &cancelled,
+        )?;
+        let after = analyze_side(&analyze, &lease.head_path, after_files, options, &cancelled)?;
         workspace::verify_head(&lease, &operation)?;
         let diff = before
             .diff(&after)
@@ -134,6 +144,7 @@ fn analyze_side(
     analyze: &Arc<AnalyzeGraph>,
     repository: &std::path::Path,
     files: Vec<PathBuf>,
+    options: AnalysisOptions,
     cancelled: &CancellationCheck,
 ) -> Result<CodeGraph, StructureReviewError> {
     if cancelled() {
@@ -147,6 +158,7 @@ fn analyze_side(
         &AnalysisInput {
             repository_root: repository.to_owned(),
             files,
+            options,
         },
         cancelled.clone(),
     )

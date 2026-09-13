@@ -33,6 +33,9 @@ fn skips_definition_queries_for_type_mentions_and_read_only_fields() {
     fs::write(server.workspace().join("lib.rs"), source).unwrap();
     let graph = RustLanguageAnalyzer::new(server.workspace().join("server"))
         .analyze(&AnalysisInput {
+            options: crate::structure_review::code_graph::AnalysisOptions {
+                include_tests: true,
+            },
             repository_root: server.workspace().to_path_buf(),
             files: vec![PathBuf::from("lib.rs")],
         })

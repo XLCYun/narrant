@@ -1,6 +1,6 @@
 //! Rust 专用的 LSP Adapter：配置、能力要求和项目就绪规则集中在这里。
 
-use std::{path::Path, process::Command, time::Duration};
+use std::{collections::BTreeMap, path::Path, process::Command, time::Duration};
 
 use serde_json::{json, Value};
 
@@ -11,7 +11,7 @@ const SERVER_STATUS: &str = "experimental/serverStatus";
 const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// rust-analyzer 在 crate 根返回清单位置；它表示当前文件的根身份，而非 Rust 声明。
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum ModuleParent {
     Declaration(Location),
     CrateRoot,
@@ -21,6 +21,7 @@ pub(super) enum ModuleParent {
 pub(super) struct RustLsp {
     client: LspClient,
     ready: bool,
+    parents: BTreeMap<String, Vec<ModuleParent>>,
 }
 
 impl RustLsp {
@@ -62,6 +63,7 @@ impl RustLsp {
         Ok(Self {
             client,
             ready: false,
+            parents: BTreeMap::new(),
         })
     }
 
@@ -94,6 +96,10 @@ impl RustLsp {
 
     /// 获取文件的全部父模块，并将服务器确认的 Cargo crate 根与显式模块区分。
     pub fn parent_modules(&mut self, uri: &str) -> Result<Vec<ModuleParent>> {
+        self.ensure_healthy()?;
+        if let Some(parents) = self.parents.get(uri) {
+            return Ok(parents.clone());
+        }
         let locations = self.query(|client| {
             client.request_locations(
                 "experimental/parentModule",
@@ -102,7 +108,7 @@ impl RustLsp {
                 }),
             )
         })?;
-        Ok(locations
+        let parents: Vec<_> = locations
             .into_iter()
             .map(|location| {
                 let is_manifest = url::Url::parse(&location.uri)
@@ -115,7 +121,9 @@ impl RustLsp {
                     ModuleParent::Declaration(location)
                 }
             })
-            .collect())
+            .collect();
+        self.parents.insert(uri.to_owned(), parents.clone());
+        Ok(parents)
     }
 
     /// 取得函数的出向调用，包括服务器能定位到原源码的宏展开调用。

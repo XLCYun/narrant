@@ -171,11 +171,27 @@ presentation only, not the complete extraction inside the chosen file scope. Q3 
 the first implementation to the existing Rust Adapter.
 
 The first entry to this tab requests analysis lazily. A completed result is reused for
-the same Snapshot; the page offers retry after failure and cancellation while running.
+the same Snapshot and analysis options; the page offers retry after failure and cancellation while running.
 Selecting a node displays its declaration/content details rather than inventing source
 navigation from its opaque ID. Layout is read-only, with pan, zoom, fit and context
 expansion. These defaults implement the accepted scope without additional language
 implementations, persistent graph storage or a new file-scope picker.
+
+### Test-code analysis switch
+
+The Structure Changes toolbar provides an **Include test code / 分析测试代码** switch,
+off by default. It changes the common Code Graph extraction options and requests a
+new comparison using the same option on both sides. It is available for ready, empty,
+loading, failed and cancelled states. Switching cancels an older in-flight request;
+late results for the old scope cannot replace the new one. Retry preserves the chosen
+option. A new Snapshot starts with the default scope, and cached results from a
+different option are never reused. The existing head checkout is still reused.
+
+The first Rust policy excludes built-in test declarations and proven test-only cfg
+scopes, including module inheritance; it does not classify tests from filenames or
+Cargo targets. See the [Rust scope](0019-rust-language-analyzer.md#test-code-analysis-scope).
+This is an analysis option, not a display filter. The `structure-tests-only` preview
+starts with an empty diff and restores a modified test when the switch is enabled.
 
 ### Persistent details sidebar
 
@@ -508,3 +524,27 @@ read extraction in the current Rust adapter.
   filtering pass without horizontal overflow or browser exceptions. Viewport overrides
   are cleared afterward. The in-app request remains queued; its interaction
   verification is pending.
+
+
+### Test-code switch follow-up verification
+
+- The full frontend suite passes: 42 files, 363 tests. Coverage includes the default
+  off option at the transport boundary, matching options on reanalysis and retry,
+  cancellation and rejection of late results, hidden-tab laziness and a new Snapshot
+  resetting the scope. View tests cover the switch in all states and a tests-only
+  empty comparison restoring distinct before/after code when enabled. After strengthening
+  the Snapshot-reset regression, the 19 related tests pass in a final sequential run.
+  One unchanged view test exceeded its 5-second limit during concurrent dependency
+  compilation; its sequential rerun passes.
+- TypeScript, production frontend build and project-source ESLint pass. Plain
+  `pnpm lint` also traversed ignored local `.tools` caches and reported errors there;
+  the source check excludes that directory. Vite retains its existing large-chunk
+  warning.
+- Independent Chrome completes 15 screenshot/accessibility/geometry captures at
+  1440×1000, 900×800 and 520×800 with light/dark themes. Real pointer and keyboard
+  interactions cover the default empty graph, inclusion, selected details, exclusion
+  again, loading cancellation, retry after cancellation/failure and the narrow English
+  menu. There is no horizontal overflow or browser exception, the switch has its
+  accessible name and viewport overrides are cleared afterward. The in-app preview
+  request remains queued and in-app interaction tooling is unavailable in this session;
+  in-app interaction verification remains pending.

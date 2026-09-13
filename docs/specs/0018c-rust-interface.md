@@ -55,7 +55,11 @@ of validated in-memory graphs has no additional fallible operation and returns O
 the Result signature is preserved. Matching analysis and normalization conventions is
 a caller precondition, not something inferred from absent protocol-version metadata.
 
-AnalysisInput and LanguageAnalyzer define the language-implementation seam. Path checks,
+AnalysisInput, AnalysisOptions and LanguageAnalyzer define the language-implementation seam.
+`AnalysisOptions::default()` sets `include_tests` to false; the option is carried in
+`AnalysisInput.options` and must match on both sides of a comparison. The language
+implementation owns conservative test classification; the common graph does not
+interpret Rust attributes or any other language's testing conventions. Path checks,
 source reads and normalization belong to the concrete analyzer; workspace preparation
 remains with the caller. RustLanguageAnalyzer implements this seam in its own module.
 Serialization and deserialization are not added by this implementation; any future

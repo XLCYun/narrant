@@ -44,6 +44,9 @@ fn analyze_roots(files: [&str; 2], parents: [Value; 2]) -> CodeGraph {
     }
     RustLanguageAnalyzer::new(server.workspace().join("server"))
         .analyze(&AnalysisInput {
+            options: crate::structure_review::code_graph::AnalysisOptions {
+                include_tests: true,
+            },
             repository_root: server.workspace().to_owned(),
             files: files.into_iter().map(Into::into).collect(),
         })

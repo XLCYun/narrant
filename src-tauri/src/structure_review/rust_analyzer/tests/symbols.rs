@@ -10,6 +10,7 @@ fn repository_symbols_have_readable_names_without_rewriting_ids() {
         repository,
         repository.join("src/未选中.rs"),
         "mod helpers { pub struct Cache; impl Cache { pub fn 读取() {} } }".into(),
+        Default::default(),
     )
     .unwrap();
     let declaration = document
@@ -35,7 +36,7 @@ fn standard_library_and_third_party_symbols_are_dependencies() {
         "registry/src/index/library-1.0/src/lib.rs",
         "git/checkouts/library/revision/src/lib.rs",
     ] {
-        let document = Document::parse(repository, outside.join(path), "pub struct Arc<T>(T); impl<T> Arc<T> { pub fn new(value: T) -> Self { Self(value) } pub fn unused() {} }".into()).unwrap();
+        let document = Document::parse(repository, outside.join(path), "pub struct Arc<T>(T); impl<T> Arc<T> { pub fn new(value: T) -> Self { Self(value) } pub fn unused() {} }".into(), Default::default()).unwrap();
         let declaration = document
             .declarations
             .iter()

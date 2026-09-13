@@ -52,9 +52,12 @@ export type StructureComparison = ReviewIdentity & {
   coverage: { path: string; oldPath: string | null; before: CoverageKind; after: CoverageKind }[];
 };
 
-/** 调用者只提供 Snapshot 身份；仓库准备、分析和回收由后端拥有。 */
+/** 各语言共享的分析范围；默认不分析能够明确识别的测试代码。 */
+export type AnalysisOptions = { includeTests: boolean };
+
+/** 调用者提供 Snapshot 和分析选项；仓库准备、分析和回收由后端拥有。 */
 export interface StructureReviewAdapter {
-  analyze(identity: ReviewIdentity, signal: AbortSignal): Promise<StructureComparison>;
+  analyze(input: ReviewIdentity & AnalysisOptions, signal: AbortSignal): Promise<StructureComparison>;
 }
 /** 未分析、失败和取消都不等价于已经证明的空差异。 */
 export type StructureState =
@@ -63,4 +66,4 @@ export type StructureState =
   | { kind: "ready"; comparison: StructureComparison };
 
 /** 结构视图只消费状态和用户意图，不自行发出 Tauri 命令。 */
-export type StructureBinding = { state: StructureState; retry(): void; cancel(): void };
+export type StructureBinding = { state: StructureState; options: AnalysisOptions; setOptions(options: AnalysisOptions): void; retry(): void; cancel(): void };

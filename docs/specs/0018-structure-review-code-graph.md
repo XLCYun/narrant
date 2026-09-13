@@ -56,7 +56,12 @@ records the adapter scope and the real-server verification obligations.
 ## Language interface and input
 
 `LanguageAnalyzer::analyze(&AnalysisInput)` returns a CodeGraph or an analysis error.
-AnalysisInput supplies a repository_root and a list of repository-relative file paths.
+AnalysisInput supplies a repository_root, a list of repository-relative file paths,
+and language-neutral `AnalysisOptions`. `include_tests` defaults to false: each language
+adapter omits code it can positively identify as test-only, including its contained
+objects and outgoing references. Unknown or shared code stays in the graph. Setting
+the option to true includes tests within the same selected file scope. The option
+controls extraction, not frontend visibility; both sides must receive the same value.
 The caller prepares the before/after repository states for the same intended scope
 and uses the same language implementations and configuration on both sides. Each
 directory and the analyzer's view of it remain consistent for the duration of analysis.

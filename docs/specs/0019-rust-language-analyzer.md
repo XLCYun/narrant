@@ -42,6 +42,40 @@ The common module now implements normalized own-code comparison. The concrete ad
 is implemented under `structure_review::rust_analyzer`; real-server verification is
 recorded separately from the historical spike below.
 
+## Test-code analysis scope
+
+The common `AnalysisOptions.include_tests` switch defaults to false. The Rust adapter
+omits ordinary unshadowed built-in `#[test]` declarations, and code whose `cfg` or
+`cfg_attr` attributes prove that it can only exist with `test` enabled. This includes
+inner `#![cfg(test)]` attributes and contained declarations. Conditions are evaluated
+conservatively with other cfg flags unknown: `all(test, unix)` is test-only, while
+`any(test, feature = "support")` and `cfg_attr(test, test)` do not establish that the
+whole declaration is test-only. Always-disabled general cfg branches are retained.
+
+Attribute aliases, potentially shadowed short-name `test` imports, framework macros,
+Cargo test targets and file/function naming conventions do not provide additional
+classification in this increment. No per-function macro identity query is introduced.
+Uncertain declarations remain included. Potential imported-attribute shadowing is
+tracked per lexical scope; an import inside another module or a function body does
+not suppress recognition of an outer test. Explicit test-only cfg still applies even
+when an attribute macro's identity is unknown.
+
+File-level inheritance follows rust-analyzer's parentModule responses, including
+`#[path]` and parents outside the selected files. Parent responses and file decisions
+are cached within the immutable analysis session. A shared file is excluded only
+when every reported parent context is positively test-only. Cycles or missing
+ownership evidence do not establish exclusion. Context reads do not enlarge the graph.
+
+Local test subtrees are skipped during object extraction. Files with inherited test
+scope contribute no graph nodes. Both omit definition and call-hierarchy queries for
+excluded code; returned call ranges inside excluded code are not assigned to an outer
+production object. Excluded targets are not replaced by synthetic unknown objects.
+Excluded declarations and expressions are also removed from the parent's normalized
+content, so editing tests alone cannot change retained business objects. Setting
+include_tests to true restores the supported declarations and their relationships.
+The language server may still load test source as part of workspace context; this
+option does not promise to eliminate its project-loading or build-script work.
+
 ## Clarifications accepted during the first round
 
 ### Code content and generated declarations
@@ -558,3 +592,23 @@ selection scope, custom Cargo entries and an empty crate. The existing multi-par
 and cross-checkout real-server regression also passes. The full Rust suite passes
 561 tests (8 ignored), with the three relevant real-server tests run explicitly;
 `check --lib`, rustfmt and all-target Clippy with warnings denied pass.
+
+
+### Test-code scope verification
+
+- The public analysis contract defaults to excluding tests and passes identical
+  options to both comparison sides. Syntax and stdio tests cover built-in tests,
+  outer/inner cfg, cfg_attr, unknown/shared conditions, shadowed attributes, nested
+  declarations, cross-file parents and shared production files. They verify omitted
+  definition/call-hierarchy queries, discarded test call ranges and test-only edits
+  producing no changes in retained parent content or containment.
+- The full Rust run completed with 571 passing tests, 9 ignored tests and one failure
+  in the unchanged Core Git process-output-limit test: output-pipe cleanup exceeded
+  its timeout and returned TerminationFailed. That exact test passed when rerun alone.
+  All structure-review tests passed in the full run. After the lexical-scope refinement,
+  the focused structure-review suite passes 74 tests with 9 real-server tests ignored.
+- `check --lib`, rustfmt and all-target Clippy with warnings denied pass. Explicit
+  real rust-analyzer verification passes for test exclusions/restoration, inherited
+  test scope, shared files and an empty tests-only diff. The existing prepared-repository
+  regression also passes with tests included. The current repository regression also
+  passes, producing 133 nodes and 112 references from the selected files.

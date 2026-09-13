@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 
-use ra_ap_syntax::{ast, AstNode, SyntaxKind, SyntaxNode, TextSize};
+use ra_ap_syntax::{ast, AstNode, SyntaxKind, SyntaxNode, TextSize, WalkEvent};
 use url::Url;
 
 use super::{
@@ -17,8 +17,8 @@ use super::{
 };
 use crate::lsp::{file_uri, Location, Position};
 use crate::structure_review::code_graph::{
-    CodeCategory, CodeGraph, CodeNode, CodeNodeData, CodeReference, CodeRoot, LanguageId, NodeId,
-    ReferenceTarget,
+    AnalysisOptions, CodeCategory, CodeGraph, CodeNode, CodeNodeData, CodeReference, CodeRoot,
+    LanguageId, NodeId, ReferenceTarget,
 };
 
 /// 单次构图的临时解析材料；图外文件只用来确认身份，不扩大输出范围。
@@ -31,6 +31,9 @@ struct Resolver<'a> {
     categories: BTreeMap<NodeId, CodeCategory>,
     definitions: BTreeMap<(String, u32), Vec<Location>>,
     crate_roots: BTreeMap<NodeId, CodeNode>,
+    options: AnalysisOptions,
+    test_files: BTreeMap<String, bool>,
+    visiting_files: BTreeSet<String>,
 }
 
 /// 组装词法包含和非包含关联，最后通过公共构造函数校验全部图约束。
@@ -38,27 +41,46 @@ pub(super) fn analyze(
     client: &mut RustLsp,
     repository: &Path,
     documents: &[Document],
+    options: AnalysisOptions,
 ) -> Result<CodeGraph> {
-    let mut nodes: BTreeMap<NodeId, CodeNode> = documents
-        .iter()
-        .flat_map(|document| &document.declarations)
-        .map(|declaration| (declaration.node.data().id.clone(), declaration.node.clone()))
-        .collect();
     let mut resolver = Resolver {
         client,
         repository,
         documents,
         external: BTreeMap::new(),
-        selected: nodes.keys().cloned().collect(),
-        categories: nodes
-            .iter()
-            .map(|(id, node)| (id.clone(), node.category()))
-            .collect(),
+        selected: BTreeSet::new(),
+        categories: BTreeMap::new(),
         definitions: BTreeMap::new(),
         crate_roots: BTreeMap::new(),
+        options,
+        test_files: BTreeMap::new(),
+        visiting_files: BTreeSet::new(),
     };
+    // 先确认文件的所有模块归属，再创建图节点，避免测试文件内的辅助声明逃逸到根。
+    for document in documents {
+        resolver.test_only_file(&document.uri)?;
+    }
+    let mut nodes: BTreeMap<NodeId, CodeNode> = documents
+        .iter()
+        .filter(|document| {
+            !resolver
+                .test_files
+                .get(&document.uri)
+                .copied()
+                .unwrap_or(false)
+        })
+        .flat_map(|document| &document.declarations)
+        .map(|declaration| (declaration.node.data().id.clone(), declaration.node.clone()))
+        .collect();
+    resolver.selected = nodes.keys().cloned().collect();
+    resolver
+        .categories
+        .extend(nodes.iter().map(|(id, node)| (id.clone(), node.category())));
     let mut root = CodeRoot::default();
     for document in documents {
+        if resolver.test_files.get(&document.uri) == Some(&true) {
+            continue;
+        }
         let parents = resolver.module_parents(&document.uri)?;
         let local_parents: Vec<_> = parents
             .iter()
@@ -136,7 +158,15 @@ pub(super) fn analyze(
                 }
             }
         }
-        for node in document.tree.descendants() {
+        let mut walk = document.tree.preorder();
+        while let Some(event) = walk.next() {
+            let WalkEvent::Enter(node) = event else {
+                continue;
+            };
+            if document.excludes_range(node.text_range()) {
+                walk.skip_subtree();
+                continue;
+            }
             // 宏 token tree 没有常规表达式结构；调用层级在下方补充可解析的展开内调用。
             if node
                 .ancestors()
@@ -183,24 +213,27 @@ pub(super) fn analyze(
         {
             let position = syntax::position(&document.source, declaration.selection.start());
             for call in resolver.client.outgoing_calls(&document.uri, position)? {
+                let owners: Vec<_> = call
+                    .from_ranges
+                    .iter()
+                    .map(|range| syntax::byte_offset(&document.source, &range.start))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .filter_map(|offset| document.owner(offset))
+                    .map(|owner| owner.node.data().id.clone())
+                    .collect();
+                if owners.is_empty() {
+                    continue;
+                }
                 let targets = resolver.target(
                     &call.to.uri,
                     &call.to.selection_range.start,
                     &call.to.name,
                     "code.calls",
                 )?;
-                for range in &call.from_ranges {
-                    let offset = syntax::byte_offset(&document.source, &range.start)?;
-                    let Some(owner) = document.owner(offset) else {
-                        continue;
-                    };
+                for owner in &owners {
                     for target in &targets {
-                        add(
-                            &mut nodes,
-                            &owner.node.data().id,
-                            "code.calls",
-                            target.clone(),
-                        );
+                        add(&mut nodes, owner, "code.calls", target.clone());
                     }
                 }
             }
@@ -239,6 +272,56 @@ pub(super) fn analyze(
 }
 
 impl Resolver<'_> {
+    /// 多个模块复用同一文件时，只有所有已知归属都明确为测试专用才排除整个文件。
+    fn test_only_file(&mut self, uri: &str) -> Result<bool> {
+        if self.options.include_tests {
+            return Ok(false);
+        }
+        if let Some(test) = self.test_files.get(uri) {
+            return Ok(*test);
+        }
+        if !self.visiting_files.insert(uri.to_owned()) {
+            return Ok(false);
+        }
+        let test = self.classify_test_file(uri)?;
+        self.visiting_files.remove(uri);
+        self.test_files.insert(uri.to_owned(), test);
+        Ok(test)
+    }
+
+    /// 父模块可在选中文件之外；只加载上下文和属性，不把这些文件加入输出图。
+    fn classify_test_file(&mut self, uri: &str) -> Result<bool> {
+        if !self.load(uri)? {
+            return Ok(false);
+        }
+        let document = self
+            .document(uri)
+            .ok_or_else(|| failure("测试范围文档不存在"))?;
+        if super::test_code::is_test_only(&document.tree) {
+            return Ok(true);
+        }
+        let parents = self.client.parent_modules(uri)?;
+        if parents.is_empty() {
+            return Ok(false);
+        }
+        for parent in parents {
+            let ModuleParent::Declaration(location) = parent else {
+                return Ok(false);
+            };
+            if !self.load(&location.uri)? {
+                return Ok(false);
+            }
+            let document = self
+                .document(&location.uri)
+                .ok_or_else(|| failure("测试父模块文档不存在"))?;
+            let offset = syntax::byte_offset(&document.source, &location.position)?;
+            if !document.excludes(offset) && !self.test_only_file(&location.uri)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// 优先读取选中快照，图外文档只载入一次以获得相同的身份生成约定。
     fn document(&self, uri: &str) -> Option<&Document> {
         self.documents
@@ -261,7 +344,7 @@ impl Resolver<'_> {
             return Ok(false);
         }
         let source = fs::read_to_string(&path).map_err(failure)?;
-        let document = Document::parse(self.repository, path, source)?;
+        let document = Document::parse(self.repository, path, source, self.options)?;
         self.categories
             .extend(document.declarations.iter().map(|declaration| {
                 (
@@ -298,6 +381,9 @@ impl Resolver<'_> {
     /// 父模块信息来自 rust-analyzer，覆盖 #[path]，不根据文件名伪造模块层次。
     fn module_parents(&mut self, uri: &str) -> Result<Vec<ReferenceTarget>> {
         let mut targets = Vec::new();
+        if self.test_files.get(uri) == Some(&true) {
+            return Ok(targets);
+        }
         for parent in self.client.parent_modules(uri)? {
             let location = match parent {
                 ModuleParent::CrateRoot => {
@@ -315,6 +401,9 @@ impl Resolver<'_> {
                 .document(&location.uri)
                 .ok_or_else(|| failure("父模块文档不可用"))?;
             let offset = syntax::byte_offset(&document.source, &location.position)?;
+            if document.excludes(offset) || self.test_files.get(&location.uri) == Some(&true) {
+                continue;
+            }
             if let Some(parent) = document
                 .declarations
                 .iter()
@@ -454,6 +543,9 @@ impl Resolver<'_> {
             .document(&uri)
             .ok_or_else(|| failure("定义目标文档不存在"))?;
         let offset = syntax::byte_offset(&document.source, position)?;
+        if document.excludes(offset) || self.test_files.get(&uri) == Some(&true) {
+            return Ok(Vec::new());
+        }
         if let Some(declaration) = document.declared_at(offset) {
             let category = declaration.node.category();
             if semantic == "code.calls" && category != CodeCategory::Callable {

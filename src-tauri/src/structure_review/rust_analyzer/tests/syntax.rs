@@ -8,8 +8,13 @@ use crate::structure_review::code_graph::{ChangeKind, CodeGraph, CodeRoot};
 /// 使用同一源码身份构造图，直接验证归一化结果在公共 diff 上的行为。
 fn graph(source: &str) -> CodeGraph {
     let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
-    let document =
-        Document::parse(repository, repository.join("src/lib.rs"), source.to_owned()).unwrap();
+    let document = Document::parse(
+        repository,
+        repository.join("src/lib.rs"),
+        source.to_owned(),
+        Default::default(),
+    )
+    .unwrap();
     CodeGraph::new(
         CodeRoot {
             contains: document
@@ -106,7 +111,13 @@ fn named_items_inside_closures_keep_their_own_content() {
 fn closure_references_belong_to_the_nearest_modeled_declaration() {
     let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
     let source = "fn run() { let f = || { fn helper() { inside(); } outside(); }; }";
-    let document = Document::parse(repository, repository.join("lib.rs"), source.into()).unwrap();
+    let document = Document::parse(
+        repository,
+        repository.join("lib.rs"),
+        source.into(),
+        Default::default(),
+    )
+    .unwrap();
     for (name, owner) in [("inside", "helper"), ("outside", "run")] {
         let offset = ra_ap_syntax::TextSize::from(source.find(name).unwrap() as u32);
         assert_eq!(
@@ -227,7 +238,13 @@ fn preserves_cfg_declarations_and_rejects_parse_failures() {
         2
     );
     let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
-    assert!(Document::parse(repository, repository.join("lib.rs"), "fn broken( {".into()).is_err());
+    assert!(Document::parse(
+        repository,
+        repository.join("lib.rs"),
+        "fn broken( {".into(),
+        Default::default()
+    )
+    .is_err());
 }
 
 /// UTF-16 转换覆盖代理对、CRLF、末尾空行以及所有越界情形。

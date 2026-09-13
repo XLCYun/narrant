@@ -4,6 +4,7 @@ mod lsp;
 mod references;
 mod symbols;
 mod syntax;
+mod test_code;
 
 use std::{
     collections::BTreeMap,
@@ -114,14 +115,19 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
         let mut documents = Vec::new();
         for (path, source) in sources {
             self.check_cancelled()?;
-            documents.push(syntax::Document::parse(&repository, path, source)?);
+            documents.push(syntax::Document::parse(
+                &repository,
+                path,
+                source,
+                input.options,
+            )?);
         }
         let mut client = lsp::RustLsp::start(&executable, &repository, self.cancelled.clone())?;
         for document in &documents {
             client.open(&document.uri, &document.source)?;
         }
         client.wait_ready()?;
-        let graph = references::analyze(&mut client, &repository, &documents)?;
+        let graph = references::analyze(&mut client, &repository, &documents, input.options)?;
         for document in &documents {
             if fs::read_to_string(&document.path).map_err(failure)? != document.source {
                 return Err(failure(format!(

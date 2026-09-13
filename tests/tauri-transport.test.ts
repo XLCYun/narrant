@@ -4,9 +4,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { BabysitProgress } from "@/babysit/types";
 import { TAURI_COMMAND_NAMES } from "@/infrastructure/tauri/command-contract";
 import { createTauriTransport } from "@/infrastructure/tauri/transport";
+import { createTauriStructureReviewAdapter } from "@/infrastructure/tauri-structure-review-adapter";
 import type { Channel } from "@tauri-apps/api/core";
 
 describe("Typed Tauri transport", () => {
+  it("把测试分析开关交给后端，而不是在图返回之后筛选", async () => {
+    const rawInvoke = vi.fn().mockResolvedValue({});
+    const adapter = createTauriStructureReviewAdapter(createTauriTransport(rawInvoke));
+    for (const includeTests of [false, true]) {
+      await adapter.analyze({ reviewId: "review", snapshotId: "snapshot", includeTests }, new AbortController().signal);
+      expect(rawInvoke).toHaveBeenLastCalledWith("analyze_structure_review", expect.objectContaining({ reviewId: "review", snapshotId: "snapshot", includeTests }));
+    }
+  });
+
   it("覆盖 Rust invoke handler 注册的全部 command", () => {
     const backend = readFileSync("src-tauri/src/tauri_app/bootstrap.rs", "utf8");
     const registered = backend.match(/generate_handler!\[([\s\S]*?)\]\)/)?.[1]
