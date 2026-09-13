@@ -405,6 +405,23 @@ the complete composition.
 
 ### Concrete extraction conventions
 
+- A selected Cargo crate entry has a `Container` with native kind `crate` when
+  `experimental/parentModule` identifies it by returning a `Cargo.toml` location.
+  The Rust LSP Adapter distinguishes this result from a Rust module declaration;
+  the graph builder puts the entry's top-level declarations inside that root.
+  Library, binary and integration-test entry files therefore retain separate roots.
+  Ordinary files and successful empty parent responses do not imply a crate root.
+- Root IDs reuse the existing `<source-identity>::crate` convention, so local and
+  external references keep the same identity across selection changes and checkouts.
+  The root's readable name is its repository-relative entry path, with native kind
+  `crate`; it is not a guessed Cargo target name. Its signature and own code are
+  absent. Member changes are compared through `contains`, without marking the root's
+  own content modified. Only selected roots are materialized, including empty roots;
+  unrelated project targets are not added. The adapter does not run a second Cargo
+  discovery process or interpret directory names as module ownership. Non-Cargo
+  roots remain under the existing placement rules unless LSP supplies this evidence.
+  This follows rust-analyzer's [parent-module handler](https://github.com/rust-lang/rust-analyzer/blob/master/crates/rust-analyzer/src/handlers/request.rs)
+  and was verified with rust-analyzer 1.97.1 through actual LSP sessions.
 - Node identities combine a repository-relative source identity with lexical declaration
   ownership and names. They never use checkout prefixes or line/column positions.
   Repeated anonymous/same-header declarations use local occurrence disambiguators;
@@ -532,3 +549,12 @@ the server's Cargo subprocesses also use a local proxy through `scripts/cargo-ag
 Run the test executable outside an already-held Cargo wrapper lock to avoid a nested
 lock while rust-analyzer loads the project. The local `.tools/run-real-tests.py` runner
 records this setup; it is temporary verification tooling, not part of the adapter API.
+
+Crate-root verification uses the public analyzer interface. Two stdio tests cover
+separate library/test roots, custom paths, empty parent responses and stable graph
+identities across repository directories. Real rust-analyzer 1.97.1 sessions verify
+library/test containment, normal child modules, cross-crate calls, member-only diffs,
+selection scope, custom Cargo entries and an empty crate. The existing multi-parent
+and cross-checkout real-server regression also passes. The full Rust suite passes
+561 tests (8 ignored), with the three relevant real-server tests run explicitly;
+`check --lib`, rustfmt and all-target Clippy with warnings denied pass.

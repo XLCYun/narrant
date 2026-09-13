@@ -436,6 +436,129 @@ fn real_server_describes_external_symbols() {
     save("external-symbols", &graph);
 }
 
+/// 真实 Cargo 项目的库和集成测试各有根模块，成员变更不误报根自身修改。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_preserves_crate_roots() {
+    let source = "mod store; pub fn run() -> u32 { store::helper() }";
+    let prepare = || {
+        let directory = repository(source);
+        fs::create_dir(directory.path().join("tests")).unwrap();
+        fs::write(
+            directory.path().join("tests/github_discovery.rs"),
+            "#[test] fn checks() { code_graph_fixture::run(); }",
+        )
+        .unwrap();
+        directory
+    };
+    let analyze = |directory: &Path, files: &[&str]| {
+        analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: directory.to_owned(),
+                files: files.iter().map(PathBuf::from).collect(),
+            })
+            .unwrap()
+    };
+    let files = ["src/lib.rs", "src/store.rs", "tests/github_discovery.rs"];
+    let before = prepare();
+    let graph = analyze(before.path(), &files);
+    let all = nodes(&graph);
+    let find = |name: &str| {
+        *all.values()
+            .find(|node| node.data().name.as_deref() == Some(name))
+            .unwrap()
+    };
+    let library = find("src/lib.rs");
+    let tests = find("tests/github_discovery.rs");
+    assert_eq!(graph.root().contains.len(), 2);
+    for root in [library, tests] {
+        assert_eq!(root.category(), CodeCategory::Container);
+        assert_eq!(root.data().native_kind, "crate");
+        assert!(graph.root().contains.contains(&root.data().id));
+    }
+    assert!(library.data().contains.contains(&find("run").data().id));
+    assert!(library.data().contains.contains(&find("store").data().id));
+    assert_eq!(
+        find("store").data().contains,
+        vec![find("helper").data().id.clone()]
+    );
+    assert_eq!(
+        tests.data().contains,
+        vec![find("checks").data().id.clone()]
+    );
+    assert!(find("checks")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.calls"
+            && reference.target == ReferenceTarget::Node(find("run").data().id.clone())));
+    let repeat = prepare();
+    assert!(graph
+        .diff(&analyze(repeat.path(), &files))
+        .unwrap()
+        .nodes
+        .is_empty());
+    fs::write(
+        repeat.path().join("tests/github_discovery.rs"),
+        "#[test] fn checks() { code_graph_fixture::run(); } #[test] fn added() {}",
+    )
+    .unwrap();
+    let after = analyze(repeat.path(), &files);
+    let diff = graph.diff(&after).unwrap();
+    let root_change = diff
+        .nodes
+        .iter()
+        .find(|change| change.id == tests.data().id)
+        .unwrap();
+    assert_eq!(root_change.content, None);
+    assert_eq!(root_change.contains.len(), 1);
+    assert!(!diff
+        .nodes
+        .iter()
+        .any(|change| change.id == library.data().id));
+    let scoped = analyze(before.path(), &["src/lib.rs", "src/store.rs"]);
+    assert_eq!(scoped.root().contains, vec![library.data().id.clone()]);
+    save("crate-roots-before", &graph);
+    save("crate-roots-after", &after);
+}
+
+/// 自定义入口和空源码也保留服务器确认的根，不依赖 src/lib.rs 或 tests/*.rs 的命名。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_recognizes_custom_and_empty_crate_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("Cargo.toml"),
+        "[package]\nname=\"custom_root_fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\nname=\"custom_library\"\npath=\"library_entry.rs\"\n[[test]]\nname=\"smoke\"\npath=\"test_entry.rs\"\n").unwrap();
+    fs::write(directory.path().join("library_entry.rs"), "").unwrap();
+    fs::write(
+        directory.path().join("test_entry.rs"),
+        "#[test] fn checks() {}",
+    )
+    .unwrap();
+    let graph = analyzer()
+        .analyze(&AnalysisInput {
+            repository_root: directory.path().to_owned(),
+            files: vec!["library_entry.rs".into(), "test_entry.rs".into()],
+        })
+        .unwrap();
+    let roots: Vec<_> = graph
+        .root()
+        .contains
+        .iter()
+        .map(|id| graph.node(id).unwrap())
+        .collect();
+    assert_eq!(roots.len(), 2);
+    assert!(roots.iter().all(|root| root.data().native_kind == "crate"));
+    assert!(roots.iter().any(
+        |root| root.data().name.as_deref() == Some("library_entry.rs")
+            && root.data().contains.is_empty()
+    ));
+    assert!(roots
+        .iter()
+        .any(|root| root.data().name.as_deref() == Some("test_entry.rs")
+            && root.data().contains.len() == 1));
+}
+
 /// 当前仓库回归覆盖较大的真实类型、模块与关联，不依赖穿刺时固定的 crate 名。
 #[test]
 #[ignore = "需要已提供的 rust-analyzer 和当前仓库的完整依赖，单独串行运行"]

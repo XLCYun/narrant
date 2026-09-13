@@ -163,6 +163,9 @@ Node identities must be unique across the entire graph, including language scope
 Source files remain caller input, not automatic semantic containers. This revision
 defers source navigation and multiple declaration locations instead of introducing a
 partial or fabricated source-location mapping.
+An analyzer may represent a semantically confirmed crate root as a Container even
+though no explicit `mod` declaration spells out that root. This uses the existing
+node and containment contract; it does not make every source file a module.
 
 ## Own-content comparison
 

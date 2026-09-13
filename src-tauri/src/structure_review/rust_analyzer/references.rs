@@ -11,13 +11,14 @@ use url::Url;
 
 use super::{
     failure,
-    lsp::RustLsp,
+    lsp::{ModuleParent, RustLsp},
     syntax::{self, child, path_name, type_name, Document},
     Result,
 };
 use crate::lsp::{file_uri, Location, Position};
 use crate::structure_review::code_graph::{
-    CodeCategory, CodeGraph, CodeNode, CodeReference, CodeRoot, NodeId, ReferenceTarget,
+    CodeCategory, CodeGraph, CodeNode, CodeNodeData, CodeReference, CodeRoot, LanguageId, NodeId,
+    ReferenceTarget,
 };
 
 /// 单次构图的临时解析材料；图外文件只用来确认身份，不扩大输出范围。
@@ -29,6 +30,7 @@ struct Resolver<'a> {
     selected: BTreeSet<NodeId>,
     categories: BTreeMap<NodeId, CodeCategory>,
     definitions: BTreeMap<(String, u32), Vec<Location>>,
+    crate_roots: BTreeMap<NodeId, CodeNode>,
 }
 
 /// 组装词法包含和非包含关联，最后通过公共构造函数校验全部图约束。
@@ -53,6 +55,7 @@ pub(super) fn analyze(
             .map(|(id, node)| (id.clone(), node.category()))
             .collect(),
         definitions: BTreeMap::new(),
+        crate_roots: BTreeMap::new(),
     };
     let mut root = CodeRoot::default();
     for document in documents {
@@ -64,6 +67,11 @@ pub(super) fn analyze(
                 _ => None,
             })
             .collect();
+        for parent in &local_parents {
+            if let Some(node) = resolver.crate_roots.get(parent) {
+                nodes.entry(parent.clone()).or_insert_with(|| node.clone());
+            }
+        }
         for declaration in document
             .declarations
             .iter()
@@ -198,6 +206,10 @@ pub(super) fn analyze(
             }
         }
     }
+    for (id, node) in &resolver.crate_roots {
+        nodes.entry(id.clone()).or_insert_with(|| node.clone());
+        root.contains.push(id.clone());
+    }
     for node in nodes.values_mut() {
         let data = syntax::data_mut(node);
         data.contains.sort();
@@ -286,7 +298,16 @@ impl Resolver<'_> {
     /// 父模块信息来自 rust-analyzer，覆盖 #[path]，不根据文件名伪造模块层次。
     fn module_parents(&mut self, uri: &str) -> Result<Vec<ReferenceTarget>> {
         let mut targets = Vec::new();
-        for location in self.client.parent_modules(uri)? {
+        for parent in self.client.parent_modules(uri)? {
+            let location = match parent {
+                ModuleParent::CrateRoot => {
+                    if let Some(target) = self.crate_root(uri)? {
+                        targets.push(target);
+                    }
+                    continue;
+                }
+                ModuleParent::Declaration(location) => location,
+            };
             if location.uri == uri || !self.load(&location.uri)? {
                 continue;
             }
@@ -309,6 +330,44 @@ impl Resolver<'_> {
         targets.sort();
         targets.dedup();
         Ok(targets)
+    }
+
+    /// 仅为选中的、由 LSP 确认的入口创建根容器；图外根保留同一身份的 External。
+    fn crate_root(&mut self, uri: &str) -> Result<Option<ReferenceTarget>> {
+        if !self.load(uri)? {
+            return Ok(None);
+        }
+        let document = self
+            .document(uri)
+            .ok_or_else(|| failure("crate 根文档不可用"))?;
+        let Some(scope) = syntax::file_scope(self.repository, &document.path) else {
+            return Ok(None);
+        };
+        let id = NodeId(format!("{scope}::crate"));
+        if self.documents.iter().any(|document| document.uri == uri) {
+            let name = document
+                .path
+                .strip_prefix(self.repository)
+                .map_err(failure)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            self.crate_roots.entry(id.clone()).or_insert_with(|| {
+                CodeNode::Container(CodeNodeData {
+                    id: id.clone(),
+                    language: LanguageId("rust".into()),
+                    native_kind: "crate".into(),
+                    name: Some(name),
+                    signature: None,
+                    code: None,
+                    contains: Vec::new(),
+                    references: Vec::new(),
+                    extensions: BTreeMap::new(),
+                })
+            });
+            self.selected.insert(id.clone());
+            self.categories.insert(id.clone(), CodeCategory::Container);
+        }
+        Ok(Some(self.reference(id)))
     }
 
     /// 在引用发生处查询定义；成功的空响应保留未知目标，失败响应向外传播。

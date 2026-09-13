@@ -116,3 +116,33 @@ export function structureClassDiagramFixture(): StructureComparison {
   comparison.diff.nodes.find((node) => node.id === "review")!.contains.push({ kind: "added", value: traitImplementation.id });
   return comparison;
 }
+
+/** 库入口和独立集成测试分别归属 crate 根，覆盖 PR #31 中根级函数混在一起的情形。 */
+export function structureCrateRootsFixture(): StructureComparison {
+  const comparison = structureReviewFixture();
+  const template = comparison.after.nodes.find((node) => node.id === "run")!;
+  const run: CodeNode = { ...template, id: "crate-run", name: "run", signature: "pub fn run()", contains: [], references: [] };
+  const library: CodeNode = { ...run, id: "library-crate", category: "container", nativeKind: "crate", name: "src-tauri/src/lib.rs", signature: null, code: null, contains: [run.id] };
+  const testRoot: CodeNode = { ...library, id: "test-crate", name: "src-tauri/tests/github_discovery.rs", contains: ["test-helper", "test-checks", "test-long"] };
+  const helper: CodeNode = { ...run, id: "test-helper", name: "repository_with_remotes", signature: "fn repository_with_remotes(remotes: &[(&str, &str)]) -> TempDir" };
+  const checks: CodeNode = { ...run, id: "test-checks", name: "discovers_pull_requests", signature: "#[test] fn discovers_pull_requests()",
+    references: [{ semantic: "code.calls", target: { kind: "node", id: run.id } }, { semantic: "code.calls", target: { kind: "node", id: helper.id } }] };
+  const long: CodeNode = { ...run, id: "test-long", name: "uses_authenticated_metadata_access_and_keeps_permission_failures_local",
+    signature: "#[test] fn uses_authenticated_metadata_access_and_keeps_permission_failures_local()" };
+  const added = [testRoot, helper, checks, long];
+  return {
+    ...comparison,
+    before: { root: [library.id], nodes: [library, run], externalSymbols: {} },
+    after: { root: [library.id, testRoot.id], nodes: [library, { ...run, code: "{ discover_pull_requests(); }" }, ...added], externalSymbols: {} },
+    diff: { nodes: [
+      { id: run.id, content: "modified", contains: [], references: [] },
+      ...added.map((node) => ({ id: node.id, content: "added" as const,
+        contains: node.contains.map((value) => ({ kind: "added" as const, value })),
+        references: node.references.map((value) => ({ kind: "added" as const, value })) })),
+    ] },
+    coverage: [
+      { path: "src-tauri/src/lib.rs", oldPath: null, before: "analyzed", after: "analyzed" },
+      { path: "src-tauri/tests/github_discovery.rs", oldPath: null, before: "absent", after: "analyzed" },
+    ],
+  };
+}

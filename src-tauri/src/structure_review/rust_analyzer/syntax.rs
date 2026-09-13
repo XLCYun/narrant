@@ -24,7 +24,7 @@ pub(super) struct Declaration {
     pub syntax: SyntaxNode,
 }
 
-/// 一个固定内容的文件及其显式声明；文件本身不会伪装成 Module 节点。
+/// 一个固定内容的文件及其显式声明；crate 根由后续 LSP 语义确认，普通文件不自动建模块。
 pub(super) struct Document {
     pub path: PathBuf,
     pub uri: String,

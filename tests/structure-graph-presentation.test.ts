@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { structureReviewFixture } from "@/dev/structure-review-fixture";
+import { structureCrateRootsFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
 import { layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, NodeDifference, StructureComparison } from "@/structure-review/types";
 
@@ -20,6 +20,22 @@ function endpoint(layout: StructureLayout, id: string, side: "source" | "target"
 }
 
 describe("Structure Graph presentation Interface", () => {
+  it("keeps library and integration-test root members in their own crate cards", async () => {
+    const comparison = structureCrateRootsFixture();
+    const layout = await layoutStructureComparison(comparison, options);
+    const library = entry(layout, "library-crate")!, tests = entry(layout, "test-crate")!;
+    expect(library.object.status).toBe("unchanged");
+    expect(tests.object.status).toBe("added");
+    expect(library.object.label).toBe("src-tauri/src/lib.rs");
+    expect(tests.object.label).toBe("src-tauri/tests/github_discovery.rs");
+    expect(entry(layout, "crate-run")?.card.id).toBe(library.card.id);
+    for (const id of ["test-helper", "test-checks", "test-long"]) expect(entry(layout, id)?.card.id).toBe(tests.card.id);
+    expect(library.card.id).not.toBe(tests.card.id);
+    expect(layout.nodes.some((node) => node.id === "members-root")).toBe(false);
+    const source = endpoint(layout, "test-checks", "source"), target = endpoint(layout, "crate-run", "target");
+    expect(layout.edges.some((edge) => edge.source === tests.card.id && edge.target === library.card.id && edge.sourceHandle === source.handle && edge.targetHandle === target.handle)).toBe(true);
+    expect(objectDetails(comparison, "test-checks").after?.name).toBe("discovers_pull_requests");
+  });
   it("keeps own content changes separate from relationship changes and includes containing context", async () => {
     const layout = await layoutStructureComparison(structureReviewFixture(), options);
     const object = (id: string) => entry(layout, id);

@@ -10,6 +10,13 @@ use crate::lsp::{CancellationCheck, Location, LspClient, LspOptions, OutgoingCal
 const SERVER_STATUS: &str = "experimental/serverStatus";
 const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// rust-analyzer 在 crate 根返回清单位置；它表示当前文件的根身份，而非 Rust 声明。
+#[derive(Debug)]
+pub(super) enum ModuleParent {
+    Declaration(Location),
+    CrateRoot,
+}
+
 /// 在通用会话上提供 Rust 语义查询，保证构图阶段始终使用完整加载的项目。
 pub(super) struct RustLsp {
     client: LspClient,
@@ -85,16 +92,30 @@ impl RustLsp {
         self.query(|client| client.definitions(uri, position))
     }
 
-    /// 获取文件的全部父模块，包括 #[path] 和同一文件的多个模块归属。
-    pub fn parent_modules(&mut self, uri: &str) -> Result<Vec<Location>> {
-        self.query(|client| {
+    /// 获取文件的全部父模块，并将服务器确认的 Cargo crate 根与显式模块区分。
+    pub fn parent_modules(&mut self, uri: &str) -> Result<Vec<ModuleParent>> {
+        let locations = self.query(|client| {
             client.request_locations(
                 "experimental/parentModule",
                 json!({
                     "textDocument": {"uri": uri}, "position": Position::default()
                 }),
             )
-        })
+        })?;
+        Ok(locations
+            .into_iter()
+            .map(|location| {
+                let is_manifest = url::Url::parse(&location.uri)
+                    .ok()
+                    .and_then(|uri| uri.to_file_path().ok())
+                    .is_some_and(|path| path.file_name().is_some_and(|name| name == "Cargo.toml"));
+                if is_manifest {
+                    ModuleParent::CrateRoot
+                } else {
+                    ModuleParent::Declaration(location)
+                }
+            })
+            .collect())
     }
 
     /// 取得函数的出向调用，包括服务器能定位到原源码的宏展开调用。

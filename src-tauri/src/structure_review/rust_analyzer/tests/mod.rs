@@ -1,3 +1,4 @@
+mod crate_roots;
 mod integration;
 
 use std::fs;

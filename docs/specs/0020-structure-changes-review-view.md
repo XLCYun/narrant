@@ -133,6 +133,13 @@ the user's explicit instruction not to repeat the head checkout. See [ADR-0031](
 
 ## React Flow projection facts
 
+Library and integration-test crate roots supplied by the Rust analyzer remain
+separate container cards. Root-level functions belong to their respective cards;
+they must not be collected into one unowned function list. The root labels are the
+repository-relative entry paths supplied by the analyzer. The representative
+`structure-crate-roots` preview covers this grouping, long test signatures and
+cross-crate calls without changing production review data.
+
 React Flow supports nested nodes through `parentId`, with child positions relative to
 their parent; parent nodes precede children in the input. It permits relationships
 crossing those groups. Parent dimensions and automatic layout are application work.
@@ -391,3 +398,15 @@ read extraction in the current Rust adapter.
   unrelated leaf-card interiors in these fixtures. No browser exceptions or toolbar,
   menu or details overflow were found; viewport overrides were cleared afterward.
   In-app interaction verification remains pending.
+
+### Crate-root follow-up verification
+
+- Public graph presentation and preview routing checks pass (21 tests), including
+  separate library/test cards, unchanged root content with a modified member,
+  cross-crate member ports and original-object details. TypeScript, ESLint and the
+  production frontend build pass.
+- Independent Chrome verifies `structure-crate-roots` at 1440×1000, 900×800 and
+  520×800, in light/dark themes. Nine screenshot/accessibility/geometry captures
+  cover card ownership, long-signature details and the options menu. There is no
+  horizontal overflow or browser exception; viewport overrides are cleared. The
+  in-app browser request remains queued, so its interaction verification is pending.
