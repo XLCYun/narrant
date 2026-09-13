@@ -4,11 +4,12 @@ use super::RustLsp;
 use crate::lsp::{test_support::FakeServer, Position};
 use serde_json::{json, Value};
 
-/// 两个扩展档位在真实 stdio 握手中打开标准库，且仅完整档加载项目依赖。
+/// 三个档位在真实 stdio 握手中分别控制标准库与项目依赖。
 #[test]
 fn selects_standard_library_and_dependency_loading_independently() {
     use super::RustDependencyScope;
     for scope in [
+        RustDependencyScope::RepositoryOnly,
         RustDependencyScope::StandardLibrary,
         RustDependencyScope::AllDependencies,
     ] {
@@ -28,8 +29,18 @@ fn selects_standard_library_and_dependency_loading_independently() {
         client.shutdown().unwrap();
         let requests = server.requests();
         let options = &requests[0]["params"]["initializationOptions"];
-        assert_eq!(options["cargo"]["sysroot"], "discover");
-        assert_eq!(options["cargo"]["noDeps"], false);
+        assert_eq!(
+            options["cargo"]["sysroot"],
+            if scope == RustDependencyScope::RepositoryOnly {
+                Value::Null
+            } else {
+                json!("discover")
+            }
+        );
+        assert_eq!(
+            options["cargo"]["noDeps"],
+            scope == RustDependencyScope::RepositoryOnly
+        );
         assert_eq!(
             options["cargo"]["metadataExtraArgs"],
             if scope == RustDependencyScope::StandardLibrary {
@@ -153,9 +164,12 @@ fn configures_rust_and_only_queries_after_loading() {
     client.shutdown().unwrap();
     let requests = server.requests();
     let configuration = &requests[0]["params"]["initializationOptions"];
-    assert_eq!(configuration["cargo"]["noDeps"], true);
-    assert_eq!(configuration["cargo"]["metadataExtraArgs"], json!([]));
-    assert_eq!(configuration["cargo"].get("sysroot"), Some(&Value::Null));
+    assert_eq!(configuration["cargo"]["noDeps"], false);
+    assert_eq!(
+        configuration["cargo"]["metadataExtraArgs"],
+        json!(["--no-deps"])
+    );
+    assert_eq!(configuration["cargo"]["sysroot"], "discover");
     assert_eq!(configuration["cargo"]["buildScripts"]["enable"], false);
     assert_eq!(configuration["procMacro"]["enable"], false);
     assert_eq!(

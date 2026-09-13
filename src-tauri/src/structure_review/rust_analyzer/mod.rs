@@ -23,9 +23,9 @@ type Result<T> = std::result::Result<T, AnalysisError>;
 #[serde(rename_all = "kebab-case")]
 pub enum RustDependencyScope {
     /// 只加载仓库项目，跳过标准库和第三方依赖。
-    #[default]
     RepositoryOnly,
     /// 允许加载标准库及其内部依赖，同时跳过项目依赖元数据。
+    #[default]
     StandardLibrary,
     /// 允许加载标准库和项目依赖。
     AllDependencies,
@@ -33,8 +33,8 @@ pub enum RustDependencyScope {
 
 /// 已有 rust-analyzer 可执行文件的轻量配置；每次分析独立加载一侧仓库快照。
 ///
-/// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。默认只加载仓库项目，
-/// 调用方可以选择更完整的依赖范围。各档均不运行构建脚本和过程宏；未知目标不猜测。
+/// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。默认加载仓库项目与标准库，
+/// 调用方可以调整依赖范围。各档均不运行构建脚本和过程宏；未知目标不猜测。
 #[derive(Clone)]
 pub struct RustLanguageAnalyzer {
     executable: PathBuf,

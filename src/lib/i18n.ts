@@ -99,8 +99,8 @@ export const resources = {
       settingsSaving: "正在保存…",
       settingsNextAnalysis: "选项会自动保存，并在下次分析时生效。已有结构图可点击“重新分析”更新。",
       scope: {
-        "repository-only": { label: "仅仓库代码（默认）", description: "禁用标准库和第三方依赖分析，加载最快；依赖这些类型信息的关联可能缺失。" },
-        "standard-library": { label: "仓库代码 + 标准库", description: "允许解析标准库，禁用第三方依赖分析；关联解析仍受缺失的依赖信息影响。" },
+        "repository-only": { label: "仅仓库代码", description: "禁用标准库和第三方依赖分析，加载最快；依赖这些类型信息的关联可能缺失。" },
+        "standard-library": { label: "仓库代码 + 标准库（默认）", description: "允许解析标准库，禁用第三方依赖分析；第三方依赖相关的关系可能会缺失。" },
         "all-dependencies": { label: "仓库代码 + 标准库 + 第三方依赖", description: "允许解析标准库和第三方依赖，关联更完整；首次加载可能需要下载依赖，等待更久。" },
       },
 
@@ -251,8 +251,8 @@ export const resources = {
       settingsSaving: "Saving…",
       settingsNextAnalysis: "Changes save automatically and apply to the next analysis. Use “Analyze again” to update an existing graph.",
       scope: {
-        "repository-only": { label: "Repository only (default)", description: "Skip the standard library and third-party dependencies for the fastest loading. Relationships that need their type information may be missing." },
-        "standard-library": { label: "Repository + standard library", description: "Allow standard library analysis and skip third-party dependencies. Missing dependency information can still limit relationship resolution." },
+        "repository-only": { label: "Repository only", description: "Skip the standard library and third-party dependencies for the fastest loading. Relationships that need their type information may be missing." },
+        "standard-library": { label: "Repository + standard library (default)", description: "Allow standard library analysis and skip third-party dependencies. Relationships involving third-party dependencies may be missing." },
         "all-dependencies": { label: "Repository + standard library + third-party dependencies", description: "Allow analysis of the standard library and third-party dependencies for more complete relationships. Initial loading may download dependencies and take longer." },
       },
 

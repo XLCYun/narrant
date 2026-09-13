@@ -51,8 +51,8 @@ the language-independent `AnalysisOptions` contract.
 
 | Stored scope | Standard library | Project dependencies | Server configuration |
 | --- | --- | --- | --- |
-| `repository-only` (default) | Disabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot=null`, Cargo offline |
-| `standard-library` | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot="discover"`, Cargo offline |
+| `repository-only` | Disabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot=null`, Cargo offline |
+| `standard-library` (default) | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot="discover"`, Cargo offline |
 | `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot="discover"`, inherit Cargo network settings |
 
 All modes keep build scripts, procedural macros, checks, diagnostics and cache priming
@@ -76,9 +76,10 @@ head relationships via `Option` and `From`, while 13 relationships involving
 [settings and parallel-analysis measurements](../research/structure-review-settings-parallel.md).
 
 Settings remain version 1. Missing `structureReview.rust.dependencyScope` defaults to
-`repository-only`; invalid values fail validation rather than silently overriding the
-file. Updates preserve other device settings. One analysis reads a single saved scope
-before launching both sides; changes apply on the next analysis, including explicit
+`standard-library`; explicitly saved scopes are preserved. Invalid values fail validation
+rather than silently overriding the file. Updates preserve other device settings. One
+analysis reads a single saved scope before launching both sides; changes apply on the
+next analysis, including explicit
 **Analyze again / 重新分析** from an existing graph.
 
 ### Repository-only loading policy

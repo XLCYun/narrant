@@ -147,7 +147,7 @@ graphs succeed does the application verify head and compare/project the graphs.
 
 Application Settings adds **Structure Changes / 结构改动**, following the existing settings
 navigation and card layout. A language selector currently offers Rust. Its three
-persisted options are repository-only (default), repository plus standard library,
+persisted options are repository-only, repository plus standard library (default),
 and repository plus standard library and third-party dependencies. Saving takes effect
 for the next analysis; a completed graph offers **Analyze again / 重新分析**. A settings
 change does not mutate an already completed result or change an in-flight analysis.

@@ -75,7 +75,7 @@ export function StructureReviewSettings({ application }: { application: Applicat
     {language === "rust" && <div className="mt-6 border-t pt-6">
       <h3 id="rust-dependencies-title" className="font-heading text-lg font-semibold">{t("dependencyScope")}</h3>
       <p className="mt-1 text-sm text-muted-foreground">{t("dependencyScopeDescription")}</p>
-      <RadioGroup value={scope ?? "repository-only"} onValueChange={(value) => void chooseScope(value as RustDependencyScope)}
+      <RadioGroup value={scope ?? "standard-library"} onValueChange={(value) => void chooseScope(value as RustDependencyScope)}
         aria-labelledby="rust-dependencies-title" aria-busy={disabled || undefined} disabled={disabled} className="mt-4 gap-3">
         {scopes.map((value) => <label key={value} className={cn("relative block cursor-pointer rounded-xl border p-4 transition-colors hover:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring", scope === value && "border-primary bg-primary/5 ring-1 ring-primary", disabled && "pointer-events-none opacity-50")}>
           <RadioGroupItem value={value} aria-labelledby={`rust-${value}-label`} aria-describedby={`rust-${value}-description`} className="absolute top-4 right-4" />

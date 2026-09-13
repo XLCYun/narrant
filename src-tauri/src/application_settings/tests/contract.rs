@@ -16,7 +16,12 @@ fn rust_dependency_scope_defaults_and_round_trips_without_overwriting_settings()
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
     let application = ApplicationSettingsApplication::new(path.clone());
-    let mut legacy = serde_json::to_value(application.load().unwrap()).unwrap();
+    let fresh = application.load().unwrap();
+    assert_eq!(
+        fresh.structure_review.rust.dependency_scope,
+        RustDependencyScope::StandardLibrary
+    );
+    let mut legacy = serde_json::to_value(fresh).unwrap();
     legacy.as_object_mut().unwrap().remove("structureReview");
     std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
     assert_eq!(
@@ -26,7 +31,7 @@ fn rust_dependency_scope_defaults_and_round_trips_without_overwriting_settings()
             .structure_review
             .rust
             .dependency_scope,
-        RustDependencyScope::RepositoryOnly
+        RustDependencyScope::StandardLibrary
     );
     application.update_theme(ThemePreference::Dark).unwrap();
     application.update_repository_exploration(true).unwrap();

@@ -152,7 +152,7 @@ function SettingsPreview({
   initialSection?: SettingsSection;
   structureSaving?: boolean;
 }) {
-  const [rustScope, setRustScope] = useState<RustDependencyScope>("repository-only");
+  const [rustScope, setRustScope] = useState<RustDependencyScope>("standard-library");
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [savedLanguage, setSavedLanguage] = useState<ApplicationLanguage>(initialLanguage);
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath

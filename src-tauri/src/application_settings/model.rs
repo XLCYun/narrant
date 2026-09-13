@@ -11,7 +11,7 @@ pub(crate) struct StructureReviewSettings {
     pub rust: RustAnalysisSettings,
 }
 
-/// Rust 的持久化分析偏好，默认只分析仓库项目。
+/// Rust 的持久化分析偏好，默认分析仓库项目与标准库，跳过项目依赖。
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub(crate) struct RustAnalysisSettings {
