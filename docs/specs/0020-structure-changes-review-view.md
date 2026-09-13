@@ -177,6 +177,23 @@ navigation from its opaque ID. Layout is read-only, with pan, zoom, fit and cont
 expansion. These defaults implement the accepted scope without additional language
 implementations, persistent graph storage or a new file-scope picker.
 
+### Persistent details sidebar
+
+Completed comparisons use the same shadcn resizable split as File Changes: a
+persistent details sidebar on the left and the graph on the right. The sidebar
+starts at 320 pixels, can be resized with the pointer or keyboard, and retains its
+pixel width during window resizing within a 180-pixel minimum and 55% maximum. The
+graph retains at least 45% of the split. Selecting a different object does not reset
+the split width or recreate the graph viewport.
+
+Before selection, the sidebar prompts the user to choose an object. Selecting a
+card or member updates the sidebar and highlights that exact object. Before/after
+declarations and code are stacked vertically, with long code scrolling inside its
+own block. The sidebar scrolls independently; selecting another object starts its
+details at the top. File coverage uses the same sidebar, so graph interactions stay
+available without dismissing a modal. A new Snapshot clears the previous selection.
+The existing object/reference display filters apply to sidebar details as well.
+
 ### Compact class-diagram presentation
 
 The user requested class-diagram-style cards after finding the individual object
@@ -432,3 +449,23 @@ read extraction in the current Rust adapter.
   No floating target, hidden relationship, horizontal overflow or browser exception
   appears; viewport overrides are cleared afterward. The in-app preview request
   remains queued, so in-app interaction verification is still pending.
+
+### Persistent sidebar follow-up verification
+
+- The full frontend suite passes: 42 files, 357 tests. New view tests exercise the
+  public StructureChangesView with real graph projection and node interactions,
+  substituting only React Flow's browser drawing layer in jsdom. They cover the
+  permanent sidebar, added/removed/type selection, exact selection highlighting,
+  canvas lifetime, coverage switching, hidden-reference filtering, preserved own
+  code, a new Snapshot clearing selection and an empty visible comparison.
+- TypeScript, repository ESLint (excluding ignored local tools/caches) and the
+  production frontend build pass. The existing large-chunk warning remains. No
+  Rust analysis or transport changed; this follow-up does not rebuild an installer.
+- Independent Chrome completes 19 screenshot/accessibility/geometry captures at
+  1440×1000, 900×800 and 520×800 in light/dark themes. Pointer and keyboard resizing,
+  pixel-width retention across window resizing, unchanged graph viewport during
+  selection, sidebar scroll reset, coverage, long content, all display options,
+  hidden-only empty state and the English menu pass. There are no modal remnants,
+  horizontal overflow, hidden targets or browser exceptions. Viewport overrides are
+  cleared afterward. The in-app request remains queued; in-app interaction
+  verification is pending.
