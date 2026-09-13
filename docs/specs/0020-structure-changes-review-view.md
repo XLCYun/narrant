@@ -209,7 +209,7 @@ Each member has distinct incoming/outgoing handles at its row, so grouping does 
 merge method calls into class-level relationships. Calls within one card, recursive
 calls, removed placement and former implementation-target relationships remain
 representable. Ownership already expressed by the containing card is not drawn as
-a duplicate edge; all original relationship changes remain in object details.
+a duplicate edge; changes to displayed relationships remain in object details.
 The graph contract and Rust extraction are unchanged by this presentation policy.
 
 ELK arranges cards while member ports have fixed positions. React Flow connects
@@ -217,29 +217,33 @@ ELK arranges cards while member ports have fixed positions. React Flow connects
 [React Flow handle documentation](https://reactflow.dev/learn/customization/handles)
 and [ELK port constraints](https://eclipse.dev/elk/reference/options/org-eclipse-elk-portConstraints.html).
 
-### Reference display defaults
+### Reference display policy
 
-Following the user's local review feedback, imports and references outside the
-repository are hidden by default. A Display options menu offers independent controls
-for all objects, unchanged relationships, imports and dependencies outside the
-repository. The first two controls do not override the dependency filter. Standard
-library and third-party references require the dependency option; a repository symbol
-outside the selected graph remains visible under the usual changed-reference rules.
-Hidden references do not create floating target cards. Object details apply the same
-import/dependency filters and identify when no relations match the current filters.
+Only resolved targets represented by a node in the graph are displayed. All External
+and Unresolved targets are always omitted, along with their incident edges, whether
+they refer to repository code outside the selected graph, standard-library code,
+third-party code or symbols without scope descriptions. There is no control to reveal
+these targets. The Display options menu has three controls: all objects, unchanged
+relationships and imports. These controls apply only to displayed graph nodes and
+their relationships.
+
+Canvas layout, object counts, change markers, expansion and both relationship lists
+in object details use the same projection. An object whose only differences are
+hidden relationships is unchanged in this projection; its own declaration or code
+changes still count. If no visible changes remain, the view directs the user to File
+Changes. Original code shown in details is preserved, including any external names
+appearing in that code.
 
 `code.type_use` and `code.reads` are no longer extracted by the Rust adapter. The earlier
 type-use display checkbox is removed. Signatures and source code still include type
 annotations and value reads, and structural relationships such as implementation and
 membership remain available.
 
-Both graphs carry `externalSymbols`, keyed by the unchanged opaque External identity.
-The language analyzer supplies each name and `repository`/`dependency` scope. Cards
-and details display those names rather than percent-encoded IDs such as `%2F`.
-If a description is unavailable, show a generic resolved-target label and retain
-unknown scope; never guess a dependency from a language's ID format. These are display
-choices: complete graphs and graph differences remain intact. Import/dependency
-reference toggles do not change the changed-object count.
+Complete backend graphs, graph differences and `externalSymbols` remain intact.
+The frontend does not decode opaque IDs or infer scope from their format. Ownership
+checks still inspect the complete references: hiding an External or Unresolved
+candidate must not turn ambiguous ownership into a seemingly unique graph-node
+target. The import toggle does not change the changed-object count.
 
 Rust `use` Extension nodes, including `pub use`, are always omitted from this view,
 including Show all objects, expansion and Show imports. Their incident relationships
@@ -410,3 +414,21 @@ read extraction in the current Rust adapter.
   cover card ownership, long-signature details and the options menu. There is no
   horizontal overflow or browser exception; viewport overrides are cleared. The
   in-app browser request remains queued, so its interaction verification is pending.
+
+### Graph-local target display follow-up verification
+
+- The full frontend suite passes: 41 files, 354 tests. Focused coverage checks every
+  display-option combination, repository/dependency/unknown External scopes,
+  Unresolved targets, removed references, hidden-only relationship changes, retained
+  local calls, consistent details and preservation of the complete comparison.
+  Ambiguous ownership remains ambiguous when one candidate is hidden.
+- TypeScript, repository ESLint (excluding ignored local tools/caches) and the
+  production frontend build pass. The existing large-chunk warning remains. This
+  display change does not modify Rust analysis or rebuild the application installer.
+- Independent Chrome completes 19 screenshot/accessibility/geometry captures at
+  1440×1000, 900×800 and 520×800 in light/dark themes. Checks cover the three remaining
+  display controls, expansion, local relationship details, long signatures, retained
+  original code, hidden-only empty state and unchanged context, and the English menu.
+  No floating target, hidden relationship, horizontal overflow or browser exception
+  appears; viewport overrides are cleared afterward. The in-app preview request
+  remains queued, so in-app interaction verification is still pending.

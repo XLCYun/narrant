@@ -1,7 +1,7 @@
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
-import type { ChangeKind, CodeNode, CodeReference, ExternalSymbol, NodeDifference, ReferenceTarget, StructureComparison } from "./types";
+import type { ChangeKind, CodeNode, CodeReference, NodeDifference, StructureComparison } from "./types";
 
 export type ObjectStatus = ChangeKind | "relations" | "unchanged";
 /** 成员保留原对象身份；每行的高度同时决定文字位置和连线端口。 */
@@ -25,8 +25,6 @@ export type ObjectData = Record<string, unknown> & {
   status: ObjectStatus;
   group: boolean;
   hiddenChildren: number;
-  targetKind?: "external" | "unresolved";
-  targetScope?: ExternalSymbol["scope"];
   category?: CodeNode["category"];
   table: boolean;
   headerHeight: number;
@@ -36,18 +34,11 @@ export type ObjectData = Record<string, unknown> & {
 export type ObjectNode = Node<ObjectData, "codeObject">;
 export type StructureEdge = Edge<{ route?: { path: string; labelX: number; labelY: number } }>;
 export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number };
-export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; showDependencies: boolean; expanded: ReadonlySet<string> };
+export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; expanded: ReadonlySet<string> };
 
-/** 已解析符号使用分析器描述；任何语言的内部 ID 都不作为可读名称解码。 */
-export function externalSymbol(comparison: StructureComparison, id: string): ExternalSymbol | undefined {
-  return comparison.after.externalSymbols[id] ?? comparison.before.externalSymbols[id];
-}
-
-/** 导入和仓库外依赖分别按需显示，缺少范围信息时不猜测目标归属。 */
-export function isReferenceVisible(comparison: StructureComparison, reference: CodeReference, options: Pick<GraphOptions, "showImports" | "showDependencies">): boolean {
-  if (reference.semantic === "code.imports" && !options.showImports) return false;
-  return options.showDependencies || reference.target.kind !== "external"
-    || externalSymbol(comparison, reference.target.symbol)?.scope !== "dependency";
+/** 只显示图内已解析关系；导入开关仅决定图内导入关系是否出现。 */
+export function isReferenceVisible(reference: CodeReference, options: Pick<GraphOptions, "showImports">): boolean {
+  return reference.target.kind === "node" && (reference.semantic !== "code.imports" || options.showImports);
 }
 
 /** 关联集合按明确字段编码，不依赖对象属性序列化顺序。 */
@@ -57,14 +48,14 @@ export function referenceKey(reference: CodeReference): string {
     target.kind === "node" ? target.id : target.kind === "external" ? target.symbol : target.name]);
 }
 
-/** use 声明留在完整分析结果中；画布、计数和详情仅投影其余对象之间的关系。 */
+/** 画布、计数和详情统一排除 use 声明及所有图外、未解析关系，保留完整分析结果。 */
 function displayComparison(comparison: StructureComparison): StructureComparison {
   const objects = new Map([...comparison.before.nodes, ...comparison.after.nodes].map((node) => [node.id, node]));
   const hidden = new Set([...objects.values()]
     .filter((node) => node.language === "rust" && node.category === "extension" && node.nativeKind === "use")
     .map((node) => node.id));
-  const keepsNode = (id: string) => !hidden.has(id);
-  const keepsReference = (reference: CodeReference) => reference.target.kind !== "node" || keepsNode(reference.target.id);
+  const keepsNode = (id: string) => objects.has(id) && !hidden.has(id);
+  const keepsReference = (reference: CodeReference) => reference.target.kind === "node" && keepsNode(reference.target.id);
   const graph = (source: StructureComparison["before"]): StructureComparison["before"] => ({
     ...source, root: source.root.filter(keepsNode),
     nodes: source.nodes.filter((node) => keepsNode(node.id)).map((node) => ({
@@ -80,6 +71,8 @@ function displayComparison(comparison: StructureComparison): StructureComparison
 
 /** 按类图聚合成员；代码身份、两侧声明与差异仍保留在原始比较中。 */
 export async function layoutStructureComparison(comparison: StructureComparison, options: GraphOptions, signal?: AbortSignal): Promise<StructureLayout> {
+  // 归属判定保留完整语义，不能因隐藏一个候选而把歧义关系误当成唯一归属。
+  const semanticObjects = new Map([...comparison.before.nodes, ...comparison.after.nodes].map((node) => [node.id, node]));
   comparison = displayComparison(comparison);
   const before = new Map(comparison.before.nodes.map((node) => [node.id, node]));
   const after = new Map(comparison.after.nodes.map((node) => [node.id, node]));
@@ -91,7 +84,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
   const parents = new Map(containment);
   /** 只接受唯一且在图内的类型归属，不根据名称、ID 或前后关系的并集猜测。 */
   const typeTarget = (object: CodeNode, semantic: string) => {
-    const targets = new Map(object.references.filter((reference) => reference.semantic === semantic).map((reference) => [referenceKey(reference), reference.target]));
+    const targets = new Map((semanticObjects.get(object.id)?.references ?? []).filter((reference) => reference.semantic === semantic).map((reference) => [referenceKey(reference), reference.target]));
     const target = targets.size === 1 ? [...targets.values()][0] : undefined;
     return target?.kind === "node" && objects.get(target.id)?.category === "type" ? target.id : undefined;
   };
@@ -128,7 +121,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
   for (const id of options.showAll ? objects.keys() : differences.keys()) include(id);
   for (const difference of differences.values()) {
     for (const change of difference.contains) include(change.value);
-    for (const change of difference.references) if (isReferenceVisible(comparison, change.value, options) && change.value.target.kind === "node") include(change.value.target.id);
+    for (const change of difference.references) if (isReferenceVisible(change.value, options) && change.value.target.kind === "node") include(change.value.target.id);
   }
   for (const id of options.expanded) for (const child of children.get(id) ?? []) {
     include(child);
@@ -136,7 +129,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
   }
   if (options.showUnchangedReferences) for (const id of [...visible]) {
     for (const reference of [...(before.get(id)?.references ?? []), ...(after.get(id)?.references ?? [])]) {
-      if (isReferenceVisible(comparison, reference, options) && reference.target.kind === "node") include(reference.target.id);
+      if (isReferenceVisible(reference, options) && reference.target.kind === "node") include(reference.target.id);
     }
   }
   const visualIds = new Map([...objects.keys()].sort().map((id, index) => [id, `object-${index}`]));
@@ -227,25 +220,8 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     sizes.set(card, { width: 360, height: top + 6 });
   }
   const edges: StructureEdge[] = [];
-  const externalIds = new Map<string, string>();
-  /** 图外目标仍按符号身份去重；未解析名称只在各自调用来源内共享。 */
-  const targetAttachment = (target: ReferenceTarget, source: string) => {
-    if (target.kind === "node") return attachments.get(target.id);
-    const key = JSON.stringify(target.kind === "external" ? [target.kind, target.symbol] : [target.kind, source, target.name]);
-    let card = externalIds.get(key);
-    if (!card) {
-      card = `target-${externalIds.size}`;
-      externalIds.set(key, card);
-      const descriptor = target.kind === "external" ? externalSymbol(comparison, target.symbol) : undefined;
-      data.set(card, { label: target.kind === "external" ? descriptor?.name ?? "" : target.name,
-        nativeKind: target.kind, status: "unchanged", group: false, hiddenChildren: 0, targetKind: target.kind, targetScope: descriptor?.scope,
-        table: false, headerHeight: 64, rows: [], ports: [{ id: `${card}-in`, side: "target", y: 32 }, { id: `${card}-out`, side: "source", y: 32 }] });
-      sizes.set(card, { width: 280, height: 64 });
-    }
-    return { card, source: `${card}-out`, target: `${card}-in` };
-  };
   /** 连线连接原成员的独立端口，不把多个方法的关系合成类级关系。 */
-  const addEdge = (source: string, target: NonNullable<ReturnType<typeof targetAttachment>>, semantic: string, change?: "added" | "removed") => {
+  const addEdge = (source: string, target: { card: string; source: string; target: string }, semantic: string, change?: "added" | "removed") => {
     const origin = attachments.get(source)!;
     // 同卡片的归属已由分区表达；实际调用（包括递归和成员间调用）继续绘制。
     if (["code.member_of", "code.applies_to"].includes(semantic)) {
@@ -268,8 +244,8 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     const references = new Map([...(before.get(id)?.references ?? []), ...(after.get(id)?.references ?? [])].map((reference) => [referenceKey(reference), reference]));
     for (const [key, reference] of references) {
       const change = changes.get(key);
-      if ((!change && !options.showUnchangedReferences) || !isReferenceVisible(comparison, reference, options)) continue;
-      const target = targetAttachment(reference.target, id);
+      if ((!change && !options.showUnchangedReferences) || !isReferenceVisible(reference, options) || reference.target.kind !== "node") continue;
+      const target = attachments.get(reference.target.id);
       if (target) addEdge(id, target, reference.semantic, change);
     }
     for (const change of difference?.contains ?? []) {

@@ -1,4 +1,4 @@
-import { structureClassDiagramFixture, structureCrateRootsFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureCrateRootsFixture, structureHiddenReferencesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
 import type { StructureState } from "@/structure-review/types";
 import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -435,7 +435,7 @@ function ReviewReaderPreview({
   merged?: boolean;
   updateState?: "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes" | "structure-changes";
-  structureKind?: "crate-roots" | "dense" | "ready" | "loading" | "failed" | "empty" | "unsupported" | "imports-only";
+  structureKind?: "crate-roots" | "dense" | "ready" | "loading" | "failed" | "empty" | "unsupported" | "imports-only" | "hidden-references";
   shortContent?: boolean;
   themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
@@ -503,7 +503,7 @@ function ReviewReaderPreview({
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
   const [structureState, setStructureState] = useState<StructureState>(() => {
-    const comparison = { ...(structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
+    const comparison = { ...(structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureKind === "hidden-references" ? structureHiddenReferencesFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
     if (structureKind === "loading") return { kind: "loading" };
     if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
     if (structureKind === "empty") return { kind: "ready", comparison: { ...comparison, before: comparison.after, diff: { nodes: [] } } };
@@ -706,6 +706,7 @@ const previews: Record<string, PreviewDefinition> = {
       "structure-failed": { label: "结构分析失败", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="failed" /> },
       "structure-empty": { label: "没有结构变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="empty" /> },
       "structure-imports-only": { label: "仅导入声明变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="imports-only" /> },
+      "structure-hidden-references": { label: "仅图外或未解析关系变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="hidden-references" /> },
       "structure-unsupported": { label: "结构分析未支持", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="unsupported" /> },
       "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
       "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },

@@ -75,6 +75,21 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
   };
 }
 
+/** 仅图外或未解析关系发生变化，验证空态及显示全部对象后的未变化标记。 */
+export function structureHiddenReferencesFixture(): StructureComparison {
+  const comparison = structureReviewFixture();
+  const callable = comparison.after.nodes.find((node) => node.id === "new")!;
+  const module = { ...comparison.after.nodes.find((node) => node.id === "review")!, contains: [callable.id] };
+  const references = callable.references.filter((reference) => reference.target.kind !== "node");
+  references.push({ semantic: "code.calls", target: { kind: "unresolved", name: "unknown_function" } });
+  return {
+    ...comparison,
+    before: { ...comparison.before, root: [module.id], nodes: [module, { ...callable, references: [] }] },
+    after: { ...comparison.after, root: [module.id], nodes: [module, { ...callable, references }] },
+    diff: { nodes: [{ id: callable.id, content: null, contains: [], references: references.map((value) => ({ kind: "added", value })) }] },
+  };
+}
+
 /** 密集类图覆盖多个实现块、长签名和成员之间的调用，仅供预览使用。 */
 export function structureClassDiagramFixture(): StructureComparison {
   const comparison = structureReviewFixture();

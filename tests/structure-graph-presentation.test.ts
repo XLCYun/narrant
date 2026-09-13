@@ -3,7 +3,7 @@ import { structureCrateRootsFixture, structureReviewFixture } from "@/dev/struct
 import { layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, NodeDifference, StructureComparison } from "@/structure-review/types";
 
-const options = { showAll: false, showUnchangedReferences: false, showImports: false, showDependencies: false, expanded: new Set<string>() };
+const options = { showAll: false, showUnchangedReferences: false, showImports: false, expanded: new Set<string>() };
 
 /** 从公开布局找到一个对象，兼容卡片标题和卡片内的成员行。 */
 function entry(layout: StructureLayout, id: string) {
@@ -53,8 +53,6 @@ describe("Structure Graph presentation Interface", () => {
     expect(object("storage")?.object.hiddenChildren).toBe(2);
     const source = endpoint(layout, "new", "source"), target = endpoint(layout, "save", "target");
     expect(layout.edges.some((edge) => edge.sourceHandle === source.handle && edge.targetHandle === target.handle)).toBe(true);
-    expect(layout.nodes.some((node) => node.data.targetKind === "external")).toBe(true);
-    expect(layout.nodes.some((node) => node.data.targetKind === "unresolved")).toBe(true);
     for (const child of layout.nodes.filter((node) => node.parentId)) {
       const parent = layout.nodes.find((node) => node.id === child.parentId)!;
       expect(layout.nodes.indexOf(parent)).toBeLessThan(layout.nodes.indexOf(child));
@@ -95,18 +93,28 @@ describe("Structure Graph presentation Interface", () => {
   });
 });
 
-it("hides standard-library and third-party targets while preserving repository targets outside the selected graph", async () => {
+it("omits all external and unresolved targets in every display mode without changing the analysis", async () => {
   const comparison = structureReviewFixture();
-  for (const overrides of [{}, { showAll: true, showUnchangedReferences: true }, { showImports: true }]) {
-    const layout = await layoutStructureComparison(comparison, { ...options, ...overrides });
-    expect(layout.nodes.some((node) => node.data.targetScope === "dependency")).toBe(false);
-    expect(layout.nodes.find((node) => node.data.targetScope === "repository")?.data.label).toBe("verify_snapshot");
+  const original = structuredClone(comparison);
+  const objects = new Set([...comparison.before.nodes, ...comparison.after.nodes].map((node) => node.id));
+  for (const showAll of [false, true]) for (const showUnchangedReferences of [false, true]) for (const showImports of [false, true]) {
+    const layout = await layoutStructureComparison(comparison, { ...options, showAll, showUnchangedReferences, showImports, expanded: new Set(["review", "storage"]) });
+    for (const node of layout.nodes) {
+      const ids = [node.data.objectId, ...node.data.rows.map((row) => row.objectId)].filter((id) => id !== undefined);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.every((id) => objects.has(id))).toBe(true);
+    }
     const ids = new Set(layout.nodes.map((node) => node.id));
     expect(layout.edges.every((edge) => ids.has(edge.source) && ids.has(edge.target))).toBe(true);
+    const source = endpoint(layout, "new", "source"), target = endpoint(layout, "save", "target");
+    expect(layout.edges.some((edge) => edge.sourceHandle === source.handle && edge.targetHandle === target.handle && edge.label === "+ code.calls")).toBe(true);
   }
-  const layout = await layoutStructureComparison(comparison, { ...options, showDependencies: true });
-  expect(layout.nodes.filter((node) => node.data.targetScope === "dependency").map((node) => node.data.label).sort()).toEqual(["Arc<T>::new", "serde_json::to_string"]);
-  expect(layout.nodes.some((node) => node.data.label.includes("%2F") || node.data.label.startsWith("rust:"))).toBe(false);
+  for (const id of objects) {
+    const details = objectDetails(comparison, id);
+    for (const side of [details.before, details.after]) expect(side?.references.every((reference) => reference.target.kind === "node") ?? true).toBe(true);
+    expect(details.difference?.references.every((change) => change.value.target.kind === "node") ?? true).toBe(true);
+  }
+  expect(comparison).toEqual(original);
 });
 
 it("only includes import-only targets when imports are enabled", async () => {
@@ -125,7 +133,7 @@ it("omits Rust use declarations and incident relations from every display mode w
   comparison.after.nodes.find((node) => node.id === "new")!.references.push(useReference);
   comparison.diff.nodes.find((node) => node.id === "new")!.references.push({ kind: "added", value: useReference });
   const original = structuredClone(comparison);
-  for (const overrides of [{}, { expanded: new Set(["review", "storage"]) }, { showAll: true, showImports: true, showDependencies: true, showUnchangedReferences: true }]) {
+  for (const overrides of [{}, { expanded: new Set(["review", "storage"]) }, { showAll: true, showImports: true, showUnchangedReferences: true }]) {
     const layout = await layoutStructureComparison(comparison, { ...options, ...overrides });
     expect(layout.nodes.some((node) => node.data.nativeKind === "use" || node.data.label === "imported_but_unused")).toBe(false);
     expect(layout.changed).toBe(5);
@@ -155,32 +163,53 @@ it("keeps import-only changes out of parent status, counts and expansion hints",
   expect(comparison.diff.nodes).toHaveLength(3);
 });
 
-it("uses declared symbol scope and names instead of interpreting opaque identity strings", async () => {
+it.each(["repository", "dependency", undefined] as const)("hides external references with %s scope, including missing descriptors", async (scope) => {
   const comparison = structureReviewFixture();
   const reference = { semantic: "code.calls", target: { kind: "external" as const, symbol: "opaque:%2F" } };
   comparison.after.nodes.find((node) => node.id === "new")!.references = [reference];
   comparison.diff.nodes.find((node) => node.id === "new")!.references = [{ kind: "added", value: reference }];
-  comparison.after.externalSymbols[reference.target.symbol] = { name: "工具::处理", scope: "repository" };
-  const shown = await layoutStructureComparison(comparison, options);
-  expect(shown.nodes.some((node) => node.data.label === "工具::处理")).toBe(true);
-  comparison.after.externalSymbols[reference.target.symbol].scope = "dependency";
-  const hidden = await layoutStructureComparison(comparison, options);
+  if (scope) comparison.after.externalSymbols[reference.target.symbol] = { name: "工具::处理", scope };
+  const hidden = await layoutStructureComparison(comparison, { ...options, showAll: true, showUnchangedReferences: true, showImports: true });
   expect(hidden.nodes.some((node) => node.data.label === "工具::处理")).toBe(false);
-  delete comparison.after.externalSymbols[reference.target.symbol];
-  const unknown = await layoutStructureComparison(comparison, options);
-  expect(unknown.nodes.some((node) => node.data.targetKind === "external" && node.data.targetScope === undefined)).toBe(true);
-  expect(unknown.nodes.some((node) => node.data.label === reference.target.symbol)).toBe(false);
+  expect(hidden.nodes.some((node) => node.data.label === reference.target.symbol)).toBe(false);
+  expect(objectDetails(comparison, "new").after?.references).toEqual([]);
+  expect(objectDetails(comparison, "new").difference).toMatchObject({ content: "added", references: [] });
 });
 
-it("retains descriptions for removed references from the before graph", async () => {
+it("omits removed external references while preserving removed local references", async () => {
   const comparison = structureReviewFixture();
   const reference = { semantic: "code.calls", target: { kind: "external" as const, symbol: "old-opaque-symbol" } };
-  comparison.before.nodes.find((node) => node.id === "old")!.references = [reference];
-  comparison.diff.nodes.find((node) => node.id === "old")!.references = [{ kind: "removed", value: reference }];
+  const local = relation("code.calls", "save");
+  comparison.before.nodes.find((node) => node.id === "old")!.references = [reference, local];
+  comparison.diff.nodes.find((node) => node.id === "old")!.references = [reference, local].map((value) => ({ kind: "removed", value }));
   comparison.before.externalSymbols[reference.target.symbol] = { name: "旧模块::旧函数", scope: "repository" };
   const layout = await layoutStructureComparison(comparison, options);
-  const target = layout.nodes.find((node) => node.data.label === "旧模块::旧函数")!;
-  expect(layout.edges.some((edge) => edge.target === target.id && edge.label === "− code.calls")).toBe(true);
+  expect(layout.nodes.some((node) => node.data.label === "旧模块::旧函数")).toBe(false);
+  const source = endpoint(layout, "old", "source"), target = endpoint(layout, "save", "target");
+  expect(layout.edges.some((edge) => edge.sourceHandle === source.handle && edge.targetHandle === target.handle && edge.label === "− code.calls")).toBe(true);
+  const details = objectDetails(comparison, "old");
+  expect(details.before?.references).toEqual([local]);
+  expect(details.difference?.references).toEqual([{ kind: "removed", value: local }]);
+});
+
+it("does not mark objects changed solely for hidden external or unresolved relationships", async () => {
+  const references: CodeReference[] = [
+    { semantic: "code.calls", target: { kind: "external", symbol: "external-function" } },
+    { semantic: "code.calls", target: { kind: "unresolved", name: "unknown_function" } },
+  ];
+  const parent = diagramNode("module", "container", { contains: ["source"] });
+  const source = diagramNode("source", "callable");
+  const comparison = diagramComparison([parent, source], [parent, { ...source, references }], [
+    { id: source.id, content: null, contains: [], references: references.map((value) => ({ kind: "added", value })) },
+  ]);
+  const hidden = await layoutStructureComparison(comparison, options);
+  expect(hidden).toMatchObject({ nodes: [], edges: [], changed: 0, visible: 0, total: 2 });
+  const all = await layoutStructureComparison(comparison, { ...options, showAll: true, showUnchangedReferences: true });
+  expect(entry(all, source.id)?.object.status).toBe("unchanged");
+  expect(entry(all, parent.id)?.object.status).toBe("unchanged");
+  expect(all.edges).toEqual([]);
+  expect(objectDetails(comparison, source.id).difference).toBeUndefined();
+  expect(comparison.after.nodes.find((node) => node.id === source.id)?.references).toEqual(references);
 });
 
 it("stops abandoned layout requests through the public Interface", async () => {
@@ -280,7 +309,8 @@ it("retains implementation changes and trait links while grouping methods under 
 it("does not guess type ownership when an implementation has ambiguous or external targets", async () => {
   const a = diagramNode("A", "type"), b = diagramNode("B", "type"), method = diagramNode("method", "callable");
   const external: CodeReference = { semantic: "code.applies_to", target: { kind: "external", symbol: "outside-type" } };
-  for (const references of [[relation("code.applies_to", "A"), relation("code.applies_to", "B")], [external], [relation("code.applies_to", "A"), external]]) {
+  const unresolved: CodeReference = { semantic: "code.applies_to", target: { kind: "unresolved", name: "unknown-type" } };
+  for (const references of [[relation("code.applies_to", "A"), relation("code.applies_to", "B")], [external], [relation("code.applies_to", "A"), external], [unresolved], [relation("code.applies_to", "A"), unresolved]]) {
     const implementation = diagramNode("impl", "extension", { contains: ["method"], references });
     const nodes = [a, b, implementation, method];
     const layout = await layoutStructureComparison(diagramComparison(nodes, nodes), { ...options, showAll: true });
