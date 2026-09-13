@@ -131,6 +131,31 @@ Preparation and release must be owned by one Module:
 This preserves the existing meaning and lifetime of Review Workspace and implements
 the user's explicit instruction not to repeat the head checkout. See [ADR-0031](../adr/0031-reuse-review-head-for-structure-analysis.md).
 
+### Parallel sides and dependency settings (2026-09-14)
+
+After obtaining the Snapshot lease, run two independent sides concurrently. Before
+prepares its checkout and immediately analyzes it; after immediately analyzes the
+existing head. Preparation, project loading and semantic queries can overlap. An empty
+side produces an empty graph without starting a server or preparing an unnecessary
+checkout. No second head checkout is introduced.
+
+Both workers use the same frozen test-code option and Rust dependency scope. A failure
+or panic on either side cancels its peer. Cancellation, close, refresh and abandoned
+requests wait for both actual workers to stop before releasing the lease; before
+cleanup belongs to its worker, and cleanup failures remain visible. Only after both
+graphs succeed does the application verify head and compare/project the graphs.
+
+Application Settings adds **Structure Changes / 结构改动**, following the existing settings
+navigation and card layout. A language selector currently offers Rust. Its three
+persisted options are repository-only (default), repository plus standard library,
+and repository plus standard library and third-party dependencies. Saving takes effect
+for the next analysis; a completed graph offers **Analyze again / 重新分析**. A settings
+change does not mutate an already completed result or change an in-flight analysis.
+Saving failure retains the last saved selection and permits retry.
+
+See the [adapter scope contract](0019-rust-language-analyzer.md#configurable-dependency-scope-2026-09-14)
+and [PR31 serial/parallel benchmark](../research/structure-review-settings-parallel.md).
+
 ## React Flow projection facts
 
 Library and integration-test crate roots supplied by the Rust analyzer remain

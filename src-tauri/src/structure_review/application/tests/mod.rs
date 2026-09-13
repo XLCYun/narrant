@@ -109,7 +109,11 @@ fn git(repository: &Path, args: &[&str]) -> String {
 }
 
 /// 受控分析器用文件内容构造最小有效代码图，差异仍走生产 graph diff。
-fn analyze_files(input: &AnalysisInput, _: CancellationCheck) -> Result<CodeGraph, AnalysisError> {
+fn analyze_files(
+    input: &AnalysisInput,
+    _: CancellationCheck,
+    _: RustDependencyScope,
+) -> Result<CodeGraph, AnalysisError> {
     let nodes: Vec<_> = input
         .files
         .iter()
@@ -142,9 +146,12 @@ async fn passes_the_same_analysis_options_to_both_sides() {
     let fixture = Fixture::new().await;
     let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured = observed.clone();
-    let application = StructureReview::new(Arc::new(move |input, cancelled| {
-        captured.lock().unwrap().push(input.options);
-        analyze_files(input, cancelled)
+    let application = StructureReview::new(Arc::new(move |input, cancelled, dependency_scope| {
+        captured
+            .lock()
+            .unwrap()
+            .push((input.options, dependency_scope));
+        analyze_files(input, cancelled, dependency_scope)
     }));
     for options in [
         AnalysisOptions::default(),
@@ -152,25 +159,43 @@ async fn passes_the_same_analysis_options_to_both_sides() {
             include_tests: true,
         },
     ] {
-        application
-            .analyze(
-                &fixture.lifecycle,
-                &OperationContext::background(),
-                &fixture.presentation.review_id,
-                &fixture.presentation.snapshot_id,
-                options,
-            )
-            .await
-            .unwrap();
+        for dependency_scope in [
+            RustDependencyScope::RepositoryOnly,
+            RustDependencyScope::StandardLibrary,
+            RustDependencyScope::AllDependencies,
+        ] {
+            application
+                .analyze(
+                    &fixture.lifecycle,
+                    &OperationContext::background(),
+                    &fixture.presentation.review_id,
+                    &fixture.presentation.snapshot_id,
+                    options,
+                    dependency_scope,
+                )
+                .await
+                .unwrap();
+        }
     }
     assert_eq!(
         observed
             .lock()
             .unwrap()
             .iter()
-            .map(|options| options.include_tests)
+            .map(|(options, scope)| (options.include_tests, *scope))
             .collect::<Vec<_>>(),
-        [false, false, true, true]
+        [false, true]
+            .into_iter()
+            .flat_map(|include_tests| {
+                [
+                    RustDependencyScope::RepositoryOnly,
+                    RustDependencyScope::StandardLibrary,
+                    RustDependencyScope::AllDependencies,
+                ]
+                .into_iter()
+                .flat_map(move |scope| [(include_tests, scope); 2])
+            })
+            .collect::<Vec<_>>()
     );
 }
 
@@ -180,19 +205,17 @@ async fn reuses_head_and_compares_exact_merge_base_with_side_specific_files() {
     let fixture = Fixture::new().await;
     let calls = Arc::new(Mutex::new(Vec::new()));
     let observed = calls.clone();
-    let application = StructureReview::new(Arc::new(move |input, cancelled| {
+    let application = StructureReview::new(Arc::new(move |input, cancelled, dependency_scope| {
         observed
             .lock()
             .unwrap()
             .push((input.repository_root.clone(), input.files.clone()));
         assert!(!input.repository_root.join("base-only.rs").exists());
-        assert_eq!(
-            git(&input.repository_root, &["worktree", "list", "--porcelain"])
-                .matches("worktree ")
-                .count(),
-            3
-        );
-        analyze_files(input, cancelled)
+        let count = git(&input.repository_root, &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count();
+        assert!((2..=3).contains(&count));
+        analyze_files(input, cancelled, dependency_scope)
     }));
     let result = application
         .analyze(
@@ -201,10 +224,12 @@ async fn reuses_head_and_compares_exact_merge_base_with_side_specific_files() {
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
             AnalysisOptions::default(),
+            RustDependencyScope::default(),
         )
         .await
         .unwrap();
-    let calls = calls.lock().unwrap();
+    let mut calls = calls.lock().unwrap();
+    calls.sort_by_key(|call| call.0 == fixture.head);
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].0, fixture.head.parent().unwrap().join("before"));
     assert_eq!(calls[1].0, fixture.head);
@@ -294,13 +319,13 @@ async fn assert_workspace_drain(action: &str) {
     } else {
         None
     };
-    let started = Arc::new(tokio::sync::Notify::new());
+    let started = Arc::new(tokio::sync::Semaphore::new(0));
     let cancelled_seen = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(AtomicBool::new(false));
     let (worker_started, worker_cancelled, worker_release) =
         (started.clone(), cancelled_seen.clone(), release.clone());
-    let application = StructureReview::new(Arc::new(move |_, cancelled| {
-        worker_started.notify_one();
+    let application = StructureReview::new(Arc::new(move |_, cancelled, _| {
+        worker_started.add_permits(1);
         while !cancelled() {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -325,12 +350,15 @@ async fn assert_workspace_drain(action: &str) {
                 &review,
                 &snapshot,
                 AnalysisOptions::default(),
+                RustDependencyScope::default(),
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(10), started.notified())
+    tokio::time::timeout(Duration::from_secs(10), started.acquire_many(2))
         .await
-        .unwrap();
+        .unwrap()
+        .unwrap()
+        .forget();
     let lifecycle = fixture.lifecycle.clone();
     let review = fixture.presentation.review_id.clone();
     if action == "abandon" {
@@ -372,7 +400,7 @@ async fn assert_workspace_drain(action: &str) {
 #[tokio::test]
 async fn analysis_failure_cleans_before_without_closing_review() {
     let fixture = Fixture::new().await;
-    let application = StructureReview::new(Arc::new(|_, _| {
+    let application = StructureReview::new(Arc::new(|_, _, _| {
         Err(AnalysisError {
             message: "server missing".into(),
         })
@@ -384,6 +412,7 @@ async fn analysis_failure_cleans_before_without_closing_review() {
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
             AnalysisOptions::default(),
+            RustDependencyScope::default(),
         )
         .await;
     assert_eq!(result.unwrap_err().code, "analysis-failed");
@@ -405,7 +434,7 @@ async fn refuses_foreign_before_directory_and_stale_snapshot() {
     let before = fixture.head.parent().unwrap().join("before");
     std::fs::create_dir(&before).unwrap();
     std::fs::write(before.join("keep"), "unrelated").unwrap();
-    let application = StructureReview::new(Arc::new(|_, _| panic!("不应调用语言分析器")));
+    let application = StructureReview::new(Arc::new(analyze_files));
     let result = application
         .analyze(
             &fixture.lifecycle,
@@ -413,6 +442,7 @@ async fn refuses_foreign_before_directory_and_stale_snapshot() {
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
             AnalysisOptions::default(),
+            RustDependencyScope::default(),
         )
         .await;
     assert_eq!(result.unwrap_err().code, "cleanup-failed");
@@ -428,6 +458,7 @@ async fn refuses_foreign_before_directory_and_stale_snapshot() {
             &fixture.presentation.review_id,
             "stale",
             AnalysisOptions::default(),
+            RustDependencyScope::default(),
         )
         .await;
     assert_eq!(result.unwrap_err().code, "review-unavailable");
@@ -472,8 +503,12 @@ async fn real_server_builds_review_structure_comparison() {
     let fixture = Fixture::new().await;
     let executable = std::env::var_os("NARRANT_RUST_ANALYZER").expect("需要提供 rust-analyzer");
     let analyzer = RustLanguageAnalyzer::new(executable);
-    let application = StructureReview::new(Arc::new(move |input, cancelled| {
-        analyzer.clone().with_cancellation(cancelled).analyze(input)
+    let application = StructureReview::new(Arc::new(move |input, cancelled, dependency_scope| {
+        analyzer
+            .clone()
+            .with_cancellation(cancelled)
+            .with_dependency_scope(dependency_scope)
+            .analyze(input)
     }));
     let result = application
         .analyze(
@@ -482,6 +517,7 @@ async fn real_server_builds_review_structure_comparison() {
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
             AnalysisOptions::default(),
+            RustDependencyScope::default(),
         )
         .await
         .unwrap();
@@ -529,3 +565,9 @@ async fn real_server_builds_review_structure_comparison() {
         result.diff.nodes.len()
     );
 }
+
+#[path = "parallel.rs"]
+mod parallel;
+
+#[path = "benchmark.rs"]
+mod benchmark;

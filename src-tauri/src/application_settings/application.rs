@@ -209,6 +209,14 @@ impl ApplicationSettingsApplication {
         self.update(|settings| settings.language = language)
     }
 
+    /// 原子保存 Rust 结构分析的依赖范围，保留其它语言和应用偏好。
+    pub(crate) fn update_rust_dependency_scope(
+        &self,
+        scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+    ) -> Result<ApplicationSettings, ApplicationSettingsError> {
+        self.update(|settings| settings.structure_review.rust.dependency_scope = scope)
+    }
+
     /// 原子切换 future analyses 使用的 provider，保留三套 provider 配置。
     pub(crate) fn update_provider(
         &self,

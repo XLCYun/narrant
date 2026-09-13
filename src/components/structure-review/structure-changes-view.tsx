@@ -145,6 +145,7 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
         </Button>
       </div>
       <TestCodeSwitch binding={binding} />
+      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={binding.retry}>{t("reanalyze")}</Button>
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-7 text-xs" />}>{t("displayOptions")}</DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">

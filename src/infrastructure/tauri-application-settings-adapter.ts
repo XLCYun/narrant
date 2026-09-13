@@ -14,6 +14,7 @@ export function createTauriApplicationSettingsAdapter(
     load: () => transport.invoke("load_application_settings", {}),
     updateTheme: (theme: ThemePreference) => transport.invoke("update_application_theme", { theme }),
     updateLanguage: (language: ApplicationLanguage) => transport.invoke("update_application_language", { language }),
+    updateRustDependencyScope: (scope) => transport.invoke("update_application_rust_dependency_scope", { scope }),
     listBabysitModels: (provider: BabysitProvider) => transport.invoke("list_babysit_models", { provider }),
     updateBabysitProvider: (provider: BabysitProvider) => transport.invoke("update_application_babysit_provider", { provider }),
     updateBabysitRepositoryExploration: (enabled: boolean) => transport.invoke("update_application_babysit_repository_exploration", { enabled }),

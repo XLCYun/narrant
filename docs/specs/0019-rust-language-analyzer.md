@@ -42,7 +42,37 @@ The common module now implements normalized own-code comparison. The concrete ad
 is implemented under `structure_review::rust_analyzer`; real-server verification is
 recorded separately from the historical spike below.
 
-## Repository-only analysis (2026-09-14)
+## Configurable dependency scope (2026-09-14)
+
+Application Settings has a Structure Changes tab with language-specific preferences.
+Rust exposes `RustDependencyScope`, applied through `with_dependency_scope` when creating
+each analyzer session. This is an adapter setting; it does not add Cargo concepts to
+the language-independent `AnalysisOptions` contract.
+
+| Stored scope | Standard library | Third-party dependencies | Server configuration |
+| --- | --- | --- | --- |
+| `repository-only` (default) | Disabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot=null`, Cargo offline |
+| `standard-library` | Enabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot="discover"`, Cargo offline |
+| `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot="discover"`, inherit Cargo network settings |
+
+All modes keep build scripts, procedural macros, checks, diagnostics and cache priming
+disabled, and prevent rustup auto-installation. Broader server context helps identify
+repository targets but does not add external source to the graph. The adapter's
+repository boundary and frontend graph-local target policy remain in force.
+
+The middle mode allows sysroot loading; it does not guarantee complete standard-library
+semantics. The tested rust-analyzer also applies `noDeps` to sysroot metadata, omitting
+connections among standard-library crates. On PR31 it restores one local call relative
+to repository-only mode, while 15 local relationships remain unresolved relative to the
+full-context comparison. See the [settings and parallel-analysis measurements](../research/structure-review-settings-parallel.md).
+
+Settings remain version 1. Missing `structureReview.rust.dependencyScope` defaults to
+`repository-only`; invalid values fail validation rather than silently overriding the
+file. Updates preserve other device settings. One analysis reads a single saved scope
+before launching both sides; changes apply on the next analysis, including explicit
+**Analyze again / 重新分析** from an existing graph.
+
+### Repository-only loading policy
 
 The user requested a separate branch to disable dependency downloads, third-party
 analysis and standard-library analysis, and measure PR31. This branch changes the

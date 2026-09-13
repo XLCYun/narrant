@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, path::Path, process::Command, time::Duration};
 
 use serde_json::{json, Value};
 
-use super::{failure, Result};
+use super::{failure, Result, RustDependencyScope};
 use crate::lsp::{CancellationCheck, Location, LspClient, LspOptions, OutgoingCall, Position};
 
 const SERVER_STATUS: &str = "experimental/serverStatus";
@@ -30,16 +30,16 @@ impl RustLsp {
         executable: &Path,
         repository: &Path,
         cancelled: CancellationCheck,
+        scope: RustDependencyScope,
     ) -> Result<Self> {
         let mut options = LspOptions {
             initialization_options: json!({
                 "checkOnSave": false,
                 "cachePriming": {"enable": false},
                 "diagnostics": {"enable": false},
-                // noDeps 跳过依赖元数据；sysroot=null 禁止加载标准库源码。
                 "cargo": {
-                    "noDeps": true,
-                    "sysroot": null,
+                    "noDeps": scope != RustDependencyScope::AllDependencies,
+                    "sysroot": if scope == RustDependencyScope::RepositoryOnly { None } else { Some("discover") },
                     "buildScripts": {"enable": false}
                 },
                 // 启用过程宏会隐式启用 build scripts，必须同时关闭。
@@ -51,7 +51,9 @@ impl RustLsp {
         options.capabilities["experimental"] = json!({"serverStatusNotification": true});
         let mut command = Command::new(executable);
         // 只约束本次分析进程及其子进程，不修改用户的 Cargo/rustup 全局设置。
-        command.env("CARGO_NET_OFFLINE", "true");
+        if scope != RustDependencyScope::AllDependencies {
+            command.env("CARGO_NET_OFFLINE", "true");
+        }
         command.env("RUSTUP_AUTO_INSTALL", "0");
         let client = LspClient::start(command, repository, options).map_err(failure)?;
         let capabilities = client.capabilities();

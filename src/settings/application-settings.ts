@@ -1,5 +1,11 @@
 export type ThemePreference = "system" | "light" | "dark";
 
+/** Rust 语义分析允许加载的依赖范围，保持与后端稳定取值一致。 */
+export type RustDependencyScope = "repository-only" | "standard-library" | "all-dependencies";
+
+/** 按语言保存结构改动偏好，新增语言时增加对应配置。 */
+export type StructureReviewSettings = { rust: { dependencyScope: RustDependencyScope } };
+
 /** Application Settings 支持的稳定界面语言；后端和文档语言都使用这些 BCP-47 值。 */
 export type ApplicationLanguage = "zh-CN" | "en-US";
 
@@ -63,6 +69,7 @@ export type ApplicationSettings = {
   theme: ThemePreference;
   language: ApplicationLanguage;
   babysit: BabysitSettings;
+  structureReview: StructureReviewSettings;
 };
 
 /** Settings UI 与持久化实现之间的窄应用端口。 */
@@ -73,6 +80,8 @@ export interface ApplicationSettingsApplication {
   updateTheme(theme: ThemePreference): Promise<ApplicationSettings>;
   /** 原子更新应用界面语言偏好。 */
   updateLanguage(language: ApplicationLanguage): Promise<ApplicationSettings>;
+  /** 原子保存未来 Rust 结构分析允许加载的依赖范围。 */
+  updateRustDependencyScope(scope: RustDependencyScope): Promise<ApplicationSettings>;
   /** 仅在用户进入修改态时获取当前完整模型目录。 */
   listBabysitModels(provider: BabysitProvider): Promise<BabysitModelCatalog>;
   /** 立即原子保存未来分析使用的 provider。 */

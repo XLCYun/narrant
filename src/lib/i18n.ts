@@ -89,6 +89,21 @@ export const resources = {
       continueExistingReview: "继续现有审核",
     },
     structure: {
+      reanalyze: "重新分析",
+      settingsDescription: "按语言设置结构改动的分析范围。",
+      settingsLanguage: "编程语言",
+      dependencyScope: "Rust 依赖分析范围",
+      dependencyScopeDescription: "加载更多类型信息有助于解析关联，也会增加等待时间。",
+      settingsLoadFailed: "无法读取结构改动设置，请重试。",
+      settingsSaveFailed: "无法保存结构改动设置，已保留原选项。请重试。",
+      settingsSaving: "正在保存…",
+      settingsNextAnalysis: "选项会自动保存，并在下次分析时生效。已有结构图可点击“重新分析”更新。",
+      scope: {
+        "repository-only": { label: "仅仓库代码（默认）", description: "禁用标准库和第三方依赖分析，加载最快；依赖这些类型信息的关联可能缺失。" },
+        "standard-library": { label: "仓库代码 + 标准库", description: "允许解析标准库，禁用第三方依赖分析；关联解析仍受缺失的依赖信息影响。" },
+        "all-dependencies": { label: "仓库代码 + 标准库 + 第三方依赖", description: "允许解析标准库和第三方依赖，关联更完整；首次加载可能需要下载依赖，等待更久。" },
+      },
+
       title: "结构改动", unavailable: "结构分析暂不可用", loading: "正在分析 Rust 结构", loadingDescription: "正在比较当前审核版本的代码对象与关系。首次分析可能需要较长时间。",
       cancelled: "已取消结构分析", failed: "结构分析失败", retryDescription: "当前审核内容仍可继续阅读。你可以重新尝试结构分析。",
       changedCount: "{{count}} 个变化对象", visibleCount: "显示 {{visible}} / {{total}} 个对象", coverage: "覆盖 {{count}} / {{total}} 个文件", partialCoverage: "部分覆盖 · {{count}} / {{total}} 个文件",
@@ -226,6 +241,21 @@ export const resources = {
       continueExistingReview: "Continue existing review",
     },
     structure: {
+      reanalyze: "Analyze again",
+      settingsDescription: "Configure the scope of structure analysis for each language.",
+      settingsLanguage: "Programming language",
+      dependencyScope: "Rust dependency analysis",
+      dependencyScopeDescription: "Loading more type information helps resolve relationships and increases analysis time.",
+      settingsLoadFailed: "Unable to load structure settings. Please retry.",
+      settingsSaveFailed: "Unable to save structure settings. Your previous selection is unchanged. Please retry.",
+      settingsSaving: "Saving…",
+      settingsNextAnalysis: "Changes save automatically and apply to the next analysis. Use “Analyze again” to update an existing graph.",
+      scope: {
+        "repository-only": { label: "Repository only (default)", description: "Skip the standard library and third-party dependencies for the fastest loading. Relationships that need their type information may be missing." },
+        "standard-library": { label: "Repository + standard library", description: "Allow standard library analysis and skip third-party dependencies. Missing dependency information can still limit relationship resolution." },
+        "all-dependencies": { label: "Repository + standard library + third-party dependencies", description: "Allow analysis of the standard library and third-party dependencies for more complete relationships. Initial loading may download dependencies and take longer." },
+      },
+
       title: "Structure Changes", unavailable: "Structure analysis is unavailable", loading: "Analyzing Rust structure", loadingDescription: "Comparing code objects and relationships in this review. The first analysis may take a while.",
       cancelled: "Structure analysis cancelled", failed: "Structure analysis failed", retryDescription: "You can keep reading this review and retry structure analysis.",
       changedCount: "{{count}} changed objects", visibleCount: "Showing {{visible}} / {{total}} objects", coverage: "{{count}} / {{total}} files covered", partialCoverage: "Partial coverage · {{count}} / {{total}} files",

@@ -5,6 +5,17 @@ use crate::application_settings::{
 };
 use tauri::State;
 
+/// 保存未来结构分析使用的 Rust 依赖范围。
+#[tauri::command]
+pub(crate) fn update_application_rust_dependency_scope(
+    application: State<'_, ApplicationSettingsApplication>,
+    scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+) -> Result<ApplicationSettings, String> {
+    application
+        .update_rust_dependency_scope(scope)
+        .map_err(|error| error.to_string())
+}
+
 /// 读取当前设备级 Application Settings 快照。
 #[tauri::command]
 pub(crate) fn load_application_settings(

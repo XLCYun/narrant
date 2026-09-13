@@ -118,10 +118,11 @@ pub fn run() {
             let rust_analyzer =
                 crate::structure_review::rust_analyzer::RustLanguageAnalyzer::new(rust_executable);
             app.manage(crate::structure_review::StructureReview::new(Arc::new(
-                move |input, cancelled| {
+                move |input, cancelled, scope| {
                     rust_analyzer
                         .clone()
                         .with_cancellation(cancelled)
+                        .with_dependency_scope(scope)
                         .analyze(input)
                 },
             )));
@@ -148,6 +149,7 @@ pub fn run() {
             application_settings_commands::save_application_custom_connection,
             application_settings_commands::update_application_theme,
             application_settings_commands::update_application_language,
+            application_settings_commands::update_application_rust_dependency_scope,
             application_settings_commands::update_application_babysit_provider,
             application_settings_commands::update_application_babysit_repository_exploration,
             application_settings_commands::update_application_babysit_all_non_empty_lines,

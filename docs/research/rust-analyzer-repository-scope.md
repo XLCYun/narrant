@@ -102,11 +102,14 @@ git worktree add --detach .tools/repository-scope-perf/before a14f544a8f698903db
 
 具体的语义损失包括：
 
-- 两侧各有 14 条相同的调用丢失，例如 `close_review → ReviewSessionStore::close`、
+- 两侧各有 13 条相同的调用丢失，例如 `close_review → ReviewSessionStore::close`、
   `read_file_change → ReviewSessionStore::get`。接收者经过第三方 `tauri::State<T>`
   包装，服务器不再知道其解引用关系。
+- 两侧另有 `open_saved_branch_review → ReviewSessionStore::insert_with_id` 丢失：
+  这里使用普通引用，原因是调用出现在 `?` 操作数中。缺少标准库 Try 相关语言项时，
+  rust-analyzer 的该表达式降级会跳过操作数；恢复 sysroot 后这条调用重新出现。
 - head 另外丢失 `github_repositories → GitHubRepository::identity` 和
-  `list_pull_requests → DiscoveredPullRequest::from`。前者依赖中间表达式的类型推断，
+  `list_pull_requests → DiscoveredPullRequest::from`。前者依赖 Option/Some 和 for 循环的类型推断，
   后者需要标准库 `From` trait 语义。
 - 未解析引用数量上升不代表多生成了代码对象；这些引用继续使用 Unresolved，
   当前前端按既有规则隐藏它们。
@@ -141,6 +144,10 @@ rust-project.json、外部 workspace 根和特殊链接配置需要额外核验�
 - 完整 `cargo test`：579 通过，12 忽略；rustfmt 检查和 all-target Clippy（warnings denied）通过。
   Cargo 验证通过仓库锁运行，真实服务端测试直接运行编译后的测试可执行文件，
   避免在外层持锁时启动同样需要 Cargo 的服务器。
+
+后续新增了三档设置和 before/after 并行化，见
+[应用级并行测速](structure-review-settings-parallel.md)。那组数值包含 before 签出、
+lease 和清理；本页原始实验仅统计分析，两者不要直接相减计算并行收益。
 
 ## 官方依据
 

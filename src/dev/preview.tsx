@@ -20,7 +20,7 @@ import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
-import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, RustDependencyScope, ThemePreference } from "@/settings/application-settings";
 import type { ApplicationUpdateApplication, ApplicationUpdateSnapshot } from "@/application-update/application-update";
 import { useApplicationUpdate, type ApplicationUpdateBinding } from "@/application-update/use-application-update";
 import { ApplicationUpdateAttention } from "@/components/application-update/application-update-attention";
@@ -139,6 +139,7 @@ function SettingsPreview({
   modelState = "idle",
   applicationUpdate,
   initialSection,
+  structureSaving = false,
 }: {
   saveFails?: boolean;
   language?: ApplicationLanguage;
@@ -149,7 +150,9 @@ function SettingsPreview({
   modelState?: "idle" | "loading" | "empty" | "error";
   applicationUpdate?: ApplicationUpdateBinding;
   initialSection?: SettingsSection;
+  structureSaving?: boolean;
 }) {
+  const [rustScope, setRustScope] = useState<RustDependencyScope>("repository-only");
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [savedLanguage, setSavedLanguage] = useState<ApplicationLanguage>(initialLanguage);
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
@@ -168,7 +171,7 @@ function SettingsPreview({
     claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
     custom: { protocol: customConnection.protocol, baseUrl: customConnection.baseUrl, model: customConnection.model, effort: customConnection.effort },
   });
-  const snapshot = (theme: ThemePreference, value = babysit, language = savedLanguage): ApplicationSettings => ({ version: 1, theme, language, babysit: value });
+  const snapshot = (theme: ThemePreference, value = babysit, language = savedLanguage): ApplicationSettings => ({ version: 1, theme, language, babysit: value, structureReview: { rust: { dependencyScope: rustScope } } });
   const application: ApplicationSettingsApplication = {
     load: async () => snapshot(savedTheme),
     updateTheme: async (theme) => {
@@ -180,6 +183,12 @@ function SettingsPreview({
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedLanguage(language);
       return snapshot(savedTheme, babysit, language);
+    },
+    updateRustDependencyScope: async (scope) => {
+      if (structureSaving) return new Promise<ApplicationSettings>(() => undefined);
+      if (saveFails) throw new Error("预览中的结构设置无法保存");
+      setRustScope(scope);
+      return { ...snapshot(savedTheme), structureReview: { rust: { dependencyScope: scope } } };
     },
     listBabysitModels: async () => {
       if (modelState === "loading") return new Promise(() => undefined);
@@ -575,6 +584,10 @@ const previews: Record<string, PreviewDefinition> = {
     label: "应用设置",
     scenarios: {
       default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
+      "structure-review": { label: "结构改动与语言配置", render: () => <SettingsPreview initialSection="structure-review" /> },
+      "structure-review-en": { label: "结构改动英文长文案", render: () => <SettingsPreview initialSection="structure-review" language="en-US" /> },
+      "structure-review-error": { label: "结构设置保存失败", render: () => <SettingsPreview initialSection="structure-review" saveFails /> },
+      "structure-review-saving": { label: "结构设置保存中", render: () => <SettingsPreview initialSection="structure-review" structureSaving /> },
       error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
       "language-zh-CN": { label: "简体中文", render: () => <SettingsPreview language="zh-CN" /> },
       "language-en-US": { label: "English", render: () => <SettingsPreview language="en-US" /> },

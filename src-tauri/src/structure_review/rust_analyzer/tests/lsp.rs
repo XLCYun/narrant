@@ -4,6 +4,40 @@ use super::RustLsp;
 use crate::lsp::{test_support::FakeServer, Position};
 use serde_json::{json, Value};
 
+/// 两个扩展档位在真实 stdio 握手中打开标准库，且仅完整档加载项目依赖。
+#[test]
+fn selects_standard_library_and_dependency_loading_independently() {
+    use super::RustDependencyScope;
+    for scope in [
+        RustDependencyScope::StandardLibrary,
+        RustDependencyScope::AllDependencies,
+    ] {
+        let server = FakeServer::new(vec![
+            vec![initialized(capabilities())],
+            vec![status("ok")],
+            vec![json!({"jsonrpc":"2.0", "id":2, "result":null})],
+        ]);
+        let mut client = RustLsp::start(
+            &server.workspace().join("server"),
+            server.workspace(),
+            std::sync::Arc::new(|| false),
+            scope,
+        )
+        .unwrap();
+        client.wait_ready().unwrap();
+        client.shutdown().unwrap();
+        let requests = server.requests();
+        let options = &requests[0]["params"]["initializationOptions"];
+        assert_eq!(options["cargo"]["sysroot"], "discover");
+        assert_eq!(
+            options["cargo"]["noDeps"],
+            scope != RustDependencyScope::AllDependencies
+        );
+        assert_eq!(options["cargo"]["buildScripts"]["enable"], false);
+        assert_eq!(options["procMacro"]["enable"], false);
+    }
+}
+
 /// Rust Adapter 所需能力，通用客户端测试无需这些字段。
 fn capabilities() -> Value {
     json!({"definitionProvider":true, "callHierarchyProvider":true, "experimental":{"parentModule":true}})
@@ -35,7 +69,8 @@ fn requires_rust_capabilities_and_utf16() {
         assert!(RustLsp::start(
             &server.workspace().join("server"),
             server.workspace(),
-            std::sync::Arc::new(|| false)
+            std::sync::Arc::new(|| false),
+            super::RustDependencyScope::default()
         )
         .is_err());
         // SAFETY: 信号 0 只查询本测试服务器是否仍存在。
@@ -55,6 +90,7 @@ fn rejects_degraded_project_loading() {
             &server.workspace().join("server"),
             server.workspace(),
             std::sync::Arc::new(|| false),
+            super::RustDependencyScope::default(),
         )
         .unwrap();
         assert!(client
@@ -94,6 +130,7 @@ fn configures_rust_and_only_queries_after_loading() {
         &server.workspace().join("server"),
         server.workspace(),
         std::sync::Arc::new(|| false),
+        super::RustDependencyScope::default(),
     )
     .unwrap();
     assert!(client
@@ -145,6 +182,7 @@ fn rust_extension_queries_check_status_changes() {
         &server.workspace().join("server"),
         server.workspace(),
         std::sync::Arc::new(|| false),
+        super::RustDependencyScope::default(),
     )
     .unwrap();
     client.wait_ready().unwrap();

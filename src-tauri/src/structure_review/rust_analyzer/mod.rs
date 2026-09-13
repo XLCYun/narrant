@@ -18,15 +18,28 @@ use crate::lsp::CancellationCheck;
 
 type Result<T> = std::result::Result<T, AnalysisError>;
 
+/// Rust 语义分析允许加载的依赖范围；不改变 Code Graph 的文件范围。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RustDependencyScope {
+    /// 只加载仓库项目，跳过标准库和第三方依赖。
+    #[default]
+    RepositoryOnly,
+    /// 允许加载标准库，同时跳过第三方依赖元数据。
+    StandardLibrary,
+    /// 允许加载标准库和项目依赖。
+    AllDependencies,
+}
+
 /// 已有 rust-analyzer 可执行文件的轻量配置；每次分析独立加载一侧仓库快照。
 ///
-/// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。分析同步执行，仅加载
-/// 仓库项目，不下载依赖、不加载标准库、不运行构建脚本和过程宏。依赖外部类型推断或
-/// Cargo 依赖解析的仓库内调用也可能无法解析；显式声明仍保留，未知目标不猜测。
+/// 二进制由调用方提供，例如开发仓库的 .tools/rust-analyzer。默认只加载仓库项目，
+/// 调用方可以选择更完整的依赖范围。各档均不运行构建脚本和过程宏；未知目标不猜测。
 #[derive(Clone)]
 pub struct RustLanguageAnalyzer {
     executable: PathBuf,
     cancelled: CancellationCheck,
+    dependency_scope: RustDependencyScope,
 }
 
 impl RustLanguageAnalyzer {
@@ -35,7 +48,14 @@ impl RustLanguageAnalyzer {
         Self {
             executable: executable.into(),
             cancelled: std::sync::Arc::new(|| false),
+            dependency_scope: RustDependencyScope::default(),
         }
+    }
+
+    /// 固定本次会话允许加载的依赖范围，前后两侧使用同一设置快照。
+    pub fn with_dependency_scope(mut self, scope: RustDependencyScope) -> Self {
+        self.dependency_scope = scope;
+        self
     }
 
     /// 为本次应用操作注入只读取消观察，覆盖 LSP 等待和源码处理阶段。
@@ -123,7 +143,12 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
                 input.options,
             )?);
         }
-        let mut client = lsp::RustLsp::start(&executable, &repository, self.cancelled.clone())?;
+        let mut client = lsp::RustLsp::start(
+            &executable,
+            &repository,
+            self.cancelled.clone(),
+            self.dependency_scope,
+        )?;
         for document in &documents {
             client.open(&document.uri, &document.source)?;
         }
