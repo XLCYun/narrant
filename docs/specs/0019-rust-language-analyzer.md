@@ -651,12 +651,3 @@ test-only merely because it is under tests/ or called by tests.
   real-server tests ignored in ordinary Cargo runs. `check --lib`, rustfmt and
   all-target Clippy with warnings denied pass. Explicit real-server verification
   passes for the PR31 fixture, custom same-name attributes and cross-file cfg scope.
-
-### Analysis timing diagnostics
-
-Phase logs distinguish source parsing, LSP startup/readiness, semantic queries and graph
-assembly. The shared LSP layer aggregates request timings and standard work-done progress;
-the Rust resolver additionally groups definition queries by relationship purpose. Logs do
-not include request/response bodies. A standalone profiling example compares prepared
-before/head repositories through the public analyzer without holding the Cargo build lock.
-See [the PR31 latency measurements and reproduction guide](../research/pr31-rust-analysis-latency.md).
