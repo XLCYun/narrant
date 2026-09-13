@@ -29,9 +29,14 @@ fn selects_standard_library_and_dependency_loading_independently() {
         let requests = server.requests();
         let options = &requests[0]["params"]["initializationOptions"];
         assert_eq!(options["cargo"]["sysroot"], "discover");
+        assert_eq!(options["cargo"]["noDeps"], false);
         assert_eq!(
-            options["cargo"]["noDeps"],
-            scope != RustDependencyScope::AllDependencies
+            options["cargo"]["metadataExtraArgs"],
+            if scope == RustDependencyScope::StandardLibrary {
+                json!(["--no-deps"])
+            } else {
+                json!([])
+            }
         );
         assert_eq!(options["cargo"]["buildScripts"]["enable"], false);
         assert_eq!(options["procMacro"]["enable"], false);
@@ -149,6 +154,7 @@ fn configures_rust_and_only_queries_after_loading() {
     let requests = server.requests();
     let configuration = &requests[0]["params"]["initializationOptions"];
     assert_eq!(configuration["cargo"]["noDeps"], true);
+    assert_eq!(configuration["cargo"]["metadataExtraArgs"], json!([]));
     assert_eq!(configuration["cargo"].get("sysroot"), Some(&Value::Null));
     assert_eq!(configuration["cargo"]["buildScripts"]["enable"], false);
     assert_eq!(configuration["procMacro"]["enable"], false);

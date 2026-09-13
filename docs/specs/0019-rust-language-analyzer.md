@@ -49,10 +49,10 @@ Rust exposes `RustDependencyScope`, applied through `with_dependency_scope` when
 each analyzer session. This is an adapter setting; it does not add Cargo concepts to
 the language-independent `AnalysisOptions` contract.
 
-| Stored scope | Standard library | Third-party dependencies | Server configuration |
+| Stored scope | Standard library | Project dependencies | Server configuration |
 | --- | --- | --- | --- |
 | `repository-only` (default) | Disabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot=null`, Cargo offline |
-| `standard-library` | Enabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot="discover"`, Cargo offline |
+| `standard-library` | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot="discover"`, Cargo offline |
 | `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot="discover"`, inherit Cargo network settings |
 
 All modes keep build scripts, procedural macros, checks, diagnostics and cache priming
@@ -60,11 +60,20 @@ disabled, and prevent rustup auto-installation. Broader server context helps ide
 repository targets but does not add external source to the graph. The adapter's
 repository boundary and frontend graph-local target policy remain in force.
 
-The middle mode allows sysroot loading; it does not guarantee complete standard-library
-semantics. The tested rust-analyzer also applies `noDeps` to sysroot metadata, omitting
-connections among standard-library crates. On PR31 it restores one local call relative
-to repository-only mode, while 15 local relationships remain unresolved relative to the
-full-context comparison. See the [settings and parallel-analysis measurements](../research/structure-review-settings-parallel.md).
+The middle mode requires a rust-analyzer version containing
+[upstream fix #22676](https://github.com/rust-lang/rust-analyzer/pull/22676), verified with
+standalone release `2026-09-07` (`0.3.3041`, commit `9074e9b4c6`). This version limits
+`metadataExtraArgs` to project metadata and preserves the sysroot dependency graph.
+The old rustup-bundled server tested here forwards those extra arguments to sysroot
+metadata too; changing the configuration without updating that server is insufficient.
+
+Standard-library implementation dependencies are allowed as part of sysroot; project
+dependencies such as Tauri and reqwest remain excluded. Standard-library loading stays
+offline and uses the installed toolchain and rust-src. Third-party wrappers can still
+prevent resolution of local calls. On PR31 the new configuration restores two additional
+head relationships via `Option` and `From`, while 13 relationships involving
+`tauri::State<T>` remain unresolved relative to full dependency context. See the
+[settings and parallel-analysis measurements](../research/structure-review-settings-parallel.md).
 
 Settings remain version 1. Missing `structureReview.rust.dependencyScope` defaults to
 `repository-only`; invalid values fail validation rather than silently overriding the

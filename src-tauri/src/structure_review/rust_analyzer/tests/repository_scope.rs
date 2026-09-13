@@ -11,7 +11,7 @@ use crate::{
             AnalysisInput, AnalysisOptions, CodeGraph, LanguageAnalyzer, ReferenceTarget,
             SymbolScope,
         },
-        rust_analyzer::RustLanguageAnalyzer,
+        rust_analyzer::{RustDependencyScope, RustLanguageAnalyzer},
     },
 };
 
@@ -99,7 +99,7 @@ fn never_reads_outside_sources_or_escaping_symlinks() {
     }
 }
 
-/// 即使依赖版本不存在且 build.rs 必然失败，仓库声明和直接图内关系仍可离线分析。
+/// 两档均跳过不可获取的项目依赖；标准库档还需恢复 Option 和 From 关联。
 #[test]
 #[ignore = "需要通过 NARRANT_RUST_ANALYZER 提供服务器，单独串行运行"]
 fn real_server_analyzes_repository_without_fetching_or_building_dependencies() {
@@ -133,46 +133,72 @@ mod local;
 pub struct Item;
 pub struct Group { pub items: Vec<Item> }
 pub fn run() -> u32 { local::helper() }
+impl Item { pub fn identity(&self) -> u32 { 42 } }
+impl From<u32> for Item { fn from(_: u32) -> Self { Self } }
+pub fn option_item(value: Option<Item>) -> u32 {
+    match value { Some(item) => item.identity(), None => 0 }
+}
+pub fn constructor() -> fn(u32) -> Item { Item::from }
 "#,
     )
     .unwrap();
     fs::write(root.join("src/local.rs"), "pub fn helper() -> u32 { 42 }").unwrap();
     let executable = std::env::var_os("NARRANT_RUST_ANALYZER").unwrap();
-    let graph = RustLanguageAnalyzer::new(executable)
-        .analyze(&AnalysisInput {
-            repository_root: root.to_owned(),
-            files: vec!["src/lib.rs".into(), "src/local.rs".into()],
-            options: Default::default(),
-        })
-        .unwrap();
-    let mut all = Vec::new();
-    let mut pending = graph.root().contains.clone();
-    while let Some(id) = pending.pop() {
-        let node = graph.node(&id).unwrap();
-        pending.extend(node.data().contains.clone());
-        all.push(node);
-    }
-    let find = |name| {
-        *all.iter()
-            .find(|node| node.data().name.as_deref() == Some(name))
-            .unwrap()
-    };
-    for (source, semantic, target) in [
-        ("run", "code.calls", "helper"),
-        ("items", "code.type_use", "Item"),
+    for scope in [
+        RustDependencyScope::RepositoryOnly,
+        RustDependencyScope::StandardLibrary,
     ] {
-        assert!(
-            find(source).data().references.iter().any(|reference| {
+        let graph = RustLanguageAnalyzer::new(executable.clone())
+            .with_dependency_scope(scope)
+            .analyze(&AnalysisInput {
+                repository_root: root.to_owned(),
+                files: vec!["src/lib.rs".into(), "src/local.rs".into()],
+                options: Default::default(),
+            })
+            .unwrap();
+        let mut all = Vec::new();
+        let mut pending = graph.root().contains.clone();
+        while let Some(id) = pending.pop() {
+            let node = graph.node(&id).unwrap();
+            pending.extend(node.data().contains.clone());
+            all.push(node);
+        }
+        let find = |name| {
+            *all.iter()
+                .find(|node| node.data().name.as_deref() == Some(name))
+                .unwrap()
+        };
+        for (source, semantic, target) in [
+            ("run", "code.calls", "helper"),
+            ("items", "code.type_use", "Item"),
+        ] {
+            assert!(
+                find(source).data().references.iter().any(|reference| {
+                    reference.semantic == semantic
+                        && reference.target == ReferenceTarget::Node(find(target).data().id.clone())
+                }),
+                "{source} -> {target}"
+            );
+        }
+        for (source, semantic, target) in [
+            ("option_item", "code.calls", "identity"),
+            ("constructor", "code.references", "from"),
+        ] {
+            let resolved = find(source).data().references.iter().any(|reference| {
                 reference.semantic == semantic
                     && reference.target == ReferenceTarget::Node(find(target).data().id.clone())
-            }),
-            "{source} -> {target}"
-        );
+            });
+            assert_eq!(
+                resolved,
+                scope == RustDependencyScope::StandardLibrary,
+                "{scope:?}: {source} -> {target}"
+            );
+        }
+        assert!(graph
+            .external_symbols()
+            .values()
+            .all(|symbol| symbol.scope == SymbolScope::Repository));
+        assert!(!root.join("build-script-ran").exists());
+        assert!(!root.join("Cargo.lock").exists());
     }
-    assert!(graph
-        .external_symbols()
-        .values()
-        .all(|symbol| symbol.scope == SymbolScope::Repository));
-    assert!(!root.join("build-script-ran").exists());
-    assert!(!root.join("Cargo.lock").exists());
 }

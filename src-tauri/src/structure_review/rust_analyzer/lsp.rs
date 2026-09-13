@@ -38,7 +38,10 @@ impl RustLsp {
                 "cachePriming": {"enable": false},
                 "diagnostics": {"enable": false},
                 "cargo": {
-                    "noDeps": scope != RustDependencyScope::AllDependencies,
+                    "noDeps": scope == RustDependencyScope::RepositoryOnly,
+                    // 只向项目 metadata 传 --no-deps，保留标准库内部依赖。
+                    // 需要包含 rust-analyzer #22676 修复的服务器版本。
+                    "metadataExtraArgs": if scope == RustDependencyScope::StandardLibrary { vec!["--no-deps"] } else { vec![] },
                     "sysroot": if scope == RustDependencyScope::RepositoryOnly { None } else { Some("discover") },
                     "buildScripts": {"enable": false}
                 },

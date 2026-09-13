@@ -25,7 +25,7 @@ pub enum RustDependencyScope {
     /// 只加载仓库项目，跳过标准库和第三方依赖。
     #[default]
     RepositoryOnly,
-    /// 允许加载标准库，同时跳过第三方依赖元数据。
+    /// 允许加载标准库及其内部依赖，同时跳过项目依赖元数据。
     StandardLibrary,
     /// 允许加载标准库和项目依赖。
     AllDependencies,
