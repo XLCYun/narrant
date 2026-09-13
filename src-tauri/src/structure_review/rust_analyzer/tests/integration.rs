@@ -29,10 +29,10 @@ fn analyzer() -> RustLanguageAnalyzer {
     RustLanguageAnalyzer::new(executable)
 }
 
-/// 复现 PR31 的真实测试文件：通配导入不妨碍识别内置测试，自定义属性宏和辅助函数保留。
+/// 复现 PR31 的真实测试文件：#[test] 按写法统一排除，未标注的辅助函数保留。
 #[test]
 #[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
-fn real_server_excludes_builtin_tests_with_glob_imports() {
+fn real_server_excludes_test_attributes_with_glob_imports() {
     let source = "pub mod github_discovery { pub fn discover_pull_requests() {} }\nmod custom;\n";
     let directory = repository(source);
     let manifest = directory.path().join("Cargo.toml");
@@ -62,13 +62,14 @@ fn real_server_excludes_builtin_tests_with_glob_imports() {
     };
     let filtered = analyze(false);
     let retained = nodes(&filtered);
-    let known_tests = [
+    let test_functions = [
         "discovers_all_remotes_deduplicates_repositories_and_paginates_metadata_only",
         "rejects_code_content_endpoints_by_only_listing_pull_requests",
         "reports_offline_discovery_per_repository_without_losing_groups",
         "uses_authenticated_metadata_access_and_keeps_permission_failures_local",
+        "custom",
     ];
-    for name in known_tests {
+    for name in test_functions {
         assert!(
             !retained
                 .values()
@@ -76,18 +77,16 @@ fn real_server_excludes_builtin_tests_with_glob_imports() {
             "默认关闭时仍生成测试节点: {name}"
         );
     }
-    for name in ["repository_with_remotes", "custom"] {
-        assert!(
-            retained
-                .values()
-                .any(|node| node.category() == CodeCategory::Callable
-                    && node.data().name.as_deref() == Some(name)),
-            "不应排除: {name}"
-        );
-    }
+    assert!(
+        retained
+            .values()
+            .any(|node| node.category() == CodeCategory::Callable
+                && node.data().name.as_deref() == Some("repository_with_remotes")),
+        "不应排除无属性的辅助函数"
+    );
     let included = analyze(true);
     let complete = nodes(&included);
-    for name in known_tests {
+    for name in test_functions {
         assert!(
             complete
                 .values()

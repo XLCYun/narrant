@@ -187,9 +187,10 @@ late results for the old scope cannot replace the new one. Retry preserves the c
 option. A new Snapshot starts with the default scope, and cached results from a
 different option are never reused. The existing head checkout is still reused.
 
-The first Rust policy excludes built-in test declarations and proven test-only cfg
-scopes, including module inheritance; it does not classify tests from filenames or
-Cargo targets. See the [Rust scope](0019-rust-language-analyzer.md#test-code-analysis-scope).
+The Rust policy excludes declarations spelled `#[test]` without checking macro identity,
+and proven test-only cfg scopes, including module inheritance; it does not classify tests
+from filenames or Cargo targets. See the
+[Rust scope](0019-rust-language-analyzer.md#test-code-analysis-scope).
 This is an analysis option, not a display filter. The `structure-tests-only` preview
 starts with an empty diff and restores a modified test when the switch is enabled.
 

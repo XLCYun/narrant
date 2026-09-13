@@ -23,6 +23,7 @@ fn excludes_test_attributes_and_inherited_local_scopes() {
     assert!(!AnalysisOptions::default().include_tests);
     let source = r#"
 #[test] fn checks() { struct Fixture; fn helper() {} }
+#[cfg(any())] #[test] fn disabled_test() {}
 #[cfg(test)] mod checks_module { pub struct Helper; pub fn setup() {} }
 mod inner { #![cfg(test)] pub const VALUE: u8 = 1; }
 struct Live { #[cfg(test)] helper: u8, value: u8 }
@@ -113,30 +114,36 @@ fn includes_tests_only_when_requested() {
     assert_eq!(document(source, true).declarations.len(), 2);
 }
 
-/// 未确认导入属性宏身份时不把自定义 test 当作内置属性；明确 cfg(test) 仍然生效。
+/// 通配、同名或别名导入都不影响 #[test] 的语法规则，开启开关才恢复测试声明。
 #[test]
-fn defers_potentially_shadowed_test_attributes_to_semantic_resolution() {
+fn excludes_test_attributes_regardless_of_imports() {
     for import in [
         "use framework::test;",
         "use framework::check as test;",
         "use framework::*;",
+        "#[macro_use] extern crate framework;",
     ] {
-        let source = format!("{import} #[test] fn live() {{}} #[cfg(test)] fn helper() {{}}");
-        let document = document(&source, false);
-        assert!(document
-            .declarations
-            .iter()
-            .any(|item| item.node.data().name.as_deref() == Some("live")));
-        assert!(!document
-            .declarations
-            .iter()
-            .any(|item| item.node.data().name.as_deref() == Some("helper")));
+        let source = format!(
+            "{import} #[test] fn checks() {{}} #[cfg(test)] fn helper() {{}} fn live() {{}}"
+        );
+        for include_tests in [false, true] {
+            let parsed = document(&source, include_tests);
+            let names: Vec<_> = parsed
+                .declarations
+                .iter()
+                .filter_map(|item| item.node.data().name.as_deref())
+                .collect();
+            assert!(names.contains(&"live"), "{import}");
+            for name in ["checks", "helper"] {
+                assert_eq!(names.contains(&name), include_tests, "{import}: {name}");
+            }
+        }
     }
 }
 
-/// 内层和相邻作用域的导入不遮蔽外层测试属性，只有当前可见的潜在导入需要保留。
+/// 所有层级中的 #[test] 都被排除，导入出现的位置不改变过滤结果。
 #[test]
-fn test_attribute_shadowing_stays_within_its_lexical_scope() {
+fn excludes_test_attributes_in_nested_import_scopes() {
     let source = r#"
 #[test] fn direct_test() {}
 mod checks { use framework::*; #[test] fn maybe_custom() {} }
@@ -150,21 +157,21 @@ fn production() { use framework::test; #[test] fn local_custom() {} }
         .iter()
         .filter_map(|item| item.node.data().name.as_deref())
         .collect();
-    for name in ["direct_test", "nested_test", "body_import"] {
+    for name in [
+        "direct_test",
+        "nested_test",
+        "body_import",
+        "maybe_custom",
+        "local_custom",
+    ] {
         assert!(!names.contains(&name), "{name}: {names:?}");
     }
-    for name in ["maybe_custom", "local_custom"] {
-        assert!(names.contains(&name), "{name}: {names:?}");
-    }
+    assert!(names.contains(&"production"));
 }
 
 /// 构造真实公共图，验证被排除的测试改动不会泄漏为父对象的内容或包含变化。
 fn graph(source: &str, include_tests: bool) -> CodeGraph {
-    graph_from_document(document(source, include_tests))
-}
-
-/// 使用当前提取结果组装公共图，语义补充后的文档也必须满足相同的图约束。
-fn graph_from_document(document: Document) -> CodeGraph {
+    let document = document(source, include_tests);
     CodeGraph::new(
         CodeRoot {
             contains: document
@@ -183,25 +190,18 @@ fn graph_from_document(document: Document) -> CodeGraph {
     .unwrap()
 }
 
-/// 语义排除外层测试时合并已有内层 cfg 范围，新增测试不得留下父对象修改或悬空包含。
+/// 通配导入后的嵌套测试整体排除，不得留下父对象修改或悬空包含。
 #[test]
-fn semantic_confirmation_rebuilds_parent_content_and_containment() {
+fn excluded_tests_under_glob_imports_do_not_change_parent_graph() {
     let before = "use scope::*; fn live() {}";
     let after = "use scope::*; fn live() { #[test] fn checks() { #[cfg(test)] struct Fixture; } }";
-    let mut parsed = document(after, false);
-    let test_range = parsed
-        .declarations
-        .iter()
-        .find(|item| item.node.data().name.as_deref() == Some("checks"))
-        .unwrap()
-        .syntax
-        .text_range();
-    let repository = parsed.path.parent().unwrap().to_path_buf();
-    parsed
-        .exclude_ranges(&repository, vec![test_range])
-        .unwrap();
     assert!(graph(before, false)
-        .diff(&graph_from_document(parsed))
+        .diff(&graph(after, false))
+        .unwrap()
+        .nodes
+        .is_empty());
+    assert!(!graph(before, true)
+        .diff(&graph(after, true))
         .unwrap()
         .nodes
         .is_empty());

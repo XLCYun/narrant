@@ -85,30 +85,6 @@ impl Document {
         })
     }
 
-    /// 补入语义确认的测试范围；合并嵌套范围后重建声明，避免留下子节点或旧的父对象内容。
-    pub fn exclude_ranges(&mut self, repository: &Path, ranges: Vec<TextRange>) -> Result<()> {
-        if ranges.is_empty() {
-            return Ok(());
-        }
-        self.excluded.extend(ranges);
-        self.excluded
-            .sort_unstable_by_key(|range| (range.start(), std::cmp::Reverse(range.end())));
-        let mut merged: Vec<TextRange> = Vec::new();
-        for range in self.excluded.drain(..) {
-            if !merged
-                .last()
-                .is_some_and(|parent| parent.contains_range(range))
-            {
-                merged.push(range);
-            }
-        }
-        self.excluded = merged;
-        let scope = file_scope(repository, &self.path)
-            .ok_or_else(|| failure("测试范围文档失去文件身份"))?;
-        self.declarations = extract(&self.tree, &scope, &self.excluded);
-        Ok(())
-    }
-
     /// 范围按源码顺序且互不重叠，查询不随测试声明数量线性增长。
     pub fn excludes(&self, offset: TextSize) -> bool {
         let index = self
@@ -145,7 +121,7 @@ impl Document {
     }
 }
 
-/// 所有排除范围共用同一套提取规则，语义确认后重新计算身份、包含关系和父对象自身内容。
+/// 跳过测试范围后提取声明，并生成身份、包含关系和父对象自身内容。
 fn extract(tree: &SyntaxNode, scope: &str, excluded: &[TextRange]) -> Vec<Declaration> {
     let mut declarations = Vec::new();
     collect(tree, scope, None, excluded, &mut declarations);

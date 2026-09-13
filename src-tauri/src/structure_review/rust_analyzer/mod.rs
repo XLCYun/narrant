@@ -127,7 +127,7 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
             client.open(&document.uri, &document.source)?;
         }
         client.wait_ready()?;
-        let graph = references::analyze(&mut client, &repository, &mut documents, input.options)?;
+        let graph = references::analyze(&mut client, &repository, &documents, input.options)?;
         for document in &documents {
             if fs::read_to_string(&document.path).map_err(failure)? != document.source {
                 return Err(failure(format!(

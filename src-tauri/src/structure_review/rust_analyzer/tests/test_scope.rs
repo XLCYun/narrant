@@ -226,31 +226,13 @@ fn ignores_call_hierarchy_ranges_inside_excluded_tests() {
         .any(|request| request["method"] == "textDocument/definition"));
 }
 
-/// 通配导入后的属性先确认身份；内置测试不发出体内查询，未知属性及显式开启的测试保留。
+/// 通配导入不触发属性身份查询，关闭开关时也不查询测试体的关系。
 #[test]
-fn resolves_shadowed_test_attributes_before_querying_their_bodies() {
-    let sysroot = tempfile::tempdir().unwrap();
-    let core_file = "lib/rustlib/src/rust/library/core/src/macros/mod.rs";
-    let builtin = "#[rustc_builtin_macro] pub macro test($item:item) {}";
-    fs::create_dir_all(sysroot.path().join(core_file).parent().unwrap()).unwrap();
-    fs::write(sysroot.path().join(core_file), builtin).unwrap();
+fn skips_test_attributes_and_bodies_without_semantic_confirmation() {
     let source = "use scope::*; #[test] fn checks(){ only_test(); } fn live() {}";
-    for (include_tests, resolved) in [(false, true), (false, false), (true, true)] {
-        let mut results = Vec::new();
-        if !include_tests {
-            results.push(if resolved {
-                json!([location(
-                    sysroot.path(),
-                    core_file,
-                    builtin.find("macro test").unwrap() + 6
-                )])
-            } else {
-                json!([])
-            });
-        }
-        results.extend([json!([]), json!([])]); // 父模块和 use 的定义查询。
-        let excluded = !include_tests && resolved;
-        if !excluded {
+    for include_tests in [false, true] {
+        let mut results = vec![json!([]), json!([])]; // 父模块和 use 的定义查询。
+        if include_tests {
             results.extend([json!([]), json!([])]); // 测试体调用及其调用层级。
         }
         results.extend([json!([]), Value::Null]); // 业务函数调用层级和 shutdown。
@@ -263,33 +245,30 @@ fn resolves_shadowed_test_attributes_before_querying_their_bodies() {
                 .contains
                 .iter()
                 .any(|id| graph.node(id).unwrap().data().name.as_deref() == Some("checks")),
-            !excluded
+            include_tests
         );
         let requests = server.requests();
         let definitions: Vec<_> = requests
             .iter()
             .filter(|request| request["method"] == "textDocument/definition")
             .collect();
-        assert_eq!(
-            definitions
-                .iter()
-                .any(|request| request["params"]["position"]["character"]
-                    == source.find("[test]").unwrap() + 1),
-            !include_tests
-        );
+        assert!(!definitions
+            .iter()
+            .any(|request| request["params"]["position"]["character"]
+                == source.find("[test]").unwrap() + 1));
         assert_eq!(
             definitions
                 .iter()
                 .any(|request| request["params"]["position"]["character"]
                     == source.find("only_test").unwrap()),
-            !excluded
+            include_tests
         );
         assert_eq!(
             requests
                 .iter()
                 .filter(|request| request["method"] == "textDocument/prepareCallHierarchy")
                 .count(),
-            if excluded { 1 } else { 2 }
+            if include_tests { 2 } else { 1 }
         );
     }
 }

@@ -45,25 +45,21 @@ recorded separately from the historical spike below.
 ## Test-code analysis scope
 
 The common `AnalysisOptions.include_tests` switch defaults to false. The Rust adapter
-omits ordinary unshadowed built-in `#[test]` declarations, and code whose `cfg` or
-`cfg_attr` attributes prove that it can only exist with `test` enabled. This includes
-inner `#![cfg(test)]` attributes and contained declarations. Conditions are evaluated
+omits declarations annotated with the exact short-name `#[test]` spelling, and code
+whose `cfg` or `cfg_attr` attributes prove that it can only exist with `test` enabled.
+This includes inner `#![cfg(test)]` attributes and contained declarations. Conditions are evaluated
 conservatively with other cfg flags unknown: `all(test, unix)` is test-only, while
 `any(test, feature = "support")` and `cfg_attr(test, test)` do not establish that the
 whole declaration is test-only. Always-disabled general cfg branches are retained.
 
-Potentially shadowed short-name `test` attributes are confirmed through LSP definition
-queries before graph assembly. A target must identify the `test` macro in sysroot source
-with `rustc_builtin_macro`; a custom same-name procedural attribute, unavailable source
-or unresolved definition stays included. The result for each definition is cached, so
-several test functions reuse one source-identity check. Ordinary unshadowed tests and
-explicit test-only cfg scopes do not need these additional attribute queries.
+The attribute spelling defines this policy; wildcard imports, explicit imports, aliases
+named `test` and custom same-name attribute macros do not change the result. The adapter
+does not query attribute definitions, inspect sysroot macro source or track imported
+attribute shadowing. Extraction omits the complete annotated subtree in one pass.
 
-Potential imported-attribute shadowing is tracked per lexical scope; an import inside
-another module or a function body does not suppress recognition of an outer test.
-Attribute aliases with other names, framework macros, Cargo test targets and file/function
-naming conventions do not provide additional classification. Explicit test-only cfg
-still applies when an attribute macro's identity is unknown.
+Attributes with other spellings such as `#[tokio::test]`, aliases with other names,
+Cargo test targets and file/function naming conventions do not provide additional
+classification. Explicit test-only cfg still applies to those declarations.
 
 File-level inheritance follows rust-analyzer's parentModule responses, including
 `#[path]` and parents outside the selected files. Parent responses and file decisions
@@ -602,8 +598,8 @@ and cross-checkout real-server regression also passes. The full Rust suite passe
 ### Test-code scope verification
 
 - The public analysis contract defaults to excluding tests and passes identical
-  options to both comparison sides. Syntax and stdio tests cover built-in tests,
-  outer/inner cfg, cfg_attr, unknown/shared conditions, shadowed attributes, nested
+  options to both comparison sides. Syntax and stdio tests cover short-name test attributes,
+  outer/inner cfg, cfg_attr, unknown/shared conditions, imported attributes, nested
   declarations, cross-file parents and shared production files. They verify omitted
   definition/call-hierarchy queries, discarded test call ranges and test-only edits
   producing no changes in retained parent content or containment.
@@ -627,22 +623,21 @@ reduction to one empty test function reproduces it; removing only the wildcard i
 or using explicit cfg(test) restores exclusion. This failure also reproduces through
 the public analyzer with the original PR source and real rust-analyzer.
 
-The adapter now confirms ambiguous test attributes before graph nodes and relationship
-queries are assembled, including for context documents. Confirmed ranges are merged
-with syntax-based exclusions and declarations are rebuilt with the same normalization
-rules, so no removed child identity or parent content remains. Custom attributes and
-unknown definitions retain the conservative behavior. This does not infer that an
-unannotated helper is test-only merely because it is under tests/ or called by tests.
+The final policy excludes `#[test]` by spelling, including custom same-name macros.
+The adapter no longer scans imports for potential shadowing, queries attribute identity,
+caches sysroot definitions or rebuilds declarations after semantic confirmation. The
+syntax pass omits the complete test subtree and normalizes retained parent content once,
+for selected and context documents alike. An unannotated helper is not considered
+test-only merely because it is under tests/ or called by tests.
 
-- The real-server public-interface regression fails before the fix and passes after
-  it using the original PR31 source. All four built-in tests are excluded by default
-  and restored when requested; the unannotated helper and a same-name custom
-  procedural attribute remain included. The existing real-server cross-file cfg
-  regression also passes.
-- A stdio regression verifies attribute identity queries, omitted test-body queries,
-  unresolved attributes being retained and no extra attribute queries when tests are
-  included. A syntax regression verifies that semantic exclusions merge with nested
-  cfg exclusions without dangling containment or changes to the retained parent.
-- The affected structure-review suite passes 76 tests with 10 real-server tests
-  ignored in the ordinary run. Rustfmt and all-target Clippy with warnings denied
-  pass. The public graph contract and frontend are unchanged by this correction.
+- The real-server public-interface regression uses the original PR31 source. It requires
+  all four built-in tests and a same-name custom procedural attribute to be excluded by
+  default and restored when requested, while the unannotated helper remains included.
+- A stdio regression requires no attribute identity queries for either switch state,
+  and no test-body queries while tests are excluded. Syntax regressions cover wildcard,
+  direct and aliased imports, nested scopes and test-only edits leaving retained parent
+  content and containment unchanged. The public graph contract and frontend are unchanged.
+- The simplified implementation passes 76 affected structure-review tests, with 10
+  real-server tests ignored in ordinary Cargo runs. `check --lib`, rustfmt and
+  all-target Clippy with warnings denied pass. Explicit real-server verification
+  passes for the PR31 fixture, custom same-name attributes and cross-file cfg scope.
