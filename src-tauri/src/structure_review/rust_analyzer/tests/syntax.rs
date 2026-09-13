@@ -5,6 +5,50 @@ use crate::lsp::Position;
 use super::{byte_offset, position, Document};
 use crate::structure_review::code_graph::{ChangeKind, CodeGraph, CodeRoot};
 
+/// 只提取字段的类型结构；泛型嵌套可见，数组长度、常量泛型和宏 token 中的类型不混入。
+#[test]
+fn field_types_walk_nested_types_without_entering_executable_code() {
+    use ra_ap_syntax::{AstNode, Edition, SourceFile, SyntaxKind};
+    let parsed = SourceFile::parse(
+        r#"
+struct Fields {
+    nested: Option<Vec<(one::Item, &'static two::Item, *const Other)>>,
+    array: [Element; { core::mem::size_of::<NotAFieldType>() }],
+    constant: Buffer<Element, { compute::<NotAFieldType>() }>,
+    callback: fn(Input) -> Output,
+    opaque: make_type!(NotAFieldType),
+}
+struct Tuple(Slice, &'static [Element]);
+enum Choice { Named { item: Item }, Tuple(Item) }
+union Storage { item: Item }
+fn run(_: Parameter) -> Returned { let _: Local; }
+type Alias = Underlying;
+const VALUE: ConstantType = make();
+"#,
+        Edition::Edition2024,
+    );
+    assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    let tree = parsed.tree();
+    let mut names = Vec::new();
+    for node in tree.syntax().descendants() {
+        let found = super::field_type_names(&node);
+        if !matches!(
+            node.kind(),
+            SyntaxKind::RECORD_FIELD | SyntaxKind::TUPLE_FIELD
+        ) {
+            assert!(found.is_empty());
+        }
+        names.extend(found.iter().map(|name| name.text().to_string()));
+    }
+    assert_eq!(
+        names,
+        [
+            "Option", "Vec", "Item", "Item", "Other", "Element", "Buffer", "Element", "Input",
+            "Output", "Slice", "Element", "Item", "Item", "Item"
+        ]
+    );
+}
+
 /// 使用同一源码身份构造图，直接验证归一化结果在公共 diff 上的行为。
 fn graph(source: &str) -> CodeGraph {
     let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureClassDiagramFixture, structureHiddenReferencesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 
@@ -29,6 +29,24 @@ function binding(comparison = structureReviewFixture()): StructureBinding {
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(cleanup);
+
+it("shows unchanged field type relations on selection and switches precise field endpoints", async () => {
+  render(<StructureChangesView binding={binding(structureFieldTypesFixture())} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  expect(within(graph).getByRole("button", { name: "DiscoveredPullRequest", exact: true })).toBeInTheDocument();
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  fireEvent.click(within(graph).getByRole("button", { name: /pub pull_requests:.*自身修改/ }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent)).toEqual(["pull-requests → Item · code.type_use"]);
+  fireEvent.click(within(graph).getByRole("button", { name: /pub repository:.*自身修改/ }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual(["repository → LegacyRepository · − code.type_use", "repository → Repository · + code.type_use"]);
+  fireEvent.click(within(graph).getByRole("button", { name: /pub error:.*自身修改/ }));
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  fireEvent.click(within(graph).getByRole("button", { name: /pub parent:.*新增/ }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent)).toEqual(["parent → Group · + code.type_use"]);
+  fireEvent.click(within(graph).getByRole("button", { name: "Graph background" }));
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  expect(screen.getByTestId("rendered-graph")).toBe(graph);
+});
 
 it("offers a controlled analysis switch in ready, empty, loading, failed and cancelled states", async () => {
   const current = binding();

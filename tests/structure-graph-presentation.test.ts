@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { structureCrateRootsFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
+import { structureCrateRootsFixture, structureFieldTypesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
 import { layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, NodeDifference, StructureComparison } from "@/structure-review/types";
 
@@ -20,6 +20,46 @@ function endpoint(layout: StructureLayout, id: string, side: "source" | "target"
 }
 
 describe("Structure Graph presentation Interface", () => {
+  it("prepares unchanged field types as context with exact member-to-type ports", async () => {
+    const comparison = structureFieldTypesFixture();
+    const original = structuredClone(comparison);
+    const layout = await layoutStructureComparison(comparison, options);
+    const source = endpoint(layout, "pull-requests", "source"), target = endpoint(layout, "Item", "target");
+    expect(entry(layout, "Item")?.object.status).toBe("unchanged");
+    expect(entry(layout, "Item")?.object.hiddenChildren).toBe(1);
+    expect(entry(layout, "item-title")).toBeUndefined();
+    expect(entry(layout, "store")).toBeUndefined();
+    expect(layout.edges.some((edge) => edge.sourceHandle === source.handle && edge.targetHandle === target.handle && edge.label === "code.type_use")).toBe(true);
+    expect(layout.edges.some((edge) => String(edge.label).includes("code.calls"))).toBe(false);
+    const replacement = endpoint(layout, "repository", "source");
+    for (const [id, label] of [["Repository", "+ code.type_use"], ["LegacyRepository", "− code.type_use"]]) {
+      expect(layout.edges.some((edge) => edge.sourceHandle === replacement.handle && edge.targetHandle === endpoint(layout, id, "target").handle && edge.label === label)).toBe(true);
+    }
+    const recursive = endpoint(layout, "parent", "source"), group = endpoint(layout, "Group", "target");
+    expect(layout.edges.some((edge) => edge.source === group.card && edge.target === group.card && edge.sourceHandle === recursive.handle && edge.targetHandle === group.handle)).toBe(true);
+    const allRelations = await layoutStructureComparison(comparison, { ...options, showUnchangedReferences: true });
+    expect(entry(allRelations, "store")).toBeDefined();
+    expect(allRelations.edges.some((edge) => edge.label === "code.calls")).toBe(true);
+    expect(comparison).toEqual(original);
+  });
+
+  it("keeps graph-external and unresolved field types out of the layout and details", async () => {
+    const comparison = structureFieldTypesFixture();
+    for (const side of [comparison.before, comparison.after]) {
+      side.nodes.find((node) => node.id === "pull-requests")!.references.push(
+        { semantic: "code.type_use", target: { kind: "external", symbol: "rust:sysroot:Vec" } },
+        { semantic: "code.type_use", target: { kind: "external", symbol: "rust:repo:Unselected" } },
+        { semantic: "code.type_use", target: { kind: "unresolved", name: "Missing" } },
+      );
+    }
+    const layout = await layoutStructureComparison(comparison, { ...options, showAll: true, showUnchangedReferences: true });
+    const source = endpoint(layout, "pull-requests", "source");
+    const outgoing = layout.edges.filter((edge) => edge.sourceHandle === source.handle);
+    expect(outgoing).toHaveLength(1);
+    expect(outgoing[0].targetHandle).toBe(endpoint(layout, "Item", "target").handle);
+    expect(objectDetails(comparison, "pull-requests").after?.references).toEqual([{ semantic: "code.type_use", target: { kind: "node", id: "Item" } }]);
+  });
+
   it("keeps library and integration-test root members in their own crate cards", async () => {
     const comparison = structureCrateRootsFixture();
     const layout = await layoutStructureComparison(comparison, options);

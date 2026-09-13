@@ -219,8 +219,10 @@ directions. Member ports determine identity, so selecting a method in a class ca
 does not reveal the other methods' lines. Calls between members of one card,
 recursive calls and removed relationships follow the same rule.
 
-The existing unchanged-relationship and import controls still restrict which lines
-are available; enabling them without a selection does not reveal lines. Only
+Field type relationships remain eligible even when unchanged, and their graph-local
+targets are prepared as one-hop context before selection. Other relationships retain
+the unchanged-relationship and import controls; enabling those controls without a
+selection does not reveal lines. Only
 endpoints represented in the displayed graph are eligible. External and Unresolved
 targets remain hidden. Contains continues to define the nested layout, while a
 former contains edge, when present, follows the same selection rule as other lines.
@@ -288,10 +290,12 @@ changes still count. If no visible changes remain, the view directs the user to 
 Changes. Original code shown in details is preserved, including any external names
 appearing in that code.
 
-`code.type_use` and `code.reads` are no longer extracted by the Rust adapter. The earlier
-type-use display checkbox is removed. Signatures and source code still include type
-annotations and value reads, and structural relationships such as implementation and
-membership remain available.
+The Rust policy omits `code.reads` and type relationships outside field declarations.
+Fields emit `code.type_use` only for graph-local Type targets, as specified in
+[graph-local field type relationships](#graph-local-field-type-relationships).
+There is no separate type-use display checkbox. Signatures and source code still
+include other type annotations and value reads, and structural relationships such as
+implementation and membership remain available.
 
 Complete backend graphs, graph differences and `externalSymbols` remain intact.
 The frontend does not decode opaque IDs or infer scope from their format. Ownership
@@ -549,3 +553,98 @@ read extraction in the current Rust adapter.
   accessible name and viewport overrides are cleared afterward. The in-app preview
   request remains queued and in-app interaction tooling is unavailable in this session;
   in-app interaction verification remains pending.
+
+## Graph-local field type relationships
+
+Status: accepted. Both scope and unchanged-relationship behavior were confirmed by
+the user before implementation.
+
+### Requested behavior and settled meaning
+
+Selecting the `PullRequestGroup.pull_requests` field whose declaration is
+`Vec<DiscoveredPullRequest>` should show a relationship from that field row to the
+`DiscoveredPullRequest` Type card when the target belongs to the Code Graph. Targets
+outside the Code Graph, including standard-library wrappers, dependencies, unselected
+repository declarations and unresolved symbols, are not displayed. A relationship
+does not expand the selected file scope or create nodes for dependency declarations.
+
+The relationship belongs to the field Code Object, not to its containing Type.
+Containment and the exact member-row ports keep their existing meanings. Membership
+in a Code Graph is distinct from visibility in the current Review View; an unchanged
+or currently omitted Type can still belong to the analyzed graph.
+
+### Extraction and display policy
+
+- Both field Value nodes and Type nodes already exist. Rust collects type positions
+  from record and tuple field declarations, covering struct, enum-variant and union
+  fields. Ordinary function signatures, type-alias definitions, bounds and local/body
+  type uses remain omitted. Existing source-member and target-Type ports render the
+  resulting relationship without changing object identity or containment.
+- Reuse `CodeReference` with semantic `code.type_use` and a
+  `ReferenceTarget::Node`. No shared graph or transport schema extension is needed.
+  Each side emits its own relationships before the existing graph comparison runs.
+  Changing `Vec<A>` to `Vec<B>` removes the relationship to A and adds one to B when
+  those targets belong to their respective graphs.
+- Traverse field-type syntax structurally, including nested generic arguments and
+  inner reference, pointer, array, slice, tuple and function-pointer types. A graph-external
+  wrapper must not stop traversal into its arguments. Do not scan signature strings
+  or infer target identity from display names.
+- Use the existing LSP definition operation to identify actual declarations, then
+  restrict these type targets to retained Type nodes in the selected documents.
+  Reject other target URIs before the existing graph-external document loader, so this
+  new path does not read and parse dependency source merely to discard its edge.
+  LSP lookups still have a cost; graph-local output does not imply graph-local server
+  analysis. Existing call and module-ownership queries keep their current behavior.
+- The alias rule follows the declaration actually named: `field: Alias`
+  points to an in-graph Alias Type, without recursively substituting the alias's
+  underlying type. Lifetimes, const-generic execution expressions and local generic
+  parameters do not become extra Type nodes. Unsupported or unresolved targets do
+  not create guessed edges.
+- Changed references introduce their graph-local targets as visible context. Type
+  references from displayed fields also introduce their unchanged targets during
+  layout preparation. This is a single-hop context expansion; the target's children
+  are not automatically expanded. Clicking an object only filters already-prepared
+  edges and does not alter the layout or viewport. Unchanged type references are
+  eligible regardless of Show unchanged relationships; other relationship kinds
+  retain that option. Initial and cleared selection still show no relationship lines.
+
+### Confirmed decisions
+
+| Decision | Answer | State |
+| --- | --- | --- |
+| Q1: Declaration scope | Fields/properties and their nested type expressions, showing which types each field is associated with in a class diagram. | Accepted |
+| Q2: Unchanged type relationships | Show the selected field's type relationships even when unchanged; prepare target context before selection so objects and viewport stay in place. Other relationship kinds retain existing options. | Accepted |
+
+The reusable `structure-field-types` preview includes an unchanged relationship
+through a changed generic wrapper, a field switching between two Type targets, a
+recursive field and unrelated unchanged call relationships.
+
+### Field type relationship verification
+
+- Structure-review tests pass: 78 passed and 11 opt-in tests ignored. The final Rust
+  adapter rerun passes 37 tests with 10 opt-in tests ignored; rustfmt and all-target
+  Clippy with `-D warnings` pass. Syntax and stdio tests verify nested type positions,
+  omitted non-field queries, exact targets, deduplication, generic parameters and
+  rejection of graph-external source before parsing it.
+- A real rust-analyzer fixture verifies cross-file targets, imported names, two
+  distinct same-name types, declared aliases, nested and function-pointer field types,
+  tuple/enum/union fields, `Self`, test exclusions and graph-external omission. Changing
+  a field target produces one removed and one added relationship; changing only its
+  graph-external generic wrapper preserves the relationship. The existing real-server
+  non-field type/read omission regression also passes, retaining calls, writes,
+  function values and implementation relationships.
+- The full frontend suite passes 42 files and 366 tests with two workers. An initial
+  unrestricted run timed out in the unrelated GitHub authorization test while other
+  checks were running; the complete rerun passes without changing that test.
+  TypeScript, changed-source ESLint and the production frontend build pass. The
+  existing Vite large-chunk warning remains. No installer is built for this follow-up.
+- Independent Chrome completes 24 screenshot, accessibility and geometry captures at
+  1440×1000, 900×800 and 520×800 in light/dark themes. Default and cleared states have
+  no edges or connection markers; field selection shows unchanged, added/removed or
+  recursive type edges from the precise field row. An unrelated field or function
+  hides those edges. Target cards are present before selection; object positions,
+  viewport transform and canvas identity remain unchanged. Long signatures, sidebar
+  scrolling and the display menu remain contained, with no horizontal page overflow
+  or browser exception. Viewport overrides are cleared afterward. The in-app preview
+  request remains queued and no in-app interaction tool is available; in-app
+  interaction verification remains pending.

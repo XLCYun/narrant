@@ -7,7 +7,7 @@ use std::{
 use crate::structure_review::{
     code_graph::{
         AnalysisInput, ChangeKind, CodeCategory, CodeGraph, CodeNode, LanguageAnalyzer, NodeId,
-        ReferenceTarget, SymbolScope,
+        ReferenceTarget, SetChange, SymbolScope,
     },
     rust_analyzer::RustLanguageAnalyzer,
 };
@@ -372,10 +372,141 @@ pub fn parameter() { let invoke = |f: fn() -> u32| f(); invoke(store::helper); }
     save("closures-after", &new);
 }
 
-/// 省略类型使用和读取关系，同时保留调用、写入、函数值、实现归属及源码 diff。
+/// 真实语义区分别名、同名类型和泛型参数，字段换类型直接形成关系集合 diff。
 #[test]
 #[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
-fn real_server_omits_type_uses_and_reads() {
+fn real_server_resolves_graph_local_field_types() {
+    let source = r#"
+mod outside;
+mod types;
+mod other { pub struct Item; }
+use types::Item as Imported;
+type Alias = types::Item;
+#[cfg(test)] struct TestOnly;
+struct Group {
+    items: Vec<Imported>,
+    alias: Option<Alias>,
+    compound: (types::Item, &'static other::Item, [types::Item; 2]),
+    callback: fn(types::Item) -> other::Item,
+    hidden: outside::Hidden,
+    recursive: Option<Box<Self>>,
+    #[cfg(test)] omitted: TestOnly,
+}
+struct Shadow<Imported> { generic: Imported }
+struct Tuple(types::Item);
+enum Choice { Named { named: types::Item }, Tuple(other::Item) }
+union Storage { stored: std::mem::ManuallyDrop<types::Item> }
+"#;
+    let before = repository(source);
+    let after = repository(
+        &source
+            .replace("items: Vec<Imported>", "items: Vec<other::Item>")
+            .replace("alias: Option<Alias>", "alias: Vec<Alias>"),
+    );
+    let analyze = |directory: &Path| {
+        fs::write(directory.join("src/types.rs"), "pub struct Item;").unwrap();
+        fs::write(directory.join("src/outside.rs"), "pub struct Hidden;").unwrap();
+        analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: directory.to_path_buf(),
+                files: vec!["src/lib.rs".into(), "src/types.rs".into()],
+                options: Default::default(),
+            })
+            .unwrap()
+    };
+    let old = analyze(before.path());
+    let new = analyze(after.path());
+    let all = nodes(&old);
+    let find = |name: &str| {
+        *all.values()
+            .find(|node| node.data().name.as_deref() == Some(name))
+            .unwrap()
+    };
+    let child = |parent: &str| old.node(&find(parent).data().contains[0]).unwrap();
+    let item = child("types").data().id.clone();
+    let other = child("other").data().id.clone();
+    let targets = |node: &CodeNode| {
+        let mut targets = node
+            .data()
+            .references
+            .iter()
+            .filter(|reference| reference.semantic == "code.type_use")
+            .map(|reference| match &reference.target {
+                ReferenceTarget::Node(id) => {
+                    assert_eq!(old.node(id).unwrap().category(), CodeCategory::Type);
+                    id.clone()
+                }
+                target => panic!("字段类型不应生成图外目标: {target:?}"),
+            })
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets
+    };
+    assert_ne!(item, other);
+    assert_eq!(targets(find("items")), std::slice::from_ref(&item));
+    assert_eq!(targets(find("alias")), [find("Alias").data().id.clone()]);
+    let mut compound = vec![item.clone(), other.clone()];
+    compound.sort();
+    assert_eq!(targets(find("compound")), compound);
+    assert_eq!(targets(find("callback")), compound);
+    assert_eq!(
+        targets(find("recursive")),
+        [find("Group").data().id.clone()]
+    );
+    assert!(targets(find("hidden")).is_empty());
+    assert!(targets(find("generic")).is_empty());
+    assert!(
+        targets(find("Alias")).is_empty(),
+        "不展开别名定义中的类型关系"
+    );
+    assert_eq!(targets(find("named")), std::slice::from_ref(&item));
+    assert_eq!(targets(find("stored")), std::slice::from_ref(&item));
+    let tuple = all
+        .values()
+        .find(|node| {
+            node.category() == CodeCategory::Type && node.data().name.as_deref() == Some("Tuple")
+        })
+        .unwrap();
+    assert_eq!(
+        targets(old.node(&tuple.data().contains[0]).unwrap()),
+        std::slice::from_ref(&item)
+    );
+    assert!(!all.values().any(|node| matches!(
+        node.data().name.as_deref(),
+        Some("TestOnly" | "omitted" | "Hidden")
+    )));
+    for node in all.values() {
+        if !targets(node).is_empty() {
+            assert_eq!(node.category(), CodeCategory::Value);
+        }
+    }
+    let diff = old.diff(&new).unwrap();
+    let changed = diff
+        .nodes
+        .iter()
+        .find(|node| node.id == find("items").data().id)
+        .unwrap();
+    assert_eq!(changed.content, Some(ChangeKind::Modified));
+    assert_eq!(changed.references.len(), 2);
+    assert!(changed.references.iter().any(|change| matches!(change, SetChange::Removed(reference)
+        if reference.semantic == "code.type_use" && reference.target == ReferenceTarget::Node(item.clone()))));
+    assert!(changed.references.iter().any(|change| matches!(change, SetChange::Added(reference)
+        if reference.semantic == "code.type_use" && reference.target == ReferenceTarget::Node(other.clone()))));
+    let wrapper = diff
+        .nodes
+        .iter()
+        .find(|node| node.id == find("alias").data().id)
+        .unwrap();
+    assert_eq!(wrapper.content, Some(ChangeKind::Modified));
+    assert!(wrapper.references.is_empty());
+    save("field-types-before", &old);
+    save("field-types-after", &new);
+}
+
+/// 省略非字段类型和读取关系，同时保留调用、写入、函数值、实现归属及源码 diff。
+#[test]
+#[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
+fn real_server_omits_non_field_type_uses_and_reads() {
     let source = r#"
 mod store;
 trait Run {}

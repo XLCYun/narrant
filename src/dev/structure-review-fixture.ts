@@ -1,5 +1,45 @@
 import type { CodeNode, CodeReference, StructureComparison } from "@/structure-review/types";
 
+/** 字段类型预览覆盖未变化关系、类型替换和递归字段，目标类型在点击前已参与布局。 */
+export function structureFieldTypesFixture(): StructureComparison {
+  const typeUse = (id: string): CodeReference => ({ semantic: "code.type_use", target: { kind: "node", id } });
+  /** 使用稳定对象身份，让包装类型变化与字段关联变化分别进入 diff。 */
+  const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode> = {}): CodeNode => ({
+    id, category, language: "rust", nativeKind: category === "container" ? "module" : category === "type" ? "struct" : category === "value" ? "field" : "fn",
+    name: id, signature: null, code: null, contains: [], references: [], extensions: {}, ...extra,
+  });
+  const common = [
+    node("github-discovery", "container", { name: "github_discovery", contains: ["Group", "Item", "Repository", "LegacyRepository", "refresh", "store"] }),
+    node("Item", "type", { name: "DiscoveredPullRequest", signature: "pub struct DiscoveredPullRequest", contains: ["item-title"] }),
+    node("item-title", "value", { name: "title", signature: "pub title: String" }),
+    node("Repository", "type", { name: "GitHubRepository", signature: "pub struct GitHubRepository" }),
+    node("LegacyRepository", "type", { name: "LegacyRepository", signature: "pub struct LegacyRepository" }),
+    node("store", "callable", { name: "store", signature: "fn store()" }),
+  ];
+  const fields = (after: boolean) => [
+    node("Group", "type", { name: "PullRequestGroup", signature: "pub struct PullRequestGroup", contains: ["pull-requests", "repository", "error", ...(after ? ["parent"] : [])] }),
+    node("pull-requests", "value", { name: "pull_requests", signature: `pub pull_requests: ${after ? "Option<Vec<DiscoveredPullRequest>>" : "Vec<DiscoveredPullRequest>"}`, references: [typeUse("Item")] }),
+    node("repository", "value", { name: "repository", signature: `pub repository: ${after ? "GitHubRepository" : "LegacyRepository"}`, references: [typeUse(after ? "Repository" : "LegacyRepository")] }),
+    node("error", "value", { name: "error", signature: `pub error: ${after ? "Option<String>" : "String"}` }),
+    node("refresh", "callable", { name: "refresh", signature: "fn refresh()", code: after ? "{ store(); log(); }" : "{ store(); }", references: [{ semantic: "code.calls", target: { kind: "node", id: "store" } }] }),
+    ...(after ? [node("parent", "value", { name: "parent", signature: "pub parent: Option<Box<Self>>", references: [typeUse("Group")] })] : []),
+  ];
+  return {
+    ...structureReviewFixture(),
+    before: { root: ["github-discovery"], externalSymbols: {}, nodes: [...common, ...fields(false)] },
+    after: { root: ["github-discovery"], externalSymbols: {}, nodes: [...common, ...fields(true)] },
+    coverage: [{ path: "src/github/discovery.rs", oldPath: null, before: "analyzed", after: "analyzed" }],
+    diff: { nodes: [
+      { id: "Group", content: null, contains: [{ kind: "added", value: "parent" }], references: [] },
+      { id: "pull-requests", content: "modified", contains: [], references: [] },
+      { id: "repository", content: "modified", contains: [], references: [{ kind: "removed", value: typeUse("LegacyRepository") }, { kind: "added", value: typeUse("Repository") }] },
+      { id: "error", content: "modified", contains: [], references: [] },
+      { id: "parent", content: "added", contains: [], references: [{ kind: "added", value: typeUse("Group") }] },
+      { id: "refresh", content: "modified", contains: [], references: [] },
+    ] },
+  };
+}
+
 /** 为预览提供开关前后的两种分析结果；测试节点由结果提供，不在真实展示层过滤。 */
 export function structureTestCodeFixture(comparison: StructureComparison, includeTests: boolean): StructureComparison {
   if (!includeTests || !comparison.coverage.some((file) => file.before === "analyzed" || file.after === "analyzed")) return comparison;

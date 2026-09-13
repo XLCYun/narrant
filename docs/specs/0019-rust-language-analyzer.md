@@ -200,11 +200,21 @@ boundary, including named items declared inside a closure.
 
 ### Relationship extraction scope
 
-The Rust adapter no longer emits `code.type_use` or `code.reads`. It skips definition
-queries for type annotations, bounds, record literal/pattern type names and read-only
-fields. Types and data declarations remain Code Objects, and their signatures and own
-code are still compared. Reading a different value can change an owner's code without
-producing a separate read edge.
+The Rust adapter emits `code.type_use` only from record or tuple fields to Type nodes
+already retained in the same Code Graph. This includes struct, enum-variant and union
+fields and nested generic, reference, pointer, array, slice, tuple and function-pointer
+types. LSP definitions establish identity; graph-external wrappers do not stop traversal
+into their generic arguments. Other target URIs are rejected before reading or parsing
+graph-external source. Generic parameters, unresolved results, excluded test nodes and
+non-Type declarations produce no type edge. A named type alias remains the target;
+its underlying definition is not recursively substituted.
+
+It still skips type queries for ordinary callable signatures, type-alias definitions,
+generic bounds, local type annotations and record literal/pattern type names. Executable
+constant expressions and opaque macro tokens within a field type are not traversed
+for type relationships. `code.reads` remains omitted. Types and data declarations remain
+Code Objects, and their signatures and own code are still compared. Reading a different
+value can change an owner's code without producing a separate read edge.
 
 Calls, imports, writes, macro use and structural relationships (`code.applies_to`,
 `code.implements`, `code.member_of`) remain. Compound assignments emit a write edge
@@ -213,7 +223,7 @@ distinguish function values from data/type values: function-value references rem
 `code.references`, while confirmed data/type targets are omitted rather than relabeled.
 Unresolved general references retain their existing uncertainty.
 
-Skipping those source queries reduces LSP round trips and target-description work;
+Skipping the other source queries reduces LSP round trips and target-description work;
 rust-analyzer still loads the workspace and performs the semantic analysis needed for
 the retained queries. No fixed end-to-end speedup is guaranteed.
 

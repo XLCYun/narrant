@@ -7,6 +7,7 @@ use std::{
 
 use ra_ap_syntax::{
     ast, AstNode, Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange, TextSize,
+    WalkEvent,
 };
 
 use super::{failure, Result};
@@ -463,6 +464,36 @@ pub(super) fn type_name(node: &SyntaxNode) -> Option<SyntaxNode> {
         return child(node, SyntaxKind::PATH).and_then(|path| path_name(&path));
     }
     node.children().find_map(|child| type_name(&child))
+}
+
+/// 只收集字段声明类型中的路径，包括泛型实参；常量表达式、宏内容和其他声明不参与。
+pub(super) fn field_type_names(node: &SyntaxNode) -> Vec<SyntaxNode> {
+    let ty = match node.kind() {
+        SyntaxKind::RECORD_FIELD => {
+            ast::RecordField::cast(node.clone()).and_then(|field| field.ty())
+        }
+        SyntaxKind::TUPLE_FIELD => ast::TupleField::cast(node.clone()).and_then(|field| field.ty()),
+        _ => None,
+    };
+    let Some(ty) = ty else { return Vec::new() };
+    let mut names = Vec::new();
+    let mut walk = ty.syntax().preorder();
+    while let Some(event) = walk.next() {
+        let WalkEvent::Enter(node) = event else {
+            continue;
+        };
+        if ast::Expr::can_cast(node.kind())
+            || ast::Item::can_cast(node.kind())
+            || node.kind() == SyntaxKind::MACRO_TYPE
+        {
+            walk.skip_subtree();
+        } else if node.kind() == SyntaxKind::PATH_TYPE {
+            if let Some(name) = child(&node, SyntaxKind::PATH).and_then(|path| path_name(&path)) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// 将 UTF-8 语法位置转换成协商后的 LSP UTF-16 位置。

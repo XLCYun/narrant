@@ -75,7 +75,8 @@ _Avoid_: Entire subtree source, full-file content
 
 **Code Graph**:
 A representation of **Code Objects** and their relationships within a selected file
-scope at one fixed side of a **Change Comparison**.
+scope at one fixed side of a **Change Comparison**. Membership is independent of
+which objects a **Review View** currently displays.
 _Avoid_: Text diff, syntax tree
 
 **Code Object Kind**:

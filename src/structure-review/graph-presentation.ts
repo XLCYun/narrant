@@ -127,9 +127,11 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     include(child);
     if (implementations.has(child)) for (const member of children.get(child) ?? []) include(member);
   }
-  if (options.showUnchangedReferences) for (const id of [...visible]) {
+  // 字段类型作为一跳上下文提前参与布局，点击成员只切换连线，不改变卡片位置。
+  for (const id of [...visible]) {
     for (const reference of [...(before.get(id)?.references ?? []), ...(after.get(id)?.references ?? [])]) {
-      if (isReferenceVisible(reference, options) && reference.target.kind === "node") include(reference.target.id);
+      if ((reference.semantic === "code.type_use" || options.showUnchangedReferences)
+        && isReferenceVisible(reference, options) && reference.target.kind === "node") include(reference.target.id);
     }
   }
   const visualIds = new Map([...objects.keys()].sort().map((id, index) => [id, `object-${index}`]));
@@ -244,7 +246,8 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     const references = new Map([...(before.get(id)?.references ?? []), ...(after.get(id)?.references ?? [])].map((reference) => [referenceKey(reference), reference]));
     for (const [key, reference] of references) {
       const change = changes.get(key);
-      if ((!change && !options.showUnchangedReferences) || !isReferenceVisible(reference, options) || reference.target.kind !== "node") continue;
+      if ((!change && reference.semantic !== "code.type_use" && !options.showUnchangedReferences)
+        || !isReferenceVisible(reference, options) || reference.target.kind !== "node") continue;
       const target = attachments.get(reference.target.id);
       if (target) addEdge(id, target, reference.semantic, change);
     }

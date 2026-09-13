@@ -119,6 +119,18 @@ pub(super) fn analyze(
             }
         }
         for declaration in &document.declarations {
+            for name in syntax::field_type_names(&declaration.syntax) {
+                for target in resolver.definition(&document.uri, &name, "code.type_use")? {
+                    if resolver.includes_reference("code.type_use", &target) {
+                        add(
+                            &mut nodes,
+                            &declaration.node.data().id,
+                            "code.type_use",
+                            target,
+                        );
+                    }
+                }
+            }
             if let Some(implementation) = ast::Impl::cast(declaration.syntax.clone()) {
                 if let Some(name) = implementation
                     .self_ty()
@@ -365,8 +377,12 @@ impl Resolver<'_> {
         }
     }
 
-    /// 路径表达式仍可能引用函数值；已确认的类型和数据值直接省略，不改名为普通引用。
+    /// 字段类型只连向图内 Type；表达式中的类型和数据值不改名为普通引用。
     fn includes_reference(&self, semantic: &str, target: &ReferenceTarget) -> bool {
+        if semantic == "code.type_use" {
+            return matches!(target, ReferenceTarget::Node(id)
+                if self.selected.contains(id) && self.categories.get(id) == Some(&CodeCategory::Type));
+        }
         if semantic != "code.references" {
             return true;
         }
@@ -536,6 +552,11 @@ impl Resolver<'_> {
             .and_then(|path| path.canonicalize().ok())
             .and_then(|path| file_uri(&path).ok())
             .unwrap_or_else(|| uri.to_owned());
+        // 字段类型不需要图外身份信息；在读取或解析图外源码之前就停止。
+        if semantic == "code.type_use" && !self.documents.iter().any(|document| document.uri == uri)
+        {
+            return Ok(Vec::new());
+        }
         if !self.load(&uri)? {
             return Ok(vec![unknown(observed)]);
         }
@@ -557,7 +578,14 @@ impl Resolver<'_> {
             if semantic == "code.writes" && category != CodeCategory::Value {
                 return Ok(Vec::new());
             }
+            if semantic == "code.type_use" && category != CodeCategory::Type {
+                return Ok(Vec::new());
+            }
             return Ok(vec![self.reference(declaration.node.data().id.clone())]);
+        }
+        // 类型参数等位置不是 Type 声明，不能回退到外层对象或生成未知目标。
+        if semantic == "code.type_use" {
+            return Ok(Vec::new());
         }
         // 已确认的闭包没有独立图目标；不制造 Unresolved 节点，也不回指其外层对象。
         let token = document.tree.token_at_offset(offset).right_biased();
@@ -669,7 +697,7 @@ fn add(
     }
 }
 
-/// 只查询调用、导入、写入、函数值候选和宏使用；类型位置与只读字段无需 LSP 查询。
+/// 查询调用、导入、写入、函数值候选和宏使用；字段类型由声明遍历处理，其他类型位置省略。
 fn reference_site(node: &SyntaxNode) -> Option<(&'static str, SyntaxNode)> {
     use SyntaxKind::*;
     match node.kind() {
