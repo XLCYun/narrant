@@ -12,7 +12,7 @@ import type { StructureBinding, StructureComparison } from "@/structure-review/t
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
 
-const ObjectActions = createContext<{ selectedId?: string; expand(id: string): void; open(id: string): void }>({ expand: () => {}, open: () => {} });
+const ObjectActions = createContext<{ selectedId?: string; connectedPorts: ReadonlySet<string>; expand(id: string): void; open(id: string): void }>({ connectedPorts: new Set(), expand: () => {}, open: () => {} });
 const statusClasses: Record<ObjectStatus, string> = {
   added: "structure-added", removed: "structure-removed", modified: "structure-modified",
   relations: "structure-relations", unchanged: "structure-unchanged",
@@ -53,7 +53,7 @@ function CodeObjectNode({ data }: NodeProps<ObjectNode>) {
           onClick={(event) => { event.stopPropagation(); actions.expand(row.objectId!); }}>+{row.hiddenChildren}</Button>}
       </div>)}
     {data.ports.map((port) => <Handle key={port.id} id={port.id} type={port.side} position={port.side === "source" ? Position.Right : Position.Left}
-      style={{ top: port.y, opacity: port.connected ? 1 : 0 }} isConnectable={false} />)}
+      style={{ top: port.y, opacity: actions.connectedPorts.has(port.id) ? 1 : 0 }} isConnectable={false} />)}
   </div>;
 }
 const nodeTypes = { codeObject: CodeObjectNode };
@@ -93,6 +93,14 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
+  const selectedId = selection?.kind === "object" ? selection.id : undefined;
+  // 按原对象端口筛选双向关系；同一类卡片中的其他成员不会一并展开连线。
+  const visibleEdges = useMemo(() => {
+    if (!layout || selectedId === undefined) return [];
+    const ports = new Set(layout.nodes.flatMap((node) => node.data.ports.filter((port) => port.objectId === selectedId).map((port) => port.id)));
+    return layout.edges.filter((edge) => ports.has(edge.sourceHandle ?? "") || ports.has(edge.targetHandle ?? ""));
+  }, [layout, selectedId]);
+  const connectedPorts = useMemo(() => new Set(visibleEdges.flatMap((edge) => [edge.sourceHandle, edge.targetHandle]).filter((id): id is string => typeof id === "string")), [visibleEdges]);
   const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, expanded }), [expanded, showAll, showUnchangedReferences, showImports]);
   useEffect(() => {
     let current = true;
@@ -141,11 +149,12 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
             {layoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{layoutError}</p>
               <Button variant="outline" onClick={() => setExpanded(new Set(expanded))}>{t("retryLayout")}</Button>
-            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId: selection?.kind === "object" ? selection.id : undefined, expand: (id) => setExpanded((current) => new Set([...current, id])), open: (id) => setSelection({ kind: "object", id }) }}>
-              <ReactFlow<ObjectNode, StructureEdge> key={layoutVersion} nodes={layout.nodes} edges={layout.edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, connectedPorts, expand: (id) => setExpanded((current) => new Set([...current, id])), open: (id) => setSelection({ kind: "object", id }) }}>
+              <ReactFlow<ObjectNode, StructureEdge> key={layoutVersion} nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                 colorMode={dark ? "dark" : "light"} fitView fitViewOptions={{ padding: 0.16, maxZoom: 1 }} minZoom={0.08} maxZoom={2}
                 nodesDraggable={false} nodesConnectable={false} nodesFocusable={false} edgesReconnectable={false} deleteKeyCode={null}
                 onNodeClick={(_, node) => { if (node.data.objectId) setSelection({ kind: "object", id: node.data.objectId }); }}
+                onPaneClick={() => setSelection(undefined)}
                 ariaLabelConfig={{ "controls.zoomIn.ariaLabel": t("zoomIn"), "controls.zoomOut.ariaLabel": t("zoomOut"), "controls.fitView.ariaLabel": t("fitView") }}>
                 <Background gap={20} size={1} />
                 <Controls showInteractive={false} />
@@ -158,7 +167,7 @@ function ComparisonView({ comparison, dark }: { comparison: StructureComparison;
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-2 text-[11px] text-muted-foreground" aria-label={t("legend")}>
             {(["added", "removed", "modified", "relations", "unchanged"] as const).map((status) => <span key={status} className={cn("structure-legend", statusClasses[status])}><span aria-hidden className="structure-dot" />{t(`status.${status}`)}</span>)}
-            <span className="ml-auto">{t("relationLegend")}</span>
+            <span className="ml-auto">{t(selectedId === undefined ? "selectRelations" : "relationLegend")}</span>
           </div>
         </div>
       </ResizablePanel>

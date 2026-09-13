@@ -16,7 +16,7 @@ export type ObjectRow = {
   hiddenChildren: number;
 };
 /** 每个对象拥有独立端口，即使多个对象被收进同一张类卡片。 */
-export type ObjectPort = { id: string; objectId?: string; side: "source" | "target"; y: number; connected?: boolean };
+export type ObjectPort = { id: string; objectId?: string; side: "source" | "target"; y: number };
 /** React Flow 所需的展示数据；代码对象与变化详情仍引用原始比较。 */
 export type ObjectData = Record<string, unknown> & {
   objectId?: string;
@@ -256,8 +256,6 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     }
   }
   const cardChildren = new Map<string, string[]>();
-  const connectedPorts = new Set(edges.flatMap((edge) => [edge.sourceHandle, edge.targetHandle]));
-  for (const content of data.values()) for (const port of content.ports) port.connected = connectedPorts.has(port.id);
   for (const [child, parent] of cardParents) cardChildren.set(parent, [...(cardChildren.get(parent) ?? []), child]);
   /** ELK 只排列卡片；固定成员端口保证方法与属性仍可逐行连线。 */
   const elkCard = (id: string): ElkNode => {

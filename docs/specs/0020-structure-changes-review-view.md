@@ -194,6 +194,26 @@ details at the top. File coverage uses the same sidebar, so graph interactions s
 available without dismissing a modal. A new Snapshot clears the previous selection.
 The existing object/reference display filters apply to sidebar details as well.
 
+### Show relationships for the selected object
+
+The graph initially hides all relationship lines and their connection markers.
+Selecting an object reveals only incident lines to that exact Code Object, in both
+directions. Member ports determine identity, so selecting a method in a class card
+does not reveal the other methods' lines. Calls between members of one card,
+recursive calls and removed relationships follow the same rule.
+
+The existing unchanged-relationship and import controls still restrict which lines
+are available; enabling them without a selection does not reveal lines. Only
+endpoints represented in the displayed graph are eligible. External and Unresolved
+targets remain hidden. Contains continues to define the nested layout, while a
+former contains edge, when present, follows the same selection rule as other lines.
+
+Clicking blank canvas clears selection and hides lines again. Showing coverage or
+switching Snapshots also leaves no object-specific lines visible. Selecting objects
+changes only line/marker visibility and sidebar content: it does not rerun analysis,
+rearrange objects or reset the viewport. Candidate routes remain in the layout so
+revealing a relationship is immediate and does not move its endpoints.
+
 ### Compact class-diagram presentation
 
 The user requested class-diagram-style cards after finding the individual object
@@ -468,4 +488,23 @@ read extraction in the current Rust adapter.
   hidden-only empty state and the English menu pass. There are no modal remnants,
   horizontal overflow, hidden targets or browser exceptions. Viewport overrides are
   cleared afterward. The in-app request remains queued; in-app interaction
+  verification is pending.
+
+### Selected-object relationship follow-up verification
+
+- The full frontend suite passes: 42 files, 358 tests. View checks cover no initial
+  lines, incoming/outgoing and removed relationships, exact member identity within
+  one class card, recursive calls, coverage/blank-canvas clearing, retained sidebar
+  behavior and stable canvas lifetime.
+- TypeScript, repository ESLint (excluding ignored local tools/caches) and the
+  production frontend build pass. The existing large-chunk warning remains. This
+  change does not modify Rust analysis or rebuild the installer.
+- Independent Chrome completes 20 screenshot/accessibility/geometry captures at
+  1440×1000, 900×800 and 520×800 with light/dark themes. Default/cleared graphs have
+  no relationship lines or connection markers; selected functions and methods show
+  only their eligible incident lines, even inside the same class card. All display
+  controls remain subject to selection, and object positions and viewport transforms
+  stay unchanged while selecting. English controls, sidebar content and hidden-target
+  filtering pass without horizontal overflow or browser exceptions. Viewport overrides
+  are cleared afterward. The in-app request remains queued; its interaction
   verification is pending.

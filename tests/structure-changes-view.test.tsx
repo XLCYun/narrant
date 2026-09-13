@@ -3,15 +3,20 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureHiddenReferencesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
-import type { ObjectData, ObjectNode } from "@/structure-review/graph-presentation";
+import { structureClassDiagramFixture, structureHiddenReferencesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
+import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 
 // jsdom 没有画布尺寸；保留真实布局和节点交互，只替换 React Flow 的浏览器绘制层。
 vi.mock("@xyflow/react", async (importOriginal) => ({
   ...await importOriginal<typeof import("@xyflow/react")>(),
-  ReactFlow: ({ nodes, nodeTypes, children }: { nodes: ObjectNode[]; nodeTypes: { codeObject: ComponentType<{ data: ObjectData }> }; children: ReactNode }) =>
-    <div data-testid="rendered-graph">{nodes.map((node) => <nodeTypes.codeObject key={node.id} data={node.data} />)}{children}</div>,
+  ReactFlow: ({ nodes, edges, nodeTypes, children, onPaneClick }: { nodes: ObjectNode[]; edges: StructureEdge[]; nodeTypes: { codeObject: ComponentType<{ data: ObjectData }> }; children: ReactNode; onPaneClick(): void }) => {
+    const ports = new Map(nodes.flatMap((node) => node.data.ports.map((port) => [port.id, port.objectId] as const)));
+    return <div data-testid="rendered-graph">{nodes.map((node) => <nodeTypes.codeObject key={node.id} data={node.data} />)}{children}
+      {edges.map((edge) => <div key={edge.id} data-testid="visible-relation">{ports.get(edge.sourceHandle!)} → {ports.get(edge.targetHandle!)} · {edge.label}</div>)}
+      <button onClick={onPaneClick}>Graph background</button>
+    </div>;
+  },
   Handle: () => null,
   Background: () => null,
   Controls: () => null,
@@ -31,6 +36,7 @@ it("keeps details beside the graph and switches exact objects without remounting
   expect(within(sidebar).getByText("选择图中的对象，在此查看详情。")).toBeInTheDocument();
   expect(screen.getByRole("separator", { name: "调整结构详情宽度" })).toBeInTheDocument();
   const graph = await screen.findByTestId("rendered-graph");
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
   const added = within(graph).getByRole("button", { name: /fn prepare_snapshot.*新增/ });
   fireEvent.click(added);
   expect(within(sidebar).getByRole("heading", { name: "prepare_snapshot" })).toBeInTheDocument();
@@ -38,6 +44,7 @@ it("keeps details beside the graph and switches exact objects without remounting
   expect(added).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual(["new → save · + code.calls", "run → new · + code.calls"]);
 
   const removed = within(graph).getByRole("button", { name: /fn load_legacy_state.*删除/ });
   fireEvent.click(removed);
@@ -45,10 +52,12 @@ it("keeps details beside the graph and switches exact objects without remounting
   expect(added).toHaveAttribute("aria-pressed", "false");
   expect(removed).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent)).toEqual(["run → old · − code.calls"]);
 
   fireEvent.click(within(graph).getByRole("button", { name: "Review", exact: true }));
   expect(within(sidebar).getByRole("heading", { name: "Review", exact: true })).toBeInTheDocument();
   expect(removed).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
 });
 
 it("shows coverage in the same sidebar and keeps filtered references out of object details", async () => {
@@ -63,6 +72,7 @@ it("shows coverage in the same sidebar and keeps filtered references out of obje
   expect(within(sidebar).getByText("src/review.rs")).toBeInTheDocument();
   expect(within(sidebar).getByText("src/structure-changes-view.tsx")).toBeInTheDocument();
   expect(within(graph).getByRole("button", { name: /fn prepare_snapshot.*新增/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   fireEvent.click(within(graph).getByRole("button", { name: /pub async fn run_review.*自身修改/ }));
   expect(within(sidebar).getByRole("heading", { name: "run_review" })).toBeInTheDocument();
@@ -83,4 +93,25 @@ it("clears selection for a new Snapshot and retains the sidebar for an empty vis
   await waitFor(() => expect(screen.getByText("没有可显示的结构变化")).toBeInTheDocument());
   expect(screen.getByRole("separator", { name: "调整结构详情宽度" })).toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("isolates member ports within a shared class card and hides relationships when selection is cleared", async () => {
+  const comparison = structureClassDiagramFixture();
+  const recursive = { semantic: "code.calls", target: { kind: "node" as const, id: "dense-method-0" } };
+  comparison.after.nodes.find((node) => node.id === "dense-method-0")!.references.push(recursive);
+  comparison.diff.nodes.find((node) => node.id === "dense-method-0")!.references.push({ kind: "added", value: recursive });
+  render(<StructureChangesView binding={binding(comparison)} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  fireEvent.click(within(graph).getByRole("button", { name: /pub fn open\(/ }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "dense-method-0 → dense-method-0 · + code.calls", "dense-method-0 → dense-method-1 · + code.calls",
+  ]);
+  fireEvent.click(within(graph).getByRole("button", { name: /pub fn close\(/ }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent)).toEqual(["dense-method-0 → dense-method-1 · + code.calls"]);
+  fireEvent.click(within(graph).getByRole("button", { name: "Graph background" }));
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  expect(within(screen.getByRole("complementary", { name: "结构详情" })).getByText("选择图中的对象，在此查看详情。")).toBeInTheDocument();
+  expect(within(graph).getByRole("button", { name: /pub fn close\(/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByTestId("rendered-graph")).toBe(graph);
 });
