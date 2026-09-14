@@ -30,6 +30,13 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
 ra_ap_syntax = "=0.0.349"
+oxc_allocator = "=0.150.0"
+oxc_ast = "=0.150.0"
+oxc_ast_visit = "=0.150.0"
+oxc_parser = "=0.150.0"
+oxc_span = "=0.150.0"
+oxc_codegen = "=0.150.0"
+oxc_semantic = "=0.150.0"
 futures-util = "0.3"
 flate2 = "1"
 minisign-verify = "0.2"

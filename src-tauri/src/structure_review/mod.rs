@@ -2,6 +2,7 @@
 
 pub mod code_graph;
 pub mod rust_analyzer;
+pub mod typescript_analyzer;
 
 mod application;
 pub(crate) use application::{StructureComparison, StructureReview, StructureReviewError};
