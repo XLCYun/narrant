@@ -1,9 +1,13 @@
 //! TypeScript / JavaScript 适配器：语法文档与后续语义查询共享稳定接口。
 
 mod identity;
+pub(crate) mod lsp;
+pub(crate) mod project;
+mod runtime;
 pub(crate) mod syntax;
 mod test_code;
 pub(crate) mod text;
+pub(crate) mod tools;
 
 use super::code_graph::AnalysisError;
 

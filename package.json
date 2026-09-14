@@ -8,6 +8,7 @@
     "node": ">=22.13 <26"
   },
   "scripts": {
+    "setup:typescript-analyzer": "node scripts/setup-typescript-analyzer.mjs",
     "generate:file-icons": "node scripts/generate-file-type-icons.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
     "predev": "pnpm generate:file-icons",
