@@ -1,5 +1,5 @@
 ---
-status: implementation
+status: accepted
 date: 2026-09-15
 ---
 
@@ -172,3 +172,36 @@ before completion; rerun only affected tests after review fixes unless shared co
 change. Run frontend tests, type checking, lint and production build. Use the in-app
 browser and Preview Harness for UI changes, including wide/narrow/long-content states.
 Do not manually trigger quality-gate.
+
+## Implementation status and verification
+
+The application implementation was completed and accepted on 2026-09-15. Production
+adapter fixtures on macOS exercise the fixed TLS 6.0.0 and tsserver 6.0.3 services,
+including modern NodeNext and Bundler projects, JS/JSX, Node ESM/CJS wrappers, Promise,
+native JSDoc, project references, workspaces, missing business dependencies, cancellation
+and process cleanup. The TS 5-style fixture uses CommonJS, legacy Node module resolution,
+baseUrl and paths under the fixed TS 6 engine. It retains a reliable local call, leaves a
+conflicting import Unresolved and reports the native deprecation note. This is representative
+configuration evidence, not execution with a TS 5 engine or a blanket TS 5/6 compatibility
+claim.
+
+Final verification used Node 24.18.0 and the repository Cargo lock wrapper. The all-targets
+Rust suite passed 650 tests with 45 opt-in tests ignored; doc tests completed successfully
+with no examples. Relevant real-service tests were then run separately against that final
+test binary: the Rust Review lifecycle fixture passed with four before nodes, four after nodes
+and six changes, and the TS/JS lifecycle-to-DTO fixture passed with a real cross-language call,
+original source, diff, TS2307 notes, coverage and workspace cleanup. The final all-targets
+Clippy check passed with warnings denied, and rustfmt check passed.
+
+The frontend suite passed 381 tests in 43 files. Type checking and ESLint passed, and the
+production build completed with the existing non-fatal warning for chunks larger than 500 kB.
+Real rendering checks at 1440×900 and the supported 900×600 minimum covered TS source,
+TS-to-JS calls, JSX component relationships, duplicate declaration cards, the test toggle,
+separate before/after notes and popup bounds without page-level horizontal overflow.
+The setup-script suite passed 166 tests without failures or skips.
+
+The research documents remain historical experiments; the acceptance above comes from the
+production adapter and application paths. Native service execution was verified on macOS.
+Windows shared-LSP production code and tests were cross-type-checked, but Windows and Linux
+were not executed natively. Packaged distribution of the fixed tools remains deferred, and
+the repository and temporary-view checks do not provide an OS-level sandbox.
