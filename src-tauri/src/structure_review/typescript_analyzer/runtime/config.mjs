@@ -67,8 +67,11 @@ export function prepareConfigurations(context, ts, sources) {
     for (const key of pathOptions) if (options[key] !== undefined) options[key] = rewrite(options[key], base);
     for (const key of listPathOptions) if (options[key] !== undefined) options[key] = options[key].map(value => rewrite(value, base));
     if (options.paths) {
-      const pathsBase = options.baseUrl ?? base;
-      for (const [key, values] of Object.entries(options.paths)) options.paths[key] = values.map(value => rewrite(value, pathsBase));
+      // 相对 paths 的基准取决于最终继承的 baseUrl；不能在当前配置层提前绑定。
+      for (const [key, values] of Object.entries(options.paths)) options.paths[key] = values.map(value => {
+        if (typeof value !== 'string') throw new Error('paths 映射必须为字符串');
+        return path.isAbsolute(value) ? rewrite(value, base) : value;
+      });
     }
     for (const key of ['files', 'include', 'exclude']) if (config[key] !== undefined) config[key] = config[key].map(value => rewrite(value, base));
     if (config.extends !== undefined) {
@@ -109,6 +112,17 @@ export function prepareConfigurations(context, ts, sources) {
     const errors = [];
     const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: error => errors.push(error) });
     if (!parsed || errors.length) throw new Error(`无法确定项目上下文：${original}`);
+    // 继承全部完成后才验证相对映射，pathsBasePath 保留无 baseUrl 时的声明配置目录。
+    const effectiveBase = parsed.options.baseUrl ?? parsed.options.pathsBasePath ?? path.dirname(config);
+    for (const values of Object.values(parsed.options.paths ?? {})) {
+      for (const value of values) {
+        const candidate = path.resolve(effectiveBase, value);
+        if (!within(context.view, candidate)) throw new Error(`有效 paths 映射越界：${candidate}`);
+        let ancestor = candidate;
+        while (!fs.existsSync(ancestor) && ancestor !== context.view) ancestor = path.dirname(ancestor);
+        if (!within(context.view, fs.realpathSync(ancestor))) throw new Error(`有效 paths 符号链接越界：${candidate}`);
+      }
+    }
     for (const error of parsed.errors) context.note(original, `TS${error.code}: ${ts.flattenDiagnosticMessageText(error.messageText, '\n')}`);
     for (const file of parsed.fileNames) {
       if (!within(context.view, file)) throw new Error(`配置成员越界：${file}`);

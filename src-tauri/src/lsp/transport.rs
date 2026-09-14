@@ -11,6 +11,10 @@ use serde_json::Value;
 
 use super::{failure, CancellationCheck, Result};
 
+#[cfg(windows)]
+#[path = "windows_process.rs"]
+mod windows_process;
+
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
@@ -18,15 +22,20 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 type Outgoing = (Vec<u8>, mpsc::Sender<Result<()>>);
 
 /// 回收服务器及其启动的构建进程，覆盖初始化失败等提前返回路径。
-struct ServerProcess(Child, bool);
+struct ServerProcess {
+    child: Child,
+    reaped: bool,
+    #[cfg(windows)]
+    job: windows_process::WindowsJob,
+}
 
 impl ServerProcess {
     /// 正常退出给服务器短暂时间处理 exit；最终仍由守卫检查并清空进程组。
     fn finish(&mut self) -> Result<()> {
         #[cfg(unix)]
-        let members = group_members(self.0.id() as i32);
+        let members = group_members(self.child.id() as i32);
         let deadline = Instant::now() + Duration::from_millis(300);
-        while self.0.try_wait().map_err(failure)?.is_none() && Instant::now() < deadline {
+        while self.child.try_wait().map_err(failure)?.is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         #[cfg(unix)]
@@ -41,12 +50,12 @@ impl ServerProcess {
 
     /// 直接子进程退出不代表后代已退出，等待整组消失后才允许释放项目目录。
     fn reap(&mut self) -> Result<()> {
-        if self.1 {
+        if self.reaped {
             return Ok(());
         }
         #[cfg(unix)]
         {
-            self.reap_members(group_members(self.0.id() as i32))
+            self.reap_members(group_members(self.child.id() as i32))
         }
         #[cfg(not(unix))]
         {
@@ -55,36 +64,27 @@ impl ServerProcess {
     }
 
     /// 保存退出前的后代 PID；macOS 的僵尸进程可能已离开进程组但尚未被系统回收。
-    fn reap_members(&mut self, members: Vec<i32>) -> Result<()> {
-        if self.1 {
+    fn reap_members(&mut self, _members: Vec<i32>) -> Result<()> {
+        if self.reaped {
             return Ok(());
         }
         #[cfg(unix)]
         // SAFETY: 本次会话以 process_group(0) 创建，负 PID 只指向自有进程组。
         unsafe {
-            libc::kill(-(self.0.id() as i32), libc::SIGKILL);
+            libc::kill(-(self.child.id() as i32), libc::SIGKILL);
         }
         #[cfg(windows)]
-        {
-            let mut command = Command::new("taskkill");
-            command
-                .args(["/PID", &self.0.id().to_string(), "/T", "/F"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            crate::child_process::configure_std_command(&mut command);
-            let _ = command.status();
-        }
-        let _ = self.0.kill();
-        self.0.wait().map_err(failure)?;
+        self.job.terminate_and_wait().map_err(failure)?;
+        let _ = self.child.kill();
+        self.child.wait().map_err(failure)?;
         #[cfg(unix)]
         {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 // SAFETY: 信号 0 仅检查自有进程组是否仍存在，不发送终止信号。
-                let exists = unsafe { libc::kill(-(self.0.id() as i32), 0) } == 0;
+                let exists = unsafe { libc::kill(-(self.child.id() as i32), 0) } == 0;
                 // SAFETY: 这些 PID 来自关闭前的自有进程组快照，只查询退出状态。
-                let descendants_exist = members
+                let descendants_exist = _members
                     .iter()
                     .any(|pid| unsafe { libc::kill(*pid, 0) } == 0);
                 if !exists && !descendants_exist {
@@ -96,7 +96,7 @@ impl ServerProcess {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        self.1 = true;
+        self.reaped = true;
         Ok(())
     }
 }
@@ -133,19 +133,26 @@ impl Transport {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut process = ServerProcess(
-            command
-                .spawn()
-                .map_err(|error| failure(format!("无法启动 LSP 服务器：{error}")))?,
-            false,
-        );
+        #[cfg(windows)]
+        let (child, job) = windows_process::WindowsJob::spawn(&mut command)
+            .map_err(|error| failure(format!("无法建立 Windows LSP Job 所有权：{error}")))?;
+        #[cfg(not(windows))]
+        let child = command
+            .spawn()
+            .map_err(|error| failure(format!("无法启动 LSP 服务器：{error}")))?;
+        let mut process = ServerProcess {
+            child,
+            reaped: false,
+            #[cfg(windows)]
+            job,
+        };
         let mut stdin = process
-            .0
+            .child
             .stdin
             .take()
             .ok_or_else(|| failure("LSP 服务器缺少输入流"))?;
         let stdout = process
-            .0
+            .child
             .stdout
             .take()
             .ok_or_else(|| failure("LSP 服务器缺少输出流"))?;

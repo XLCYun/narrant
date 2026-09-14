@@ -8,8 +8,9 @@
 
 ## 推断配置
 
-现存 tsconfig/jsconfig 的配置语义优先。TS 配置解析给出初始根文件候选，LSP 注册后
-再通过显式 projectInfo 确认包含 imported/reference 源文件的实际项目。只有没有实际
+现存 tsconfig/jsconfig 的配置语义优先。TS 配置解析给出初始根文件候选；
+相对 paths 保留在原配置层，继承完成后按有效 baseUrl/pathsBasePath 校验范围。
+LSP 注册后再通过显式 projectInfo 确认包含 imported/reference 源文件的实际项目。只有没有实际
 配置项目的选中文件才使用下述推断 profile，并生成一条说明。
 
 - Node 上下文判据为 `.cjs`、`.mjs`、`.cts`、`.mts`，或最近 package.json 存在

@@ -665,3 +665,126 @@ fn fixed_service_jsconfig_and_first_party_layout() {
         .any(|target| target.uri.ends_with("/src/target/worker.js")));
     session.shutdown().unwrap();
 }
+
+/// 以固定 TS 配置/模块解析器确认原始侧目标，再要求受控 LSP 返回同一目标。
+fn assert_inherited_alias(files: &[(&str, &str)], expected: &str) {
+    let fixture = fixture(files);
+    let root = fixture.path().canonicalize().unwrap();
+    let tools = TypeScriptToolchain::default();
+    let mut command = tools.command();
+    command.args(["-e", r#"const ts = require(process.argv[1]); const root = process.argv[2];
+const parsed = ts.getParsedCommandLineOfConfigFile(root + '/app/tsconfig.json', {}, {...ts.sys, onUnRecoverableConfigFileDiagnostic: error => { throw new Error(String(error.code)); }});
+const target = ts.resolveModuleName('@impl', root + '/app/main.ts', parsed.options, ts.sys).resolvedModule;
+if (!target) throw new Error('original alias unresolved'); process.stdout.write(target.resolvedFileName);"#])
+        .arg(tools.runtime_root.join("typescript/lib/typescript.js")).arg(&root);
+    let check: CancellationCheck = Arc::new(|| false);
+    let original = crate::structure_review::typescript_analyzer::runtime::run(
+        command,
+        Duration::from_secs(10),
+        &check,
+    )
+    .unwrap();
+    assert_eq!(Path::new(&original), root.join(expected));
+    let mut session = start(&root, &["app/main.ts"]);
+    let file = session.project.files[0].view.clone();
+    let name = session.project.view_root.join("app/tsconfig.json");
+    let source = session.project.source(&file).unwrap();
+    let position = text::position(&source, source.rfind("value").unwrap() as u32).unwrap();
+    let definitions = session.definitions(&file, position, &name).unwrap();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(
+        definitions[0].uri,
+        crate::lsp::file_uri(&root.join(expected)).unwrap()
+    );
+    session.shutdown().unwrap();
+}
+
+/// 子配置的相对 paths 使用继承的 baseUrl，不能错误绑定到子配置目录的竞争文件。
+#[test]
+#[ignore = "需要固定工具"]
+fn fixed_service_inherited_base_url_with_child_paths() {
+    assert_inherited_alias(
+        &[
+            (
+                "base.json",
+                r#"{"compilerOptions":{"baseUrl":"./src","module":"Preserve","moduleResolution":"Bundler","types":[]}}"#,
+            ),
+            (
+                "app/tsconfig.json",
+                r#"{"extends":"../base.json","compilerOptions":{"paths":{"@impl":["impl.ts"]}},"files":["main.ts"]}"#,
+            ),
+            (
+                "app/main.ts",
+                "import { value } from '@impl';\nexport const result = value;",
+            ),
+            (
+                "src/impl.ts",
+                "export const value = 'correct inherited base';",
+            ),
+            (
+                "app/impl.ts",
+                "export const value = 'wrong child directory';",
+            ),
+        ],
+        "src/impl.ts",
+    );
+}
+
+/// 子配置覆盖 baseUrl 时继承的 paths 必须重新按有效 baseUrl 解析。
+#[test]
+#[ignore = "需要固定工具"]
+fn fixed_service_inherited_paths_with_overridden_base_url() {
+    assert_inherited_alias(
+        &[
+            (
+                "base.json",
+                r#"{"compilerOptions":{"paths":{"@impl":["impl.ts"]},"module":"Preserve","moduleResolution":"Bundler","types":[]}}"#,
+            ),
+            (
+                "app/tsconfig.json",
+                r#"{"extends":"../base.json","compilerOptions":{"baseUrl":"../other"},"files":["main.ts"]}"#,
+            ),
+            (
+                "app/main.ts",
+                "import { value } from '@impl';\nexport const result = value;",
+            ),
+            (
+                "other/impl.ts",
+                "export const value = 'correct overridden base';",
+            ),
+            (
+                "impl.ts",
+                "export const value = 'wrong base config directory';",
+            ),
+        ],
+        "other/impl.ts",
+    );
+}
+
+/// 保留相对 paths 后仍按最终继承上下文拒绝越界，不能让新的基准绕过范围验证。
+#[test]
+#[ignore = "需要固定工具"]
+fn fixed_service_inherited_paths_reject_effective_escape() {
+    let fixture = fixture(&[
+        (
+            "config/deep/base.json",
+            r#"{"compilerOptions":{"paths":{"@impl":["../../outside/impl.ts"]}}}"#,
+        ),
+        (
+            "app/tsconfig.json",
+            r#"{"extends":"../config/deep/base.json","compilerOptions":{"baseUrl":".."},"files":["main.ts"]}"#,
+        ),
+        ("app/main.ts", "import { value } from '@impl';\nvalue();"),
+    ]);
+    let root = fixture.path().canonicalize().unwrap();
+    let check: CancellationCheck = Arc::new(|| false);
+    let error = PreparedProject::prepare(
+        &root,
+        &[root.join("app/main.ts")],
+        &TypeScriptToolchain::default(),
+        Duration::from_secs(30),
+        &check,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("有效 paths 映射越界"));
+}
