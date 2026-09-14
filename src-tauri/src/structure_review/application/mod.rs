@@ -3,8 +3,11 @@
 mod projection;
 mod workspace;
 
-use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
 use super::rust_analyzer::RustDependencyScope;
+use super::{
+    analysis::AnalysisReport,
+    code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot},
+};
 use crate::{
     lsp::CancellationCheck,
     operation::OperationContext,
@@ -21,6 +24,11 @@ use tokio_util::sync::CancellationToken;
 
 /// 每次运行注入只读取消观察，生产和测试都经过同一个语言分析调用点。
 pub(crate) type AnalyzeGraph = dyn Fn(&AnalysisInput, CancellationCheck, RustDependencyScope) -> Result<CodeGraph, AnalysisError>
+    + Send
+    + Sync;
+
+/// TypeScript/JavaScript 共用一次语义项目，并把结构化说明留给应用投影。
+pub(crate) type AnalyzeTypeScript = dyn Fn(&AnalysisInput, CancellationCheck) -> Result<AnalysisReport, AnalysisError>
     + Send
     + Sync;
 
@@ -44,12 +52,24 @@ impl StructureReviewError {
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
 pub(crate) struct StructureReview {
     analyze_rust: Arc<AnalyzeGraph>,
+    analyze_typescript: Arc<AnalyzeTypeScript>,
 }
 
 impl StructureReview {
-    /// 接收语言分析依赖；本版覆盖 Rust，后续语言沿用同一图契约。
+    /// 接收固定的 Rust 分析依赖；测试和最小宿主可以保留既有单语言装配。
     pub fn new(analyze_rust: Arc<AnalyzeGraph>) -> Self {
-        Self { analyze_rust }
+        Self {
+            analyze_rust,
+            analyze_typescript: Arc::new(|_, _| {
+                Err(AnalysisError::new("TypeScript 分析器尚未装配"))
+            }),
+        }
+    }
+
+    /// 装配共享的 TypeScript/JavaScript 分析入口；非空语言组才会调用它。
+    pub fn with_typescript(mut self, analyze_typescript: Arc<AnalyzeTypeScript>) -> Self {
+        self.analyze_typescript = analyze_typescript;
+        self
     }
 
     /// 分析固定 Snapshot；真正 worker 持有 head 保护，调用方丢弃 future 也不会提前放行刷新。
@@ -62,14 +82,16 @@ impl StructureReview {
         options: AnalysisOptions,
         dependency_scope: RustDependencyScope,
     ) -> Result<StructureComparison, StructureReviewError> {
-        let analyze = self.analyze_rust.clone();
+        let analyze_rust = self.analyze_rust.clone();
+        let analyze_typescript = self.analyze_typescript.clone();
         let result_review_id = review_id.to_owned();
         let result_snapshot_id = snapshot_id.to_owned();
         lifecycle
             .run_in_workspace(operation, review_id, snapshot_id, move |workspace| {
                 run(
                     workspace,
-                    analyze,
+                    analyze_rust,
+                    analyze_typescript,
                     result_review_id,
                     result_snapshot_id,
                     options,
@@ -95,7 +117,8 @@ impl From<ReviewLifecycleError> for StructureReviewError {
 /// 生命周期执行范围保护目录；两侧 worker 在返回前完成分析与 before 回收。
 fn run(
     workspace: &SnapshotWorkspace,
-    analyze: Arc<AnalyzeGraph>,
+    analyze_rust: Arc<AnalyzeGraph>,
+    analyze_typescript: Arc<AnalyzeTypeScript>,
     review_id: String,
     snapshot_id: String,
     options: AnalysisOptions,
@@ -120,12 +143,14 @@ fn run(
             // 在 checkout 仍存活时捕获分析器 panic，随后显式清理并收集两个错误。
             let result = run_worker(stop, &errors, || {
                 analyze_side(
-                    &analyze,
+                    &analyze_rust,
+                    &analyze_typescript,
                     &workspace.before_path,
                     before_files,
                     options,
                     &cancelled,
                     dependency_scope,
+                    stop,
                 )
             });
             if let Some(checkout) = checkout {
@@ -135,12 +160,14 @@ fn run(
         });
         let after = run_worker(stop, &errors, || {
             analyze_side(
-                &analyze,
+                &analyze_rust,
+                &analyze_typescript,
                 &workspace.head_path,
                 after_files,
                 options,
                 &cancelled,
                 dependency_scope,
+                stop,
             )
         });
         let before = run_worker(stop, &errors, || before.join().map_err(panic_error)).flatten();
@@ -155,15 +182,26 @@ fn run(
     }
     let (before, after) = (before.unwrap(), after.unwrap());
     let diff = before
-        .diff(&after)
+        .graph
+        .diff(&after.graph)
         .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
     Ok(StructureComparison {
         review_id,
         snapshot_id,
         comparison_base: workspace.comparison.comparison_base.clone(),
         head_revision: workspace.comparison.head_revision.clone(),
-        before: Graph::from(&before),
-        after: Graph::from(&after),
+        before: Graph::from(&before.graph),
+        after: Graph::from(&after.graph),
+        before_notes: before
+            .notes
+            .iter()
+            .map(projection::AnalysisNote::from)
+            .collect(),
+        after_notes: after
+            .notes
+            .iter()
+            .map(projection::AnalysisNote::from)
+            .collect(),
         diff: GraphDifference::from(&diff),
         coverage,
     })
@@ -241,56 +279,149 @@ fn panic_error(panic: Box<dyn std::any::Any + Send>) -> StructureReviewError {
 
 /// 当前侧没有文件时直接提供空图，避免启动语言服务器或伪造目录。
 fn analyze_side(
-    analyze: &Arc<AnalyzeGraph>,
+    analyze_rust: &Arc<AnalyzeGraph>,
+    analyze_typescript: &Arc<AnalyzeTypeScript>,
     repository: &std::path::Path,
-    files: Vec<PathBuf>,
+    files: SideFiles,
     options: AnalysisOptions,
     cancelled: &CancellationCheck,
     dependency_scope: RustDependencyScope,
-) -> Result<CodeGraph, StructureReviewError> {
+    stop: &CancellationToken,
+) -> Result<AnalysisReport, StructureReviewError> {
     if cancelled() {
         return Err(StructureReviewError::new("cancelled", "结构分析已停止。"));
     }
     if files.is_empty() {
-        return CodeGraph::new(CodeRoot::default(), Vec::new())
-            .map_err(|error| StructureReviewError::new("analysis-failed", error.message));
+        return empty_report();
     }
-    analyze(
-        &AnalysisInput {
-            repository_root: repository.to_owned(),
-            files,
-            options,
+    let rust_input = (!files.rust.is_empty()).then(|| AnalysisInput {
+        repository_root: repository.to_owned(),
+        files: files.rust,
+        options,
+    });
+    let typescript_input = (!files.typescript.is_empty()).then(|| AnalysisInput {
+        repository_root: repository.to_owned(),
+        files: files.typescript,
+        options,
+    });
+    let errors = Mutex::new(WorkerErrors::default());
+    let (rust, typescript) = std::thread::scope(|threads| {
+        let rust = rust_input.map(|input| {
+            let errors = &errors;
+            threads.spawn(move || {
+                run_worker(stop, errors, || {
+                    analyze_rust(&input, cancelled.clone(), dependency_scope)
+                        .map(|graph| AnalysisReport {
+                            graph,
+                            notes: Vec::new(),
+                        })
+                        .map_err(analysis_error)
+                })
+            })
+        });
+        let typescript = typescript_input.and_then(|input| {
+            run_worker(stop, &errors, || {
+                analyze_typescript(&input, cancelled.clone()).map_err(analysis_error)
+            })
+        });
+        let rust = rust.and_then(|worker| {
+            run_worker(stop, &errors, || worker.join().map_err(panic_error)).flatten()
+        });
+        (rust, typescript)
+    });
+    errors
+        .into_inner()
+        .expect("语言 worker 不在错误锁内执行分析")
+        .finish()?;
+    let mut report = empty_report()?;
+    for next in [rust, typescript].into_iter().flatten() {
+        report.graph = report
+            .graph
+            .merge(next.graph)
+            .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
+        report.notes.extend(next.notes);
+    }
+    report.notes.sort();
+    report.notes.dedup();
+    Ok(report)
+}
+
+/// 将语言分析错误映射到稳定应用类别，并保留适配器提供的原始原因。
+fn analysis_error(error: AnalysisError) -> StructureReviewError {
+    StructureReviewError::new(
+        if error.is_cancelled() {
+            "cancelled"
+        } else {
+            "analysis-failed"
         },
-        cancelled.clone(),
-        dependency_scope,
+        error.message,
     )
-    .map_err(|error| {
-        StructureReviewError::new(
-            if error.is_cancelled() {
-                "cancelled"
-            } else {
-                "analysis-failed"
-            },
-            error.message,
-        )
+}
+
+/// 构造不启动任何语言工具的空报告。
+fn empty_report() -> Result<AnalysisReport, StructureReviewError> {
+    Ok(AnalysisReport {
+        graph: CodeGraph::new(CodeRoot::default(), Vec::new())
+            .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?,
+        notes: Vec::new(),
     })
 }
 
-/// 分侧选择普通 Rust 源文件，并保留所有改动文件的覆盖说明。
-fn scope(workspace: &SnapshotWorkspace) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<FileCoverage>) {
-    let mut before = Vec::new();
-    let mut after = Vec::new();
+/// 一侧的文件按 Rust 和共享 TS/JS 语义项目分组。
+#[derive(Default)]
+struct SideFiles {
+    rust: Vec<PathBuf>,
+    typescript: Vec<PathBuf>,
+}
+
+impl SideFiles {
+    /// 没有支持文件时跳过 checkout 与全部语言工具。
+    fn is_empty(&self) -> bool {
+        self.rust.is_empty() && self.typescript.is_empty()
+    }
+
+    /// 按路径对应的语言组加入输入，未知扩展保持在 coverage 中。
+    fn push(&mut self, language: Option<LanguageGroup>, path: PathBuf) {
+        match language {
+            Some(LanguageGroup::Rust) => self.rust.push(path),
+            Some(LanguageGroup::TypeScript) => self.typescript.push(path),
+            None => {}
+        }
+    }
+
+    /// 为分析器提供稳定且去重的文件次序。
+    fn sort_and_dedup(&mut self) {
+        self.rust.sort();
+        self.rust.dedup();
+        self.typescript.sort();
+        self.typescript.dedup();
+    }
+}
+
+/// 应用层只需要两个明确语言组，不引入通用插件注册表。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LanguageGroup {
+    Rust,
+    TypeScript,
+}
+
+/// 分侧选择支持的源码文件，并保留所有改动文件的覆盖说明。
+fn scope(workspace: &SnapshotWorkspace) -> (SideFiles, SideFiles, Vec<FileCoverage>) {
+    let mut before = SideFiles::default();
+    let mut after = SideFiles::default();
     let mut coverage = Vec::new();
     for change in &workspace.comparison.file_changes {
         let before_path = change.old_path.as_deref().unwrap_or(&change.path);
         let old = coverage_kind(before_path, change.before.as_ref());
         let new = coverage_kind(&change.path, change.after.as_ref());
-        if old == "analyzed" {
-            before.push(before_path.into());
-        }
-        if new == "analyzed" {
-            after.push((&change.path).into());
-        }
+        before.push(
+            language_group(before_path, change.before.as_ref()),
+            before_path.into(),
+        );
+        after.push(
+            language_group(&change.path, change.after.as_ref()),
+            (&change.path).into(),
+        );
         coverage.push(FileCoverage {
             path: change.path.clone(),
             old_path: change.old_path.clone(),
@@ -298,10 +429,8 @@ fn scope(workspace: &SnapshotWorkspace) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<File
             after: new,
         });
     }
-    before.sort();
-    before.dedup();
-    after.sort();
-    after.dedup();
+    before.sort_and_dedup();
+    after.sort_and_dedup();
     (before, after, coverage)
 }
 
@@ -313,14 +442,24 @@ fn coverage_kind(path: &str, reference: Option<&crate::review::FileContentRef>) 
     if !matches!(reference.mode, 0o100644 | 0o100755) {
         return "unsupported-kind";
     }
-    if std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        != Some("rs")
-    {
-        return "unsupported-language";
+    language_group(path, Some(reference)).map_or("unsupported-language", |_| "analyzed")
+}
+
+/// 普通文件按支持扩展路由；测试文件仍进入分析器，由 include_tests 决定是否产出对象。
+fn language_group(
+    path: &str,
+    reference: Option<&crate::review::FileContentRef>,
+) -> Option<LanguageGroup> {
+    if !matches!(reference?.mode, 0o100644 | 0o100755) {
+        return None;
     }
-    "analyzed"
+    match std::path::Path::new(path).extension()?.to_str()? {
+        "rs" => Some(LanguageGroup::Rust),
+        "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => {
+            Some(LanguageGroup::TypeScript)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use crate::structure_review::code_graph::{
-    CodeCategory::*, CodeGraph, CodeNode, CodeReference, CodeRoot, LanguageId, ReferenceTarget,
+    CodeCategory::*, CodeGraph, CodeNode, CodeReference, CodeRoot, ExternalSymbol, LanguageId,
+    ReferenceTarget, SymbolScope,
 };
 
 use super::fixtures::{calls, data, graph, id, node, root};
@@ -228,6 +229,34 @@ fn mixed_languages_and_all_reference_target_states_are_supported() {
         ],
     );
     assert_eq!(graph.node(&typescript.id).unwrap().data(), &typescript);
+}
+
+/// 语言图只能在身份和图外描述完全兼容时合并，合并后仍经过统一端点校验。
+#[test]
+fn merges_language_graphs_and_rejects_identity_or_symbol_collisions() {
+    let rust = graph(&["rust"], vec![node(Callable, "rust", &[])]);
+    let typescript = graph(&["typescript"], vec![node(Callable, "typescript", &[])]);
+    let merged = rust.merge(typescript).unwrap();
+    assert_eq!(merged.root().contains, [id("rust"), id("typescript")]);
+
+    let duplicate = graph(&["same"], vec![node(Callable, "same", &[])]);
+    assert!(duplicate.clone().merge(duplicate).is_err());
+
+    let symbol = |name: &str| {
+        CodeGraph::new(CodeRoot::default(), vec![])
+            .unwrap()
+            .with_external_symbols(
+                [(
+                    "shared".into(),
+                    ExternalSymbol {
+                        name: name.into(),
+                        scope: SymbolScope::Repository,
+                    },
+                )]
+                .into(),
+            )
+    };
+    assert!(symbol("first").merge(symbol("second")).is_err());
 }
 
 /// 深层包含链使用图索引与显式遍历，不依赖递归对象或调用栈深度。

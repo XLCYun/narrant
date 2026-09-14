@@ -74,6 +74,28 @@ impl CodeGraph {
         self.nodes.get(id)
     }
 
+    /// 合并两个已经验证的语言图，并再次校验全局身份、包含关系与图内目标。
+    ///
+    /// 相同图外符号的描述必须一致；节点身份冲突由统一构图入口拒绝，不能静默覆盖。
+    pub fn merge(self, other: Self) -> Result<Self, InvalidGraph> {
+        let mut root = self.root;
+        root.contains.extend(other.root.contains);
+        let mut nodes = self.nodes.into_values().collect::<Vec<_>>();
+        nodes.extend(other.nodes.into_values());
+        let mut external_symbols = self.external_symbols;
+        for (id, symbol) in other.external_symbols {
+            if external_symbols
+                .insert(id.clone(), symbol.clone())
+                .is_some_and(|previous| previous != symbol)
+            {
+                return Err(InvalidGraph {
+                    message: format!("图外符号 {id} 的描述冲突。"),
+                });
+            }
+        }
+        Ok(Self::new(root, nodes)?.with_external_symbols(external_symbols))
+    }
+
     /// 按稳定身份分别比较自身声明、直接包含关系和引用。
     ///
     /// 两侧须使用相同提取和规范化约定；此约定由调用方保证。

@@ -123,6 +123,7 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
   ] };
   const comparison: StructureComparison = {
     reviewId: "structure-preview", snapshotId: "structure-snapshot", comparisonBase: "1111111", headRevision: "2222222", before, after,
+    beforeNotes: [], afterNotes: [],
     diff: { nodes: [
       { id: "review", content: null, contains: [{ kind: "removed", value: "old" }, { kind: "added", value: "new" }, { kind: "removed", value: "use-old" }, { kind: "added", value: "use-new" }], references: [] },
       { id: "use-old", content: "removed", contains: [], references: [] },
@@ -148,6 +149,74 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
       ...comparison.diff.nodes.filter((node) => node.id.startsWith("use-")),
     ] },
   };
+}
+
+/** 混合语言预览覆盖 TS/JS 共享目标、JSX 关系、同名声明、长源码与逐侧说明。 */
+export function structureMixedLanguageFixture(): StructureComparison {
+  const comparison = structureSourceDiffFixture();
+  const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode>): CodeNode => ({
+    id,
+    category,
+    language: "typescript",
+    nativeKind: category === "container" ? "module" : category === "type" ? "interface" : category === "extension" ? "import" : "function",
+    name: id,
+    signature: null,
+    code: null,
+    source: null,
+    contains: [],
+    references: [],
+    extensions: {},
+    ...extra,
+  });
+  const call = (id: string): CodeReference => ({ semantic: "code.calls", target: { kind: "node", id } });
+  const jsx = (id: string): CodeReference => ({ semantic: "jsx.uses_component", target: { kind: "node", id } });
+  for (const side of ["before", "after"] as const) {
+    const graph = comparison[side];
+    graph.root.push("typescript-module", "javascript-helper", "merged-plugin-a", "merged-plugin-b");
+    graph.nodes.push(
+      node("typescript-module", "container", { name: "review-ui", contains: ["typescript-import", "typescript-component", "child-view"] }),
+      node("typescript-import", "extension", { name: null, signature: 'import { formatReview } from "./format-review.js";', source: 'import { formatReview } from "./format-review.js";', references: [{ semantic: "code.imports", target: { kind: "node", id: "javascript-helper" } }] }),
+      node("javascript-helper", "callable", { language: "javascript", name: "formatReview", signature: "export function formatReview(value)", source: "export function formatReview(value) { return String(value); }" }),
+      node("child-view", "callable", { name: "ReviewSummaryCard", signature: "export function ReviewSummaryCard(props: ReviewSummaryProps)", source: "export function ReviewSummaryCard(props: ReviewSummaryProps) { return <strong>{props.title}</strong>; }" }),
+      node("typescript-component", "callable", {
+        name: "ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes",
+        signature: "export function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes()",
+        code: side === "before" ? "{ return <ReviewSummaryCard title={formatReview(review)} />; }" : "{ return <ReviewSummaryCard title={formatReview(review.title)} onOpen={() => openReview(review.id)} />; }",
+        source: side === "before"
+          ? "/** 保留原生 JSDoc 与 JSX 源码。 */\nexport function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes() {\n  return <ReviewSummaryCard title={formatReview(review)} />;\n}"
+          : "/** 保留原生 JSDoc、长属性与 JSX 源码。 */\nexport function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes() {\n  return (\n    <ReviewSummaryCard\n      title={formatReview(review.title)}\n      description=\"这是一段用于验证窄窗口详情面板、源码折行和滚动区域的很长 JSX 属性内容\"\n      onOpen={() => openReview(review.id)}\n    />\n  );\n}",
+        references: [call("javascript-helper"), jsx("child-view")],
+      }),
+      node("merged-plugin-a", "type", { name: "PluginRegistry", signature: "export interface PluginRegistry", source: "export interface PluginRegistry { open(): void; }" }),
+      node("merged-plugin-b", "type", { name: "PluginRegistry", signature: "export interface PluginRegistry", source: "export interface PluginRegistry { close(): void; }" }),
+    );
+  }
+  comparison.beforeNotes = [{
+    code: "typescript.context",
+    message: "变更前使用仓库配置与固定运行时声明进行分析。",
+    file: null,
+    project: "tsconfig.json",
+  }];
+  comparison.afterNotes = [
+    {
+      code: "typescript.context",
+      message: "变更后使用仓库配置与固定运行时声明进行分析。",
+      file: null,
+      project: "tsconfig.json",
+    },
+    {
+      code: "typescript.TS2307",
+      message: "缺少可选业务依赖的声明；已保留能够确认的本地对象与关系，这段较长说明用于验证弹层内容可以自然换行。",
+      file: "src/components/review-workspace-with-a-very-long-file-name.tsx",
+      project: "packages/application/tsconfig.json",
+    },
+  ];
+  comparison.coverage.push(
+    { path: "src/components/review-workspace.tsx", oldPath: null, before: "analyzed", after: "analyzed" },
+    { path: "src/format-review.js", oldPath: null, before: "analyzed", after: "analyzed" },
+  );
+  comparison.diff.nodes.push({ id: "typescript-component", content: "modified", contains: [], references: [] });
+  return comparison;
 }
 
 /** 仅图外或未解析关系发生变化，验证空态及显示全部对象后的未变化标记。 */

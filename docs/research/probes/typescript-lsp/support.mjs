@@ -85,7 +85,8 @@ export class LspProbe {
         if (!pending) continue;
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
-        message.error ? pending.reject(new Error(JSON.stringify(message.error))) : pending.resolve(message.result);
+        if (message.error) pending.reject(new Error(JSON.stringify(message.error)));
+        else pending.resolve(message.result);
       }
     }
   }
@@ -179,7 +180,7 @@ export class LspProbe {
     let exit = await Promise.race([this.closed, new Promise(resolve => { timer = setTimeout(() => resolve(null), 5000); })]);
     clearTimeout(timer);
     if (!exit) {
-      try { process.kill(-this.proc.pid, 'SIGTERM'); } catch {}
+      try { process.kill(-this.proc.pid, 'SIGTERM'); } catch { /* 进程组可能已经自行退出。 */ }
       exit = await this.closed;
     }
     const immediatelyRemaining = groupMembers(this.proc.pid);
@@ -188,7 +189,7 @@ export class LspProbe {
       await new Promise(resolve => setTimeout(resolve, 50));
       remaining = groupMembers(this.proc.pid);
     }
-    if (remaining.length) { try { process.kill(-this.proc.pid, 'SIGTERM'); } catch {} }
+    if (remaining.length) { try { process.kill(-this.proc.pid, 'SIGTERM'); } catch { /* 最终检查会报告残留。 */ } }
     return { shutdown, shutdownError, exit, before, immediatelyRemaining, remaining, stderr: this.stderr };
   }
 }

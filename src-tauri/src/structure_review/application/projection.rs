@@ -1,4 +1,7 @@
-use super::super::code_graph::{self, CodeCategory, CodeGraph, CodeGraphDiff, ReferenceTarget};
+use super::super::{
+    analysis,
+    code_graph::{self, CodeCategory, CodeGraph, CodeGraphDiff, ReferenceTarget},
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -16,6 +19,8 @@ pub(crate) struct StructureComparison {
     pub head_revision: String,
     pub before: Graph,
     pub after: Graph,
+    pub before_notes: Vec<AnalysisNote>,
+    pub after_notes: Vec<AnalysisNote>,
     pub diff: GraphDifference,
     pub coverage: Vec<FileCoverage>,
 }
@@ -28,6 +33,36 @@ pub(crate) struct FileCoverage {
     pub old_path: Option<String>,
     pub before: &'static str,
     pub after: &'static str,
+}
+
+/// WebView 使用的逐侧分析说明；路径保持仓库相对形式且不携带服务端跟踪数据。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnalysisNote {
+    pub code: String,
+    pub message: String,
+    pub file: Option<String>,
+    pub project: Option<String>,
+}
+
+impl From<&analysis::AnalysisNote> for AnalysisNote {
+    /// 只投影结构化公开字段，路径使用跨平台可读的斜杠形式。
+    fn from(note: &analysis::AnalysisNote) -> Self {
+        Self {
+            code: note.code.clone(),
+            message: note.message.clone(),
+            file: note.file.as_deref().map(path_for_transport),
+            project: note.project.as_deref().map(path_for_transport),
+        }
+    }
+}
+
+/// 仓库相对路径按传输约定使用 `/`，避免 Windows 分隔符泄漏到 UI。
+fn path_for_transport(path: &std::path::Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// 已验证代码图的传输投影，父子和引用仍按不透明身份关联。

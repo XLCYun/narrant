@@ -33,10 +33,10 @@ export function StructureDetails({ comparison, selectedId, showImports, dark }: 
         {(details.difference?.contains.length ?? 0) + referenceChanges.length === 0
           ? <p className="text-xs text-muted-foreground">{t("noRelationshipChanges")}</p>
           : <ul className="space-y-2 text-xs">{details.difference?.contains.map((change) => <li key={`${change.kind}-${change.value}`} className="break-words"><span className="font-medium">{t(`status.${change.kind}`)}</span> · contains → {objectName(comparison, change.value)}</li>)}
-            {referenceChanges.map((change, index) => <li key={index} className="break-words"><span className="font-medium">{t(`status.${change.kind}`)}</span> · {referenceLabel(comparison, change.value)}</li>)}
+            {referenceChanges.map((change, index) => <li key={index} className="break-words"><span className="font-medium">{t(`status.${change.kind}`)}</span> · {referenceLabel(comparison, change.value, t("jsxUsesComponent"))}</li>)}
           </ul>}
         <h4 className="mb-2 mt-6 text-sm font-medium">{t("referencesTitle")}</h4>
-        {selectedReferences.length ? <ul className="space-y-2 break-words text-xs text-muted-foreground">{selectedReferences.map((reference, index) => <li key={index}>{referenceLabel(comparison, reference)}</li>)}</ul> : <p className="text-xs text-muted-foreground">{t("noVisibleReferences")}</p>}
+        {selectedReferences.length ? <ul className="space-y-2 break-words text-xs text-muted-foreground">{selectedReferences.map((reference, index) => <li key={index}>{referenceLabel(comparison, reference, t("jsxUsesComponent"))}</li>)}</ul> : <p className="text-xs text-muted-foreground">{t("noVisibleReferences")}</p>}
       </>}
     </div>
   </aside>;
@@ -70,7 +70,8 @@ function objectName(comparison: StructureComparison, id: string): string {
 }
 
 /** 详情只格式化已经通过展示过滤的图内引用。 */
-function referenceLabel(comparison: StructureComparison, reference: CodeReference): string {
+function referenceLabel(comparison: StructureComparison, reference: CodeReference, jsxLabel: string): string {
   const target = reference.target;
-  return target.kind === "node" ? `${reference.semantic} → ${objectName(comparison, target.id)}` : "";
+  const semantic = reference.semantic === "jsx.uses_component" ? jsxLabel : reference.semantic;
+  return target.kind === "node" ? `${semantic} → ${objectName(comparison, target.id)}` : "";
 }

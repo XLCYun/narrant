@@ -6,10 +6,10 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { StructureDetails } from "./structure-details";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { collapseStructureLayout, layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
-import type { StructureBinding, StructureComparison } from "@/structure-review/types";
+import type { AnalysisNote, StructureBinding, StructureComparison } from "@/structure-review/types";
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
 
@@ -98,6 +98,34 @@ function TestCodeSwitch({ binding }: { binding: StructureBinding }) {
   </div>;
 }
 
+/** 将公开分析说明按前后侧放入紧凑弹层，避免诊断占用图与详情的固定空间。 */
+function AnalysisNotes({ comparison }: { comparison: StructureComparison }) {
+  const { t } = useTranslation("structure");
+  const total = comparison.beforeNotes.length + comparison.afterNotes.length;
+  if (total === 0) return null;
+  const context = (note: AnalysisNote) => [note.file, note.project].filter(Boolean).join(" · ");
+  return <DropdownMenu>
+    <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-7 max-w-full text-xs" data-analysis-notes-trigger />}>
+      <span className="truncate">{t("analysisNotes", { count: total })}</span>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="end" className="w-[min(32rem,calc(100vw-2rem))]" data-analysis-notes data-testid="analysis-notes">
+      {(["before", "after"] as const).map((side) => {
+        const notes = side === "before" ? comparison.beforeNotes : comparison.afterNotes;
+        if (notes.length === 0) return null;
+        return <DropdownMenuGroup key={side}>
+          <DropdownMenuLabel className="font-medium text-foreground">{t(side)}</DropdownMenuLabel>
+          <div className="space-y-2 px-3 pb-3">
+            {notes.map((note, index) => <article key={`${note.code}-${note.file ?? ""}-${note.project ?? ""}-${index}`} className="min-w-0 rounded-lg border bg-background/70 p-2.5" role="note">
+              <p className="break-words text-xs leading-5">{note.message}</p>
+              <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">{note.code}{context(note) ? ` · ${context(note)}` : ""}</p>
+            </article>)}
+          </div>
+        </DropdownMenuGroup>;
+      })}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
 /** loading、失败、取消与已证明的空 diff 使用不同状态，避免把分析失败当作无变化。 */
 export default function StructureChangesView({ binding, dark }: { binding?: StructureBinding; dark: boolean }) {
   const { t } = useTranslation(["structure", "common"]);
@@ -161,6 +189,7 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
     : comparison.diff.nodes.length > 0 ? "filtered" : "empty";
   return <div className="structure-view flex min-h-0 flex-1 flex-col" aria-label={t("title")}>
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-2 border-b px-3 py-2">
+      <AnalysisNotes comparison={comparison} />
       <TestCodeSwitch binding={binding} />
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={binding.retry}>{t("reanalyze")}</Button>
       <DropdownMenu>

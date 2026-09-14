@@ -9,6 +9,9 @@ export default tseslint.config(
       "dist/**",
       "node_modules/**",
       ".pnpm-store/**",
+      ".tools/**",
+      ".superpowers/**",
+      ".worktrees/**",
       "src-tauri/**",
       "src-tauri/target/**",
       "components.json",
@@ -16,6 +19,10 @@ export default tseslint.config(
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["scripts/**/*.{js,mjs}", "docs/research/probes/**/*.{js,mjs}"],
+    languageOptions: { globals: globals.node },
+  },
   {
     files: [
       "src/**/*.{ts,tsx,js,mjs}",

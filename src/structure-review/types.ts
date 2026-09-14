@@ -43,6 +43,8 @@ export type NodeDifference = {
 };
 /** 一侧源码进入分析、缺失或不受支持的原因。 */
 export type CoverageKind = "analyzed" | "absent" | "unsupported-kind" | "unsupported-language";
+/** 一侧分析的结构化说明；文件与项目路径均相对于该侧仓库。 */
+export type AnalysisNote = { code: string; message: string; file: string | null; project: string | null };
 
 /** 一次固定 Snapshot 的完整分析结果，与布局和展示筛选相互独立。 */
 export type StructureComparison = ReviewIdentity & {
@@ -50,6 +52,8 @@ export type StructureComparison = ReviewIdentity & {
   headRevision: string;
   before: CodeGraph;
   after: CodeGraph;
+  beforeNotes: AnalysisNote[];
+  afterNotes: AnalysisNote[];
   diff: { nodes: NodeDifference[] };
   coverage: { path: string; oldPath: string | null; before: CoverageKind; after: CoverageKind }[];
 };

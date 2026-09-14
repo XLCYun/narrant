@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureClassDiagramFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
 import * as graphPresentation from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
@@ -168,6 +168,32 @@ it("keeps filtered references out of details when switching objects in the sideb
   expect(sidebar).toHaveTextContent("generated::on_review_opened()");
   expect(within(sidebar).getAllByRole("listitem").every((item) => !item.textContent?.includes("generated::on_review_opened"))).toBe(true);
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
+});
+
+it("keeps per-side notes outside the diff and presents JSX relations and duplicate declarations", async () => {
+  const comparison = structureMixedLanguageFixture();
+  const originalDiff = structuredClone(comparison.diff);
+  render(<StructureChangesView binding={binding(comparison)} dark={false} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "分析说明（3）" }));
+  const notes = await screen.findByTestId("analysis-notes");
+  expect(within(notes).getAllByRole("note")).toHaveLength(3);
+  expect(within(notes).getByText("变更前使用仓库配置与固定运行时声明进行分析。")).toBeInTheDocument();
+  expect(within(notes).getByText(/缺少可选业务依赖的声明/)).toBeInTheDocument();
+  expect(within(notes).getByText(/typescript\.TS2307.*review-workspace-with-a-very-long-file-name\.tsx/)).toBeInTheDocument();
+  expect(comparison.diff).toEqual(originalDiff);
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+  const graph = await screen.findByTestId("rendered-graph");
+  fireEvent.click(within(graph).getByRole("button", { name: /ReviewWorkspaceWithAnExtraordinarilyLongName.*自身修改/ }));
+  const details = screen.getByRole("complementary", { name: "结构详情" });
+  expect(details).toHaveTextContent("code.calls → formatReview");
+  expect(details).toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
+  expect(screen.getByTestId("source-diff")).toHaveAttribute("data-original-language", "typescript");
+
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "显示全部对象" }));
+  await waitFor(() => expect(within(graph).getAllByRole("button", { name: "PluginRegistry", exact: true })).toHaveLength(2));
 });
 
 it("clears selection for a new Snapshot and retains the sidebar for an empty visible diff", async () => {

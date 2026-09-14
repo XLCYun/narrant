@@ -83,7 +83,7 @@ function buildDirectoryTree(fileChanges: FileChangeSummary[]): DirectoryNode {
 function editorLanguage(path: string) {
   const extension = path.split(".").at(-1)?.toLowerCase();
   const languages: Record<string, string> = {
-    js: "javascript", jsx: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", mts: "typescript",
+    js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript", ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
     md: "markdown", json: "json", css: "css", html: "html", rs: "rust",
     py: "python", go: "go", java: "java", yml: "yaml", yaml: "yaml",
     c: "c", cpp: "cpp", h: "cpp", cs: "csharp", sh: "shell",

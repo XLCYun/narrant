@@ -3,7 +3,10 @@ use crate::{
     persistence::ReviewStore,
     repository::verify_repository_location,
     review::{PresentReview, ReviewPresentation},
-    structure_review::code_graph::{CodeNode, CodeNodeData, LanguageId, NodeId},
+    structure_review::{
+        analysis::{AnalysisNote, AnalysisReport},
+        code_graph::{CodeNode, CodeNodeData, CodeReference, LanguageId, NodeId, ReferenceTarget},
+    },
 };
 use std::{
     path::Path,
@@ -99,6 +102,82 @@ path = "lib.rs"
             head,
         }
     }
+
+    /// 建立同时改动 TS 与 JS 的真实 Review，供固定 TLS 生命周期夹具使用。
+    async fn typescript_javascript() -> Self {
+        let data = tempfile::tempdir().unwrap();
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-q"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "test@narrant.invalid"],
+        );
+        git(repository.path(), &["config", "user.name", "Narrant Test"]);
+        std::fs::write(
+            repository.path().join("package.json"),
+            r#"{"name":"structure-review-typescript-fixture","private":true,"type":"module"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repository.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","allowJs":true,"checkJs":true,"strict":true},"include":["*.ts","*.js"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repository.path().join("format-review.js"),
+            "export function formatReview(value) { return String(value); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repository.path().join("main.ts"),
+            "import type { MissingReview } from 'missing-business-package';\nimport { formatReview } from './format-review.js';\nexport function run(review: MissingReview) { return formatReview(review); }\n",
+        )
+        .unwrap();
+        git(repository.path(), &["add", "."]);
+        git(repository.path(), &["commit", "-qm", "common"]);
+        git(repository.path(), &["branch", "base"]);
+        std::fs::write(
+            repository.path().join("format-review.js"),
+            "export function formatReview(value) { return String(value).trim(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repository.path().join("main.ts"),
+            "import type { MissingReview } from 'missing-business-package';\nimport { formatReview } from './format-review.js';\nexport function run(review: MissingReview) { return `${formatReview(review)}!`; }\n",
+        )
+        .unwrap();
+        git(repository.path(), &["add", "."]);
+        git(repository.path(), &["commit", "-qm", "head"]);
+        git(repository.path(), &["branch", "topic"]);
+        git(repository.path(), &["checkout", "-q", "base"]);
+        let store = Arc::new(ReviewStore::open(&data.path().join("store.sqlite3")).unwrap());
+        let entry = store
+            .upsert_repository(&verify_repository_location(repository.path()).unwrap())
+            .unwrap();
+        store.insert_workspace_trust(entry.id).unwrap();
+        let lifecycle = Arc::new(ReviewLifecycle::new(store));
+        let presentation = lifecycle
+            .present(
+                &OperationContext::background(),
+                PresentReview::Branch {
+                    repository_id: entry.id,
+                    base_ref: "refs/heads/base".into(),
+                    head_ref: "refs/heads/topic".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let head = lifecycle
+            .workspace_path(&presentation.review_id, &presentation.snapshot_id)
+            .unwrap();
+        Self {
+            _data: data,
+            repository,
+            lifecycle,
+            presentation,
+            head,
+        }
+    }
 }
 
 /// 使用输出捕获避免测试日志被 Git 的工作区提示淹没。
@@ -148,6 +227,231 @@ fn analyze_files(
         nodes,
     )
     .unwrap())
+}
+
+/// 同一侧把 TS 与 JS 放进一个调用，并与 Rust 图合并；逐侧说明不进入图差异。
+#[test]
+fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets() {
+    let repository = tempfile::tempdir().unwrap();
+    let rust_calls = Arc::new(Mutex::new(Vec::new()));
+    let observed_rust = rust_calls.clone();
+    let analyze_rust: Arc<AnalyzeGraph> = Arc::new(move |input, _, _| {
+        observed_rust.lock().unwrap().push(input.files.clone());
+        Ok(single_node_graph("rust:main", "rust", vec![]))
+    });
+    let typescript_calls = Arc::new(Mutex::new(Vec::new()));
+    let observed_typescript = typescript_calls.clone();
+    let analyze_typescript: Arc<AnalyzeTypeScript> = Arc::new(move |input, _| {
+        observed_typescript
+            .lock()
+            .unwrap()
+            .push(input.files.clone());
+        let helper = code_node("javascript:helper", "javascript", vec![]);
+        let mut entry = code_node("typescript:entry", "typescript", vec![]);
+        entry.references.push(CodeReference {
+            semantic: "code.calls".into(),
+            target: ReferenceTarget::Node(helper.id.clone()),
+        });
+        Ok(AnalysisReport {
+            graph: CodeGraph::new(
+                CodeRoot {
+                    contains: vec![entry.id.clone(), helper.id.clone()],
+                },
+                vec![CodeNode::Callable(entry), CodeNode::Callable(helper)],
+            )
+            .unwrap(),
+            notes: vec![AnalysisNote {
+                code: "typescript.context".into(),
+                message: "受控项目上下文".into(),
+                file: Some("main.ts".into()),
+                project: Some("tsconfig.json".into()),
+            }],
+        })
+    });
+    let not_cancelled: CancellationCheck = Arc::new(|| false);
+    let report = analyze_side(
+        &analyze_rust,
+        &analyze_typescript,
+        repository.path(),
+        SideFiles {
+            rust: vec!["lib.rs".into()],
+            typescript: vec!["main.ts".into(), "helper.js".into()],
+        },
+        AnalysisOptions::default(),
+        &not_cancelled,
+        RustDependencyScope::StandardLibrary,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(*rust_calls.lock().unwrap(), [vec![PathBuf::from("lib.rs")]]);
+    assert_eq!(
+        *typescript_calls.lock().unwrap(),
+        [vec![PathBuf::from("main.ts"), PathBuf::from("helper.js")]]
+    );
+    let entry = report
+        .graph
+        .node(&NodeId("typescript:entry".into()))
+        .unwrap();
+    assert_eq!(
+        entry.data().references[0].target,
+        ReferenceTarget::Node(NodeId("javascript:helper".into()))
+    );
+    assert_eq!(report.notes[0].code, "typescript.context");
+}
+
+/// 空语言组不触发工具，跨语言重复身份在应用合并边界失败。
+#[test]
+fn skips_empty_groups_and_rejects_merge_collisions() {
+    let repository = tempfile::tempdir().unwrap();
+    let unavailable_rust: Arc<AnalyzeGraph> = Arc::new(|_, _, _| panic!("空组不应启动 Rust"));
+    let unavailable_typescript: Arc<AnalyzeTypeScript> =
+        Arc::new(|_, _| panic!("空组不应启动 TypeScript"));
+    let not_cancelled: CancellationCheck = Arc::new(|| false);
+    let empty = analyze_side(
+        &unavailable_rust,
+        &unavailable_typescript,
+        repository.path(),
+        SideFiles::default(),
+        AnalysisOptions::default(),
+        &not_cancelled,
+        RustDependencyScope::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert!(empty.graph.root().contains.is_empty());
+
+    let rust: Arc<AnalyzeGraph> =
+        Arc::new(|_, _, _| Ok(single_node_graph("collision", "rust", vec![])));
+    let typescript: Arc<AnalyzeTypeScript> = Arc::new(|_, _| {
+        Ok(AnalysisReport {
+            graph: single_node_graph("collision", "typescript", vec![]),
+            notes: vec![],
+        })
+    });
+    let error = analyze_side(
+        &rust,
+        &typescript,
+        repository.path(),
+        SideFiles {
+            rust: vec!["lib.rs".into()],
+            typescript: vec!["main.ts".into()],
+        },
+        AnalysisOptions::default(),
+        &not_cancelled,
+        RustDependencyScope::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "analysis-failed");
+    assert!(error.detail.contains("collision"));
+}
+
+/// 一侧语言失败会取消同侧与另一侧的同组工作，并保留真实失败原因。
+#[test]
+fn language_failure_cancels_its_peer_and_preserves_original_cause() {
+    let repository = tempfile::tempdir().unwrap();
+    let stop = CancellationToken::new();
+    let cancellation = stop.clone();
+    let cancelled: CancellationCheck = Arc::new(move || cancellation.is_cancelled());
+    let rust_stopped = Arc::new(AtomicBool::new(false));
+    let observed = rust_stopped.clone();
+    let rust: Arc<AnalyzeGraph> = Arc::new(move |_, cancelled, _| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !cancelled() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "语言 peer 必须收到取消"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        observed.store(true, Ordering::Release);
+        Err(AnalysisError::cancelled("peer cancelled"))
+    });
+    let typescript: Arc<AnalyzeTypeScript> =
+        Arc::new(|_, _| Err(AnalysisError::new("typescript original failure")));
+    let error = analyze_side(
+        &rust,
+        &typescript,
+        repository.path(),
+        SideFiles {
+            rust: vec!["lib.rs".into()],
+            typescript: vec!["main.ts".into()],
+        },
+        AnalysisOptions::default(),
+        &cancelled,
+        RustDependencyScope::default(),
+        &stop,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "analysis-failed");
+    assert_eq!(error.detail, "typescript original failure");
+    assert!(rust_stopped.load(Ordering::Acquire));
+}
+
+/// 支持扩展逐侧路由；声明文件与测试文件仍属于 TS/JS 语义组。
+#[test]
+fn routes_all_supported_extensions_without_excluding_tests_from_coverage() {
+    let regular = crate::review::FileContentRef {
+        object_id: "0".repeat(40),
+        mode: 0o100644,
+    };
+    for path in [
+        "lib.rs",
+        "main.ts",
+        "view.tsx",
+        "helper.js",
+        "legacy.jsx",
+        "module.mts",
+        "module.cts",
+        "module.mjs",
+        "module.cjs",
+        "types.d.ts",
+        "types.d.mts",
+        "types.d.cts",
+        "feature.test.ts",
+        "__tests__/feature.spec.js",
+    ] {
+        assert_eq!(coverage_kind(path, Some(&regular)), "analyzed", "{path}");
+    }
+    assert_eq!(
+        coverage_kind("README.md", Some(&regular)),
+        "unsupported-language"
+    );
+    let symlink = crate::review::FileContentRef {
+        object_id: "1".repeat(40),
+        mode: 0o120000,
+    };
+    assert_eq!(coverage_kind("main.ts", Some(&symlink)), "unsupported-kind");
+    assert_eq!(coverage_kind("main.ts", None), "absent");
+}
+
+/// 构造一个顶层 Callable 图，供应用分组测试组合。
+fn single_node_graph(id: &str, language: &str, references: Vec<CodeReference>) -> CodeGraph {
+    let mut node = code_node(id, language, vec![]);
+    node.references = references;
+    CodeGraph::new(
+        CodeRoot {
+            contains: vec![node.id.clone()],
+        },
+        vec![CodeNode::Callable(node)],
+    )
+    .unwrap()
+}
+
+/// 构造不依赖源码解析的受控代码对象。
+fn code_node(id: &str, language: &str, contains: Vec<NodeId>) -> CodeNodeData {
+    CodeNodeData {
+        id: NodeId(id.into()),
+        language: LanguageId(language.into()),
+        native_kind: "function".into(),
+        name: Some(id.into()),
+        signature: Some(format!("fn {id}()")),
+        code: Some("{}".into()),
+        source: Some(format!("fn {id}() {{}}")),
+        contains,
+        references: vec![],
+        extensions: Default::default(),
+    }
 }
 
 /// 同一比较的两侧接收完全相同的通用选项，显式开启和默认关闭均向下传递。
@@ -593,6 +897,84 @@ async fn real_server_builds_review_structure_comparison() {
         result.after.nodes.len(),
         result.diff.nodes.len()
     );
+}
+
+/// 从真实 Review 生命周期经固定 TS/JS 服务到 DTO，保留本地 Node 目标、原文与逐侧说明。
+#[tokio::test]
+#[ignore = "需要固定 NARRANT_TYPESCRIPT_NODE/NARRANT_TYPESCRIPT_RUNTIME；直接运行测试二进制"]
+async fn real_typescript_javascript_reports_flow_through_review_lifecycle_to_dto() {
+    use crate::structure_review::typescript_analyzer::TypeScriptLanguageAnalyzer;
+    let fixture = Fixture::typescript_javascript().await;
+    let analyzer = TypeScriptLanguageAnalyzer::default();
+    let application = StructureReview::new(Arc::new(|_, _, _| {
+        panic!("TS/JS-only Review 不应启动 rust-analyzer")
+    }))
+    .with_typescript(Arc::new(move |input, cancelled| {
+        analyzer
+            .clone()
+            .with_cancellation(cancelled)
+            .analyze_with_report(input)
+    }));
+    let result = application
+        .analyze(
+            &fixture.lifecycle,
+            &OperationContext::background(),
+            &fixture.presentation.review_id,
+            &fixture.presentation.snapshot_id,
+            AnalysisOptions::default(),
+            RustDependencyScope::default(),
+        )
+        .await
+        .unwrap();
+    let run = result
+        .after
+        .nodes
+        .iter()
+        .find(|node| node.name.as_deref() == Some("run"))
+        .unwrap();
+    let target = run
+        .references
+        .iter()
+        .find(|reference| reference.semantic == "code.calls")
+        .and_then(|reference| match &reference.target {
+            projection::Target::Node { id } => Some(id),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        result
+            .after
+            .nodes
+            .iter()
+            .find(|node| &node.id == target)
+            .and_then(|node| node.name.as_deref()),
+        Some("formatReview")
+    );
+    assert!(run
+        .source
+        .as_deref()
+        .unwrap()
+        .contains("formatReview(review)"));
+    assert_eq!(
+        result
+            .diff
+            .nodes
+            .iter()
+            .find(|change| change.id == run.id)
+            .and_then(|change| change.content),
+        Some("modified")
+    );
+    assert!(result
+        .before_notes
+        .iter()
+        .chain(&result.after_notes)
+        .any(|note| note.code == "typescript.TS2307"));
+    assert!(result
+        .coverage
+        .iter()
+        .all(|file| { file.path == "main.ts" || file.path == "format-review.js" }));
+    assert!(!fixture.head.parent().unwrap().join("before").exists());
+    assert!(fixture.head.exists());
 }
 
 #[path = "parallel.rs"]

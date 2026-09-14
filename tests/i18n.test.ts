@@ -37,4 +37,11 @@ describe("离线国际化边界", () => {
     expect(i18n.t("review:refresh", { lng: "zh-CN" })).toBe("刷新审核");
     expect(i18n.t("common:retry", { lng: "zh-CN" })).toBe("重试");
   });
+
+  it("结构分析文案覆盖 Rust、TypeScript 与 JavaScript 并保留 Rust 设置名称", () => {
+    expect(i18n.t("structure:loading", { lng: "zh-CN" })).toBe("正在分析代码结构");
+    expect(i18n.t("structure:unsupportedDescription", { lng: "zh-CN" })).toContain("Rust、TypeScript 与 JavaScript");
+    expect(i18n.t("structure:dependencyScope", { lng: "zh-CN" })).toBe("Rust 依赖分析范围");
+    expect(i18n.t("structure:jsxUsesComponent", { lng: "en" })).toBe("JSX uses component");
+  });
 });
