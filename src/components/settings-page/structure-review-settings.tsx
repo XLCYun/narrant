@@ -85,7 +85,7 @@ export function StructureReviewSettings({ application }: { application: Applicat
           </span>
         </label>)}
       </RadioGroup>
-      <p role="status" className="mt-4 text-sm text-muted-foreground">{t(saving ? "settingsSaving" : "settingsNextAnalysis")}</p>
+      {saving && <p role="status" className="mt-4 text-sm text-muted-foreground">{t("settingsSaving")}</p>}
     </div>}
   </section>;
 }
