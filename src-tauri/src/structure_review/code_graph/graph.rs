@@ -7,6 +7,21 @@ use super::{diff, validation, CodeGraphDiff, CodeNode, CompareError, InvalidGrap
 pub struct CodeGraph {
     root: CodeRoot,
     nodes: BTreeMap<NodeId, CodeNode>,
+    external_symbols: BTreeMap<String, ExternalSymbol>,
+}
+
+/// 图外已解析符号的描述；身份仍由引用中的 symbol 提供，描述不参与图差异比较。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalSymbol {
+    pub name: String,
+    pub scope: SymbolScope,
+}
+
+/// 以本次分析仓库为范围；标准库和第三方库都属于仓库外依赖。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymbolScope {
+    Repository,
+    Dependency,
 }
 
 /// 图的唯一入口，只关联顶层声明，自身不是源码中的包或模块。
@@ -31,7 +46,22 @@ impl CodeGraph {
             }
         }
         validation::validate(&root, &index)?;
-        Ok(Self { root, nodes: index })
+        Ok(Self {
+            root,
+            nodes: index,
+            external_symbols: BTreeMap::new(),
+        })
+    }
+
+    /// 附加语言分析器确认的图外符号描述，不改变节点范围或关系身份。
+    pub fn with_external_symbols(mut self, symbols: BTreeMap<String, ExternalSymbol>) -> Self {
+        self.external_symbols = symbols;
+        self
+    }
+
+    /// 调用方可据此显示名称和筛选仓库外依赖，无需解读语言实现的 ID 编码。
+    pub fn external_symbols(&self) -> &BTreeMap<String, ExternalSymbol> {
+        &self.external_symbols
     }
 
     /// 从唯一的虚拟根开始遍历。

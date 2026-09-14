@@ -4,6 +4,20 @@ use std::path::PathBuf;
 
 pub(super) const SETTINGS_VERSION: u32 = 1;
 
+/// 按语言保存结构改动的分析偏好；新增语言时添加对应的独立配置。
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub(crate) struct StructureReviewSettings {
+    pub rust: RustAnalysisSettings,
+}
+
+/// Rust 的持久化分析偏好，默认分析仓库项目与标准库，跳过项目依赖。
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub(crate) struct RustAnalysisSettings {
+    pub dependency_scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+}
+
 /// Narrant 的持久化主题偏好。
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -150,6 +164,9 @@ pub(crate) struct ApplicationSettings {
     #[serde(default)]
     pub language: ApplicationLanguage,
     pub babysit: BabysitSettings,
+    /// 旧 settings v1 缺少结构改动配置时，补出各语言默认值。
+    #[serde(default)]
+    pub structure_review: StructureReviewSettings,
 }
 
 impl Default for ApplicationSettings {
@@ -160,6 +177,7 @@ impl Default for ApplicationSettings {
             theme: ThemePreference::System,
             language: ApplicationLanguage::English,
             babysit: BabysitSettings::default(),
+            structure_review: StructureReviewSettings::default(),
         }
     }
 }

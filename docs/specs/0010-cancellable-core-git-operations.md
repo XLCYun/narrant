@@ -55,11 +55,17 @@ CoreGitProcess::execute(invocation, cancellation)
     -> Result<GitOutput, CoreGitFailure>
 ```
 
-`OperationContext` supplies the shared read-only cancellation signal and is passed through
-application operations as their first argument after `self`. `run` owns registration,
-the private cancellation source, and release; callers do not receive start/finish methods
-or cancellation authority. Core Git receives only the signal. `background()` creates a
-root context without an external source, while `without_cancellation()` derives a
+`OperationContext` carries a native `tokio_util::sync::CancellationToken` and is passed
+through application operations as their first argument after `self`. `run` owns
+registration, cancellation by operation ID, and release; callers do not receive
+start/finish methods. Core Git receives the token directly. By convention, ordinary
+downstream code only observes received tokens; operation creators and lifecycle managers
+request cancellation. `clone()` shares a cancellation scope, while `child()` creates a
+context whose token receives parent cancellation without propagating child cancellation
+back to the parent. Production and tests use `new(token)` without source/signal wrappers
+or test-only controllers. Async waits use `cancelled().await` without timer polling.
+`background()` creates a root context without an external source, while
+`without_cancellation()` derives a
 non-observing convergence context from the current call. Cancelling an unknown ID records a
 bounded short-lived early-cancellation entry so an abort racing command dispatch is not
 lost. A second running operation with the same ID fails without affecting the first.

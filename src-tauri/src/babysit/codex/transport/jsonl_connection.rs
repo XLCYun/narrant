@@ -4,11 +4,12 @@
 //! request id、notification 队列以及 endpoint 语义由上层 transport 模块负责。
 
 use super::super::{AppServerCommand, RpcFailure, CODEX_PROCESS_REAP_TIMEOUT};
-use crate::babysit::CancellationSignal;
+
 use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio_util::sync::CancellationToken;
 
 /// 单条 JSONL 线的最大字节数，防止无换行进程输出无限增长。
 const MAX_JSONL_LINE_BYTES: usize = 8 * 1024 * 1024;
@@ -68,7 +69,7 @@ impl JsonlConnection {
     pub(super) async fn read_message(
         &mut self,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<Value, RpcFailure> {
         read_json_line(&mut self.stdout, deadline, cancellation).await
     }
@@ -78,7 +79,7 @@ impl JsonlConnection {
         &mut self,
         value: Value,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<(), RpcFailure> {
         check_io_deadline(deadline, cancellation)?;
         let mut encoded = serde_json::to_vec(&value).map_err(|_| RpcFailure::Protocol)?;
@@ -103,7 +104,7 @@ impl Drop for JsonlConnection {
 async fn read_json_line<R>(
     reader: &mut R,
     deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Value, RpcFailure>
 where
     R: AsyncBufRead + Unpin,
@@ -152,7 +153,7 @@ async fn write_json_line<W>(
     writer: &mut W,
     encoded: &[u8],
     deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(), RpcFailure>
 where
     W: AsyncWrite + Unpin,
@@ -184,9 +185,9 @@ where
 /// 检查一次 I/O 是否仍处于调用方的取消状态与总 deadline 内。
 fn check_io_deadline(
     deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(), RpcFailure> {
-    if cancellation.is_some_and(CancellationSignal::is_cancelled) {
+    if cancellation.is_some_and(CancellationToken::is_cancelled) {
         return Err(RpcFailure::Cancelled);
     }
     if Instant::now() >= deadline {

@@ -1,3 +1,4 @@
+import type { StructureComparison } from "@/structure-review/types";
 import type { GitHubIdentity } from "@/components/github-identity-entry";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type { PullRequestGroup } from "@/lib/review-types";
@@ -17,6 +18,7 @@ import type {
 } from "@/repository/repository-application";
 import type { ApplicationLanguage, ApplicationSettings, BabysitModelCatalog, BabysitProvider, BabysitProviderPreference, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
 import type { ApplicationUpdateSnapshot } from "@/application-update/application-update";
+import type { RustDependencyScope } from "@/settings/application-settings";
 
 export type PullRequestReviewUpdate = {
   updateAvailable: boolean;
@@ -32,6 +34,7 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
+  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string; includeTests: boolean }; result: StructureComparison; error: { code: string; detail: string } };
   application_update_snapshot: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_manual_check: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_set_automatic_download: { args: { enabled: boolean }; result: ApplicationUpdateSnapshot };
@@ -40,6 +43,7 @@ export type TauriCommandContract = {
   load_application_settings: { args: EmptyArgs; result: ApplicationSettings };
   update_application_theme: { args: { theme: ThemePreference }; result: ApplicationSettings };
   update_application_language: { args: { language: ApplicationLanguage }; result: ApplicationSettings };
+  update_application_rust_dependency_scope: { args: { scope: RustDependencyScope }; result: ApplicationSettings };
   list_babysit_models: { args: { provider: BabysitProvider }; result: BabysitModelCatalog; error: { code: string; detail: string } };
   update_application_babysit_provider: { args: { provider: BabysitProvider }; result: ApplicationSettings; error: { code: string; detail: string } };
   update_application_babysit_repository_exploration: { args: { enabled: boolean }; result: ApplicationSettings; error: { code: string; detail: string } };
@@ -80,6 +84,7 @@ export type TauriCommandContract = {
 
 export type TauriCommandName = keyof TauriCommandContract;
 export type CancellableTauriCommandName =
+  | "analyze_structure_review"
   | "compare_local_refs"
   | "check_branch_review_updates"
   | "reopen_and_refresh_branch_review"
@@ -101,6 +106,7 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "analyze_structure_review",
   "application_update_snapshot",
   "application_update_manual_check",
   "application_update_set_automatic_download",
@@ -109,6 +115,7 @@ export const TAURI_COMMAND_NAMES = [
   "load_application_settings",
   "update_application_theme",
   "update_application_language",
+  "update_application_rust_dependency_scope",
   "list_babysit_models",
   "update_application_babysit_provider",
   "update_application_babysit_repository_exploration",

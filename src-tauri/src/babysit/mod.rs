@@ -1,4 +1,3 @@
-use crate::operation::CancellationSignal;
 use crate::review::FileChangeContent;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -35,6 +34,7 @@ pub use error::{BabysitErrorCode, BabysitRecoveryAction};
 pub(crate) use model_catalog::{
     BabysitModelCatalog, BabysitProviderModelCatalog, BabysitResolvedModel,
 };
+use tokio_util::sync::CancellationToken;
 use validation::{merge_repair_patch, normalize_and_collect_repairs};
 pub use validation::{
     parse_provider_response, validate_response, BabysitFileExplanations, ValidationFailure,
@@ -330,7 +330,7 @@ pub trait BabysitAgentProvider: Send + Sync {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError>;
     /// 只生成上一次结果中缺失或空白的目标行；provider 可复用会话或启动无状态轮次。
     async fn repair(
@@ -338,7 +338,7 @@ pub trait BabysitAgentProvider: Send + Sync {
         request: BabysitProviderRequest,
         previous: BabysitFileExplanations,
         failures: Vec<ValidationFailure>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError>;
     /// 上层在 repair 之间提前退出时，释放 provider 私有的 thread/run 状态。
     async fn abandon(&self, _request: &BabysitProviderRequest) {}
@@ -348,7 +348,7 @@ pub trait BabysitAgentProvider: Send + Sync {
 
 // Application orchestration lives in the dedicated deep module.
 /// 检查可取消操作是否已被前端取消。
-fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), BabysitError> {
+fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<(), BabysitError> {
     cancellation
         .is_cancelled()
         .then_some(BabysitError::Cancelled)

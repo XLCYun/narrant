@@ -3,6 +3,7 @@ use crate::operation::OperationContext;
 use crate::review::{FileChangeContent, FileChangeStatus, FileContent};
 use std::sync::Arc;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn model_preference_save_validation_uses_the_catalog_from_the_current_edit_session() {
@@ -144,7 +145,7 @@ impl BabysitAgentProvider for InFlightModelProvider {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        _cancellation: &CancellationSignal,
+        _cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         self.observed
             .lock()
@@ -160,7 +161,7 @@ impl BabysitAgentProvider for InFlightModelProvider {
         _request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
         _failures: Vec<ValidationFailure>,
-        _cancellation: &CancellationSignal,
+        _cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         unreachable!("完整输出不会进入 repair")
     }

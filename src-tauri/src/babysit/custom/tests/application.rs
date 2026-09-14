@@ -13,6 +13,7 @@ use httpmock::prelude::*;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 /// 仅在应用级 Custom 契约中保存凭据，避免测试读取真实系统钥匙串。
 #[derive(Default)]
@@ -82,7 +83,7 @@ fn application_for_connection_with_tool_cancellation(
     settings_path: impl Into<std::path::PathBuf>,
     protocol: CustomProviderProtocol,
     base_url: String,
-    tool_cancellation: Option<crate::operation::TestCancellation>,
+    tool_cancellation: Option<CancellationToken>,
 ) -> ConfiguredApplication {
     application_for_connection_with_options(
         settings_path,
@@ -99,7 +100,7 @@ fn application_for_connection_with_options(
     protocol: CustomProviderProtocol,
     base_url: String,
     api_key: String,
-    tool_cancellation: Option<crate::operation::TestCancellation>,
+    tool_cancellation: Option<CancellationToken>,
 ) -> ConfiguredApplication {
     let credentials = Arc::new(MemoryCredentials::default());
     let settings =
@@ -853,7 +854,7 @@ async fn both_custom_protocols_cancel_inside_repository_tool_without_cache() {
         )
         .expect("写入 repository fixture");
         let settings = tempfile::tempdir().expect("创建 fixture settings");
-        let cancellation = crate::operation::TestCancellation::default();
+        let cancellation = CancellationToken::new();
         let configured = application_for_connection_with_tool_cancellation(
             settings.path().join("settings.json"),
             protocol,
@@ -1108,7 +1109,7 @@ async fn both_custom_protocols_cancel_before_repair_dispatch_without_cache() {
             base_url(protocol, &server),
         );
         let (request, content) = fixture_input(workspace.path());
-        let cancellation = crate::operation::TestCancellation::default();
+        let cancellation = CancellationToken::new();
         let cancellation_at_repair = cancellation.clone();
 
         let cancelled = configured
@@ -1165,7 +1166,7 @@ async fn both_custom_protocols_reject_late_responses_and_regenerate_after_cancel
             base_url(protocol, &server),
         );
         let (request, content) = fixture_input(workspace.path());
-        let cancellation = crate::operation::TestCancellation::default();
+        let cancellation = CancellationToken::new();
         let task = {
             let application = configured.application.clone();
             let request = request.clone();

@@ -27,8 +27,9 @@ the resulting data. The Rust adapter is implemented separately under
   receivers, generic constraints, visibility, or value types in the common model.
 - Store language-normalized own code to support body-only comparison, following the
   user's Rust-analyzer design decision, in the optional `CodeNodeData.code` field.
-- Defer source locations, a separate attributes object, a graph-wide symbol table,
-  and extension-field version envelopes.
+- Defer source locations, a separate attributes object, and extension-field version
+  envelopes. Optional descriptions of referenced External symbols provide readable
+  names and repository scope without introducing additional code nodes.
 - Keep identity matching conservative. Do not infer object renames or moves.
 - Consumers decide display, filtering, layout, and ancestor-impact presentation.
 
@@ -55,7 +56,12 @@ records the adapter scope and the real-server verification obligations.
 ## Language interface and input
 
 `LanguageAnalyzer::analyze(&AnalysisInput)` returns a CodeGraph or an analysis error.
-AnalysisInput supplies a repository_root and a list of repository-relative file paths.
+AnalysisInput supplies a repository_root, a list of repository-relative file paths,
+and language-neutral `AnalysisOptions`. `include_tests` defaults to false: each language
+adapter omits code it can positively identify as test-only, including its contained
+objects and outgoing references. Unknown or shared code stays in the graph. Setting
+the option to true includes tests within the same selected file scope. The option
+controls extraction, not frontend visibility; both sides must receive the same value.
 The caller prepares the before/after repository states for the same intended scope
 and uses the same language implementations and configuration on both sides. Each
 directory and the analyzer's view of it remain consistent for the duration of analysis.
@@ -63,6 +69,13 @@ directory and the analyzer's view of it remain consistent for the duration of an
 files selects which files contribute objects to the output graph. It does not prevent
 an analyzer from reading other source, configuration, or dependencies for semantic
 context. A resolved target outside the selected graph remains an External reference.
+External does not imply that the target is outside the repository. An analyzer can
+attach `ExternalSymbol { name, scope }` descriptions through
+`CodeGraph::with_external_symbols`. `SymbolScope::Repository` identifies unselected
+repository source; `Dependency` identifies source outside that repository, including
+standard libraries and third-party dependencies. Missing descriptions mean unknown
+scope. Descriptions do not participate in graph comparison, and opaque symbol IDs
+retain their original encoding.
 The input paths are relative, stay within the root, and identify existing source files
 on that side. A new file appears only in the after input; a deleted file only in the
 before input. Empty files are included when selected. Failure to read a requested
@@ -155,6 +168,9 @@ Node identities must be unique across the entire graph, including language scope
 Source files remain caller input, not automatic semantic containers. This revision
 defers source navigation and multiple declaration locations instead of introducing a
 partial or fabricated source-location mapping.
+An analyzer may represent a semantically confirmed crate root as a Container even
+though no explicit `mod` declaration spells out that root. This uses the existing
+node and containment contract; it does not make every source file a module.
 
 ## Own-content comparison
 
@@ -186,6 +202,11 @@ Ordinary function implementation content belongs to its Callable, without requir
 an ExecutionRegion wrapper. Comparison still distinguishes a node's own content from
 the content of separately modeled children, so a child edit does not automatically
 modify every ancestor's own declaration.
+
+The Rust mapping now keeps closures as expressions in the enclosing object's code,
+following the user's 2026-09-13 decision. Their changes and outgoing references belong
+to the nearest modeled declaration; no separate Callable or ExecutionRegion is emitted
+for the closure. Named declarations nested inside a closure remain independently modeled.
 
 The user selected language-normalized own code in the
 [Rust analyzer design](0019-rust-language-analyzer.md). It preserves significant syntax

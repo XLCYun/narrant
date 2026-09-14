@@ -5,6 +5,64 @@ use crate::structure_review::code_graph::{
 
 use super::fixtures::{calls, data, graph, id, node};
 
+/// 任意类别的展示源码都不参与自身内容、包含关系或引用的语义比较。
+#[test]
+fn display_source_does_not_create_structural_changes() {
+    for variant in [
+        CodeNode::Container,
+        CodeNode::Type,
+        CodeNode::Callable,
+        CodeNode::Value,
+        CodeNode::ExecutionRegion,
+        CodeNode::Extension,
+    ] {
+        let mut before = data("item", &[]);
+        let mut after = before.clone();
+        before.source = Some("original source".into());
+        after.source = Some("changed display source".into());
+        assert!(graph(&["item"], vec![variant(before)])
+            .diff(&graph(&["item"], vec![variant(after)]))
+            .unwrap()
+            .nodes
+            .is_empty());
+    }
+}
+
+/// 图外描述不会改变关系身份，也不会因为显示名称或范围说明更新而产生代码差异。
+#[test]
+fn external_symbol_descriptions_do_not_create_code_changes() {
+    use crate::structure_review::code_graph::{ExternalSymbol, SymbolScope};
+    let mut source = data("source", &[]);
+    source.references.push(CodeReference {
+        semantic: "code.calls".into(),
+        target: ReferenceTarget::External {
+            symbol: "outside".into(),
+        },
+    });
+    let before = graph(&["source"], vec![CodeNode::Callable(source)]).with_external_symbols(
+        [(
+            "outside".into(),
+            ExternalSymbol {
+                name: "call".into(),
+                scope: SymbolScope::Repository,
+            },
+        )]
+        .into(),
+    );
+    let after = before.clone().with_external_symbols(
+        [(
+            "outside".into(),
+            ExternalSymbol {
+                name: "module::call".into(),
+                scope: SymbolScope::Dependency,
+            },
+        )]
+        .into(),
+    );
+    assert_eq!(after.external_symbols()["outside"].name, "module::call");
+    assert!(before.diff(&after).unwrap().nodes.is_empty());
+}
+
 /// 节点、根入口、包含列表和引用的排列不影响差异，重复引用也不新增事实。
 #[test]
 fn input_order_and_duplicate_references_do_not_create_changes() {

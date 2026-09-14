@@ -1,4 +1,4 @@
-import { useEffect, useRef, type UIEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, type UIEvent } from "react";
 import {
   ArrowDown01Icon,
   FileAddIcon,
@@ -27,6 +27,8 @@ import { cn } from "@/lib/utils";
 import type { ReviewReaderBinding } from "@/review/use-review-lifecycle";
 import type { ChangeStatus, FileChangeSummary, ReviewDiffMode, ReviewReaderScrollPositions, ReviewView } from "@/review/types";
 export type { ChangeStatus, FileChangeContent, FileChangeSummary, ReviewDiffMode as DiffMode, ReviewSnapshot as ReviewReaderSnapshot } from "@/review/types";
+
+const StructureChangesView = lazy(() => import("@/components/structure-review/structure-changes-view"));
 
 /** 文件树内部使用的目录节点，只表达层级，不承载阅读进度。 */
 type DirectoryNode = {
@@ -202,9 +204,10 @@ export function ReviewReader(input: ReviewReaderProps) {
 
   return <Tabs value={activeView} onValueChange={(value) => review.setView(value as ReviewView)} aria-label={t("review:reader")} className="h-full min-h-0 gap-0 overflow-hidden rounded-lg border bg-background">
     <div role="toolbar" aria-label={t("review:toolbar")} className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-      <TabsList variant="line" aria-label={t("review:reviewViews")} className="!h-full shrink-0 p-0">
+      <TabsList variant="line" aria-label={t("review:reviewViews")} className="!h-full min-w-0 justify-start overflow-x-auto p-0">
         <TabsTrigger value="overview" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("review:overview")}</TabsTrigger>
         <TabsTrigger value="file-changes" className="h-full px-3 after:!bottom-[-1px] after:!h-px">{t("review:fileChanges", { count: props.snapshot.fileChanges.length })}</TabsTrigger>
+        <TabsTrigger value="structure-changes" className="h-full shrink-0 px-3 after:!bottom-[-1px] after:!h-px">{t("review:structureChanges")}</TabsTrigger>
       </TabsList>
       <div className="ml-auto flex min-w-0 shrink-0 items-center justify-end gap-2">
         {props.updateAction}
@@ -229,6 +232,11 @@ export function ReviewReader(input: ReviewReaderProps) {
     </div>
     {props.notice && <div className="shrink-0 border-b px-3 py-2 text-xs">{props.notice}</div>}
     <TabsContent value="overview" className="min-h-0 overflow-hidden"><div ref={overviewScrollRef} onScroll={saveScroll("overview")} data-review-scroll-region="overview" className="h-full overflow-y-auto"><ReviewOverview review={props.snapshot} onOpenExternal={props.onOpenExternal} /></div></TabsContent>
+    <TabsContent value="structure-changes" className="flex min-h-0 flex-col overflow-hidden">
+      <Suspense fallback={<FileChangeLoading label={t("review:loadingStructureView")} />}>
+        <StructureChangesView binding={review.structure} dark={fileTypeIconTheme === "dark"} />
+      </Suspense>
+    </TabsContent>
     <TabsContent value="file-changes" className="flex min-h-0 flex-col overflow-hidden">
     {props.snapshot.fileChanges.length === 0
       ? <div data-empty-state className="flex min-h-0 flex-1 flex-col items-center px-6 pt-14 text-center sm:pt-20">

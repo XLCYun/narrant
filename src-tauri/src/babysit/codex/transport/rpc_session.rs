@@ -5,11 +5,12 @@
 
 use super::super::RpcFailure;
 use super::jsonl_connection::JsonlConnection;
-use crate::babysit::CancellationSignal;
+
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 /// Codex request 的 typed envelope；省略 jsonrpc 以兼容现有 App Server。
 #[derive(Clone, Debug, Serialize)]
@@ -223,7 +224,7 @@ impl RpcSession {
         method: &str,
         params: Value,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<(), RpcSessionError> {
         let value = serde_json::to_value(NotificationEnvelope::new(method, params))
             .map_err(|_| RpcSessionError::Failure(RpcFailure::Protocol))?;
@@ -240,13 +241,13 @@ impl RpcSession {
         method: &str,
         params: Value,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
         mut on_server_request: F,
     ) -> Result<Value, RpcSessionError>
     where
         F: FnMut(&ServerRequest) -> Result<Value, RpcSessionError>,
     {
-        if cancellation.is_some_and(CancellationSignal::is_cancelled) {
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
             return Err(RpcSessionError::Failure(RpcFailure::Cancelled));
         }
         let request_number = self.next_request_id;
@@ -285,7 +286,7 @@ impl RpcSession {
         &mut self,
         connection: &mut JsonlConnection,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
         mut on_server_request: F,
     ) -> Result<Notification, RpcSessionError>
     where
@@ -318,7 +319,7 @@ fn valid_id(value: &Value) -> bool {
 async fn read_message(
     connection: &mut JsonlConnection,
     deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<IncomingMessage, RpcSessionError> {
     let value = connection
         .read_message(deadline, cancellation)
@@ -332,7 +333,7 @@ async fn write_message(
     connection: &mut JsonlConnection,
     value: Value,
     deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(), RpcSessionError> {
     connection
         .write_message(value, deadline, cancellation)

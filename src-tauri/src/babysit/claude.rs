@@ -2,8 +2,8 @@
 
 use super::{
     parse_provider_response, validate_response, BabysitAgentProvider, BabysitError,
-    BabysitFileExplanations, BabysitProviderRequest, CancellationSignal, FileSide,
-    ValidationFailure, MAX_REPAIR_ATTEMPTS,
+    BabysitFileExplanations, BabysitProviderRequest, FileSide, ValidationFailure,
+    MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -25,6 +25,7 @@ use process::configure_round_command;
 use protocol::{
     classify_failure, classify_result_error, redacted_provider_error, ClaudeResultEnvelope,
 };
+use tokio_util::sync::CancellationToken;
 
 pub(crate) use model_catalog::{ClaudeModelCatalog, ResolvedClaudeModel};
 
@@ -97,7 +98,7 @@ impl ClaudeCodeProvider {
         prompt: String,
         resolved_model: &ResolvedClaudeModel,
         deadline: Instant,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         if cancellation.is_cancelled() {
             return Err(BabysitError::Cancelled);
@@ -158,7 +159,7 @@ impl ClaudeCodeProvider {
                 terminate_process_tree(&mut child, process_id).await;
                 return Err(redacted_provider_error("timeout"));
             },
-            () = wait_for_cancellation(cancellation) => {
+            () = cancellation.cancelled() => {
                 terminate_process_tree(&mut child, process_id).await;
                 return Err(BabysitError::Cancelled);
             },
@@ -196,7 +197,7 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         let key = request_key(&request);
         let deadline = Instant::now() + self.timeout;
@@ -253,7 +254,7 @@ impl BabysitAgentProvider for ClaudeCodeProvider {
         request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
         failures: Vec<ValidationFailure>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         let key = request_key(&request);
         let state = {
@@ -400,13 +401,6 @@ fn numbered_prompt_request(request: &BabysitProviderRequest) -> Value {
     prompt_request["before"] = Value::String(super::numbered_content(&request.before));
     prompt_request["after"] = Value::String(super::numbered_content(&request.after));
     prompt_request
-}
-
-/// 等待轮询式 cancellation，不向 provider 暴露 operation identity。
-async fn wait_for_cancellation(cancellation: &CancellationSignal) {
-    while !cancellation.is_cancelled() {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 /// 终止当前 CLI 及其后代；Windows 使用 taskkill 的 `/T` 覆盖整个进程树。

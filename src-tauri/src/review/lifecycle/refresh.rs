@@ -72,14 +72,11 @@ impl ReviewLifecycle {
         review_id: &str,
         confirmation: ConfirmedReviewUpdate,
     ) -> Result<ReviewPresentation, ReviewLifecycleError> {
-        self.begin_refresh(review_id)?;
+        let _workspace_change = self.begin_workspace_change(review_id)?;
         let review_lock = self.review_lock(review_id)?;
         let _review_guard = review_lock.lock().await;
-        let result = self
-            .refresh_exclusive(operation, review_id, confirmation)
-            .await;
-        self.finish_refresh(review_id);
-        result
+        self.refresh_exclusive(operation, review_id, confirmation)
+            .await
     }
 
     /// 物化 durable Review 后刷新；刷新失败时保留运行时并恢复此前 Presented Review。
@@ -246,28 +243,35 @@ impl ReviewLifecycle {
 
     /// 获取同一 Review 的独占刷新权。
     pub(super) fn begin_refresh(&self, review_id: &str) -> Result<(), ReviewLifecycleError> {
-        let mut active = self
-            .active_refreshes
+        let mut access = self
+            .workspace_access
             .lock()
             .map_err(|_| ReviewLifecycleError::new("Review 刷新状态不可用。"))?;
-        if !active.insert(review_id.to_owned()) {
+        if !access.changing.insert(review_id.to_owned()) {
             return Err(ReviewLifecycleError::Busy);
+        }
+        if let Some(revoked) = access
+            .users
+            .get(review_id)
+            .and_then(std::sync::Weak::upgrade)
+        {
+            revoked.cancel();
         }
         Ok(())
     }
 
     /// 释放同一 Review 的独占刷新权。
     pub(super) fn finish_refresh(&self, review_id: &str) {
-        if let Ok(mut active) = self.active_refreshes.lock() {
-            active.remove(review_id);
+        if let Ok(mut access) = self.workspace_access.lock() {
+            access.changing.remove(review_id);
         }
     }
 
     /// 查询 Review 当前是否正在刷新。
     pub(super) fn is_refreshing(&self, review_id: &str) -> Result<bool, ReviewLifecycleError> {
-        self.active_refreshes
+        self.workspace_access
             .lock()
-            .map(|active| active.contains(review_id))
+            .map(|access| access.changing.contains(review_id))
             .map_err(|_| ReviewLifecycleError::new("Review 刷新状态不可用。"))
     }
 }

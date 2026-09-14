@@ -1,4 +1,3 @@
-use crate::operation::CancellationSignal;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};

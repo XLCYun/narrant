@@ -282,14 +282,19 @@ impl ReviewLifecycle {
     }
 
     /// 返回已授权 Workspace Trust 的可用 repository path。
-    fn require_trusted_repository(&self, id: i64) -> Result<PathBuf, ReviewLifecycleError> {
+    pub(super) fn require_trusted_repository(
+        &self,
+        id: i64,
+    ) -> Result<PathBuf, ReviewLifecycleError> {
         self.repository_application
             .require_trusted_path(id)
             .map_err(Self::repository_application_error)
     }
 
     /// 将 Repository application 的 gate 结果映射为 Review 生命周期错误。
-    fn repository_application_error(error: RepositoryApplicationError) -> ReviewLifecycleError {
+    pub(super) fn repository_application_error(
+        error: RepositoryApplicationError,
+    ) -> ReviewLifecycleError {
         match error {
             RepositoryApplicationError::Unavailable(message) => {
                 ReviewLifecycleError::RepositoryUnavailable(message)

@@ -9,6 +9,54 @@ use std::{
     time::Duration,
 };
 
+/// 旧配置补默认值，三个档位均可独立保存，并保留其它偏好。
+#[test]
+fn rust_dependency_scope_defaults_and_round_trips_without_overwriting_settings() {
+    use crate::structure_review::rust_analyzer::RustDependencyScope;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let application = ApplicationSettingsApplication::new(path.clone());
+    let fresh = application.load().unwrap();
+    assert_eq!(
+        fresh.structure_review.rust.dependency_scope,
+        RustDependencyScope::StandardLibrary
+    );
+    let mut legacy = serde_json::to_value(fresh).unwrap();
+    legacy.as_object_mut().unwrap().remove("structureReview");
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    assert_eq!(
+        application
+            .load()
+            .unwrap()
+            .structure_review
+            .rust
+            .dependency_scope,
+        RustDependencyScope::StandardLibrary
+    );
+    application.update_theme(ThemePreference::Dark).unwrap();
+    application.update_repository_exploration(true).unwrap();
+    for scope in [
+        RustDependencyScope::RepositoryOnly,
+        RustDependencyScope::StandardLibrary,
+        RustDependencyScope::AllDependencies,
+    ] {
+        application.update_rust_dependency_scope(scope).unwrap();
+        let settings = ApplicationSettingsApplication::new(path.clone())
+            .load()
+            .unwrap();
+        assert_eq!(settings.structure_review.rust.dependency_scope, scope);
+        assert_eq!(settings.theme, ThemePreference::Dark);
+        assert!(settings.babysit.repository_exploration);
+        assert_eq!(settings.version, 1);
+    }
+    let mut invalid = serde_json::to_value(application.load().unwrap()).unwrap();
+    invalid["structureReview"]["rust"]["dependencyScope"] = serde_json::json!("unknown");
+    let original = serde_json::to_vec(&invalid).unwrap();
+    std::fs::write(&path, &original).unwrap();
+    assert!(application.load().is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
 #[test]
 fn missing_settings_resolve_to_provider_aware_defaults_without_writing() {
     let directory = tempfile::tempdir().unwrap();

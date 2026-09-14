@@ -2,18 +2,19 @@ use super::super::*;
 use crate::babysit::{
     BabysitError, BabysitProviderRequest, FileSide, LineTarget, ValidationFailure,
 };
-use crate::operation::TestCancellation;
+
 use rig::completion::{Message, ResponseIdentity};
 use rig::message::UserContent;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 /// 只在 runtime 契约测试中使用的可脚本化 provider-neutral adapter。
 #[derive(Clone)]
 struct FakeAdapter {
     responses: Arc<Mutex<Vec<CustomRunResult>>>,
     requests: Arc<Mutex<Vec<CustomRunRequest>>>,
-    cancel_before_return: Option<TestCancellation>,
+    cancel_before_return: Option<CancellationToken>,
 }
 
 impl FakeAdapter {
@@ -33,7 +34,7 @@ impl CustomProtocolAdapter for FakeAdapter {
     async fn run_agent(
         &self,
         request: CustomRunRequest,
-        cancellation: &crate::operation::CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<CustomRunResult, CustomAdapterError> {
         self.requests.lock().expect("请求锁").push(request);
         if cancellation.is_cancelled() {
@@ -190,7 +191,7 @@ async fn runtime_delegates_tool_dispatch_without_a_second_narrant_loop() {
         .generate(
             Arc::new(adapter),
             fixture_request(401, &workspace.path().to_string_lossy()),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("adapter 已经负责完整 Rig agent loop");
@@ -253,7 +254,7 @@ async fn runtime_preserves_rig_transcript_across_generation_and_repairs() {
         .generate(
             Arc::new(adapter),
             request.clone(),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("首轮结果");
@@ -262,12 +263,12 @@ async fn runtime_preserves_rig_transcript_across_generation_and_repairs() {
             request.clone(),
             output.clone(),
             Vec::new(),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("第一次 repair");
     runtime
-        .repair(request, output, Vec::new(), &TestCancellation::default())
+        .repair(request, output, Vec::new(), &CancellationToken::new())
         .await
         .expect("第二次 repair");
 
@@ -280,7 +281,7 @@ async fn runtime_preserves_rig_transcript_across_generation_and_repairs() {
 #[tokio::test]
 async fn runtime_rejects_late_response_after_cancellation_without_next_tool_or_final() {
     let workspace = tempfile::tempdir().expect("创建 workspace");
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let mut adapter = FakeAdapter::scripted(vec![tool_response(
         FINAL_OUTPUT_TOOL_NAME,
         json!({"before": {}, "after": {}}),
@@ -318,7 +319,7 @@ async fn runtime_delegates_turn_budget_to_the_adapter() {
         .generate(
             Arc::new(adapter),
             fixture_request(43, &workspace.path().to_string_lossy()),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("adapter 已经拥有 Rig 的 turn budget");
@@ -344,7 +345,7 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
         .generate(
             Arc::new(adapter),
             request.clone(),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("坏 final 交给上层校验");
@@ -364,7 +365,7 @@ async fn malformed_final_output_is_repaired_in_the_same_memory_session() {
                     line_number: 1,
                 },
             ],
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("同一会话 repair");
@@ -400,7 +401,7 @@ async fn runtime_rejects_a_fourth_repair_attempt() {
         .generate(
             Arc::new(FakeAdapter::scripted(responses)),
             request.clone(),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("首轮结果");
@@ -410,13 +411,13 @@ async fn runtime_rejects_a_fourth_repair_attempt() {
                 request.clone(),
                 empty.clone(),
                 Vec::new(),
-                &TestCancellation::default(),
+                &CancellationToken::new(),
             )
             .await
             .expect("前三次 repair");
     }
     let exhausted = runtime
-        .repair(request, empty, Vec::new(), &TestCancellation::default())
+        .repair(request, empty, Vec::new(), &CancellationToken::new())
         .await;
     assert!(matches!(
         exhausted,

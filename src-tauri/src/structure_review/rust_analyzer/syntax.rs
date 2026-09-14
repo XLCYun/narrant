@@ -7,12 +7,13 @@ use std::{
 
 use ra_ap_syntax::{
     ast, AstNode, Edition, NodeOrToken, SourceFile, SyntaxKind, SyntaxNode, TextRange, TextSize,
+    WalkEvent,
 };
 
 use super::{failure, Result};
 use crate::lsp::{file_uri, Position};
 use crate::structure_review::code_graph::{
-    CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
+    AnalysisOptions, CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
 };
 
 /// 临时源码位置只用于 LSP 关联，不进入图和节点身份。
@@ -24,18 +25,25 @@ pub(super) struct Declaration {
     pub syntax: SyntaxNode,
 }
 
-/// 一个固定内容的文件及其显式声明；文件本身不会伪装成 Module 节点。
+/// 一个固定内容的文件及其显式声明；crate 根由后续 LSP 语义确认，普通文件不自动建模块。
 pub(super) struct Document {
     pub path: PathBuf,
     pub uri: String,
     pub source: String,
     pub tree: SyntaxNode,
     pub declarations: Vec<Declaration>,
+    /// 已确认的测试范围不生成对象，也不归入外层对象的代码或引用。
+    excluded: Vec<TextRange>,
 }
 
 impl Document {
     /// 本地库只负责语法；尝试语言版本以兼容仍使用旧版保留字的依赖源码。
-    pub fn parse(repository: &Path, path: PathBuf, source: String) -> Result<Self> {
+    pub fn parse(
+        repository: &Path,
+        path: PathBuf,
+        source: String,
+        options: AnalysisOptions,
+    ) -> Result<Self> {
         let scope = file_scope(repository, &path)
             .ok_or_else(|| failure("无法构造不依赖绝对路径的 Rust 文件身份"))?;
         let mut parsed = None;
@@ -62,32 +70,15 @@ impl Document {
                 errors
             ))
         })?;
-        let mut declarations = Vec::new();
-        collect(&tree, &scope, None, &mut declarations);
-        let children: BTreeMap<_, Vec<_>> = declarations
-            .iter()
-            .map(|declaration| {
-                let children = declarations
-                    .iter()
-                    .filter(|child| child.parent.as_ref() == Some(&declaration.node.data().id))
-                    .map(|child| {
-                        (
-                            child.syntax.text_range(),
-                            child.node.data().id.clone(),
-                            child.syntax.kind() == SyntaxKind::CLOSURE_EXPR,
-                        )
-                    })
-                    .collect();
-                (declaration.node.data().id.clone(), children)
-            })
-            .collect();
+        let excluded = if options.include_tests {
+            Vec::new()
+        } else {
+            super::test_code::excluded_ranges(&tree)
+        };
+        let mut declarations = extract(&tree, &scope, &excluded);
         for declaration in &mut declarations {
-            let own_children = &children[&declaration.node.data().id];
-            let body = implementation(&declaration.syntax);
-            let data = data_mut(&mut declaration.node);
-            data.signature = Some(signature(&declaration.syntax, own_children));
-            data.code = body.as_ref().map(|body| normalize(body, own_children));
-            data.contains = own_children.iter().map(|(_, id, _)| id.clone()).collect();
+            data_mut(&mut declaration.node).source =
+                Some(source_excerpt(&source, declaration.syntax.text_range()));
         }
         Ok(Self {
             uri: file_uri(&path).map_err(failure)?,
@@ -95,11 +86,31 @@ impl Document {
             source,
             tree,
             declarations,
+            excluded,
         })
     }
 
-    /// 查找最内层声明，保证闭包和嵌套 item 的引用不会归入外层函数。
+    /// 范围按源码顺序且互不重叠，查询不随测试声明数量线性增长。
+    pub fn excludes(&self, offset: TextSize) -> bool {
+        let index = self
+            .excluded
+            .partition_point(|range| range.start() <= offset);
+        index > 0 && self.excluded[index - 1].contains(offset)
+    }
+
+    /// 父节点可能从测试声明相同位置开始，必须确认整个范围被排除才能跳过子树。
+    pub fn excludes_range(&self, range: TextRange) -> bool {
+        let index = self
+            .excluded
+            .partition_point(|excluded| excluded.start() <= range.start());
+        index > 0 && self.excluded[index - 1].contains_range(range)
+    }
+
+    /// 查找最内层已建模声明；闭包是普通表达式，内部关联自然归属外层对象。
     pub fn owner(&self, offset: TextSize) -> Option<&Declaration> {
+        if self.excludes(offset) {
+            return None;
+        }
         self.declarations
             .iter()
             .filter(|declaration| declaration.syntax.text_range().contains(offset))
@@ -115,23 +126,63 @@ impl Document {
     }
 }
 
-/// 构造源码位置无关的文件命名空间；未知的图外路径由解析层保留为 Unresolved。
+/// 按语法范围截取原文；声明独占行时保留首行缩进，不混入同行的其他声明。
+fn source_excerpt(source: &str, range: TextRange) -> String {
+    let start = usize::from(range.start());
+    let line_start = source[..start].rfind('\n').map_or(0, |offset| offset + 1);
+    let start = if source[line_start..start]
+        .chars()
+        .all(|character| matches!(character, ' ' | '\t'))
+    {
+        line_start
+    } else {
+        start
+    };
+    source[start..usize::from(range.end())].to_owned()
+}
+
+/// 跳过测试范围后提取声明，并生成身份、包含关系和父对象自身内容。
+fn extract(tree: &SyntaxNode, scope: &str, excluded: &[TextRange]) -> Vec<Declaration> {
+    let mut declarations = Vec::new();
+    collect(tree, scope, None, excluded, &mut declarations);
+    let children: BTreeMap<_, Vec<_>> = declarations
+        .iter()
+        .map(|declaration| {
+            let children = declarations
+                .iter()
+                .filter(|child| child.parent.as_ref() == Some(&declaration.node.data().id))
+                .map(|child| (child.syntax.text_range(), child.node.data().id.clone()))
+                .collect();
+            (declaration.node.data().id.clone(), children)
+        })
+        .collect();
+    for declaration in &mut declarations {
+        let own_children = &children[&declaration.node.data().id];
+        let mut ignored: Vec<_> = own_children
+            .iter()
+            .map(|(range, _)| *range)
+            .chain(
+                excluded
+                    .iter()
+                    .copied()
+                    .filter(|range| declaration.syntax.text_range().contains_range(*range)),
+            )
+            .collect();
+        ignored.sort_unstable_by_key(range_key);
+        ignored.dedup();
+        let body = implementation(&declaration.syntax);
+        let data = data_mut(&mut declaration.node);
+        data.signature = Some(signature(&declaration.syntax, &ignored));
+        data.code = body.as_ref().map(|body| normalize(body, &ignored));
+        data.contains = own_children.iter().map(|(_, id)| id.clone()).collect();
+    }
+    declarations
+}
+
+/// 仅为仓库内源码构造稳定命名空间，不再提取标准库或第三方源码的声明身份。
 pub(super) fn file_scope(repository: &Path, path: &Path) -> Option<String> {
-    if let Ok(relative) = path.strip_prefix(repository) {
-        return Some(format!("rust:repo:{}", component(relative.to_str()?)));
-    }
-    let path = path.to_str()?.replace('\\', "/");
-    if let Some((_, relative)) = path.split_once("/lib/rustlib/src/rust/library/") {
-        return Some(format!("rust:sysroot:{}", component(relative)));
-    }
-    if let Some((_, relative)) = path.split_once("/registry/src/") {
-        let (_, relative) = relative.split_once('/')?;
-        return Some(format!("rust:registry:{}", component(relative)));
-    }
-    if let Some((_, relative)) = path.split_once("/git/checkouts/") {
-        return Some(format!("rust:git-dependency:{}", component(relative)));
-    }
-    None
+    let relative = path.strip_prefix(repository).ok()?;
+    Some(format!("rust:repo:{}", component(relative.to_str()?)))
 }
 
 /// 对身份分段转义，防止 Rust 名称、路径和类型语法与层级分隔符碰撞。
@@ -145,7 +196,7 @@ fn category(syntax: &SyntaxNode) -> Option<CodeCategory> {
     Some(match syntax.kind() {
         MODULE => CodeCategory::Container,
         STRUCT | ENUM | TRAIT | TYPE_ALIAS | UNION => CodeCategory::Type,
-        FN | CLOSURE_EXPR => CodeCategory::Callable,
+        FN => CodeCategory::Callable,
         RECORD_FIELD | TUPLE_FIELD | VARIANT | CONST | STATIC => CodeCategory::Value,
         IMPL | MACRO_RULES | MACRO_DEF | USE | EXTERN_CRATE | EXTERN_BLOCK => {
             CodeCategory::Extension
@@ -164,26 +215,32 @@ fn category(syntax: &SyntaxNode) -> Option<CodeCategory> {
     })
 }
 
-/// 收集所有显式声明，包含 cfg 未启用的分支；不解析宏展开后的生成对象。
+/// 收集分析范围内的显式声明；未知 cfg 分支保留，明确排除的测试子树不提取。
 fn collect(
     syntax: &SyntaxNode,
     scope: &str,
     parent: Option<NodeId>,
+    excluded: &[TextRange],
     output: &mut Vec<Declaration>,
 ) {
+    if excluded
+        .binary_search_by_key(&range_key(&syntax.text_range()), range_key)
+        .is_ok()
+    {
+        return;
+    }
     let mut next_parent = parent.clone();
     if let Some(category) = category(syntax) {
         let name_node = child(syntax, SyntaxKind::NAME);
         let name = name_node.as_ref().map(|name| name.text().to_string());
         let native_kind = match syntax.kind() {
-            SyntaxKind::CLOSURE_EXPR => "closure".to_owned(),
             SyntaxKind::MACRO_CALL => "macro_invocation".to_owned(),
             kind => format!("{kind:?}").to_lowercase(),
         };
-        let signature = signature(syntax, &[]);
+        let signature = signature(syntax, excluded);
         let key = name
             .clone()
-            .unwrap_or_else(|| identity_key(syntax, &signature));
+            .unwrap_or_else(|| identity_key(syntax, &signature, excluded));
         let owner = parent.as_ref().map_or(scope, |id| id.0.as_str());
         let base = format!(
             "{owner}::{native_kind}:{}",
@@ -214,6 +271,7 @@ fn collect(
             name,
             signature: Some(signature),
             code: None,
+            source: None,
             contains: Vec::new(),
             references: Vec::new(),
             extensions: BTreeMap::new(),
@@ -238,35 +296,23 @@ fn collect(
         next_parent = Some(id);
     }
     for child in syntax.children() {
-        collect(&child, scope, next_parent.clone(), output);
+        collect(&child, scope, next_parent.clone(), excluded, output);
     }
 }
 
 /// 匿名对象使用词法归属和结构锚点，不把行列或实现代码当成身份。
-fn identity_key(syntax: &SyntaxNode, signature: &str) -> String {
+fn identity_key(syntax: &SyntaxNode, signature: &str, excluded: &[TextRange]) -> String {
     if let Some(implementation) = ast::Impl::cast(syntax.clone()) {
         return [implementation.trait_(), implementation.self_ty()]
             .into_iter()
             .flatten()
-            .map(|ty| normalize(ty.syntax(), &[]))
+            .map(|ty| normalize(ty.syntax(), excluded))
             .collect::<Vec<_>>()
             .join(" for ");
     }
-    if syntax.kind() == SyntaxKind::CLOSURE_EXPR {
-        if let Some(binding) = syntax
-            .ancestors()
-            .skip(1)
-            .take_while(|node| category(node).is_none())
-            .find(|node| node.kind() == SyntaxKind::LET_STMT)
-            .and_then(|statement| child(&statement, SyntaxKind::IDENT_PAT))
-        {
-            return normalize(&binding, &[]);
-        }
-        return "anonymous".into();
-    }
     if syntax.kind() == SyntaxKind::MACRO_CALL {
         return child(syntax, SyntaxKind::PATH)
-            .map_or_else(|| "macro".into(), |path| normalize(&path, &[]));
+            .map_or_else(|| "macro".into(), |path| normalize(&path, excluded));
     }
     if matches!(
         syntax.kind(),
@@ -282,7 +328,7 @@ fn implementation(syntax: &SyntaxNode) -> Option<SyntaxNode> {
     use SyntaxKind::*;
     match syntax.kind() {
         FN => child(syntax, BLOCK_EXPR),
-        CLOSURE_EXPR | CONST | STATIC => syntax
+        CONST | STATIC => syntax
             .children()
             .find(|node| ast::Expr::can_cast(node.kind())),
         VARIANT => child(syntax, CONST_ARG),
@@ -292,7 +338,7 @@ fn implementation(syntax: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// 声明签名排除实现和成员内容，但保留括号形态、修饰符及语言特有标注。
-fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> String {
+fn signature(syntax: &SyntaxNode, children: &[TextRange]) -> String {
     let body = implementation(syntax);
     let mut tokens = Vec::new();
     for element in syntax.children_with_tokens() {
@@ -341,23 +387,21 @@ fn signature(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> Str
         .join(" ")
 }
 
-/// 输出可读的规范化代码投影；子闭包保留身份占位，具名子声明整体排除。
-fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> String {
-    let mut tokens = Vec::<(String, Option<TextRange>, bool)>::new();
+/// 输出可读的规范化代码；闭包内容原样参与外层比较，独立的具名子声明整体排除。
+fn normalize(syntax: &SyntaxNode, children: &[TextRange]) -> String {
+    let mut tokens = Vec::<(String, TextRange, bool)>::new();
     normalized_tokens(syntax, children, &mut tokens);
     let mut output = String::new();
     let mut previous: Option<(TextRange, bool)> = None;
     for (text, range, punctuation) in tokens {
-        let joint = previous
-            .zip(range)
-            .is_some_and(|((left, was_punctuation), right)| {
-                was_punctuation && punctuation && left.end() == right.start()
-            });
+        let joint = previous.is_some_and(|(left, was_punctuation)| {
+            was_punctuation && punctuation && left.end() == range.start()
+        });
         if !output.is_empty() && !joint {
             output.push(' ');
         }
         output.push_str(&text);
-        previous = range.map(|range| (range, punctuation));
+        previous = Some((range, punctuation));
     }
     output
 }
@@ -365,20 +409,13 @@ fn normalize(syntax: &SyntaxNode, children: &[(TextRange, NodeId, bool)]) -> Str
 /// 只删除真正的空白/注释 token；字面量和宏中有意义的标点粘连保持原样。
 fn normalized_tokens(
     syntax: &SyntaxNode,
-    children: &[(TextRange, NodeId, bool)],
-    output: &mut Vec<(String, Option<TextRange>, bool)>,
+    children: &[TextRange],
+    output: &mut Vec<(String, TextRange, bool)>,
 ) {
-    if let Some((_, id, expression)) = children
-        .iter()
-        .find(|(range, _, _)| *range == syntax.text_range())
+    if children
+        .binary_search_by_key(&range_key(&syntax.text_range()), range_key)
+        .is_ok()
     {
-        if *expression {
-            output.push((
-                format!("/*@code_graph_child:{}*/", component(&id.0)),
-                None,
-                false,
-            ));
-        }
         return;
     }
     for element in syntax.children_with_tokens() {
@@ -390,7 +427,7 @@ fn normalized_tokens(
                     .any(|parent| parent.kind() == SyntaxKind::TOKEN_TREE);
                 output.push((
                     token.text().to_string(),
-                    Some(token.text_range()),
+                    token.text_range(),
                     in_macro
                         && token.kind().is_punct()
                         && !matches!(
@@ -409,6 +446,11 @@ fn normalized_tokens(
     }
 }
 
+/// TextRange 没有全序，明确按起止偏移排序以便二分查询排除范围。
+fn range_key(range: &TextRange) -> (TextSize, TextSize) {
+    (range.start(), range.end())
+}
+
 /// 获取直接语法子节点，避免混入更深层对象的名称或类型。
 pub(super) fn child(syntax: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
     syntax.children().find(|node| node.kind() == kind)
@@ -423,12 +465,42 @@ pub(super) fn path_name(path: &SyntaxNode) -> Option<SyntaxNode> {
     child(&segment, SyntaxKind::NAME_REF)
 }
 
-/// 取得类型表达式的主体名字，泛型实参另行遍历提取。
+/// 取得实现目标或 trait 类型表达式的主体名字，泛型实参不单独生成类型使用关系。
 pub(super) fn type_name(node: &SyntaxNode) -> Option<SyntaxNode> {
     if node.kind() == SyntaxKind::PATH_TYPE {
         return child(node, SyntaxKind::PATH).and_then(|path| path_name(&path));
     }
     node.children().find_map(|child| type_name(&child))
+}
+
+/// 只收集字段声明类型中的路径，包括泛型实参；常量表达式、宏内容和其他声明不参与。
+pub(super) fn field_type_names(node: &SyntaxNode) -> Vec<SyntaxNode> {
+    let ty = match node.kind() {
+        SyntaxKind::RECORD_FIELD => {
+            ast::RecordField::cast(node.clone()).and_then(|field| field.ty())
+        }
+        SyntaxKind::TUPLE_FIELD => ast::TupleField::cast(node.clone()).and_then(|field| field.ty()),
+        _ => None,
+    };
+    let Some(ty) = ty else { return Vec::new() };
+    let mut names = Vec::new();
+    let mut walk = ty.syntax().preorder();
+    while let Some(event) = walk.next() {
+        let WalkEvent::Enter(node) = event else {
+            continue;
+        };
+        if ast::Expr::can_cast(node.kind())
+            || ast::Item::can_cast(node.kind())
+            || node.kind() == SyntaxKind::MACRO_TYPE
+        {
+            walk.skip_subtree();
+        } else if node.kind() == SyntaxKind::PATH_TYPE {
+            if let Some(name) = child(&node, SyntaxKind::PATH).and_then(|path| path_name(&path)) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 /// 将 UTF-8 语法位置转换成协商后的 LSP UTF-16 位置。

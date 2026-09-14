@@ -227,3 +227,40 @@ fn malformed_frames_and_eof_fail_and_reap_the_process() {
         assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
     }
 }
+
+/// 长时间不回应的服务器仍可及时取消，析构时回收真实服务器进程。
+#[test]
+fn cancellation_interrupts_a_pending_response_and_reaps_server() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let server = FakeServer::new(vec![vec![initialized()], vec![], vec![]]);
+    let revoked = Arc::new(AtomicBool::new(false));
+    let observed = revoked.clone();
+    let mut options = options();
+    options.request_timeout = Duration::from_secs(30);
+    options.cancelled = Arc::new(move || observed.load(Ordering::Acquire));
+    let mut client = LspClient::start(server.command(), server.workspace(), options).unwrap();
+    let requests_path = server.workspace().join("requests");
+    let cancelling = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !std::fs::read_to_string(&requests_path)
+            .unwrap_or_default()
+            .contains("example/pending")
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        revoked.store(true, Ordering::Release);
+    });
+    let started = std::time::Instant::now();
+    let error = client.request("example/pending", json!({})).unwrap_err();
+    assert!(error.is_cancelled());
+    assert!(error.message.contains("取消"));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    cancelling.join().unwrap();
+    drop(client);
+    // SAFETY: 信号 0 只查询本测试启动的服务器。
+    assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
+}

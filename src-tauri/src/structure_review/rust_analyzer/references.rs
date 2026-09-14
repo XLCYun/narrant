@@ -6,18 +6,19 @@ use std::{
     path::Path,
 };
 
-use ra_ap_syntax::{ast, AstNode, SyntaxKind, SyntaxNode, TextSize};
+use ra_ap_syntax::{ast, AstNode, SyntaxKind, SyntaxNode, TextSize, WalkEvent};
 use url::Url;
 
 use super::{
     failure,
-    lsp::RustLsp,
+    lsp::{ModuleParent, RustLsp},
     syntax::{self, child, path_name, type_name, Document},
     Result,
 };
 use crate::lsp::{file_uri, Location, Position};
 use crate::structure_review::code_graph::{
-    CodeCategory, CodeGraph, CodeNode, CodeReference, CodeRoot, NodeId, ReferenceTarget,
+    AnalysisOptions, CodeCategory, CodeGraph, CodeNode, CodeNodeData, CodeReference, CodeRoot,
+    LanguageId, NodeId, ReferenceTarget,
 };
 
 /// 单次构图的临时解析材料；图外文件只用来确认身份，不扩大输出范围。
@@ -29,6 +30,10 @@ struct Resolver<'a> {
     selected: BTreeSet<NodeId>,
     categories: BTreeMap<NodeId, CodeCategory>,
     definitions: BTreeMap<(String, u32), Vec<Location>>,
+    crate_roots: BTreeMap<NodeId, CodeNode>,
+    options: AnalysisOptions,
+    test_files: BTreeMap<String, bool>,
+    visiting_files: BTreeSet<String>,
 }
 
 /// 组装词法包含和非包含关联，最后通过公共构造函数校验全部图约束。
@@ -36,26 +41,46 @@ pub(super) fn analyze(
     client: &mut RustLsp,
     repository: &Path,
     documents: &[Document],
+    options: AnalysisOptions,
 ) -> Result<CodeGraph> {
-    let mut nodes: BTreeMap<NodeId, CodeNode> = documents
-        .iter()
-        .flat_map(|document| &document.declarations)
-        .map(|declaration| (declaration.node.data().id.clone(), declaration.node.clone()))
-        .collect();
     let mut resolver = Resolver {
         client,
         repository,
         documents,
         external: BTreeMap::new(),
-        selected: nodes.keys().cloned().collect(),
-        categories: nodes
-            .iter()
-            .map(|(id, node)| (id.clone(), node.category()))
-            .collect(),
+        selected: BTreeSet::new(),
+        categories: BTreeMap::new(),
         definitions: BTreeMap::new(),
+        crate_roots: BTreeMap::new(),
+        options,
+        test_files: BTreeMap::new(),
+        visiting_files: BTreeSet::new(),
     };
+    // 先确认文件的所有模块归属，再创建图节点，避免测试文件内的辅助声明逃逸到根。
+    for document in documents {
+        resolver.test_only_file(&document.uri)?;
+    }
+    let mut nodes: BTreeMap<NodeId, CodeNode> = documents
+        .iter()
+        .filter(|document| {
+            !resolver
+                .test_files
+                .get(&document.uri)
+                .copied()
+                .unwrap_or(false)
+        })
+        .flat_map(|document| &document.declarations)
+        .map(|declaration| (declaration.node.data().id.clone(), declaration.node.clone()))
+        .collect();
+    resolver.selected = nodes.keys().cloned().collect();
+    resolver
+        .categories
+        .extend(nodes.iter().map(|(id, node)| (id.clone(), node.category())));
     let mut root = CodeRoot::default();
     for document in documents {
+        if resolver.test_files.get(&document.uri) == Some(&true) {
+            continue;
+        }
         let parents = resolver.module_parents(&document.uri)?;
         let local_parents: Vec<_> = parents
             .iter()
@@ -64,6 +89,11 @@ pub(super) fn analyze(
                 _ => None,
             })
             .collect();
+        for parent in &local_parents {
+            if let Some(node) = resolver.crate_roots.get(parent) {
+                nodes.entry(parent.clone()).or_insert_with(|| node.clone());
+            }
+        }
         for declaration in document
             .declarations
             .iter()
@@ -89,6 +119,18 @@ pub(super) fn analyze(
             }
         }
         for declaration in &document.declarations {
+            for name in syntax::field_type_names(&declaration.syntax) {
+                for target in resolver.definition(&document.uri, &name, "code.type_use")? {
+                    if resolver.includes_reference("code.type_use", &target) {
+                        add(
+                            &mut nodes,
+                            &declaration.node.data().id,
+                            "code.type_use",
+                            target,
+                        );
+                    }
+                }
+            }
             if let Some(implementation) = ast::Impl::cast(declaration.syntax.clone()) {
                 if let Some(name) = implementation
                     .self_ty()
@@ -128,7 +170,15 @@ pub(super) fn analyze(
                 }
             }
         }
-        for node in document.tree.descendants() {
+        let mut walk = document.tree.preorder();
+        while let Some(event) = walk.next() {
+            let WalkEvent::Enter(node) = event else {
+                continue;
+            };
+            if document.excludes_range(node.text_range()) {
+                walk.skip_subtree();
+                continue;
+            }
             // 宏 token tree 没有常规表达式结构；调用层级在下方补充可解析的展开内调用。
             if node
                 .ancestors()
@@ -138,41 +188,32 @@ pub(super) fn analyze(
                 continue;
             }
             if node.kind() == SyntaxKind::CALL_EXPR {
-                if let Some(mut callee) = node
+                // 直接执行闭包不生成目标节点；其内部调用仍由下方的语法遍历提取。
+                let dynamic_target = node
                     .children()
                     .find(|child| ast::Expr::can_cast(child.kind()))
-                {
-                    if callee.kind() != SyntaxKind::PATH_EXPR {
-                        while callee.kind() == SyntaxKind::PAREN_EXPR {
-                            let Some(inner) = callee
-                                .children()
-                                .find(|child| ast::Expr::can_cast(child.kind()))
-                            else {
-                                break;
-                            };
-                            callee = inner;
-                        }
-                        if let Some(owner) = document.owner(node.text_range().start()) {
-                            let target = document
-                                .declarations
-                                .iter()
-                                .find(|declaration| declaration.syntax == callee)
-                                .map(|declaration| {
-                                    resolver.reference(declaration.node.data().id.clone())
-                                })
-                                .unwrap_or_else(|| unknown("<dynamic callable>"));
-                            add(&mut nodes, &owner.node.data().id, "code.calls", target);
-                        }
+                    .is_some_and(|callee| {
+                        callee.kind() != SyntaxKind::PATH_EXPR && !is_closure_expression(&callee)
+                    });
+                if dynamic_target {
+                    if let Some(owner) = document.owner(node.text_range().start()) {
+                        add(
+                            &mut nodes,
+                            &owner.node.data().id,
+                            "code.calls",
+                            unknown("<dynamic callable>"),
+                        );
                     }
                 }
             }
-            for (semantic, name) in reference_sites(&node) {
+            if let Some((semantic, name)) = reference_site(&node) {
                 let Some(owner) = document.owner(name.text_range().start()) else {
                     continue;
                 };
                 for target in resolver.definition(&document.uri, &name, semantic)? {
-                    let semantic = resolver.relation_semantic(semantic, &target);
-                    add(&mut nodes, &owner.node.data().id, semantic, target);
+                    if resolver.includes_reference(semantic, &target) {
+                        add(&mut nodes, &owner.node.data().id, semantic, target);
+                    }
                 }
             }
         }
@@ -184,28 +225,35 @@ pub(super) fn analyze(
         {
             let position = syntax::position(&document.source, declaration.selection.start());
             for call in resolver.client.outgoing_calls(&document.uri, position)? {
+                let owners: Vec<_> = call
+                    .from_ranges
+                    .iter()
+                    .map(|range| syntax::byte_offset(&document.source, &range.start))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .filter_map(|offset| document.owner(offset))
+                    .map(|owner| owner.node.data().id.clone())
+                    .collect();
+                if owners.is_empty() {
+                    continue;
+                }
                 let targets = resolver.target(
                     &call.to.uri,
                     &call.to.selection_range.start,
                     &call.to.name,
                     "code.calls",
                 )?;
-                for range in &call.from_ranges {
-                    let offset = syntax::byte_offset(&document.source, &range.start)?;
-                    let Some(owner) = document.owner(offset) else {
-                        continue;
-                    };
+                for owner in &owners {
                     for target in &targets {
-                        add(
-                            &mut nodes,
-                            &owner.node.data().id,
-                            "code.calls",
-                            target.clone(),
-                        );
+                        add(&mut nodes, owner, "code.calls", target.clone());
                     }
                 }
             }
         }
+    }
+    for (id, node) in &resolver.crate_roots {
+        nodes.entry(id.clone()).or_insert_with(|| node.clone());
+        root.contains.push(id.clone());
     }
     for node in nodes.values_mut() {
         let data = syntax::data_mut(node);
@@ -216,10 +264,76 @@ pub(super) fn analyze(
     }
     root.contains.sort();
     root.contains.dedup();
-    CodeGraph::new(root, nodes.into_values().collect()).map_err(failure)
+    let referenced = nodes
+        .values()
+        .flat_map(|node| &node.data().references)
+        .filter_map(|reference| match &reference.target {
+            ReferenceTarget::External { symbol } => Some(symbol.as_str()),
+            _ => None,
+        })
+        .collect();
+    let symbols = resolver
+        .documents
+        .iter()
+        .chain(resolver.external.values())
+        .flat_map(|document| super::symbols::describe(repository, document, &referenced))
+        .collect();
+    CodeGraph::new(root, nodes.into_values().collect())
+        .map(|graph| graph.with_external_symbols(symbols))
+        .map_err(failure)
 }
 
 impl Resolver<'_> {
+    /// 多个模块复用同一文件时，只有所有已知归属都明确为测试专用才排除整个文件。
+    fn test_only_file(&mut self, uri: &str) -> Result<bool> {
+        if self.options.include_tests {
+            return Ok(false);
+        }
+        if let Some(test) = self.test_files.get(uri) {
+            return Ok(*test);
+        }
+        if !self.visiting_files.insert(uri.to_owned()) {
+            return Ok(false);
+        }
+        let test = self.classify_test_file(uri)?;
+        self.visiting_files.remove(uri);
+        self.test_files.insert(uri.to_owned(), test);
+        Ok(test)
+    }
+
+    /// 父模块可在选中文件之外；只加载上下文和属性，不把这些文件加入输出图。
+    fn classify_test_file(&mut self, uri: &str) -> Result<bool> {
+        if !self.load(uri)? {
+            return Ok(false);
+        }
+        let document = self
+            .document(uri)
+            .ok_or_else(|| failure("测试范围文档不存在"))?;
+        if super::test_code::is_test_only(&document.tree) {
+            return Ok(true);
+        }
+        let parents = self.client.parent_modules(uri)?;
+        if parents.is_empty() {
+            return Ok(false);
+        }
+        for parent in parents {
+            let ModuleParent::Declaration(location) = parent else {
+                return Ok(false);
+            };
+            if !self.load(&location.uri)? {
+                return Ok(false);
+            }
+            let document = self
+                .document(&location.uri)
+                .ok_or_else(|| failure("测试父模块文档不存在"))?;
+            let offset = syntax::byte_offset(&document.source, &location.position)?;
+            if !document.excludes(offset) && !self.test_only_file(&location.uri)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// 优先读取选中快照，图外文档只载入一次以获得相同的身份生成约定。
     fn document(&self, uri: &str) -> Option<&Document> {
         self.documents
@@ -228,7 +342,7 @@ impl Resolver<'_> {
             .or_else(|| self.external.get(uri))
     }
 
-    /// 无法稳定命名的虚拟/外部源码返回 false，由目标解析显式保留 Unresolved。
+    /// 仅读取仓库内源码；仓库外目标和越界符号链接显式保留为 Unresolved。
     fn load(&mut self, uri: &str) -> Result<bool> {
         if self.document(uri).is_some() {
             return Ok(true);
@@ -237,12 +351,16 @@ impl Resolver<'_> {
             return Ok(false);
         };
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs")
-            || syntax::file_scope(self.repository, &path).is_none()
+            || !path.starts_with(self.repository)
         {
             return Ok(false);
         }
+        let path = path.canonicalize().map_err(failure)?;
+        if !path.starts_with(self.repository) {
+            return Ok(false);
+        }
         let source = fs::read_to_string(&path).map_err(failure)?;
-        let document = Document::parse(self.repository, path, source)?;
+        let document = Document::parse(self.repository, path, source, self.options)?;
         self.categories
             .extend(document.declarations.iter().map(|declaration| {
                 (
@@ -263,26 +381,39 @@ impl Resolver<'_> {
         }
     }
 
-    /// 把已解析的函数值或类型使用与数据读取区分开，保留非调用的高层关联。
-    fn relation_semantic(&self, semantic: &'static str, target: &ReferenceTarget) -> &'static str {
+    /// 字段类型只连向图内 Type；表达式中的类型和数据值不改名为普通引用。
+    fn includes_reference(&self, semantic: &str, target: &ReferenceTarget) -> bool {
+        if semantic == "code.type_use" {
+            return matches!(target, ReferenceTarget::Node(id)
+                if self.selected.contains(id) && self.categories.get(id) == Some(&CodeCategory::Type));
+        }
+        if semantic != "code.references" {
+            return true;
+        }
         let category = match target {
             ReferenceTarget::Node(id) => self.categories.get(id),
             ReferenceTarget::External { symbol } => self.categories.get(&NodeId(symbol.clone())),
             ReferenceTarget::Unresolved { .. } => None,
         };
-        match (semantic, category) {
-            ("code.reads", Some(CodeCategory::Value)) => "code.reads",
-            ("code.reads", Some(CodeCategory::Type)) => "code.type_use",
-            ("code.reads", _) => "code.references",
-            ("code.type_use", Some(CodeCategory::Value)) => "code.references",
-            _ => semantic,
-        }
+        !matches!(category, Some(CodeCategory::Type | CodeCategory::Value))
     }
 
     /// 父模块信息来自 rust-analyzer，覆盖 #[path]，不根据文件名伪造模块层次。
     fn module_parents(&mut self, uri: &str) -> Result<Vec<ReferenceTarget>> {
         let mut targets = Vec::new();
-        for location in self.client.parent_modules(uri)? {
+        if self.test_files.get(uri) == Some(&true) {
+            return Ok(targets);
+        }
+        for parent in self.client.parent_modules(uri)? {
+            let location = match parent {
+                ModuleParent::CrateRoot => {
+                    if let Some(target) = self.crate_root(uri)? {
+                        targets.push(target);
+                    }
+                    continue;
+                }
+                ModuleParent::Declaration(location) => location,
+            };
             if location.uri == uri || !self.load(&location.uri)? {
                 continue;
             }
@@ -290,6 +421,9 @@ impl Resolver<'_> {
                 .document(&location.uri)
                 .ok_or_else(|| failure("父模块文档不可用"))?;
             let offset = syntax::byte_offset(&document.source, &location.position)?;
+            if document.excludes(offset) || self.test_files.get(&location.uri) == Some(&true) {
+                continue;
+            }
             if let Some(parent) = document
                 .declarations
                 .iter()
@@ -307,6 +441,46 @@ impl Resolver<'_> {
         Ok(targets)
     }
 
+    /// 仅为选中的、由 LSP 确认的入口创建根容器；图外根保留同一身份的 External。
+    fn crate_root(&mut self, uri: &str) -> Result<Option<ReferenceTarget>> {
+        if !self.load(uri)? {
+            return Ok(None);
+        }
+        let document = self
+            .document(uri)
+            .ok_or_else(|| failure("crate 根文档不可用"))?;
+        let Some(scope) = syntax::file_scope(self.repository, &document.path) else {
+            return Ok(None);
+        };
+        let id = NodeId(format!("{scope}::crate"));
+        if self.documents.iter().any(|document| document.uri == uri) {
+            let name = document
+                .path
+                .strip_prefix(self.repository)
+                .map_err(failure)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = document.source.clone();
+            self.crate_roots.entry(id.clone()).or_insert_with(|| {
+                CodeNode::Container(CodeNodeData {
+                    id: id.clone(),
+                    language: LanguageId("rust".into()),
+                    native_kind: "crate".into(),
+                    name: Some(name),
+                    signature: None,
+                    code: None,
+                    source: Some(source),
+                    contains: Vec::new(),
+                    references: Vec::new(),
+                    extensions: BTreeMap::new(),
+                })
+            });
+            self.selected.insert(id.clone());
+            self.categories.insert(id.clone(), CodeCategory::Container);
+        }
+        Ok(Some(self.reference(id)))
+    }
+
     /// 在引用发生处查询定义；成功的空响应保留未知目标，失败响应向外传播。
     fn definition(
         &mut self,
@@ -315,15 +489,6 @@ impl Resolver<'_> {
         semantic: &str,
     ) -> Result<Vec<ReferenceTarget>> {
         let text = name.text().to_string();
-        if semantic == "code.type_use"
-            && [
-                "bool", "str", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16",
-                "i32", "i64", "i128", "isize", "f32", "f64",
-            ]
-            .contains(&text.as_str())
-        {
-            return Ok(Vec::new());
-        }
         if text == "Self" {
             if let Some(enclosing) = name.ancestors().find(|node| {
                 matches!(
@@ -393,6 +558,11 @@ impl Resolver<'_> {
             .and_then(|path| path.canonicalize().ok())
             .and_then(|path| file_uri(&path).ok())
             .unwrap_or_else(|| uri.to_owned());
+        // 字段类型不需要图外身份信息；在读取或解析图外源码之前就停止。
+        if semantic == "code.type_use" && !self.documents.iter().any(|document| document.uri == uri)
+        {
+            return Ok(Vec::new());
+        }
         if !self.load(&uri)? {
             return Ok(vec![unknown(observed)]);
         }
@@ -400,17 +570,30 @@ impl Resolver<'_> {
             .document(&uri)
             .ok_or_else(|| failure("定义目标文档不存在"))?;
         let offset = syntax::byte_offset(&document.source, position)?;
+        if document.excludes(offset) || self.test_files.get(&uri) == Some(&true) {
+            return Ok(Vec::new());
+        }
         if let Some(declaration) = document.declared_at(offset) {
             let category = declaration.node.category();
             if semantic == "code.calls" && category != CodeCategory::Callable {
+                if closure_initializer(&declaration.syntax) {
+                    return Ok(Vec::new());
+                }
                 return Ok(vec![unknown(observed)]);
             }
             if semantic == "code.writes" && category != CodeCategory::Value {
                 return Ok(Vec::new());
             }
+            if semantic == "code.type_use" && category != CodeCategory::Type {
+                return Ok(Vec::new());
+            }
             return Ok(vec![self.reference(declaration.node.data().id.clone())]);
         }
-        // 对局部闭包绑定的调用，定义指向绑定名；由其实际初始化表达式定位闭包对象。
+        // 类型参数等位置不是 Type 声明，不能回退到外层对象或生成未知目标。
+        if semantic == "code.type_use" {
+            return Ok(Vec::new());
+        }
+        // 已确认的闭包没有独立图目标；不制造 Unresolved 节点，也不回指其外层对象。
         let token = document.tree.token_at_offset(offset).right_biased();
         if let Some(token) = token {
             let ancestors: Vec<_> = token.parent_ancestors().collect();
@@ -419,16 +602,19 @@ impl Resolver<'_> {
                     .iter()
                     .find(|node| node.kind() == SyntaxKind::LET_STMT)
                 {
-                    if let Some(closure) =
-                        child(statement, SyntaxKind::CLOSURE_EXPR).and_then(|closure| {
-                            document
-                                .declarations
-                                .iter()
-                                .find(|declaration| declaration.syntax == closure)
-                        })
+                    // 只匹配 let 的绑定位置，闭包参数中的函数指针仍是未解析动态调用。
+                    if ast::LetStmt::cast(statement.clone())
+                        .and_then(|statement| statement.pat())
+                        .is_some_and(|pattern| pattern.syntax().text_range().contains(offset))
+                        && closure_initializer(statement)
                     {
-                        return Ok(vec![self.reference(closure.node.data().id.clone())]);
+                        return Ok(Vec::new());
                     }
+                }
+                if ancestors.iter().any(|node| {
+                    node.kind() == SyntaxKind::CLOSURE_EXPR && node.text_range().start() == offset
+                }) {
+                    return Ok(Vec::new());
                 }
             }
             if semantic != "code.calls"
@@ -473,6 +659,28 @@ impl Resolver<'_> {
     }
 }
 
+/// 识别绑定或值声明直接提供的闭包，不猜测函数指针参数和返回值的运行时目标。
+fn closure_initializer(declaration: &SyntaxNode) -> bool {
+    declaration
+        .children()
+        .find(|node| ast::Expr::can_cast(node.kind()))
+        .is_some_and(|expression| is_closure_expression(&expression))
+}
+
+/// 括号和函数指针转换不改变匿名闭包的对象边界。
+fn is_closure_expression(expression: &SyntaxNode) -> bool {
+    match ast::Expr::cast(expression.clone()) {
+        Some(ast::Expr::ClosureExpr(_)) => true,
+        Some(ast::Expr::ParenExpr(parenthesized)) => parenthesized
+            .expr()
+            .is_some_and(|inner| is_closure_expression(inner.syntax())),
+        Some(ast::Expr::CastExpr(cast)) => cast
+            .expr()
+            .is_some_and(|inner| is_closure_expression(inner.syntax())),
+        _ => false,
+    }
+}
+
 /// 不推断身份的引用目标，保留观察到的名称以便两侧作确定性比较。
 fn unknown(name: &str) -> ReferenceTarget {
     ReferenceTarget::Unresolved {
@@ -495,14 +703,10 @@ fn add(
     }
 }
 
-/// 提取有明确源码位置的类型、调用、导入、数据访问和宏使用。
-fn reference_sites(node: &SyntaxNode) -> Vec<(&'static str, SyntaxNode)> {
+/// 查询调用、导入、写入、函数值候选和宏使用；字段类型由声明遍历处理，其他类型位置省略。
+fn reference_site(node: &SyntaxNode) -> Option<(&'static str, SyntaxNode)> {
     use SyntaxKind::*;
-    let site = match node.kind() {
-        PATH_TYPE => type_name(node).map(|name| ("code.type_use", name)),
-        RECORD_EXPR | RECORD_PAT => child(node, PATH)
-            .and_then(|path| path_name(&path))
-            .map(|name| ("code.type_use", name)),
+    match node.kind() {
         USE_TREE if child(node, USE_TREE_LIST).is_none() => child(node, PATH)
             .and_then(|path| path_name(&path))
             .map(|name| ("code.imports", name)),
@@ -524,49 +728,46 @@ fn reference_sites(node: &SyntaxNode) -> Vec<(&'static str, SyntaxNode)> {
         {
             child(node, PATH)
                 .and_then(|path| path_name(&path))
-                .map(|name| ("code.reads", name))
+                .map(|name| {
+                    let semantic = if is_write_target(node) {
+                        "code.writes"
+                    } else {
+                        "code.references"
+                    };
+                    (semantic, name)
+                })
         }
-        FIELD_EXPR => child(node, NAME_REF).map(|name| ("code.reads", name)),
+        FIELD_EXPR if is_write_target(node) => {
+            child(node, NAME_REF).map(|name| ("code.writes", name))
+        }
         _ => None,
-    };
-    let Some((semantic, name)) = site else {
-        return Vec::new();
-    };
-    if semantic == "code.reads" {
-        if let Some(parent) = node.parent().filter(|parent| parent.kind() == BIN_EXPR) {
-            let is_left = parent
-                .children()
-                .find(|child| ast::Expr::can_cast(child.kind()))
-                .as_ref()
-                == Some(node);
-            if is_left {
-                let operator = parent
-                    .children_with_tokens()
-                    .filter_map(|element| element.into_token())
-                    .find(|token| {
-                        matches!(
-                            token.text(),
-                            "=" | "+="
-                                | "-="
-                                | "*="
-                                | "/="
-                                | "%="
-                                | "&="
-                                | "|="
-                                | "^="
-                                | "<<="
-                                | ">>="
-                        )
-                    });
-                if let Some(operator) = operator {
-                    let mut result = vec![("code.writes", name.clone())];
-                    if operator.text() != "=" {
-                        result.push(("code.reads", name));
-                    }
-                    return result;
-                }
-            }
-        }
     }
-    vec![(semantic, name)]
 }
+
+/// 赋值和复合赋值只保留左侧目标的写入，不额外产生读取关系。
+fn is_write_target(node: &SyntaxNode) -> bool {
+    let Some(parent) = node
+        .parent()
+        .filter(|parent| parent.kind() == SyntaxKind::BIN_EXPR)
+    else {
+        return false;
+    };
+    parent
+        .children()
+        .find(|child| ast::Expr::can_cast(child.kind()))
+        .as_ref()
+        == Some(node)
+        && parent
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| {
+                matches!(
+                    token.text(),
+                    "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
+                )
+            })
+}
+
+#[cfg(test)]
+#[path = "tests/references.rs"]
+mod tests;

@@ -1,3 +1,5 @@
+import { structureClassDiagramFixture, structureCrateRootsFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureReviewFixture, structureSourceDiffFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import type { AnalysisOptions, StructureState } from "@/structure-review/types";
 import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -18,7 +20,7 @@ import type { RepositoryReviewSummary } from "@/lib/review-types";
 import type { GitHubIdentityLifecycleBinding } from "@/github/use-github-identity-lifecycle";
 import type { BranchSelectionContinuationBinding } from "@/review/use-branch-selection-continuation";
 import { ApplicationSettingsDestination } from "@/components/settings-page";
-import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, ThemePreference } from "@/settings/application-settings";
+import type { ApplicationLanguage, ApplicationSettings, ApplicationSettingsApplication, BabysitSettings, CustomProviderConnection, RustDependencyScope, ThemePreference } from "@/settings/application-settings";
 import type { ApplicationUpdateApplication, ApplicationUpdateSnapshot } from "@/application-update/application-update";
 import { useApplicationUpdate, type ApplicationUpdateBinding } from "@/application-update/use-application-update";
 import { ApplicationUpdateAttention } from "@/components/application-update/application-update-attention";
@@ -137,6 +139,7 @@ function SettingsPreview({
   modelState = "idle",
   applicationUpdate,
   initialSection,
+  structureSaving = false,
 }: {
   saveFails?: boolean;
   language?: ApplicationLanguage;
@@ -147,7 +150,9 @@ function SettingsPreview({
   modelState?: "idle" | "loading" | "empty" | "error";
   applicationUpdate?: ApplicationUpdateBinding;
   initialSection?: SettingsSection;
+  structureSaving?: boolean;
 }) {
+  const [rustScope, setRustScope] = useState<RustDependencyScope>("standard-library");
   const [savedTheme, setSavedTheme] = useState<ThemePreference>("system");
   const [savedLanguage, setSavedLanguage] = useState<ApplicationLanguage>(initialLanguage);
   const [codexExecutable, setCodexExecutable] = useState<string | null>(longCodexPath
@@ -166,7 +171,7 @@ function SettingsPreview({
     claudeCode: { executable: babysitSection ? "/opt/homebrew/bin/claude" : null, model: babysitSection ? "sonnet" : null, reasoningEffort: babysitSection ? "low" : null },
     custom: { protocol: customConnection.protocol, baseUrl: customConnection.baseUrl, model: customConnection.model, effort: customConnection.effort },
   });
-  const snapshot = (theme: ThemePreference, value = babysit, language = savedLanguage): ApplicationSettings => ({ version: 1, theme, language, babysit: value });
+  const snapshot = (theme: ThemePreference, value = babysit, language = savedLanguage): ApplicationSettings => ({ version: 1, theme, language, babysit: value, structureReview: { rust: { dependencyScope: rustScope } } });
   const application: ApplicationSettingsApplication = {
     load: async () => snapshot(savedTheme),
     updateTheme: async (theme) => {
@@ -178,6 +183,12 @@ function SettingsPreview({
       if (saveFails) throw new Error("预览中的 settings.json 无法写入");
       setSavedLanguage(language);
       return snapshot(savedTheme, babysit, language);
+    },
+    updateRustDependencyScope: async (scope) => {
+      if (structureSaving) return new Promise<ApplicationSettings>(() => undefined);
+      if (saveFails) throw new Error("预览中的结构设置无法保存");
+      setRustScope(scope);
+      return { ...snapshot(savedTheme), structureReview: { rust: { dependencyScope: scope } } };
     },
     listBabysitModels: async () => {
       if (modelState === "loading") return new Promise(() => undefined);
@@ -427,11 +438,13 @@ function ReviewReaderPreview({
   shortContent = false,
   themeSample = false,
   babysitKind,
+  structureKind = "ready",
 }: {
   empty?: boolean;
   merged?: boolean;
   updateState?: "current" | "checking" | "failed" | "available";
-  initialView?: "overview" | "file-changes";
+  initialView?: "overview" | "file-changes" | "structure-changes";
+  structureKind?: "source-diff" | "crate-roots" | "dense" | "field-types" | "ready" | "loading" | "failed" | "empty" | "tests-only" | "unsupported" | "imports-only" | "hidden-references";
   shortContent?: boolean;
   themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
@@ -474,7 +487,7 @@ function ReviewReaderPreview({
     ? "src/components/review-reader.tsx"
     : snapshot.fileChanges[0]?.path);
   const [mode, setMode] = useState<DiffMode>("side-by-side");
-  const [view, setView] = useState<"overview" | "file-changes">(initialView);
+  const [view, setView] = useState<"overview" | "file-changes" | "structure-changes">(initialView);
   const selectedContent = selectedPath ? contents[selectedPath] : undefined;
   const babysitRequest = selectedPath
     ? { reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, path: selectedPath, detectedLanguage: "typescript" }
@@ -498,7 +511,25 @@ function ReviewReaderPreview({
         : babysitKind === "failed"
           ? { kind: "failed", request: babysitRequest, retryable: true, error: { code: "repair_exhausted", detail: "三轮修复后仍有行解释缺失。" } }
           : { kind: "generating", request: babysitRequest };
+  const [structureOptions, setStructureOptions] = useState<AnalysisOptions>({ includeTests: false });
+  /** 代表性源码对应的分析结果，重试与切换范围使用同一份预览输入。 */
+  const structureReadyState = (includeTests: boolean): StructureState => {
+    const comparison = { ...(structureKind === "source-diff" ? structureSourceDiffFixture() : structureKind === "field-types" ? structureFieldTypesFixture() : structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureKind === "hidden-references" ? structureHiddenReferencesFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
+    if (structureKind === "empty" || structureKind === "tests-only") return { kind: "ready", comparison: structureTestCodeFixture({ ...comparison, before: comparison.after, diff: { nodes: [] } }, structureKind === "tests-only" && includeTests) };
+    if (structureKind === "unsupported") return { kind: "ready", comparison: { ...comparison, before: { root: [], nodes: [], externalSymbols: {} }, after: { root: [], nodes: [], externalSymbols: {} }, diff: { nodes: [] }, coverage: comparison.coverage.slice(-1) } };
+    return { kind: "ready", comparison: structureTestCodeFixture(comparison, includeTests) };
+  };
+  const [structureState, setStructureState] = useState<StructureState>(() => {
+    if (structureKind === "loading") return { kind: "loading" };
+    if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
+    return structureReadyState(false);
+  });
   const review: ReviewReaderBinding = {
+    structure: {
+      state: structureState, options: structureOptions,
+      setOptions: (options) => { setStructureOptions(options); setStructureState(structureReadyState(options.includeTests)); },
+      cancel: () => setStructureState({ kind: "cancelled" }), retry: () => setStructureState(structureReadyState(structureOptions.includeTests)),
+    },
     snapshot,
     transition: { kind: "stable" },
     fileChange: selectedPath
@@ -553,6 +584,10 @@ const previews: Record<string, PreviewDefinition> = {
     label: "应用设置",
     scenarios: {
       default: { label: "外观与分区导航", render: () => <SettingsPreview /> },
+      "structure-review": { label: "结构改动与语言配置", render: () => <SettingsPreview initialSection="structure-review" /> },
+      "structure-review-en": { label: "结构改动英文长文案", render: () => <SettingsPreview initialSection="structure-review" language="en-US" /> },
+      "structure-review-error": { label: "结构设置保存失败", render: () => <SettingsPreview initialSection="structure-review" saveFails /> },
+      "structure-review-saving": { label: "结构设置保存中", render: () => <SettingsPreview initialSection="structure-review" structureSaving /> },
       error: { label: "主题保存失败", render: () => <SettingsPreview saveFails /> },
       "language-zh-CN": { label: "简体中文", render: () => <SettingsPreview language="zh-CN" /> },
       "language-en-US": { label: "English", render: () => <SettingsPreview language="en-US" /> },
@@ -686,6 +721,18 @@ const previews: Record<string, PreviewDefinition> = {
     label: "Review 阅读器",
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
+      "structure-changes": { label: "结构改动与嵌套关系", render: () => <ReviewReaderPreview initialView="structure-changes" /> },
+      "structure-source-diff": { label: "对象原始源码与长实现对比", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="source-diff" /> },
+      "structure-class-diagram": { label: "密集类图与成员关系", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="dense" /> },
+      "structure-field-types": { label: "字段与图内类型关联", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="field-types" /> },
+      "structure-crate-roots": { label: "库与集成测试 crate 根", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="crate-roots" /> },
+      "structure-loading": { label: "结构分析中", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="loading" /> },
+      "structure-failed": { label: "结构分析失败", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="failed" /> },
+      "structure-empty": { label: "没有结构变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="empty" /> },
+      "structure-tests-only": { label: "测试代码分析开关与空图", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="tests-only" /> },
+      "structure-imports-only": { label: "仅导入声明变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="imports-only" /> },
+      "structure-hidden-references": { label: "仅图外或未解析关系变化", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="hidden-references" /> },
+      "structure-unsupported": { label: "结构分析未支持", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="unsupported" /> },
       "file-changes": { label: "File Changes 长列表", render: () => <ReviewReaderPreview initialView="file-changes" /> },
       "short-content": { label: "短内容 File Change", render: () => <ReviewReaderPreview initialView="file-changes" shortContent /> },
       "diff-theme": { label: "Diff 主题与长行", render: () => <ReviewReaderPreview initialView="file-changes" themeSample babysitKind="completed" /> },

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio_util::sync::CancellationToken;
 
 /// Review 持久化的 Pull Request Selection identity。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -139,7 +140,7 @@ impl PullRequestSelectionResolver {
         let access_token = match &self.auth {
             Some(auth) => tokio::select! {
                 result = auth.access_token() => result.map_err(PullRequestResolutionError::GitHub)?,
-                () = wait_for_cancellation(cancellation) => return Err(cancelled()),
+                () = cancellation.cancelled() => return Err(cancelled()),
             },
             None => None,
         };
@@ -150,7 +151,7 @@ impl PullRequestSelectionResolver {
                 selection.number,
                 access_token.as_ref(),
             ) => result.map_err(PullRequestResolutionError::GitHub)?,
-            () = wait_for_cancellation(cancellation) => return Err(cancelled()),
+            () = cancellation.cancelled() => return Err(cancelled()),
         };
         let remotes = github::remote_names_for_repository_with_cancellation(
             repository_path,
@@ -315,19 +316,12 @@ async fn resolve_pull_request_objects(
 
 /// 在任何外部工作开始前响应已经发生的取消。
 fn require_not_cancelled(
-    cancellation: &crate::operation::CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<(), PullRequestResolutionError> {
     if cancellation.is_cancelled() {
         Err(cancelled())
     } else {
         Ok(())
-    }
-}
-
-/// 等待共享 cancellation token，供异步 GitHub 请求参与 select。
-async fn wait_for_cancellation(cancellation: &crate::operation::CancellationSignal) {
-    while !cancellation.is_cancelled() {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
 

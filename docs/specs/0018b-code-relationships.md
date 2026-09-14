@@ -120,14 +120,17 @@ long-lived self-references.
 | code.applies_to | Implementation/extension declaration → target |
 | code.inherits | Derived type → base type |
 | code.implements | Implementer → contract |
-| code.type_use | Referencing declaration → type |
 | code.imports | Importing node → imported symbol |
-| code.reads / code.writes | Accessing node → data target |
+| code.writes | Writing node → data target |
 
 A semantic is a documented relation meaning, not an arbitrary display label. Language
 implementations may add namespaced meanings as needed. No independent AccessorOf
 relation is required: inline accessors can be property children; reused functions can
 be linked through a suitable reference.
+
+General type-use and data-read relationships are not currently extracted. Declarations,
+signatures and owned code still participate in content comparison. This does not remove
+structural relationships to types, such as implementation targets and trait contracts.
 
 Declaration placement and semantic ownership remain distinct. A Rust implementation
 node may contain a method while referencing the implemented type; the method can

@@ -7,7 +7,7 @@ pub enum CodeNode {
     Container(CodeNodeData),
     /// 类、结构体、接口、trait、枚举、类型别名。
     Type(CodeNodeData),
-    /// 函数、方法、构造函数、访问器、闭包。
+    /// 独立建模的函数、方法、构造函数、访问器等可调用对象。
     Callable(CodeNodeData),
     /// 字段、属性、常量、全局变量、枚举成员。
     Value(CodeNodeData),
@@ -30,7 +30,11 @@ pub struct CodeNodeData {
     pub signature: Option<String>,
     /// 自身实现内容的规范化代码，例如函数体或初始化表达式；不重复嵌入子对象内容。
     /// None 表示没有实现内容，不能用来掩盖提取失败；子表达式可由语言实现投影为身份占位。
+    /// 未单独建模的表达式（如当前 Rust 映射中的闭包）仍保留在所属对象的代码中。
     pub code: Option<String>,
+    /// 节点对应的原始源码，仅供展示，不参与身份和结构差异比较。
+    /// 保留声明、实现、注释、排版及嵌套成员；无对应源码时为 None。
+    pub source: Option<String>,
     /// 直接包含的声明节点，分类从目标节点的枚举变体读取。
     pub contains: Vec<NodeId>,
     /// 当前节点发出的非包含关联，允许指向自身或形成引用环。

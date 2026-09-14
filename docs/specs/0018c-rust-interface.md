@@ -16,6 +16,12 @@ The common content/tree/reference interface is implemented, including normalized
 The concrete Rust LSP adapter lives in the sibling `rust_analyzer` module; frontend
 transport remains later work.
 
+`CodeNodeData.source` optionally retains the node's original source for display,
+including declaration, implementation, comments, whitespace and nested members.
+It is separate from normalized `signature` and own `code`: neither node identity nor
+`CodeGraph::diff` compares it. An analyzer can leave it `None` when no corresponding
+source is available. No filesystem location or formatter is required by this field.
+
 ## Rust implementation
 
 The supported entry point is
@@ -38,6 +44,13 @@ placement plus reachability from the root rules out containment cycles, includin
 cycles disconnected from the root. Traversal uses an explicit stack. Reference cycles
 and repeated identical reference observations are allowed.
 
+`CodeGraph::with_external_symbols` optionally attaches a map from opaque External
+symbol identity to `ExternalSymbol { name, scope }`. `external_symbols()` exposes
+these descriptions read-only. `SymbolScope::{Repository, Dependency}` distinguishes
+repository symbols outside the selected graph from source outside the repository.
+Names and scope are analyzer-provided descriptions, not additional nodes or fields
+in reference identity; changing them alone does not create a graph difference.
+
 CodeGraph::diff produces stable output: nodes are sorted by NodeId, and set changes
 list sorted removals followed by sorted additions. It ignores input array order and
 duplicate reference observations. Own data is compared separately from relationships,
@@ -48,7 +61,18 @@ of validated in-memory graphs has no additional fallible operation and returns O
 the Result signature is preserved. Matching analysis and normalization conventions is
 a caller precondition, not something inferred from absent protocol-version metadata.
 
-AnalysisInput and LanguageAnalyzer define the language-implementation seam. Path checks,
+`AnalysisError::new(message)` represents a real failure;
+`AnalysisError::cancelled(message)` explicitly represents cooperative cancellation.
+`is_cancelled()` preserves that distinction independently of a signal arriving later,
+so simultaneous user cancellation cannot hide a real analyzer failure. The message
+remains available for diagnostics, and language implementations do not need access
+to the parent's cancellation authority.
+
+AnalysisInput, AnalysisOptions and LanguageAnalyzer define the language-implementation seam.
+`AnalysisOptions::default()` sets `include_tests` to false; the option is carried in
+`AnalysisInput.options` and must match on both sides of a comparison. The language
+implementation owns conservative test classification; the common graph does not
+interpret Rust attributes or any other language's testing conventions. Path checks,
 source reads and normalization belong to the concrete analyzer; workspace preparation
 remains with the caller. RustLanguageAnalyzer implements this seam in its own module.
 Serialization and deserialization are not added by this implementation; any future

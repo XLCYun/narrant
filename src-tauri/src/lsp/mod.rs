@@ -8,6 +8,7 @@ use std::{
     fmt::Display,
     path::Path,
     process::Command,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -21,6 +22,28 @@ use transport::Transport;
 #[derive(Debug)]
 pub struct LspError {
     pub message: String,
+    cancelled: bool,
+}
+
+impl LspError {
+    /// 将明确的本地取消与 I/O、协议和服务器错误区分。
+    fn cancelled() -> Self {
+        Self {
+            message: "LSP 操作已取消".into(),
+            cancelled: true,
+        }
+    }
+
+    /// 供语言 Adapter 保留取消类别，不再依赖错误文案或后到的取消请求。
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    /// 添加请求上下文时保留原始错误的取消语义。
+    fn context(mut self, context: impl Display) -> Self {
+        self.message = format!("{context}：{}", self.message);
+        self
+    }
 }
 
 impl Display for LspError {
@@ -35,12 +58,16 @@ impl std::error::Error for LspError {}
 /// 通用 LSP 操作的结果，语言 Adapter 可在自己的 seam 转换错误。
 pub type Result<T> = std::result::Result<T, LspError>;
 
+/// 只观察调用方的取消状态；通用会话不拥有应用操作的取消触发权。
+pub type CancellationCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// 原样传给服务器的能力及初始化选项；超时限制一次请求的总等待时间。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LspOptions {
     pub capabilities: Value,
     pub initialization_options: Value,
     pub request_timeout: Duration,
+    pub cancelled: CancellationCheck,
 }
 
 impl Default for LspOptions {
@@ -55,6 +82,7 @@ impl Default for LspOptions {
             }),
             initialization_options: Value::Null,
             request_timeout: Duration::from_secs(90),
+            cancelled: Arc::new(|| false),
         }
     }
 }
@@ -69,6 +97,7 @@ pub struct LspClient {
     notifications: BTreeMap<String, Value>,
     next_id: u64,
     request_timeout: Duration,
+    cancelled: CancellationCheck,
 }
 
 impl LspClient {
@@ -82,6 +111,7 @@ impl LspClient {
             notifications: BTreeMap::new(),
             next_id: 0,
             request_timeout: options.request_timeout,
+            cancelled: options.cancelled,
         };
         let initialized = client.request(
             "initialize",
@@ -132,6 +162,7 @@ impl LspClient {
         self.transport.send(
             json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
             self.request_timeout,
+            &self.cancelled,
         )?;
         loop {
             let remaining = deadline
@@ -139,7 +170,7 @@ impl LspClient {
                 .ok_or_else(|| failure(format!("LSP 请求超时：{method}")))?;
             let message = self
                 .receive(remaining)
-                .map_err(|error| failure(format!("LSP {method} 等待响应失败：{error}")))?;
+                .map_err(|error| error.context(format!("LSP {method} 等待响应失败")))?;
             if message.get("method").is_none() && message["id"] == id {
                 if let Some(error) = message.get("error") {
                     return Err(failure(format!("LSP {method} 失败：{error}")));
@@ -157,6 +188,7 @@ impl LspClient {
         self.transport.send(
             json!({"jsonrpc": "2.0", "method": method, "params": params}),
             self.request_timeout,
+            &self.cancelled,
         )
     }
 
@@ -185,7 +217,7 @@ impl LspClient {
                 .checked_duration_since(Instant::now())
                 .ok_or_else(|| failure(format!("等待 LSP 通知超时：{method}")))?;
             self.receive(remaining)
-                .map_err(|error| failure(format!("等待 LSP {method} 失败：{error}")))?;
+                .map_err(|error| error.context(format!("等待 LSP {method} 失败")))?;
         }
     }
 
@@ -227,7 +259,7 @@ impl LspClient {
     /// 处理标准反向请求并保存扩展通知；未实现的反向请求明确返回 MethodNotFound。
     fn receive(&mut self, timeout: Duration) -> Result<Value> {
         let deadline = Instant::now() + timeout;
-        let message = self.transport.receive(timeout)?;
+        let message = self.transport.receive(timeout, &self.cancelled)?;
         if !message.is_object() || message["jsonrpc"] != "2.0" {
             return Err(failure("LSP 收到无效的 JSON-RPC 消息"));
         }
@@ -246,7 +278,7 @@ impl LspClient {
                 let remaining = deadline
                     .checked_duration_since(Instant::now())
                     .ok_or_else(|| failure("LSP 反向请求处理超时"))?;
-                self.transport.send(response, remaining)?;
+                self.transport.send(response, remaining, &self.cancelled)?;
             } else {
                 self.notifications
                     .insert(method.to_owned(), message["params"].clone());
@@ -267,6 +299,7 @@ pub fn file_uri(path: &Path) -> Result<String> {
 fn failure(message: impl Display) -> LspError {
     LspError {
         message: message.to_string(),
+        cancelled: false,
     }
 }
 

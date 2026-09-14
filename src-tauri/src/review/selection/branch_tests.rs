@@ -2,6 +2,7 @@ use super::*;
 use crate::operation::OperationContext;
 use std::path::Path;
 use std::process::Command;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn stable_branch_selection_resolves_one_immutable_snapshot() {
@@ -47,9 +48,9 @@ async fn branch_ref_catalog_reports_canonical_refs_and_explicit_choices() {
 
 #[tokio::test]
 async fn cancelled_branch_selection_stops_before_repository_access() {
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let operation = OperationContext::new(cancellation.clone());
 
     let error = match BranchSelectionResolver
         .resolve(

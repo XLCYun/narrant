@@ -11,7 +11,15 @@ pub(crate) struct FakeServer {
 impl FakeServer {
     /// 每一步消费一帧，允许同时发出响应、反向请求和通知。
     pub fn new(steps: Vec<Vec<Value>>) -> Self {
-        Self::raw(
+        Self::with_workspace(|_| steps)
+    }
+
+    /// 响应中的源码 URI 使用临时仓库真实路径，支持跨文件语义和模块归属验证。
+    pub fn with_workspace(steps: impl FnOnce(&Path) -> Vec<Vec<Value>>) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let steps = steps(directory.path());
+        Self::raw_in(
+            directory,
             steps
                 .into_iter()
                 .map(|messages| {
@@ -31,6 +39,11 @@ impl FakeServer {
     /// 原始帧入口覆盖截断、无效头部和 EOF，其余测试使用结构化消息。
     pub fn raw(steps: Vec<Vec<u8>>, keep_alive: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
+        Self::raw_in(directory, steps, keep_alive)
+    }
+
+    /// 协议帧和可执行脚本保存在同一个测试目录。
+    fn raw_in(directory: tempfile::TempDir, steps: Vec<Vec<u8>>, keep_alive: bool) -> Self {
         let mut script = String::from("#!/bin/sh\nset -eu\nprintf '%s' \"$$\" > pid\n");
         for (index, bytes) in steps.iter().enumerate() {
             fs::write(directory.path().join(format!("step-{index}")), bytes).unwrap();

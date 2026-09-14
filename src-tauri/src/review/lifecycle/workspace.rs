@@ -2,30 +2,29 @@ use super::*;
 
 impl ReviewLifecycle {
     /// 先完成逻辑关闭，再尝试清理 workspace；清理失败不会重新打开 Review。
-    pub fn close(&self, review_id: &str) -> Result<CloseOutcome, ReviewLifecycleError> {
-        if self.is_shutting_down() {
-            return Err(ReviewLifecycleError::ShuttingDown);
-        }
-        if self.is_refreshing(review_id)? {
-            return Err(ReviewLifecycleError::Busy);
-        }
+    pub async fn close(&self, review_id: &str) -> Result<CloseOutcome, ReviewLifecycleError> {
+        let _operation_guard = self.enter_operation().await?;
+        let _workspace_change = self.begin_workspace_change(review_id)?;
         let review_lock = self.review_lock(review_id)?;
-        let _review_guard = review_lock
-            .try_lock()
-            .map_err(|_| ReviewLifecycleError::Busy)?;
+        let _review_guard = review_lock.lock().await;
         self.remove_runtime_review(review_id)?;
         let saved = self
             .store
             .open_review(review_id)
             .map_err(|error| ReviewLifecycleError::new(error.to_string()))?;
         let target = self.cleanup_target(&saved)?;
-        if !target.workspace_path.exists() {
-            return Ok(CloseOutcome {
-                workspace_cleanup: WorkspaceCleanup::NotNeeded,
-            });
-        }
-        let cleanup = remove_workspace(&target)
-            .map_or_else(WorkspaceCleanup::Deferred, |()| WorkspaceCleanup::Complete);
+        let existed = target.workspace_path.exists()
+            || target
+                .workspace_path
+                .parent()
+                .is_some_and(|parent| parent.join("before").exists());
+        let cleanup = remove_workspace(&target).map_or_else(WorkspaceCleanup::Deferred, |()| {
+            if existed {
+                WorkspaceCleanup::Complete
+            } else {
+                WorkspaceCleanup::NotNeeded
+            }
+        });
         Ok(CloseOutcome {
             workspace_cleanup: cleanup,
         })
@@ -47,6 +46,7 @@ impl ReviewLifecycle {
     /// 应用退出时拒绝新操作，等待既有 materialize/refresh 收敛，再清理全部 runtime。
     pub async fn shutdown(&self) -> Result<Vec<String>, ReviewLifecycleError> {
         self.shutting_down.store(true, Ordering::Release);
+        self.revoke_workspace_uses()?;
         let _operation_guard = self.operation_gate.write().await;
         self.clear_runtime()?;
         self.cleanup_workspaces()
@@ -87,11 +87,24 @@ impl ReviewLifecycle {
 
 /// 精确移除已验证归属的受管 workspace。
 fn remove_workspace(target: &ReviewWorkspaceCleanupTarget) -> Result<(), String> {
-    GitProcessAdapter::new(&target.repository_path)
-        .remove_owned_worktree_if_present(
-            &target.workspace_path,
+    let parent = target
+        .workspace_path
+        .parent()
+        .ok_or_else(|| "Review Workspace 路径无效".to_owned())?;
+    let adapter = GitProcessAdapter::new(&target.repository_path);
+    let mut errors = Vec::new();
+    for path in [parent.join("before"), target.workspace_path.clone()] {
+        if let Err(error) = adapter.remove_owned_worktree_if_present(
+            &path,
             &target.git_common_directory,
             OperationContext::background().cancellation(),
-        )
-        .map_err(|error| format!("{}：{error}", target.review_id))
+        ) {
+            errors.push(format!("{} {}：{error}", target.review_id, path.display()));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
 }

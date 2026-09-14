@@ -6,7 +6,7 @@
 use super::{
     codex_setup_error, parse_provider_response, validate_response, BabysitAgentProvider,
     BabysitError, BabysitFileExplanations, BabysitProviderRequest, BabysitProviderSetupFailure,
-    CancellationSignal, FileSide, LineTarget, ValidationFailure, MAX_REPAIR_ATTEMPTS,
+    FileSide, LineTarget, ValidationFailure, MAX_REPAIR_ATTEMPTS,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 #[path = "codex/discovery.rs"]
 mod discovery;
@@ -495,7 +496,7 @@ impl CodexAppServerProvider {
         key: &str,
         run: &ActiveThread,
         request: &BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
         delete_invalid: bool,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         let mut cleanup_guard = RunCleanupGuard::new(
@@ -563,7 +564,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         if cancellation.is_cancelled() {
             return Err(BabysitError::Cancelled);
@@ -655,7 +656,7 @@ impl BabysitAgentProvider for CodexAppServerProvider {
         request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
         failures: Vec<ValidationFailure>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         if cancellation.is_cancelled() {
             return Err(BabysitError::Cancelled);

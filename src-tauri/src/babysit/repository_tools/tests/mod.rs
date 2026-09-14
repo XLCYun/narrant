@@ -1,7 +1,8 @@
 use super::*;
-use crate::operation::TestCancellation;
+
 use std::fs;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 mod read;
 
@@ -41,7 +42,7 @@ fn glob_returns_matching_workspace_relative_paths() {
             RepositoryToolRequest::Glob(GlobRequest {
                 pattern: "**/*.rs".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Glob");
 
@@ -63,7 +64,7 @@ fn glob_returns_matching_workspace_relative_paths() {
             RepositoryToolRequest::Glob(GlobRequest {
                 pattern: "[literal].rs".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("按字面量匹配未公开的 Glob 元字符");
     assert_eq!(
@@ -105,7 +106,7 @@ fn glob_returns_deterministic_bounded_results_with_explicit_truncation() {
             RepositoryToolRequest::Glob(GlobRequest {
                 pattern: "*.txt".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Glob");
 
@@ -151,7 +152,7 @@ fn glob_proves_each_match_and_skips_symlinks_leaving_the_workspace() {
             RepositoryToolRequest::Glob(GlobRequest {
                 pattern: "**/*.txt".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Glob");
 
@@ -178,7 +179,7 @@ fn glob_never_uses_an_absolute_pattern_as_a_host_filesystem_root() {
             RepositoryToolRequest::Glob(GlobRequest {
                 pattern: format!("{}/*.txt", outside.path().display()),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Glob");
 
@@ -194,7 +195,7 @@ fn glob_honors_cancellation_before_traversal() {
     let root = workspace();
     fs::write(root.path().join("inside.txt"), "inside").expect("写入文件");
     let tools = RepositoryTools::new(root.path()).expect("初始化工具");
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
 
     let error = tools
@@ -229,7 +230,7 @@ fn grep_searches_a_directory_and_returns_relative_paths_and_one_based_lines() {
                 pattern: "needle".to_owned(),
                 path: "src".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep");
 
@@ -275,7 +276,7 @@ fn grep_accepts_absolute_and_parent_targets_only_when_they_resolve_inside() {
                     pattern: "needle".to_owned(),
                     path,
                 }),
-                &TestCancellation::default(),
+                &CancellationToken::new(),
             )
             .expect("执行 Grep");
         assert_eq!(
@@ -297,7 +298,7 @@ fn grep_accepts_absolute_and_parent_targets_only_when_they_resolve_inside() {
                 pattern: "needle".to_owned(),
                 path: outside_file.display().to_string(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect_err("workspace 外目标应失败");
     assert_eq!(error, RepositoryToolError::OutsideWorkspace);
@@ -329,7 +330,7 @@ fn grep_skips_binary_and_invalid_utf8_files_without_partial_matches() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep");
 
@@ -373,7 +374,7 @@ fn grep_reads_internal_symlinks_and_skips_external_symlinks() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep");
 
@@ -425,7 +426,7 @@ fn grep_preserves_requested_file_and_directory_symlink_aliases() {
                     pattern: "needle".to_owned(),
                     path: path.to_owned(),
                 }),
-                &TestCancellation::default(),
+                &CancellationToken::new(),
             )
             .expect("通过 symlink alias 执行 Grep")
         else {
@@ -449,7 +450,7 @@ fn grep_removes_only_one_line_terminator() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep")
     else {
@@ -477,7 +478,7 @@ fn grep_returns_deterministic_bounded_matching_lines_with_explicit_truncation() 
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep");
 
@@ -517,7 +518,7 @@ fn grep_bounds_a_single_extreme_line_and_reports_truncation() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep")
     else {
@@ -545,7 +546,7 @@ fn grep_scans_past_one_mib_but_discards_the_whole_file_after_a_late_nul() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep")
     else {
@@ -576,7 +577,7 @@ fn grep_discards_files_with_binary_or_invalid_utf8_after_the_result_budget() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep")
     else {
@@ -602,7 +603,7 @@ fn grep_scans_complete_large_utf8_files() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep")
     else {
@@ -643,7 +644,7 @@ fn grep_honors_workspace_ignore_files_but_searches_hidden_paths() {
                 pattern: "needle".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect("执行 Grep")
     else {
@@ -670,7 +671,7 @@ fn grep_rejects_patterns_larger_than_sixteen_kib() {
                 pattern: "x".repeat(16 * 1024 + 1),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect_err("超大 pattern 应失败");
     assert_eq!(error, RepositoryToolError::InvalidPattern);
@@ -681,7 +682,7 @@ fn grep_honors_cancellation_before_search() {
     let root = workspace();
     fs::write(root.path().join("inside.rs"), "needle\n").expect("写入文件");
     let tools = RepositoryTools::new(root.path()).expect("初始化工具");
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
 
     let error = tools
@@ -711,7 +712,7 @@ fn grep_reports_stable_redacted_errors_for_invalid_pattern_and_missing_target() 
                 pattern: "[".to_owned(),
                 path: ".".to_owned(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect_err("无效模式应失败");
     assert_eq!(invalid_pattern, RepositoryToolError::InvalidPattern);
@@ -726,7 +727,7 @@ fn grep_reports_stable_redacted_errors_for_invalid_pattern_and_missing_target() 
                 pattern: "needle".to_owned(),
                 path: missing_target_path.display().to_string(),
             }),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .expect_err("缺失目标应失败");
     assert_eq!(missing_target, RepositoryToolError::TargetUnavailable);

@@ -70,7 +70,7 @@ pub(super) fn compare(
     CodeGraphDiff { nodes }
 }
 
-/// 只比较节点自身字段，不将子节点、引用或它们的变化递归算入声明。
+/// 只比较自身语义；展示源码的排版、注释和嵌套成员不计入父节点内容变化。
 fn same_content(before: &CodeNode, after: &CodeNode) -> bool {
     let old = before.data();
     let new = after.data();

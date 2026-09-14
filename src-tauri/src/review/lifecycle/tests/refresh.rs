@@ -269,8 +269,8 @@ async fn cancellation_after_workspace_mutation_does_not_interrupt_convergence() 
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    let cancellation = crate::operation::TestCancellation::default();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let cancellation = CancellationToken::new();
+    let operation = OperationContext::new(cancellation.clone());
     let cancellation_request = cancellation.clone();
     let refresh_completed = Arc::new(AtomicBool::new(false));
     let completion_observer = refresh_completed.clone();
@@ -334,9 +334,9 @@ async fn cancelled_update_check_keeps_current_snapshot_and_workspace() {
         )
         .await
         .unwrap();
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let operation = OperationContext::new(cancellation.clone());
 
     let error = lifecycle
         .check_update(&operation, &saved.review_id)
@@ -386,9 +386,9 @@ async fn cancellation_after_candidate_staging_abandons_candidate_before_workspac
         .store
         .stage_branch_refresh_candidate(&saved.review_id, &saved.to_change_comparison())
         .unwrap();
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let operation = OperationContext::new(cancellation.clone());
 
     let error = lifecycle
         .cancel_staged_refresh(&operation, &candidate)

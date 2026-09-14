@@ -1,11 +1,12 @@
 use super::*;
 use crate::babysit::codex::CODEX_ANALYSIS_TIMEOUT;
-use crate::operation::{OperationContext, TestCancellation};
+use crate::operation::OperationContext;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn codex_deadlines_match_the_runtime_policy() {
@@ -229,7 +230,7 @@ async fn shutdown_releases_the_owned_app_server_after_a_completed_run() {
 async fn cancelled_generate_is_cleaned_before_provider_shutdown() {
     let (provider, _temp, events) = provider("hang", CODEX_ANALYSIS_TIMEOUT);
     let provider = Arc::new(provider);
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let worker_provider = provider.clone();
     let worker_cancellation = cancellation.clone();
     let worker = tokio::spawn(async move {
@@ -263,7 +264,7 @@ async fn cancelled_generate_is_cleaned_before_provider_shutdown() {
 async fn cancelled_repair_is_cleaned_before_provider_shutdown() {
     let (provider, _temp, events) = provider("repair-hang", CODEX_ANALYSIS_TIMEOUT);
     let provider = Arc::new(provider);
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let first = provider
         .generate(request(), &cancellation)
         .await
@@ -660,7 +661,7 @@ async fn cancellation_interrupts_and_deletes_the_active_thread() {
     let (provider, _temp, events) = provider("hang", CODEX_ANALYSIS_TIMEOUT);
     let provider = Arc::new(provider);
     let request = request();
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
     let worker_provider = provider.clone();
     let worker = tokio::spawn(async move {
@@ -846,7 +847,7 @@ async fn stale_item_and_nested_turn_notifications_are_ignored() {
 async fn cancellation_after_thread_start_response_still_deletes_the_thread() {
     let (provider, _temp, events) = provider("delayed-thread-start", CODEX_ANALYSIS_TIMEOUT);
     let provider = Arc::new(provider);
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
     let worker_provider = provider.clone();
     let worker = tokio::spawn(async move {

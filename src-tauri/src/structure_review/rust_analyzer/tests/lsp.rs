@@ -3,6 +3,76 @@
 use super::RustLsp;
 use crate::lsp::{test_support::FakeServer, Position};
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
+
+/// 语言 Adapter 在等待项目状态时保留通用 LSP 的取消类别与请求上下文。
+#[test]
+fn preserves_cancellation_while_waiting_for_project_readiness() {
+    let server = FakeServer::new(vec![vec![initialized(capabilities())]]);
+    let cancellation = CancellationToken::new();
+    let observed = cancellation.clone();
+    let mut client = RustLsp::start(
+        &server.workspace().join("server"),
+        server.workspace(),
+        std::sync::Arc::new(move || observed.is_cancelled()),
+        super::RustDependencyScope::default(),
+    )
+    .unwrap();
+    cancellation.cancel();
+    let error = client.wait_ready().unwrap_err();
+    assert!(error.is_cancelled());
+    assert!(error.message.contains("experimental/serverStatus"));
+}
+
+/// 三个档位在真实 stdio 握手中分别控制标准库与项目依赖。
+#[test]
+fn selects_standard_library_and_dependency_loading_independently() {
+    use super::RustDependencyScope;
+    for scope in [
+        RustDependencyScope::RepositoryOnly,
+        RustDependencyScope::StandardLibrary,
+        RustDependencyScope::AllDependencies,
+    ] {
+        let server = FakeServer::new(vec![
+            vec![initialized(capabilities())],
+            vec![status("ok")],
+            vec![json!({"jsonrpc":"2.0", "id":2, "result":null})],
+        ]);
+        let mut client = RustLsp::start(
+            &server.workspace().join("server"),
+            server.workspace(),
+            std::sync::Arc::new(|| false),
+            scope,
+        )
+        .unwrap();
+        client.wait_ready().unwrap();
+        client.shutdown().unwrap();
+        let requests = server.requests();
+        let options = &requests[0]["params"]["initializationOptions"];
+        assert_eq!(
+            options["cargo"]["sysroot"],
+            if scope == RustDependencyScope::RepositoryOnly {
+                Value::Null
+            } else {
+                json!("discover")
+            }
+        );
+        assert_eq!(
+            options["cargo"]["noDeps"],
+            scope == RustDependencyScope::RepositoryOnly
+        );
+        assert_eq!(
+            options["cargo"]["metadataExtraArgs"],
+            if scope == RustDependencyScope::StandardLibrary {
+                json!(["--no-deps"])
+            } else {
+                json!([])
+            }
+        );
+        assert_eq!(options["cargo"]["buildScripts"]["enable"], false);
+        assert_eq!(options["procMacro"]["enable"], false);
+    }
+}
 
 /// Rust Adapter 所需能力，通用客户端测试无需这些字段。
 fn capabilities() -> Value {
@@ -32,7 +102,13 @@ fn requires_rust_capabilities_and_utf16() {
     utf8["positionEncoding"] = json!("utf-8");
     for capabilities in [missing_parent, missing_definition, utf8] {
         let server = FakeServer::new(vec![vec![initialized(capabilities)], vec![]]);
-        assert!(RustLsp::start(&server.workspace().join("server"), server.workspace()).is_err());
+        assert!(RustLsp::start(
+            &server.workspace().join("server"),
+            server.workspace(),
+            std::sync::Arc::new(|| false),
+            super::RustDependencyScope::default()
+        )
+        .is_err());
         // SAFETY: 信号 0 只查询本测试服务器是否仍存在。
         assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
     }
@@ -46,8 +122,13 @@ fn rejects_degraded_project_loading() {
             vec![initialized(capabilities())],
             vec![status(health)],
         ]);
-        let mut client =
-            RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+        let mut client = RustLsp::start(
+            &server.workspace().join("server"),
+            server.workspace(),
+            std::sync::Arc::new(|| false),
+            super::RustDependencyScope::default(),
+        )
+        .unwrap();
         assert!(client
             .wait_ready()
             .unwrap_err()
@@ -69,8 +150,25 @@ fn configures_rust_and_only_queries_after_loading() {
         vec![json!({"jsonrpc":"2.0", "id":2, "result":[]})],
         vec![json!({"jsonrpc":"2.0", "id":3, "result":null})],
     ]);
-    let mut client =
-        RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+    // 只记录分析策略相关的环境变量，验证限制实际传给子进程。
+    let executable = server.workspace().join("server");
+    let script = std::fs::read_to_string(&executable).unwrap();
+    std::fs::write(
+        &executable,
+        script.replacen(
+            "#!/bin/sh\n",
+            "#!/bin/sh\nprintf '%s\\n' \"${CARGO_NET_OFFLINE-unset}\" \"${RUSTUP_AUTO_INSTALL-unset}\" > analysis-environment\n",
+            1,
+        ),
+    )
+    .unwrap();
+    let mut client = RustLsp::start(
+        &server.workspace().join("server"),
+        server.workspace(),
+        std::sync::Arc::new(|| false),
+        super::RustDependencyScope::default(),
+    )
+    .unwrap();
     assert!(client
         .definitions("file:///lib.rs", Position::default())
         .unwrap_err()
@@ -85,6 +183,19 @@ fn configures_rust_and_only_queries_after_loading() {
         .is_empty());
     client.shutdown().unwrap();
     let requests = server.requests();
+    let configuration = &requests[0]["params"]["initializationOptions"];
+    assert_eq!(configuration["cargo"]["noDeps"], false);
+    assert_eq!(
+        configuration["cargo"]["metadataExtraArgs"],
+        json!(["--no-deps"])
+    );
+    assert_eq!(configuration["cargo"]["sysroot"], "discover");
+    assert_eq!(configuration["cargo"]["buildScripts"]["enable"], false);
+    assert_eq!(configuration["procMacro"]["enable"], false);
+    assert_eq!(
+        std::fs::read_to_string(server.workspace().join("analysis-environment")).unwrap(),
+        "true\n0\n"
+    );
     assert_eq!(
         requests[0]["params"]["initializationOptions"]["checkOnSave"],
         false
@@ -107,8 +218,13 @@ fn rust_extension_queries_check_status_changes() {
             json!({"jsonrpc":"2.0", "id":2, "result":[]}),
         ],
     ]);
-    let mut client =
-        RustLsp::start(&server.workspace().join("server"), server.workspace()).unwrap();
+    let mut client = RustLsp::start(
+        &server.workspace().join("server"),
+        server.workspace(),
+        std::sync::Arc::new(|| false),
+        super::RustDependencyScope::default(),
+    )
+    .unwrap();
     client.wait_ready().unwrap();
     assert!(client
         .parent_modules("file:///lib.rs")

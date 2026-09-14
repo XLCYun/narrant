@@ -8,7 +8,7 @@ Create the reusable `babysit::repository_tools` public seam and implement the Re
 
 - `RepositoryTools::new(workspace_root)` canonicalizes the Review Workspace once.
 - A schema-bearing registration view exposes exactly `read`, `glob`, and `grep`.
-- The execution API accepts typed Read input plus `CancellationSignal` and returns a typed,
+- The execution API accepts typed Read input plus `CancellationToken` and returns a typed,
   serializable response containing workspace-relative identity, content, continuation, and
   explicit truncation.
 - Stable tool errors never contain the absolute workspace path.
@@ -29,4 +29,3 @@ Tests live under `src-tauri/src/babysit/repository_tools/tests/` and invoke only
 registration/execution seam against real temporary directory trees. Cover relative/absolute/
 parent paths, files/directories, missing paths, symlinks, binary input, continuation, budget,
 cancellation, and redacted errors. Run only focused tests via `scripts/cargo-agent.sh`.
-

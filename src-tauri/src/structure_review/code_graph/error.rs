@@ -4,6 +4,30 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnalysisError {
     pub message: String,
+    cancelled: bool,
+}
+
+impl AnalysisError {
+    /// 保留真实失败，不根据同时到达的取消请求改写错误类别。
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            cancelled: false,
+        }
+    }
+
+    /// 分析器明确因取消退出时使用，避免与语义分析失败混淆。
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            cancelled: true,
+        }
+    }
+
+    /// 只返回错误自身的取消语义，不读取此后改变的运行状态。
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
 }
 
 impl fmt::Display for AnalysisError {

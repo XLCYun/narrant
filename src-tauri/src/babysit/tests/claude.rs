@@ -3,9 +3,10 @@ use super::super::{
     FileSide, LineTarget,
 };
 use crate::operation::OperationContext;
-use crate::operation::TestCancellation;
+
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 #[path = "claude/process.rs"]
 mod process;
@@ -355,7 +356,7 @@ async fn timeout_discards_partial_output_and_terminates_the_process() {
 #[tokio::test]
 async fn cancellation_discards_output_and_terminates_the_process() {
     let (provider, temp, events) = provider("hang", Duration::from_secs(5));
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
     let workspace = temp.path().to_string_lossy().into_owned();
     let worker = tokio::spawn(async move {

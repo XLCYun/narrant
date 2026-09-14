@@ -8,7 +8,7 @@ use super::agent_run::{
 use super::connection::{CustomConnectionSnapshot, CustomProtocol};
 use super::final_tool::{line_explanation_schema, FINAL_OUTPUT_TOOL_NAME};
 use crate::babysit::RepositoryTools;
-use crate::operation::CancellationSignal;
+
 use async_trait::async_trait;
 use rig::client::AgentClientExt;
 use rig::completion::Prompt;
@@ -21,6 +21,7 @@ use std::future::IntoFuture;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 /// 一次 Rig prompt 的内部失败，保留取消、构造与 provider 错误边界。
 enum OpenAiPromptAttemptError {
@@ -40,7 +41,7 @@ pub(crate) struct OpenAiChatCompletionsAdapter {
     http_client: OpenAiRequestGuardClient,
     workspace: PathBuf,
     #[cfg(test)]
-    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
+    tool_boundary_cancellation: Option<CancellationToken>,
 }
 
 /// OpenAI 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
@@ -48,7 +49,7 @@ pub(crate) struct OpenAiChatCompletionsAdapter {
 struct OpenAiRequestGuardClient {
     inner: rig::http_client::ReqwestClient,
     omit_authorization: bool,
-    cancellation: Arc<Mutex<Option<CancellationSignal>>>,
+    cancellation: Arc<Mutex<Option<CancellationToken>>>,
 }
 
 impl Default for OpenAiRequestGuardClient {
@@ -73,7 +74,7 @@ impl OpenAiRequestGuardClient {
     }
 
     /// 将当前 agent run 的共享取消信号绑定到每一次后续 HTTP dispatch。
-    fn bind_cancellation(&self, cancellation: &CancellationSignal) {
+    fn bind_cancellation(&self, cancellation: &CancellationToken) {
         if let Ok(mut current) = self.cancellation.lock() {
             *current = Some(cancellation.clone());
         }
@@ -214,7 +215,7 @@ impl OpenAiChatCompletionsAdapter {
     #[cfg(test)]
     pub(crate) fn with_tool_boundary_cancellation(
         mut self,
-        cancellation: crate::operation::TestCancellation,
+        cancellation: CancellationToken,
     ) -> Self {
         self.tool_boundary_cancellation = Some(cancellation);
         self
@@ -224,7 +225,7 @@ impl OpenAiChatCompletionsAdapter {
     fn agent_for_workspace(
         &self,
         workspace: impl AsRef<Path>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
         preamble: impl Into<String>,
         repository_exploration: bool,
     ) -> Result<rig::Agent, CustomAdapterError> {
@@ -277,7 +278,7 @@ impl OpenAiChatCompletionsAdapter {
     async fn run_prompt_attempt(
         &self,
         request: &CustomRunRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<rig::agent::PromptResponse, OpenAiPromptAttemptError> {
         let agent = self
             .agent_for_workspace(
@@ -332,7 +333,7 @@ impl CustomProtocolAdapter for OpenAiChatCompletionsAdapter {
     async fn run_agent(
         &self,
         request: CustomRunRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<CustomRunResult, CustomAdapterError> {
         let started_at = std::time::Instant::now();
         tracing::info!(

@@ -75,7 +75,8 @@ _Avoid_: Entire subtree source, full-file content
 
 **Code Graph**:
 A representation of **Code Objects** and their relationships within a selected file
-scope at one fixed side of a **Change Comparison**.
+scope at one fixed side of a **Change Comparison**. Membership is independent of
+which objects a **Review View** currently displays.
 _Avoid_: Text diff, syntax tree
 
 **Code Object Kind**:
@@ -101,8 +102,14 @@ _Avoid_: File Changes page, Diff page
 
 **Review View**:
 One peer presentation of the **Review Snapshot** currently open in the **Review Reader**.
-The available views are Overview and File Changes; switching views does not create another Review.
+The views are Overview, File Changes, and Structure Changes; switching views does not
+create another Review.
 _Avoid_: Review mode, sidebar panel
+
+**Structure Changes**:
+A **Review View** that presents the **Code Graph Difference** and its surrounding
+**Code Objects** for the open **Review Snapshot**.
+_Avoid_: Repository map, new Review
 
 **Review Snapshot**:
 An immutable **Change Comparison** that became current for a **Review**, pinned to exact
@@ -284,7 +291,10 @@ _Avoid_: Stateless patch, full response repair
 - A **Code Graph Difference** compares the before Code Graph to the after Code Graph
   of the same **Change Comparison**
 - A **Review Reader** presents one open **Review Snapshot** and one selected **File Change** at a time
-- A **Review Reader** provides Overview and File Changes as peer **Review Views** over the same open **Review Snapshot**
+- A **Review Reader** provides Overview, File Changes, and Structure Changes as peer
+  **Review Views** over the same open **Review Snapshot**
+- **Structure Changes** uses the same **Comparison Base** and head revision as the
+  **File Changes** presented by its **Review Snapshot**
 - Selecting a **File Change** in the **Review Reader** is navigation only; it does not
   mark that change as viewed, reviewed, or approved
 - A **Repository** owns zero or more **Reviews**

@@ -1,8 +1,9 @@
 use super::RepositoryApplicationError;
 use crate::core_git::GitProcessAdapter;
-use crate::operation::{CancellationSignal, OperationContext};
+use crate::operation::OperationContext;
 use crate::persistence::RepositoryLocation;
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 /// 通过机器可读 Core Git 输出验证 working tree、canonical path、common directory 和能力。
 pub(crate) fn verify_repository_location(
@@ -66,7 +67,7 @@ pub(crate) fn verify_repository_location(
 /// 只读探测 Repository 页面立即依赖的 refs、remotes 与 worktree 能力。
 fn verify_required_git_capabilities(
     adapter: &GitProcessAdapter,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<(), RepositoryApplicationError> {
     for arguments in [
         vec![

@@ -2,3 +2,6 @@
 
 pub mod code_graph;
 pub mod rust_analyzer;
+
+mod application;
+pub(crate) use application::{StructureComparison, StructureReview, StructureReviewError};

@@ -1,4 +1,7 @@
+mod crate_roots;
 mod integration;
+mod repository_scope;
+mod test_scope;
 
 use std::fs;
 
@@ -13,6 +16,9 @@ fn validates_sources_before_starting_the_server() {
     let analyzer = RustLanguageAnalyzer::new(directory.path().join("missing-server"));
     assert!(analyzer
         .analyze(&AnalysisInput {
+            options: crate::structure_review::code_graph::AnalysisOptions {
+                include_tests: true
+            },
             repository_root: repository.clone(),
             files: vec![]
         })
@@ -23,6 +29,9 @@ fn validates_sources_before_starting_the_server() {
     for file in ["../outside.rs", "missing.rs", ""] {
         assert!(analyzer
             .analyze(&AnalysisInput {
+                options: crate::structure_review::code_graph::AnalysisOptions {
+                    include_tests: true
+                },
                 repository_root: repository.clone(),
                 files: vec![file.into()]
             })
@@ -31,6 +40,9 @@ fn validates_sources_before_starting_the_server() {
     fs::write(repository.join("lib.rs"), "fn f() {}").unwrap();
     let error = analyzer
         .analyze(&AnalysisInput {
+            options: crate::structure_review::code_graph::AnalysisOptions {
+                include_tests: true,
+            },
             repository_root: repository,
             files: vec!["lib.rs".into()],
         })

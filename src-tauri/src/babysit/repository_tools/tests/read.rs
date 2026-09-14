@@ -1,5 +1,6 @@
 use super::*;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn registration_exposes_only_the_bounded_repository_tool_set() {
@@ -318,7 +319,7 @@ fn read_stops_before_filesystem_work_when_the_signal_is_already_cancelled() {
     let workspace = tempdir().unwrap();
     std::fs::write(workspace.path().join("notes.txt"), "should not be read").unwrap();
     let tools = RepositoryTools::new(workspace.path()).unwrap();
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
 
     let result = tools.read(ReadInput::new("notes.txt"), &cancellation);

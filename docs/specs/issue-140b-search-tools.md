@@ -29,7 +29,7 @@ registration/execution seam established by Issue 140A.
 - Grep accepts regex patterns up to 16 KiB and applies fixed compilation, DFA, and nesting
   resource limits. Compilation failure or any exceeded regex budget returns the stable
   invalid-pattern error.
-- Both operations observe `CancellationSignal` before and throughout traversal/search. Grep
+- Both operations observe `CancellationToken` before and throughout traversal/search. Grep
   checks between directory entries, on streamed reads, and in match callbacks, but does not
   guarantee interruption inside one regex buffer match.
 - Errors use stable categories/messages and never reveal the absolute workspace path.
