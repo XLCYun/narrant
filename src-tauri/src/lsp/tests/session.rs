@@ -256,6 +256,7 @@ fn cancellation_interrupts_a_pending_response_and_reaps_server() {
     });
     let started = std::time::Instant::now();
     let error = client.request("example/pending", json!({})).unwrap_err();
+    assert!(error.is_cancelled());
     assert!(error.message.contains("取消"));
     assert!(started.elapsed() < Duration::from_secs(5));
     cancelling.join().unwrap();

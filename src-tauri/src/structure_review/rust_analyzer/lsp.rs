@@ -58,7 +58,7 @@ impl RustLsp {
             command.env("CARGO_NET_OFFLINE", "true");
         }
         command.env("RUSTUP_AUTO_INSTALL", "0");
-        let client = LspClient::start(command, repository, options).map_err(failure)?;
+        let client = LspClient::start(command, repository, options).map_err(lsp_failure)?;
         let capabilities = client.capabilities();
         for capability in ["definitionProvider", "callHierarchyProvider"] {
             if capabilities[capability] != true && !capabilities[capability].is_object() {
@@ -90,7 +90,7 @@ impl RustLsp {
         }
         self.client
             .open_document(uri, "rust", 1, source)
-            .map_err(failure)
+            .map_err(lsp_failure)
     }
 
     /// 解释 rust-analyzer 的状态扩展，warning 也不能充当完整加载。
@@ -99,7 +99,7 @@ impl RustLsp {
             .wait_for_notification(SERVER_STATUS, LOAD_TIMEOUT, |status| {
                 status["quiescent"] == true
             })
-            .map_err(failure)?;
+            .map_err(lsp_failure)?;
         self.ensure_healthy()?;
         self.ready = true;
         Ok(())
@@ -149,7 +149,7 @@ impl RustLsp {
 
     /// 结束本次仓库快照会话，底层负责正常协议及异常回收。
     pub fn shutdown(self) -> Result<()> {
-        self.client.shutdown().map_err(failure)
+        self.client.shutdown().map_err(lsp_failure)
     }
 
     /// 所有语义查询共享 Rust 就绪检查，协议错误与状态降级都向上传播。
@@ -161,7 +161,7 @@ impl RustLsp {
             return Err(failure("Rust LSP 项目尚未就绪"));
         }
         self.ensure_healthy()?;
-        let result = query(&mut self.client).map_err(failure)?;
+        let result = query(&mut self.client).map_err(lsp_failure)?;
         self.ensure_healthy()?;
         Ok(result)
     }
@@ -176,6 +176,15 @@ impl RustLsp {
             return Err(failure(format!("rust-analyzer 项目未完整加载：{status}")));
         }
         Ok(())
+    }
+}
+
+/// 跨越语言 Adapter 时保留取消语义和完整 LSP 上下文。
+fn lsp_failure(error: crate::lsp::LspError) -> super::AnalysisError {
+    if error.is_cancelled() {
+        super::AnalysisError::cancelled(error.message)
+    } else {
+        super::AnalysisError::new(error.message)
     }
 }
 

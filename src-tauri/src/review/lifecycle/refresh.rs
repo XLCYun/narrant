@@ -255,7 +255,7 @@ impl ReviewLifecycle {
             .get(review_id)
             .and_then(std::sync::Weak::upgrade)
         {
-            revoked.store(true, Ordering::Release);
+            revoked.cancel();
         }
         Ok(())
     }

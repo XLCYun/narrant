@@ -75,7 +75,11 @@ impl Document {
         } else {
             super::test_code::excluded_ranges(&tree)
         };
-        let declarations = extract(&tree, &scope, &excluded);
+        let mut declarations = extract(&tree, &scope, &excluded);
+        for declaration in &mut declarations {
+            data_mut(&mut declaration.node).source =
+                Some(source_excerpt(&source, declaration.syntax.text_range()));
+        }
         Ok(Self {
             uri: file_uri(&path).map_err(failure)?,
             path,
@@ -120,6 +124,21 @@ impl Document {
                 || declaration.selection.is_empty() && declaration.selection.start() == offset
         })
     }
+}
+
+/// 按语法范围截取原文；声明独占行时保留首行缩进，不混入同行的其他声明。
+fn source_excerpt(source: &str, range: TextRange) -> String {
+    let start = usize::from(range.start());
+    let line_start = source[..start].rfind('\n').map_or(0, |offset| offset + 1);
+    let start = if source[line_start..start]
+        .chars()
+        .all(|character| matches!(character, ' ' | '\t'))
+    {
+        line_start
+    } else {
+        start
+    };
+    source[start..usize::from(range.end())].to_owned()
 }
 
 /// 跳过测试范围后提取声明，并生成身份、包含关系和父对象自身内容。
@@ -252,6 +271,7 @@ fn collect(
             name,
             signature: Some(signature),
             code: None,
+            source: None,
             contains: Vec::new(),
             references: Vec::new(),
             extensions: BTreeMap::new(),

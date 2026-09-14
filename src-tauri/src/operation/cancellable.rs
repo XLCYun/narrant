@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 const EARLY_CANCELLATION_TTL: Duration = Duration::from_secs(60);
 const MAX_EARLY_CANCELLATIONS: usize = 1_024;
@@ -25,61 +23,25 @@ impl OperationId {
     }
 }
 
-/// 应用操作可只读观察的取消信号，不能触发上层操作取消。
-#[derive(Debug, Default)]
-struct CancellationState {
-    cancelled: AtomicBool,
-    notified: Notify,
-    parent: Option<CancellationSignal>,
-    revoked: Option<Arc<AtomicBool>>,
-}
-
 /// 可 clone 的只读取消信号，同时支持同步轮询与异步唤醒。
 #[derive(Clone, Debug, Default)]
-pub(crate) struct CancellationSignal(Arc<CancellationState>);
+pub(crate) struct CancellationSignal(CancellationToken);
 
 impl CancellationSignal {
-    /// 仅由同模块的取消 source 标记共享状态。
-    fn mark_cancelled(&self) {
-        self.0.cancelled.store(true, Ordering::Release);
-        self.0.notified.notify_waiters();
-    }
-
     /// 返回调用方是否已经请求取消。
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(Ordering::Acquire)
-            || self
-                .0
-                .revoked
-                .as_ref()
-                .is_some_and(|flag| flag.load(Ordering::Acquire))
-            || self.0.parent.as_ref().is_some_and(Self::is_cancelled)
+        self.0.is_cancelled()
     }
 
-    /// 异步等待取消，并用 enable-before-check 避免通知丢失。
+    /// 父级和本级取消都直接唤醒等待者，无需定时轮询组合信号。
     pub(crate) async fn cancelled(&self) {
-        loop {
-            let notified = self.0.notified.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.is_cancelled() {
-                return;
-            }
-            if self.0.parent.is_some() || self.0.revoked.is_some() {
-                tokio::select! {
-                    _ = notified => {},
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => {},
-                }
-            } else {
-                notified.await;
-            }
-        }
+        self.0.cancelled().await;
     }
 }
 
-/// 仅供操作 registry 持有的取消触发权。
+/// 运行范围的所有者持有取消权；下游只接收对应的只读上下文。
 #[derive(Clone, Debug, Default)]
-struct CancellationSource(CancellationSignal);
+pub(crate) struct CancellationSource(CancellationSignal);
 
 impl CancellationSource {
     /// 创建一对共享状态的触发源和只读观察信号。
@@ -89,8 +51,8 @@ impl CancellationSource {
     }
 
     /// 请求取消所有共享此 source 的操作阶段。
-    fn cancel(&self) {
-        self.0.mark_cancelled();
+    pub(crate) fn cancel(&self) {
+        self.0 .0.cancel();
     }
 }
 
@@ -168,15 +130,13 @@ impl OperationContext {
         Self::background()
     }
 
-    /// 派生只观察资源撤销标记的上下文，保留用户取消且不授予取消上层操作的权限。
-    pub(crate) fn with_revocation(&self, revoked: Arc<AtomicBool>) -> Self {
-        Self {
-            cancellation: CancellationSignal(Arc::new(CancellationState {
-                parent: Some(self.cancellation.clone()),
-                revoked: Some(revoked),
-                ..CancellationState::default()
-            })),
-        }
+    /// 创建可独立停止的子操作；父取消向下传播，子取消不影响父级或兄弟操作。
+    pub(crate) fn child(&self) -> (CancellationSource, Self) {
+        let cancellation = CancellationSignal(self.cancellation.0.child_token());
+        (
+            CancellationSource(cancellation.clone()),
+            Self { cancellation },
+        )
     }
 
     /// 返回跨越本次应用操作全部可取消阶段的只读共享信号。

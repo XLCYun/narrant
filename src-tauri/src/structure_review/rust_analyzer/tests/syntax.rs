@@ -77,6 +77,48 @@ fn graph(source: &str) -> CodeGraph {
     .unwrap()
 }
 
+/// 原文保留属性、中文注释、CRLF、首行缩进和子声明，规范化比较仍只关注自身语义。
+#[test]
+fn preserves_original_source_without_changing_structural_comparison() {
+    let source = "mod demo {\r\n    /// 原始注释\r\n    #[inline]\r\n    fn run() {\r\n        // 函数内注释\r\n        const N: u8 = 1;\r\n        consume(N);\r\n    }\r\n}";
+    let before = graph(source);
+    let module = before.node(&before.root().contains[0]).unwrap();
+    assert_eq!(module.data().source.as_deref(), Some(source));
+    let function = before.node(&module.data().contains[0]).unwrap();
+    assert_eq!(
+        function.data().source.as_deref(),
+        Some("    /// 原始注释\r\n    #[inline]\r\n    fn run() {\r\n        // 函数内注释\r\n        const N: u8 = 1;\r\n        consume(N);\r\n    }")
+    );
+    assert!(!function.data().code.as_ref().unwrap().contains("const"));
+    let changed = source
+        .replace("原始注释", "修改后的注释")
+        .replace("\r\n", "\n")
+        .replace("    ", "\t");
+    let after = graph(&changed);
+    assert_ne!(
+        function.data().source,
+        after.node(&function.data().id).unwrap().data().source
+    );
+    assert!(before.diff(&after).unwrap().nodes.is_empty());
+}
+
+/// 同行多个声明与多字节标识符按字节范围准确截取，不拼接签名、等号或实现。
+#[test]
+fn source_ranges_keep_complete_declarations_without_neighboring_items() {
+    let source = "fn 甲() {} const 值: u8 = 7; struct S { pub 字段: u8, other: u8 }";
+    let graph = graph(source);
+    let nodes: Vec<_> = graph
+        .root()
+        .contains
+        .iter()
+        .map(|id| graph.node(id).unwrap())
+        .collect();
+    assert_eq!(nodes[0].data().source.as_deref(), Some("fn 甲() {}"));
+    assert_eq!(nodes[1].data().source.as_deref(), Some("const 值: u8 = 7;"));
+    let field = graph.node(&nodes[2].data().contains[0]).unwrap();
+    assert_eq!(field.data().source.as_deref(), Some("pub 字段: u8"));
+}
+
 /// 具名子声明独立比较，闭包内容变化归属于外层函数。
 #[test]
 fn nested_body_edits_belong_only_to_their_owner() {

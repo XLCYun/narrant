@@ -57,6 +57,8 @@ pub(crate) struct Node {
     pub name: Option<String>,
     pub signature: Option<String>,
     pub code: Option<String>,
+    /// 原始源码独立于规范化内容传输，供编辑器显示真实文本差异。
+    pub source: Option<String>,
     pub contains: Vec<String>,
     pub references: Vec<Reference>,
     pub extensions: code_graph::ExtensionFields,
@@ -125,6 +127,7 @@ impl From<&CodeGraph> for Graph {
                 name: data.name.clone(),
                 signature: data.signature.clone(),
                 code: data.code.clone(),
+                source: data.source.clone(),
                 contains: data.contains.iter().map(|id| id.0.clone()).collect(),
                 references: data.references.iter().map(Reference::from).collect(),
                 extensions: data.extensions.clone(),

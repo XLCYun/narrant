@@ -17,6 +17,8 @@ export type ObjectRow = {
 };
 /** 每个对象拥有独立端口，即使多个对象被收进同一张类卡片。 */
 export type ObjectPort = { id: string; objectId?: string; side: "source" | "target"; y: number };
+/** 统计当前展示范围内的后代；内部变化与对象自身状态分别表达。 */
+export type ObjectCollapse = { collapsed: boolean; count: number; changed: number; values: number; callables: number };
 /** React Flow 所需的展示数据；代码对象与变化详情仍引用原始比较。 */
 export type ObjectData = Record<string, unknown> & {
   objectId?: string;
@@ -30,10 +32,17 @@ export type ObjectData = Record<string, unknown> & {
   headerHeight: number;
   rows: ObjectRow[];
   ports: ObjectPort[];
+  collapse?: ObjectCollapse;
 };
 export type ObjectNode = Node<ObjectData, "codeObject">;
-export type StructureEdge = Edge<{ route?: { path: string; labelX: number; labelY: number } }>;
-export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number };
+/** 原始关系身份独立于展示端口；折叠端点只提供真实对象名称作为提示。 */
+export type StructureEdge = Edge<{
+  sourceObjectId: string; targetObjectId: string;
+  sourceName: string; targetName: string;
+  collapsedSource?: string; collapsedTarget?: string;
+  route?: { path: string; labelX: number; labelY: number };
+}>;
+export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number; collapsibleIds: string[] };
 export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; expanded: ReadonlySet<string> };
 
 /** 只显示图内已解析关系；导入开关仅决定图内导入关系是否出现。 */
@@ -69,7 +78,7 @@ function displayComparison(comparison: StructureComparison): StructureComparison
   return { ...comparison, before: graph(comparison.before), after: graph(comparison.after), diff: { nodes: differences } };
 }
 
-/** 按类图聚合成员；代码身份、两侧声明与差异仍保留在原始比较中。 */
+/** 按当前筛选生成全展开的类图布局；折叠直接复用此结果，不参与 ELK 计算。 */
 export async function layoutStructureComparison(comparison: StructureComparison, options: GraphOptions, signal?: AbortSignal): Promise<StructureLayout> {
   // 归属判定保留完整语义，不能因隐藏一个候选而把歧义关系误当成唯一归属。
   const semanticObjects = new Map([...comparison.before.nodes, ...comparison.after.nodes].map((node) => [node.id, node]));
@@ -134,6 +143,28 @@ export async function layoutStructureComparison(comparison: StructureComparison,
         && isReferenceVisible(reference, options) && reference.target.kind === "node") include(reference.target.id);
     }
   }
+  const collapses = new Map<string, ObjectCollapse>();
+  for (const id of visible) {
+    if (["container", "type"].includes(objects.get(id)!.category) && children.get(id)?.length) {
+      collapses.set(id, { collapsed: false, count: 0, changed: 0, values: 0, callables: 0 });
+    }
+  }
+  for (const id of visible) {
+    let ancestor = parents.get(id);
+    while (ancestor) {
+      const collapse = collapses.get(ancestor);
+      if (collapse) {
+        collapse.count++;
+        if (differences.has(id)) collapse.changed++;
+        if (objects.get(id)!.category === "value") collapse.values++;
+        if (objects.get(id)!.category === "callable") collapse.callables++;
+      }
+      ancestor = parents.get(ancestor);
+    }
+  }
+  // 尚未纳入任何成员的卡片已经足够紧凑，先通过现有入口显示成员再提供折叠。
+  for (const [id, collapse] of collapses) if (collapse.count === 0) collapses.delete(id);
+  const collapsibleIds = [...collapses.keys()];
   const visualIds = new Map([...objects.keys()].sort().map((id, index) => [id, `object-${index}`]));
   const status = (id: string): ObjectStatus => differences.get(id)?.content ?? (differences.has(id) ? "relations" : "unchanged");
   const hiddenChildren = (id: string) => (children.get(id) ?? []).filter((child) => !visible.has(child)).length;
@@ -162,9 +193,10 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     const object = objects.get(id)!;
     const card = visualIds.get(id)!;
     const hidden = hiddenChildren(id);
+    const collapse = collapses.get(id);
     data.set(card, { objectId: id, label: object.name ?? object.signature ?? object.nativeKind,
       nativeKind: object.nativeKind, category: object.category, status: status(id), group: false,
-      hiddenChildren: hidden, table: false, headerHeight: hidden > 0 ? 82 : 56, rows: [], ports: [] });
+      hiddenChildren: hidden, table: false, headerHeight: hidden > 0 ? 82 : 56, rows: [], ports: [], collapse });
     const parent = parents.get(id);
     if (parent) cardParents.set(card, visualIds.get(parent)!);
     attach(id, card, 28);
@@ -221,10 +253,27 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     }
     sizes.set(card, { width: 360, height: top + 6 });
   }
+  /** 方法和字段提示保留类型限定名，不添加“目标”或容器描述前缀。 */
+  const endpointName = (id: string) => {
+    const object = objects.get(id)!;
+    const name = object.name ?? object.signature ?? object.nativeKind;
+    let parent = parents.get(id);
+    while (parent) {
+      const owner = objects.get(parent)!;
+      if (owner.category === "type") {
+        const ownerName = owner.name ?? owner.nativeKind;
+        return name.startsWith(`${ownerName}::`) ? name : `${ownerName}::${name}`;
+      }
+      if (owner.category === "container") break;
+      parent = parents.get(parent);
+    }
+    return name;
+  };
   const edges: StructureEdge[] = [];
   /** 连线连接原成员的独立端口，不把多个方法的关系合成类级关系。 */
-  const addEdge = (source: string, target: { card: string; source: string; target: string }, semantic: string, change?: "added" | "removed") => {
+  const addEdge = (source: string, targetId: string, semantic: string, change?: "added" | "removed") => {
     const origin = attachments.get(source)!;
+    const target = attachments.get(targetId)!;
     // 同卡片的归属已由分区表达；实际调用（包括递归和成员间调用）继续绘制。
     if (["code.member_of", "code.applies_to"].includes(semantic)) {
       let containingCard: string | undefined = origin.card;
@@ -235,6 +284,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     }
     const color = change === "added" ? "#059669" : change === "removed" ? "#e11d48" : "#64748b";
     edges.push({ id: `relation-${edges.length}`, source: origin.card, sourceHandle: origin.source, target: target.card, targetHandle: target.target, type: "routedRelation",
+      data: { sourceObjectId: source, targetObjectId: targetId, sourceName: endpointName(source), targetName: endpointName(targetId) },
       label: `${change === "added" ? "+ " : change === "removed" ? "− " : ""}${semantic}`,
       markerEnd: { type: MarkerType.ArrowClosed, color },
       style: { stroke: color, strokeWidth: change ? 1.8 : 1, strokeDasharray: change === "removed" ? "6 4" : undefined },
@@ -249,12 +299,12 @@ export async function layoutStructureComparison(comparison: StructureComparison,
       if ((!change && reference.semantic !== "code.type_use" && !options.showUnchangedReferences)
         || !isReferenceVisible(reference, options) || reference.target.kind !== "node") continue;
       const target = attachments.get(reference.target.id);
-      if (target) addEdge(id, target, reference.semantic, change);
+      if (target) addEdge(id, reference.target.id, reference.semantic, change);
     }
     for (const change of difference?.contains ?? []) {
       if (change.kind === "removed" && containment.get(change.value) !== id) {
         const target = attachments.get(change.value);
-        if (target) addEdge(id, target, "contains", "removed");
+        if (target) addEdge(id, change.value, "contains", "removed");
       }
     }
   }
@@ -277,7 +327,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     };
   };
   const roots = [...data.keys()].filter((id) => !cardParents.has(id)).sort().map(elkCard);
-  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0, changed: differences.size };
+  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0, changed: differences.size, collapsibleIds };
   /** 容器祖先关系不参加层级求解，成员间和递归调用均交给 ELK 走线。 */
   const isAncestor = (ancestor: string, child: string) => {
     let parent = cardParents.get(child);
@@ -313,13 +363,68 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     const points = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint]
       .map((point) => ({ x: point.x + origin.x, y: point.y + origin.y }));
     const label = routed.labels?.[0];
-    edge.data = { route: {
+    edge.data = { ...edge.data!, route: {
       path: points.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" "),
       labelX: label?.x === undefined ? (points[0].x + points[1].x) / 2 : label.x + origin.x + (label.width ?? 0) / 2,
       labelY: label?.y === undefined ? points[0].y : label.y + origin.y + (label.height ?? 0) / 2,
     } };
   }
-  return { nodes, edges, total: objects.size, visible: visible.size, changed: differences.size };
+  return { nodes, edges, total: objects.size, visible: visible.size, changed: differences.size, collapsibleIds };
+}
+
+/** 从全展开布局同步投影折叠状态；保持每张卡片的原坐标及展开时的预留空间。 */
+export function collapseStructureLayout(layout: StructureLayout, collapsed: ReadonlySet<string>): StructureLayout {
+  const folded = new Set(layout.nodes.filter((node) => node.data.collapse && node.data.objectId && collapsed.has(node.data.objectId)).map((node) => node.id));
+  if (!folded.size) return layout;
+  const representatives = new Map<string, string>();
+  const nodes: ObjectNode[] = [];
+  // 全展开布局保证父卡片在前，因此一次遍历就能找到仍可见的折叠祖先。
+  for (const node of layout.nodes) {
+    const parent = node.parentId && representatives.get(node.parentId);
+    const representative = parent && folded.has(parent) ? parent : node.id;
+    representatives.set(node.id, representative);
+    if (representative !== node.id) continue;
+    nodes.push(folded.has(node.id) ? {
+      ...node, style: { ...node.style, width: 360, height: 88 },
+      data: { ...node.data, group: false, headerHeight: 82, rows: [],
+        collapse: { ...node.data.collapse!, collapsed: true },
+        ports: node.data.ports.filter((port) => port.objectId === node.data.objectId).map((port) => ({ ...port, y: 28 })),
+      },
+    } : node);
+  }
+  const visibleNodes = new Map(nodes.map((node) => [node.id, node]));
+  const endpoints = new Map<string, { card: string; handle: string; proxy: boolean; moved: boolean }>();
+  for (const original of layout.nodes) {
+    const node = visibleNodes.get(representatives.get(original.id)!)!;
+    const header = node.id !== original.id || folded.has(node.id);
+    for (const originalPort of original.data.ports) {
+      const port = header ? node.data.ports.find((candidate) => candidate.side === originalPort.side)! : originalPort;
+      endpoints.set(originalPort.id, { card: node.id, handle: port.id,
+        proxy: originalPort.objectId !== port.objectId,
+        moved: original.id !== node.id || originalPort.y !== port.y
+          || (port.side === "source" && original.style?.width !== node.style?.width),
+      });
+    }
+  }
+  const edges: StructureEdge[] = [];
+  for (const edge of layout.edges) {
+    const source = endpoints.get(edge.sourceHandle!)!, target = endpoints.get(edge.targetHandle!)!;
+    if (source.card === target.card && (source.proxy || target.proxy)) continue;
+    if (!source.moved && !target.moved && !source.proxy && !target.proxy) {
+      edges.push(edge);
+      continue;
+    }
+    edges.push({ ...edge, source: source.card, sourceHandle: source.handle, target: target.card, targetHandle: target.handle,
+      data: { ...edge.data!, collapsedSource: source.proxy ? edge.data!.sourceName : undefined,
+        collapsedTarget: target.proxy ? edge.data!.targetName : undefined,
+        // 只有落点移动的连线改用正交连接；其余连线保持初始避让路径。
+        route: source.moved || target.moved ? undefined : edge.data?.route,
+      },
+    });
+  }
+  const visible = nodes.reduce((count, node) => count + Number(node.data.objectId !== undefined)
+    + node.data.rows.filter((row) => row.objectId !== undefined).length, 0);
+  return { ...layout, nodes, edges, visible };
 }
 
 /** 详情保留两侧声明内容，并与画布使用相同的对象及关系投影。 */

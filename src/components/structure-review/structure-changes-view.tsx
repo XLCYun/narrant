@@ -1,28 +1,30 @@
 import { createContext, useContext, useEffect, useId, useMemo, useState } from "react";
-import { Background, BaseEdge, Controls, Handle, Position, ReactFlow, getSmoothStepPath, type EdgeProps, type NodeProps } from "@xyflow/react";
+import { Background, BaseEdge, Controls, Handle, Position, ReactFlow, getSmoothStepPath, useUpdateNodeInternals, type EdgeProps, type NodeProps } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { StructureDetails, type StructureSelection } from "./structure-details";
+import { StructureDetails } from "./structure-details";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
+import { collapseStructureLayout, layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
 
-const ObjectActions = createContext<{ selectedId?: string; connectedPorts: ReadonlySet<string>; expand(id: string): void; open(id: string): void }>({ connectedPorts: new Set(), expand: () => {}, open: () => {} });
+const ObjectActions = createContext<{ selectedId?: string; connectedPorts: ReadonlySet<string>; expand(id: string): void; toggleCollapse(id: string): void; open(id: string): void }>({ connectedPorts: new Set(), expand: () => {}, toggleCollapse: () => {}, open: () => {} });
 const statusClasses: Record<ObjectStatus, string> = {
   added: "structure-added", removed: "structure-removed", modified: "structure-modified",
   relations: "structure-relations", unchanged: "structure-unchanged",
 };
 
 /** 类图卡片用紧凑行展示字段和方法；每行保留原对象的详情入口与独立端口。 */
-function CodeObjectNode({ data }: NodeProps<ObjectNode>) {
+function CodeObjectNode({ id, data }: NodeProps<ObjectNode>) {
   const { t } = useTranslation("structure");
   const actions = useContext(ObjectActions);
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => { updateNodeInternals(id); }, [data.ports, id, updateNodeInternals]);
   const selected = data.objectId !== undefined && actions.selectedId === data.objectId;
   const markers: Record<ObjectStatus, string> = { added: "+", removed: "−", modified: "~", relations: "↔", unchanged: "·" };
   return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", data.table && "structure-member-table", selected && "structure-selected")}
@@ -32,10 +34,22 @@ function CodeObjectNode({ data }: NodeProps<ObjectNode>) {
       <span className="min-w-0 truncate text-muted-foreground">{data.nativeKind}</span>
       <span className="structure-status shrink-0">{t(`status.${data.status}`)}</span>
     </div>
-    {data.objectId ? <Button variant="ghost" className="nodrag nopan mt-0.5 h-6 w-full justify-start overflow-hidden px-0 font-mono text-sm font-semibold hover:bg-transparent hover:underline"
+    <div className="mt-0.5 flex min-w-0 items-center gap-1">
+    {data.collapse && data.objectId && <Button variant="ghost" size="icon" className="nodrag nopan size-6 shrink-0 text-sm"
+      aria-expanded={!data.collapse.collapsed} aria-label={t(data.collapse.collapsed ? "expandObject" : "collapseObject", { name: data.label })}
+      title={t(data.collapse.collapsed ? "expandObject" : "collapseObject", { name: data.label })}
+      onClick={(event) => { event.stopPropagation(); actions.toggleCollapse(data.objectId!); }}><span aria-hidden>{data.collapse.collapsed ? "▸" : "▾"}</span></Button>}
+    {data.objectId ? <Button variant="ghost" className="nodrag nopan h-6 min-w-0 flex-1 justify-start overflow-hidden px-0 font-mono text-sm font-semibold hover:bg-transparent hover:underline"
       title={data.label} aria-pressed={selected} onClick={(event) => { event.stopPropagation(); actions.open(data.objectId!); }}><span className="truncate">{data.label}</span></Button>
       : <div className="mt-2 truncate font-mono text-sm font-medium" title={data.label}>{data.label}</div>}
-    {data.hiddenChildren > 0 && data.objectId && <Button variant="ghost" size="sm" className="nodrag nopan mt-1 h-6 px-1 text-[10px]"
+    </div>
+    {data.collapse?.collapsed && <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground" data-testid="collapse-summary">
+      <span className="truncate">{data.category === "type" && data.collapse.values + data.collapse.callables > 0
+        ? t("collapsedTypeSummary", { values: data.collapse.values, callables: data.collapse.callables })
+        : t("collapsedSummary", { count: data.collapse.count })}</span>
+      {data.collapse.changed > 0 && <span className="shrink-0 font-medium text-foreground">{t("collapsedChanges", { count: data.collapse.changed })}</span>}
+    </div>}
+    {!data.collapse?.collapsed && data.hiddenChildren > 0 && data.objectId && <Button variant="ghost" size="sm" className="nodrag nopan mt-1 h-6 px-1 text-[10px]"
       onClick={(event) => { event.stopPropagation(); actions.expand(data.objectId!); }}>{t("expandChildren", { count: data.hiddenChildren })}</Button>}
     </div>}
     {data.rows.map((row, index) => row.kind === "section"
@@ -63,8 +77,12 @@ const nodeTypes = { codeObject: CodeObjectNode };
 function RoutedRelationEdge(props: EdgeProps<StructureEdge>) {
   const fallback = props.data?.route ? undefined : getSmoothStepPath(props);
   const route = props.data?.route ?? { path: fallback![0], labelX: fallback![1], labelY: fallback![2] };
-  return <BaseEdge id={props.id} path={route.path} markerEnd={props.markerEnd} style={props.style}
-    label={props.label} labelX={route.labelX} labelY={route.labelY} labelStyle={props.labelStyle} labelBgStyle={props.labelBgStyle} />;
+  const names = [props.data?.collapsedSource, props.data?.collapsedTarget].filter(Boolean).join(" → ");
+  return <g data-collapsed-endpoints={names || undefined}>
+    {names && <title>{names}</title>}
+    <BaseEdge id={props.id} path={route.path} markerEnd={props.markerEnd} style={props.style}
+      label={props.label} labelX={route.labelX} labelY={route.labelY} labelStyle={props.labelStyle} labelBgStyle={props.labelBgStyle} />
+  </g>;
 }
 const edgeTypes = { routedRelation: RoutedRelationEdge };
 
@@ -104,46 +122,45 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
   const [showUnchangedReferences, setShowUnchangedReferences] = useState(false);
   const [showImports, setShowImports] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [selection, setSelection] = useState<StructureSelection>();
-  const [layout, setLayout] = useState<StructureLayout>();
-  const [layoutVersion, setLayoutVersion] = useState(0);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string>();
+  const [expandedLayout, setExpandedLayout] = useState<StructureLayout>();
+  const layout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed), [expandedLayout, collapsed]);
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
-  const selectedId = selection?.kind === "object" ? selection.id : undefined;
-  // 按原对象端口筛选双向关系；同一类卡片中的其他成员不会一并展开连线。
+  // 按真实对象筛选双向关系；折叠端口共享后仍不混入其他成员的关系。
   const visibleEdges = useMemo(() => {
     if (!layout || selectedId === undefined) return [];
-    const ports = new Set(layout.nodes.flatMap((node) => node.data.ports.filter((port) => port.objectId === selectedId).map((port) => port.id)));
-    return layout.edges.filter((edge) => ports.has(edge.sourceHandle ?? "") || ports.has(edge.targetHandle ?? ""));
+    return layout.edges.filter((edge) => edge.data?.sourceObjectId === selectedId || edge.data?.targetObjectId === selectedId);
   }, [layout, selectedId]);
   const connectedPorts = useMemo(() => new Set(visibleEdges.flatMap((edge) => [edge.sourceHandle, edge.targetHandle]).filter((id): id is string => typeof id === "string")), [visibleEdges]);
   const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, expanded }), [expanded, showAll, showUnchangedReferences, showImports]);
+  /** 折叠按钮始终选中被操作对象；只更新自己的状态，保留后代的收起选择。 */
+  const toggleCollapse = (id: string) => {
+    setSelectedId(id);
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
   useEffect(() => {
     let current = true;
     const abort = new AbortController();
     setLayingOut(true);
     setLayoutError(undefined);
     void layoutStructureComparison(comparison, options, abort.signal).then((result) => {
-      if (current) { setLayout(result); setLayoutVersion((version) => version + 1); setLayingOut(false); }
+      if (current) { setExpandedLayout(result); setLayingOut(false); }
     }).catch((reason: unknown) => {
       if (current) { setLayoutError(String(reason)); setLayingOut(false); }
     });
     return () => { current = false; abort.abort(); };
   }, [comparison, options]);
-  const analyzed = comparison.coverage.filter((file) => file.before === "analyzed" || file.after === "analyzed").length;
-  const partial = comparison.coverage.some((file) => file.before.startsWith("unsupported") || file.after.startsWith("unsupported"));
-  const changed = layout?.changed ?? 0;
-  const emptyState = analyzed === 0 && comparison.coverage.length > 0 ? "unsupported"
+  const analyzed = comparison.coverage.some((file) => file.before === "analyzed" || file.after === "analyzed");
+  const emptyState = !analyzed && comparison.coverage.length > 0 ? "unsupported"
     : comparison.diff.nodes.length > 0 ? "filtered" : "empty";
   return <div className="structure-view flex min-h-0 flex-1 flex-col" aria-label={t("title")}>
-    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-3 py-2">
-      <div className="mr-auto flex min-w-0 flex-wrap items-center gap-2 text-xs">
-        <span className="font-medium">{t("changedCount", { count: changed })}</span>
-        <span className="text-muted-foreground">{t("visibleCount", { visible: layout?.visible ?? 0, total: layout?.total ?? 0 })}</span>
-        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setSelection({ kind: "coverage" })}>
-          {t(partial ? "partialCoverage" : "coverage", { count: analyzed, total: comparison.coverage.length })}
-        </Button>
-      </div>
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-2 border-b px-3 py-2">
       <TestCodeSwitch binding={binding} />
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={binding.retry}>{t("reanalyze")}</Button>
       <DropdownMenu>
@@ -153,12 +170,20 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
           <DropdownMenuCheckboxItem checked={showUnchangedReferences} onCheckedChange={setShowUnchangedReferences}>{t("showUnchangedReferences")}</DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuCheckboxItem checked={showImports} onCheckedChange={setShowImports}>{t("showImports")}</DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={!layout?.collapsibleIds.length} onClick={() => {
+            setSelectedId(undefined);
+            setCollapsed(new Set(layout?.collapsibleIds));
+          }}>{t("collapseAll")}</DropdownMenuItem>
+          <DropdownMenuItem disabled={collapsed.size === 0} onClick={() => {
+            setCollapsed(new Set());
+          }}>{t("expandAll")}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
     <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1">
       <ResizablePanel id="structure-details" defaultSize="320px" minSize="180px" maxSize="55%" groupResizeBehavior="preserve-pixel-size">
-        <StructureDetails comparison={comparison} selection={selection} showImports={showImports} />
+        <StructureDetails comparison={comparison} selectedId={selectedId} showImports={showImports} dark={dark} />
       </ResizablePanel>
       <ResizableHandle withHandle aria-label={t("resizeDetails")} />
       <ResizablePanel id="structure-graph" minSize="45%">
@@ -167,12 +192,12 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
             {layoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{layoutError}</p>
               <Button variant="outline" onClick={() => setExpanded(new Set(expanded))}>{t("retryLayout")}</Button>
-            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, connectedPorts, expand: (id) => setExpanded((current) => new Set([...current, id])), open: (id) => setSelection({ kind: "object", id }) }}>
-              <ReactFlow<ObjectNode, StructureEdge> key={layoutVersion} nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, connectedPorts, toggleCollapse, expand: (id) => setExpanded((current) => new Set([...current, id])), open: setSelectedId }}>
+              <ReactFlow<ObjectNode, StructureEdge> nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                 colorMode={dark ? "dark" : "light"} fitView fitViewOptions={{ padding: 0.16, maxZoom: 1 }} minZoom={0.08} maxZoom={2}
                 nodesDraggable={false} nodesConnectable={false} nodesFocusable={false} edgesReconnectable={false} deleteKeyCode={null}
-                onNodeClick={(_, node) => { if (node.data.objectId) setSelection({ kind: "object", id: node.data.objectId }); }}
-                onPaneClick={() => setSelection(undefined)}
+                onNodeClick={(_, node) => { if (node.data.objectId) setSelectedId(node.data.objectId); }}
+                onPaneClick={() => setSelectedId(undefined)}
                 ariaLabelConfig={{ "controls.zoomIn.ariaLabel": t("zoomIn"), "controls.zoomOut.ariaLabel": t("zoomOut"), "controls.fitView.ariaLabel": t("fitView") }}>
                 <Background gap={20} size={1} />
                 <Controls showInteractive={false} />

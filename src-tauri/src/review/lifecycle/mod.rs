@@ -482,7 +482,7 @@ mod presentation;
 mod refresh;
 mod workspace;
 mod workspace_use;
-pub(crate) use workspace_use::SnapshotWorkspaceLease;
+pub(crate) use workspace_use::SnapshotWorkspace;
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

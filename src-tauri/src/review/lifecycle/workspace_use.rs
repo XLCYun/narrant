@@ -1,11 +1,12 @@
 use super::*;
+use crate::operation::CancellationSource;
 use std::sync::Weak;
 
 /// 同一短锁下协调使用登记与禁止新使用，避免取消后插入新的分析。
 #[derive(Default)]
 pub(super) struct WorkspaceAccess {
     pub changing: HashSet<String>,
-    pub users: HashMap<String, Weak<AtomicBool>>,
+    pub users: HashMap<String, Weak<CancellationSource>>,
 }
 
 /// 目录收敛期间关闭使用入口；错误和 future 被丢弃时也恢复入口。
@@ -21,30 +22,95 @@ impl Drop for WorkspaceChangeGuard<'_> {
     }
 }
 
-/// 固定 Snapshot 对现有 head 的独占使用；必须由实际分析 worker 持有到退出。
-pub(crate) struct SnapshotWorkspaceLease {
+/// 同步工作范围内固定的 Snapshot 和目录；子工作必须在回调返回前结束。
+pub(crate) struct SnapshotWorkspace {
     pub comparison: ChangeComparison,
     pub repository_path: PathBuf,
     pub git_common_directory: PathBuf,
     pub head_path: PathBuf,
     pub before_path: PathBuf,
-    revoked: Arc<AtomicBool>,
+    pub operation: OperationContext,
+}
+
+/// 私有租约由实际 blocking worker 持有，外层 future 无法提前释放目录保护。
+struct SnapshotWorkspaceLease {
+    workspace: SnapshotWorkspace,
+    _revocation: Arc<CancellationSource>,
     _review_guard: tokio::sync::OwnedMutexGuard<()>,
     _operation_guard: tokio::sync::OwnedRwLockReadGuard<()>,
 }
 
 impl SnapshotWorkspaceLease {
-    /// 只读合并用户取消和目录使用撤销，不向消费者提供取消触发权。
-    pub fn operation_context(&self, operation: &OperationContext) -> OperationContext {
-        operation.with_revocation(self.revoked.clone())
+    /// 整体移入租约，避免闭包仅捕获 workspace 字段而把锁留在异步调用方。
+    fn execute<T, E: From<ReviewLifecycleError>>(
+        self,
+        work: impl FnOnce(&SnapshotWorkspace) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.workspace.validate()?;
+        let result = work(&self.workspace)?;
+        self.workspace.validate()?;
+        Ok(result)
+    }
+}
+
+impl SnapshotWorkspace {
+    /// 执行前及成功发布前验证 head，拒绝取消或外部进程改写的源码版本。
+    fn validate(&self) -> Result<(), ReviewLifecycleError> {
+        GitProcessAdapter::new(&self.repository_path)
+            .validate_worktree_revision(
+                &self.head_path,
+                &self.git_common_directory,
+                &self.comparison.head_revision,
+                self.operation.cancellation(),
+            )
+            .map_err(ReviewLifecycleError::git)
+    }
+}
+
+/// 放弃异步等待只停止本次工作，实际 worker 仍持有租约直到回调和清理结束。
+struct WorkspaceAwaitGuard(Arc<CancellationSource>);
+
+impl Drop for WorkspaceAwaitGuard {
+    /// 正常完成时工作已经退出；取消或丢弃 future 时立即唤醒其下游。
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
 impl ReviewLifecycle {
-    /// 复用现有 head，不物化另一份 checkout；等待锁期间仍响应用户取消。
-    pub(crate) async fn lease_workspace(
+    /// 在固定 Review Snapshot 内执行同步工作，并封装互斥、撤销和 worker 寿命。
+    /// 回调只能在此执行范围内使用目录；它启动的全部子工作必须在返回前结束。
+    pub(crate) async fn run_in_workspace<T, E>(
         &self,
         operation: &OperationContext,
+        review_id: &str,
+        snapshot_id: &str,
+        work: impl FnOnce(&SnapshotWorkspace) -> Result<T, E> + Send + 'static,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<ReviewLifecycleError> + Send + 'static,
+    {
+        let (source, operation) = operation.child();
+        let source = Arc::new(source);
+        let _await_guard = WorkspaceAwaitGuard(source.clone());
+        let lease = self
+            .lease_workspace(operation, source, review_id, snapshot_id)
+            .await?;
+        tokio::task::spawn_blocking(move || lease.execute(work))
+            .await
+            .map_err(|error| {
+                E::from(ReviewLifecycleError::new(format!(
+                    "工作目录执行失败：{error}"
+                )))
+            })?
+    }
+
+    /// 复用现有 head，不物化另一份 checkout；等待锁期间仍响应用户取消。
+    async fn lease_workspace(
+        &self,
+        operation: OperationContext,
+        source: Arc<CancellationSource>,
         review_id: &str,
         snapshot_id: &str,
     ) -> Result<SnapshotWorkspaceLease, ReviewLifecycleError> {
@@ -82,19 +148,10 @@ impl ReviewLifecycle {
             .store
             .review_workspace_path(review_id)
             .map_err(ReviewLifecycleError::persistence)?;
-        GitProcessAdapter::new(&repository_path)
-            .validate_worktree_revision(
-                &head_path,
-                &entry.git_common_directory,
-                &current.head_revision,
-                operation.cancellation(),
-            )
-            .map_err(ReviewLifecycleError::git)?;
         let before_path = head_path
             .parent()
             .ok_or_else(|| ReviewLifecycleError::new("Review Workspace 路径无效"))?
             .join("before");
-        let revoked = Arc::new(AtomicBool::new(false));
         {
             let mut access = self
                 .workspace_access
@@ -111,15 +168,18 @@ impl ReviewLifecycle {
             }
             access
                 .users
-                .insert(review_id.to_owned(), Arc::downgrade(&revoked));
+                .insert(review_id.to_owned(), Arc::downgrade(&source));
         }
         Ok(SnapshotWorkspaceLease {
-            comparison: current.to_change_comparison(),
-            repository_path,
-            git_common_directory: entry.git_common_directory,
-            head_path,
-            before_path,
-            revoked,
+            workspace: SnapshotWorkspace {
+                comparison: current.to_change_comparison(),
+                repository_path,
+                git_common_directory: entry.git_common_directory,
+                head_path,
+                before_path,
+                operation,
+            },
+            _revocation: source,
             _review_guard: review_guard,
             _operation_guard: operation_guard,
         })
@@ -144,7 +204,7 @@ impl ReviewLifecycle {
             .lock()
             .map_err(|_| ReviewLifecycleError::RuntimeUnavailable)?;
         for revoked in access.users.values().filter_map(Weak::upgrade) {
-            revoked.store(true, Ordering::Release);
+            revoked.cancel();
         }
         Ok(())
     }

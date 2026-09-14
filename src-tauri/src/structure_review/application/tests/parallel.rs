@@ -59,9 +59,7 @@ async fn failure_and_panic_cancel_the_peer_and_preserve_the_head() {
                 let is_before = input.repository_root.ends_with("before");
                 if is_before == (failed_side == "before") {
                     assert!(!panic, "模拟分析器异常");
-                    return Err(AnalysisError {
-                        message: "original failure".into(),
-                    });
+                    return Err(AnalysisError::new("original failure"));
                 }
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
                 while !cancelled() && std::time::Instant::now() < deadline {
@@ -69,9 +67,7 @@ async fn failure_and_panic_cancel_the_peer_and_preserve_the_head() {
                 }
                 assert!(cancelled(), "失败必须通知仍在运行的另一侧");
                 observed.fetch_add(1, Ordering::Release);
-                Err(AnalysisError {
-                    message: "peer cancelled".into(),
-                })
+                Err(AnalysisError::cancelled("peer cancelled"))
             }));
             let error = application
                 .analyze(

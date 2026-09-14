@@ -4,6 +4,25 @@ use super::RustLsp;
 use crate::lsp::{test_support::FakeServer, Position};
 use serde_json::{json, Value};
 
+/// 语言 Adapter 在等待项目状态时保留通用 LSP 的取消类别与请求上下文。
+#[test]
+fn preserves_cancellation_while_waiting_for_project_readiness() {
+    let server = FakeServer::new(vec![vec![initialized(capabilities())]]);
+    let cancellation = crate::operation::TestCancellation::default();
+    let observed = cancellation.clone();
+    let mut client = RustLsp::start(
+        &server.workspace().join("server"),
+        server.workspace(),
+        std::sync::Arc::new(move || observed.is_cancelled()),
+        super::RustDependencyScope::default(),
+    )
+    .unwrap();
+    cancellation.cancel();
+    let error = client.wait_ready().unwrap_err();
+    assert!(error.is_cancelled());
+    assert!(error.message.contains("experimental/serverStatus"));
+}
+
 /// 三个档位在真实 stdio 握手中分别控制标准库与项目依赖。
 #[test]
 fn selects_standard_library_and_dependency_loading_independently() {

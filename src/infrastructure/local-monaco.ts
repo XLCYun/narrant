@@ -7,8 +7,13 @@ import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { createReviewRustLanguage } from "@/infrastructure/review-rust-language";
 
+let configured = false;
+
 /** 让 Monaco 及其 Worker 全部由 Vite 打进安装包，不访问默认 CDN。 */
 export function configureLocalMonaco(): void {
+  // 文件与结构视图共用同一加载器，避免重复注册 Rust 语言服务。
+  if (configured) return;
+  configured = true;
   self.MonacoEnvironment = {
     getWorker(_moduleId, label) {
       if (label === "json") return new jsonWorker();

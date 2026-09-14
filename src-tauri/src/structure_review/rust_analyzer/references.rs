@@ -460,6 +460,7 @@ impl Resolver<'_> {
                 .map_err(failure)?
                 .to_string_lossy()
                 .replace('\\', "/");
+            let source = document.source.clone();
             self.crate_roots.entry(id.clone()).or_insert_with(|| {
                 CodeNode::Container(CodeNodeData {
                     id: id.clone(),
@@ -468,6 +469,7 @@ impl Resolver<'_> {
                     name: Some(name),
                     signature: None,
                     code: None,
+                    source: Some(source),
                     contains: Vec::new(),
                     references: Vec::new(),
                     extensions: BTreeMap::new(),

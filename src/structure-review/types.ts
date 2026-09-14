@@ -24,6 +24,8 @@ export type CodeNode = {
   name: string | null;
   signature: string | null;
   code: string | null;
+  /** 节点原始源码仅用于展示，含签名、实现及嵌套成员，不参与结构比较。 */
+  source: string | null;
   contains: string[];
   references: CodeReference[];
   extensions: Record<string, unknown>;

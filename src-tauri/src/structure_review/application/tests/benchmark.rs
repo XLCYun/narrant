@@ -61,59 +61,57 @@ async fn sequential(
     dependency_scope: RustDependencyScope,
 ) -> StructureComparison {
     let operation = OperationContext::background();
-    let lease = fixture
+    let review_id = fixture.presentation.review_id.clone();
+    let snapshot_id = fixture.presentation.snapshot_id.clone();
+    fixture
         .lifecycle
-        .lease_workspace(
+        .run_in_workspace(
             &operation,
             &fixture.presentation.review_id,
             &fixture.presentation.snapshot_id,
+            move |workspace| {
+                let operation = &workspace.operation;
+                let (before_files, after_files, coverage) = scope(workspace);
+                let checkout = (!before_files.is_empty())
+                    .then(|| workspace::BeforeCheckout::prepare(workspace, operation).unwrap());
+                let cancelled: CancellationCheck = Arc::new(|| false);
+                let before = analyze_side(
+                    &analyze,
+                    &workspace.before_path,
+                    before_files,
+                    AnalysisOptions::default(),
+                    &cancelled,
+                    dependency_scope,
+                )
+                .unwrap();
+                let after = analyze_side(
+                    &analyze,
+                    &workspace.head_path,
+                    after_files,
+                    AnalysisOptions::default(),
+                    &cancelled,
+                    dependency_scope,
+                )
+                .unwrap();
+                let diff = before.diff(&after).unwrap();
+                let result = StructureComparison {
+                    review_id,
+                    snapshot_id,
+                    comparison_base: workspace.comparison.comparison_base.clone(),
+                    head_revision: workspace.comparison.head_revision.clone(),
+                    before: Graph::from(&before),
+                    after: Graph::from(&after),
+                    diff: GraphDifference::from(&diff),
+                    coverage,
+                };
+                if let Some(checkout) = checkout {
+                    checkout.finish().unwrap();
+                }
+                Ok::<_, StructureReviewError>(result)
+            },
         )
         .await
-        .unwrap();
-    let review_id = fixture.presentation.review_id.clone();
-    let snapshot_id = fixture.presentation.snapshot_id.clone();
-    tokio::task::spawn_blocking(move || {
-        let (before_files, after_files, coverage) = scope(&lease);
-        let checkout = (!before_files.is_empty())
-            .then(|| workspace::BeforeCheckout::prepare(&lease, &operation).unwrap());
-        let cancelled: CancellationCheck = Arc::new(|| false);
-        let before = analyze_side(
-            &analyze,
-            &lease.before_path,
-            before_files,
-            AnalysisOptions::default(),
-            &cancelled,
-            dependency_scope,
-        )
-        .unwrap();
-        let after = analyze_side(
-            &analyze,
-            &lease.head_path,
-            after_files,
-            AnalysisOptions::default(),
-            &cancelled,
-            dependency_scope,
-        )
-        .unwrap();
-        workspace::verify_head(&lease, &operation).unwrap();
-        let diff = before.diff(&after).unwrap();
-        let result = StructureComparison {
-            review_id,
-            snapshot_id,
-            comparison_base: lease.comparison.comparison_base.clone(),
-            head_revision: lease.comparison.head_revision.clone(),
-            before: Graph::from(&before),
-            after: Graph::from(&after),
-            diff: GraphDifference::from(&diff),
-            coverage,
-        };
-        if let Some(checkout) = checkout {
-            checkout.finish().unwrap();
-        }
-        result
-    })
-    .await
-    .unwrap()
+        .unwrap()
 }
 
 /// 在同一 head 上交替执行串行和并行，并逐字段确认结果相同。

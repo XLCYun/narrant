@@ -100,14 +100,19 @@ inputs remain available. The additional before checkout belongs to one analysis 
 the Review lease serializes actual workers, so an old worker finishes cleanup before a retry can acquire the same path. No second
 head checkout or independent clone is created.
 
-The Review Lifecycle grants a Snapshot-scoped use of its existing head directory. It
+The Review Lifecycle exposes `run_in_workspace` for synchronous work in a fixed
+Snapshot. The callback receives the comparison, paths and a bound read-only operation
+context. Lifecycle starts the blocking worker and keeps its private lease there;
+the caller no longer acquires or transfers a lease or composes revocation flags. It
 verifies Review/Snapshot identity, Trust and the expected head while establishing the
 protection. Refresh and close revoke active analysis, wait for its worker and language
 server processes to stop, and only then mutate or remove head. Releasing the use does
 not remove head; normal Review lifecycle remains its owner. A bare path lookup is not
 sufficient, and cancelling only the frontend await is not sufficient.
 
-Preparation and release must be owned by one Module:
+Review Lifecycle owns admission, cancellation binding, locking and worker lifetime.
+Structure Changes owns before preparation, two-side analysis and before cleanup inside
+that execution range:
 
 - Verify the Review is open, the requested Snapshot is current and its Repository is
   trusted before materialization. Use the Snapshot's saved commit identities.
@@ -133,7 +138,7 @@ the user's explicit instruction not to repeat the head checkout. See [ADR-0031](
 
 ### Parallel sides and dependency settings (2026-09-14)
 
-After obtaining the Snapshot lease, run two independent sides concurrently. Before
+Inside the fixed-workspace callback, run two independent sides concurrently. Before
 prepares its checkout and immediately analyzes it; after immediately analyzes the
 existing head. Preparation, project loading and semantic queries can overlap. An empty
 side produces an empty graph without starting a server or preparing an unnecessary
@@ -142,8 +147,10 @@ checkout. No second head checkout is introduced.
 Both workers use the same frozen test-code option and Rust dependency scope. A failure
 or panic on either side cancels its peer. Cancellation, close, refresh and abandoned
 requests wait for both actual workers to stop before releasing the lease; before
-cleanup belongs to its worker, and cleanup failures remain visible. Only after both
-graphs succeed does the application verify head and compare/project the graphs.
+cleanup belongs to its worker, and cleanup failures remain visible together with any
+original analysis error or panic. Explicit cancellation stays distinct from real
+failures. Only after both graphs succeed does the callback compare/project the graphs;
+Lifecycle then validates head before publishing success.
 
 Application Settings adds **Structure Changes / 结构改动**, following the existing settings
 navigation and card layout. A language selector currently offers Rust. Its three
@@ -189,7 +196,7 @@ containment without unioning two parent trees into a multi-parent or cyclic hier
 | Checkout strategy | Reuse existing head under lifecycle protection; create only before | Explicit user correction |
 | Q1: presentation | One combined difference graph with explicit added/removed/modified states | Accepted |
 | Q2: initial visible objects | Changed objects and their containing context; allow expansion of unchanged objects | Accepted |
-| Q3: first language coverage | Existing Rust Adapter; explicitly show unsupported changed-file coverage | Accepted |
+| Q3: first language coverage | Existing Rust Adapter; retain coverage data to distinguish unsupported-only results | Accepted; coverage details UI removed by user follow-up |
 
 Q1 chooses a combined graph. Q2 changes the initial
 presentation only, not the complete extraction inside the chosen file scope. Q3 limits
@@ -229,18 +236,32 @@ graph retains at least 45% of the split. Selecting a different object does not r
 the split width or recreate the graph viewport.
 
 Before selection, the sidebar prompts the user to choose an object. Selecting a
-card or member updates the sidebar and highlights that exact object. Before/after
-declarations and code are stacked vertically, with long code scrolling inside its
-own block. The sidebar scrolls independently; selecting another object starts its
-details at the top. File coverage uses the same sidebar, so graph interactions stay
-available without dismissing a modal. A new Snapshot clears the previous selection.
+card or member updates the sidebar and highlights that exact object. One read-only
+Monaco inline diff compares the before/after `source` excerpts, combining declaration
+and implementation with their original comments, whitespace and nested members.
+The editor shares File Changes' light/dark themes, wraps long lines for display only,
+and grows for short excerpts up to a bounded height with independent scrolling.
+An added/removed object has an empty original/modified side. A present node without
+source shows an unavailable message rather than a fabricated addition or deletion.
+No formatter reconstructs source from the normalized signature and implementation.
+These display excerpts do not participate in structural comparison: comment-only or
+child changes in a parent's excerpt do not make its own graph content modified.
+Source is retained in the comparison before the temporary checkout is cleaned up.
+The sidebar scrolls independently; selecting another object starts its
+details at the top. A new Snapshot clears the previous selection.
 The existing object/reference display filters apply to sidebar details as well.
+
+The toolbar contains the test-code switch, reanalysis and display options, aligned
+to the right. Object counters and the file-coverage button and details mode are
+removed. Coverage data remains available to distinguish unsupported-only results
+from an analyzed empty graph. The sidebar header displays only its title, without
+an explanatory sentence.
 
 ### Show relationships for the selected object
 
 The graph initially hides all relationship lines and their connection markers.
 Selecting an object reveals only incident lines to that exact Code Object, in both
-directions. Member ports determine identity, so selecting a method in a class card
+directions. Original relationship endpoints determine identity, so selecting a method in a class card
 does not reveal the other methods' lines. Calls between members of one card,
 recursive calls and removed relationships follow the same rule.
 
@@ -252,11 +273,49 @@ endpoints represented in the displayed graph are eligible. External and Unresolv
 targets remain hidden. Contains continues to define the nested layout, while a
 former contains edge, when present, follows the same selection rule as other lines.
 
-Clicking blank canvas clears selection and hides lines again. Showing coverage or
-switching Snapshots also leaves no object-specific lines visible. Selecting objects
+Clicking blank canvas clears selection and hides lines again. Switching Snapshots
+also leaves no object-specific lines visible. Selecting objects
 changes only line/marker visibility and sidebar content: it does not rerun analysis,
 rearrange objects or reset the viewport. Candidate routes remain in the layout so
 revealing a relationship is immediate and does not move its endpoints.
+
+### Collapse containers and types
+
+Containers and Types with members currently included in the view have a separate
+collapse button. The button always selects that same Code Object for the sidebar
+and toggles only its own collapsed state. The name remains a separate selection
+button. Collapsing a parent preserves its descendants' individual collapse choices.
+Ordinary member rows have no additional collapse control.
+
+A collapsed card keeps its header, a count of included descendants (or fields and
+methods for a Type), and the count of changed descendants. The latter is separate
+from the object's own change status. ELK first lays out the current display scope
+fully expanded. Collapse synchronously hides descendant cards and member rows and
+shrinks only the folded card inside its original bounds. Other cards and their
+parents keep the initial coordinates and sizes, reserving space for expansion.
+It does not change graph
+membership, comparison counts, or the set of unchanged objects revealed by the
+existing context controls. The display menu offers Collapse all and Expand all;
+these affect every collapsible object already included in the current view,
+including descendants hidden under collapsed parents. Collapse all clears selection.
+State is scoped to the current comparison; a new Snapshot starts expanded.
+
+Candidate relationships retain their original Code Object endpoints. If an endpoint
+is hidden by collapse, its visible collapsed ancestor provides the display port.
+Only relationships incident to the exact selected object appear; selecting a
+collapsed parent does not select all its descendants' relationships. Relationships
+entirely inside one collapsed card are hidden. A proxied endpoint's tooltip contains
+only its readable object name, qualified by the containing Type for a member (for
+example `Repository::load`), without a target or module-description prefix.
+External and Unresolved references remain hidden.
+
+Folding and unfolding project the cached expanded layout without running ELK,
+showing a layout-loading overlay, adjusting the viewport or remounting React Flow.
+Existing edge routes are retained whenever their port positions stay the same;
+only a moved endpoint uses a local orthogonal connection to its collapsed card.
+Expanding restores the original positions, sizes, member ports and routed paths.
+Changing display filters or revealing additional context still computes a new
+expanded layout for the new display scope.
 
 ### Compact class-diagram presentation
 

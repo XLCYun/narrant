@@ -5,6 +5,29 @@ use crate::structure_review::code_graph::{
 
 use super::fixtures::{calls, data, graph, id, node};
 
+/// 任意类别的展示源码都不参与自身内容、包含关系或引用的语义比较。
+#[test]
+fn display_source_does_not_create_structural_changes() {
+    for variant in [
+        CodeNode::Container,
+        CodeNode::Type,
+        CodeNode::Callable,
+        CodeNode::Value,
+        CodeNode::ExecutionRegion,
+        CodeNode::Extension,
+    ] {
+        let mut before = data("item", &[]);
+        let mut after = before.clone();
+        before.source = Some("original source".into());
+        after.source = Some("changed display source".into());
+        assert!(graph(&["item"], vec![variant(before)])
+            .diff(&graph(&["item"], vec![variant(after)]))
+            .unwrap()
+            .nodes
+            .is_empty());
+    }
+}
+
 /// 图外描述不会改变关系身份，也不会因为显示名称或范围说明更新而产生代码差异。
 #[test]
 fn external_symbol_descriptions_do_not_create_code_changes() {

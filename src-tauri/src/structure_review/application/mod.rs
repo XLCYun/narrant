@@ -7,18 +7,15 @@ use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph
 use super::rust_analyzer::RustDependencyScope;
 use crate::{
     lsp::CancellationCheck,
-    operation::OperationContext,
-    review::{ReviewLifecycle, SnapshotWorkspaceLease},
+    operation::{CancellationSource, OperationContext},
+    review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
 };
 pub(crate) use projection::StructureComparison;
 use projection::{FileCoverage, Graph, GraphDifference};
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
 /// 每次运行注入只读取消观察，生产和测试都经过同一个语言分析调用点。
@@ -64,124 +61,105 @@ impl StructureReview {
         options: AnalysisOptions,
         dependency_scope: RustDependencyScope,
     ) -> Result<StructureComparison, StructureReviewError> {
-        let lease = lifecycle
-            .lease_workspace(operation, review_id, snapshot_id)
-            .await
-            .map_err(|error| StructureReviewError::new("review-unavailable", error))?;
-        let abandoned = Arc::new(AtomicBool::new(false));
-        let _await_guard = AnalysisAwaitGuard(abandoned.clone());
-        let context = lease
-            .operation_context(operation)
-            .with_revocation(abandoned);
         let analyze = self.analyze_rust.clone();
-        let review_id = review_id.to_owned();
-        let snapshot_id = snapshot_id.to_owned();
-        tokio::task::spawn_blocking(move || {
-            run(
-                lease,
-                context,
-                analyze,
-                review_id,
-                snapshot_id,
-                options,
-                dependency_scope,
-            )
-        })
-        .await
-        .map_err(|error| StructureReviewError::new("analysis-failed", error))?
+        let result_review_id = review_id.to_owned();
+        let result_snapshot_id = snapshot_id.to_owned();
+        lifecycle
+            .run_in_workspace(operation, review_id, snapshot_id, move |workspace| {
+                run(
+                    workspace,
+                    analyze,
+                    result_review_id,
+                    result_snapshot_id,
+                    options,
+                    dependency_scope,
+                )
+            })
+            .await
     }
 }
 
-/// 外层 future 消失时通知实际 worker 停止，而不是仅丢弃 JoinHandle。
-struct AnalysisAwaitGuard(Arc<AtomicBool>);
-impl Drop for AnalysisAwaitGuard {
-    /// 正常结束时 worker 已完成；异常结束时该标记传播到 Git 和 LSP。
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
+impl From<ReviewLifecycleError> for StructureReviewError {
+    /// 取消有独立类别；其余生命周期诊断原样保留。
+    fn from(error: ReviewLifecycleError) -> Self {
+        let code = if matches!(error, ReviewLifecycleError::Cancelled(_)) {
+            "cancelled"
+        } else {
+            "review-unavailable"
+        };
+        Self::new(code, error)
     }
 }
 
-/// 同一 Review 的 lease 使固定 before 路径一次仅有一个使用者。
+/// 生命周期执行范围保护目录；两侧 worker 在返回前完成分析与 before 回收。
 fn run(
-    lease: SnapshotWorkspaceLease,
-    operation: OperationContext,
+    workspace: &SnapshotWorkspace,
     analyze: Arc<AnalyzeGraph>,
     review_id: String,
     snapshot_id: String,
     options: AnalysisOptions,
     dependency_scope: RustDependencyScope,
 ) -> Result<StructureComparison, StructureReviewError> {
-    let (before_files, after_files, coverage) = scope(&lease);
-    let failed = Arc::new(AtomicBool::new(false));
-    let parallel_operation = operation.with_revocation(failed.clone());
-    let first_error = Mutex::new(None);
+    let (before_files, after_files, coverage) = scope(workspace);
+    let (stop, parallel_operation) = workspace.operation.child();
+    let errors = Mutex::new(WorkerErrors::default());
     let cancelled_signal = parallel_operation.cancellation().clone();
     let cancelled: CancellationCheck = Arc::new(move || cancelled_signal.is_cancelled());
-    // before 的签出和分析与 after 的完整分析重叠；scope 保证实际 worker 全部退出。
+    // before 的准备与 after 分析重叠；所有实际子工作和清理都在 scope 内结束。
     let (before, after) = std::thread::scope(|threads| {
         let before = threads.spawn(|| {
-            run_worker(&failed, &first_error, || {
-                let checkout = if before_files.is_empty() {
-                    None
-                } else {
-                    Some(workspace::BeforeCheckout::prepare(
-                        &lease,
-                        &parallel_operation,
-                    )?)
-                };
-                let result = analyze_side(
+            let checkout = if before_files.is_empty() {
+                None
+            } else {
+                Some(run_worker(&stop, &errors, || {
+                    workspace::BeforeCheckout::prepare(workspace, &parallel_operation)
+                })?)
+            };
+            // 在 checkout 仍存活时捕获分析器 panic，随后显式清理并收集两个错误。
+            let result = run_worker(&stop, &errors, || {
+                analyze_side(
                     &analyze,
-                    &lease.before_path,
+                    &workspace.before_path,
                     before_files,
                     options,
                     &cancelled,
                     dependency_scope,
-                );
-                // 目录仅由 before worker 拥有，失败或取消也必须完成回收。
-                if let Some(checkout) = checkout {
-                    checkout.finish()?;
-                }
-                result
-            })
+                )
+            });
+            if let Some(checkout) = checkout {
+                run_worker(&stop, &errors, || checkout.finish());
+            }
+            result
         });
-        let after = run_worker(&failed, &first_error, || {
+        let after = run_worker(&stop, &errors, || {
             analyze_side(
                 &analyze,
-                &lease.head_path,
+                &workspace.head_path,
                 after_files,
                 options,
                 &cancelled,
                 dependency_scope,
             )
         });
-        (before.join().expect("worker panic 已转换为分析错误"), after)
+        let before = run_worker(&stop, &errors, || before.join().map_err(panic_error)).flatten();
+        (before, after)
     });
-    let error = first_error
+    errors
         .into_inner()
-        .expect("worker 不在错误锁内执行分析");
-    // 回收失败优先展示，避免一次取消掩盖残留工作副本。
-    if let Some(error) = error
-        .as_ref()
-        .filter(|error| error.code == "cleanup-failed")
-    {
-        return Err(StructureReviewError::new(error.code, &error.detail));
-    }
-    if operation.cancellation().is_cancelled() {
+        .expect("worker 不在错误锁内执行分析")
+        .finish()?;
+    if workspace.operation.cancellation().is_cancelled() {
         return Err(StructureReviewError::new("cancelled", "结构分析已停止。"));
     }
-    if let Some(error) = error {
-        return Err(error);
-    }
     let (before, after) = (before.unwrap(), after.unwrap());
-    workspace::verify_head(&lease, &operation)?;
     let diff = before
         .diff(&after)
         .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
     Ok(StructureComparison {
         review_id,
         snapshot_id,
-        comparison_base: lease.comparison.comparison_base.clone(),
-        head_revision: lease.comparison.head_revision.clone(),
+        comparison_base: workspace.comparison.comparison_base.clone(),
+        head_revision: workspace.comparison.head_revision.clone(),
         before: Graph::from(&before),
         after: Graph::from(&after),
         diff: GraphDifference::from(&diff),
@@ -189,30 +167,74 @@ fn run(
     })
 }
 
-/// 一侧失败或 panic 时通知另一侧停止，保留首个根因并等待资源收敛。
-fn run_worker(
-    failed: &AtomicBool,
-    first_error: &Mutex<Option<StructureReviewError>>,
-    work: impl FnOnce() -> Result<CodeGraph, StructureReviewError>,
-) -> Option<CodeGraph> {
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|_| {
-            Err(StructureReviewError::new(
-                "analysis-failed",
-                "结构分析 worker 异常退出。",
-            ))
-        });
-    match result {
-        Ok(graph) => Some(graph),
-        Err(error) => {
-            let mut first = first_error.lock().expect("worker 不在错误锁内执行分析");
-            if first.is_none() || error.code == "cleanup-failed" {
-                *first = Some(error);
+/// 诊断与停止信号分离：记录首个真实根因及每次补偿清理错误。
+#[derive(Default)]
+struct WorkerErrors {
+    first_error: Option<StructureReviewError>,
+    cleanup_errors: Vec<String>,
+}
+
+impl WorkerErrors {
+    /// 真正失败优先于伴随取消；清理错误单独积累，不能覆盖根因。
+    fn record(&mut self, error: StructureReviewError) {
+        if error.code == "cleanup-failed" {
+            self.cleanup_errors.push(error.detail);
+        } else if self
+            .first_error
+            .as_ref()
+            .is_none_or(|first| first.code == "cancelled" && error.code != "cancelled")
+        {
+            self.first_error = Some(error);
+        }
+    }
+
+    /// 清理失败优先报告，附带原始分析失败；单纯取消保留其稳定类别。
+    fn finish(self) -> Result<(), StructureReviewError> {
+        if !self.cleanup_errors.is_empty() {
+            let mut detail = self.cleanup_errors.join("；");
+            if let Some(error) = self.first_error {
+                detail.push_str(&format!("；原始错误：{}", error.detail));
             }
-            failed.store(true, Ordering::Release);
+            // 等待者可能已经消失，仍留下包含根因的清理诊断供排查和恢复。
+            tracing::warn!(%detail, "结构分析 before checkout 清理失败");
+            return Err(StructureReviewError::new("cleanup-failed", detail));
+        }
+        self.first_error.map_or(Ok(()), Err)
+    }
+}
+
+/// 捕获同步阶段的失败或 panic，先记录根因再停止同组工作。
+fn run_worker<T>(
+    stop: &CancellationSource,
+    errors: &Mutex<WorkerErrors>,
+    work: impl FnOnce() -> Result<T, StructureReviewError>,
+) -> Option<T> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|panic| Err(panic_error(panic)));
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            errors
+                .lock()
+                .expect("worker 不在错误锁内执行分析")
+                .record(error);
+            stop.cancel();
             None
         }
     }
+}
+
+/// 保留 panic 的文字根因，避免仅报告一个无法定位的 worker 退出。
+fn panic_error(panic: Box<dyn std::any::Any + Send>) -> StructureReviewError {
+    let detail = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("无文字诊断");
+    StructureReviewError::new(
+        "analysis-failed",
+        format!("结构分析 worker 异常退出：{detail}"),
+    )
 }
 
 /// 当前侧没有文件时直接提供空图，避免启动语言服务器或伪造目录。
@@ -240,15 +262,24 @@ fn analyze_side(
         cancelled.clone(),
         dependency_scope,
     )
-    .map_err(|error| StructureReviewError::new("analysis-failed", error.message))
+    .map_err(|error| {
+        StructureReviewError::new(
+            if error.is_cancelled() {
+                "cancelled"
+            } else {
+                "analysis-failed"
+            },
+            error.message,
+        )
+    })
 }
 
 /// 分侧选择普通 Rust 源文件，并保留所有改动文件的覆盖说明。
-fn scope(lease: &SnapshotWorkspaceLease) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<FileCoverage>) {
+fn scope(workspace: &SnapshotWorkspace) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<FileCoverage>) {
     let mut before = Vec::new();
     let mut after = Vec::new();
     let mut coverage = Vec::new();
-    for change in &lease.comparison.file_changes {
+    for change in &workspace.comparison.file_changes {
         let before_path = change.old_path.as_deref().unwrap_or(&change.path);
         let old = coverage_kind(before_path, change.before.as_ref());
         let new = coverage_kind(&change.path, change.after.as_ref());

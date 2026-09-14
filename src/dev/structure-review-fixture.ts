@@ -1,12 +1,28 @@
 import type { CodeNode, CodeReference, StructureComparison } from "@/structure-review/types";
 
+/** 原文对比预览覆盖长实现、长字符串、注释与字段，避免用规范化文本模拟展示数据。 */
+export function structureSourceDiffFixture(): StructureComparison {
+  const comparison = structureReviewFixture();
+  const longSignature = "pub async fn recover_all_previously_opened_review_workspaces_with_very_long_descriptive_names(&self) -> Result<(), RecoveryError>";
+  for (const side of ["before", "after"] as const) {
+    comparison[side] = structuredClone(comparison[side]);
+    const node = comparison[side].nodes.find((node) => node.id === "long")!;
+    const steps = Array.from({ length: 36 }, (_, index) => `    restore_step(${index})?;`).join("\n");
+    node.source = `/// 恢复已打开的审核工作区。\n${longSignature} {\n    let message = "保留原始字符串里的空格，长行只在编辑器中自动折行，不改写真实文本";\n${steps}\n    ${side === "before" ? "save_snapshot();" : "validate_snapshot()?;\n    save_snapshot();"}\n    Ok(())\n}`;
+    node.code = side === "before" ? "{ restore_step(); save_snapshot(); }" : "{ restore_step(); validate_snapshot()?; save_snapshot(); }";
+    comparison[side].nodes.find((node) => node.id === "Review")!.source = `pub struct Review {\n    pub id: ReviewId,\n    pub snapshot: ${side === "before" ? "Option<Snapshot>" : "Snapshot"},\n}`;
+  }
+  comparison.diff.nodes.push({ id: "long", content: "modified", contains: [], references: [] });
+  return comparison;
+}
+
 /** 字段类型预览覆盖未变化关系、类型替换和递归字段，目标类型在点击前已参与布局。 */
 export function structureFieldTypesFixture(): StructureComparison {
   const typeUse = (id: string): CodeReference => ({ semantic: "code.type_use", target: { kind: "node", id } });
   /** 使用稳定对象身份，让包装类型变化与字段关联变化分别进入 diff。 */
   const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode> = {}): CodeNode => ({
     id, category, language: "rust", nativeKind: category === "container" ? "module" : category === "type" ? "struct" : category === "value" ? "field" : "fn",
-    name: id, signature: null, code: null, contains: [], references: [], extensions: {}, ...extra,
+    name: id, signature: null, code: null, source: extra.signature == null ? null : `${extra.signature}${extra.code ? ` ${extra.code}` : ""}`, contains: [], references: [], extensions: {}, ...extra,
   });
   const common = [
     node("github-discovery", "container", { name: "github_discovery", contains: ["Group", "Item", "Repository", "LegacyRepository", "refresh", "store"] }),
@@ -48,8 +64,8 @@ export function structureTestCodeFixture(comparison: StructureComparison, includ
     const common = { language: "rust", references: [], extensions: {} };
     result[side].root.push("preview-tests");
     result[side].nodes.push(
-      { ...common, id: "preview-tests", category: "container", nativeKind: "mod", name: "tests", signature: "#[cfg(test)] mod tests", code: null, contains: ["preview-test"] },
-      { ...common, id: "preview-test", category: "callable", nativeKind: "fn", name: "checks_snapshot_identity", signature: "#[test] fn checks_snapshot_identity()", code: side === "before" ? "{ assert!(snapshot.is_ready()); }" : "{ assert!(snapshot.has_matching_identity()); }", contains: [] },
+      { ...common, id: "preview-tests", category: "container", nativeKind: "mod", name: "tests", signature: "#[cfg(test)] mod tests", code: null, source: null, contains: ["preview-test"] },
+      { ...common, id: "preview-test", category: "callable", nativeKind: "fn", name: "checks_snapshot_identity", signature: "#[test] fn checks_snapshot_identity()", code: side === "before" ? "{ assert!(snapshot.is_ready()); }" : "{ assert!(snapshot.has_matching_identity()); }", source: `#[test]\nfn checks_snapshot_identity() {\n    assert!(snapshot.${side === "before" ? "is_ready" : "has_matching_identity"}());\n}`, contains: [] },
     );
   }
   result.diff.nodes.push({ id: "preview-test", content: "modified", contains: [], references: [] });
@@ -59,10 +75,13 @@ export function structureTestCodeFixture(comparison: StructureComparison, includ
 /** 预览和应用测试共用的代表性图，包含高层对象、导入声明和独立的关系变化。 */
 export function structureReviewFixture({ importsOnly = false }: { importsOnly?: boolean } = {}): StructureComparison {
   const call = (id: string): CodeReference => ({ semantic: "code.calls", target: { kind: "node", id } });
-  const node = (id: string, category: CodeNode["category"], contains: string[] = [], extra: Partial<CodeNode> = {}): CodeNode => ({
-    id, category, contains, language: "rust", nativeKind: category === "container" ? "mod" : category === "type" ? "struct" : category === "extension" ? "impl" : "fn",
-    name: id, signature: category === "callable" ? `fn ${extra.name ?? id}()` : `${category} ${extra.name ?? id}`, code: null, references: [], extensions: {}, ...extra,
-  });
+  const node = (id: string, category: CodeNode["category"], contains: string[] = [], extra: Partial<CodeNode> = {}): CodeNode => {
+    const signature = extra.signature ?? (category === "callable" ? `fn ${extra.name ?? id}()` : `${category} ${extra.name ?? id}`);
+    return {
+      id, category, contains, language: "rust", nativeKind: category === "container" ? "mod" : category === "type" ? "struct" : category === "extension" ? "impl" : "fn",
+      name: id, signature, code: null, source: `${signature}${extra.code ? ` ${extra.code}` : category === "callable" ? " {}" : ""}`, references: [], extensions: {}, ...extra,
+    };
+  };
   const shared = [
     node("narrant", "container", ["review", "storage"]),
     node("Review", "type", ["review-id", "snapshot"], { signature: "pub struct Review" }),
@@ -81,7 +100,7 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
     node("review", "container", ["Review", "impl", "old", "keep", "use-old"]),
     node("use-old", "extension", [], { nativeKind: "use", name: null, signature: "use crate::legacy::load;" }),
     node("old", "callable", [], { name: "load_legacy_state" }),
-    node("run", "callable", [], { name: "run_review", signature: "pub async fn run_review(&mut self) -> Result<()>", code: "{ let state = load_legacy_state(); save_snapshot(state); }", references: [call("old"), call("save"), { semantic: "code.member_of", target: { kind: "node", id: "Review" } }] }),
+    node("run", "callable", [], { name: "run_review", signature: "pub async fn run_review(&mut self) -> Result<()>", code: "{ let state = load_legacy_state(); save_snapshot(state); }", source: "/// 加载当前审核并保存快照。\npub async fn run_review(&mut self) -> Result<()> {\n    let state = load_legacy_state();\n    save_snapshot(state);\n    Ok(())\n}", references: [call("old"), call("save"), { semantic: "code.member_of", target: { kind: "node", id: "Review" } }] }),
   ] };
   const unresolved: CodeReference = { semantic: "code.references", target: { kind: "unresolved", name: "generated::on_review_opened" } };
   const external = { semantic: "code.calls", target: { kind: "external", symbol: "rust:registry:serde_json-1.0%2Fsrc%2Fser.rs::fn:to_string" } } satisfies CodeReference;
@@ -99,8 +118,8 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
     node("snapshot", "value", [], { name: "snapshot", nativeKind: "field", signature: "pub snapshot: Snapshot" }),
     node("review", "container", ["Review", "impl", "new", "keep", "use-new"]),
     node("use-new", "extension", [], { nativeKind: "use", name: null, signature: "pub use crate::storage::load;", references: [unusedImport] }),
-    node("new", "callable", [], { name: "prepare_snapshot", signature: "fn prepare_snapshot(review: Review, options: SnapshotOptions)", code: "{ save_snapshot(Snapshot::new()); }", references: addedReferences }),
-    node("run", "callable", [], { name: "run_review", signature: "pub async fn run_review(&mut self) -> Result<()>", code: "{ let state = prepare_snapshot(); save_snapshot(state); generated::on_review_opened(); }", references: [call("new"), call("save"), unresolved, { semantic: "code.member_of", target: { kind: "node", id: "Review" } }] }),
+    node("new", "callable", [], { name: "prepare_snapshot", signature: "fn prepare_snapshot(review: Review, options: SnapshotOptions)", code: "{ save_snapshot(Snapshot::new()); }", source: "fn prepare_snapshot(\n    review: Review,\n    options: SnapshotOptions,\n) {\n    save_snapshot(Snapshot::new());\n}", references: addedReferences }),
+    node("run", "callable", [], { name: "run_review", signature: "pub async fn run_review(&mut self) -> Result<()>", code: "{ let state = prepare_snapshot(); save_snapshot(state); generated::on_review_opened(); }", source: "/// 准备当前审核并保存快照。\npub async fn run_review(&mut self) -> Result<()> {\n    // 固定本次审核使用的源码版本。\n    let state = prepare_snapshot();\n    save_snapshot(state);\n    generated::on_review_opened();\n    Ok(())\n}", references: [call("new"), call("save"), unresolved, { semantic: "code.member_of", target: { kind: "node", id: "Review" } }] }),
   ] };
   const comparison: StructureComparison = {
     reviewId: "structure-preview", snapshotId: "structure-snapshot", comparisonBase: "1111111", headRevision: "2222222", before, after,
@@ -156,22 +175,24 @@ export function structureClassDiagramFixture(): StructureComparison {
   const method = comparison.after.nodes.find((node) => node.id === "run")!;
   const fields = ["repository", "base_revision", "head_revision", "workspaces"].map((name, index): CodeNode => ({
     ...field, id: `dense-field-${index}`, name, signature: `pub ${name}: ${index === 3 ? "Vec<ReviewWorkspace>" : "String"}`,
+    source: `pub ${name}: ${index === 3 ? "Vec<ReviewWorkspace>" : "String"}`,
   }));
   const names = ["open", "close", "refresh", "cancel", "is_current", "recover_all_previously_opened_review_workspaces", "save", "restore_snapshot"];
-  const methods = names.map((name, index): CodeNode => ({
-    ...method, id: `dense-method-${index}`, name,
-    signature: index === 5 ? `pub async fn ${name}(&mut self, options: RecoveryOptions, cancellation: CancellationToken) -> Result<Vec<ReviewWorkspace>, RecoveryError>`
-      : `pub fn ${name}(&mut self) -> Result<()>`,
-    code: `{ ${index === 0 ? "close();" : "Ok(())"} }`,
-    references: index === 0 ? [{ semantic: "code.calls", target: { kind: "node", id: "dense-method-1" } }] : [],
-  }));
-  const contract: CodeNode = { ...type, id: "Persist", name: "Persist", nativeKind: "trait", signature: "pub trait Persist", contains: [] };
+  const methods = names.map((name, index): CodeNode => {
+    const signature = index === 5 ? `pub async fn ${name}(&mut self, options: RecoveryOptions, cancellation: CancellationToken) -> Result<Vec<ReviewWorkspace>, RecoveryError>`
+      : `pub fn ${name}(&mut self) -> Result<()>`;
+    const body = index === 0 ? "close();" : "Ok(())";
+    return { ...method, id: `dense-method-${index}`, name, signature, code: `{ ${body} }`, source: `${signature} {\n    ${body}\n}`,
+      references: index === 0 ? [{ semantic: "code.calls", target: { kind: "node", id: "dense-method-1" } }] : [] };
+  });
+  const contract: CodeNode = { ...type, id: "Persist", name: "Persist", nativeKind: "trait", signature: "pub trait Persist", source: "pub trait Persist {}", contains: [] };
   for (const graph of [comparison.before, comparison.after]) {
     graph.nodes.push(contract);
     const storage = graph.nodes.find((node) => node.id === "storage")!;
     storage.contains = [...storage.contains, contract.id];
   }
   const traitImplementation: CodeNode = { ...implementation, id: "impl-persist", name: "impl Persist for Review", signature: "impl Persist for Review", contains: methods.slice(6).map((node) => node.id),
+    source: `impl Persist for Review {\n${methods.slice(6).map((node) => node.source).join("\n\n")}\n}`,
     references: [...implementation.references, { semantic: "code.implements", target: { kind: "node", id: contract.id } }] };
   type.contains = [...type.contains, ...fields.map((node) => node.id)];
   implementation.contains = [...implementation.contains, ...methods.slice(0, 6).map((node) => node.id)];
@@ -192,19 +213,21 @@ export function structureClassDiagramFixture(): StructureComparison {
 export function structureCrateRootsFixture(): StructureComparison {
   const comparison = structureReviewFixture();
   const template = comparison.after.nodes.find((node) => node.id === "run")!;
-  const run: CodeNode = { ...template, id: "crate-run", name: "run", signature: "pub fn run()", contains: [], references: [] };
+  const run: CodeNode = { ...template, id: "crate-run", name: "run", signature: "pub fn run()", code: "{}", source: "pub fn run() {}", contains: [], references: [] };
   const library: CodeNode = { ...run, id: "library-crate", category: "container", nativeKind: "crate", name: "src-tauri/src/lib.rs", signature: null, code: null, contains: [run.id] };
   const testRoot: CodeNode = { ...library, id: "test-crate", name: "src-tauri/tests/github_discovery.rs", contains: ["test-helper", "test-checks", "test-long"] };
-  const helper: CodeNode = { ...run, id: "test-helper", name: "repository_with_remotes", signature: "fn repository_with_remotes(remotes: &[(&str, &str)]) -> TempDir" };
+  const helper: CodeNode = { ...run, id: "test-helper", name: "repository_with_remotes", signature: "fn repository_with_remotes(remotes: &[(&str, &str)]) -> TempDir", source: "fn repository_with_remotes(remotes: &[(&str, &str)]) -> TempDir {\n    todo!()\n}" };
   const checks: CodeNode = { ...run, id: "test-checks", name: "discovers_pull_requests", signature: "#[test] fn discovers_pull_requests()",
+    source: "#[test]\nfn discovers_pull_requests() {\n    let repository = repository_with_remotes(&[]);\n    run();\n}",
     references: [{ semantic: "code.calls", target: { kind: "node", id: run.id } }, { semantic: "code.calls", target: { kind: "node", id: helper.id } }] };
   const long: CodeNode = { ...run, id: "test-long", name: "uses_authenticated_metadata_access_and_keeps_permission_failures_local",
-    signature: "#[test] fn uses_authenticated_metadata_access_and_keeps_permission_failures_local()" };
+    signature: "#[test] fn uses_authenticated_metadata_access_and_keeps_permission_failures_local()", source: "#[test]\nfn uses_authenticated_metadata_access_and_keeps_permission_failures_local() {}" };
+  testRoot.source = [helper.source, checks.source, long.source].join("\n\n");
   const added = [testRoot, helper, checks, long];
   return {
     ...comparison,
     before: { root: [library.id], nodes: [library, run], externalSymbols: {} },
-    after: { root: [library.id, testRoot.id], nodes: [library, { ...run, code: "{ discover_pull_requests(); }" }, ...added], externalSymbols: {} },
+    after: { root: [library.id, testRoot.id], nodes: [{ ...library, source: "pub fn run() {\n    discover_pull_requests();\n}" }, { ...run, code: "{ discover_pull_requests(); }", source: "pub fn run() {\n    discover_pull_requests();\n}" }, ...added], externalSymbols: {} },
     diff: { nodes: [
       { id: run.id, content: "modified", contains: [], references: [] },
       ...added.map((node) => ({ id: node.id, content: "added" as const,

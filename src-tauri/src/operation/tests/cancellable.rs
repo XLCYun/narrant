@@ -220,26 +220,45 @@ fn derived_convergence_context_ignores_parent_cancellation() {
     assert!(!convergence.cancellation().is_cancelled());
 }
 
-/// 派生操作同时观察上层用户取消和生命周期撤销，不改变根操作的取消状态。
+/// 子操作直接接收两级父取消的唤醒；子取消不影响父级与兄弟，已取消父级的后续子操作也立即取消。
 #[tokio::test]
-async fn linked_context_observes_both_cancellation_sources() {
-    for revoke_resource in [false, true] {
+async fn child_context_propagates_cancellation_downward_without_polling_timers() {
+    for cancel_parent in [false, true] {
         let (controller, signal) = test_cancellation_signal();
         let root = OperationContext {
             cancellation: signal,
         };
-        let revoked = Arc::new(AtomicBool::new(false));
-        let linked = root.with_revocation(revoked.clone());
-        let waiting = tokio::spawn(async move { linked.cancellation().cancelled().await });
-        if revoke_resource {
-            revoked.store(true, Ordering::Release);
-        } else {
+        let (stop, child) = root.child();
+        let (_, grandchild) = child.child();
+        let (_, sibling) = root.child();
+        let wake = Arc::new(WakeCount::default());
+        let waker = futures_util::task::waker(wake.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut waiting = Box::pin(grandchild.cancellation().cancelled());
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        if cancel_parent {
             controller.cancel();
+        } else {
+            stop.cancel();
         }
-        tokio::time::timeout(Duration::from_secs(1), waiting)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(root.cancellation().is_cancelled(), !revoke_resource);
+        assert!(
+            wake.0.load(Ordering::Acquire) > 0,
+            "父取消必须直接唤醒后代等待者"
+        );
+        assert!(waiting.as_mut().poll(&mut context).is_ready());
+        assert!(child.cancellation().is_cancelled());
+        assert_eq!(root.cancellation().is_cancelled(), cancel_parent);
+        assert_eq!(sibling.cancellation().is_cancelled(), cancel_parent);
+        assert!(child.child().1.cancellation().is_cancelled());
+    }
+}
+
+/// 用唤醒计数验证异步通知，不通过真实时间等待掩盖轮询实现。
+#[derive(Default)]
+struct WakeCount(std::sync::atomic::AtomicUsize);
+impl futures_util::task::ArcWake for WakeCount {
+    /// 保存运行时会收到的唤醒，供公开信号行为断言。
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.0.fetch_add(1, Ordering::Release);
     }
 }

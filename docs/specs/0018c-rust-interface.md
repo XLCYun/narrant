@@ -16,6 +16,12 @@ The common content/tree/reference interface is implemented, including normalized
 The concrete Rust LSP adapter lives in the sibling `rust_analyzer` module; frontend
 transport remains later work.
 
+`CodeNodeData.source` optionally retains the node's original source for display,
+including declaration, implementation, comments, whitespace and nested members.
+It is separate from normalized `signature` and own `code`: neither node identity nor
+`CodeGraph::diff` compares it. An analyzer can leave it `None` when no corresponding
+source is available. No filesystem location or formatter is required by this field.
+
 ## Rust implementation
 
 The supported entry point is
@@ -54,6 +60,13 @@ All three error types implement Display and std::error::Error. The current compa
 of validated in-memory graphs has no additional fallible operation and returns Ok;
 the Result signature is preserved. Matching analysis and normalization conventions is
 a caller precondition, not something inferred from absent protocol-version metadata.
+
+`AnalysisError::new(message)` represents a real failure;
+`AnalysisError::cancelled(message)` explicitly represents cooperative cancellation.
+`is_cancelled()` preserves that distinction independently of a signal arriving later,
+so simultaneous user cancellation cannot hide a real analyzer failure. The message
+remains available for diagnostics, and language implementations do not need access
+to the parent's cancellation authority.
 
 AnalysisInput, AnalysisOptions and LanguageAnalyzer define the language-implementation seam.
 `AnalysisOptions::default()` sets `include_tests` to false; the option is carried in

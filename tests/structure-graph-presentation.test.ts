@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { structureCrateRootsFixture, structureFieldTypesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
-import { layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
+import { collapseStructureLayout, layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, NodeDifference, StructureComparison } from "@/structure-review/types";
 
 const options = { showAll: false, showUnchangedReferences: false, showImports: false, expanded: new Set<string>() };
@@ -261,7 +261,7 @@ it("stops abandoned layout requests through the public Interface", async () => {
 
 /** 用最小的有效图组合验证展示语义，避免依赖某种语言的 ID 编码。 */
 function diagramNode(id: string, category: CodeNode["category"], extra: Partial<CodeNode> = {}): CodeNode {
-  return { id, category, language: "rust", nativeKind: category, name: id, signature: id, code: null, contains: [], references: [], extensions: {}, ...extra };
+  return { id, category, language: "rust", nativeKind: category, name: id, signature: id, code: null, source: null, contains: [], references: [], extensions: {}, ...extra };
 }
 
 /** 只由声明的 contains 计算根，成员关系不会混进真实包含树。 */
@@ -384,4 +384,97 @@ it("collects root functions in a compact declaration table without inventing a m
   expect(layout.nodes[0].data.rows.filter((row) => row.objectId).map((row) => row.objectId).sort()).toEqual(["constant", "one", "two"]);
   expect(layout.visible).toBe(3);
   expect(layout.total).toBe(3);
+});
+
+it("collapses type members and impl rows while retaining their differences and original relationship identities", async () => {
+  const comparison = structureReviewFixture();
+  const original = structuredClone(comparison);
+  const opened = await layoutStructureComparison(comparison, options);
+  const originalLayout = structuredClone(opened);
+  const closed = collapseStructureLayout(opened, new Set(["Review"]));
+  const card = entry(closed, "Review")!.card;
+  expect(card.data.rows).toEqual([]);
+  expect(card.data.status).toBe("unchanged");
+  expect(card.data.collapse).toMatchObject({ collapsed: true, count: 3, changed: 2, values: 1, callables: 1 });
+  expect(Number(card.style!.height)).toBeLessThan(Number(entry(opened, "Review")!.card.style!.height));
+  expect(entry(closed, "run")).toBeUndefined();
+  expect(entry(closed, "snapshot")).toBeUndefined();
+  const call = closed.edges.find((edge) => edge.data?.sourceObjectId === "run" && edge.data.targetObjectId === "new")!;
+  expect(call).toMatchObject({ source: card.id, sourceHandle: endpoint(closed, "Review", "source").handle,
+    data: { sourceObjectId: "run", targetObjectId: "new", collapsedSource: "Review::run_review" } });
+  expect(call.data?.route).toBeUndefined();
+  expect(closed.changed).toBe(opened.changed);
+  expect(closed.total).toBe(opened.total);
+  expect(closed.visible).toBe(opened.visible - 3);
+  for (const node of closed.nodes) {
+    const initial = opened.nodes.find((candidate) => candidate.id === node.id)!;
+    expect(node.position).toBe(initial.position);
+    expect(node.parentId).toBe(initial.parentId);
+    if (node.id !== card.id) expect(node).toBe(initial);
+  }
+  const unaffected = opened.edges.find((edge) => edge.data?.sourceObjectId === "new" && edge.data.targetObjectId === "save")!;
+  expect(closed.edges.find((edge) => edge.id === unaffected.id)).toBe(unaffected);
+  expect(opened).toEqual(originalLayout);
+  expect(collapseStructureLayout(opened, new Set())).toBe(opened);
+  expect(comparison).toEqual(original);
+});
+
+it("uses the visible collapsed ancestor and restores nested collapse and context expansion independently", async () => {
+  const comparison = structureReviewFixture();
+  const expanded = new Set(["Review"]);
+  const allOpened = await layoutStructureComparison(comparison, { ...options, expanded });
+  const closed = collapseStructureLayout(allOpened, new Set(["review", "Review"]));
+  expect(entry(closed, "Review")).toBeUndefined();
+  expect(closed.collapsibleIds).toContain("Review");
+  const crossModule = closed.edges.find((edge) => edge.data?.sourceObjectId === "new" && edge.data.targetObjectId === "save")!;
+  expect(crossModule.sourceHandle).toBe(endpoint(closed, "review", "source").handle);
+  expect(crossModule.data?.collapsedSource).toBe("prepare_snapshot");
+  expect(closed.edges.some((edge) => edge.data?.sourceObjectId === "run" && edge.data.targetObjectId === "new")).toBe(false);
+  const parentOpened = collapseStructureLayout(allOpened, new Set(["Review"]));
+  expect(entry(parentOpened, "Review")!.card.data.collapse?.collapsed).toBe(true);
+  expect(entry(parentOpened, "restore")).toBeUndefined();
+  expect(entry(allOpened, "restore")).toBeDefined();
+  expect(entry(allOpened, "review-id")).toBeDefined();
+  expect(entry(allOpened, "Review")!.card.data.hiddenChildren).toBe(0);
+});
+
+it("collapses all containers without losing objects or inventing self relationships", async () => {
+  const comparison = structureReviewFixture();
+  const opened = await layoutStructureComparison(comparison, options);
+  const closed = collapseStructureLayout(opened, new Set(opened.collapsibleIds));
+  expect(closed.nodes).toHaveLength(1);
+  expect(closed.nodes[0].data.objectId).toBe("narrant");
+  expect(closed.nodes[0].data.collapse?.changed).toBe(opened.changed);
+  expect(closed.edges).toEqual([]);
+  expect(closed.visible).toBe(1);
+  expect(closed.total).toBe(opened.total);
+  expect(new Set(closed.collapsibleIds)).toEqual(new Set(opened.collapsibleIds));
+  expect(closed.nodes[0].position).toBe(entry(opened, "narrant")!.card.position);
+  expect(collapseStructureLayout(opened, new Set())).toBe(opened);
+});
+
+it("routes removed containment and member calls to a collapsed type without conflating the target", async () => {
+  const a = diagramNode("A", "type", { contains: ["load"] }), b = diagramNode("B", "type"), method = diagramNode("load", "callable");
+  const caller = diagramNode("caller", "callable", { references: [relation("code.calls", "load")] });
+  const comparison = diagramComparison([a, b, method, caller], [{ ...a, contains: [] }, { ...b, contains: ["load"] }, method, caller], [
+    { id: "A", content: null, contains: [{ kind: "removed", value: "load" }], references: [] },
+    { id: "B", content: null, contains: [{ kind: "added", value: "load" }], references: [] },
+  ]);
+  const opened = await layoutStructureComparison(comparison, { ...options, showAll: true, showUnchangedReferences: true });
+  const layout = collapseStructureLayout(opened, new Set(["B"]));
+  expect(layout.edges).toHaveLength(2);
+  for (const edge of layout.edges) {
+    expect(edge.targetHandle).toBe(endpoint(layout, "B", "target").handle);
+    expect(edge.data).toMatchObject({ targetObjectId: "load", collapsedTarget: "B::load" });
+  }
+  expect(layout.edges.map((edge) => edge.label).sort()).toEqual(["code.calls", "− contains"]);
+});
+
+it("retains existing type-reference routes when folding leaves their title ports in place", async () => {
+  const opened = await layoutStructureComparison(structureFieldTypesFixture(), { ...options, showAll: true });
+  const closed = collapseStructureLayout(opened, new Set(["Item"]));
+  const edge = opened.edges.find((item) => item.data?.targetObjectId === "Item")!;
+  expect(closed.edges.find((item) => item.id === edge.id)).toBe(edge);
+  expect(entry(closed, "Item")!.card.position).toBe(entry(opened, "Item")!.card.position);
+  expect(collapseStructureLayout(opened, new Set(["unknown"]))).toBe(opened);
 });

@@ -83,6 +83,21 @@ fn separates_library_and_integration_test_crate_roots() {
         );
         assert!(root.data().signature.is_none());
         assert!(root.data().code.is_none());
+        let source = if member == "run" {
+            "pub fn run() {}"
+        } else {
+            "#[test] fn checks() {}"
+        };
+        assert_eq!(root.data().source.as_deref(), Some(source));
+        assert_eq!(
+            graph
+                .node(&root.data().contains[0])
+                .unwrap()
+                .data()
+                .source
+                .as_deref(),
+            Some(source)
+        );
     }
     let repeat = analyze_roots(files, [parent.clone(), parent]);
     assert!(graph.diff(&repeat).unwrap().nodes.is_empty());

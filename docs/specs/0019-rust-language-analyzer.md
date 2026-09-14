@@ -37,6 +37,9 @@ records the agreed scope and the implementation obligations.
   analyzer. Do not mix repository snapshots with unrelated editor buffers.
 - A selected-file read or extraction failure is an analysis error. Unavailable semantic
   analysis must not be represented as a proven absence of objects or relationships.
+- Explicit cancellation from Rust checks or the shared LSP transport remains a
+  cancellation error through request context and the Rust Adapter. It is not inferred
+  from error wording or from a cancellation signal read after a real failure.
 
 The common module now implements normalized own-code comparison. The concrete adapter
 is implemented under `structure_review::rust_analyzer`; real-server verification is
@@ -230,7 +233,7 @@ recommendation, explicitly confirming that semantics should be obtained through 
 - Preserve significant tokens and literal contents. Ignore pure formatting and ordinary
   comments using syntax-aware normalization, not textual whitespace/comment stripping.
 - Extend common own-content comparison so a body-only edit reports Modified on its owner.
-  No fingerprint, complete original-source copy, or common structured type AST is needed.
+  No fingerprint or common structured type AST is needed for comparison.
 - Use a pinned, compiler-compatible local rust-analyzer syntax crate for declarations,
   source structure and normalization. Use the external server for semantic resolution
   over LSP; the syntax library does not replace project loading or name/type resolution.
@@ -239,6 +242,15 @@ This responsibility split is internal to the Rust adapter. The common
 LanguageAnalyzer input remains the prepared repository root and selected relative files.
 Library version selection, protocol framing, process cleanup, and position conversion
 are implementation responsibilities, not further user capability choices.
+
+On 2026-09-14 the user additionally accepted keeping original source for the details
+editor. `CodeNodeData.source` copies the node's exact range from the already loaded
+document, retaining CRLF, comments and layout, and includes the first line's indentation
+when no preceding declaration shares that line. LSP-confirmed crate roots retain the
+root file's source. This requires no additional LSP request or formatting process.
+The display excerpt includes nested declarations, even ones excluded from graph
+analysis; it does not change test filtering, own-content comparison or graph membership.
+Out-of-line modules show their actual `mod name;` declaration, without stitching files.
 
 ### Consequences for the existing common contract
 

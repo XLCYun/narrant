@@ -67,7 +67,7 @@ impl RustLanguageAnalyzer {
     /// 取消不能被解释为一张成功的空代码图。
     fn check_cancelled(&self) -> Result<()> {
         if (self.cancelled)() {
-            return Err(failure("Rust 结构分析已取消"));
+            return Err(AnalysisError::cancelled("Rust 结构分析已取消"));
         }
         Ok(())
     }
@@ -170,9 +170,7 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
 
 /// 在 Rust 适配器内部统一添加可读错误，保持公共错误结构简单。
 fn failure(message: impl Display) -> AnalysisError {
-    AnalysisError {
-        message: message.to_string(),
-    }
+    AnalysisError::new(message.to_string())
 }
 
 #[cfg(test)]

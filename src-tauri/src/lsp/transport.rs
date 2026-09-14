@@ -126,7 +126,7 @@ impl Transport {
         cancelled: &CancellationCheck,
     ) -> Result<()> {
         if cancelled() {
-            return Err(failure("LSP 操作已取消"));
+            return Err(super::LspError::cancelled());
         }
         let bytes = serde_json::to_vec(&message).map_err(failure)?;
         let (complete, completed) = mpsc::channel();
@@ -145,7 +145,7 @@ fn wait<T>(receiver: &Receiver<T>, timeout: Duration, cancelled: &CancellationCh
     let deadline = Instant::now() + timeout;
     loop {
         if cancelled() {
-            return Err(failure("LSP 操作已取消"));
+            return Err(super::LspError::cancelled());
         }
         let remaining = deadline
             .checked_duration_since(Instant::now())

@@ -5,7 +5,15 @@ use crate::{
     review::{PresentReview, ReviewPresentation},
     structure_review::code_graph::{CodeNode, CodeNodeData, LanguageId, NodeId},
 };
-use std::{path::Path, process::Command, sync::Mutex, time::Duration};
+use std::{
+    path::Path,
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::Duration,
+};
 
 /// 在真实 Git 仓库和 Review 生命周期上测试应用 Interface，语言提取使用受控 Adapter。
 struct Fixture {
@@ -118,13 +126,15 @@ fn analyze_files(
         .files
         .iter()
         .map(|path| {
+            let source = std::fs::read_to_string(input.repository_root.join(path)).unwrap();
             CodeNode::Callable(CodeNodeData {
                 id: NodeId(path.to_string_lossy().into()),
                 language: LanguageId("rust".into()),
                 native_kind: "fn".into(),
                 name: Some(path.to_string_lossy().into()),
                 signature: Some("fn value() -> u8".into()),
-                code: Some(std::fs::read_to_string(input.repository_root.join(path)).unwrap()),
+                code: Some(source.clone()),
+                source: Some(source),
                 contains: vec![],
                 references: vec![],
                 extensions: Default::default(),
@@ -239,6 +249,20 @@ async fn reuses_head_and_compares_exact_merge_base_with_side_specific_files() {
     assert!(!calls[1].1.contains(&PathBuf::from("removed.rs")));
     assert!(!calls[0].0.exists());
     assert!(fixture.head.exists());
+    // before 已回收，传输投影仍持有两侧原始源码，详情无需再次 checkout 或读取文件。
+    let serialized = serde_json::to_value(&result).unwrap();
+    for (side, expected) in [
+        ("before", "mod removed; fn value() -> u8 { 1 }"),
+        ("after", "mod added; fn value() -> u8 { 2 }"),
+    ] {
+        let node = serialized[side]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == "lib.rs")
+            .unwrap();
+        assert_eq!(node["source"], expected);
+    }
     assert_eq!(
         git(
             fixture.repository.path(),
@@ -291,6 +315,12 @@ async fn abandoned_await_keeps_head_lease_until_worker_exits() {
     assert_workspace_drain("abandon").await;
 }
 
+/// 全局退出先撤销正在执行的分析，等待两侧和 before 清理后再删除 head。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_revokes_analysis_and_waits_for_actual_workers() {
+    assert_workspace_drain("shutdown").await;
+}
+
 /// 用真实目录和完成屏障验证异步等待者与实际 worker 的不同寿命。
 async fn assert_workspace_drain(action: &str) {
     let fixture = Fixture::new().await;
@@ -333,9 +363,7 @@ async fn assert_workspace_drain(action: &str) {
         while !worker_release.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        Err(AnalysisError {
-            message: "cancelled".into(),
-        })
+        Err(AnalysisError::cancelled("cancelled"))
     }));
     let lifecycle = fixture.lifecycle.clone();
     let (review, snapshot) = (
@@ -364,12 +392,15 @@ async fn assert_workspace_drain(action: &str) {
     if action == "abandon" {
         running.abort();
     }
+    let shutdown = action == "shutdown";
     let closing = tokio::spawn(async move {
         if let Some(confirmation) = confirmation {
             lifecycle
                 .refresh(&OperationContext::background(), &review, confirmation)
                 .await
                 .map(|_| ())
+        } else if shutdown {
+            lifecycle.shutdown().await.map(|_| ())
         } else {
             lifecycle.close(&review).await.map(|_| ())
         }
@@ -401,9 +432,7 @@ async fn assert_workspace_drain(action: &str) {
 async fn analysis_failure_cleans_before_without_closing_review() {
     let fixture = Fixture::new().await;
     let application = StructureReview::new(Arc::new(|_, _, _| {
-        Err(AnalysisError {
-            message: "server missing".into(),
-        })
+        Err(AnalysisError::new("server missing"))
     }));
     let result = application
         .analyze(
@@ -568,6 +597,9 @@ async fn real_server_builds_review_structure_comparison() {
 
 #[path = "parallel.rs"]
 mod parallel;
+
+#[path = "workspace_execution.rs"]
+mod workspace_execution;
 
 #[path = "benchmark.rs"]
 mod benchmark;

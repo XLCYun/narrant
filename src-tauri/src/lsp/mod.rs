@@ -22,6 +22,28 @@ use transport::Transport;
 #[derive(Debug)]
 pub struct LspError {
     pub message: String,
+    cancelled: bool,
+}
+
+impl LspError {
+    /// 将明确的本地取消与 I/O、协议和服务器错误区分。
+    fn cancelled() -> Self {
+        Self {
+            message: "LSP 操作已取消".into(),
+            cancelled: true,
+        }
+    }
+
+    /// 供语言 Adapter 保留取消类别，不再依赖错误文案或后到的取消请求。
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    /// 添加请求上下文时保留原始错误的取消语义。
+    fn context(mut self, context: impl Display) -> Self {
+        self.message = format!("{context}：{}", self.message);
+        self
+    }
 }
 
 impl Display for LspError {
@@ -148,7 +170,7 @@ impl LspClient {
                 .ok_or_else(|| failure(format!("LSP 请求超时：{method}")))?;
             let message = self
                 .receive(remaining)
-                .map_err(|error| failure(format!("LSP {method} 等待响应失败：{error}")))?;
+                .map_err(|error| error.context(format!("LSP {method} 等待响应失败")))?;
             if message.get("method").is_none() && message["id"] == id {
                 if let Some(error) = message.get("error") {
                     return Err(failure(format!("LSP {method} 失败：{error}")));
@@ -195,7 +217,7 @@ impl LspClient {
                 .checked_duration_since(Instant::now())
                 .ok_or_else(|| failure(format!("等待 LSP 通知超时：{method}")))?;
             self.receive(remaining)
-                .map_err(|error| failure(format!("等待 LSP {method} 失败：{error}")))?;
+                .map_err(|error| error.context(format!("等待 LSP {method} 失败")))?;
         }
     }
 
@@ -277,6 +299,7 @@ pub fn file_uri(path: &Path) -> Result<String> {
 fn failure(message: impl Display) -> LspError {
     LspError {
         message: message.to_string(),
+        cancelled: false,
     }
 }
 
