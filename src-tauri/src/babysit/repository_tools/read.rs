@@ -2,16 +2,17 @@ use super::{
     ensure_not_cancelled, path_string, ReadContinuation, ReadInput, ReadResponse,
     RepositoryToolError, READ_OUTPUT_LIMIT,
 };
-use crate::operation::CancellationSignal;
+
 use std::fs::{self, File};
 use std::io::Read as IoRead;
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 /// 在 canonical workspace 内执行一次 Read。
 pub(super) fn execute(
     workspace_root: &Path,
     input: &ReadInput,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<ReadResponse, RepositoryToolError> {
     ensure_not_cancelled(cancellation)?;
     let (target, relative_path) = resolve_target(workspace_root, &input.path, cancellation)?;
@@ -30,7 +31,7 @@ pub(super) fn execute(
 fn resolve_target(
     workspace_root: &Path,
     requested_path: &str,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<(PathBuf, String), RepositoryToolError> {
     ensure_not_cancelled(cancellation)?;
     let requested = Path::new(requested_path);
@@ -58,7 +59,7 @@ fn read_file(
     target: &Path,
     relative_path: String,
     input: &ReadInput,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<ReadResponse, RepositoryToolError> {
     let mut file = File::open(target).map_err(|_| RepositoryToolError::TargetUnavailable)?;
     let output_limit = input
@@ -112,7 +113,7 @@ fn read_directory(
     target: &Path,
     relative_path: String,
     input: &ReadInput,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<ReadResponse, RepositoryToolError> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(target).map_err(|_| RepositoryToolError::TargetUnavailable)? {

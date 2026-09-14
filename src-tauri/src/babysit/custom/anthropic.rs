@@ -12,7 +12,7 @@ use super::agent_run::{
 use super::connection::{CustomConnectionSnapshot, CustomEffort, CustomProtocol};
 use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
 use crate::babysit::repository_tools::RepositoryTools;
-use crate::operation::CancellationSignal;
+
 use rig::agent::OutputMode;
 use rig::client::AgentClientExt;
 use rig::completion::{AssistantContent, Message, Prompt, ResponseIdentity};
@@ -23,19 +23,20 @@ use serde_json::{json, Value};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 /// Anthropic 请求守卫：处理可选认证，并阻止取消后的任何 HTTP dispatch。
 #[derive(Clone)]
 struct AnthropicRequestGuardClient {
     inner: http_client::ReqwestClient,
     omit_authentication: bool,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
 }
 
 impl Default for AnthropicRequestGuardClient {
     /// 满足 Rig 泛型 client 的构造约束，并始终建立显式 rustls backend。
     fn default() -> Self {
-        Self::new(false, CancellationSignal::default())
+        Self::new(false, CancellationToken::new())
             .expect("Rig rustls HTTP client should be constructible")
     }
 }
@@ -44,7 +45,7 @@ impl AnthropicRequestGuardClient {
     /// 创建同时执行可选认证与 dispatch-time 取消检查的 Rig backend。
     fn new(
         omit_authentication: bool,
-        cancellation: CancellationSignal,
+        cancellation: CancellationToken,
     ) -> Result<Self, AnthropicAdapterError> {
         let inner = http_client::ReqwestClient::builder()
             .use_rustls_tls()
@@ -164,7 +165,7 @@ pub(crate) struct AnthropicAdapterRequest {
     prompt: Message,
     history: Vec<Message>,
     repository_tools: Option<RepositoryTools>,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
 }
 
 #[cfg(test)]
@@ -174,7 +175,7 @@ impl AnthropicAdapterRequest {
         prompt: impl Into<String>,
         history: Vec<Message>,
         repository_tools: RepositoryTools,
-        cancellation: CancellationSignal,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             prompt: Message::user(prompt.into()),
@@ -188,7 +189,7 @@ impl AnthropicAdapterRequest {
     pub(crate) fn without_repository_tools(
         prompt: impl Into<String>,
         history: Vec<Message>,
-        cancellation: CancellationSignal,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             prompt: Message::user(prompt.into()),
@@ -205,7 +206,7 @@ pub(crate) struct AnthropicMessagesAdapter {
     adapter: AnthropicAdapter,
     workspace: PathBuf,
     #[cfg(test)]
-    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
+    tool_boundary_cancellation: Option<CancellationToken>,
 }
 
 impl AnthropicMessagesAdapter {
@@ -246,7 +247,7 @@ impl AnthropicMessagesAdapter {
     #[cfg(test)]
     pub(crate) fn with_tool_boundary_cancellation(
         mut self,
-        cancellation: crate::operation::TestCancellation,
+        cancellation: CancellationToken,
     ) -> Self {
         self.tool_boundary_cancellation = Some(cancellation);
         self
@@ -259,7 +260,7 @@ impl CustomProtocolAdapter for AnthropicMessagesAdapter {
     async fn run_agent(
         &self,
         request: CustomRunRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<CustomRunResult, CustomAdapterError> {
         let repository_tools = request
             .repository_exploration()

@@ -17,7 +17,7 @@ Reuse the existing Review Workspace head through
 `ReviewLifecycle::run_in_workspace(operation, review_id, snapshot_id, work).await`.
 The synchronous callback borrows a `SnapshotWorkspace` containing the fixed
 `ChangeComparison`, repository/common-directory/head/before paths, and an already
-bound read-only `OperationContext`. It must join all child work before returning.
+bound `OperationContext`. It must join all child work before returning.
 Its result cannot borrow from the workspace. Prepare only
 an additional `reviews/<review-id>/before` worktree at the saved comparison-base commit.
 The lease is a private Implementation of Review Lifecycle. The execution Interface
@@ -30,11 +30,15 @@ Refresh, close and shutdown revoke analysis, wait for its actual workers to rele
 lease, then change or remove head. The worker owns cleanup even if its asynchronous
 caller disappears; cancellation reaches the language-server process and its children.
 
-`OperationContext::child()` creates a child cancellation source and read-only context,
-backed by the existing `tokio-util` cancellation token. Parent cancellation directly
+`OperationContext::child()` returns a context carrying a native `tokio-util` child
+cancellation token, without a separate source/signal pair. Cancellation is requested
+by the operation creator or lifecycle manager; ordinary downstream code observes the
+received token by convention. Parent cancellation directly
 wakes descendants; child cancellation cannot cancel parents or siblings. Workspace
 revocation and abandonment stop the workspace child, and a failed analysis stops its
-own child group. No timer combines resource flags. The admission `changing` state
+own child group. Abandonment uses the token's native `drop_guard()`; the actual worker
+still owns the lease until work and cleanup finish. No timer combines resource flags.
+The admission `changing` state
 and recorded errors remain independent of cancellation.
 
 Within one leased analysis, before checkout/preparation and analysis run concurrently

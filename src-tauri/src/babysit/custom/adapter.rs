@@ -1,7 +1,8 @@
 use super::agent_run::{CustomRunRequest, CustomRunResult};
 use super::connection::CustomProtocol;
-use crate::operation::CancellationSignal;
+
 use std::fmt;
+use tokio_util::sync::CancellationToken;
 
 /// 适配器 transport failure 可携带的脱敏状态类别。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,6 +304,6 @@ pub(crate) trait CustomProtocolAdapter: Send + Sync {
     async fn run_agent(
         &self,
         request: CustomRunRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<CustomRunResult, CustomAdapterError>;
 }

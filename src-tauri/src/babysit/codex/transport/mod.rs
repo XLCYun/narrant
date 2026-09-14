@@ -5,7 +5,7 @@ use super::{
     restricted_config, AppServerCommand, AppServerProcess, RpcFailure, CODEX_CLIENT_NAME,
     CODEX_FOREGROUND_CLEANUP_TIMEOUT, CODEX_INITIALIZATION_TIMEOUT, CODEX_THREAD_SOURCE,
 };
-use crate::babysit::{BabysitProviderRequest, CancellationSignal};
+use crate::babysit::BabysitProviderRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -16,6 +16,7 @@ pub(super) use jsonl_connection::JsonlConnection;
 mod rpc_session;
 pub(super) use rpc_session::RpcSession;
 use rpc_session::{RpcSessionError, ServerRequest};
+use tokio_util::sync::CancellationToken;
 
 /// 不存在的 thread/turn 只用于解析协议参数，绝不会触发模型推理。
 const CAPABILITY_SENTINEL_THREAD_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -342,7 +343,7 @@ impl AppServerProcess {
 
     /// 在同一 App Server 连接上验证受限 thread、结构化输出、interrupt 和 delete 能力。
     pub(super) async fn probe_capabilities(&mut self, workspace: &Path) -> Result<(), RpcFailure> {
-        let cancellation = CancellationSignal::default();
+        let cancellation = CancellationToken::new();
         let request = BabysitProviderRequest {
             analysis_run_id: 1,
             path: "__narrant_babysit_capability_probe__".to_owned(),
@@ -429,7 +430,7 @@ impl AppServerProcess {
         &mut self,
         request: &BabysitProviderRequest,
         deadline: Instant,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<String, RpcFailure> {
         let config = restricted_config();
         let result = self
@@ -490,7 +491,7 @@ impl AppServerProcess {
         prompt: String,
         request: &BabysitProviderRequest,
         deadline: Instant,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<String, RpcFailure> {
         let result = self
             .request(
@@ -516,7 +517,7 @@ impl AppServerProcess {
         thread_id: &str,
         turn_id: &str,
         deadline: Instant,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<Option<String>, RpcFailure> {
         let mut streamed_text = String::new();
         let mut completed_text = None;
@@ -620,7 +621,7 @@ impl AppServerProcess {
         method: &str,
         params: Value,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<(), RpcFailure> {
         self.rpc_session
             .notification(&mut self.connection, method, params, deadline, cancellation)
@@ -632,7 +633,7 @@ impl AppServerProcess {
     async fn next_notification(
         &mut self,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<Notification, RpcFailure> {
         self.rpc_session
             .next_notification(&mut self.connection, deadline, cancellation, |request| {
@@ -650,7 +651,7 @@ impl AppServerProcess {
         method: &str,
         params: Value,
         deadline: Instant,
-        cancellation: Option<&CancellationSignal>,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<Value, RpcFailure> {
         self.rpc_session
             .request(

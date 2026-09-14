@@ -101,7 +101,7 @@ the Review lease serializes actual workers, so an old worker finishes cleanup be
 head checkout or independent clone is created.
 
 The Review Lifecycle exposes `run_in_workspace` for synchronous work in a fixed
-Snapshot. The callback receives the comparison, paths and a bound read-only operation
+Snapshot. The callback receives the comparison, paths and a bound operation
 context. Lifecycle starts the blocking worker and keeps its private lease there;
 the caller no longer acquires or transfers a lease or composes revocation flags. It
 verifies Review/Snapshot identity, Trust and the expected head while establishing the

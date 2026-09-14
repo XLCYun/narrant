@@ -2,13 +2,14 @@ use super::{
     ensure_not_cancelled, is_contained, path_string, GrepMatch, GrepRequest, GrepResponse,
     RepositoryToolError,
 };
-use crate::operation::CancellationSignal;
+
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::WalkBuilder;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 /// Grep 单次调用最多返回的匹配行数量。
 const MAX_RESULTS: usize = 500;
@@ -27,7 +28,7 @@ const REGEX_NEST_LIMIT: u32 = 250;
 pub(super) fn execute(
     workspace_root: &Path,
     request: &GrepRequest,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<GrepResponse, RepositoryToolError> {
     ensure_not_cancelled(cancellation)?;
     let matcher = build_matcher(&request.pattern)?;
@@ -179,7 +180,7 @@ fn search_file(
     matcher: &RegexMatcher,
     path: &Path,
     relative_path: &str,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<Vec<GrepMatch>, RepositoryToolError> {
     let mut searcher = SearcherBuilder::new()
         .line_number(true)
@@ -226,7 +227,7 @@ fn search_file(
 /// 在 ripgrep 每次读取时检查取消并验证完整 UTF-8 字节流。
 struct ValidatedReader<'a> {
     inner: File,
-    cancellation: &'a CancellationSignal,
+    cancellation: &'a CancellationToken,
     utf8_tail: Vec<u8>,
     invalid_utf8: bool,
 }
@@ -256,7 +257,7 @@ impl Read for ValidatedReader<'_> {
 /// 把 ripgrep 匹配回调转换为稳定的 Repository Grep 结果。
 struct MatchSink<'a> {
     path: &'a str,
-    cancellation: &'a CancellationSignal,
+    cancellation: &'a CancellationToken,
     matches: Vec<GrepMatch>,
     binary: bool,
 }

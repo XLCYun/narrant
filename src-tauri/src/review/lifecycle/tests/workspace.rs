@@ -256,8 +256,8 @@ async fn cancellation_after_materialization_starts_does_not_interrupt_convergenc
         .store
         .review_workspace_path(&saved.review_id)
         .unwrap();
-    let cancellation = crate::operation::TestCancellation::default();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let cancellation = CancellationToken::new();
+    let operation = OperationContext::new(cancellation.clone());
     let cancellation_request = cancellation.clone();
     let observed_workspace = workspace.clone();
     let observer = thread::spawn(move || {

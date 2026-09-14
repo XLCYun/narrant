@@ -8,7 +8,7 @@ use super::{
     UpdateController, UpdateEffect, UpdateFailure, UpdateFailureCategory, UpdateInput,
     UpdateOperationId, UpdateOutput, UpdateSnapshot,
 };
-use crate::operation::{CancellableOperations, CancellationSignal, OperationId};
+use crate::operation::{CancellableOperations, OperationId};
 use futures_util::{Stream, StreamExt};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +18,7 @@ use tauri::{Emitter, Manager};
 
 use super::verifier::DiskMinisignVerifier;
 use crate::tauri_app::shutdown::{PostStopCoordinator, PostStopIntent};
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const UPDATE_SNAPSHOT_EVENT: &str = "application-update:snapshot";
 const PACKAGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -297,7 +298,7 @@ impl ApplicationUpdateRuntime {
         self: Arc<Self>,
         app: &tauri::AppHandle<R>,
         operation_id: UpdateOperationId,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) {
         let _check = tokio::select! {
             _ = cancellation.cancelled() => return,
@@ -405,7 +406,7 @@ impl ApplicationUpdateRuntime {
         app: &tauri::AppHandle<R>,
         operation_id: UpdateOperationId,
         release: StableRelease,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) {
         let pending = self
             .pending
@@ -508,7 +509,7 @@ impl ApplicationUpdateRuntime {
         release: StableRelease,
         total: Option<u64>,
         stream: S,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
         mut on_progress: F,
         before_commit: G,
     ) -> DownloadTaskOutcome
@@ -586,7 +587,7 @@ impl ApplicationUpdateRuntime {
         operation_id: UpdateOperationId,
         candidate: StageCandidate,
         package: &mut std::fs::File,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> DownloadTaskOutcome {
         {
             let _gate = self

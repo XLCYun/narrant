@@ -1,7 +1,8 @@
 #[cfg(windows)]
 use super::workspace::worktree_field_matches_path;
 use super::*;
-use crate::operation::{OperationContext, TestCancellation};
+use crate::operation::OperationContext;
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn core_git_commands_disable_interactive_credential_prompts() {
@@ -73,7 +74,7 @@ fn read_git<const N: usize>(path: &Path, arguments: [&str; N]) -> String {
 async fn cancellation_stops_a_core_git_operation() {
     let fixture = repository();
     let process = CoreGitProcess::default();
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
     let error = process
         .execute(
@@ -180,7 +181,7 @@ async fn cancellation_stops_an_already_running_core_git_process() {
     let fixture = repository();
     std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let process = CoreGitProcess::default();
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let cancellation_request = cancellation.clone();
     let socket = fixture.path().join("credential-cache.socket");
     let canceller = thread::spawn(move || {
@@ -207,7 +208,7 @@ async fn cancellation_stops_an_already_running_core_git_process() {
 async fn cancellation_reaps_descendants_before_returning() {
     let fixture = repository();
     let process = CoreGitProcess::default();
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let cancellation_request = cancellation.clone();
     let canceller = thread::spawn(move || {
         thread::sleep(Duration::from_millis(100));
@@ -335,7 +336,7 @@ fn cancelled_workspace_creation_removes_its_partial_worktree() {
     let head = read_git(fixture.path(), ["rev-parse", "HEAD"]);
     let managed = tempfile::TempDir::new().unwrap();
     let workspace = managed.path().join("reviews/review-1/repo");
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let cancellation_request = cancellation.clone();
     let observed_workspace = workspace.clone();
     let observer = thread::spawn(move || {
@@ -349,7 +350,7 @@ fn cancelled_workspace_creation_removes_its_partial_worktree() {
         false
     });
 
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let operation = OperationContext::new(cancellation.clone());
     let convergence = operation.without_cancellation();
     let error = GitProcessAdapter::new(fixture.path())
         .create_detached_worktree(&workspace, &head, &cancellation, convergence.cancellation())
@@ -394,7 +395,7 @@ fn removal_clears_a_registered_worktree_after_its_directory_disappears() {
 fn force_restore_review_workspace_discards_dirty_state_and_moves_detached_head() {
     let repository = committed_repository();
     let adapter = GitProcessAdapter::new(repository.path());
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let first_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
     let common_directory = PathBuf::from(read_git(
         repository.path(),
@@ -472,7 +473,7 @@ fn workspace_transition_rejects_an_unregistered_directory_before_deletion() {
 fn failed_workspace_transition_restores_the_previous_snapshot_head() {
     let repository = committed_repository();
     let adapter = GitProcessAdapter::new(repository.path());
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let old_head = read_git(repository.path(), ["rev-parse", "HEAD"]);
     let common_directory = PathBuf::from(read_git(
         repository.path(),

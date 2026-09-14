@@ -1,6 +1,7 @@
 use super::*;
-use crate::operation::TestCancellation;
+
 use std::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 /// 放弃等待本身触发取消；关闭尚未开始也能观察到，实际工作退出前仍保护 head。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -102,8 +103,8 @@ async fn serializes_workspace_callbacks_and_cancels_only_the_waiting_operation()
     tokio::time::timeout(Duration::from_secs(5), entered.notified())
         .await
         .unwrap();
-    let cancellation = TestCancellation::default();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let cancellation = CancellationToken::new();
+    let operation = OperationContext::new(cancellation.clone());
     let mut waiting = Box::pin(fixture.lifecycle.run_in_workspace(
         &operation,
         &fixture.presentation.review_id,
@@ -197,8 +198,8 @@ async fn workspace_execution_checks_snapshot_head_and_shutdown() {
 async fn preserves_failure_when_user_cancellation_arrives_at_the_same_time() {
     for fails in [false, true] {
         let fixture = Fixture::new().await;
-        let cancellation = TestCancellation::default();
-        let operation = OperationContext::from_test_cancellation(&cancellation);
+        let cancellation = CancellationToken::new();
+        let operation = OperationContext::new(cancellation.clone());
         let application = StructureReview::new(Arc::new(move |input, cancelled, _| {
             if input.repository_root.ends_with("before") {
                 cancellation.cancel();

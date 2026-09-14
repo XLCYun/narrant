@@ -1,4 +1,5 @@
 use super::*;
+use tokio_util::sync::CancellationToken;
 
 /// Fake provider 的可预测错误脚本；用于契约和 repair loop 测试。
 #[cfg(test)]
@@ -153,7 +154,7 @@ impl BabysitAgentProvider for FakeBabysitProvider {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         ensure_not_cancelled(cancellation)?;
         self.generate_calls.fetch_add(1, Ordering::AcqRel);
@@ -174,7 +175,7 @@ impl BabysitAgentProvider for FakeBabysitProvider {
         mut request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
         failures: Vec<ValidationFailure>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         ensure_not_cancelled(cancellation)?;
         self.repair_calls.fetch_add(1, Ordering::AcqRel);

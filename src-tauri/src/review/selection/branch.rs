@@ -1,8 +1,9 @@
 use crate::core_git::{GitCommandError, GitOutput, GitProcessAdapter};
-use crate::operation::CancellationSignal;
+
 use crate::operation::OperationContext;
 use crate::review::{build_comparison, ChangeComparison, ResolvedRevisions};
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 
 /// Review 持久化的 canonical Branch Selection identity。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,7 +134,7 @@ fn validate_branch_ref(reference: &str) -> Result<(), GitCommandError> {
 fn fetch_selected_remotes(
     adapter: &GitProcessAdapter,
     selection: &BranchSelection,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<(), GitCommandError> {
     let mut remotes = [&selection.base_ref, &selection.head_ref]
         .into_iter()
@@ -161,7 +162,7 @@ fn remote_name(reference: &str) -> Option<&str> {
 fn resolve_commit(
     adapter: &GitProcessAdapter,
     reference: &str,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<String, GitCommandError> {
     adapter.run(["check-ref-format", reference], cancellation)?;
     let referenced_object = text_output(
@@ -180,7 +181,7 @@ fn resolve_commit(
 
 fn list_canonical_refs(
     adapter: &GitProcessAdapter,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<Vec<String>, GitCommandError> {
     let output = adapter.run(
         [
@@ -217,7 +218,7 @@ fn default_branch_ref(
     adapter: &GitProcessAdapter,
     refs: &[String],
     current_ref: &str,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<String, GitCommandError> {
     let output = adapter.run(
         [

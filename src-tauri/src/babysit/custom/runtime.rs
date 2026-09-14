@@ -4,11 +4,12 @@ use super::final_tool::FINAL_OUTPUT_TOOL_NAME;
 use crate::babysit::{
     BabysitError, BabysitFileExplanations, BabysitProviderRequest, LineTarget, ValidationFailure,
 };
-use crate::operation::CancellationSignal;
+
 use rig::completion::Message;
 use rig::message::ToolCall;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 /// Custom 运行允许的最大修复轮数；共享 runtime 负责具体 repair 编排。
 pub(super) const MAX_REPAIR_ATTEMPTS: u8 = 3;
@@ -38,7 +39,7 @@ impl CustomRuntime {
         &self,
         adapter: Arc<dyn CustomProtocolAdapter>,
         request: BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         ensure_not_cancelled(cancellation)?;
         let run_id = request.analysis_run_id;
@@ -69,7 +70,7 @@ impl CustomRuntime {
         request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
         failures: Vec<ValidationFailure>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         ensure_not_cancelled(cancellation)?;
         let run_id = request.analysis_run_id;
@@ -115,7 +116,7 @@ impl CustomRuntime {
         run_id: u64,
         request: BabysitProviderRequest,
         prompt: F,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError>
     where
         F: Fn(&BabysitProviderRequest) -> String,
@@ -311,7 +312,7 @@ fn merge_transcript(previous: &[Message], transcript: &[Message]) -> Vec<Message
 }
 
 /// 每个模型调用、工具前后和 final 接受前共享的取消 guard。
-fn ensure_not_cancelled(cancellation: &CancellationSignal) -> Result<(), BabysitError> {
+fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<(), BabysitError> {
     cancellation
         .is_cancelled()
         .then_some(BabysitError::Cancelled)

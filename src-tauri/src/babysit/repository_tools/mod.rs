@@ -1,6 +1,6 @@
-use crate::operation::CancellationSignal;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 mod contract;
 mod glob;
@@ -19,7 +19,7 @@ pub use rig_adapter::{RepositoryRigTools, RigGlobTool, RigGrepTool, RigReadTool}
 pub struct RepositoryTools {
     pub(super) workspace_root: PathBuf,
     #[cfg(test)]
-    cancel_before_execute: Option<crate::operation::TestCancellation>,
+    cancel_before_execute: Option<CancellationToken>,
 }
 
 impl RepositoryTools {
@@ -39,10 +39,7 @@ impl RepositoryTools {
 
     /// 测试专用：在进入真实 repository tool 实现时触发指定取消信号。
     #[cfg(test)]
-    pub(crate) fn with_execute_cancellation(
-        mut self,
-        cancellation: crate::operation::TestCancellation,
-    ) -> Self {
+    pub(crate) fn with_execute_cancellation(mut self, cancellation: CancellationToken) -> Self {
         self.cancel_before_execute = Some(cancellation);
         self
     }
@@ -70,7 +67,7 @@ impl RepositoryTools {
     }
 
     /// 为一次可取消分析构造可直接交给 Rig agent builder 的工具。
-    pub fn rig_tools(&self, cancellation: &CancellationSignal) -> RepositoryRigTools {
+    pub fn rig_tools(&self, cancellation: &CancellationToken) -> RepositoryRigTools {
         rig_adapter::build(self, cancellation)
     }
 
@@ -78,7 +75,7 @@ impl RepositoryTools {
     pub fn read(
         &self,
         input: ReadInput,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<ReadResponse, RepositoryToolError> {
         read::execute(&self.workspace_root, &input, cancellation)
     }
@@ -88,7 +85,7 @@ impl RepositoryTools {
     pub fn execute(
         &self,
         request: RepositoryToolRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<RepositoryToolResponse, RepositoryToolError> {
         #[cfg(test)]
         self.trigger_execute_cancellation();
@@ -110,7 +107,7 @@ impl RepositoryTools {
 
 /// 检查共享取消 signal，并将取消统一映射为稳定工具错误。
 pub(super) fn ensure_not_cancelled(
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<(), RepositoryToolError> {
     if cancellation.is_cancelled() {
         Err(RepositoryToolError::Cancelled)

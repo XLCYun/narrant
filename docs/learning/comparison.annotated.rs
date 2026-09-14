@@ -15,7 +15,7 @@ FileContentRef --read_content--> FileContent
 use super::*;
 // 机制层只观察取消信号；错误统一成 GitCommandError；适配器绑定具体仓库路径。
 use crate::core_git::{GitCommandError, GitProcessAdapter};
-use crate::operation::CancellationSignal;
+use tokio_util::sync::CancellationToken;
 // OperationContext 表达这次业务操作的取消策略，reader 不自行创建策略。
 use crate::operation::OperationContext;
 use std::path::Path;
@@ -164,7 +164,7 @@ pub(crate) fn build_comparison(
 fn peel_to_commit_id(
     adapter: &GitProcessAdapter,
     object_id: &str,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<String, GitCommandError> {
     validate_object_id(object_id)?;
     let revision = format!("{object_id}^{{commit}}");
@@ -288,7 +288,7 @@ fn file_content_ref(object_id: &str, mode: u32) -> Option<FileContentRef> {
 fn read_content(
     adapter: &GitProcessAdapter,
     content_ref: Option<&FileContentRef>,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<Option<FileContent>, GitCommandError> {
     let Some(content_ref) = content_ref else {
         return Ok(None);

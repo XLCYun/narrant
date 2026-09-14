@@ -7,12 +7,13 @@ use crate::babysit::{
     BabysitProgress, BabysitProviderCapabilities, BabysitProviderModelCatalog,
     BabysitProviderSetupFailure, BabysitResolvedModel, PreparedBabysitAnalysis, ReviewIdentity,
 };
-use crate::operation::TestCancellation;
+
 use httpmock::prelude::*;
 use rig::completion::Message;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// 将冻结的真实 Custom provider 接入应用 registry 的测试 capability。
 struct FrozenCustomCapability {
@@ -23,7 +24,7 @@ struct FrozenCustomCapability {
 /// 首次返回前触发取消、随后返回合法 final 的测试 adapter。
 struct CancelOnceAdapter {
     calls: Arc<AtomicUsize>,
-    first_cancellation: TestCancellation,
+    first_cancellation: CancellationToken,
 }
 
 #[async_trait::async_trait]
@@ -32,7 +33,7 @@ impl CustomProtocolAdapter for CancelOnceAdapter {
     async fn run_agent(
         &self,
         _request: CustomRunRequest,
-        _cancellation: &crate::operation::CancellationSignal,
+        _cancellation: &CancellationToken,
     ) -> Result<CustomRunResult, CustomAdapterError> {
         let first_call = self.calls.fetch_add(1, Ordering::AcqRel) == 0;
         if first_call {
@@ -182,7 +183,7 @@ async fn openai_rig_tool_loop_stops_after_sixteen_model_requests() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect_err("持续工具调用应在 Rig 16-turn 上限失败");
 
@@ -254,7 +255,7 @@ async fn openai_fixture_uses_rig_chat_path_model_effort_auth_and_final_schema() 
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
     let response = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect("fixture response");
 
@@ -314,7 +315,7 @@ async fn disabled_repository_exploration_registers_only_the_final_output_tool() 
     adapter
         .run_agent(
             CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), false),
-            &TestCancellation::default(),
+            &CancellationToken::new(),
         )
         .await
         .expect("fixture response");
@@ -368,7 +369,7 @@ async fn openai_length_finish_reason_is_an_output_limit_error() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect_err("length 不能进入 malformed repair");
 
@@ -438,7 +439,7 @@ async fn openai_provider_default_omits_reasoning_effort() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect("Provider 默认值请求应成功");
 
@@ -504,7 +505,7 @@ async fn openai_explicit_effort_failure_does_not_retry_without_it() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect_err("显式 effort 被拒绝时应直接返回错误");
 
@@ -574,7 +575,7 @@ async fn openai_output_budget_failure_does_not_retry_with_a_different_budget() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect_err("固定输出预算被拒绝时应直接失败");
 
@@ -758,7 +759,7 @@ async fn empty_key_omits_the_authorization_header() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect("无认证请求");
     assert_eq!(forbidden.hits_async().await, 0);
@@ -795,7 +796,7 @@ async fn openai_http_client_failure_keeps_redacted_transport_classification() {
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
 
     let error = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect_err("fixture 4xx 应返回 transport failure");
     let CustomAdapterError::Transport(failure) = error else {
@@ -844,7 +845,7 @@ async fn openai_success_status_error_envelope_is_invalid_response() {
         OpenAiChatCompletionsAdapter::new(connection, workspace.path()).expect("创建 adapter");
     let request = CustomRunRequest::from_prompt(Message::user("review"), Vec::new(), true);
     let error = adapter
-        .run_agent(request, &TestCancellation::default())
+        .run_agent(request, &CancellationToken::new())
         .await
         .expect_err("2xx error envelope 应返回 transport failure");
 
@@ -1020,7 +1021,7 @@ async fn custom_registry_cancels_before_tool_dispatch_and_does_not_cache() {
 
     let workspace = tempfile::tempdir().expect("创建 workspace");
     let settings = tempfile::tempdir().expect("创建 settings 目录");
-    let first_cancellation = TestCancellation::default();
+    let first_cancellation = CancellationToken::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let adapter = Arc::new(CancelOnceAdapter {
         calls: calls.clone(),
@@ -1088,7 +1089,7 @@ async fn custom_registry_cancels_before_tool_dispatch_and_does_not_cache() {
         .await;
     assert_eq!(cancelled, Err(BabysitError::Cancelled));
     application
-        .explain_file(request, content, &TestCancellation::default(), |_| Ok(()))
+        .explain_file(request, content, &CancellationToken::new(), |_| Ok(()))
         .await
         .expect("取消结果未缓存，第二次重新生成");
     assert_eq!(calls.load(Ordering::Acquire), 2);

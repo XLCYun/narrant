@@ -1,8 +1,9 @@
 use super::*;
-use crate::operation::CancellationSignal;
+
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 /// 进程内 repository tool 调用序号，只用于关联开发日志。
 static TOOL_CALL_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -25,25 +26,25 @@ pub struct RepositoryRigTools {
 #[derive(Clone)]
 pub struct RigReadTool {
     tools: RepositoryTools,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
 }
 /// 绑定 Workspace 与本次 Babysit 取消信号的 Rig Glob 工具。
 #[derive(Clone)]
 pub struct RigGlobTool {
     tools: RepositoryTools,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
 }
 /// 绑定 Workspace 与本次 Babysit 取消信号的 Rig Grep 工具。
 #[derive(Clone)]
 pub struct RigGrepTool {
     tools: RepositoryTools,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
 }
 
 /// 为一次可取消分析构造可直接交给 Rig agent builder 的工具。
 pub(super) fn build(
     tools: &RepositoryTools,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> RepositoryRigTools {
     RepositoryRigTools {
         read: RigReadTool {

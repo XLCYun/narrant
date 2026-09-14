@@ -1,10 +1,11 @@
 use super::*;
 use crate::babysit::codex::{AppServerCommand, RpcFailure};
-use crate::operation::TestCancellation;
+
 use std::ffi::OsString;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
 /// 构造只输出固定 JSONL 的 shell child，避免测试依赖真实 Codex 安装。
 fn command(script: &str) -> AppServerCommand {
@@ -34,7 +35,7 @@ async fn observes_cancellation_while_stdout_is_blocked() {
     let mut connection = JsonlConnection::spawn(&command("sleep 2"))
         .await
         .expect("shell child should start");
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
     let reader = tokio::spawn(async move {
         let result = connection
@@ -57,7 +58,7 @@ async fn observes_cancellation_while_stdout_is_blocked() {
 #[tokio::test]
 async fn observes_cancellation_while_stdin_is_blocked() {
     let (mut writer, _reader) = tokio::io::duplex(1);
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
     let writer_task = tokio::spawn(async move {
         write_json_line(

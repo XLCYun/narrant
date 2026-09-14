@@ -1,8 +1,9 @@
 use super::*;
-use crate::operation::{OperationContext, TestCancellation};
+use crate::operation::OperationContext;
 use httpmock::prelude::*;
 use std::path::Path;
 use std::process::Command;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot() {
@@ -60,9 +61,9 @@ async fn stable_selection_resolves_current_metadata_and_local_three_dot_snapshot
 
 #[tokio::test]
 async fn cancelled_selection_stops_before_github_observation() {
-    let cancellation = TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let operation = OperationContext::from_test_cancellation(&cancellation);
+    let operation = OperationContext::new(cancellation.clone());
     let resolver = PullRequestSelectionResolver::anonymous("http://127.0.0.1:1");
 
     let error = match resolver

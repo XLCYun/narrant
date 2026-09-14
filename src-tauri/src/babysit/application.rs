@@ -1,5 +1,6 @@
 use super::observability::AnalysisLifecycle;
 use super::*;
+use tokio_util::sync::CancellationToken;
 
 // Babysit 的请求 identity、缓存和 provider 编排集中在这一深模块中。
 /// 缓存中不可变的 Review identity；不把 review 与 snapshot 合并成单一 ID。
@@ -334,7 +335,7 @@ impl BabysitApplication {
         &self,
         request: BabysitFileRequest,
         content: FileChangeContent,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
         notify: F,
     ) -> Result<BabysitFileExplanations, BabysitError>
     where
@@ -361,7 +362,7 @@ impl BabysitApplication {
         &self,
         request: BabysitFileRequest,
         content: FileChangeContent,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
         analysis_run_id: u64,
         lifecycle: &AnalysisLifecycle,
         mut notify: F,

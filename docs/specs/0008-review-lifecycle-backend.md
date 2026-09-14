@@ -163,9 +163,10 @@ transaction. Candidate abandonment must not change the previous current pointer.
 
 ## Cancellation and Concurrency
 
-- The transport cancellation registry maps `operationId` to a private `CancellationSource`
-  and exposes only a read-only `CancellationSignal` through the call-level
-  `OperationContext` outside the lifecycle seam.
+- The transport cancellation registry maps `operationId` to a native `CancellationToken`
+  shared through the call-level `OperationContext`. Ordinary downstream code observes
+  received tokens by convention; operation creators and lifecycle managers request
+  cancellation. Independent scopes use child tokens rather than shared clones.
 - The lifecycle module decides where the current context is observed and, at its
   mutation/convergence policy seam, derives `without_cancellation()` from that context so
   future call-level metadata remains associated with the convergence work.

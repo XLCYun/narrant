@@ -1,10 +1,11 @@
 use super::{
     ensure_not_cancelled, is_contained, path_string, GlobRequest, GlobResponse, RepositoryToolError,
 };
-use crate::operation::CancellationSignal;
+
 use globset::{GlobBuilder, GlobMatcher};
 use std::collections::BinaryHeap;
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 use walkdir::WalkDir;
 
 /// Glob 单次调用最多返回的路径数量。
@@ -14,7 +15,7 @@ const MAX_RESULTS: usize = 500;
 pub(super) fn execute(
     workspace_root: &Path,
     request: &GlobRequest,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<GlobResponse, RepositoryToolError> {
     ensure_not_cancelled(cancellation)?;
     let pattern = Pattern::parse(&request.pattern)?;

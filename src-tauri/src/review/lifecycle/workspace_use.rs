@@ -1,12 +1,13 @@
 use super::*;
-use crate::operation::CancellationSource;
+
 use std::sync::Weak;
+use tokio_util::sync::CancellationToken;
 
 /// 同一短锁下协调使用登记与禁止新使用，避免取消后插入新的分析。
 #[derive(Default)]
 pub(super) struct WorkspaceAccess {
     pub changing: HashSet<String>,
-    pub users: HashMap<String, Weak<CancellationSource>>,
+    pub users: HashMap<String, Weak<CancellationToken>>,
 }
 
 /// 目录收敛期间关闭使用入口；错误和 future 被丢弃时也恢复入口。
@@ -35,7 +36,7 @@ pub(crate) struct SnapshotWorkspace {
 /// 私有租约由实际 blocking worker 持有，外层 future 无法提前释放目录保护。
 struct SnapshotWorkspaceLease {
     workspace: SnapshotWorkspace,
-    _revocation: Arc<CancellationSource>,
+    _revocation: Arc<CancellationToken>,
     _review_guard: tokio::sync::OwnedMutexGuard<()>,
     _operation_guard: tokio::sync::OwnedRwLockReadGuard<()>,
 }
@@ -67,16 +68,6 @@ impl SnapshotWorkspace {
     }
 }
 
-/// 放弃异步等待只停止本次工作，实际 worker 仍持有租约直到回调和清理结束。
-struct WorkspaceAwaitGuard(Arc<CancellationSource>);
-
-impl Drop for WorkspaceAwaitGuard {
-    /// 正常完成时工作已经退出；取消或丢弃 future 时立即唤醒其下游。
-    fn drop(&mut self) {
-        self.0.cancel();
-    }
-}
-
 impl ReviewLifecycle {
     /// 在固定 Review Snapshot 内执行同步工作，并封装互斥、撤销和 worker 寿命。
     /// 回调只能在此执行范围内使用目录；它启动的全部子工作必须在返回前结束。
@@ -91,11 +82,12 @@ impl ReviewLifecycle {
         T: Send + 'static,
         E: From<ReviewLifecycleError> + Send + 'static,
     {
-        let (source, operation) = operation.child();
-        let source = Arc::new(source);
-        let _await_guard = WorkspaceAwaitGuard(source.clone());
+        let operation = operation.child();
+        let cancellation = Arc::new(operation.cancellation().clone());
+        // 放弃等待只请求取消；实际 worker 持有租约直到回调与清理结束。
+        let _await_guard = operation.cancellation().clone().drop_guard();
         let lease = self
-            .lease_workspace(operation, source, review_id, snapshot_id)
+            .lease_workspace(operation, cancellation, review_id, snapshot_id)
             .await?;
         tokio::task::spawn_blocking(move || lease.execute(work))
             .await
@@ -110,7 +102,7 @@ impl ReviewLifecycle {
     async fn lease_workspace(
         &self,
         operation: OperationContext,
-        source: Arc<CancellationSource>,
+        cancellation: Arc<CancellationToken>,
         review_id: &str,
         snapshot_id: &str,
     ) -> Result<SnapshotWorkspaceLease, ReviewLifecycleError> {
@@ -168,7 +160,7 @@ impl ReviewLifecycle {
             }
             access
                 .users
-                .insert(review_id.to_owned(), Arc::downgrade(&source));
+                .insert(review_id.to_owned(), Arc::downgrade(&cancellation));
         }
         Ok(SnapshotWorkspaceLease {
             workspace: SnapshotWorkspace {
@@ -179,7 +171,7 @@ impl ReviewLifecycle {
                 before_path,
                 operation,
             },
-            _revocation: source,
+            _revocation: cancellation,
             _review_guard: review_guard,
             _operation_guard: operation_guard,
         })

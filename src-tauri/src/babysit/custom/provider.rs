@@ -8,10 +8,11 @@ use crate::babysit::{
     BabysitProviderModelCatalog, BabysitProviderRequest, BabysitProviderSetupFailure,
     BabysitResolvedModel, PreparedBabysitAnalysis, ValidationFailure,
 };
-use crate::operation::CancellationSignal;
+
 use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Custom provider 在 registry 中使用的稳定 identity。
 pub(super) const PROVIDER_ID: &str = "custom";
@@ -48,7 +49,7 @@ impl BabysitAgentProvider for CustomProvider {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         self.runtime
             .generate(self.adapter.clone(), request, cancellation)
@@ -60,7 +61,7 @@ impl BabysitAgentProvider for CustomProvider {
         request: BabysitProviderRequest,
         previous: BabysitFileExplanations,
         failures: Vec<ValidationFailure>,
-        cancellation: &CancellationSignal,
+        cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         self.runtime
             .repair(request, previous, failures, cancellation)
@@ -81,7 +82,7 @@ pub(crate) struct CustomCapabilityBundle {
     settings: crate::application_settings::ApplicationSettingsApplication,
     runtime: Arc<CustomRuntime>,
     #[cfg(test)]
-    tool_boundary_cancellation: Option<crate::operation::TestCancellation>,
+    tool_boundary_cancellation: Option<CancellationToken>,
 }
 
 impl CustomCapabilityBundle {
@@ -100,7 +101,7 @@ impl CustomCapabilityBundle {
     #[cfg(test)]
     pub(crate) fn with_tool_boundary_cancellation(
         settings: crate::application_settings::ApplicationSettingsApplication,
-        cancellation: crate::operation::TestCancellation,
+        cancellation: CancellationToken,
     ) -> Self {
         Self {
             settings,

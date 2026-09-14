@@ -5,6 +5,7 @@ use crate::application_settings::{
 use crate::operation::OperationContext;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// 构造不携带调用方语言的请求，验证语言只能来自 Application Settings。
 fn request() -> BabysitFileRequest {
@@ -50,7 +51,7 @@ impl BabysitAgentProvider for InFlightLanguageProvider {
     async fn generate(
         &self,
         request: BabysitProviderRequest,
-        _cancellation: &CancellationSignal,
+        _cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         let first_run = {
             let mut locales = self.observed_locales.lock().unwrap();
@@ -70,7 +71,7 @@ impl BabysitAgentProvider for InFlightLanguageProvider {
         _request: BabysitProviderRequest,
         _previous: BabysitFileExplanations,
         _failures: Vec<ValidationFailure>,
-        _cancellation: &CancellationSignal,
+        _cancellation: &CancellationToken,
     ) -> Result<BabysitFileExplanations, BabysitError> {
         unreachable!("完整输出不会进入 repair")
     }

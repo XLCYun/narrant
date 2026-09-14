@@ -7,7 +7,7 @@ use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph
 use super::rust_analyzer::RustDependencyScope;
 use crate::{
     lsp::CancellationCheck,
-    operation::{CancellationSource, OperationContext},
+    operation::OperationContext,
     review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
 };
 pub(crate) use projection::StructureComparison;
@@ -17,6 +17,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use tokio_util::sync::CancellationToken;
 
 /// 每次运行注入只读取消观察，生产和测试都经过同一个语言分析调用点。
 pub(crate) type AnalyzeGraph = dyn Fn(&AnalysisInput, CancellationCheck, RustDependencyScope) -> Result<CodeGraph, AnalysisError>
@@ -101,7 +102,8 @@ fn run(
     dependency_scope: RustDependencyScope,
 ) -> Result<StructureComparison, StructureReviewError> {
     let (before_files, after_files, coverage) = scope(workspace);
-    let (stop, parallel_operation) = workspace.operation.child();
+    let parallel_operation = workspace.operation.child();
+    let stop = parallel_operation.cancellation();
     let errors = Mutex::new(WorkerErrors::default());
     let cancelled_signal = parallel_operation.cancellation().clone();
     let cancelled: CancellationCheck = Arc::new(move || cancelled_signal.is_cancelled());
@@ -111,12 +113,12 @@ fn run(
             let checkout = if before_files.is_empty() {
                 None
             } else {
-                Some(run_worker(&stop, &errors, || {
+                Some(run_worker(stop, &errors, || {
                     workspace::BeforeCheckout::prepare(workspace, &parallel_operation)
                 })?)
             };
             // 在 checkout 仍存活时捕获分析器 panic，随后显式清理并收集两个错误。
-            let result = run_worker(&stop, &errors, || {
+            let result = run_worker(stop, &errors, || {
                 analyze_side(
                     &analyze,
                     &workspace.before_path,
@@ -127,11 +129,11 @@ fn run(
                 )
             });
             if let Some(checkout) = checkout {
-                run_worker(&stop, &errors, || checkout.finish());
+                run_worker(stop, &errors, || checkout.finish());
             }
             result
         });
-        let after = run_worker(&stop, &errors, || {
+        let after = run_worker(stop, &errors, || {
             analyze_side(
                 &analyze,
                 &workspace.head_path,
@@ -141,7 +143,7 @@ fn run(
                 dependency_scope,
             )
         });
-        let before = run_worker(&stop, &errors, || before.join().map_err(panic_error)).flatten();
+        let before = run_worker(stop, &errors, || before.join().map_err(panic_error)).flatten();
         (before, after)
     });
     errors
@@ -205,7 +207,7 @@ impl WorkerErrors {
 
 /// 捕获同步阶段的失败或 panic，先记录根因再停止同组工作。
 fn run_worker<T>(
-    stop: &CancellationSource,
+    stop: &CancellationToken,
     errors: &Mutex<WorkerErrors>,
     work: impl FnOnce() -> Result<T, StructureReviewError>,
 ) -> Option<T> {

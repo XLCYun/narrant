@@ -64,9 +64,7 @@ async fn running_operation_observes_cancellation_and_is_reusable_after_exit() {
         running_operations
             .run(running_id, move |context| async move {
                 running_started.notify_one();
-                while !context.cancellation().is_cancelled() {
-                    tokio::task::yield_now().await;
-                }
+                context.cancellation().cancelled().await;
                 "cancelled"
             })
             .await
@@ -95,9 +93,7 @@ async fn cancel_all_notifies_every_running_operation() {
                     OperationId::new(format!("operation-{index}")).unwrap(),
                     move |context| async move {
                         worker_started.fetch_add(1, Ordering::AcqRel);
-                        while !context.cancellation().is_cancelled() {
-                            tokio::task::yield_now().await;
-                        }
+                        context.cancellation().cancelled().await;
                     },
                 )
                 .await
@@ -144,9 +140,7 @@ async fn close_and_drain_waits_for_every_running_registration_to_release() {
                 OperationId::new("drained-operation").unwrap(),
                 move |context| async move {
                     running_started.notify_one();
-                    while !context.cancellation().is_cancelled() {
-                        tokio::task::yield_now().await;
-                    }
+                    context.cancellation().cancelled().await;
                     running_release.notified().await;
                 },
             )
@@ -208,13 +202,11 @@ fn background_context_starts_uncancelled() {
 
 #[test]
 fn derived_convergence_context_ignores_parent_cancellation() {
-    let (controller, signal) = test_cancellation_signal();
-    let operation = OperationContext {
-        cancellation: signal,
-    };
+    let cancellation = CancellationToken::new();
+    let operation = OperationContext::new(cancellation.clone());
     let convergence = operation.without_cancellation();
 
-    controller.cancel();
+    cancellation.cancel();
 
     assert!(operation.cancellation().is_cancelled());
     assert!(!convergence.cancellation().is_cancelled());
@@ -224,22 +216,19 @@ fn derived_convergence_context_ignores_parent_cancellation() {
 #[tokio::test]
 async fn child_context_propagates_cancellation_downward_without_polling_timers() {
     for cancel_parent in [false, true] {
-        let (controller, signal) = test_cancellation_signal();
-        let root = OperationContext {
-            cancellation: signal,
-        };
-        let (stop, child) = root.child();
-        let (_, grandchild) = child.child();
-        let (_, sibling) = root.child();
+        let root = OperationContext::background();
+        let child = root.child();
+        let grandchild = child.child();
+        let sibling = root.child();
         let wake = Arc::new(WakeCount::default());
         let waker = futures_util::task::waker(wake.clone());
         let mut context = std::task::Context::from_waker(&waker);
         let mut waiting = Box::pin(grandchild.cancellation().cancelled());
         assert!(waiting.as_mut().poll(&mut context).is_pending());
         if cancel_parent {
-            controller.cancel();
+            root.cancellation().cancel();
         } else {
-            stop.cancel();
+            child.cancellation().cancel();
         }
         assert!(
             wake.0.load(Ordering::Acquire) > 0,
@@ -249,7 +238,7 @@ async fn child_context_propagates_cancellation_downward_without_polling_timers()
         assert!(child.cancellation().is_cancelled());
         assert_eq!(root.cancellation().is_cancelled(), cancel_parent);
         assert_eq!(sibling.cancellation().is_cancelled(), cancel_parent);
-        assert!(child.child().1.cancellation().is_cancelled());
+        assert!(child.child().cancellation().is_cancelled());
     }
 }
 

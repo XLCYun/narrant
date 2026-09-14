@@ -7,9 +7,10 @@ use super::super::{
 };
 use crate::application_settings::CustomProviderEffort;
 use crate::babysit::repository_tools::RepositoryTools;
-use crate::operation::CancellationSignal;
+
 use httpmock::prelude::*;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
@@ -93,7 +94,7 @@ async fn adapter_uses_messages_endpoint_and_tool_output_with_adaptive_effort() {
             "Explain this changed line.",
             Vec::new(),
             repository_tools,
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await
         .expect("fixture response should complete");
@@ -149,7 +150,7 @@ async fn disabled_repository_exploration_registers_only_anthropic_final_output_t
         .run_agent(AnthropicAdapterRequest::without_repository_tools(
             "Explain this changed line.",
             Vec::new(),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await
         .expect("fixture response should complete");
@@ -207,7 +208,7 @@ async fn adapter_provider_default_omits_thinking_configuration() {
             "review",
             Vec::new(),
             repository_tools,
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await
         .expect("Provider 默认值请求应成功");
@@ -255,7 +256,7 @@ async fn adapter_rejects_anthropic_max_tokens_stop_reason() {
             "review",
             Vec::new(),
             RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await;
 
@@ -323,7 +324,7 @@ async fn adapter_propagates_max_tokens_rejection_without_retrying() {
             "review",
             Vec::new(),
             RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await;
 
@@ -379,7 +380,7 @@ async fn adapter_stops_continuous_tool_calls_at_shared_turn_limit() {
             "keep inspecting the fixture",
             Vec::new(),
             RepositoryTools::new(workspace.path()).expect("绑定 repository tools"),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await;
 
@@ -410,7 +411,7 @@ async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
         })
         .await;
     let workspace = tempfile::tempdir().expect("fixture workspace should be created");
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
         server.base_url(),
         None,
@@ -422,7 +423,7 @@ async fn adapter_drops_an_in_flight_http_future_when_cancelled() {
         "prompt",
         Vec::new(),
         RepositoryTools::new(workspace.path()).unwrap(),
-        (*cancellation).clone(),
+        cancellation.clone(),
     );
     let task = tokio::spawn(async move { adapter.run_agent(request).await });
     for _ in 0..50 {
@@ -507,7 +508,7 @@ async fn adapter_converts_anthropic_tool_use_and_tool_result_round_trip() {
             "inspect fixture",
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await
         .expect("tool loop should complete");
@@ -566,7 +567,7 @@ async fn adapter_keeps_an_empty_optional_key_and_maps_every_effort() {
                 "prompt",
                 Vec::new(),
                 RepositoryTools::new(workspace.path()).unwrap(),
-                CancellationSignal::default(),
+                CancellationToken::new(),
             ))
             .await
             .expect("effort fixture should complete");
@@ -585,7 +586,7 @@ async fn adapter_rejects_early_cancellation_without_contacting_anthropic() {
         })
         .await;
     let workspace = tempfile::tempdir().expect("fixture workspace should be created");
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     cancellation.cancel();
     let adapter = AnthropicAdapter::new(AnthropicAdapterConfig::new(
         server.base_url(),
@@ -599,7 +600,7 @@ async fn adapter_rejects_early_cancellation_without_contacting_anthropic() {
             "secret prompt",
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
-            (*cancellation).clone(),
+            cancellation.clone(),
         ))
         .await;
     assert!(matches!(result, Err(AnthropicAdapterError::Cancelled)));
@@ -629,7 +630,7 @@ async fn adapter_redacts_http_and_protocol_error_content() {
             secret,
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await
         .expect_err("HTTP failure should be redacted");
@@ -663,7 +664,7 @@ async fn adapter_redacts_a_malformed_success_response() {
             "prompt",
             Vec::new(),
             RepositoryTools::new(workspace.path()).unwrap(),
-            CancellationSignal::default(),
+            CancellationToken::new(),
         ))
         .await
         .expect_err("malformed success response should fail");

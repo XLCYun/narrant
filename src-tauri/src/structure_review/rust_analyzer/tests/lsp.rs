@@ -3,12 +3,13 @@
 use super::RustLsp;
 use crate::lsp::{test_support::FakeServer, Position};
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 /// 语言 Adapter 在等待项目状态时保留通用 LSP 的取消类别与请求上下文。
 #[test]
 fn preserves_cancellation_while_waiting_for_project_readiness() {
     let server = FakeServer::new(vec![vec![initialized(capabilities())]]);
-    let cancellation = crate::operation::TestCancellation::default();
+    let cancellation = CancellationToken::new();
     let observed = cancellation.clone();
     let mut client = RustLsp::start(
         &server.workspace().join("server"),

@@ -1,10 +1,11 @@
 use crate::core_git::{GitCommandError, GitProcessAdapter};
-use crate::operation::{CancellationSignal, OperationContext};
+use crate::operation::OperationContext;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 
 /// 一个经规范化的 GitHub repository identity。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -144,7 +145,7 @@ fn github_repositories(
 /// 使用调用方 cancellation 扫描 GitHub remotes。
 fn github_repositories_with_cancellation(
     repository_path: &Path,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<BTreeMap<String, (GitHubRepository, Vec<String>)>, GitCommandError> {
     let adapter = GitProcessAdapter::new(repository_path);
     let remote_names = adapter.run(["remote"], cancellation)?;
@@ -201,7 +202,7 @@ pub fn remote_names_for_repository(
 pub fn remote_names_for_repository_with_cancellation(
     repository_path: &Path,
     repository: &GitHubRepository,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<Vec<String>, GitCommandError> {
     Ok(
         github_repositories_with_cancellation(repository_path, cancellation)?
