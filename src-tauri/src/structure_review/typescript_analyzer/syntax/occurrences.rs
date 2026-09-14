@@ -40,8 +40,9 @@ impl<'d, 'a> Collector<'d, 'a> {
         let mut output = Vec::new();
         for (kind, span, selection, dynamic, type_only, import_alias) in &self.pending {
             if *kind == OccurrenceKind::Reference
-                && self.pending.iter().any(|(k, _, s, _, _, _)| {
-                    *k != OccurrenceKind::Reference && contains(*s, *selection)
+                && self.pending.iter().any(|(k, _, s, dynamic, _, _)| {
+                    // 只有明确的同名选择才能替代读取；复合或动态候选不能吞掉内部证据。
+                    *k != OccurrenceKind::Reference && !dynamic && *s == *selection
                 })
             {
                 continue;
@@ -160,6 +161,7 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
         let type_only = self.type_only();
         match node {
             AstKind::CallExpression(c) => { let (selection, dynamic) = callee(&c.callee); self.add(Call, c.span, selection, dynamic, type_only, false); }
+            AstKind::TaggedTemplateExpression(t) => { let (selection, dynamic) = callee(&t.tag); self.add(Call, t.span, selection, dynamic, type_only, false); }
             AstKind::NewExpression(c) => { let (selection, dynamic) = callee(&c.callee); self.add(Construct, c.span, selection, dynamic, type_only, false); }
             AstKind::AssignmentTargetPropertyIdentifier(p) => self.add(Write, p.binding.span, p.binding.span, false, type_only, false),
             AstKind::IdentifierReference(i) if !self.alias_context() => self.add(Reference, i.span, i.span, false, type_only, false),

@@ -2,51 +2,68 @@
 use super::{failure, Result};
 use crate::lsp::Position;
 
-/// 字节位置必须落在字符边界，且不能处于 CRLF 的中间。
+/// 一行的内容范围不包含换行符；下一行起点自然跳过完整 CRLF。
+struct Line {
+    start: usize,
+    end: usize,
+}
+
+/// 对齐固定 TypeScript 的 computeLineStarts/isLineBreak，不把 U+0085 当作换行。
+fn lines(source: &str) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut characters = source.char_indices().peekable();
+    while let Some((offset, character)) = characters.next() {
+        if matches!(character, '\r' | '\n' | '\u{2028}' | '\u{2029}') {
+            lines.push(Line { start, end: offset });
+            start = offset + character.len_utf8();
+            if character == '\r' && characters.peek().is_some_and(|(_, next)| *next == '\n') {
+                characters.next();
+                start += 1;
+            }
+        }
+    }
+    lines.push(Line {
+        start,
+        end: source.len(),
+    });
+    lines
+}
+
+/// 字节位置必须落在字符边界或行尾，不能处于多字节字符或 CRLF 中间。
 pub(crate) fn position(source: &str, offset: u32) -> Result<Position> {
     let offset = offset as usize;
-    let preceding = source
-        .get(..offset)
-        .ok_or_else(|| failure("源码偏移不是有效的 UTF-8 边界"))?;
-    if offset > 0
-        && source.as_bytes().get(offset) == Some(&b'\n')
-        && source.as_bytes()[offset - 1] == b'\r'
-    {
+    if !source.is_char_boundary(offset) {
+        return Err(failure("源码偏移不是有效的 UTF-8 边界"));
+    }
+    let lines = lines(source);
+    let index = lines.partition_point(|line| line.start <= offset) - 1;
+    let line = &lines[index];
+    if offset > line.end {
         return Err(failure("源码偏移位于 CRLF 中间"));
     }
     Ok(Position {
-        line: preceding.bytes().filter(|b| *b == b'\n').count() as u32,
-        character: preceding
-            .rsplit('\n')
-            .next()
-            .unwrap_or_default()
-            .encode_utf16()
-            .count() as u32,
+        line: u32::try_from(index).map_err(failure)?,
+        character: u32::try_from(source[line.start..offset].encode_utf16().count())
+            .map_err(failure)?,
     })
 }
 
-/// 严格拒绝越行、越界和代理对中间的 LSP 坐标。
+/// 严格拒绝越行、越界和代理对中间的 LSP 坐标，所有换行类型共用行边界。
 pub(crate) fn byte_offset(source: &str, position: &Position) -> Result<u32> {
-    let mut starts = vec![0];
-    starts.extend(source.match_indices('\n').map(|(i, _)| i + 1));
-    let start = *starts
+    let lines = lines(source);
+    let line = lines
         .get(position.line as usize)
         .ok_or_else(|| failure("LSP 行号越界"))?;
-    let end = starts
-        .get(position.line as usize + 1)
-        .map_or(source.len(), |end| end - 1);
-    let line = source[start..end]
-        .strip_suffix('\r')
-        .unwrap_or(&source[start..end]);
     let mut units = 0;
-    for (offset, ch) in line.char_indices() {
+    for (offset, ch) in source[line.start..line.end].char_indices() {
         if units == position.character {
-            return u32::try_from(start + offset).map_err(failure);
+            return u32::try_from(line.start + offset).map_err(failure);
         }
         units += ch.len_utf16() as u32;
     }
     if units == position.character {
-        return u32::try_from(start + line.len()).map_err(failure);
+        return u32::try_from(line.end).map_err(failure);
     }
     Err(failure("LSP 位置不是有效的 UTF-16 边界"))
 }

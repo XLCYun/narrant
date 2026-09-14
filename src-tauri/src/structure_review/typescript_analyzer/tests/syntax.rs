@@ -532,3 +532,204 @@ fn directives_and_parameter_properties_are_modeled() {
         .any(|o| o.kind == OccurrenceKind::TypeUse && o.text == "Model"));
     graph(&[&document]);
 }
+
+/// 复合动态被调表达式中的函数值读取必须保留，不能被外层调用的大范围吞掉。
+#[test]
+fn compound_callees_preserve_independent_function_value_references() {
+    let document = parse("a.ts", "function f() { (() => handler)(); (() => accept(callback))(); factory(argument)(); object[keyHandler](); direct(); }");
+    for name in ["handler", "callback", "argument", "keyHandler"] {
+        assert!(
+            document
+                .occurrences
+                .iter()
+                .any(|o| o.kind == OccurrenceKind::Reference && o.text == name),
+            "missing {name}"
+        );
+    }
+    assert!(
+        document
+            .occurrences
+            .iter()
+            .filter(|o| o.kind == OccurrenceKind::Call && o.dynamic)
+            .count()
+            >= 4
+    );
+    assert!(!document
+        .occurrences
+        .iter()
+        .any(|o| o.kind == OccurrenceKind::Reference && o.text == "direct"));
+    assert!(document
+        .occurrences
+        .iter()
+        .all(|o| o.owner == named(&document, "f").node.data().id));
+}
+
+/// 标签模板是运行时调用，直接、成员与动态标签保留相同的保守分类和插值遍历。
+#[test]
+fn tagged_templates_capture_calls_and_substitution_evidence() {
+    let document = parse("a.ts", "function f() { tag`hello ${format(valueHandler)}`; object.tag`member ${memberHandler}`; object[keyTag]`computed ${compute()}`; factory(factoryHandler)`dynamic ${dynamicHandler}`; (() => returnedTag)`iife ${substitutionHandler}`; }");
+    for name in ["tag", "format", "compute", "factory"] {
+        assert!(
+            document
+                .occurrences
+                .iter()
+                .any(|o| o.kind == OccurrenceKind::Call && o.text == name && !o.dynamic),
+            "missing call {name}"
+        );
+    }
+    assert_eq!(
+        document
+            .occurrences
+            .iter()
+            .filter(|o| o.kind == OccurrenceKind::Call && o.text == "tag")
+            .count(),
+        2
+    );
+    for name in ["keyTag", "factory(factoryHandler)", "() => returnedTag"] {
+        assert!(
+            document
+                .occurrences
+                .iter()
+                .any(|o| o.kind == OccurrenceKind::Call && o.text == name && o.dynamic),
+            "missing dynamic tag {name}"
+        );
+    }
+    for name in [
+        "valueHandler",
+        "memberHandler",
+        "keyTag",
+        "factoryHandler",
+        "dynamicHandler",
+        "returnedTag",
+        "substitutionHandler",
+    ] {
+        assert!(
+            document
+                .occurrences
+                .iter()
+                .any(|o| o.kind == OccurrenceKind::Reference && o.text == name),
+            "missing reference {name}"
+        );
+    }
+    assert!(document
+        .occurrences
+        .iter()
+        .all(|o| o.owner == named(&document, "f").node.data().id));
+}
+
+/// CR、CRLF、LF 和两个 Unicode 分隔符全部按固定语言服务规则往返转换。
+#[test]
+fn native_line_boundaries_round_trip_and_reject_invalid_positions() {
+    for separator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+        let source = format!("中😀x{separator}尾{separator}");
+        let second_start = 8 + separator.len();
+        for (offset, line, character) in [
+            (0, 0, 0),
+            (3, 0, 1),
+            (7, 0, 3),
+            (8, 0, 4),
+            (second_start, 1, 0),
+            (second_start + 3, 1, 1),
+            (source.len(), 2, 0),
+        ] {
+            let expected = Position { line, character };
+            assert_eq!(
+                text::position(&source, offset as u32).unwrap(),
+                expected,
+                "{separator:?}"
+            );
+            assert_eq!(
+                text::byte_offset(&source, &expected).unwrap(),
+                offset as u32,
+                "{separator:?}"
+            );
+        }
+        for offset in [1, 4, source.len() + 1] {
+            assert!(text::position(&source, offset as u32).is_err());
+        }
+        for position in [
+            Position {
+                line: 0,
+                character: 2,
+            },
+            Position {
+                line: 0,
+                character: 5,
+            },
+            Position {
+                line: 1,
+                character: 2,
+            },
+            Position {
+                line: 2,
+                character: 1,
+            },
+            Position {
+                line: 3,
+                character: 0,
+            },
+        ] {
+            assert!(
+                text::byte_offset(&source, &position).is_err(),
+                "{separator:?}: {position:?}"
+            );
+        }
+        for offset in 9..8 + separator.len() {
+            assert!(text::position(&source, offset as u32).is_err());
+        }
+        let document = parse(
+            "a.ts",
+            &format!("function f() {{{separator}tag`hello`;{separator}}}"),
+        );
+        assert_eq!(
+            document
+                .occurrences
+                .iter()
+                .find(|o| o.kind == OccurrenceKind::Call)
+                .unwrap()
+                .position,
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
+    }
+    // U+0085 是一个普通 UTF-16 单元，不是固定 TypeScript 接受的换行字符。
+    let source = "a\u{85}b\r\nc\rd\ne\u{2028}f\u{2029}";
+    assert_eq!(
+        text::position(source, 3).unwrap(),
+        Position {
+            line: 0,
+            character: 2
+        }
+    );
+    assert_eq!(
+        text::byte_offset(
+            source,
+            &Position {
+                line: 0,
+                character: 2
+            }
+        )
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        text::position(source, source.len() as u32).unwrap(),
+        Position {
+            line: 5,
+            character: 0
+        }
+    );
+    assert_eq!(
+        text::byte_offset(
+            source,
+            &Position {
+                line: 5,
+                character: 0
+            }
+        )
+        .unwrap(),
+        source.len() as u32
+    );
+}
