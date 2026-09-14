@@ -110,6 +110,14 @@ server processes to stop, and only then mutate or remove head. Releasing the use
 not remove head; normal Review lifecycle remains its owner. A bare path lookup is not
 sufficient, and cancelling only the frontend await is not sufficient.
 
+Before executing the callback and before returning success, validate the Repository's
+Git common directory, exact canonical worktree registration, Snapshot HEAD and tracked
+contents relative to HEAD. Each validation uses one fresh `worktree list --porcelain -z`
+result for both path and HEAD, followed by `git diff --quiet HEAD --`. The checks do not
+cover untracked files or edits restored between the two checks, and do not provide
+filesystem snapshot isolation. The lease coordinates application-managed mutations;
+it does not replace either check against external changes.
+
 Review Lifecycle owns admission, cancellation binding, locking and worker lifetime.
 Structure Changes owns before preparation, two-side analysis and before cleanup inside
 that execution range:

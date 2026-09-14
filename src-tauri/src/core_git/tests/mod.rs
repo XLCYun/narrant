@@ -4,6 +4,8 @@ use super::*;
 use crate::operation::OperationContext;
 use tokio_util::sync::CancellationToken;
 
+mod workspace;
+
 #[test]
 fn core_git_commands_disable_interactive_credential_prompts() {
     let mut command = std::process::Command::new("git");

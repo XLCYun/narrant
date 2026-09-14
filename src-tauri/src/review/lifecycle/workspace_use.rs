@@ -55,7 +55,8 @@ impl SnapshotWorkspaceLease {
 }
 
 impl SnapshotWorkspace {
-    /// 执行前及成功发布前验证 head，拒绝取消或外部进程改写的源码版本。
+    /// 执行前及成功返回前检查注册、HEAD 与已跟踪内容，拒绝当时仍存在的外部修改。
+    /// 不检查未跟踪文件，也无法发现两次检查之间发生后又还原的修改。
     fn validate(&self) -> Result<(), ReviewLifecycleError> {
         GitProcessAdapter::new(&self.repository_path)
             .validate_worktree_revision(

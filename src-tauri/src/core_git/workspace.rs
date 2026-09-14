@@ -2,7 +2,8 @@ use super::*;
 use tokio_util::sync::CancellationToken;
 
 impl GitProcessAdapter {
-    /// 验证借用的 checkout 仍属于本仓库并固定在所请求的精确提交。
+    /// 检查 checkout 的仓库归属、精确注册路径、HEAD 及已跟踪内容相对 HEAD 的一致性。
+    /// 此次状态检查不覆盖未跟踪文件，也不提供分析期间的文件系统快照隔离。
     pub(crate) fn validate_worktree_revision(
         &self,
         workspace_path: &Path,
@@ -10,8 +11,12 @@ impl GitProcessAdapter {
         expected_head_object_id: &str,
         cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
-        self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
-        self.validate_registered_worktree(workspace_path, expected_head_object_id, cancellation)?;
+        self.validate_registered_worktree(
+            workspace_path,
+            expected_common_directory,
+            expected_head_object_id,
+            cancellation,
+        )?;
         Self::new(workspace_path)
             .run(["diff", "--quiet", "HEAD", "--"], cancellation)
             .map(|_| ())
@@ -123,8 +128,12 @@ impl GitProcessAdapter {
         cancellation: &CancellationToken,
         convergence_cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
-        self.validate_owned_worktree(workspace_path, expected_common_directory, cancellation)?;
-        self.validate_registered_worktree(workspace_path, previous_head_object_id, cancellation)?;
+        self.validate_registered_worktree(
+            workspace_path,
+            expected_common_directory,
+            previous_head_object_id,
+            cancellation,
+        )?;
         if let Err(error) = self.force_restore_detached_worktree(
             workspace_path,
             next_head_object_id,
@@ -147,27 +156,33 @@ impl GitProcessAdapter {
         Ok(())
     }
 
-    /// 验证目标是当前 Repository 注册且位于预期 HEAD 的精确 linked worktree。
+    /// 先确认仓库 common directory，再用同一份清单核对精确路径及该记录的 HEAD。
     fn validate_registered_worktree(
         &self,
         workspace_path: &Path,
+        expected_common_directory: &Path,
         expected_head_object_id: &str,
         cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
+        self.validate_common_directory(expected_common_directory, cancellation)?;
         let output =
             self.run_workspace_inspect(["worktree", "list", "--porcelain", "-z"], cancellation)?;
         let canonical_workspace = workspace_path.canonicalize().map_err(|error| {
             GitCommandError::new(format!("无法验证 Review Workspace canonical path：{error}"))
         })?;
         let expected_head = format!("HEAD {expected_head_object_id}").into_bytes();
-        let fields = output.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-        let registered = fields.windows(2).any(|fields| {
-            worktree_field_matches_path(fields[0], &canonical_workspace)
-                && fields[1] == expected_head
-        });
-        if !registered {
+        let mut fields = output.stdout.split(|byte| *byte == 0);
+        if !fields
+            .by_ref()
+            .any(|field| worktree_field_matches_path(field, &canonical_workspace))
+        {
             return Err(GitCommandError::new(
-                "拒绝重建 Review Workspace：目标路径、Git worktree 注册或 current Snapshot HEAD 不一致。",
+                "Review Workspace 所有权验证失败：路径不是该仓库注册的 linked worktree。",
+            ));
+        }
+        if fields.next() != Some(expected_head.as_slice()) {
+            return Err(GitCommandError::new(
+                "Review Workspace 校验失败：目标路径的 Git worktree HEAD 与 current Snapshot 不一致。",
             ));
         }
         Ok(())
@@ -228,6 +243,21 @@ impl GitProcessAdapter {
         expected_common_directory: &Path,
         cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
+        self.validate_common_directory(expected_common_directory, cancellation)?;
+        if !self.is_registered_worktree(workspace_path, cancellation)? {
+            return Err(GitCommandError::new(
+                "Review Workspace 所有权验证失败：路径不是该仓库注册的 linked worktree。",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 对照保存的 canonical common directory 验证当前 Repository 的身份。
+    fn validate_common_directory(
+        &self,
+        expected_common_directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), GitCommandError> {
         let actual_common = self
             .run(
                 ["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -248,11 +278,6 @@ impl GitProcessAdapter {
         if actual_common != expected_common {
             return Err(GitCommandError::new(
                 "Review Workspace 所有权验证失败：Git common directory 不匹配。",
-            ));
-        }
-        if !self.is_registered_worktree(workspace_path, cancellation)? {
-            return Err(GitCommandError::new(
-                "Review Workspace 所有权验证失败：路径不是该仓库注册的 linked worktree。",
             ));
         }
         Ok(())
