@@ -1,6 +1,9 @@
 //! 用规范代码的真实 token 投影自身内容，空白和成员列表标点不依赖被删子项的位置。
 use super::contains;
-use oxc_ast::{ast::Program, AstKind};
+use oxc_ast::{
+    ast::{ArrayExpressionElement, Program},
+    AstKind,
+};
 use oxc_ast_visit::Visit;
 use oxc_parser::{Kind, Token};
 use oxc_span::{GetSpan, Span};
@@ -10,14 +13,31 @@ use std::collections::BTreeSet;
 struct CommaList {
     span: Span,
     items: Vec<Span>,
+    /// Oxc Elision 的范围就是对应空位的逗号，不能当作已删除子对象。
+    elisions: BTreeSet<u32>,
 }
 
 /// 从 typed AST 收集可独立删除成员的列表，不改写原始语法树。
 #[derive(Default)]
 struct Lists(Vec<CommaList>);
 impl<'a> Visit<'a> for Lists {
-    /// 对象、枚举和参数具有明确的成员边界；数组空位有语义，不作通用逗号清理。
+    /// 明确区分普通成员和数组空位，复用列表边界而不从连续逗号猜测稀疏元素。
     fn enter_node(&mut self, node: AstKind<'a>) {
+        if let AstKind::ArrayExpression(array) = node {
+            self.0.push(CommaList {
+                span: array.span,
+                items: array.elements.iter().map(GetSpan::span).collect(),
+                elisions: array
+                    .elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        ArrayExpressionElement::Elision(hole) => Some(hole.span.start),
+                        _ => None,
+                    })
+                    .collect(),
+            });
+            return;
+        }
         let (span, items) = match node {
             AstKind::ObjectExpression(object) => (
                 object.span,
@@ -55,7 +75,11 @@ impl<'a> Visit<'a> for Lists {
             ),
             _ => return,
         };
-        self.0.push(CommaList { span, items });
+        self.0.push(CommaList {
+            span,
+            items,
+            elisions: BTreeSet::new(),
+        });
     }
 }
 
@@ -77,7 +101,7 @@ impl<'s> Content<'s> {
         }
     }
 
-    /// 删除子范围后只保留相邻存活成员间的一个分隔符，零成员与尾逗号保持统一。
+    /// 删除子范围后重连存活成员，真实空位按 AST 保留；普通尾逗号不进入自身内容。
     fn omitted_commas(&self, span: Span, omitted: &[Span]) -> BTreeSet<u32> {
         let mut removed = BTreeSet::new();
         for list in self.lists.iter().filter(|list| contains(span, list.span)) {
@@ -87,7 +111,9 @@ impl<'s> Content<'s> {
                 .filter(|token| {
                     token.kind() == Kind::Comma
                         && contains(list.span, token.span())
-                        && !list.items.iter().any(|item| contains(*item, token.span()))
+                        && !list.items.iter().any(|item| {
+                            !list.elisions.contains(&item.start) && contains(*item, token.span())
+                        })
                 })
                 .collect();
             removed.extend(separators.iter().map(|token| token.start()));
@@ -97,12 +123,25 @@ impl<'s> Content<'s> {
                 .filter(|item| !omitted.iter().any(|range| contains(*range, **item)))
                 .collect();
             for pair in retained.windows(2) {
+                // 空位没有值 token；它本身的逗号可分隔下一个存活项。
+                let left_end = if list.elisions.contains(&pair[0].start) {
+                    pair[0].start
+                } else {
+                    pair[0].end
+                };
                 if let Some(comma) = separators
                     .iter()
-                    .find(|token| pair[0].end <= token.start() && token.end() <= pair[1].start)
+                    .find(|token| left_end <= token.start() && token.end() <= pair[1].start)
                 {
                     removed.remove(&comma.start());
                 }
+            }
+            // 最后一个存活项若为空位，还需要它自己的尾逗号来表达该空位。
+            if let Some(last) = retained
+                .last()
+                .filter(|last| list.elisions.contains(&last.start))
+            {
+                removed.remove(&last.start);
             }
         }
         removed

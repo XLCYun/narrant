@@ -891,3 +891,69 @@ fn own_content_keeps_semantic_punctuation_and_literal_text() {
         );
     }
 }
+
+/// 数组具名函数和类作为独立子对象，增删只改变包含关系并保留相邻元素与空位。
+#[test]
+fn array_child_insertion_and_removal_preserve_owner_content() {
+    for (before, after) in [
+        ("[]", "[function Child() {}]"),
+        ("[keep]", "[function Child() {}, keep]"),
+        ("[keep, ...rest]", "[keep, class Child {}, ...rest]"),
+        ("[keep, ...rest]", "[keep, ...rest, function Child() {}]"),
+        ("[,]", "[function Child() {}, ,]"),
+        ("[,]", "[, class Child {}]"),
+        ("[keep, ,]", "[keep, function Child() {}, ,]"),
+        ("[keep, ,]", "[keep, , class Child {}]"),
+        ("[, keep]", "[, function Child() {}, keep]"),
+        ("[,,]", "[function First() {}, , class Last {}, ,]"),
+        ("[`a, b`, /a,b/, <div>a,b</div>, ...rest]", "[class First {}, `a, b`, function Middle() {}, /a,b/, <div>a,b</div>, ...rest, function Last() {}]"),
+    ] {
+        let before = parse("a.tsx", &format!("const value = {before};"));
+        let after = parse("a.tsx", &format!("const value = {after};"));
+        let id = &named(&before, "value").node.data().id;
+        for (before, after) in [(&before, &after), (&after, &before)] {
+            let diff = graph(&[before]).diff(&graph(&[after])).unwrap();
+            let parent = diff.nodes.iter().find(|d| &d.id == id).unwrap();
+            assert!(parent.content.is_none(), "{} -> {}: {diff:?}", before.source, after.source);
+            assert!(!parent.contains.is_empty());
+        }
+    }
+}
+
+/// 子声明跨越普通值、spread 和真实空位重排，不改变任何已有对象的自身内容。
+#[test]
+fn array_child_reordering_preserves_surviving_values_and_holes() {
+    let before = parse(
+        "a.ts",
+        "const value = [function First() {}, , keep, class Last {}, ...rest, ,];",
+    );
+    let after = parse(
+        "a.ts",
+        "const value = [, class Last {}, keep, ...rest, , function First() {}];",
+    );
+    assert!(graph(&[&before])
+        .diff(&graph(&[&after]))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 不同真实空位的位置与数量仍产生内容差异，数组分隔符不能被整体删光。
+#[test]
+fn sparse_array_hole_positions_and_counts_remain_distinct() {
+    let arrays = ["[keep]", "[, keep]", "[keep, ,]", "[,,]", "[]"];
+    for (index, left) in arrays.iter().enumerate() {
+        for right in arrays.iter().skip(index + 1) {
+            let before = parse("a.ts", &format!("const value = {left};"));
+            let after = parse("a.ts", &format!("const value = {right};"));
+            assert!(
+                !graph(&[&before])
+                    .diff(&graph(&[&after]))
+                    .unwrap()
+                    .nodes
+                    .is_empty(),
+                "{left} versus {right}"
+            );
+        }
+    }
+}
