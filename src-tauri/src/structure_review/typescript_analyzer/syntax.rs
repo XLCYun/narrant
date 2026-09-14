@@ -9,13 +9,14 @@ use crate::{
 use oxc_allocator::Allocator;
 use oxc_ast_visit::Visit;
 use oxc_codegen::{Codegen, CodegenOptions, CommentOptions};
-use oxc_parser::{ParseOptions, Parser};
+use oxc_parser::{config::TokensParserConfig, ParseOptions, Parser};
 use oxc_semantic::SemanticBuilder;
 use oxc_span::{SourceType, Span};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
+mod content;
 mod declarations;
 mod occurrences;
 
@@ -163,10 +164,17 @@ impl Document {
             .build(&parsed.program)
             .code;
         let normalized_arena = Allocator::default();
-        let normalized_parse = Parser::new(&normalized_arena, &normalized, source_type).parse();
+        let normalized_parse = Parser::new(&normalized_arena, &normalized, source_type)
+            .with_config(TokensParserConfig)
+            .parse();
         if normalized_parse.fatal_error || !normalized_parse.diagnostics.is_empty() {
             return Err(failure("Oxc 规范代码无法重新解析"));
         }
+        let content = content::Content::new(
+            &normalized,
+            &normalized_parse.tokens,
+            &normalized_parse.program,
+        );
         let mut canonical = declarations::Collector::new();
         canonical.visit_program(&normalized_parse.program);
         if original.items.len() != canonical.items.len() {
@@ -219,12 +227,12 @@ impl Document {
                 let mut omitted = nested.clone();
                 if let Some(body) = part.body {
                     omitted.push(body);
-                    bodies.push(own_text(&normalized, body, &nested));
+                    bodies.push(content.own_text(body, &nested));
                 }
                 signature.push(format!(
                     "{}{}",
                     norm.prefix,
-                    own_text(&normalized, part.span, &omitted)
+                    content.own_text(part.span, &omitted)
                 ));
             }
             let source_text = raw
@@ -304,30 +312,6 @@ fn at(span: Span, offset: u32) -> bool {
 /// 判断完整子范围是否属于外层范围。
 fn contains(outer: Span, inner: Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
-}
-
-/// 在规范源码上按 AST 范围扣除子声明，不重写字面量或 JSX 文本。
-fn own_text(source: &str, span: Span, omitted: &[Span]) -> String {
-    let mut ranges: Vec<_> = omitted
-        .iter()
-        .copied()
-        .filter(|s| contains(span, *s))
-        .collect();
-    ranges.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
-    let mut start = span.start;
-    let mut pieces = Vec::new();
-    for range in ranges {
-        if range.start >= start {
-            pieces.push(source[start as usize..range.start as usize].trim());
-        }
-        start = start.max(range.end);
-    }
-    pieces.push(source[start as usize..span.end as usize].trim());
-    pieces
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// 展示原文包括相邻前导注释；图比较只读取规范签名和代码。

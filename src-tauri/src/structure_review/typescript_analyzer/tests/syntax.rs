@@ -733,3 +733,161 @@ fn native_line_boundaries_round_trip_and_reject_invalid_positions() {
         source.len() as u32
     );
 }
+
+/// 独立子对象增删只改变父包含关系，不得产生空容器与带空格容器的内容差异。
+#[test]
+fn first_child_insertion_and_last_child_removal_preserve_owner_content() {
+    for (before, after, owner) in [
+        ("class C {}", "class C { method() {} }", "C"),
+        ("interface I {}", "interface I { field: string; }", "I"),
+        ("namespace N {}", "namespace N { function child() {} }", "N"),
+        (
+            "function f() {}",
+            "function f() { function child() {} }",
+            "f",
+        ),
+        ("const value = {};", "const value = { field: 1 };", "value"),
+    ] {
+        let before = parse("a.ts", before);
+        let after = parse("a.ts", after);
+        for (before, after) in [(&before, &after), (&after, &before)] {
+            let id = &named(before, owner).node.data().id;
+            let diff = graph(&[before]).diff(&graph(&[after])).unwrap();
+            let owner_change = diff.nodes.iter().find(|d| &d.id == id).unwrap();
+            assert!(
+                owner_change.content.is_none(),
+                "{owner}: {:?} -> {:?}: {diff:?}",
+                named(before, owner).node.data(),
+                named(after, owner).node.data()
+            );
+            assert!(!owner_change.contains.is_empty());
+        }
+    }
+}
+
+/// 子声明在剩余语句两侧增删和换序不能改变剩余语句的排版投影。
+#[test]
+fn child_reordering_and_neighboring_statements_preserve_owner_content() {
+    let base = parse("a.ts", "function f() { before(); after(); }");
+    let one = parse(
+        "a.ts",
+        "function f() { before(); function a() {} after(); function b() {} }",
+    );
+    let reordered = parse(
+        "a.ts",
+        "function f() { function b() {} before(); function a() {} after(); }",
+    );
+    let id = &named(&base, "f").node.data().id;
+    for document in [&one, &reordered] {
+        let diff = graph(&[&base]).diff(&graph(&[document])).unwrap();
+        assert!(
+            diff.nodes
+                .iter()
+                .find(|d| &d.id == id)
+                .unwrap()
+                .content
+                .is_none(),
+            "{diff:?}"
+        );
+    }
+    assert!(graph(&[&one])
+        .diff(&graph(&[&reordered]))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 对象属性间的逗号属于成员列表，删去子属性后不能污染剩余 spread 初始化内容。
+#[test]
+fn object_children_preserve_surviving_spreads_and_list_punctuation() {
+    let before = parse("a.ts", "const value = { ...left, ...right };");
+    let after = parse(
+        "a.ts",
+        "const value = { first: 1, ...left, middle() {}, ...right, last: 3 };",
+    );
+    let reordered = parse(
+        "a.ts",
+        "const value = { last: 3, first: 1, ...left, ...right, middle() {} };",
+    );
+    let id = &named(&before, "value").node.data().id;
+    for document in [&after, &reordered] {
+        let diff = graph(&[&before]).diff(&graph(&[document])).unwrap();
+        assert!(
+            diff.nodes
+                .iter()
+                .find(|d| &d.id == id)
+                .unwrap()
+                .content
+                .is_none(),
+            "{diff:?}"
+        );
+    }
+    assert!(graph(&[&after])
+        .diff(&graph(&[&reordered]))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 相同分隔符规则覆盖枚举、参数属性和作为参数的具名声明，保留普通列表成员。
+#[test]
+fn child_list_separators_preserve_nonchild_values() {
+    for (before, after, owner) in [
+        ("enum E {}", "enum E { A = 1, B = 2 }", "E"),
+        ("class C { constructor(ordinary: string) {} }", "class C { constructor(public field: Type, ordinary: string, readonly other = 0) {} }", "constructor"),
+        ("const value = factory(before, after);", "const value = factory(function first() {}, before, function middle() {}, after, function last() {});", "value"),
+    ] {
+        let before = parse("a.ts", before);
+        let after = parse("a.ts", after);
+        let id = &named(&before, owner).node.data().id;
+        for (before, after) in [(&before, &after), (&after, &before)] {
+            let diff = graph(&[before]).diff(&graph(&[after])).unwrap();
+            assert!(diff.nodes.iter().find(|d| &d.id == id).unwrap().content.is_none(), "{owner}: {diff:?}");
+        }
+    }
+}
+
+/// 列表清理不能擦掉数组空位、逗号表达式或字面量中的有意义内容。
+#[test]
+fn own_content_keeps_semantic_punctuation_and_literal_text() {
+    let before = parse("a.ts", "const value = { ...build((a, b), c), ...right };");
+    let with_child = parse(
+        "a.ts",
+        "const value = { child: 1, ...build((a, b), c), ...right, last: 2 };",
+    );
+    let id = &named(&before, "value").node.data().id;
+    let diff = graph(&[&before]).diff(&graph(&[&with_child])).unwrap();
+    assert!(diff
+        .nodes
+        .iter()
+        .find(|d| &d.id == id)
+        .unwrap()
+        .content
+        .is_none());
+    for (before, after) in [
+        ("const value = [];", "const value = [,];"),
+        ("const value = [a];", "const value = [a,,];"),
+        (
+            "const value = build((a, b), c);",
+            "const value = build(a, b, c);",
+        ),
+        ("const value = /a,b/;", "const value = /ab/;"),
+        ("const value = tag`a, b`;", "const value = tag`a,b`;"),
+        (
+            "const value = <div>a, b</div>;",
+            "const value = <div>a,b</div>;",
+        ),
+    ] {
+        let before = parse("a.tsx", before);
+        let after = parse("a.tsx", after);
+        assert!(
+            !graph(&[&before])
+                .diff(&graph(&[&after]))
+                .unwrap()
+                .nodes
+                .is_empty(),
+            "{}",
+            before.source
+        );
+    }
+}
