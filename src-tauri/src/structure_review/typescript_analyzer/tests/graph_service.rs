@@ -640,3 +640,103 @@ fn graph_heterogeneous_union_members_preserve_ambiguity() {
         "{calls:?}"
     );
 }
+
+/// 同一仓库内路径在普通根、外部测试目录和名为 __tests__ 的仓库下产生完全相同的图。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_repository_relative_test_classification_ignores_checkout_ancestors() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut expected: Option<CodeGraph> = None;
+    for relative_root in ["ordinary/repo", "__tests__/repo", "named/__tests__"] {
+        let root = temporary.path().join(relative_root);
+        for (name, source) in [
+            ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["**/*.ts"]}"#),
+            ("src/main.ts", "export function production() { test(() => 1); } function test(callback: () => number) { return callback(); }"),
+            ("contest.ts", "export const contest = 1;"),
+            ("__tests__/main.ts", "export const directoryTest = 1;"),
+            ("src/main.test.ts", "export const suffixTest = 1;"),
+            ("src/main.spec.ts", "export const suffixSpec = 1;"),
+        ] {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+        let files = [
+            "src/main.ts",
+            "contest.ts",
+            "__tests__/main.ts",
+            "src/main.test.ts",
+            "src/main.spec.ts",
+        ];
+        let actual = analyze(&root, &files);
+        assert_eq!(
+            named(&actual.graph, "production")
+                .data()
+                .source
+                .as_ref()
+                .unwrap(),
+            "export function production() { test(() => 1); }"
+        );
+        assert!(nodes(&actual.graph)
+            .iter()
+            .any(|node| node.data().name.as_deref() == Some("contest")));
+        for name in ["directoryTest", "suffixTest", "suffixSpec"] {
+            assert!(!nodes(&actual.graph)
+                .iter()
+                .any(|node| node.data().name.as_deref() == Some(name)));
+        }
+        if let Some(expected) = &expected {
+            assert_eq!(actual.graph.root(), expected.root());
+            assert_eq!(nodes(&actual.graph), nodes(expected));
+            assert_eq!(actual.graph.external_symbols(), expected.external_symbols());
+        } else {
+            expected = Some(actual.graph);
+        }
+        let enabled = TypeScriptLanguageAnalyzer::default()
+            .analyze(&AnalysisInput {
+                repository_root: root,
+                files: files.iter().map(PathBuf::from).collect(),
+                options: crate::structure_review::code_graph::AnalysisOptions {
+                    include_tests: true,
+                },
+            })
+            .unwrap();
+        for name in ["directoryTest", "suffixTest", "suffixSpec"] {
+            assert_eq!(named(&enabled, name).data().name.as_deref(), Some(name));
+        }
+    }
+}
+
+/// 直接和继承的 configDir 别名保持确定本地调用，不得命中共享配置目录的竞争声明。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_config_dir_templates_retain_local_call() {
+    for inherited in [false, true] {
+        let fixture = super::super::config_dir_fixture::fixture(inherited);
+        let report = analyze(
+            fixture.path(),
+            &["app/src/main.ts", "app/src/dep.ts", "config/src/dep.ts"],
+        );
+        let target = named(&report.graph, "target").data().id.clone();
+        let wrong = named(&report.graph, "wrongTarget").data().id.clone();
+        let references = &named(&report.graph, "caller").data().references;
+        assert!(
+            references
+                .iter()
+                .any(|reference| reference.semantic == "code.calls"
+                    && reference.target == ReferenceTarget::Node(target.clone())),
+            "{inherited}: {references:?}"
+        );
+        assert!(!references
+            .iter()
+            .any(|reference| reference.target == ReferenceTarget::Node(wrong.clone())));
+        assert!(
+            !report
+                .notes
+                .iter()
+                .any(|note| note.message.contains("TS2307")),
+            "{:?}",
+            report.notes
+        );
+    }
+}

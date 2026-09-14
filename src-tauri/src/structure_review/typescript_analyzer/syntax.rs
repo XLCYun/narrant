@@ -154,7 +154,9 @@ impl Document {
                 checked.diagnostics
             )));
         }
-        let excluded = !options.include_tests && test_code::is_test(&path);
+        // file_scope 已校验词法/真实边界；分类只看仓库内部分，忽略 checkout 祖先名称。
+        let relative = path.strip_prefix(repository).map_err(failure)?;
+        let excluded = !options.include_tests && test_code::is_test(relative);
         let mut document = Self {
             uri: file_uri(&path).map_err(failure)?,
             path,

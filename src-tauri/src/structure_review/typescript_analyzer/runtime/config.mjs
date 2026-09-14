@@ -11,6 +11,8 @@ export function prepareConfigurations(context, ts, sources) {
   /** 把配置中的路径转成视图绝对路径，含不存在的输出目录也不能越界。 */
   function rewrite(value, base) {
     if (typeof value !== 'string') throw new Error('配置路径必须为字符串');
+    // 原样交给固定 TS 在最终消费配置处展开，不能提前绑定到共享配置的目录。
+    if (value.toLowerCase().startsWith('${configdir}')) return value;
     if (within(context.view, path.resolve(base, value))) return path.resolve(base, value);
     return mapped(context, path.resolve(base, value), true);
   }
@@ -112,20 +114,38 @@ export function prepareConfigurations(context, ts, sources) {
     const errors = [];
     const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: error => errors.push(error) });
     if (!parsed || errors.length) throw new Error(`无法确定项目上下文：${original}`);
-    // 继承全部完成后才验证相对映射，pathsBasePath 保留无 baseUrl 时的声明配置目录。
-    const effectiveBase = parsed.options.baseUrl ?? parsed.options.pathsBasePath ?? path.dirname(config);
-    for (const values of Object.values(parsed.options.paths ?? {})) {
-      for (const value of values) {
-        const candidate = path.resolve(effectiveBase, value);
-        if (!within(context.view, candidate)) throw new Error(`有效 paths 映射越界：${candidate}`);
-        let ancestor = candidate;
-        while (!fs.existsSync(ancestor) && ancestor !== context.view) ancestor = path.dirname(ancestor);
-        if (!within(context.view, fs.realpathSync(ancestor))) throw new Error(`有效 paths 符号链接越界：${candidate}`);
+    // 继承与模板展开全部完成后校验有效路径；不存在的输出和 glob 也检查最近现存祖先。
+    /** 同时检查视图及原始仓库，避免未复制的目录链接掩盖原始路径越界。 */
+    function validateEffectivePath(value, base, label) {
+      const candidate = path.resolve(base, value);
+      if (!within(context.view, candidate)) throw new Error(`有效 ${label} 映射越界：${candidate}`);
+      const originalPath = path.join(context.root, path.relative(context.view, candidate));
+      for (const [root, file] of [[context.view, candidate], [context.root, originalPath]]) {
+        let ancestor = file;
+        while (!fs.existsSync(ancestor) && ancestor !== root) ancestor = path.dirname(ancestor);
+        if (!within(root, fs.realpathSync(ancestor))) throw new Error(`有效 ${label} 符号链接越界：${file}`);
       }
+    }
+    const configDirectory = path.dirname(config);
+    for (const key of pathOptions) {
+      if (parsed.options[key] !== undefined) validateEffectivePath(parsed.options[key], configDirectory, key);
+    }
+    for (const key of listPathOptions) {
+      for (const value of parsed.options[key] ?? []) validateEffectivePath(value, configDirectory, key);
+    }
+    // pathsBasePath 保留无 baseUrl 时的声明配置目录；模板 paths 已由 TS 展开。
+    const effectiveBase = parsed.options.baseUrl ?? parsed.options.pathsBasePath ?? configDirectory;
+    for (const values of Object.values(parsed.options.paths ?? {})) {
+      for (const value of values) validateEffectivePath(value, effectiveBase, 'paths');
+    }
+    // 固定 TS 6.0.3 的配置解析结果包含展开后的有效文件模式，不自行重写模板语法。
+    const specs = parsed.options.configFile.configFileSpecs;
+    for (const key of ['validatedFilesSpec', 'validatedIncludeSpecs', 'validatedExcludeSpecs']) {
+      for (const value of specs[key] ?? []) validateEffectivePath(value, configDirectory, key);
     }
     for (const error of parsed.errors) context.note(original, `TS${error.code}: ${ts.flattenDiagnosticMessageText(error.messageText, '\n')}`);
     for (const file of parsed.fileNames) {
-      if (!within(context.view, file)) throw new Error(`配置成员越界：${file}`);
+      validateEffectivePath(file, configDirectory, '配置成员');
       candidates.get(file)?.push(config);
     }
     projects.push({ name: config, roots: [config], options: {} });

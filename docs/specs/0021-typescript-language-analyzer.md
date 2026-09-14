@@ -42,7 +42,9 @@ semantic graph queries stay in the language service.
 - Preserve original source, including JSDoc. Reuse the language service's native
   JSDoc inference, without a separate JSDoc parser, contract model or diff pipeline.
 - Test files are supported extensions whose basename ends in `.test.<ext>` or
-  `.spec.<ext>`, or whose path has a `__tests__` directory segment. With include_tests
+  `.spec.<ext>`, or whose repository-relative path has a `__tests__` directory segment.
+  Checkout-root names and ancestor directories outside the repository do not affect this
+  classification. With include_tests
   false they contribute no nodes/outgoing relationships; unknown/shared files remain.
   Calls named test/it/describe do not exclude a mixed production file.
 
@@ -192,6 +194,24 @@ test binary: the Rust Review lifecycle fixture passed with four before nodes, fo
 and six changes, and the TS/JS lifecycle-to-DTO fixture passed with a real cross-language call,
 original source, diff, TS2307 notes, coverage and workspace cleanup. The final all-targets
 Clippy check passed with warnings denied, and rustfmt check passed.
+
+A subsequent focused final-review correction preserves native `${configDir}` expansion at
+its consuming configuration, including inherited scalar/list paths and file patterns.
+Real-filesystem configuration regressions compare fixed-TS effective options, membership
+and alias resolution before/after preparation, and reject expanded paths or symlink
+ancestors escaping the repository/view. Actual fixed-service and public-graph fixtures
+retain the exact first-party declaration and definite local call despite a competing
+shared-config-directory declaration. Syntax and public-analyzer regressions also establish
+identical production identities/content/output under ordinary roots, external `__tests__`
+ancestors and repositories themselves named `__tests__`; real repository-relative test
+paths remain controlled by the test toggle. The broad-suite counts in this section precede
+these fixes; subsequent validation is focused, with strict all-targets Clippy and formatting.
+The standalone fixed-TS configuration checks run with
+`node --test src-tauri/src/structure_review/typescript_analyzer/tests/config.test.mjs`
+after provisioning the fixed development tools. These 14 checks, 45 focused Rust unit
+tests, and 13 serialized actual-service/public-graph tests passed. The controller then
+reran the affected real TS/JS Review lifecycle fixture on the fresh test binary outside
+the Cargo lock; it passed with 1 test and 698 filtered tests.
 
 The frontend suite passed 381 tests in 43 files. Type checking and ESLint passed, and the
 production build completed with the existing non-fatal warning for chunks larger than 500 kB.

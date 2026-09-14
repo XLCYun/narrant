@@ -10,7 +10,7 @@ pub(crate) fn language(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// 明确测试文件在关闭测试选项时整体排除。
+/// 只接受已校验的仓库相对路径；明确测试文件在关闭测试选项时整体排除。
 pub(super) fn is_test(path: &Path) -> bool {
     language(path).is_some()
         && (path.components().any(|c| c.as_os_str() == "__tests__")

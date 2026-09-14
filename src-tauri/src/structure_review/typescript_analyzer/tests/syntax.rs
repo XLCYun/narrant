@@ -984,3 +984,39 @@ fn alias_metadata_keeps_lexical_identity_and_public_routes() {
             .all(|o| (o.root_binding == imported.binding) == (name == "outer")));
     }
 }
+
+/// 仓库外的测试目录名称不影响生产声明、身份和内容，两个入口都使用仓库内路径。
+#[test]
+fn repository_relative_test_classification_ignores_checkout_ancestors() {
+    let source = "export function production() { test(() => 1); }";
+    let expected = parse("src/main.ts", source);
+    for root in [
+        "/ordinary/repo",
+        "/outer/__tests__/repo",
+        "/outer/__tests__",
+    ] {
+        let actual = Document::parse(
+            Path::new(root),
+            Path::new(root).join("src/main.ts"),
+            source.into(),
+            AnalysisOptions::default(),
+        )
+        .unwrap();
+        assert!(!actual.excluded, "{root}");
+        assert_eq!(actual.source, expected.source);
+        assert_eq!(actual.declarations.len(), expected.declarations.len());
+        for (actual, expected) in actual.declarations.iter().zip(&expected.declarations) {
+            assert_eq!(actual.node, expected.node);
+        }
+        assert!(
+            !Document::parse(
+                Path::new(root),
+                Path::new(root).join("contest.ts"),
+                source.into(),
+                AnalysisOptions::default(),
+            )
+            .unwrap()
+            .excluded
+        );
+    }
+}

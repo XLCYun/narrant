@@ -105,7 +105,7 @@ impl TypeScriptLanguageAnalyzer {
                 return Err(failure("TypeScript 分析器收到不支持的文件扩展名"));
             }
             let source = fs::read_to_string(&path).map_err(failure)?;
-            if input.options.include_tests || !test_code::is_test(&path) {
+            if input.options.include_tests || !test_code::is_test(relative) {
                 selected.insert(path, source);
             }
         }
@@ -188,3 +188,7 @@ pub(crate) type Result<T> = std::result::Result<T, AnalysisError>;
 pub(crate) fn failure(message: impl std::fmt::Display) -> AnalysisError {
     AnalysisError::new(message.to_string())
 }
+
+#[cfg(test)]
+#[path = "tests/config_dir_fixture.rs"]
+mod config_dir_fixture;

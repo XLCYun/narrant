@@ -788,3 +788,29 @@ fn fixed_service_inherited_paths_reject_effective_escape() {
     .unwrap_err();
     assert!(error.to_string().contains("有效 paths 映射越界"));
 }
+
+/// 原生配置成员必须注册为 configured 项目，模板别名需返回消费目录中的精确声明。
+#[test]
+#[ignore = "需要固定工具"]
+fn fixed_service_config_dir_templates_resolve_consumer_declaration() {
+    for inherited in [false, true] {
+        let fixture =
+            crate::structure_review::typescript_analyzer::config_dir_fixture::fixture(inherited);
+        let root = fixture.path().canonicalize().unwrap();
+        let mut session = start(&root, &["app/src/main.ts", "app/src/dep.ts"]);
+        let name = session.project.view_root.join("app/tsconfig.json");
+        for association in &session.project.files {
+            assert_eq!(association.projects, vec![name.clone()]);
+        }
+        let file = session.project.view_root.join("app/src/main.ts");
+        let source = session.project.source(&file).unwrap();
+        let position = text::position(&source, source.rfind("target").unwrap() as u32).unwrap();
+        let definitions = session.definitions(&file, position, &name).unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(
+            definitions[0].uri,
+            crate::lsp::file_uri(&root.join("app/src/dep.ts")).unwrap()
+        );
+        session.shutdown().unwrap();
+    }
+}

@@ -16,8 +16,24 @@ fn excluded_and_empty_inputs_do_not_require_tools_but_validate_paths() {
         options: Default::default(),
     };
     assert!(analyzer.analyze(&input).unwrap().root().contains.is_empty());
-    input.files = vec!["../hidden.test.ts".into()];
-    assert!(analyzer.analyze(&input).is_err());
+    fs::create_dir(repository.path().join("directory.test.ts")).unwrap();
+    fs::write(repository.path().join("invalid.test.ts"), [0xff]).unwrap();
+    for file in [
+        "../hidden.test.ts",
+        "missing.test.ts",
+        "directory.test.ts",
+        "invalid.test.ts",
+    ] {
+        input.files = vec![file.into()];
+        assert!(analyzer.analyze(&input).is_err(), "{file}");
+    }
+    #[cfg(unix)]
+    {
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), repository.path().join("link.test.ts")).unwrap();
+        input.files = vec!["link.test.ts".into()];
+        assert!(analyzer.analyze(&input).is_err());
+    }
     input.files.clear();
     assert!(analyzer.analyze(&input).unwrap().root().contains.is_empty());
 }
