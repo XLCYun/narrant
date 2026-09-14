@@ -49,26 +49,32 @@ impl StructureReviewError {
     }
 }
 
+/// 固定的一组语言分析入口；运行时只克隆闭包，不重新读取工具设置。
+#[derive(Clone)]
+struct LanguageAnalyzers {
+    rust: Arc<AnalyzeGraph>,
+    typescript: Arc<AnalyzeTypeScript>,
+}
+
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
 pub(crate) struct StructureReview {
-    analyze_rust: Arc<AnalyzeGraph>,
-    analyze_typescript: Arc<AnalyzeTypeScript>,
+    analyzers: LanguageAnalyzers,
 }
 
 impl StructureReview {
     /// 接收固定的 Rust 分析依赖；测试和最小宿主可以保留既有单语言装配。
     pub fn new(analyze_rust: Arc<AnalyzeGraph>) -> Self {
         Self {
-            analyze_rust,
-            analyze_typescript: Arc::new(|_, _| {
-                Err(AnalysisError::new("TypeScript 分析器尚未装配"))
-            }),
+            analyzers: LanguageAnalyzers {
+                rust: analyze_rust,
+                typescript: Arc::new(|_, _| Err(AnalysisError::new("TypeScript 分析器尚未装配"))),
+            },
         }
     }
 
     /// 装配共享的 TypeScript/JavaScript 分析入口；非空语言组才会调用它。
     pub fn with_typescript(mut self, analyze_typescript: Arc<AnalyzeTypeScript>) -> Self {
-        self.analyze_typescript = analyze_typescript;
+        self.analyzers.typescript = analyze_typescript;
         self
     }
 
@@ -82,16 +88,14 @@ impl StructureReview {
         options: AnalysisOptions,
         dependency_scope: RustDependencyScope,
     ) -> Result<StructureComparison, StructureReviewError> {
-        let analyze_rust = self.analyze_rust.clone();
-        let analyze_typescript = self.analyze_typescript.clone();
+        let analyzers = self.analyzers.clone();
         let result_review_id = review_id.to_owned();
         let result_snapshot_id = snapshot_id.to_owned();
         lifecycle
             .run_in_workspace(operation, review_id, snapshot_id, move |workspace| {
                 run(
                     workspace,
-                    analyze_rust,
-                    analyze_typescript,
+                    analyzers,
                     result_review_id,
                     result_snapshot_id,
                     options,
@@ -117,8 +121,7 @@ impl From<ReviewLifecycleError> for StructureReviewError {
 /// 生命周期执行范围保护目录；两侧 worker 在返回前完成分析与 before 回收。
 fn run(
     workspace: &SnapshotWorkspace,
-    analyze_rust: Arc<AnalyzeGraph>,
-    analyze_typescript: Arc<AnalyzeTypeScript>,
+    analyzers: LanguageAnalyzers,
     review_id: String,
     snapshot_id: String,
     options: AnalysisOptions,
@@ -143,8 +146,7 @@ fn run(
             // 在 checkout 仍存活时捕获分析器 panic，随后显式清理并收集两个错误。
             let result = run_worker(stop, &errors, || {
                 analyze_side(
-                    &analyze_rust,
-                    &analyze_typescript,
+                    &analyzers,
                     &workspace.before_path,
                     before_files,
                     options,
@@ -160,8 +162,7 @@ fn run(
         });
         let after = run_worker(stop, &errors, || {
             analyze_side(
-                &analyze_rust,
-                &analyze_typescript,
+                &analyzers,
                 &workspace.head_path,
                 after_files,
                 options,
@@ -279,8 +280,7 @@ fn panic_error(panic: Box<dyn std::any::Any + Send>) -> StructureReviewError {
 
 /// 当前侧没有文件时直接提供空图，避免启动语言服务器或伪造目录。
 fn analyze_side(
-    analyze_rust: &Arc<AnalyzeGraph>,
-    analyze_typescript: &Arc<AnalyzeTypeScript>,
+    analyzers: &LanguageAnalyzers,
     repository: &std::path::Path,
     files: SideFiles,
     options: AnalysisOptions,
@@ -310,7 +310,7 @@ fn analyze_side(
             let errors = &errors;
             threads.spawn(move || {
                 run_worker(stop, errors, || {
-                    analyze_rust(&input, cancelled.clone(), dependency_scope)
+                    (analyzers.rust)(&input, cancelled.clone(), dependency_scope)
                         .map(|graph| AnalysisReport {
                             graph,
                             notes: Vec::new(),
@@ -321,7 +321,7 @@ fn analyze_side(
         });
         let typescript = typescript_input.and_then(|input| {
             run_worker(stop, &errors, || {
-                analyze_typescript(&input, cancelled.clone()).map_err(analysis_error)
+                (analyzers.typescript)(&input, cancelled.clone()).map_err(analysis_error)
             })
         });
         let rust = rust.and_then(|worker| {

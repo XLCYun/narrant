@@ -64,6 +64,10 @@ async fn sequential(
     analyze_typescript: Arc<AnalyzeTypeScript>,
     dependency_scope: RustDependencyScope,
 ) -> StructureComparison {
+    let analyzers = LanguageAnalyzers {
+        rust: analyze,
+        typescript: analyze_typescript,
+    };
     let operation = OperationContext::background();
     let review_id = fixture.presentation.review_id.clone();
     let snapshot_id = fixture.presentation.snapshot_id.clone();
@@ -80,8 +84,7 @@ async fn sequential(
                     .then(|| workspace::BeforeCheckout::prepare(workspace, operation).unwrap());
                 let cancelled: CancellationCheck = Arc::new(|| false);
                 let before = analyze_side(
-                    &analyze,
-                    &analyze_typescript,
+                    &analyzers,
                     &workspace.before_path,
                     before_files,
                     AnalysisOptions::default(),
@@ -91,8 +94,7 @@ async fn sequential(
                 )
                 .unwrap();
                 let after = analyze_side(
-                    &analyze,
-                    &analyze_typescript,
+                    &analyzers,
                     &workspace.head_path,
                     after_files,
                     AnalysisOptions::default(),

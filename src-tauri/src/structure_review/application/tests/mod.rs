@@ -268,10 +268,13 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
             }],
         })
     });
+    let analyzers = LanguageAnalyzers {
+        rust: analyze_rust,
+        typescript: analyze_typescript,
+    };
     let not_cancelled: CancellationCheck = Arc::new(|| false);
     let report = analyze_side(
-        &analyze_rust,
-        &analyze_typescript,
+        &analyzers,
         repository.path(),
         SideFiles {
             rust: vec!["lib.rs".into()],
@@ -306,10 +309,13 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
     let unavailable_rust: Arc<AnalyzeGraph> = Arc::new(|_, _, _| panic!("空组不应启动 Rust"));
     let unavailable_typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| panic!("空组不应启动 TypeScript"));
+    let unavailable = LanguageAnalyzers {
+        rust: unavailable_rust,
+        typescript: unavailable_typescript,
+    };
     let not_cancelled: CancellationCheck = Arc::new(|| false);
     let empty = analyze_side(
-        &unavailable_rust,
-        &unavailable_typescript,
+        &unavailable,
         repository.path(),
         SideFiles::default(),
         AnalysisOptions::default(),
@@ -328,9 +334,9 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
             notes: vec![],
         })
     });
+    let colliding = LanguageAnalyzers { rust, typescript };
     let error = analyze_side(
-        &rust,
-        &typescript,
+        &colliding,
         repository.path(),
         SideFiles {
             rust: vec!["lib.rs".into()],
@@ -369,9 +375,9 @@ fn language_failure_cancels_its_peer_and_preserves_original_cause() {
     });
     let typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| Err(AnalysisError::new("typescript original failure")));
+    let failing = LanguageAnalyzers { rust, typescript };
     let error = analyze_side(
-        &rust,
-        &typescript,
+        &failing,
         repository.path(),
         SideFiles {
             rust: vec!["lib.rs".into()],
