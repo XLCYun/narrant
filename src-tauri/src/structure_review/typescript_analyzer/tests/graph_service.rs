@@ -602,3 +602,41 @@ fn graph_repository_ambient_functions_and_nonambient_signature_boundary() {
                     }));
     }
 }
+
+/// 同名方法和箭头字段是不同运行时候选，联合顺序不能制造确定调用。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_heterogeneous_union_members_preserve_ambiguity() {
+    let directory = fixture(&[
+        ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["*.ts"]}"#),
+        ("main.ts", "class A { method() {} } class B { method = () => {}; } function forward(value: A | B) { value.method(); } function reversed(value: B | A) { value.method(); } class method {} class Producer { method(): method { return new method(); } } function single(value: Producer) { value.method(); }"),
+    ]);
+    let report = analyze(directory.path(), &["main.ts"]);
+    for name in ["forward", "reversed"] {
+        let calls = named(&report.graph, name)
+            .data()
+            .references
+            .iter()
+            .filter(|r| r.semantic == "code.calls")
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1, "{name}: {calls:?}");
+        assert_eq!(
+            calls[0].target,
+            ReferenceTarget::Unresolved {
+                name: "method".into()
+            },
+            "{name}: {calls:?}"
+        );
+    }
+    let calls = named(&report.graph, "single")
+        .data()
+        .references
+        .iter()
+        .filter(|r| r.semantic == "code.calls")
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        matches!(calls[0].target, ReferenceTarget::Node(_)),
+        "{calls:?}"
+    );
+}

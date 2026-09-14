@@ -123,28 +123,12 @@ impl Resolver {
                 targets.insert(target.declaration.node.data().id.clone(), target);
             }
         }
-        if occurrence.kind == OccurrenceKind::Call
-            && targets.values().any(|t| {
-                matches!(
-                    t.declaration.node.data().native_kind.as_str(),
-                    "method"
-                        | "static_method"
-                        | "object_method"
-                        | "field"
-                        | "static_field"
-                        | "object_property"
-                )
-            })
-        {
-            let kinds = targets
-                .values()
-                .map(|t| {
-                    (
-                        t.declaration.node.data().native_kind.clone(),
-                        t.declaration.node.data().name.clone(),
-                    )
-                })
-                .collect::<BTreeSet<_>>();
+        let member_names = targets
+            .values()
+            .filter_map(member_name)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        if occurrence.kind == OccurrenceKind::Call && !member_names.is_empty() {
             for location in session.type_definitions(file, occurrence.position, project)? {
                 if location.unverified {
                     return Ok(None);
@@ -158,11 +142,14 @@ impl Resolver {
                 )? {
                     for target in additional {
                         let data = target.declaration.node.data();
-                        // typeDefinition 有时返回函数返回类型；只接纳同名同种成员声明作为补充证据。
-                        if kinds.contains(&(data.native_kind.clone(), data.name.clone())) {
+                        // 同名成员可能采用方法或函数值字段；返回类型本身不是成员，不能混入候选。
+                        if member_name(&target).is_some_and(|name| member_names.contains(name)) {
                             targets.insert(data.id.clone(), target);
                         }
                     }
+                } else {
+                    // 无法映射的补充位置也不能被悄悄丢弃后恢复确定性。
+                    uncertain = true;
                 }
             }
         }
@@ -451,6 +438,27 @@ impl Resolver {
 /// 运行时的相对包路径仍保留；安装目录和临时侧路径永不进入身份。
 fn runtime_id(id: &str) -> String {
     id.replacen(":repo:", ":runtime:", 1)
+}
+
+/// 同名成员证据跨越方法、字段和结构声明；是否可调用在完整候选集合上统一检查。
+fn member_name(target: &Target) -> Option<&str> {
+    let data = target.declaration.node.data();
+    matches!(
+        data.native_kind.as_str(),
+        "method"
+            | "static_method"
+            | "object_method"
+            | "field"
+            | "static_field"
+            | "object_property"
+            | "property"
+            | "parameter_property"
+            | "accessor_property"
+            | "getter"
+            | "setter"
+    )
+    .then_some(data.name.as_deref())
+    .flatten()
 }
 
 /// 明确声明类别与语义意图对应；裸调用签名和 import alias 永远不是运行时实现。
