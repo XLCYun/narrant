@@ -69,7 +69,14 @@ Extract imports/re-exports, statically confirmed calls (including new where mode
 writes, function-value references, inheritance/implementation and field/property type
 relationships consistent with 0018 and the existing Rust scope. Keep a syntax occurrence
 even if call hierarchy omits it. Do not turn an import alias or a type-only signature into
-a definite runtime call. Dynamic/ambiguous targets remain Unresolved.
+a definite runtime call. Dynamic/ambiguous targets remain Unresolved. Named function declarations in repository
+`.d.ts`/`.d.mts`/`.d.cts` files and explicit `declare function` declarations (including
+legal ambient contexts) introduce function-value bindings and may be static call targets:
+selected declarations are Node, unselected declarations are Repository External. Bare
+structural call signatures/interface methods and isolated non-ambient overload signatures
+without an implementation do not establish runtime call targets. These edges identify
+verified source declarations; they do not assert that ambient declarations match a deployed
+runtime implementation.
 
 Custom JSX occurrences use `jsx.uses_component`, distinct from `code.calls`. Intrinsic
 tags such as div/button have no nodes or component edges. Expressions and callbacks

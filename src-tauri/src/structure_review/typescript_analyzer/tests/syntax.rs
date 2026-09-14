@@ -957,3 +957,30 @@ fn sparse_array_hole_positions_and_counts_remain_distinct() {
         }
     }
 }
+
+/// 类型专用导入的非法值读取仍保留词法声明；局部同名值不可被外层导入吞掉。
+#[test]
+fn alias_metadata_keeps_lexical_identity_and_public_routes() {
+    let document = parse("a.ts", "// @ts-nocheck\nimport type {Model} from './model'; export {Model as Public}; export default Model; function outer() { Model.run(); new Model(); } function shadow() { class Model { static run() {} } Model.run(); new Model(); }");
+    let imported = document.aliases.iter().find(|a| a.import).unwrap();
+    assert!(imported.type_only);
+    for export in document.aliases.iter().filter(|a| !a.import) {
+        assert_eq!(export.binding, imported.binding);
+    }
+    for name in ["outer", "shadow"] {
+        let owner = &named(&document, name).node.data().id;
+        let calls = document
+            .occurrences
+            .iter()
+            .filter(|o| {
+                &o.owner == owner
+                    && matches!(o.kind, OccurrenceKind::Call | OccurrenceKind::Construct)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|o| o.root_binding.is_some()));
+        assert!(calls
+            .iter()
+            .all(|o| (o.root_binding == imported.binding) == (name == "outer")));
+    }
+}

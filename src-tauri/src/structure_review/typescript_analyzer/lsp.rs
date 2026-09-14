@@ -7,7 +7,7 @@ use super::{
 use crate::lsp::{CancellationCheck, LspClient, LspOptions, Position, Range};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -30,6 +30,7 @@ pub(crate) struct CheckedLocation {
 }
 
 /// 调用层级对象保留名称与完整范围，语义层自行匹配语法声明。
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct HierarchyItem {
     pub name: String,
@@ -38,6 +39,7 @@ pub(crate) struct HierarchyItem {
 }
 
 /// 调用位置始终位于调用方文件；incoming 的调用方为 target，outgoing 为查询文件。
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct CallEvidence {
     pub target: HierarchyItem,
@@ -50,6 +52,8 @@ pub(crate) struct TypeScriptLsp {
     project: PreparedProject,
     diagnosed: BTreeSet<(PathBuf, PathBuf)>,
     diagnosed_options: BTreeSet<PathBuf>,
+    /// 原生诊断指出类型专用导入/导出被用作值；不能因 definition 越过别名而伪造调用。
+    runtime_type_errors: BTreeMap<(PathBuf, PathBuf), Vec<CheckedRange>>,
 }
 impl TypeScriptLsp {
     /// 配置注册完成后才打开文档，逐一验证真实项目与成员并收集显式诊断。
@@ -79,6 +83,7 @@ impl TypeScriptLsp {
             project,
             diagnosed: BTreeSet::new(),
             diagnosed_options: BTreeSet::new(),
+            runtime_type_errors: BTreeMap::new(),
         };
         for (index, registration) in session
             .project
@@ -152,6 +157,8 @@ impl TypeScriptLsp {
                 {
                     if session.project.notes.len() < 200 {
                         session.project.notes.push(AnalysisNote {
+                            code: Some("typescript.inferred_project".into()),
+                            project: Some(registration.name.clone()),
                             file: file.original.clone(),
                             message: format!(
                                 "未配置文件使用 {}/{} ES2022 推断配置",
@@ -282,10 +289,31 @@ impl TypeScriptLsp {
         position: Position,
         name: &Path,
     ) -> Result<Vec<CheckedLocation>> {
+        self.locations("definition", file, position, name)
+    }
+
+    /// 联合成员调用的 definition 可能只给出选中签名，类型定义补充同名成员的完整候选。
+    pub fn type_definitions(
+        &mut self,
+        file: &Path,
+        position: Position,
+        name: &Path,
+    ) -> Result<Vec<CheckedLocation>> {
+        self.locations("typeDefinition", file, position, name)
+    }
+
+    /// 两种定义查询共用严格项目与源码位置检查，不扩大服务的输入边界。
+    fn locations(
+        &mut self,
+        command: &str,
+        file: &Path,
+        position: Position,
+        name: &Path,
+    ) -> Result<Vec<CheckedLocation>> {
         self.guarded(|session| {
             let arguments = session.query_arguments(file, position, name)?;
-            let response = session.raw("definition", arguments, true)?;
-            let result = array(&response, "definition")?
+            let response = session.raw(command, arguments, true)?;
+            let result = array(&response, command)?
                 .iter()
                 .map(|value| {
                     let file = Path::new(
@@ -302,6 +330,7 @@ impl TypeScriptLsp {
     }
 
     /// 返回指定项目的层级入口，供需要从重载或复合声明继续查询的语义层使用。
+    #[cfg(test)]
     pub fn prepare_hierarchy(
         &mut self,
         file: &Path,
@@ -326,6 +355,7 @@ impl TypeScriptLsp {
     }
 
     /// 查询出边，每个 from_span 都在当前查询文件中校验。
+    #[cfg(test)]
     pub fn outgoing_calls(
         &mut self,
         file: &Path,
@@ -336,6 +366,7 @@ impl TypeScriptLsp {
     }
 
     /// 查询入边，每个 from_span 都在返回的调用方文件中校验。
+    #[cfg(test)]
     pub fn incoming_calls(
         &mut self,
         file: &Path,
@@ -346,6 +377,7 @@ impl TypeScriptLsp {
     }
 
     /// 出入边共用明确项目选择和严格 span 校验，不使用标准 LSP 的隐式默认项目。
+    #[cfg(test)]
     fn calls(
         &mut self,
         file: &Path,
@@ -385,6 +417,7 @@ impl TypeScriptLsp {
     }
 
     /// 层级选择范围及完整范围都必须落在同一份受控源码中。
+    #[cfg(test)]
     fn hierarchy_item(&self, value: &Value) -> Result<HierarchyItem> {
         let file = Path::new(
             value["file"]
@@ -452,40 +485,91 @@ impl TypeScriptLsp {
                     json!({"file":file, "projectFileName":name, "includeLinePosition":true}),
                     true,
                 )?;
-                for diagnostic in array(&diagnostics, command)?.iter().take(40) {
-                    let code = diagnostic["code"]
-                        .as_u64()
-                        .ok_or_else(|| failure("诊断缺少 code"))?;
-                    let message = diagnostic
-                        .get("text")
-                        .or_else(|| diagnostic.get("message"))
-                        .or_else(|| diagnostic.get("messageText"))
-                        .ok_or_else(|| failure("诊断缺少说明"))?;
-                    let message = diagnostic_message(message)?;
-                    if session.project.notes.len() < 200 {
-                        let original = session
-                            .project
-                            .sources
-                            .get(file)
-                            .map(|source| source.original.clone())
-                            .unwrap_or_else(|| file.to_path_buf());
-                        session.project.notes.push(AnalysisNote {
-                            file: original,
-                            message: format!(
-                                "{} TS{code}: {message}",
-                                name.strip_prefix(&session.project.view_root)
-                                    .map_err(failure)?
-                                    .display()
-                            )
-                            .chars()
-                            .take(4096)
-                            .collect(),
-                        });
+                let mut batches = vec![(file.to_path_buf(), diagnostics)];
+                // TS 的 compilerOptionsDiagnostics-full 丢弃附带配置文件的诊断，必须显式查询配置。
+                if command == "compilerOptionsDiagnostics-full"
+                    && session.project.config_files.contains(&name.to_path_buf())
+                {
+                    session.project.checked_path(name)?;
+                    let diagnostics = session.raw(
+                        "semanticDiagnosticsSync",
+                        json!({"file":name,"projectFileName":name,"includeLinePosition":true}),
+                        true,
+                    )?;
+                    batches.push((name.to_path_buf(), diagnostics));
+                }
+                for (diagnostic_file, diagnostics) in batches {
+                    for (index, diagnostic) in array(&diagnostics, command)?.iter().enumerate() {
+                        let code = diagnostic["code"]
+                            .as_u64()
+                            .ok_or_else(|| failure("诊断缺少 code"))?;
+                        if matches!(code, 1361 | 1362 | 2693) {
+                            let start = diagnostic
+                                .get("startLocation")
+                                .or_else(|| diagnostic.get("start"));
+                            let end = diagnostic
+                                .get("endLocation")
+                                .or_else(|| diagnostic.get("end"));
+                            let start = start.ok_or_else(|| failure("运行时类型错误缺少起点"))?;
+                            let end = end.ok_or_else(|| failure("运行时类型错误缺少终点"))?;
+                            let span = checked_range(
+                                &session.project.source(&diagnostic_file)?,
+                                &json!({"start":start,"end":end}),
+                            )?;
+                            session
+                                .runtime_type_errors
+                                .entry((diagnostic_file.clone(), name.to_path_buf()))
+                                .or_default()
+                                .push(span);
+                        }
+                        if index >= 40 {
+                            continue;
+                        }
+                        let message = diagnostic
+                            .get("text")
+                            .or_else(|| diagnostic.get("message"))
+                            .or_else(|| diagnostic.get("messageText"))
+                            .ok_or_else(|| failure("诊断缺少说明"))?;
+                        let message = diagnostic_message(message)?;
+                        if session.project.notes.len() < 200 {
+                            let original = session
+                                .project
+                                .sources
+                                .get(&diagnostic_file)
+                                .map(|source| source.original.clone())
+                                .or_else(|| session.project.metadata.get(&diagnostic_file).cloned())
+                                .unwrap_or_else(|| diagnostic_file.clone());
+                            session.project.notes.push(AnalysisNote {
+                                code: Some(format!("typescript.TS{code}")),
+                                project: Some(name.to_path_buf()),
+                                file: original,
+                                message: format!(
+                                    "{} TS{code}: {message}",
+                                    name.strip_prefix(&session.project.view_root)
+                                        .map_err(failure)?
+                                        .display()
+                                )
+                                .chars()
+                                .take(4096)
+                                .collect(),
+                            });
+                        }
                     }
                 }
             }
             Ok(())
         })
+    }
+
+    /// 按真实项目和原始位置检查原生诊断，不用导入名称猜测词法绑定。
+    pub fn runtime_type_error(&self, file: &Path, offset: u32, name: &Path) -> bool {
+        self.runtime_type_errors
+            .get(&(file.to_path_buf(), name.to_path_buf()))
+            .is_some_and(|ranges| {
+                ranges
+                    .iter()
+                    .any(|range| range.start_byte <= offset && offset < range.end_byte)
+            })
     }
 
     /// 完成 shutdown/exit 后销毁客户端；即使关闭失败也先回收进程再释放视图。

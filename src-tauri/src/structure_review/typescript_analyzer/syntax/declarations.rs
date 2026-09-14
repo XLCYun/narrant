@@ -13,6 +13,9 @@ pub(super) struct RawDeclaration {
     pub parent: Option<usize>,
     pub parts: Vec<DeclarationPart>,
     pub prefix: String,
+    pub callable_value: Option<Span>,
+    pub ambient_function: bool,
+    pub alias_selection: Option<Span>,
 }
 
 /// 声明遍历栈同时追踪词法所有者与未建模的回调、语句包装。
@@ -35,11 +38,11 @@ impl<'a> Collector<'a> {
         category: CodeCategory,
         kind: &'static str,
         name: Option<String>,
-        span: Span,
-        selection: Span,
+        spans: (Span, Span),
         body: Option<Span>,
         prefix: String,
     ) -> usize {
+        let (span, selection) = spans;
         let parent = self.stack.last().and_then(|(_, owner)| *owner);
         let part = DeclarationPart {
             span,
@@ -80,6 +83,9 @@ impl<'a> Collector<'a> {
             parent,
             parts: vec![part],
             prefix,
+            callable_value: None,
+            ambient_function: false,
+            alias_selection: None,
         });
         index
     }
@@ -139,8 +145,7 @@ impl<'a> Visit<'a> for Collector<'a> {
                 CodeCategory::ExecutionRegion,
                 "statement",
                 None,
-                span,
-                Span::new(span.start, span.start),
+                (span, Span::new(span.start, span.start)),
                 Some(span),
                 String::new(),
             );
@@ -452,7 +457,44 @@ impl<'a> Visit<'a> for Collector<'a> {
             _ => None,
         };
         if let Some((category, kind, name, selection, body)) = shape {
-            let id = self.push(category, kind, name, node.span(), selection, body, prefix);
+            let id = self.push(category, kind, name, (node.span(), selection), body, prefix);
+            if let AstKind::Function(f) = node {
+                self.items[id].ambient_function |= f.id.is_some()
+                    && (f.declare
+                        || self.stack.iter().any(|(ancestor, _)| match ancestor {
+                            AstKind::TSNamespaceDeclaration(d) => d.declare,
+                            AstKind::TSExternalModuleDeclaration(d) => d.declare,
+                            AstKind::TSGlobalDeclaration(d) => d.declare,
+                            _ => false,
+                        }));
+            }
+            let initializer = match node {
+                AstKind::VariableDeclarator(v) => v.init.as_ref(),
+                AstKind::ObjectProperty(p) if !p.method => Some(&p.value),
+                AstKind::PropertyDefinition(p) => p.value.as_ref(),
+                _ => None,
+            }
+            .map(Expression::get_inner_expression);
+            self.items[id].callable_value = initializer
+                .filter(|e| {
+                    matches!(
+                        e,
+                        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+                    )
+                })
+                .map(GetSpan::span);
+            if let AstKind::VariableDeclarator(v) = node {
+                let constant = self.stack.last().is_some_and(|(n, _)| {
+                    matches!(n,
+                    AstKind::VariableDeclaration(d) if d.kind == VariableDeclarationKind::Const)
+                });
+                if constant && matches!(v.id, BindingPattern::BindingIdentifier(_)) {
+                    self.items[id].alias_selection = match initializer {
+                        Some(Expression::Identifier(i)) => Some(i.span),
+                        _ => None,
+                    };
+                }
+            }
             if let AstKind::VariableDeclarator(v) = node {
                 let part = self.items[id].parts.last_mut().unwrap();
                 part.names =

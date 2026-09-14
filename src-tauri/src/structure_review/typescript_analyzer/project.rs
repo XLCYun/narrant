@@ -24,6 +24,10 @@ pub(crate) struct ProjectRegistration {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AnalysisNote {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub project: Option<PathBuf>,
     pub file: PathBuf,
     pub message: String,
 }

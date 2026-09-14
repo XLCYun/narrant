@@ -16,6 +16,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
+pub(crate) mod aliases;
 mod content;
 mod declarations;
 mod occurrences;
@@ -42,6 +43,12 @@ pub(crate) struct Declaration {
     pub span: Span,
     pub selections: Vec<Span>,
     pub parts: Vec<DeclarationPart>,
+    /// 只有直接函数初始化器提供运行时函数值证据，普通类型注解不提供。
+    pub callable_value: Option<Span>,
+    /// 声明文件或显式 ambient 上下文中的具名函数引入值绑定；不包含结构调用签名。
+    pub ambient_function: bool,
+    /// const 的透明直接引用初始化器；别名续查不能跨条件、工厂或可写绑定。
+    pub alias_selection: Option<Span>,
 }
 
 /// 语法意图只是语义解析的候选证据，不等于已确认关系。
@@ -84,6 +91,11 @@ pub(crate) struct Occurrence {
     pub selection: Span,
     pub position: Position,
     pub text: String,
+    /// 来自原始 AST 的规范引用名；普通注释和排版不能改变未解析关系身份。
+    pub semantic_text: String,
+    /// 调用/读取根标识符在本文件的词法声明位置，以及后续静态成员路径。
+    pub root_binding: Option<Span>,
+    pub members: Vec<String>,
     pub dynamic: bool,
     pub type_only: bool,
     pub import_alias: bool,
@@ -99,6 +111,7 @@ pub(crate) struct Document {
     pub declarations: Vec<Declaration>,
     pub occurrences: Vec<Occurrence>,
     pub excluded: bool,
+    pub aliases: Vec<aliases::Alias>,
 }
 impl Document {
     /// 先解析原文，再用 Oxc 生成无注释规范代码；两次 typed AST 遍历按声明配对。
@@ -150,6 +163,7 @@ impl Document {
             declarations: vec![],
             occurrences: vec![],
             excluded,
+            aliases: vec![],
         };
         if excluded {
             return Ok(document);
@@ -274,9 +288,18 @@ impl Document {
                     .flat_map(|p| p.names.iter().copied())
                     .collect(),
                 parts: raw.parts.clone(),
+                callable_value: raw.callable_value,
+                ambient_function: raw.ambient_function
+                    || source_type.is_typescript_definition()
+                        && raw.kind == "function"
+                        && raw.name.is_some(),
+                alias_selection: raw.alias_selection,
             });
         }
-        let mut references = occurrences::Collector::new(&document);
+        let mut aliases = aliases::Collector::new(checked.semantic.scoping(), parsed.program.span);
+        aliases.visit_program(&parsed.program);
+        document.aliases = aliases.aliases;
+        let mut references = occurrences::Collector::new(&document, checked.semantic.scoping());
         references.visit_program(&parsed.program);
         document.occurrences = references.finish()?;
         Ok(document)
