@@ -29,6 +29,13 @@ pub(crate) struct CheckedLocation {
     pub span: CheckedRange,
 }
 
+/// tsserver 的未验证定义可能指向不存在的文件，不能作为已读取的源码位置。
+#[derive(Clone, Debug)]
+pub(crate) enum DefinitionEvidence {
+    Checked(CheckedLocation),
+    Unverified,
+}
+
 /// 调用层级对象保留名称与完整范围，语义层自行匹配语法声明。
 #[cfg(test)]
 #[derive(Clone, Debug)]
@@ -288,7 +295,7 @@ impl TypeScriptLsp {
         file: &Path,
         position: Position,
         name: &Path,
-    ) -> Result<Vec<CheckedLocation>> {
+    ) -> Result<Vec<DefinitionEvidence>> {
         self.locations("definition", file, position, name)
     }
 
@@ -298,30 +305,36 @@ impl TypeScriptLsp {
         file: &Path,
         position: Position,
         name: &Path,
-    ) -> Result<Vec<CheckedLocation>> {
+    ) -> Result<Vec<DefinitionEvidence>> {
         self.locations("typeDefinition", file, position, name)
     }
 
-    /// 两种定义查询共用严格项目与源码位置检查，不扩大服务的输入边界。
+    /// 未验证定义只保留不确定性；已验证定义共用严格项目与源码位置检查。
     fn locations(
         &mut self,
         command: &str,
         file: &Path,
         position: Position,
         name: &Path,
-    ) -> Result<Vec<CheckedLocation>> {
+    ) -> Result<Vec<DefinitionEvidence>> {
         self.guarded(|session| {
             let arguments = session.query_arguments(file, position, name)?;
             let response = session.raw(command, arguments, true)?;
             let result = array(&response, command)?
                 .iter()
                 .map(|value| {
+                    // 相对资源和缺失模块可返回 unverified；协议不保证这些文件存在。
+                    if definition_unverified(value)? {
+                        return Ok(DefinitionEvidence::Unverified);
+                    }
                     let file = Path::new(
                         value["file"]
                             .as_str()
                             .ok_or_else(|| failure("定义缺少 file"))?,
                     );
-                    session.location(file, value)
+                    session
+                        .location(file, value)
+                        .map(DefinitionEvidence::Checked)
                 })
                 .collect::<Result<Vec<_>>>()?;
             session.validate_project_inner(file, name)?;
@@ -444,12 +457,7 @@ impl TypeScriptLsp {
     /// 所有位置先验证范围和来源，再生成原始身份 URI。
     fn location(&self, file: &Path, span: &Value) -> Result<CheckedLocation> {
         let view_path = self.project.checked_path(file)?;
-        let unverified = match span.get("unverified") {
-            None => false,
-            Some(value) => value
-                .as_bool()
-                .ok_or_else(|| failure("定义 unverified 标记无效"))?,
-        };
+        let unverified = definition_unverified(span)?;
         let span = checked_range(&self.project.source(&view_path)?, span)?;
         let uri = self.project.original_uri(&view_path)?;
         Ok(CheckedLocation {
@@ -579,6 +587,16 @@ impl TypeScriptLsp {
             .ok_or_else(|| failure("TypeScript 会话已经关闭"))?
             .shutdown()
             .map_err(lsp_failure)
+    }
+}
+
+/// 只接受协议明确的布尔标记；缺省表示服务提供了已验证的定义。
+fn definition_unverified(value: &Value) -> Result<bool> {
+    match value.get("unverified") {
+        None => Ok(false),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| failure("定义 unverified 标记无效")),
     }
 }
 

@@ -1,7 +1,7 @@
 //! 类型专用别名路线由词法绑定和原始模块语法确认，不依赖可被 nocheck 屏蔽的诊断。
 use super::Resolver;
 use crate::structure_review::typescript_analyzer::{
-    lsp::{CheckedLocation, TypeScriptLsp},
+    lsp::{CheckedLocation, DefinitionEvidence, TypeScriptLsp},
     syntax::{aliases::Alias, Occurrence},
     text, Result,
 };
@@ -86,8 +86,11 @@ impl Resolver {
             if modules.is_empty() {
                 return Ok(true);
             }
-            for module in modules {
-                if module.unverified || !self.load(session, &module)? {
+            for definition in modules {
+                let DefinitionEvidence::Checked(module) = definition else {
+                    return Ok(true);
+                };
+                if !self.load(session, &module)? {
                     return Ok(true);
                 }
                 if self.export_route(session, &module, &names, project, &mut visited.clone())? {

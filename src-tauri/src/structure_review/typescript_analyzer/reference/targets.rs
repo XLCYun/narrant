@@ -3,7 +3,7 @@
 mod aliases;
 use super::super::{
     failure, identity,
-    lsp::{CheckedLocation, TypeScriptLsp},
+    lsp::{CheckedLocation, DefinitionEvidence, TypeScriptLsp},
     syntax::{Declaration, Document, Occurrence, OccurrenceKind},
     Result,
 };
@@ -93,11 +93,11 @@ impl Resolver {
         let mut targets = BTreeMap::new();
         let mut modules = BTreeSet::new();
         let mut uncertain = false;
-        for location in definitions {
-            if location.unverified {
+        for definition in definitions {
+            let DefinitionEvidence::Checked(location) = definition else {
                 uncertain = true;
                 continue;
-            }
+            };
             if matches!(
                 occurrence.kind,
                 OccurrenceKind::Import | OccurrenceKind::Reexport
@@ -129,10 +129,10 @@ impl Resolver {
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         if occurrence.kind == OccurrenceKind::Call && !member_names.is_empty() {
-            for location in session.type_definitions(file, occurrence.position, project)? {
-                if location.unverified {
+            for definition in session.type_definitions(file, occurrence.position, project)? {
+                let DefinitionEvidence::Checked(location) = definition else {
                     return Ok(None);
-                }
+                };
                 if let Some(additional) = self.follow(
                     session,
                     &location,
@@ -287,7 +287,10 @@ impl Resolver {
                 return Ok(None);
             }
             let mut result = Vec::new();
-            for next in definitions {
+            for definition in definitions {
+                let DefinitionEvidence::Checked(next) = definition else {
+                    return Ok(None);
+                };
                 let Some(targets) =
                     self.follow(session, &next, project, kind, &mut visited.clone())?
                 else {

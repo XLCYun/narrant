@@ -37,7 +37,12 @@ impl PreparedProject {
         {
             return Err(failure("服务返回非规范路径"));
         }
-        let canonical = file.canonicalize().map_err(failure)?;
+        let canonical = file.canonicalize().map_err(|error| {
+            failure(format!(
+                "无法读取 TypeScript 定义文件 {}：{error}",
+                file.display()
+            ))
+        })?;
         if self.sources.contains_key(&canonical)
             || self.metadata.contains_key(&canonical)
             || self.runtime_original(&canonical).is_some()

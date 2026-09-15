@@ -34,6 +34,17 @@ fn start(directory: &Path, selected: &[&str]) -> TypeScriptLsp {
     TypeScriptLsp::start(project, Duration::from_secs(30), Arc::new(|| false)).unwrap()
 }
 
+/// 已知有效目标的夹具必须全部返回可信位置，未验证回退不能悄悄通过断言。
+fn checked_definitions(definitions: Vec<DefinitionEvidence>) -> Result<Vec<CheckedLocation>> {
+    definitions
+        .into_iter()
+        .map(|definition| match definition {
+            DefinitionEvidence::Checked(location) => Ok(location),
+            DefinitionEvidence::Unverified => Err(failure("夹具返回未验证定义")),
+        })
+        .collect()
+}
+
 /// 最小真实查询跨越准备、注册、打开、显式项目、定义和出入边全过程。
 #[test]
 #[ignore = "需要 pnpm setup:typescript-analyzer；固定工具验收显式运行"]
@@ -60,6 +71,7 @@ fn fixed_service_definitions_and_calls() {
             },
             &name,
         )
+        .and_then(checked_definitions)
         .unwrap();
     assert_eq!(definitions.len(), 1);
     assert_eq!(definitions[0].span.range.start.line, 0);
@@ -135,6 +147,7 @@ fn fixed_service_excludes_business_and_supplies_node_closure() {
             },
             &name,
         )
+        .and_then(checked_definitions)
         .unwrap();
     assert!(definitions
         .iter()
@@ -169,6 +182,7 @@ fn fixed_service_jsonc_paths_and_ambiguous_projects() {
                 },
                 name,
             )
+            .and_then(checked_definitions)
             .unwrap();
         targets.extend(definitions.into_iter().map(|target| target.uri));
     }
@@ -235,6 +249,7 @@ fn fixed_service_workspace_reference_without_dist() {
             },
             &name,
         )
+        .and_then(checked_definitions)
         .unwrap();
     assert!(definitions
         .iter()
@@ -276,6 +291,7 @@ fn fixed_service_unconfigured_js_and_uri_boundaries() {
             },
             &name,
         )
+        .and_then(checked_definitions)
         .unwrap();
     assert!(definitions
         .iter()
@@ -382,6 +398,7 @@ fn fixed_service_reclaims_descendants_on_shutdown_and_cancel() {
             },
             &name
         )
+        .and_then(checked_definitions)
         .unwrap_err()
         .is_cancelled());
     assert!(session.client.is_none());
@@ -574,6 +591,7 @@ fn fixed_service_browser_inference_and_unresolved() {
             },
             &name,
         )
+        .and_then(checked_definitions)
         .unwrap();
     assert!(definitions
         .iter()
@@ -587,6 +605,7 @@ fn fixed_service_browser_inference_and_unresolved() {
             },
             &name
         )
+        .and_then(checked_definitions)
         .unwrap()
         .is_empty());
     assert!(session
@@ -659,6 +678,7 @@ fn fixed_service_jsconfig_and_first_party_layout() {
             },
             &name,
         )
+        .and_then(checked_definitions)
         .unwrap();
     assert!(definitions
         .iter()
@@ -690,7 +710,10 @@ if (!target) throw new Error('original alias unresolved'); process.stdout.write(
     let name = session.project.view_root.join("app/tsconfig.json");
     let source = session.project.source(&file).unwrap();
     let position = text::position(&source, source.rfind("value").unwrap() as u32).unwrap();
-    let definitions = session.definitions(&file, position, &name).unwrap();
+    let definitions = session
+        .definitions(&file, position, &name)
+        .and_then(checked_definitions)
+        .unwrap();
     assert_eq!(definitions.len(), 1);
     assert_eq!(
         definitions[0].uri,
@@ -805,7 +828,10 @@ fn fixed_service_config_dir_templates_resolve_consumer_declaration() {
         let file = session.project.view_root.join("app/src/main.ts");
         let source = session.project.source(&file).unwrap();
         let position = text::position(&source, source.rfind("target").unwrap() as u32).unwrap();
-        let definitions = session.definitions(&file, position, &name).unwrap();
+        let definitions = session
+            .definitions(&file, position, &name)
+            .and_then(checked_definitions)
+            .unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(
             definitions[0].uri,

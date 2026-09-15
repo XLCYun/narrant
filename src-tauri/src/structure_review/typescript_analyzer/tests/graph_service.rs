@@ -43,6 +43,36 @@ fn named<'a>(graph: &'a CodeGraph, name: &str) -> &'a CodeNode {
         .unwrap()
 }
 
+/// 资源导入与不存在的相对模块只能留下未解析关系，不能阻断有效代码的调用图。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_unverified_relative_imports_do_not_abort_analysis() {
+    let directory = fixture(&[
+        ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["*.ts"]}"#),
+        ("main.ts", "import './style.css'; import './missing.ts'; function target() {} export function caller() { target(); }"),
+        ("style.css", "body { color: red; }"),
+    ]);
+    let report = analyze(directory.path(), &["main.ts"]);
+    let target = named(&report.graph, "target").data().id.clone();
+    assert!(named(&report.graph, "caller")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.semantic == "code.calls"
+            && reference.target == ReferenceTarget::Node(target.clone())));
+    let unresolved = nodes(&report.graph)
+        .into_iter()
+        .flat_map(|node| &node.data().references)
+        .filter(|reference| reference.semantic == "code.imports")
+        .filter_map(|reference| match &reference.target {
+            ReferenceTarget::Unresolved { name } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(unresolved.iter().any(|name| name.contains("style.css")));
+    assert!(unresolved.iter().any(|name| name.contains("missing.ts")));
+}
+
 /// TS/JS 共用选集身份，导入和 barrel 别名最终落到声明而非导入节点。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
