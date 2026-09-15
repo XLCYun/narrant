@@ -1,44 +1,41 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { copyRepository, mapped, within, sourcePattern } from './view.mjs';
+import { fileURLToPath } from 'node:url';
+import { createWorkspace, checkedWorkspacePath, sourcePattern } from './workspace.mjs';
 import { prepareConfigurations, inferredOptions } from './config.mjs';
 
-/** 只接收宿主写出的明确输入；结果写专用文件，stdout 不作为宽松协议。 */
-function main() {
-  const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-  const { root, view, runtime, selected } = input;
-  const notes = [];
-  const context = { root, view, runtime, note(file, message) { if (notes.length < 200) notes.push({ file, message: message.slice(0, 4096) }); } };
-  if (!path.isAbsolute(root) || !path.isAbsolute(view) || !path.isAbsolute(runtime) || within(root, view)) throw new Error('无效的项目准备目录');
-  for (const file of selected) {
-    mapped(context, file);
+/** 从原始 Git workspace 读取文件与配置，只输出路径和项目描述，不复制仓库文件。 */
+export function prepare(input, ts) {
+  const context = createWorkspace(input);
+  const selected = input.selected.map(file => {
+    checkedWorkspacePath(context.root, file);
     if (!sourcePattern.test(file)) throw new Error(`非 TS/JS 输入：${file}`);
-  }
-  const { sources, metadata } = copyRepository(context);
-  const require = createRequire(import.meta.url);
-  const ts = require(path.join(runtime, 'typescript/lib/typescript.js'));
-  if (ts.version !== '6.0.3') throw new Error('固定 TypeScript 版本不匹配');
-  const { projects, candidates, configFiles } = prepareConfigurations(context, ts, sources);
-  for (const name of ['@types/node', 'undici-types']) {
-    const destination = path.join(view, 'node_modules', name);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    if (fs.existsSync(destination)) throw new Error(`运行时类型名称被第一方包占用：${name}`);
-    // 复制固定声明，避免符号链接实路径解析绕过视图中的 undici 闭包。
-    fs.cpSync(path.join(runtime, name), destination, { recursive: true, dereference: true });
-  }
-  const associations = [];
-  for (const original of selected) {
-    const file = mapped(context, original);
-    if (!sources.some(source => source.view === file)) throw new Error(`选中源码未进入视图：${original}`);
+    return fs.realpathSync(file);
+  });
+  const sources = [...context.sources].sort();
+  const { host, projects, candidates, configFiles } = prepareConfigurations(context, ts, sources);
+  const associations = selected.map((file, index) => {
+    if (!context.sources.has(file)) throw new Error(`选中源码不属于 workspace：${file}`);
     let names = candidates.get(file) ?? [];
     if (!names.length) {
-      const name = path.join(view, `.narrant-inferred-${associations.length}`);
+      const name = path.join(context.root, `.narrant-inferred-${index}`);
       projects.push({ name, roots: [file], options: inferredOptions(context, file) });
       names = [name];
     }
-    associations.push({ original, view: file, projects: names });
-  }
-  fs.writeFileSync(input.output, JSON.stringify({ projects, associations, sources, metadata, notes, config_files: configFiles }));
+    return { file, projects: names };
+  });
+  return { host, context, output: { projects, associations, sources, metadata: [...context.metadata].sort(), notes: context.notes, config_files: configFiles } };
 }
-try { main(); } catch (error) { console.error(error.stack); process.exitCode = 1; }
+
+/** 助手作为独立工具执行时只写自己的输出文件；服务加载模块时不重复执行入口。 */
+function main() {
+  const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  const require = createRequire(import.meta.url);
+  const ts = require(path.join(input.runtime, 'typescript/lib/typescript.js'));
+  if (ts.version !== '6.0.3') throw new Error('固定 TypeScript 版本不匹配');
+  fs.writeFileSync(input.output, JSON.stringify(prepare(input, ts).output));
+}
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { main(); } catch (error) { console.error(error.stack); process.exitCode = 1; }
+}

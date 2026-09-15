@@ -102,20 +102,27 @@ Disable ATA, project plugins and arbitrary automatic @types. Missing business de
 can yield reliable partial semantics and Unresolved references; do not auto-install or
 build the reviewed project. Necessary configuration/package metadata may be read.
 
-Prepare a temporary analysis directory preserving first-party relative layout, effective
-tsconfig/jsconfig configuration, extends, references and package metadata. Recreate only
-first-party workspace links. Do not copy the current checkout's node_modules tree or
-silently substitute arbitrary source entries for package exports. Do not flatten all
-projects into a single noResolve Program: that fails source redirects in composite projects.
+All language analyzers must read the same Git workspace supplied for that comparison
+side. Reuse the Review head checkout and the single before checkout under the existing
+lease. Do not make per-language source trees, copy source/configuration/declaration files,
+or create physical workspace package links. The TS adapter may create temporary files
+only for its own trusted helpers, launcher and control metadata; it does not own or delete
+the Git workspace.
 
-Normalize config paths into the view while preserving module/moduleResolution, paths,
+Preserve effective tsconfig/jsconfig, extends, references and package module metadata
+through a read-only TypeScript file host. Configuration overrides and first-party package
+lookup aliases exist only in memory. Read standard/runtime declarations directly from the
+fixed tool directory. Do not silently substitute source entries for package exports or
+flatten projects into one noResolve Program: that fails composite source redirects.
+
+Normalize config paths within the same workspace while preserving module/moduleResolution, paths,
 imports/exports, package type and extension substitution. Support TS5/6 representative
 configurations without upgrading the reviewed source/config. Surface compatibility
 diagnostics and missing contexts; an expected deprecation alone is not unavailable
 semantic analysis. Config-less selected sources get an explicit, deterministic inferred
 project profile, documented in the implementation; do not alter actual repository files.
 
-All input paths must belong to the allowed repository/view or fixed runtime context.
+All input paths must belong to the allowed Git workspace or fixed runtime context.
 Check the service's actual project identity and membership before accepting results;
 unexpected outside inputs must not become a successful graph. This is a semantic scope
 contract, not an OS-level sandbox for arbitrary hostile language-server inputs.
@@ -133,7 +140,7 @@ application does not download tools during analysis. Provide an explicit develop
 setup command with pinned versions/integrities and clear missing-tool errors.
 Formal bundled runtime distribution remains deferred.
 
-The TS adapter owns its temporary analysis directory and all child processes. Use the
+The TS adapter owns its temporary helper/control directory and all child processes. Use the
 existing CancellationCheck and process lifetime guards. Cancellation, timeout, errors
 and panic must reclaim child work before returning/releasing the workspace lease.
 Shutdown acknowledgement alone does not prove the tsserver child exited.
@@ -161,7 +168,9 @@ single-card declaration placement and original-source details. Update Rust-only 
 Run focused syntax/graph/diff tests; real fixed-service tests for scope, aliases, JS/JSX,
 Node ESM/CJS, references with missing declaration outputs, workspace package names,
 Node libraries, JSDoc, overload/merged declarations, unresolvable/dynamic calls and
-Unicode. Test cancellation and tool failures. Verify mixed Rust+TS/JS application
+Unicode. Verify actual project members and definition URIs point to the original Git
+checkout or fixed standard libraries, the workspace tree/content remain unchanged,
+and helper cleanup never removes the workspace. Test cancellation and tool failures. Verify mixed Rust+TS/JS application
 composition, empty sides, extension changes, coverage and per-side notes.
 
 Keep meaningful own-content tests for nested declarations, anonymous callbacks,
@@ -199,7 +208,7 @@ A subsequent focused final-review correction preserves native `${configDir}` exp
 its consuming configuration, including inherited scalar/list paths and file patterns.
 Real-filesystem configuration regressions compare fixed-TS effective options, membership
 and alias resolution before/after preparation, and reject expanded paths or symlink
-ancestors escaping the repository/view. Actual fixed-service and public-graph fixtures
+ancestors escaping the repository. Actual fixed-service and public-graph fixtures
 retain the exact first-party declaration and definite local call despite a competing
 shared-config-directory declaration. Syntax and public-analyzer regressions also establish
 identical production identities/content/output under ordinary roots, external `__tests__`
@@ -224,4 +233,14 @@ The research documents remain historical experiments; the acceptance above comes
 production adapter and application paths. Native service execution was verified on macOS.
 Windows shared-LSP production code and tests were cross-type-checked, but Windows and Linux
 were not executed natively. Packaged distribution of the fixed tools remains deferred, and
-the repository and temporary-view checks do not provide an OS-level sandbox.
+the repository and language-service file-host checks do not provide an OS-level sandbox.
+
+The shared-workspace revision on 2026-09-15 removes the copied analysis tree and all
+source/standard-library reverse mapping. Its fixed-service regression creates a real Git
+worktree, verifies original member/definition paths and byte-identical workspace contents,
+and checks that the temporary directory contains only Narrant helpers/control metadata.
+All 81 TS adapter tests (including opt-in services and every cleanup exit), 21 JavaScript
+configuration/file-host tests, 20 application tests and the real TS/JS Review lifecycle
+fixture passed. All-targets Clippy with warnings denied and focused helper ESLint passed.
+The earlier full Rust/frontend acceptance remains applicable; no shared production
+contract or UI behavior changed in this revision.

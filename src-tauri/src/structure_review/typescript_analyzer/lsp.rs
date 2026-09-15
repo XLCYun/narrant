@@ -20,10 +20,10 @@ pub(crate) struct CheckedRange {
     pub end_byte: u32,
 }
 
-/// 第一方 URI 使用原始侧身份；view_path 仅用于会话续查。
+/// 第一方 URI 使用原始侧身份；path 仅用于会话续查。
 #[derive(Clone, Debug)]
 pub(crate) struct CheckedLocation {
-    pub view_path: PathBuf,
+    pub path: PathBuf,
     pub uri: String,
     pub unverified: bool,
     pub span: CheckedRange,
@@ -53,7 +53,7 @@ pub(crate) struct CallEvidence {
     pub from_spans: Vec<CheckedRange>,
 }
 
-/// 一个会话拥有一个完整视图；字段顺序保证先销毁客户端再释放 TempDir。
+/// 会话借用 Git workspace；字段顺序保证先回收子进程，再清理自身工具文件。
 pub(crate) struct TypeScriptLsp {
     client: Option<LspClient>,
     project: PreparedProject,
@@ -79,12 +79,13 @@ impl TypeScriptLsp {
             )
             .arg("--stdio");
         let options = LspOptions {
-            initialization_options: json!({"disableAutomaticTypingAcquisition":true, "plugins":[], "tsserver":{"path":project.toolchain.tsserver(), "useSyntaxServer":"never"}}),
+            initialization_options: json!({"disableAutomaticTypingAcquisition":true, "plugins":[], "tsserver":{"path":project.server_entry(), "useSyntaxServer":"never"}}),
             request_timeout: timeout,
             cancelled,
             ..LspOptions::default()
         };
-        let client = LspClient::start(command, &project.view_root, options).map_err(lsp_failure)?;
+        let client =
+            LspClient::start(command, &project.workspace_root, options).map_err(lsp_failure)?;
         let mut session = Self {
             client: Some(client),
             project,
@@ -106,7 +107,7 @@ impl TypeScriptLsp {
             {
                 session
                     .project
-                    .view_root
+                    .workspace_root
                     .join(format!(".narrant-registration-{index}"))
             } else {
                 registration.name
@@ -117,10 +118,10 @@ impl TypeScriptLsp {
             let snapshot = session
                 .project
                 .sources
-                .get(&file.view)
+                .get(&file.file)
                 .ok_or_else(|| failure("缺少选中源码快照"))?;
             let extension = file
-                .view
+                .file
                 .extension()
                 .and_then(|value| value.to_str())
                 .unwrap_or("");
@@ -135,7 +136,7 @@ impl TypeScriptLsp {
                 .as_mut()
                 .expect("已启动会话")
                 .open_document(
-                    &crate::lsp::file_uri(&file.view).map_err(failure)?,
+                    &crate::lsp::file_uri(&file.file).map_err(failure)?,
                     language,
                     1,
                     &snapshot.source,
@@ -150,7 +151,7 @@ impl TypeScriptLsp {
                 .collect::<Vec<_>>();
             let mut actual = Vec::new();
             for name in configured {
-                if session.inspect_project(&file.view, &name)?.is_some() {
+                if session.inspect_project(&file.file, &name)?.is_some() {
                     actual.push(name);
                 }
             }
@@ -166,7 +167,7 @@ impl TypeScriptLsp {
                         session.project.notes.push(AnalysisNote {
                             code: Some("typescript.inferred_project".into()),
                             project: Some(registration.name.clone()),
-                            file: file.original.clone(),
+                            file: file.file.clone(),
                             message: format!(
                                 "未配置文件使用 {}/{} ES2022 推断配置",
                                 registration.options["module"].as_str().unwrap_or("未知"),
@@ -180,14 +181,14 @@ impl TypeScriptLsp {
             }
             session.project.files[file_index].projects = actual.clone();
             for name in &actual {
-                session.validate_project(&file.view, name)?;
-                session.collect_notes(&file.view, name)?;
+                session.validate_project(&file.file, name)?;
+                session.collect_notes(&file.file, name)?;
             }
         }
         Ok(session)
     }
 
-    /// 语义层借用同一份原始身份和快照，不能在会话存活时释放视图。
+    /// 语义层借用同一个 Git workspace 的路径与内存快照。
     pub fn project(&self) -> &PreparedProject {
         &self.project
     }
@@ -207,7 +208,12 @@ impl TypeScriptLsp {
             .client
             .as_mut()
             .ok_or_else(|| failure("TypeScript 会话已经关闭"))?;
-        let response = client.request("workspace/executeCommand", json!({"command":"typescript.tsserverRequest", "arguments":[command, arguments, {"executionTarget":0, "expectsResult":true, "isAsync":false}]})).map_err(|mut error| { error.message = format!("tsserver {command}：{}", error.message); lsp_failure(error) })?;
+        let response = client.request("workspace/executeCommand", json!({"command":"typescript.tsserverRequest", "arguments":[command, arguments, {"executionTarget":0, "expectsResult":true, "isAsync":false}]}));
+        self.project.check_access()?;
+        let response = response.map_err(|mut error| {
+            error.message = format!("tsserver {command}：{}", error.message);
+            lsp_failure(error)
+        })?;
         response_body(command, response, body_required)
     }
 
@@ -266,7 +272,7 @@ impl TypeScriptLsp {
                 if !path
                     .canonicalize()
                     .map_err(failure)?
-                    .starts_with(&self.project.view_root)
+                    .starts_with(&self.project.workspace_root)
                 {
                     return Err(failure("项目配置路径越界"));
                 }
@@ -412,7 +418,7 @@ impl TypeScriptLsp {
                     let target =
                         session.hierarchy_item(&value[if incoming { "from" } else { "to" }])?;
                     let caller = if incoming {
-                        target.location.view_path.as_path()
+                        target.location.path.as_path()
                     } else {
                         file
                     };
@@ -456,12 +462,12 @@ impl TypeScriptLsp {
 
     /// 所有位置先验证范围和来源，再生成原始身份 URI。
     fn location(&self, file: &Path, span: &Value) -> Result<CheckedLocation> {
-        let view_path = self.project.checked_path(file)?;
+        let path = self.project.checked_path(file)?;
         let unverified = definition_unverified(span)?;
-        let span = checked_range(&self.project.source(&view_path)?, span)?;
-        let uri = self.project.original_uri(&view_path)?;
+        let span = checked_range(&self.project.source(&path)?, span)?;
+        let uri = self.project.source_uri(&path)?;
         Ok(CheckedLocation {
-            view_path,
+            path,
             uri,
             unverified,
             span,
@@ -544,7 +550,7 @@ impl TypeScriptLsp {
                                 .project
                                 .sources
                                 .get(&diagnostic_file)
-                                .map(|source| source.original.clone())
+                                .map(|source| source.path.clone())
                                 .or_else(|| session.project.metadata.get(&diagnostic_file).cloned())
                                 .unwrap_or_else(|| diagnostic_file.clone());
                             session.project.notes.push(AnalysisNote {
@@ -553,7 +559,7 @@ impl TypeScriptLsp {
                                 file: original,
                                 message: format!(
                                     "{} TS{code}: {message}",
-                                    name.strip_prefix(&session.project.view_root)
+                                    name.strip_prefix(&session.project.workspace_root)
                                         .map_err(failure)?
                                         .display()
                                 )
@@ -580,7 +586,7 @@ impl TypeScriptLsp {
             })
     }
 
-    /// 完成 shutdown/exit 后销毁客户端；即使关闭失败也先回收进程再释放视图。
+    /// 完成 shutdown/exit 后销毁客户端；即使关闭失败也先回收进程再清理工具文件。
     pub fn shutdown(mut self) -> Result<()> {
         self.client
             .take()

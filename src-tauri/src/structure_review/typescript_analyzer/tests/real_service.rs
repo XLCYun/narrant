@@ -45,6 +45,128 @@ fn checked_definitions(definitions: Vec<DefinitionEvidence>) -> Result<Vec<Check
         .collect()
 }
 
+/// 连目录、文件内容及链接目标一起记录，防止分析悄悄新增配置或替换真实文件。
+fn filesystem_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    /// 目录和链接也纳入快照，不能只比较已知源码内容。
+    fn visit(root: &Path, directory: &Path, result: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let kind = entry.file_type().unwrap();
+            let content = if kind.is_dir() {
+                visit(root, &path, result);
+                vec![]
+            } else if kind.is_symlink() {
+                fs::read_link(&path)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_bytes()
+                    .to_vec()
+            } else {
+                fs::read(&path).unwrap()
+            };
+            result.insert(path.strip_prefix(root).unwrap().to_path_buf(), content);
+        }
+    }
+    let mut result = BTreeMap::new();
+    visit(root, root, &mut result);
+    result
+}
+
+/// 真实 Git 签出是唯一源码目录；服务 URI、标准声明和清理均不依赖文件副本。
+#[test]
+#[ignore = "需要固定工具"]
+fn fixed_service_reads_git_checkout_without_copying_or_mutating_files() {
+    let repository = fixture(&[
+        ("tsconfig.json", r#"{"compilerOptions":{"module":"Preserve","moduleResolution":"Bundler","target":"ES2022","types":[],"plugins":[{"name":"not-enabled"}]},"files":["main.ts"]}"#),
+        ("main.ts", "import {work} from './worker';\nexport function run() { return Promise.resolve(work()); }"),
+        ("worker.ts", "export function work() { return 1; }"),
+        ("asset.css", "button { color: red; }"),
+    ]);
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        vec!["worktree", "add", "--detach", "checkout", "HEAD"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(repository.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let root = repository.path().join("checkout").canonicalize().unwrap();
+    let original = filesystem_snapshot(&root);
+    let mut session = start(&root, &["main.ts"]);
+    assert_eq!(session.project.workspace_root, root);
+    assert_eq!(
+        session.project.config_files,
+        vec![root.join("tsconfig.json")]
+    );
+    assert!(session
+        .project
+        .sources
+        .keys()
+        .all(|file| file.starts_with(&root)));
+    let file = root.join("main.ts");
+    let name = root.join("tsconfig.json");
+    let members = session.validate_project(&file, &name).unwrap();
+    assert!(members.contains(&root.join("worker.ts")));
+    assert!(members.iter().any(
+        |file| file.starts_with(&session.project.toolchain.runtime_root)
+            && file.ends_with("lib.es2015.promise.d.ts")
+    ));
+    let source = session.project.source(&file).unwrap();
+    let position = text::position(&source, source.rfind("work()").unwrap() as u32).unwrap();
+    let definitions = session
+        .definitions(&file, position, &name)
+        .and_then(checked_definitions)
+        .unwrap();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].path, root.join("worker.ts"));
+    assert_eq!(
+        definitions[0].uri,
+        crate::lsp::file_uri(&root.join("worker.ts")).unwrap()
+    );
+    let support = session.project.support_root.clone();
+    let artifacts = filesystem_snapshot(&support);
+    assert_eq!(
+        artifacts.keys().cloned().collect::<BTreeSet<_>>(),
+        [
+            "config.mjs",
+            "input.json",
+            "output.json",
+            "prepare.mjs",
+            "server.mjs",
+            "workspace.mjs",
+            "server",
+            "server/lib",
+            "server/lib/tsserver.js",
+            "server/package.json",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+    );
+    assert_eq!(filesystem_snapshot(&root), original);
+    session.shutdown().unwrap();
+    assert!(!support.exists());
+    assert_eq!(filesystem_snapshot(&root), original);
+}
+
 /// 最小真实查询跨越准备、注册、打开、显式项目、定义和出入边全过程。
 #[test]
 #[ignore = "需要 pnpm setup:typescript-analyzer；固定工具验收显式运行"]
@@ -60,7 +182,7 @@ fn fixed_service_definitions_and_calls() {
         ),
     ]);
     let mut session = start(fixture.path(), &["main.ts"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     let definitions = session
         .definitions(
@@ -98,9 +220,9 @@ fn fixed_service_definitions_and_calls() {
         )
         .unwrap();
     assert_eq!(incoming[0].target.name, "caller");
-    let view = session.project.view_root.clone();
+    let support = session.project.support_root.clone();
     session.shutdown().unwrap();
-    assert!(!view.exists());
+    assert!(!support.exists());
 }
 
 /// 已安装的业务 @types 不可进入 Program，Node 固定声明与 undici 闭包仍能解析。
@@ -116,7 +238,7 @@ fn fixed_service_excludes_business_and_supplies_node_closure() {
         ("node_modules/business/index.d.ts", "export declare function hidden(): void;"),
     ]);
     let mut session = start(fixture.path(), &["src/main.ts"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     let members = session.validate_project(&file, &name).unwrap();
     assert!(members
@@ -125,12 +247,12 @@ fn fixed_service_excludes_business_and_supplies_node_closure() {
     assert!(members
         .iter()
         .any(|file| file.to_string_lossy().contains("undici-types/")));
-    assert!(!members.iter().any(
-        |file| file.to_string_lossy().contains("business") || file.starts_with(fixture.path())
-    ));
-    assert!(!session
+    assert!(!members
+        .iter()
+        .any(|file| file.to_string_lossy().contains("business")));
+    assert!(session
         .project
-        .view_root
+        .workspace_root
         .join("node_modules/business")
         .exists());
     assert!(session
@@ -168,7 +290,7 @@ fn fixed_service_jsonc_paths_and_ambiguous_projects() {
         ("shared.ts", "import { work } from '@impl';\nexport function caller() { return work(); }"),
     ]);
     let mut session = start(fixture.path(), &["shared.ts"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let names = session.project.files[0].projects.clone();
     assert_eq!(names.len(), 2);
     let mut targets = BTreeSet::new();
@@ -189,7 +311,10 @@ fn fixed_service_jsonc_paths_and_ambiguous_projects() {
     assert_eq!(targets.len(), 2);
     assert!(targets.iter().any(|target| target.ends_with("/a/impl.ts")));
     assert!(targets.iter().any(|target| target.ends_with("/b/impl.ts")));
-    let invalid = session.project.view_root.join(".narrant-registration-0");
+    let invalid = session
+        .project
+        .workspace_root
+        .join(".narrant-registration-0");
     assert!(session
         .validate_project(&file, &invalid)
         .unwrap_err()
@@ -237,8 +362,12 @@ fn fixed_service_workspace_reference_without_dist() {
         ),
     ]);
     let mut session = start(fixture.path(), &["packages/app/src/main.ts"]);
-    assert!(!session.project.view_root.join("packages/lib/dist").exists());
-    let file = session.project.files[0].view.clone();
+    assert!(!session
+        .project
+        .workspace_root
+        .join("packages/lib/dist")
+        .exists());
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     let definitions = session
         .definitions(
@@ -268,7 +397,7 @@ fn fixed_service_unconfigured_js_and_uri_boundaries() {
         ("中文 space/main.js", "const path = require('node:path');\nfunction make() { return path.join('a', 'b'); }\nmodule.exports = make;"),
     ]);
     let mut session = start(fixture.path(), &["中文 space/main.js"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     assert!(name.to_string_lossy().contains(".narrant-inferred-"));
     let uri = crate::lsp::file_uri(&file).unwrap();
@@ -316,7 +445,7 @@ fn fixed_service_missing_extends_and_authoritative_libraries() {
         .notes
         .iter()
         .any(|note| note.message.contains("缺失配置 extends")));
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     assert_eq!(session.validate_project(&file, &name).unwrap(), vec![file]);
     session.shutdown().unwrap();
@@ -365,9 +494,9 @@ fn fixed_service_reclaims_descendants_on_shutdown_and_cancel() {
     let session = start(fixture.path(), &["main.ts"]);
     let pids = owned_service_processes();
     assert!(pids.len() >= 2, "未观察到 TLS 与 tsserver：{pids:?}");
-    let view = session.project.view_root.clone();
+    let support = session.project.support_root.clone();
     session.shutdown().unwrap();
-    assert!(!view.exists());
+    assert!(!support.exists());
     for pid in pids {
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "正常退出残留 PID {pid}");
     }
@@ -386,7 +515,7 @@ fn fixed_service_reclaims_descendants_on_shutdown_and_cancel() {
     .unwrap();
     let mut session = TypeScriptLsp::start(project, Duration::from_secs(30), check).unwrap();
     let pids = owned_service_processes();
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(session
@@ -424,9 +553,12 @@ fn fixed_service_imported_selection_and_json_context() {
         ("data.json", r#"{"name":"sample"}"#),
     ]);
     let mut session = start(fixture.path(), &["worker.ts"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let names = session.project.files[0].projects.clone();
-    assert_eq!(names, vec![session.project.view_root.join("tsconfig.json")]);
+    assert_eq!(
+        names,
+        vec![session.project.workspace_root.join("tsconfig.json")]
+    );
     assert!(session
         .validate_project(&file, &names[0])
         .unwrap()
@@ -447,7 +579,7 @@ fn fixed_service_imported_selection_and_json_context() {
     assert_eq!(
         session
             .project()
-            .view_path(&fixture.path().canonicalize().unwrap().join("worker.ts"))
+            .checked_path(&fixture.path().canonicalize().unwrap().join("worker.ts"))
             .unwrap(),
         file
     );
@@ -489,12 +621,12 @@ fn fixed_service_rejects_external_source_and_configuration_paths() {
     )
     .unwrap()
     .unwrap();
-    let view = project.view_root.clone();
+    let support = project.support_root.clone();
     let error = TypeScriptLsp::start(project, Duration::from_secs(30), check.clone())
         .err()
         .unwrap();
     assert!(error.to_string().contains("未授权源码"));
-    assert!(!view.exists());
+    assert!(!support.exists());
     fs::write(
         root.join("tsconfig.json"),
         r#"{"compilerOptions":{"baseUrl":"../../outside"},"files":["main.ts"]}"#,
@@ -511,7 +643,7 @@ fn fixed_service_rejects_external_source_and_configuration_paths() {
     assert!(error.to_string().contains("仓库外路径"));
 }
 
-/// node_modules 内只读取 extends JSON 元数据，插件入口不会执行或复制业务声明。
+/// 业务配置只在内存去除插件，workspace 原文件和依赖保持不变，业务声明不进入项目。
 #[test]
 #[ignore = "需要固定工具"]
 fn fixed_service_business_config_metadata_without_plugins() {
@@ -539,7 +671,7 @@ fn fixed_service_business_config_metadata_without_plugins() {
         ),
     ]);
     let mut session = start(fixture.path(), &["main.ts"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     let members = session.validate_project(&file, &name).unwrap();
     assert!(!members
@@ -547,20 +679,20 @@ fn fixed_service_business_config_metadata_without_plugins() {
         .any(|path| path.to_string_lossy().contains("@business")));
     let config = session
         .project
-        .view_root
+        .workspace_root
         .join("node_modules/@business/config/base.json");
     assert!(config.exists());
-    assert!(!fs::read_to_string(config)
+    assert!(fs::read_to_string(config)
         .unwrap()
         .contains("danger-plugin"));
-    assert!(!session
+    assert!(session
         .project
-        .view_root
+        .workspace_root
         .join("node_modules/@business/config/index.d.ts")
         .exists());
-    assert!(!session
+    assert!(session
         .project
-        .view_root
+        .workspace_root
         .join("node_modules/danger-plugin")
         .exists());
     session.shutdown().unwrap();
@@ -575,7 +707,7 @@ fn fixed_service_browser_inference_and_unresolved() {
         "export const title = document.title;\nmissing();",
     )]);
     let mut session = start(fixture.path(), &["main.ts"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     let members = session.validate_project(&file, &name).unwrap();
     assert!(members.iter().any(|file| file.ends_with("lib.dom.d.ts")));
@@ -616,7 +748,7 @@ fn fixed_service_browser_inference_and_unresolved() {
     session.shutdown().unwrap();
 }
 
-/// 真实服务器初始化超时与实际 tsserver 命令错误都失败，并在返回前释放进程及视图。
+/// 真实服务器初始化超时与命令错误都失败，返回前释放进程及工具文件，保留 workspace。
 #[test]
 #[ignore = "需要固定工具"]
 fn fixed_service_timeout_and_rpc_errors() {
@@ -632,12 +764,12 @@ fn fixed_service_timeout_and_rpc_errors() {
     )
     .unwrap()
     .unwrap();
-    let view = project.view_root.clone();
+    let support = project.support_root.clone();
     let error = TypeScriptLsp::start(project, Duration::from_nanos(1), check)
         .err()
         .unwrap();
     assert!(error.to_string().contains("超时"));
-    assert!(!view.exists());
+    assert!(!support.exists());
     #[cfg(unix)]
     assert!(owned_service_processes().is_empty());
     let mut session = start(fixture.path(), &["main.ts"]);
@@ -666,7 +798,7 @@ fn fixed_service_jsconfig_and_first_party_layout() {
         ("src/target/worker.js", "export function run() {}"),
     ]);
     let mut session = start(fixture.path(), &["src/main.js"]);
-    let file = session.project.files[0].view.clone();
+    let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     assert!(name.ends_with("jsconfig.json"));
     let definitions = session
@@ -706,8 +838,8 @@ if (!target) throw new Error('original alias unresolved'); process.stdout.write(
     .unwrap();
     assert_eq!(Path::new(&original), root.join(expected));
     let mut session = start(&root, &["app/main.ts"]);
-    let file = session.project.files[0].view.clone();
-    let name = session.project.view_root.join("app/tsconfig.json");
+    let file = session.project.files[0].file.clone();
+    let name = session.project.workspace_root.join("app/tsconfig.json");
     let source = session.project.source(&file).unwrap();
     let position = text::position(&source, source.rfind("value").unwrap() as u32).unwrap();
     let definitions = session
@@ -821,11 +953,11 @@ fn fixed_service_config_dir_templates_resolve_consumer_declaration() {
             crate::structure_review::typescript_analyzer::config_dir_fixture::fixture(inherited);
         let root = fixture.path().canonicalize().unwrap();
         let mut session = start(&root, &["app/src/main.ts", "app/src/dep.ts"]);
-        let name = session.project.view_root.join("app/tsconfig.json");
+        let name = session.project.workspace_root.join("app/tsconfig.json");
         for association in &session.project.files {
             assert_eq!(association.projects, vec![name.clone()]);
         }
-        let file = session.project.view_root.join("app/src/main.ts");
+        let file = session.project.workspace_root.join("app/src/main.ts");
         let source = session.project.source(&file).unwrap();
         let position = text::position(&source, source.rfind("target").unwrap() as u32).unwrap();
         let definitions = session

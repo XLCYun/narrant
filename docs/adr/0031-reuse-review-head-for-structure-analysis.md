@@ -59,6 +59,14 @@ not their two sides. Failure on one side revokes its peer, and the lease remains
 until both workers have exited. This parallelization was added on 2026-09-14 without
 changing checkout ownership.
 
+All language analyzers for one side read that side's same Git workspace. As clarified
+on 2026-09-15, adapters must not create additional source/configuration/declaration copies
+or per-language checkouts. An adapter can keep its own temporary helper executables and
+control metadata, but file-host configuration overrides and package lookup aliases remain
+in memory. Fixed standard-library declarations are read from their tool installation.
+The adapter must finish its child processes before returning; only Review Lifecycle owns
+the Git workspace. This extends the original head-reuse decision to language internals.
+
 Structure Changes retains two-side concurrency and before preparation/cleanup inside
 its synchronous callback; Review Lifecycle knows neither Code Graph nor analyzer
 options. Analysis errors preserve explicit cancellation instead of deriving it from

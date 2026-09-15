@@ -213,14 +213,14 @@ impl Resolver {
     ) -> Result<Option<Vec<Target>>> {
         if location.unverified
             || visited.len() >= 32
-            || !visited.insert((location.view_path.clone(), location.span.start_byte))
+            || !visited.insert((location.path.clone(), location.span.start_byte))
         {
             return Ok(None);
         }
         if !self.load(session, location)? {
             return Ok(None);
         }
-        let document = &self.documents[&location.view_path];
+        let document = &self.documents[&location.path];
         let alias = document
             .occurrences
             .iter()
@@ -263,15 +263,15 @@ impl Resolver {
                     | OccurrenceKind::Construct
                     | OccurrenceKind::Reference
                     | OccurrenceKind::JsxComponent
-            ) && self.type_only_binding(session, &location.view_path, &alias, project)?
+            ) && self.type_only_binding(session, &location.path, &alias, project)?
             {
                 return Ok(None);
             }
-            if session.project().sources.contains_key(&location.view_path) {
-                session.collect_notes(&location.view_path, project)?;
+            if session.project().sources.contains_key(&location.path) {
+                session.collect_notes(&location.path, project)?;
             }
             if (alias.type_only
-                || session.runtime_type_error(&location.view_path, alias.selection.start, project))
+                || session.runtime_type_error(&location.path, alias.selection.start, project))
                 && matches!(
                     kind,
                     OccurrenceKind::Call
@@ -282,7 +282,7 @@ impl Resolver {
             {
                 return Ok(None);
             }
-            let definitions = session.definitions(&location.view_path, alias.position, project)?;
+            let definitions = session.definitions(&location.path, alias.position, project)?;
             if definitions.is_empty() {
                 return Ok(None);
             }
@@ -302,7 +302,7 @@ impl Resolver {
         }
         Ok(declaration.map(|declaration| {
             vec![Target {
-                runtime: !session.project().sources.contains_key(&location.view_path),
+                runtime: !session.project().sources.contains_key(&location.path),
                 declaration,
             }]
         }))
@@ -312,20 +312,16 @@ impl Resolver {
     fn load(&mut self, session: &TypeScriptLsp, location: &CheckedLocation) -> Result<bool> {
         let project = session.project();
         let checked =
-            project.path_from_uri(&crate::lsp::file_uri(&location.view_path).map_err(failure)?)?;
-        if checked != location.view_path || project.original_uri(&checked)? != location.uri {
+            project.path_from_uri(&crate::lsp::file_uri(&location.path).map_err(failure)?)?;
+        if checked != location.path || project.source_uri(&checked)? != location.uri {
             return Err(failure("定义 URI 与受控源码身份不一致"));
         }
-        if project.metadata.contains_key(&checked) {
+        if project.metadata.contains(&checked) {
             return Ok(false);
         }
         if !self.documents.contains_key(&checked) {
             let (root, path, runtime) = if let Some(snapshot) = project.sources.get(&checked) {
-                (
-                    project.original_root.clone(),
-                    snapshot.original.clone(),
-                    false,
-                )
+                (project.workspace_root.clone(), snapshot.path.clone(), false)
             } else {
                 let path = url::Url::parse(&location.uri)
                     .map_err(failure)?
@@ -385,12 +381,12 @@ impl Resolver {
         if !self.load(session, location)? {
             return Ok(None);
         }
-        let document = &self.documents[&location.view_path];
-        let runtime = !session.project().sources.contains_key(&location.view_path);
+        let document = &self.documents[&location.path];
+        let runtime = !session.project().sources.contains_key(&location.path);
         let root = if runtime {
             &session.project().toolchain.runtime_root
         } else {
-            &session.project().original_root
+            &session.project().workspace_root
         };
         let mut symbol = identity::file_scope(root, &document.path, &document.language.0)?;
         if runtime {

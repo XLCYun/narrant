@@ -28,7 +28,7 @@ pub(super) fn analyze(
     let mut nodes = BTreeMap::new();
     let mut root = CodeRoot::default();
     let mut queries = Vec::new();
-    for (view, document) in &documents {
+    for (path, document) in &documents {
         if document.excluded {
             continue;
         }
@@ -42,18 +42,18 @@ pub(super) fn analyze(
             .project()
             .files
             .iter()
-            .find(|f| f.view == *view)
+            .find(|f| f.file == *path)
             .ok_or_else(|| failure("选中文档缺少真实项目关联"))?
             .projects
             .clone();
         for occurrence in &document.occurrences {
-            queries.push((view.clone(), projects.clone(), occurrence.clone()));
+            queries.push((path.clone(), projects.clone(), occurrence.clone()));
         }
     }
     let membership: BTreeSet<NodeId> = nodes.keys().cloned().collect();
     let mut resolver = targets::Resolver::new(documents, membership);
     let mut notes = Vec::new();
-    for (view, projects, occurrence) in queries {
+    for (path, projects, occurrence) in queries {
         if cancelled() {
             return Err(AnalysisError::cancelled("TypeScript 结构分析已取消"));
         }
@@ -62,15 +62,11 @@ pub(super) fn analyze(
         }
         let mut alternatives = Vec::new();
         for project in &projects {
-            alternatives.push(resolver.resolve(session, &view, &occurrence, project)?);
+            alternatives.push(resolver.resolve(session, &path, &occurrence, project)?);
         }
         let conflict = alternatives.windows(2).any(|pair| pair[0] != pair[1]);
         if conflict {
-            let file = session
-                .project()
-                .sources
-                .get(&view)
-                .map(|s| s.original.clone());
+            let file = session.project().sources.get(&path).map(|s| s.path.clone());
             push_note(
                 &mut notes,
                 AnalysisNote {
@@ -80,7 +76,7 @@ pub(super) fn analyze(
                         occurrence.text
                     ),
                     file: file.and_then(|f| {
-                        f.strip_prefix(&session.project().original_root)
+                        f.strip_prefix(&session.project().workspace_root)
                             .ok()
                             .map(PathBuf::from)
                     }),
@@ -121,7 +117,7 @@ pub(super) fn analyze(
     for note in &session.project().notes {
         let relative = note
             .file
-            .strip_prefix(&session.project().original_root)
+            .strip_prefix(&session.project().workspace_root)
             .ok()
             .map(PathBuf::from);
         push_note(
@@ -131,23 +127,17 @@ pub(super) fn analyze(
                     .code
                     .clone()
                     .unwrap_or_else(|| "typescript.context".into()),
-                message: note
-                    .message
-                    .replace(
-                        &session.project().view_root.to_string_lossy().to_string(),
-                        "[分析目录]",
-                    )
-                    .replace(
-                        &session
-                            .project()
-                            .original_root
-                            .to_string_lossy()
-                            .to_string(),
-                        "[仓库]",
-                    ),
+                message: note.message.replace(
+                    &session
+                        .project()
+                        .workspace_root
+                        .to_string_lossy()
+                        .to_string(),
+                    "[仓库]",
+                ),
                 file: relative,
                 project: note.project.as_ref().and_then(|p| {
-                    p.strip_prefix(&session.project().view_root)
+                    p.strip_prefix(&session.project().workspace_root)
                         .ok()
                         .map(PathBuf::from)
                 }),

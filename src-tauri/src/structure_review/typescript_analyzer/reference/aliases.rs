@@ -119,7 +119,7 @@ impl Resolver {
         project: &Path,
         visited: &mut BTreeSet<(PathBuf, u32, Vec<String>)>,
     ) -> Result<bool> {
-        let document = &self.documents[&module.view_path];
+        let document = &self.documents[&module.path];
         let scope = document
             .declared_at(module.span.start_byte)
             .filter(|d| matches!(d.node.data().native_kind.as_str(), "module" | "namespace"))
@@ -157,7 +157,7 @@ impl Resolver {
             let remaining = if wildcard { names } else { &names[1..] };
             if self.alias_route(
                 session,
-                &module.view_path,
+                &module.path,
                 &alias,
                 remaining,
                 project,

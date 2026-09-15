@@ -1,20 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { within, mapped } from './view.mjs';
+import { within, checkedWorkspacePath, workspaceSystem } from './workspace.mjs';
 
 /** 固定 TS 仅用于 JSONC 配置解析；不创建 Program、checker 或抽取图。 */
 export function prepareConfigurations(context, ts, sources) {
+  const host = workspaceSystem(context, ts);
   const done = new Set();
   const configs = new Set();
   const pathOptions = ['baseUrl', 'rootDir', 'outDir', 'declarationDir', 'tsBuildInfoFile'];
   const listPathOptions = ['rootDirs', 'typeRoots'];
-  /** 把配置中的路径转成视图绝对路径，含不存在的输出目录也不能越界。 */
+  /** 在内存中把配置路径规范到 Git workspace，不存在的输出目录也不能越界。 */
   function rewrite(value, base) {
     if (typeof value !== 'string') throw new Error('配置路径必须为字符串');
     // 原样交给固定 TS 在最终消费配置处展开，不能提前绑定到共享配置的目录。
     if (value.toLowerCase().startsWith('${configdir}')) return value;
-    if (within(context.view, path.resolve(base, value))) return path.resolve(base, value);
-    return mapped(context, path.resolve(base, value), true);
+    return checkedWorkspacePath(context.root, path.resolve(base, value));
   }
   /** 解析纯 JSONC extends；只读取包配置元数据，禁止 JS 和任意外部文件。 */
   function resolveExtends(request, directory) {
@@ -30,19 +30,19 @@ export function prepareConfigurations(context, ts, sources) {
       }
     }
     for (const candidate of attempts) {
-      mapped(context, candidate, true);
+      checkedWorkspacePath(context.root, candidate);
       const candidates = [candidate, `${candidate}.json`, path.join(candidate, 'tsconfig.json')];
       const manifest = path.join(candidate, 'package.json');
       if (fs.existsSync(manifest)) {
-        mapped(context, manifest, true);
+        checkedWorkspacePath(context.root, manifest);
         const packageData = JSON.parse(fs.readFileSync(manifest, 'utf8'));
         if (typeof packageData.tsconfig === 'string') candidates.unshift(path.resolve(candidate, packageData.tsconfig));
       }
       for (const file of candidates) {
         if (fs.existsSync(file) && fs.statSync(file).isFile()) {
           if (!/\.jsonc?$/.test(file)) throw new Error(`不执行配置代码：${file}`);
-          mapped(context, file, true);
-          return file;
+          checkedWorkspacePath(context.root, file);
+          return fs.realpathSync(file);
         }
       }
     }
@@ -51,9 +51,8 @@ export function prepareConfigurations(context, ts, sources) {
   }
   /** 保留每层 extends/references；只剥离插件入口和改写路径。 */
   function processConfig(original) {
-    original = path.resolve(original);
-    const destination = mapped(context, original, true);
-    if (done.has(original)) return destination;
+    original = fs.realpathSync(checkedWorkspacePath(context.root, original));
+    if (done.has(original)) return original;
     done.add(original);
     const parsed = ts.parseConfigFileTextToJson(original, fs.readFileSync(original, 'utf8'));
     if (parsed.error || !parsed.config || typeof parsed.config !== 'object' || Array.isArray(parsed.config)) {
@@ -85,46 +84,35 @@ export function prepareConfigurations(context, ts, sources) {
       config.references = config.references.map(reference => {
         const absolute = path.resolve(base, reference.path);
         const file = /\.json$/.test(absolute) ? absolute : path.join(absolute, 'tsconfig.json');
-        mapped(context, file, true);
+        checkedWorkspacePath(context.root, file);
         if (!fs.existsSync(file)) throw new Error(`缺失引用项目配置：${file}`);
-        configs.add(file);
+        configs.add(fs.realpathSync(file));
         processConfig(file);
-        return { ...reference, path: mapped(context, absolute, true) };
+        return { ...reference, path: checkedWorkspacePath(context.root, absolute) };
       });
     }
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, JSON.stringify(config, null, 2));
-    return destination;
+    context.metadata.add(original);
+    context.overlays.set(original, JSON.stringify(config));
+    return original;
   }
-  /** 第一方目录递归查找配置，不把 node_modules 中的工具配置注册为项目。 */
-  function visit(directory) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name !== 'node_modules') visit(path.join(directory, entry.name));
-      else if (entry.isFile() && /^(?:tsconfig|jsconfig)(?:\.[\w.-]+)?\.json$/.test(entry.name)) {
-        configs.add(path.join(context.root, path.relative(context.view, path.join(directory, entry.name))));
-      }
-    }
+  // 配置来自同一个 workspace 的清单；不扫描生成目录或安装依赖的配置。
+  for (const file of context.metadata) {
+    if (/^(?:tsconfig|jsconfig)(?:\.[\w.-]+)?\.json$/.test(path.basename(file))) configs.add(file);
   }
-  visit(context.view);
   for (const original of configs) processConfig(original);
   const projects = [];
-  const candidates = new Map(sources.map(source => [source.view, []]));
+  const candidates = new Map(sources.map(source => [source, []]));
   for (const original of configs) {
-    const config = mapped(context, original, true);
+    const config = checkedWorkspacePath(context.root, original);
     const errors = [];
-    const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: error => errors.push(error) });
+    const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...host, onUnRecoverableConfigFileDiagnostic: error => errors.push(error) });
     if (!parsed || errors.length) throw new Error(`无法确定项目上下文：${original}`);
     // 继承与模板展开全部完成后校验有效路径；不存在的输出和 glob 也检查最近现存祖先。
-    /** 同时检查视图及原始仓库，避免未复制的目录链接掩盖原始路径越界。 */
+    /** 校验有效路径和现存祖先，工作区外的配置仍然拒绝。 */
     function validateEffectivePath(value, base, label) {
       const candidate = path.resolve(base, value);
-      if (!within(context.view, candidate)) throw new Error(`有效 ${label} 映射越界：${candidate}`);
-      const originalPath = path.join(context.root, path.relative(context.view, candidate));
-      for (const [root, file] of [[context.view, candidate], [context.root, originalPath]]) {
-        let ancestor = file;
-        while (!fs.existsSync(ancestor) && ancestor !== root) ancestor = path.dirname(ancestor);
-        if (!within(root, fs.realpathSync(ancestor))) throw new Error(`有效 ${label} 符号链接越界：${file}`);
-      }
+      if (!within(context.root, candidate)) throw new Error(`有效 ${label} 映射越界：${candidate}`);
+      checkedWorkspacePath(context.root, candidate);
     }
     const configDirectory = path.dirname(config);
     for (const key of pathOptions) {
@@ -150,25 +138,25 @@ export function prepareConfigurations(context, ts, sources) {
     }
     projects.push({ name: config, roots: [config], options: {} });
   }
-  return { projects, candidates, configFiles: [...done].map(original => mapped(context, original, true)) };
+  return { host, projects, candidates, configFiles: [...done].map(original => checkedWorkspacePath(context.root, original)) };
 }
 
 /** 未配置文件按最近包元数据选固定 NodeNext 或 Preserve/Bundler；不参考工具 Node 版本。 */
 export function inferredOptions(context, file) {
   let directory = path.dirname(file);
   let node = /\.[cm][jt]s$/.test(file);
-  while (within(context.view, directory)) {
+  while (within(context.root, directory)) {
     const manifest = path.join(directory, 'package.json');
     if (fs.existsSync(manifest)) {
       const metadata = JSON.parse(fs.readFileSync(manifest, 'utf8'));
       node ||= Boolean(metadata.engines?.node || metadata.dependencies?.['@types/node'] || metadata.devDependencies?.['@types/node'] || metadata.type === 'commonjs');
       break;
     }
-    if (directory === context.view) break;
+    if (directory === context.root) break;
     directory = path.dirname(directory);
   }
   // tsserver protocol 使用选项枚举的字符串形式；ES2022 的 lib 名需要完整文件名。
   return { target: 'ES2022', module: node ? 'NodeNext' : 'Preserve', moduleResolution: node ? 'NodeNext' : 'Bundler',
     allowJs: true, checkJs: true, jsx: 'preserve', lib: node ? ['lib.es2022.d.ts'] : ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts'],
-    types: node ? ['node'] : [], typeRoots: [path.join(context.view, 'node_modules/@types')], skipLibCheck: true };
+    types: node ? ['node'] : [], typeRoots: [path.join(context.root, 'node_modules/@types')], skipLibCheck: true };
 }

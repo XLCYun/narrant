@@ -112,11 +112,6 @@ impl TypeScriptToolchain {
         command.env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
         command
     }
-
-    /// TLS 使用明确的 tsserver.path；此路径也作为标准库允许根。
-    pub fn tsserver(&self) -> PathBuf {
-        self.runtime_root.join("typescript/lib/tsserver.js")
-    }
 }
 
 /// 固定包树中的任意符号链接均不可逃出运行时，递归集合避免循环链接。

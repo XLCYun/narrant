@@ -32,10 +32,10 @@ fn group_pids(pid: i32) -> BTreeSet<i32> {
         .collect()
 }
 
-/// 使用真实固定服务，观测所有正常/取消/故障/快照变化出口均先回收进程再释放视图。
+/// 使用真实固定服务，观测所有正常/取消/故障/快照变化出口均先回收进程再释放助手文件。
 #[test]
 #[ignore = "需要固定 TypeScript 工具；Unix 进程组验收"]
-fn public_adapter_reclaims_view_and_children_on_every_exit() {
+fn public_adapter_preserves_workspace_and_reclaims_children_on_every_exit() {
     for mode in ["normal", "cancel", "failure", "timeout", "changed", "panic"] {
         let repository = tempfile::tempdir().unwrap();
         let source = repository.path().join("main.ts");
@@ -47,12 +47,13 @@ fn public_adapter_reclaims_view_and_children_on_every_exit() {
         let tools = tools::TypeScriptToolchain::default();
         let log = repository.path().join("lifecycle.log");
         let launcher = repository.path().join("node-wrapper");
+        let support_log = repository.path().join("support.log");
         let failure = match mode {
             "failure" => "exit 19",
             "timeout" => "sleep 10",
             _ => ":",
         };
-        fs::write(&launcher, format!("#!/bin/sh\ncase \"$1\" in */typescript-language-server/lib/cli.mjs) printf '%s\\n%s\\n' \"$$\" \"$PWD\" > {}; {};; esac\nexec {} \"$@\"\n", quote(&log), failure, quote(&tools.node))).unwrap();
+        fs::write(&launcher, format!("#!/bin/sh\ncase \"$1\" in */prepare.mjs) printf '%s\\n' \"$PWD\" > {};; */typescript-language-server/lib/cli.mjs) printf '%s\\n%s\\n' \"$$\" \"$PWD\" > {}; {};; esac\nexec {} \"$@\"\n", quote(&support_log), quote(&log), failure, quote(&tools.node))).unwrap();
         fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
         let done = Arc::new(AtomicBool::new(false));
         let pids = Arc::new(Mutex::new(BTreeSet::new()));
@@ -105,8 +106,11 @@ fn public_adapter_reclaims_view_and_children_on_every_exit() {
         let text = fs::read_to_string(&log).unwrap();
         let mut lines = text.lines();
         let pid: i32 = lines.next().unwrap().parse().unwrap();
-        let view = PathBuf::from(lines.next().unwrap());
-        assert!(!view.exists(), "{mode} 残留视图 {view:?}");
+        let workspace = PathBuf::from(lines.next().unwrap());
+        assert_eq!(workspace, repository.path().canonicalize().unwrap());
+        assert!(workspace.is_dir(), "{mode} 不能删除 Git workspace");
+        let support = PathBuf::from(fs::read_to_string(support_log).unwrap().trim());
+        assert!(!support.exists(), "{mode} 残留助手文件 {support:?}");
         pids.lock().unwrap().insert(pid);
         for pid in pids.lock().unwrap().iter() {
             assert_eq!(unsafe { libc::kill(*pid, 0) }, -1, "{mode} 残留 PID {pid}");

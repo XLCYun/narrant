@@ -1,4 +1,4 @@
-//! 路径和 URI 映射拒绝词法跳转与符号链接逃逸，运行时声明保持外部身份。
+//! 路径和 URI 映射拒绝词法跳转与符号链接逃逸，所有文件保持真实身份。
 use super::PreparedProject;
 use crate::structure_review::typescript_analyzer::{failure, Result};
 use std::path::{Component, Path, PathBuf};
@@ -43,10 +43,7 @@ impl PreparedProject {
                 file.display()
             ))
         })?;
-        if self.sources.contains_key(&canonical)
-            || self.metadata.contains_key(&canonical)
-            || self.runtime_original(&canonical).is_some()
-        {
+        if self.sources.contains_key(&canonical) || self.metadata.contains(&canonical) {
             return Ok(canonical);
         }
         if self
@@ -60,20 +57,6 @@ impl PreparedProject {
             return Ok(canonical);
         }
         Err(failure(format!("服务引入未授权源码：{}", file.display())))
-    }
-
-    /// 将原始侧已选中或上下文文件映射到受控视图。
-    pub fn view_path(&self, original: &Path) -> Result<PathBuf> {
-        lexical_under(&self.original_root, original)?;
-        let view = self.view_root.join(
-            original
-                .strip_prefix(&self.original_root)
-                .map_err(failure)?,
-        );
-        if !self.sources.contains_key(&view) {
-            return Err(failure("原始路径不属于源码快照"));
-        }
-        Ok(view)
     }
 
     /// 服务 URI 只能是本地 file URI，映射后仍执行同一来源范围检查。
@@ -92,39 +75,14 @@ impl PreparedProject {
         )
     }
 
-    /// 返回第一方的原始 URI；标准库保留固定运行时 URI，由语义层识别为外部对象。
-    pub fn original_uri(&self, view: &Path) -> Result<String> {
-        let checked = self.checked_path(view)?;
-        let identity = self
-            .sources
-            .get(&checked)
-            .map(|source| source.original.clone())
-            .or_else(|| self.metadata.get(&checked).cloned())
-            .or_else(|| self.runtime_original(&checked))
-            .unwrap_or(checked);
-        crate::lsp::file_uri(&identity).map_err(failure)
-    }
-
-    /// 视图中的固定 Node 闭包映射回工具身份；业务 node_modules 永远不能使用此入口。
-    fn runtime_original(&self, file: &Path) -> Option<PathBuf> {
-        if !file.to_string_lossy().ends_with(".d.ts") {
-            return None;
-        }
-        for name in ["@types/node", "undici-types"] {
-            let root = self.view_root.join("node_modules").join(name);
-            if let Ok(relative) = file.strip_prefix(root) {
-                let original = self.toolchain.runtime_root.join(name).join(relative);
-                if original.is_file() {
-                    return Some(original);
-                }
-            }
-        }
-        None
+    /// 语义位置直接使用 Git workspace 或固定标准库的真实 URI。
+    pub fn source_uri(&self, file: &Path) -> Result<String> {
+        crate::lsp::file_uri(&self.checked_path(file)?).map_err(failure)
     }
 
     /// 从固定快照读取第一方文本；运行时声明只能从已验证目录读取。
-    pub fn source(&self, view: &Path) -> Result<String> {
-        let checked = self.checked_path(view)?;
+    pub fn source(&self, file: &Path) -> Result<String> {
+        let checked = self.checked_path(file)?;
         self.sources
             .get(&checked)
             .map(|source| Ok(source.source.clone()))

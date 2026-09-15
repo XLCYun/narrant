@@ -5,6 +5,10 @@
 状态：产品范围已收敛；工程推荐 Oxc + typescript-language-server 6.0.0 + tsserver 6.0.3。
 已完成 23 个真实 LSP 会话的方案验证；通用项目投影器和生产适配器尚未实现。
 本文是调研与设计记录，不表示生产实现已经完成。
+后续决策更新（2026-09-15）：用户明确禁止重复复制文件，所有语言必须复用同一侧的
+Git workspace。生产实现改为 tsserver 只读文件接口、内存配置和包路径映射；下文关于
+临时源码目录的建议与探针保留为历史记录，当前契约以
+[规范 0021](../specs/0021-typescript-language-analyzer.md) 为准。
 本轮按 `grill-with-docs` 同时应用 grilling、domain-modeling，并用 research 收集一手资料。
 外部后端资料见 [分析后端调研](typescript-code-graph-backends.md)。
 VS Code 当前稳定版的实际架构与 JS 支持见 [VS Code 参考](typescript-vscode-reference.md)。

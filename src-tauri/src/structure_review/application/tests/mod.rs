@@ -229,14 +229,17 @@ fn analyze_files(
     .unwrap())
 }
 
-/// 同一侧把 TS 与 JS 放进一个调用，并与 Rust 图合并；逐侧说明不进入图差异。
+/// 同一侧的 Rust 与 TS/JS 共用唯一 workspace；跨语言图合并，逐侧说明不进入图差异。
 #[test]
 fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets() {
     let repository = tempfile::tempdir().unwrap();
     let rust_calls = Arc::new(Mutex::new(Vec::new()));
     let observed_rust = rust_calls.clone();
     let analyze_rust: Arc<AnalyzeGraph> = Arc::new(move |input, _, _| {
-        observed_rust.lock().unwrap().push(input.files.clone());
+        observed_rust
+            .lock()
+            .unwrap()
+            .push((input.repository_root.clone(), input.files.clone()));
         Ok(single_node_graph("rust:main", "rust", vec![]))
     });
     let typescript_calls = Arc::new(Mutex::new(Vec::new()));
@@ -245,7 +248,7 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
         observed_typescript
             .lock()
             .unwrap()
-            .push(input.files.clone());
+            .push((input.repository_root.clone(), input.files.clone()));
         let helper = code_node("javascript:helper", "javascript", vec![]);
         let mut entry = code_node("typescript:entry", "typescript", vec![]);
         entry.references.push(CodeReference {
@@ -286,10 +289,19 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
         &CancellationToken::new(),
     )
     .unwrap();
-    assert_eq!(*rust_calls.lock().unwrap(), [vec![PathBuf::from("lib.rs")]]);
+    assert_eq!(
+        *rust_calls.lock().unwrap(),
+        [(
+            repository.path().to_path_buf(),
+            vec![PathBuf::from("lib.rs")]
+        )]
+    );
     assert_eq!(
         *typescript_calls.lock().unwrap(),
-        [vec![PathBuf::from("main.ts"), PathBuf::from("helper.js")]]
+        [(
+            repository.path().to_path_buf(),
+            vec![PathBuf::from("main.ts"), PathBuf::from("helper.js")]
+        )]
     );
     let entry = report
         .graph

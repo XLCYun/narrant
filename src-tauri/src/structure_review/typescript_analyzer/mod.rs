@@ -23,7 +23,7 @@ use std::{
     time::Duration,
 };
 
-/// 固定工具配置可克隆；每次调用独立拥有项目视图和全部子进程。
+/// 固定工具配置可克隆；每次调用读取传入的 Git workspace 并独立管理子进程。
 #[derive(Clone)]
 pub struct TypeScriptLanguageAnalyzer {
     tools: tools::TypeScriptToolchain,
@@ -123,16 +123,20 @@ impl TypeScriptLanguageAnalyzer {
             self.timeout,
             &self.cancelled,
         )?
-        .ok_or_else(|| failure("非空选集缺少项目视图"))?;
+        .ok_or_else(|| failure("非空选集缺少项目上下文"))?;
         let mut documents = BTreeMap::new();
         for (path, source) in selected {
-            let view = project.view_path(&path)?;
-            if project.source(&view)? != source {
+            let path = project.checked_path(&path)?;
+            if project.source(&path)? != source {
                 return Err(failure("准备期间选中源文件已改变"));
             }
-            let document =
-                syntax::Document::parse(&project.original_root, path, source, input.options)?;
-            documents.insert(view, document);
+            let document = syntax::Document::parse(
+                &project.workspace_root,
+                path.clone(),
+                source,
+                input.options,
+            )?;
+            documents.insert(path, document);
         }
         validate_snapshots(&project, &self.cancelled)?;
         let mut session = lsp::TypeScriptLsp::start(project, self.timeout, self.cancelled.clone())?;
@@ -151,26 +155,26 @@ impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
     }
 }
 
-/// 验证全部第一方语义上下文仍等于受控视图快照，不能只检查输出选集。
+/// 验证 Git workspace 的全部第一方源码仍等于分析前的内存快照，不只检查输出选集。
 fn validate_snapshots(
     project: &project::PreparedProject,
     cancelled: &CancellationCheck,
 ) -> Result<()> {
+    project.check_access()?;
     for snapshot in project.sources.values() {
         if cancelled() {
             return Err(AnalysisError::cancelled("TypeScript 结构分析已取消"));
         }
         if !snapshot
-            .original
+            .path
             .canonicalize()
             .map_err(failure)?
-            .starts_with(&project.original_root)
-            || snapshot.view != project.view_path(&snapshot.original)?
-            || fs::read_to_string(&snapshot.original).map_err(failure)? != snapshot.source
+            .starts_with(&project.workspace_root)
+            || fs::read_to_string(&snapshot.path).map_err(failure)? != snapshot.source
         {
             return Err(failure(format!(
                 "分析期间源文件已改变：{}",
-                snapshot.original.display()
+                snapshot.path.display()
             )));
         }
     }

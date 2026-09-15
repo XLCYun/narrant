@@ -12,6 +12,7 @@ Execute through all tasks; commits remain on codex/typescript-code-graph for rev
 - Direct const-bound arrows are Callable; anonymous inline callbacks stay in owner code. Intrinsic JSX has no nodes/edges.
 - Preserve six graph categories, source-declaration identity, own-content boundaries, and Node/External/Unresolved.
 - Before/after use their own snapshots/configs and the same fixed engine/rules/options. Any hard language failure fails the whole comparison.
+- Each side's languages read the same Git workspace; no per-language source/config/declaration copies. Temporary helper/control files are allowed.
 - Chinese comments for functions/types. Private Rust tests in module tests/ directories, never inline.
 - Every Cargo command through scripts/cargo-agent.sh; separate worktree target, no disabled incremental, no manual quality-gate.
 - Use /Users/lizhanfa/.nvm/versions/node/v24.18.0/bin in PATH for commands; the login shell currently chooses unsupported Node 26.
@@ -60,7 +61,7 @@ Run cargo-agent check --lib and syntax-focused tests, not the full suite. Report
 precise internal interfaces and any remaining Task 3 semantic requirements. Commit only
 task-owned files and update no research/spec prose unless a factual correction is needed.
 
-## Task 2: Controlled project view and fixed LSP sessions
+## Task 2: Shared Git workspace and fixed LSP sessions
 
 Implement project.rs/project/ modules, tools.rs, lsp.rs and trusted runtime helpers under
 typescript_analyzer/runtime/, plus their tests. Consume Task 1 source/path helpers only
@@ -78,9 +79,11 @@ packages with integrity verification/no package install scripts and to prepare t
 tool entry from the running supported Node. Preserve existing app dependency versions.
 Node types initial profile is @types/node 22.20.1 + undici-types 6.21.0.
 
-Build temporary analysis view from the provided repository side. Preserve first-party
-layout/config JSONC/extends/references/manifest module metadata, recreate only first-party
-workspace links, supply allowed runtime types, and exclude business sources/declarations.
+Read the provided repository side directly. Preserve first-party layout, JSONC config,
+extends/references and manifest module metadata. Override configuration and first-party
+package lookup paths only in memory through the fixed tsserver file host; never create
+source/config/declaration copies or physical package links. Read fixed runtime declarations
+at their installed paths and exclude business sources/declarations from service inputs.
 Do not force noResolve or flatten configurations. Configuration helper may use the fixed
 TS library to parse/resolve config (no checker/graph extraction); embed trusted helper
 source so packaged app does not depend on current repository source paths. Runtime helper
@@ -93,7 +96,7 @@ preserve. Explicit project lib/noLib remains authoritative. Treat missing busine
 extends/types as an analysis note if reliable project context can still be established;
 do not execute config JS/plugins or borrow original dependency sources.
 
-Expose a PreparedProject owning TempDir, original/view path mapping, project registrations,
+Expose a PreparedProject owning only its helper/control TempDir, canonical workspace paths, project registrations,
 allowed roots and per-file project candidates, notes and source snapshots. Validate all
 selected input paths and context paths. Unexpected external source membership is an error.
 Project info must be checked against actual requested project names (not registration aliases).
@@ -107,7 +110,8 @@ file analysis notes using explicit queries rather than last-notification storage
 shutdown/exit and cancellation reclaim the full process group before releasing temp files.
 Modify shared LSP only for demonstrated protocol/lifecycle gaps and regress Rust consumers.
 
-Focus tests on view exclusion even with installed third-party types, standard Node closure,
+Focus tests on unchanged Git workspace files, actual service paths, helper cleanup without
+workspace deletion, exclusion even with installed third-party types, standard Node closure,
 JSONC/extends and paths, project references with absent dist, workspace package imports,
 config-less JS, selected-file association, URI mapping/escape rejection, real server normal
 shutdown and missing-tool/cancel/errors. Fixed-service tests can be ignored by ordinary CI

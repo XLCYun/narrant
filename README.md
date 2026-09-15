@@ -2,7 +2,7 @@
 
 ## TypeScript / JavaScript 结构分析
 
-使用应用支持的 Node 版本安装项目依赖后，在应用仓库根目录显式准备分析工具：
+以下命令只供 Narrant 开发环境安装应用自身依赖和准备分析工具，在 Narrant 仓库根目录执行：
 
 ```sh
 pnpm install --frozen-lockfile
@@ -43,8 +43,13 @@ Rust 分析继续使用开发仓库中的 `.tools/rust-analyzer`（Windows 为
 默认语义上下文由仓库第一方源码、项目配置启用的标准库，以及固定 Node 声明闭包
 组成，不包含业务第三方源码或类型。缺少业务依赖时，可靠关系会保留，无法确认的目标
 保持未解析，并按前后两侧分别显示上下文说明。这套代码图是保守的静态语义结果，
-不保证完整的 TypeScript 静态可靠性；输入路径检查和临时视图隔离也不构成操作系统级
+不保证完整的 TypeScript 静态可靠性；输入路径检查和语言服务的文件读取控制也不构成操作系统级
 沙箱。
+
+同一比较侧的 Rust、TypeScript 和 JavaScript 共用 Review 已签出的 Git workspace。
+分析器不再复制仓库源码、配置或标准声明；配置调整与 workspace 包解析映射只存在于内存，
+标准声明从固定工具目录直接读取。临时目录仅保存 Narrant 自身的助手和控制消息，
+退出时清理这些文件及语言服务进程，Git workspace 继续由 Review 生命周期管理。
 
 生产夹具已覆盖现代 NodeNext、Bundler、JS/JSX、Promise、Node ESM/CJS 包装和
 原生 JSDoc。TS 5 风格兼容夹具使用 CommonJS、旧式 Node moduleResolution、

@@ -9,7 +9,8 @@ use std::{
 
 pub(super) const HELPERS: &[(&str, &str)] = &[
     ("prepare.mjs", include_str!("runtime/prepare.mjs")),
-    ("view.mjs", include_str!("runtime/view.mjs")),
+    ("workspace.mjs", include_str!("runtime/workspace.mjs")),
+    ("server.mjs", include_str!("runtime/server.mjs")),
     ("config.mjs", include_str!("runtime/config.mjs")),
 ];
 
