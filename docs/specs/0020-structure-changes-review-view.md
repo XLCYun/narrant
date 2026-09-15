@@ -740,3 +740,19 @@ recursive field and unrelated unchanged call relationships.
   or browser exception. Viewport overrides are cleared afterward. The in-app preview
   request remains queued and no in-app interaction tool is available; in-app
   interaction verification remains pending.
+
+## Language selection (2026-09-15)
+
+The left edge of the Structure Changes toolbar contains a single-select language
+control. Options come from the union of `CodeNode.language` values in both graphs,
+sorted by language ID, including languages present only in removed objects. Select
+the first available language by default; show a disabled empty selector when no
+objects provide a language. New language analyzers require no selector registry.
+
+Switching language is a local presentation operation and never restarts analysis.
+Project both graphs and their differences to the selected language before layout
+and detail rendering. Containment and graph-internal references must stay within
+that language; retain both added and removed relations whose endpoints remain.
+Keep the full analysis result unchanged. Clear selected objects and folding/expansion
+state on a language switch and fit the new graph, while retaining the sidebar width
+and the display-option switches. No mixed-language “all” option is offered.

@@ -6,10 +6,12 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { StructureDetails } from "./structure-details";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { collapseStructureLayout, layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { AnalysisNote, StructureBinding, StructureComparison } from "@/structure-review/types";
+import { comparisonForLanguage, structureLanguages } from "@/structure-review/language-view";
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
 
@@ -85,6 +87,7 @@ function RoutedRelationEdge(props: EdgeProps<StructureEdge>) {
   </g>;
 }
 const edgeTypes = { routedRelation: RoutedRelationEdge };
+const languageNames: Record<string, string> = { rust: "Rust", typescript: "TypeScript", javascript: "JavaScript" };
 
 /** 分析范围开关在加载、失败和空图时同样可用，切换由应用层重新分析两侧。 */
 function TestCodeSwitch({ binding }: { binding: StructureBinding }) {
@@ -144,15 +147,20 @@ export default function StructureChangesView({ binding, dark }: { binding?: Stru
 }
 
 /** 只读 combined graph，布局、展开和选中状态留在展示层。 */
-function ComparisonView({ comparison, binding, dark }: { comparison: StructureComparison; binding: StructureBinding; dark: boolean }) {
+function ComparisonView({ comparison: fullComparison, binding, dark }: { comparison: StructureComparison; binding: StructureBinding; dark: boolean }) {
   const { t } = useTranslation("structure");
+  const languages = useMemo(() => structureLanguages(fullComparison), [fullComparison]);
+  const [preferredLanguage, setPreferredLanguage] = useState<string>();
+  const language = preferredLanguage && languages.includes(preferredLanguage) ? preferredLanguage : languages[0];
+  const comparison = useMemo(() => comparisonForLanguage(fullComparison, language), [fullComparison, language]);
   const [showAll, setShowAll] = useState(false);
   const [showUnchangedReferences, setShowUnchangedReferences] = useState(false);
   const [showImports, setShowImports] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string>();
-  const [expandedLayout, setExpandedLayout] = useState<StructureLayout>();
+  const [layoutResult, setLayoutResult] = useState<{ comparison: StructureComparison; layout: StructureLayout }>();
+  const expandedLayout = layoutResult?.comparison === comparison ? layoutResult.layout : undefined;
   const layout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed), [expandedLayout, collapsed]);
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
@@ -178,7 +186,7 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
     setLayingOut(true);
     setLayoutError(undefined);
     void layoutStructureComparison(comparison, options, abort.signal).then((result) => {
-      if (current) { setExpandedLayout(result); setLayingOut(false); }
+      if (current) { setLayoutResult({ comparison, layout: result }); setLayingOut(false); }
     }).catch((reason: unknown) => {
       if (current) { setLayoutError(String(reason)); setLayingOut(false); }
     });
@@ -189,6 +197,24 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
     : comparison.diff.nodes.length > 0 ? "filtered" : "empty";
   return <div className="structure-view flex min-h-0 flex-1 flex-col" aria-label={t("title")}>
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-2 border-b px-3 py-2">
+      <div className="mr-auto min-w-0">
+        <Select value={language ?? null} disabled={languages.length === 0} onValueChange={(value) => {
+          if (!value || value === language) return;
+          setPreferredLanguage(value);
+          setSelectedId(undefined);
+          setExpanded(new Set());
+          setCollapsed(new Set());
+          setLayoutError(undefined);
+          setLayingOut(true);
+        }}>
+          <SelectTrigger size="sm" className="h-7 w-40 max-w-full text-xs" aria-label={t("graphLanguage")}>
+            <SelectValue>{language ? languageNames[language] ?? language : t("noGraphLanguages")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent align="start" alignItemWithTrigger={false}>
+            {languages.map((value) => <SelectItem key={value} value={value}>{languageNames[value] ?? value}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
       <AnalysisNotes comparison={comparison} />
       <TestCodeSwitch binding={binding} />
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={binding.retry}>{t("reanalyze")}</Button>
@@ -222,7 +248,7 @@ function ComparisonView({ comparison, binding, dark }: { comparison: StructureCo
               <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{layoutError}</p>
               <Button variant="outline" onClick={() => setExpanded(new Set(expanded))}>{t("retryLayout")}</Button>
             </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, connectedPorts, toggleCollapse, expand: (id) => setExpanded((current) => new Set([...current, id])), open: setSelectedId }}>
-              <ReactFlow<ObjectNode, StructureEdge> nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+              <ReactFlow<ObjectNode, StructureEdge> key={language} nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                 colorMode={dark ? "dark" : "light"} fitView fitViewOptions={{ padding: 0.16, maxZoom: 1 }} minZoom={0.08} maxZoom={2}
                 nodesDraggable={false} nodesConnectable={false} nodesFocusable={false} edgesReconnectable={false} deleteKeyCode={null}
                 onNodeClick={(_, node) => { if (node.data.objectId) setSelectedId(node.data.objectId); }}

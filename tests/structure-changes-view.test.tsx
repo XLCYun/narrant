@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureClassDiagramFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
 import * as graphPresentation from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
@@ -41,6 +41,58 @@ function binding(comparison = structureReviewFixture()): StructureBinding {
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+it("switches graph languages locally, clears old details and keeps cross-language relationships hidden", async () => {
+  const current = binding(structureMixedLanguagesFixture());
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  expect(screen.getByRole("combobox", { name: "结构图语言" })).toHaveTextContent("Rust");
+  expect(within(graph).getByRole("button", { name: "PullRequestGroup", exact: true })).toBeInTheDocument();
+  expect(within(graph).queryByRole("button", { name: "PullRequestViewModel", exact: true })).not.toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: /pub pull_requests:.*自身修改/ }));
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("combobox", { name: "结构图语言" }));
+  const typescriptOption = await screen.findByRole("option", { name: "TypeScript" });
+  fireEvent.pointerDown(typescriptOption);
+  fireEvent.pointerUp(typescriptOption);
+  fireEvent.click(typescriptOption);
+  await screen.findByRole("button", { name: "PullRequestViewModel", exact: true });
+  const next = screen.getByTestId("rendered-graph");
+  expect(within(next).queryByRole("button", { name: "PullRequestGroup", exact: true })).not.toBeInTheDocument();
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  expect(screen.queryByTestId("source-diff")).not.toBeInTheDocument();
+  fireEvent.click(within(next).getByRole("button", { name: /export async function refreshPullRequests/ }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent)).toEqual(["ts-refresh → ts-persist · + code.calls"]);
+  const sidebar = screen.getByRole("complementary", { name: "结构详情" });
+  expect(sidebar).toHaveTextContent("TypeScript".toLowerCase());
+  expect(sidebar).not.toHaveTextContent("code.calls → refresh");
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "显示全部对象" }));
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "PullRequestGroup", exact: true })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("combobox", { name: "结构图语言" }));
+  const rustOption = await screen.findByRole("option", { name: "Rust" });
+  fireEvent.pointerDown(rustOption);
+  fireEvent.pointerUp(rustOption);
+  fireEvent.click(rustOption);
+  expect(await screen.findByRole("button", { name: "PullRequestGroup", exact: true })).toBeInTheDocument();
+  expect(screen.queryByTestId("source-diff")).not.toBeInTheDocument();
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
+});
+
+it("keeps the language selector visible for single-language and empty results", async () => {
+  const view = render(<StructureChangesView binding={binding()} dark={false} />);
+  expect(screen.getByRole("combobox", { name: "结构图语言" })).toHaveTextContent("Rust");
+  const comparison = structureReviewFixture();
+  comparison.before = { root: [], nodes: [], externalSymbols: {} };
+  comparison.after = { root: [], nodes: [], externalSymbols: {} };
+  comparison.diff = { nodes: [] };
+  view.rerender(<StructureChangesView binding={binding(comparison)} dark={false} />);
+  expect(screen.getByRole("combobox", { name: "结构图语言" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "结构图语言" })).toHaveTextContent("暂无语言");
+  expect(await screen.findByText("没有结构变化")).toBeInTheDocument();
+});
 
 it("compares original source as one read-only inline diff and follows theme changes", async () => {
   const comparison = structureReviewFixture();
@@ -184,10 +236,16 @@ it("keeps per-side notes outside the diff and presents JSX relations and duplica
   expect(comparison.diff).toEqual(originalDiff);
   fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 
-  const graph = await screen.findByTestId("rendered-graph");
+  fireEvent.click(screen.getByRole("combobox", { name: "结构图语言" }));
+  const languageOption = await screen.findByRole("option", { name: "TypeScript" });
+  fireEvent.pointerDown(languageOption);
+  fireEvent.pointerUp(languageOption);
+  fireEvent.click(languageOption);
+  await screen.findByRole("button", { name: /ReviewWorkspaceWith/ });
+  const graph = screen.getByTestId("rendered-graph");
   fireEvent.click(within(graph).getByRole("button", { name: /ReviewWorkspaceWithAnExtraordinarilyLongName.*自身修改/ }));
   const details = screen.getByRole("complementary", { name: "结构详情" });
-  expect(details).toHaveTextContent("code.calls → formatReview");
+  expect(details).not.toHaveTextContent("code.calls → formatReview");
   expect(details).toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
   expect(screen.getByTestId("source-diff")).toHaveAttribute("data-original-language", "typescript");
 

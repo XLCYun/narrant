@@ -90,6 +90,7 @@ export const resources = {
     },
     structure: {
       reanalyze: "重新分析",
+      graphLanguage: "结构图语言", noGraphLanguages: "暂无语言",
       settingsDescription: "按语言设置结构改动的分析范围。",
       settingsLanguage: "编程语言",
       dependencyScope: "Rust 依赖分析范围",
@@ -242,6 +243,7 @@ export const resources = {
     },
     structure: {
       reanalyze: "Analyze again",
+      graphLanguage: "Graph language", noGraphLanguages: "No languages",
       settingsDescription: "Configure the scope of structure analysis for each language.",
       settingsLanguage: "Programming language",
       dependencyScope: "Rust dependency analysis",

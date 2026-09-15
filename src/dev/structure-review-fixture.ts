@@ -1,5 +1,36 @@
 import type { CodeNode, CodeReference, StructureComparison } from "@/structure-review/types";
 
+/** 同一个 Snapshot 含 Rust 与 TypeScript，覆盖切换语言、长签名、同语言和跨语言关系。 */
+export function structureMixedLanguagesFixture(): StructureComparison {
+  const comparison = structureFieldTypesFixture();
+  const call = (id: string): CodeReference => ({ semantic: "code.calls", target: { kind: "node", id } });
+  /** 用真实的语言标识和源码构造前端声明，不借助节点 ID 推断语言。 */
+  const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode> = {}): CodeNode => ({
+    id, category, language: "typescript", nativeKind: category === "container" ? "module" : category === "type" ? "interface" : "function",
+    name: id, signature: null, code: null, source: null, contains: [], references: [], extensions: {}, ...extra,
+  });
+  for (const side of ["before", "after"] as const) {
+    comparison[side].root.push("ts-module");
+    comparison[side].nodes.push(
+      node("ts-module", "container", { name: "src/review/pull-request-view-model.ts", contains: ["ts-type", "ts-refresh", "ts-persist"] }),
+      node("ts-type", "type", { name: "PullRequestViewModel", signature: "export interface PullRequestViewModel", contains: ["ts-title"] }),
+      node("ts-title", "value", { nativeKind: "property", name: "title", signature: `${side === "after" ? "readonly " : ""}title: string`, source: `${side === "after" ? "readonly " : ""}title: string;` }),
+      node("ts-refresh", "callable", {
+        name: "refreshPullRequests", signature: "export async function refreshPullRequestsForSelectedRepository(repository: RepositoryConfiguration): Promise<PullRequestViewModel[]>",
+        source: `export async function refreshPullRequestsForSelectedRepository(\n  repository: RepositoryConfiguration,\n): Promise<PullRequestViewModel[]> {\n  ${side === "before" ? "return cached;" : "persistPullRequests();\n  return await fetchRequests(repository);"}\n}`,
+        references: side === "before" ? [] : [call("ts-persist"), call("refresh")],
+      }),
+      node("ts-persist", "callable", { name: "persistPullRequests", signature: "function persistPullRequests(): void", source: "function persistPullRequests(): void {}" }),
+    );
+  }
+  comparison.diff.nodes.push(
+    { id: "ts-title", content: "modified", contains: [], references: [] },
+    { id: "ts-refresh", content: "modified", contains: [], references: ["ts-persist", "refresh"].map((id) => ({ kind: "added", value: call(id) })) },
+  );
+  comparison.coverage.push({ path: "src/review/pull-request-view-model.ts", oldPath: null, before: "analyzed", after: "analyzed" });
+  return comparison;
+}
+
 /** 原文对比预览覆盖长实现、长字符串、注释与字段，避免用规范化文本模拟展示数据。 */
 export function structureSourceDiffFixture(): StructureComparison {
   const comparison = structureReviewFixture();
