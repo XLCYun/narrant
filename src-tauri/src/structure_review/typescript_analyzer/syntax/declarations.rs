@@ -122,23 +122,33 @@ impl<'a> Visit<'a> for Collector<'a> {
     /// 普通顶层执行语句独立建模；具名声明继续走统一 typed AST 入口。
     fn visit_statement(&mut self, statement: &Statement<'a>) {
         let execution = self.top_statement()
-            && matches!(
-                statement,
+            && match statement {
                 Statement::ExpressionStatement(_)
-                    | Statement::BlockStatement(_)
-                    | Statement::IfStatement(_)
-                    | Statement::ForStatement(_)
-                    | Statement::ForInStatement(_)
-                    | Statement::ForOfStatement(_)
-                    | Statement::WhileStatement(_)
-                    | Statement::DoWhileStatement(_)
-                    | Statement::SwitchStatement(_)
-                    | Statement::TryStatement(_)
-                    | Statement::ThrowStatement(_)
-                    | Statement::WithStatement(_)
-                    | Statement::LabeledStatement(_)
-                    | Statement::DebuggerStatement(_)
-            );
+                | Statement::BlockStatement(_)
+                | Statement::IfStatement(_)
+                | Statement::ForStatement(_)
+                | Statement::ForInStatement(_)
+                | Statement::ForOfStatement(_)
+                | Statement::WhileStatement(_)
+                | Statement::DoWhileStatement(_)
+                | Statement::SwitchStatement(_)
+                | Statement::TryStatement(_)
+                | Statement::ThrowStatement(_)
+                | Statement::WithStatement(_)
+                | Statement::LabeledStatement(_)
+                | Statement::DebuggerStatement(_) => true,
+                // 纯导出没有对象；导出表达式中的实际执行代码仍需要归属。
+                Statement::ExportDefaultDeclaration(d) => {
+                    d.declaration.as_expression().is_some_and(|e| {
+                        !matches!(e.get_inner_expression(), Expression::Identifier(_))
+                    })
+                }
+                Statement::TSExportAssignment(d) => !matches!(
+                    d.expression.get_inner_expression(),
+                    Expression::Identifier(_)
+                ),
+                _ => false,
+            };
         if execution {
             let span = statement.span();
             let id = self.push(
@@ -391,69 +401,6 @@ impl<'a> Visit<'a> for Collector<'a> {
                 d.global_span,
                 None,
             )),
-            AstKind::ImportDeclaration(d) => Some((
-                Extension,
-                "import",
-                Some(d.source.value.to_string()),
-                d.source.span,
-                None,
-            )),
-            AstKind::TSImportEqualsDeclaration(d) => Some((
-                Extension,
-                "import_equals",
-                Some(d.id.name.to_string()),
-                d.id.span,
-                None,
-            )),
-            AstKind::ExportFromDeclaration(d) => Some((
-                Extension,
-                "reexport",
-                Some(d.source.value.to_string()),
-                d.source.span,
-                None,
-            )),
-            AstKind::ExportAllDeclaration(d) => Some((
-                Extension,
-                "export_all",
-                Some(d.source.value.to_string()),
-                d.source.span,
-                None,
-            )),
-            AstKind::ExportNamedDeclaration(d) => Some((
-                Extension,
-                "export_named",
-                None,
-                Span::new(d.span.start, d.span.start),
-                None,
-            )),
-            AstKind::ExportDeclaration(d) => Some((
-                Extension,
-                "export",
-                None,
-                Span::new(d.span.start, d.span.start),
-                None,
-            )),
-            AstKind::ExportDefaultDeclaration(d) => Some((
-                Extension,
-                "export_default",
-                Some("default".into()),
-                Span::new(d.span.start, d.span.start),
-                None,
-            )),
-            AstKind::TSExportAssignment(d) => Some((
-                Extension,
-                "export_assignment",
-                None,
-                Span::new(d.span.start, d.span.start),
-                Some(d.expression.span()),
-            )),
-            AstKind::TSNamespaceExportDeclaration(d) => Some((
-                Extension,
-                "namespace_export",
-                Some(d.id.name.to_string()),
-                d.id.span,
-                None,
-            )),
             _ => None,
         };
         if let Some((category, kind, name, selection, body)) = shape {
@@ -507,8 +454,8 @@ impl<'a> Visit<'a> for Collector<'a> {
                     part.source_span = d.span;
                 }
             }
-            // export 是独立 Extension，但声明展示保留完整导出包装和前导 JSDoc。
-            if let Some(export_span) = self
+            // 导出包装归入真实声明的签名和原文，不再生成独立图节点。
+            if let Some((export_span, modifier)) = self
                 .stack
                 .iter()
                 .rev()
@@ -521,19 +468,20 @@ impl<'a> Visit<'a> for Collector<'a> {
                     )
                 })
                 .find_map(|(n, _)| match n {
-                    AstKind::ExportDeclaration(e) => Some(e.span),
-                    AstKind::ExportDefaultDeclaration(e) => Some(e.span),
+                    AstKind::ExportDeclaration(e) => Some((e.span, "export ")),
+                    AstKind::ExportDefaultDeclaration(e) => Some((e.span, "export default ")),
                     _ => None,
                 })
             {
-                self.items[id].parts.last_mut().unwrap().source_span = export_span;
+                let declaration = &mut self.items[id];
+                let part = declaration.parts.last_mut().unwrap();
+                part.source_span = export_span;
+                part.parent_exclusion = export_span;
+                if !declaration.prefix.starts_with(modifier) {
+                    declaration.prefix.insert_str(0, modifier);
+                }
             }
-            if !matches!(
-                node,
-                AstKind::ExportDeclaration(_) | AstKind::ExportDefaultDeclaration(_)
-            ) {
-                owner = Some(id);
-            }
+            owner = Some(id);
         }
         self.stack.push((node, owner));
     }

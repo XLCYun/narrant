@@ -189,7 +189,7 @@ export function structureMixedLanguageFixture(): StructureComparison {
     id,
     category,
     language: "typescript",
-    nativeKind: category === "container" ? "module" : category === "type" ? "interface" : category === "extension" ? "import" : "function",
+    nativeKind: category === "container" ? "module" : category === "type" ? "interface" : "function",
     name: id,
     signature: null,
     code: null,
@@ -205,8 +205,7 @@ export function structureMixedLanguageFixture(): StructureComparison {
     const graph = comparison[side];
     graph.root.push("typescript-module", "javascript-helper", "merged-plugin-a", "merged-plugin-b");
     graph.nodes.push(
-      node("typescript-module", "container", { name: "review-ui", contains: ["typescript-import", "typescript-component", "child-view"] }),
-      node("typescript-import", "extension", { name: null, signature: 'import { formatReview } from "./format-review.js";', source: 'import { formatReview } from "./format-review.js";', references: [{ semantic: "code.imports", target: { kind: "node", id: "javascript-helper" } }] }),
+      node("typescript-module", "container", { name: "review-ui", contains: ["typescript-component", "child-view"] }),
       node("javascript-helper", "callable", { language: "javascript", name: "formatReview", signature: "export function formatReview(value)", source: "export function formatReview(value) { return String(value); }" }),
       node("child-view", "callable", { name: "ReviewSummaryCard", signature: "export function ReviewSummaryCard(props: ReviewSummaryProps)", source: "export function ReviewSummaryCard(props: ReviewSummaryProps) { return <strong>{props.title}</strong>; }" }),
       node("typescript-component", "callable", {

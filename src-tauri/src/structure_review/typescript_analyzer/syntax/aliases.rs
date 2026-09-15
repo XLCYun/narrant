@@ -2,13 +2,15 @@
 use oxc_ast::{ast::*, AstKind};
 use oxc_ast_visit::Visit;
 use oxc_semantic::Scoping;
-use oxc_span::Span;
+use oxc_span::{GetSpan, Span};
 
 /// 一条导入或公开导出路线；binding 是 Oxc 的本文件声明位置，不是跨文件符号身份。
 #[derive(Clone, Debug)]
 pub(crate) struct Alias {
     pub import: bool,
     pub binding: Option<Span>,
+    /// 别名语法的定义查询位置，与图节点及本地目标声明的位置无关。
+    pub selection: Option<Span>,
     pub exported: Option<String>,
     pub name: String,
     pub source: Option<Span>,
@@ -58,10 +60,11 @@ impl<'s, 'a> Collector<'s, 'a> {
     }
 
     /// 直接导出的值声明优先于星号导出，防止邻接 type-only 星号掩盖真实运行时出口。
-    fn value_export(&mut self, name: &str, span: Option<Span>) {
+    fn value_export(&mut self, name: &str, span: Option<Span>, selection: Option<Span>) {
         self.aliases.push(Alias {
             import: false,
             binding: span,
+            selection,
             exported: Some(name.into()),
             name: name.into(),
             source: None,
@@ -81,6 +84,7 @@ impl<'s, 'a> Collector<'s, 'a> {
         self.aliases.push(Alias {
             import: true,
             binding: Some(local.span),
+            selection: Some(local.span),
             exported: None,
             name,
             source: Some(parent.source.span),
@@ -108,6 +112,7 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
                 self.aliases.push(Alias {
                     import: true,
                     binding: Some(i.id.span),
+                    selection: Some(i.id.span),
                     exported: None,
                     name: "*".into(),
                     source,
@@ -137,6 +142,7 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
                 self.aliases.push(Alias {
                     import: false,
                     binding: local,
+                    selection: Some(e.local.span()),
                     exported: Some(e.exported.name().to_string()),
                     name: e.local.name().to_string(),
                     source,
@@ -147,6 +153,7 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
             AstKind::ExportAllDeclaration(e) => self.aliases.push(Alias {
                 import: false,
                 binding: None,
+                selection: None,
                 exported: e.exported.as_ref().map(|n| n.name().to_string()),
                 name: "*".into(),
                 source: Some(e.source.span),
@@ -158,29 +165,35 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
                     ExportDefaultDeclarationKind::Identifier(id) => binding(self.scoping, id),
                     _ => None,
                 };
-                self.value_export("default", local);
+                let selection = match &d.declaration {
+                    ExportDefaultDeclarationKind::Identifier(id) => Some(id.span),
+                    _ => None,
+                };
+                self.value_export("default", local, selection);
             }
             AstKind::ExportDeclaration(e) => match &e.declaration {
                 Declaration::FunctionDeclaration(d) => {
                     if let Some(id) = &d.id {
-                        self.value_export(&id.name, Some(id.span));
+                        self.value_export(&id.name, Some(id.span), None);
                     }
                 }
                 Declaration::ClassDeclaration(d) => {
                     if let Some(id) = &d.id {
-                        self.value_export(&id.name, Some(id.span));
+                        self.value_export(&id.name, Some(id.span), None);
                     }
                 }
                 Declaration::VariableDeclaration(d) => {
                     for variable in &d.declarations {
                         for id in variable.id.get_binding_identifiers() {
-                            self.value_export(&id.name, Some(id.span));
+                            self.value_export(&id.name, Some(id.span), None);
                         }
                     }
                 }
-                Declaration::TSEnumDeclaration(d) => self.value_export(&d.id.name, Some(d.id.span)),
+                Declaration::TSEnumDeclaration(d) => {
+                    self.value_export(&d.id.name, Some(d.id.span), None)
+                }
                 Declaration::TSNamespaceDeclaration(d) => {
-                    self.value_export(&d.id.name, Some(d.id.span))
+                    self.value_export(&d.id.name, Some(d.id.span), None)
                 }
                 _ => {}
             },

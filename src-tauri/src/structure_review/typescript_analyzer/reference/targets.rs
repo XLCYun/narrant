@@ -2,10 +2,10 @@
 #[path = "aliases.rs"]
 mod aliases;
 use super::super::{
-    failure, identity,
+    failure,
     lsp::{CheckedLocation, DefinitionEvidence, TypeScriptLsp},
     syntax::{Declaration, Document, Occurrence, OccurrenceKind},
-    Result,
+    text, Result,
 };
 use crate::structure_review::code_graph::{
     AnalysisOptions, CodeCategory, ExternalSymbol, NodeId, ReferenceTarget, SymbolScope,
@@ -91,23 +91,12 @@ impl Resolver {
             return Ok(None);
         }
         let mut targets = BTreeMap::new();
-        let mut modules = BTreeSet::new();
         let mut uncertain = false;
         for definition in definitions {
             let DefinitionEvidence::Checked(location) = definition else {
                 uncertain = true;
                 continue;
             };
-            if matches!(
-                occurrence.kind,
-                OccurrenceKind::Import | OccurrenceKind::Reexport
-            ) && location.span.start_byte == 0
-            {
-                if let Some(target) = self.module(session, &location)? {
-                    modules.insert(target);
-                    continue;
-                }
-            }
             let Some(resolved) = self.follow(
                 session,
                 &location,
@@ -154,7 +143,7 @@ impl Resolver {
             }
         }
         if targets.is_empty() {
-            return Ok((!uncertain && !modules.is_empty()).then_some(modules));
+            return Ok(None);
         }
         // 已观察到函数值但证据冲突时保留未知引用，普通数据读取仍不扩展成图边。
         let unknown_reference = || {
@@ -196,10 +185,12 @@ impl Resolver {
                 return Ok(unknown_reference());
             }
         }
-        for target in targets.into_values() {
-            modules.insert(self.reference(target));
-        }
-        Ok(Some(modules))
+        Ok(Some(
+            targets
+                .into_values()
+                .map(|target| self.reference(target))
+                .collect(),
+        ))
     }
 
     /// 别名续查限定深度并检测回环；只沿精确导入/导出名或 const 直接绑定继续。
@@ -222,16 +213,17 @@ impl Resolver {
         }
         let document = &self.documents[&location.path];
         let alias = document
-            .occurrences
+            .aliases
             .iter()
-            .find(|o| {
-                o.import_alias
-                    && o.selection.start <= location.span.start_byte
-                    && location.span.end_byte <= o.selection.end
+            .find(|alias| {
+                alias.selection.is_some_and(|selection| {
+                    selection.start <= location.span.start_byte
+                        && location.span.end_byte <= selection.end
+                })
             })
             .cloned();
         let declaration = declaration_at(document, location).cloned();
-        let alias = alias.or_else(|| {
+        let value_alias = if alias.is_none() {
             declaration.as_ref().and_then(|d| {
                 if !matches!(
                     kind,
@@ -255,34 +247,51 @@ impl Resolver {
                     })
                     .cloned()
             })
-        });
-        if let Some(alias) = alias {
-            if matches!(
-                kind,
-                OccurrenceKind::Call
-                    | OccurrenceKind::Construct
-                    | OccurrenceKind::Reference
-                    | OccurrenceKind::JsxComponent
-            ) && self.type_only_binding(session, &location.path, &alias, project)?
+        } else {
+            None
+        };
+        let runtime_value = matches!(
+            kind,
+            OccurrenceKind::Call
+                | OccurrenceKind::Construct
+                | OccurrenceKind::Reference
+                | OccurrenceKind::JsxComponent
+        );
+        // 导入/导出别名使用独立语法位置，不需要伪造一个图节点作为所有者。
+        let query = if let Some(alias) = alias {
+            let selection = alias.selection.expect("已按别名查询位置筛选");
+            let position = text::position(&document.source, selection.start)?;
+            if runtime_value
+                && self.alias_route(
+                    session,
+                    &location.path,
+                    &alias,
+                    &[],
+                    project,
+                    &mut BTreeSet::new(),
+                )?
             {
                 return Ok(None);
             }
+            Some((position, selection.start, alias.type_only))
+        } else if let Some(alias) = value_alias {
+            if runtime_value && self.type_only_binding(session, &location.path, &alias, project)? {
+                return Ok(None);
+            }
+            Some((alias.position, alias.selection.start, alias.type_only))
+        } else {
+            None
+        };
+        if let Some((position, offset, type_only)) = query {
             if session.project().sources.contains_key(&location.path) {
                 session.collect_notes(&location.path, project)?;
             }
-            if (alias.type_only
-                || session.runtime_type_error(&location.path, alias.selection.start, project))
-                && matches!(
-                    kind,
-                    OccurrenceKind::Call
-                        | OccurrenceKind::Construct
-                        | OccurrenceKind::Reference
-                        | OccurrenceKind::JsxComponent
-                )
+            if runtime_value
+                && (type_only || session.runtime_type_error(&location.path, offset, project))
             {
                 return Ok(None);
             }
-            let definitions = session.definitions(&location.path, alias.position, project)?;
+            let definitions = session.definitions(&location.path, position, project)?;
             if definitions.is_empty() {
                 return Ok(None);
             }
@@ -372,42 +381,6 @@ impl Resolver {
         Ok(true)
     }
 
-    /// 文件级模块没有虚构图节点；导入文件本身仍有稳定的外部模块身份。
-    fn module(
-        &mut self,
-        session: &TypeScriptLsp,
-        location: &CheckedLocation,
-    ) -> Result<Option<ReferenceTarget>> {
-        if !self.load(session, location)? {
-            return Ok(None);
-        }
-        let document = &self.documents[&location.path];
-        let runtime = !session.project().sources.contains_key(&location.path);
-        let root = if runtime {
-            &session.project().toolchain.runtime_root
-        } else {
-            &session.project().workspace_root
-        };
-        let mut symbol = identity::file_scope(root, &document.path, &document.language.0)?;
-        if runtime {
-            symbol = runtime_id(&symbol);
-        }
-        symbol.push_str("::module");
-        let path = document.path.strip_prefix(root).map_err(failure)?.display();
-        self.external_symbols.insert(
-            symbol.clone(),
-            ExternalSymbol {
-                name: format!("{path}（模块）"),
-                scope: if runtime {
-                    SymbolScope::Dependency
-                } else {
-                    SymbolScope::Repository
-                },
-            },
-        );
-        Ok(Some(ReferenceTarget::External { symbol }))
-    }
-
     /// 只有最初选集中的声明可成为 Node；外部说明不参与身份或差异。
     fn reference(&mut self, target: Target) -> ReferenceTarget {
         let data = target.declaration.node.data();
@@ -482,9 +455,6 @@ fn accepts(target: &Target, kind: OccurrenceKind) -> bool {
         }
         OccurrenceKind::Extends | OccurrenceKind::Implements | OccurrenceKind::TypeUse => {
             declaration.node.category() == CodeCategory::Type
-        }
-        OccurrenceKind::Import | OccurrenceKind::Reexport => {
-            declaration.node.category() != CodeCategory::Extension
         }
     }
 }

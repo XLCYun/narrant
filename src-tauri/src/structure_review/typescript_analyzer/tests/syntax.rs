@@ -233,8 +233,6 @@ fn reference_intents_are_explicit() {
         OccurrenceKind::Construct,
         OccurrenceKind::Write,
         OccurrenceKind::Reference,
-        OccurrenceKind::Import,
-        OccurrenceKind::Reexport,
         OccurrenceKind::Extends,
         OccurrenceKind::Implements,
         OccurrenceKind::TypeUse,
@@ -249,14 +247,118 @@ fn reference_intents_are_explicit() {
         .iter()
         .any(|o| o.kind == OccurrenceKind::Call && o.dynamic));
     assert!(document
-        .occurrences
+        .aliases
         .iter()
-        .any(|o| o.import_alias && o.type_only));
+        .any(|alias| alias.import && alias.type_only));
     assert!(document
         .occurrences
         .iter()
         .filter(|o| o.kind == OccurrenceKind::Call)
-        .all(|o| !o.import_alias && !o.type_only));
+        .all(|o| !o.type_only));
+}
+
+/// 导入和纯导出只保留内部别名信息，不生成节点或模块关系候选。
+#[test]
+fn module_routes_do_not_create_graph_objects() {
+    for (path, source) in [
+        ("a.ts", "import './style.css'; import {run as alias} from './target'; import type {T} from './types'; export {alias}; export {run as forwarded} from './target'; export type {T} from './types'; export * from './other'; export * as scope from './target'; export default alias;"),
+        ("a.cts", "import fs = require('node:fs'); export = fs;"),
+        ("a.d.ts", "export as namespace Public; export {};"),
+    ] {
+        let document = parse(path, source);
+        assert!(document.declarations.is_empty(), "{path}: {:?}", document.declarations);
+        assert!(document.occurrences.is_empty(), "{path}: {:?}", document.occurrences);
+        assert!(graph(&[&document]).root().contains.is_empty());
+    }
+    let document = parse(
+        "a.ts",
+        "import {run as alias} from './target'; export {alias as again};",
+    );
+    assert_eq!(document.aliases.len(), 2);
+    for alias in &document.aliases {
+        let selection = alias.selection.unwrap();
+        assert_eq!(
+            &document.source[selection.start as usize..selection.end as usize],
+            "alias"
+        );
+    }
+}
+
+/// export 修饰属于真实声明；修改导出可见性仍能产生该对象的差异。
+#[test]
+fn exported_declarations_keep_single_nodes_and_own_modifiers() {
+    for (before, after, name) in [
+        ("function f() {}", "export function f() {}", "f"),
+        ("class C {}", "export default class C {}", "C"),
+        ("const f = () => 1;", "export const f = () => 1;", "f"),
+    ] {
+        let before = parse("a.ts", before);
+        let after = parse("a.ts", after);
+        assert_eq!(after.declarations.len(), 1);
+        let declaration = named(&after, name);
+        assert!(declaration
+            .node
+            .data()
+            .signature
+            .as_ref()
+            .unwrap()
+            .starts_with("export "));
+        let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
+        assert_eq!(diff.nodes.len(), 1);
+        assert_eq!(diff.nodes[0].id, declaration.node.data().id);
+    }
+    let before = parse("a.ts", "namespace N {}");
+    let after = parse("a.ts", "namespace N { export function f() {} }");
+    assert_eq!(
+        named(&before, "N").node.data().signature,
+        named(&after, "N").node.data().signature
+    );
+    assert_eq!(
+        named(&after, "f").parent.as_ref(),
+        Some(&named(&after, "N").node.data().id)
+    );
+}
+
+/// 删除模块语句节点不会吞掉导出表达式或 CommonJS 普通执行代码中的调用。
+#[test]
+fn export_expressions_and_require_calls_keep_execution_owners() {
+    for source in [
+        "function make() {} export default make();",
+        "function make() {} export = make();",
+        "function make() {} export default () => make();",
+    ] {
+        let document = parse("a.ts", source);
+        let call = document
+            .occurrences
+            .iter()
+            .find(|o| o.kind == OccurrenceKind::Call)
+            .unwrap();
+        assert_eq!(
+            graph(&[&document]).node(&call.owner).unwrap().category(),
+            CodeCategory::ExecutionRegion
+        );
+        assert!(document
+            .declarations
+            .iter()
+            .all(|d| d.node.category() != CodeCategory::Extension));
+    }
+    let document = parse("a.cjs", "const fs = require('node:fs'); require('./setup'); function read() { return require('./local'); }");
+    assert_eq!(named(&document, "fs").node.category(), CodeCategory::Value);
+    let graph = graph(&[&document]);
+    let owners = document
+        .occurrences
+        .iter()
+        .filter(|o| o.kind == OccurrenceKind::Call && o.text == "require")
+        .map(|o| graph.node(&o.owner).unwrap().category())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        owners,
+        [
+            CodeCategory::Value,
+            CodeCategory::ExecutionRegion,
+            CodeCategory::Callable
+        ]
+    );
 }
 
 /// 只排除明确测试路径，混合生产文件里的 test 调用不触发排除。

@@ -27,8 +27,14 @@ semantic graph queries stay in the language service.
   appropriate graph/editor language labels. `.js` can contain JSX, as in tsserver.
 - Extract modules/namespaces (Container); classes/interfaces/type aliases/enums (Type);
   functions/methods/constructors/accessors (Callable); variables/fields/properties/enum
-  members (Value); top-level executable statements and static blocks (ExecutionRegion);
-  import/export/re-export declarations (Extension).
+  members (Value); top-level executable statements and static blocks (ExecutionRegion).
+- Import/export/re-export statements, including `import x = require(...)`, do not
+  create graph nodes or import/re-export edges. Keep their module paths, lexical
+  bindings and alias query locations internally so calls still resolve across files
+  and barrel exports. Exported functions/classes/values keep a single real declaration
+  node, with export modifiers in its signature and original source. Executable export
+  expressions retain an execution owner; ordinary CommonJS variables and calls follow
+  the existing value/execution rules.
 - A direct const identifier binding with an arrow initializer is one Callable and no
   duplicate Value. Unwrap transparent parentheses, assertions, non-null and satisfies
   for classification only; preserve their semantic text. Inline callback arrows stay
@@ -67,7 +73,7 @@ validating UTF-8 boundaries and handling CRLF, Unicode paths and non-BMP charact
 
 ## Relationships
 
-Extract imports/re-exports, statically confirmed calls (including new where modeled),
+Extract statically confirmed calls (including new where modeled),
 writes, function-value references, inheritance/implementation and field/property type
 relationships consistent with 0018 and the existing Rust scope. Keep a syntax occurrence
 even if call hierarchy omits it. Do not turn an import alias or a type-only signature into

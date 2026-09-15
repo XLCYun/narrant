@@ -43,7 +43,7 @@ fn named<'a>(graph: &'a CodeGraph, name: &str) -> &'a CodeNode {
         .unwrap()
 }
 
-/// 资源导入与不存在的相对模块只能留下未解析关系，不能阻断有效代码的调用图。
+/// 资源与缺失模块的纯导入不生成图对象，也不阻断有效代码的调用图。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
 fn graph_unverified_relative_imports_do_not_abort_analysis() {
@@ -60,17 +60,13 @@ fn graph_unverified_relative_imports_do_not_abort_analysis() {
         .iter()
         .any(|reference| reference.semantic == "code.calls"
             && reference.target == ReferenceTarget::Node(target.clone())));
-    let unresolved = nodes(&report.graph)
-        .into_iter()
-        .flat_map(|node| &node.data().references)
-        .filter(|reference| reference.semantic == "code.imports")
-        .filter_map(|reference| match &reference.target {
-            ReferenceTarget::Unresolved { name } => Some(name.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(unresolved.iter().any(|name| name.contains("style.css")));
-    assert!(unresolved.iter().any(|name| name.contains("missing.ts")));
+    assert_eq!(nodes(&report.graph).len(), 2);
+    assert!(
+        nodes(&report.graph)
+            .iter()
+            .all(|node| node.category()
+                == crate::structure_review::code_graph::CodeCategory::Callable)
+    );
 }
 
 /// TS/JS 共用选集身份，导入和 barrel 别名最终落到声明而非导入节点。
@@ -89,6 +85,14 @@ fn graph_cross_language_alias_barrel_and_callbacks() {
         &["main.ts", "target.js", "other.js", "barrel.ts"],
     );
     let graph = &report.graph;
+    assert_eq!(nodes(graph).len(), 4);
+    assert!(nodes(graph)
+        .iter()
+        .flat_map(|node| &node.data().references)
+        .all(|reference| !matches!(
+            reference.semantic.as_str(),
+            "code.imports" | "code.reexports"
+        )));
     let target = named(graph, "jsTarget").data().id.clone();
     assert!(named(graph, "tsTarget")
         .data()
@@ -576,8 +580,7 @@ fn graph_unicode_default_namespace_alias_and_union_evidence() {
     assert!(!nodes(graph)
         .iter()
         .flat_map(|n| &n.data().references)
-        .any(|r| r.semantic == "code.imports"
-            && matches!(&r.target, ReferenceTarget::Unresolved {name} if name == "scope")));
+        .any(|r| matches!(r.semantic.as_str(), "code.imports" | "code.reexports")));
 }
 
 /// 仓库声明式函数是值绑定；接口调用契约和无实现的普通孤立签名仍不能确认运行时目标。

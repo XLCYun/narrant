@@ -58,8 +58,6 @@ pub(crate) enum OccurrenceKind {
     Construct,
     Reference,
     Write,
-    Import,
-    Reexport,
     Extends,
     Implements,
     TypeUse,
@@ -72,8 +70,6 @@ impl OccurrenceKind {
             Self::Call | Self::Construct => "code.calls",
             Self::Reference => "code.references",
             Self::Write => "code.writes",
-            Self::Import => "code.imports",
-            Self::Reexport => "code.reexports",
             Self::Extends => "code.extends",
             Self::Implements => "code.implements",
             Self::TypeUse => "code.type_use",
@@ -98,7 +94,6 @@ pub(crate) struct Occurrence {
     pub members: Vec<String>,
     pub dynamic: bool,
     pub type_only: bool,
-    pub import_alias: bool,
 }
 
 /// 一个固定源码文件，不将 Oxc 的 arena 生命周期泄漏到语言服务层。
@@ -107,7 +102,6 @@ pub(crate) struct Document {
     pub path: PathBuf,
     pub uri: String,
     pub source: String,
-    pub language: LanguageId,
     pub declarations: Vec<Declaration>,
     pub occurrences: Vec<Occurrence>,
     pub excluded: bool,
@@ -161,7 +155,6 @@ impl Document {
             uri: file_uri(&path).map_err(failure)?,
             path,
             source: source.clone(),
-            language: LanguageId(language.into()),
             declarations: vec![],
             occurrences: vec![],
             excluded,

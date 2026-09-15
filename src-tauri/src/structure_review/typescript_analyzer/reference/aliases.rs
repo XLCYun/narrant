@@ -54,7 +54,7 @@ impl Resolver {
     }
 
     /// 类型专用路段不可重新变成值；循环或过深的公开路线保持保守未知。
-    fn alias_route(
+    pub(super) fn alias_route(
         &mut self,
         session: &mut TypeScriptLsp,
         file: &Path,

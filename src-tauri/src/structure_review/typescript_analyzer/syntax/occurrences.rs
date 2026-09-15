@@ -14,7 +14,7 @@ pub(super) struct Collector<'d, 'a> {
     scoping: &'d oxc_semantic::Scoping,
     bindings: BTreeMap<(u32, u32), (Option<Span>, Vec<String>)>,
     canonical: BTreeMap<(u32, u32), String>,
-    pending: Vec<(OccurrenceKind, Span, Span, bool, bool, bool)>,
+    pending: Vec<(OccurrenceKind, Span, Span, bool, bool)>,
 }
 impl<'d, 'a> Collector<'d, 'a> {
     /// 只借用拥有数据的文档，不改变声明树。
@@ -29,7 +29,7 @@ impl<'d, 'a> Collector<'d, 'a> {
         }
     }
 
-    /// 记录候选位置；type_only 和 import_alias 阻止后续误作运行时调用。
+    /// 记录候选位置；type_only 阻止类型位置被误作运行时调用。
     fn add(
         &mut self,
         kind: OccurrenceKind,
@@ -37,18 +37,17 @@ impl<'d, 'a> Collector<'d, 'a> {
         selection: Span,
         dynamic: bool,
         type_only: bool,
-        import_alias: bool,
     ) {
         self.pending
-            .push((kind, span, selection, dynamic, type_only, import_alias));
+            .push((kind, span, selection, dynamic, type_only));
     }
 
     /// 生成经过 UTF-16 校验且具有明确所有者的候选引用。
     pub fn finish(self) -> Result<Vec<Occurrence>> {
         let mut output = Vec::new();
-        for (kind, span, selection, dynamic, type_only, import_alias) in &self.pending {
+        for (kind, span, selection, dynamic, type_only) in &self.pending {
             if *kind == OccurrenceKind::Reference
-                && self.pending.iter().any(|(k, _, s, dynamic, _, _)| {
+                && self.pending.iter().any(|(k, _, s, dynamic, _)| {
                     // 只有明确的同名选择才能替代读取；复合或动态候选不能吞掉内部证据。
                     *k != OccurrenceKind::Reference && !dynamic && *s == *selection
                 })
@@ -90,7 +89,6 @@ impl<'d, 'a> Collector<'d, 'a> {
                     .unwrap_or_default(),
                 dynamic: *dynamic,
                 type_only: *type_only,
-                import_alias: *import_alias,
             });
         }
         Ok(output)
@@ -129,7 +127,7 @@ impl<'d, 'a> Collector<'d, 'a> {
         })
     }
 
-    /// import 与 export 的别名语法有单独候选，不再生成普通标识符读取。
+    /// import 与 export 的别名只留在内部路由中，不生成图关系候选。
     fn alias_context(&self) -> bool {
         self.stack.iter().any(|node| {
             matches!(
@@ -246,50 +244,136 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
             selection,
             dynamic,
             self.type_only(),
-            false,
         );
         walk::walk_simple_assignment_target(self, target);
     }
 
-    /// 从具体节点记录调用、写入、类型、模块与 JSX 候选，仍继续遍历内部表达式。
+    /// 从具体节点记录调用、写入、类型与 JSX 候选，仍继续遍历内部表达式。
     fn enter_node(&mut self, node: AstKind<'a>) {
         use OccurrenceKind::*;
         let type_only = self.type_only();
         match node {
-            AstKind::CallExpression(c) => { let (selection, dynamic, name) = callee(&c.callee); self.expression_binding(selection, &c.callee); self.canonical(selection, name); self.add(Call, c.span, selection, dynamic, type_only, false); }
-            AstKind::TaggedTemplateExpression(t) => { let (selection, dynamic, name) = callee(&t.tag); self.expression_binding(selection, &t.tag); self.canonical(selection, name); self.add(Call, t.span, selection, dynamic, type_only, false); }
-            AstKind::NewExpression(c) => { let (selection, dynamic, name) = callee(&c.callee); self.expression_binding(selection, &c.callee); self.canonical(selection, name); self.add(Construct, c.span, selection, dynamic, type_only, false); }
-            AstKind::AssignmentTargetPropertyIdentifier(p) => self.add(Write, p.binding.span, p.binding.span, false, type_only, false),
-            AstKind::IdentifierReference(i) if !self.alias_context() => { self.bindings.insert((i.span.start,i.span.end), (super::aliases::binding(self.scoping,i), vec![])); self.add(Reference, i.span, i.span, false, type_only, false); },
-            AstKind::PrivateFieldExpression(m) => self.add(Reference, m.span, m.field.span, dynamic_receiver(&m.object), type_only, false),
-            AstKind::StaticMemberExpression(m) => { if let Some((root, mut members)) = root_path(&m.object) { members.push(m.property.name.to_string()); self.bindings.insert((m.property.span.start,m.property.span.end), (super::aliases::binding(self.scoping,root), members)); } self.add(Reference, m.span, m.property.span, dynamic_receiver(&m.object), type_only, false); },
-            AstKind::Class(c) => {
-                if let Some(heritage) = &c.heritage { let (selection, dynamic, name) = callee(&heritage.expression); self.canonical(selection, name); self.add(Extends, heritage.expression.span(), selection, dynamic, false, false); }
+            AstKind::CallExpression(c) => {
+                let (selection, dynamic, name) = callee(&c.callee);
+                self.expression_binding(selection, &c.callee);
+                self.canonical(selection, name);
+                self.add(Call, c.span, selection, dynamic, type_only);
             }
-            AstKind::TSClassImplements(i) => self.add(Implements, i.span, type_selection(&i.expression), false, true, false),
-            AstKind::TSInterfaceHeritage(i) => self.add(Extends, i.span, type_selection(&i.type_name), false, true, false),
-            AstKind::TSTypeReference(t) if self.stack.iter().any(|n| match n {
-                AstKind::PropertyDefinition(p) => p.type_annotation.as_ref().is_some_and(|a| contains(a.span, t.span)),
-                AstKind::AccessorProperty(p) => p.type_annotation.as_ref().is_some_and(|a| contains(a.span, t.span)),
-                AstKind::TSPropertySignature(p) => p.type_annotation.as_ref().is_some_and(|a| contains(a.span, t.span)),
-                AstKind::TSIndexSignature(p) => contains(p.type_annotation.span, t.span),
-                AstKind::FormalParameter(p) if p.accessibility.is_some() || p.readonly || p.r#override => p.type_annotation.as_ref().is_some_and(|a| contains(a.span, t.span)),
-                _ => false,
-            }) => self.add(TypeUse, t.span, type_selection(&t.type_name), false, true, false),
-            AstKind::ImportDeclaration(i) => { self.canonical(i.source.span, serde_json::to_string(i.source.value.as_str()).expect("字符串可序列化")); self.add(Import, i.span, i.source.span, false, i.import_kind == ImportOrExportKind::Type, false); },
-            AstKind::ImportSpecifier(i) => self.add(Import, i.span, i.local.span, false, i.import_kind == ImportOrExportKind::Type || self.stack.iter().any(|n| matches!(n, AstKind::ImportDeclaration(d) if d.import_kind == ImportOrExportKind::Type)), true),
-            AstKind::ImportDefaultSpecifier(i) => self.add(Import, i.span, i.local.span, false, self.stack.iter().any(|n| matches!(n, AstKind::ImportDeclaration(d) if d.import_kind == ImportOrExportKind::Type)), true),
-            AstKind::ImportNamespaceSpecifier(i) => self.add(Import, i.span, i.local.span, false, self.stack.iter().any(|n| matches!(n, AstKind::ImportDeclaration(d) if d.import_kind == ImportOrExportKind::Type)), true),
-            AstKind::TSImportEqualsDeclaration(i) => self.add(Import, i.span, i.id.span, false, i.import_kind == ImportOrExportKind::Type, true),
-            AstKind::ExportFromDeclaration(e) => { self.canonical(e.source.span, serde_json::to_string(e.source.value.as_str()).expect("字符串可序列化")); self.add(Reexport, e.span, e.source.span, false, e.export_kind == ImportOrExportKind::Type, false); },
-            AstKind::ExportAllDeclaration(e) => { self.canonical(e.source.span, serde_json::to_string(e.source.value.as_str()).expect("字符串可序列化")); self.add(Reexport, e.span, e.source.span, false, e.export_kind == ImportOrExportKind::Type, false); },
-            AstKind::ExportSpecifier(e) => self.add(Reexport, e.span, e.local.span(), false, e.export_kind == ImportOrExportKind::Type || self.stack.iter().any(|n| matches!(n, AstKind::ExportNamedDeclaration(d) if d.export_kind == ImportOrExportKind::Type) || matches!(n, AstKind::ExportFromDeclaration(d) if d.export_kind == ImportOrExportKind::Type)), true),
+            AstKind::TaggedTemplateExpression(t) => {
+                let (selection, dynamic, name) = callee(&t.tag);
+                self.expression_binding(selection, &t.tag);
+                self.canonical(selection, name);
+                self.add(Call, t.span, selection, dynamic, type_only);
+            }
+            AstKind::NewExpression(c) => {
+                let (selection, dynamic, name) = callee(&c.callee);
+                self.expression_binding(selection, &c.callee);
+                self.canonical(selection, name);
+                self.add(Construct, c.span, selection, dynamic, type_only);
+            }
+            AstKind::AssignmentTargetPropertyIdentifier(p) => {
+                self.add(Write, p.binding.span, p.binding.span, false, type_only)
+            }
+            AstKind::IdentifierReference(i) if !self.alias_context() => {
+                self.bindings.insert(
+                    (i.span.start, i.span.end),
+                    (super::aliases::binding(self.scoping, i), vec![]),
+                );
+                self.add(Reference, i.span, i.span, false, type_only);
+            }
+            AstKind::PrivateFieldExpression(m) => self.add(
+                Reference,
+                m.span,
+                m.field.span,
+                dynamic_receiver(&m.object),
+                type_only,
+            ),
+            AstKind::StaticMemberExpression(m) => {
+                if let Some((root, mut members)) = root_path(&m.object) {
+                    members.push(m.property.name.to_string());
+                    self.bindings.insert(
+                        (m.property.span.start, m.property.span.end),
+                        (super::aliases::binding(self.scoping, root), members),
+                    );
+                }
+                self.add(
+                    Reference,
+                    m.span,
+                    m.property.span,
+                    dynamic_receiver(&m.object),
+                    type_only,
+                );
+            }
+            AstKind::Class(c) => {
+                if let Some(heritage) = &c.heritage {
+                    let (selection, dynamic, name) = callee(&heritage.expression);
+                    self.canonical(selection, name);
+                    self.add(
+                        Extends,
+                        heritage.expression.span(),
+                        selection,
+                        dynamic,
+                        false,
+                    );
+                }
+            }
+            AstKind::TSClassImplements(i) => self.add(
+                Implements,
+                i.span,
+                type_selection(&i.expression),
+                false,
+                true,
+            ),
+            AstKind::TSInterfaceHeritage(i) => {
+                self.add(Extends, i.span, type_selection(&i.type_name), false, true)
+            }
+            AstKind::TSTypeReference(t)
+                if self.stack.iter().any(|n| match n {
+                    AstKind::PropertyDefinition(p) => p
+                        .type_annotation
+                        .as_ref()
+                        .is_some_and(|a| contains(a.span, t.span)),
+                    AstKind::AccessorProperty(p) => p
+                        .type_annotation
+                        .as_ref()
+                        .is_some_and(|a| contains(a.span, t.span)),
+                    AstKind::TSPropertySignature(p) => p
+                        .type_annotation
+                        .as_ref()
+                        .is_some_and(|a| contains(a.span, t.span)),
+                    AstKind::TSIndexSignature(p) => contains(p.type_annotation.span, t.span),
+                    AstKind::FormalParameter(p)
+                        if p.accessibility.is_some() || p.readonly || p.r#override =>
+                    {
+                        p.type_annotation
+                            .as_ref()
+                            .is_some_and(|a| contains(a.span, t.span))
+                    }
+                    _ => false,
+                }) =>
+            {
+                self.add(TypeUse, t.span, type_selection(&t.type_name), false, true)
+            }
             AstKind::JSXOpeningElement(e) => {
-                let selection = match &e.name { JSXElementName::IdentifierReference(i) => Some(i.span), JSXElementName::MemberExpression(m) => Some(m.property.span), _ => None };
-                if let Some(selection) = selection { let binding = match &e.name {
-                    JSXElementName::IdentifierReference(id) => Some((id.as_ref(), vec![])),
-                    JSXElementName::MemberExpression(m) => jsx_root(m), _ => None,
-                }; if let Some((root,members)) = binding { self.bindings.insert((selection.start,selection.end), (super::aliases::binding(self.scoping,root), members)); } self.add(JsxComponent, e.name.span(), selection, false, false, false); }
+                let selection = match &e.name {
+                    JSXElementName::IdentifierReference(i) => Some(i.span),
+                    JSXElementName::MemberExpression(m) => Some(m.property.span),
+                    _ => None,
+                };
+                if let Some(selection) = selection {
+                    let binding = match &e.name {
+                        JSXElementName::IdentifierReference(id) => Some((id.as_ref(), vec![])),
+                        JSXElementName::MemberExpression(m) => jsx_root(m),
+                        _ => None,
+                    };
+                    if let Some((root, members)) = binding {
+                        self.bindings.insert(
+                            (selection.start, selection.end),
+                            (super::aliases::binding(self.scoping, root), members),
+                        );
+                    }
+                    self.add(JsxComponent, e.name.span(), selection, false, false);
+                }
             }
             _ => {}
         }
