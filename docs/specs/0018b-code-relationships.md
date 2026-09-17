@@ -128,8 +128,11 @@ implementations may add namespaced meanings as needed. No independent AccessorOf
 relation is required: inline accessors can be property children; reused functions can
 be linked through a suitable reference.
 
-General type-use and data-read relationships are not currently extracted. Declarations,
-signatures and owned code still participate in content comparison. This does not remove
+`code.writes` remains reserved vocabulary; the current Rust and TypeScript/JavaScript
+adapters do not extract `code.writes` or `code.reads`. General type-use relationships
+remain outside the current extraction scope except for the field/property type
+relationships defined by those adapters. Declarations, signatures and owned code,
+including assignments, still participate in content comparison. This does not remove
 structural relationships to types, such as implementation targets and trait contracts.
 
 Declaration placement and semantic ownership remain distinct. A Rust implementation

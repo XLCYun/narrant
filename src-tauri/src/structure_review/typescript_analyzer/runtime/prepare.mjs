@@ -25,7 +25,7 @@ export function prepare(input, ts) {
     }
     return { file, projects: names };
   });
-  return { host, context, output: { projects, associations, sources, metadata: [...context.metadata].sort(), notes: context.notes, config_files: configFiles } };
+  return { host, context, output: { projects, associations, sources, metadata: [...context.metadata].sort(), config_files: configFiles } };
 }
 
 /** 助手作为独立工具执行时只写自己的输出文件；服务加载模块时不重复执行入口。 */

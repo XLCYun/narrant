@@ -10,10 +10,7 @@ mod test_code;
 pub(crate) mod text;
 pub(crate) mod tools;
 
-use super::{
-    analysis::AnalysisReport,
-    code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer},
-};
+use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer};
 use crate::lsp::CancellationCheck;
 use std::{
     collections::BTreeMap,
@@ -73,9 +70,11 @@ impl TypeScriptLanguageAnalyzer {
         }
         Ok(())
     }
+}
 
-    /// 提取选集图并返回独立说明；上下文文档只在定义命中时解析。
-    pub fn analyze_with_report(&self, input: &AnalysisInput) -> Result<AnalysisReport> {
+impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
+    /// 提取选集图；上下文文档只在定义命中时解析。
+    fn analyze(&self, input: &AnalysisInput) -> Result<CodeGraph> {
         self.check_cancelled()?;
         let repository = input.repository_root.canonicalize().map_err(failure)?;
         if !repository.is_dir() {
@@ -110,10 +109,7 @@ impl TypeScriptLanguageAnalyzer {
             }
         }
         if selected.is_empty() {
-            return Ok(AnalysisReport {
-                graph: CodeGraph::new(CodeRoot::default(), vec![]).map_err(failure)?,
-                notes: vec![],
-            });
+            return CodeGraph::new(CodeRoot::default(), vec![]).map_err(failure);
         }
         let paths = selected.keys().cloned().collect::<Vec<_>>();
         let project = project::PreparedProject::prepare(
@@ -140,18 +136,11 @@ impl TypeScriptLanguageAnalyzer {
         }
         validate_snapshots(&project, &self.cancelled)?;
         let mut session = lsp::TypeScriptLsp::start(project, self.timeout, self.cancelled.clone())?;
-        let report = references::analyze(&mut session, documents, &self.cancelled)?;
+        let graph = references::analyze(&mut session, documents, &self.cancelled)?;
         validate_snapshots(session.project(), &self.cancelled)?;
         self.check_cancelled()?;
         session.shutdown()?;
-        Ok(report)
-    }
-}
-
-impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
-    /// 与现有语言无关契约兼容，调用方可选择保留单独的运行说明。
-    fn analyze(&self, input: &AnalysisInput) -> Result<CodeGraph> {
-        Ok(self.analyze_with_report(input)?.graph)
+        Ok(graph)
     }
 }
 

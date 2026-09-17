@@ -3,9 +3,8 @@ use crate::{
     persistence::ReviewStore,
     repository::verify_repository_location,
     review::{PresentReview, ReviewPresentation},
-    structure_review::{
-        analysis::{AnalysisNote, AnalysisReport},
-        code_graph::{CodeNode, CodeNodeData, CodeReference, LanguageId, NodeId, ReferenceTarget},
+    structure_review::code_graph::{
+        CodeNode, CodeNodeData, CodeReference, LanguageId, NodeId, ReferenceTarget,
     },
 };
 use std::{
@@ -229,7 +228,7 @@ fn analyze_files(
     .unwrap())
 }
 
-/// 同一侧的 Rust 与 TS/JS 共用唯一 workspace；跨语言图合并，逐侧说明不进入图差异。
+/// 同一侧的 Rust 与 TS/JS 共用唯一 workspace；跨语言图合并并保留真实引用目标。
 #[test]
 fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets() {
     let repository = tempfile::tempdir().unwrap();
@@ -255,28 +254,20 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
             semantic: "code.calls".into(),
             target: ReferenceTarget::Node(helper.id.clone()),
         });
-        Ok(AnalysisReport {
-            graph: CodeGraph::new(
-                CodeRoot {
-                    contains: vec![entry.id.clone(), helper.id.clone()],
-                },
-                vec![CodeNode::Callable(entry), CodeNode::Callable(helper)],
-            )
-            .unwrap(),
-            notes: vec![AnalysisNote {
-                code: "typescript.context".into(),
-                message: "受控项目上下文".into(),
-                file: Some("main.ts".into()),
-                project: Some("tsconfig.json".into()),
-            }],
-        })
+        Ok(CodeGraph::new(
+            CodeRoot {
+                contains: vec![entry.id.clone(), helper.id.clone()],
+            },
+            vec![CodeNode::Callable(entry), CodeNode::Callable(helper)],
+        )
+        .unwrap())
     });
     let analyzers = LanguageAnalyzers {
         rust: analyze_rust,
         typescript: analyze_typescript,
     };
     let not_cancelled: CancellationCheck = Arc::new(|| false);
-    let report = analyze_side(
+    let graph = analyze_side(
         &analyzers,
         repository.path(),
         SideFiles {
@@ -303,15 +294,11 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
             vec![PathBuf::from("main.ts"), PathBuf::from("helper.js")]
         )]
     );
-    let entry = report
-        .graph
-        .node(&NodeId("typescript:entry".into()))
-        .unwrap();
+    let entry = graph.node(&NodeId("typescript:entry".into())).unwrap();
     assert_eq!(
         entry.data().references[0].target,
         ReferenceTarget::Node(NodeId("javascript:helper".into()))
     );
-    assert_eq!(report.notes[0].code, "typescript.context");
 }
 
 /// 空语言组不触发工具，跨语言重复身份在应用合并边界失败。
@@ -336,16 +323,12 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
         &CancellationToken::new(),
     )
     .unwrap();
-    assert!(empty.graph.root().contains.is_empty());
+    assert!(empty.root().contains.is_empty());
 
     let rust: Arc<AnalyzeGraph> =
         Arc::new(|_, _, _| Ok(single_node_graph("collision", "rust", vec![])));
-    let typescript: Arc<AnalyzeTypeScript> = Arc::new(|_, _| {
-        Ok(AnalysisReport {
-            graph: single_node_graph("collision", "typescript", vec![]),
-            notes: vec![],
-        })
-    });
+    let typescript: Arc<AnalyzeTypeScript> =
+        Arc::new(|_, _| Ok(single_node_graph("collision", "typescript", vec![])));
     let colliding = LanguageAnalyzers { rust, typescript };
     let error = analyze_side(
         &colliding,
@@ -917,21 +900,20 @@ async fn real_server_builds_review_structure_comparison() {
     );
 }
 
-/// 从真实 Review 生命周期经固定 TS/JS 服务到 DTO，保留本地 Node 目标、原文与逐侧说明。
+/// 从真实 Review 生命周期经固定 TS/JS 服务到 DTO，保留本地 Node 目标、原文与结构差异。
 #[tokio::test]
 #[ignore = "需要固定 NARRANT_TYPESCRIPT_NODE/NARRANT_TYPESCRIPT_RUNTIME；直接运行测试二进制"]
-async fn real_typescript_javascript_reports_flow_through_review_lifecycle_to_dto() {
-    use crate::structure_review::typescript_analyzer::TypeScriptLanguageAnalyzer;
+async fn real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto() {
+    use crate::structure_review::{
+        code_graph::LanguageAnalyzer, typescript_analyzer::TypeScriptLanguageAnalyzer,
+    };
     let fixture = Fixture::typescript_javascript().await;
     let analyzer = TypeScriptLanguageAnalyzer::default();
     let application = StructureReview::new(Arc::new(|_, _, _| {
         panic!("TS/JS-only Review 不应启动 rust-analyzer")
     }))
     .with_typescript(Arc::new(move |input, cancelled| {
-        analyzer
-            .clone()
-            .with_cancellation(cancelled)
-            .analyze_with_report(input)
+        analyzer.clone().with_cancellation(cancelled).analyze(input)
     }));
     let result = application
         .analyze(
@@ -982,11 +964,6 @@ async fn real_typescript_javascript_reports_flow_through_review_lifecycle_to_dto
             .and_then(|change| change.content),
         Some("modified")
     );
-    assert!(result
-        .before_notes
-        .iter()
-        .chain(&result.after_notes)
-        .any(|note| note.code == "typescript.TS2307"));
     assert!(result
         .coverage
         .iter()

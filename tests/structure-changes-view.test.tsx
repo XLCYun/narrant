@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureClassDiagramFixture, structureFieldTypesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
 import * as graphPresentation from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
@@ -222,19 +222,9 @@ it("keeps filtered references out of details when switching objects in the sideb
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
 });
 
-it("keeps per-side notes outside the diff and presents JSX relations and duplicate declarations", async () => {
+it("presents long source, JSX relations and duplicate declarations in a mixed-language comparison", async () => {
   const comparison = structureMixedLanguageFixture();
-  const originalDiff = structuredClone(comparison.diff);
   render(<StructureChangesView binding={binding(comparison)} dark={false} />);
-
-  fireEvent.click(screen.getByRole("button", { name: "分析说明（3）" }));
-  const notes = await screen.findByTestId("analysis-notes");
-  expect(within(notes).getAllByRole("note")).toHaveLength(3);
-  expect(within(notes).getByText("变更前使用仓库配置与固定运行时声明进行分析。")).toBeInTheDocument();
-  expect(within(notes).getByText(/缺少可选业务依赖的声明/)).toBeInTheDocument();
-  expect(within(notes).getByText(/typescript\.TS2307.*review-workspace-with-a-very-long-file-name\.tsx/)).toBeInTheDocument();
-  expect(comparison.diff).toEqual(originalDiff);
-  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 
   fireEvent.click(screen.getByRole("combobox", { name: "结构图语言" }));
   const languageOption = await screen.findByRole("option", { name: "TypeScript" });
@@ -248,6 +238,7 @@ it("keeps per-side notes outside the diff and presents JSX relations and duplica
   expect(details).not.toHaveTextContent("code.calls → formatReview");
   expect(details).toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
   expect(screen.getByTestId("source-diff")).toHaveAttribute("data-original-language", "typescript");
+  expect(screen.getByTestId("modified-source").textContent).toBe(comparison.after.nodes.find((node) => node.id === "typescript-component")!.source);
 
   fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
   fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "显示全部对象" }));
@@ -337,4 +328,42 @@ it("offers collapse all and expand all while keeping context filters unchanged",
   expect(within(graph).queryByRole("button", { name: /pub fn restore\(/ })).not.toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
   expect(layoutCalls).toHaveBeenCalledTimes(1);
+});
+
+it("selects directories without inventing source diffs and preserves file folds and exact cross-directory relationships", async () => {
+  const layoutCalls = vi.spyOn(graphPresentation, "layoutStructureComparison");
+  const current = binding(structureFileModulesFixture());
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  const sidebar = screen.getByRole("complementary", { name: "结构详情" });
+  const path = "src/review/initialization";
+  const filePath = `${path}/prepare-review-workspace-for-selected-repository.ts`;
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  fireEvent.click(within(graph).getByRole("button", { name: filePath, exact: true }));
+  expect(within(sidebar).getByTestId("modified-source")).toHaveTextContent("export function prepare()");
+  fireEvent.click(within(graph).getByRole("button", { name: `收起 ${filePath}`, exact: true }));
+  fireEvent.click(within(graph).getByRole("button", { name: `收起 ${path}`, exact: true }));
+  expect(within(sidebar).getByRole("heading", { name: "目录详情", exact: true })).toBeInTheDocument();
+  expect(within(sidebar).getByText("prepare-review-workspace-for-selected-repository.ts", { exact: true })).toBeInTheDocument();
+  expect(within(sidebar).queryByTestId("source-diff")).not.toBeInTheDocument();
+  expect(within(sidebar).queryByText("关系变化", { exact: true })).not.toBeInTheDocument();
+  expect(within(graph).getByRole("button", { name: path, exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(within(graph).queryByRole("button", { name: filePath, exact: true })).not.toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: "export function start() · 新增", exact: true }));
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
+  expect(screen.getByTitle("prepare")).toHaveTextContent("+ code.calls");
+  fireEvent.click(within(graph).getByRole("button", { name: `展开 ${path}`, exact: true }));
+  expect(within(graph).getByRole("button", { name: `展开 ${filePath}`, exact: true })).toBeInTheDocument();
+  expect(within(graph).queryByRole("button", { name: "export function prepare() · 新增", exact: true })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "全部收起" }));
+  expect(within(graph).getByRole("button", { name: "展开 src", exact: true })).toBeInTheDocument();
+  expect(within(graph).queryByRole("button", { name: "src/startup.ts", exact: true })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "全部展开" }));
+  expect(within(graph).getByRole("button", { name: "export function prepare() · 新增", exact: true })).toBeInTheDocument();
+  expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(layoutCalls).toHaveBeenCalledTimes(1);
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
 });

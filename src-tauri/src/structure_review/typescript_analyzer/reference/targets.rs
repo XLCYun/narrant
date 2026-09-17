@@ -82,8 +82,13 @@ impl Resolver {
                 | OccurrenceKind::Construct
                 | OccurrenceKind::JsxComponent
                 | OccurrenceKind::Reference
-        ) && self.type_only_binding(session, file, occurrence, project)?
-        {
+        ) && self.type_only_binding(
+            session,
+            file,
+            occurrence.root_binding,
+            &occurrence.members,
+            project,
+        )? {
             return Ok(None);
         }
         let definitions = session.definitions(file, occurrence.position, project)?;
@@ -223,30 +228,22 @@ impl Resolver {
             })
             .cloned();
         let declaration = declaration_at(document, location).cloned();
-        let value_alias = if alias.is_none() {
-            declaration.as_ref().and_then(|d| {
-                if !matches!(
-                    kind,
-                    OccurrenceKind::Call
-                        | OccurrenceKind::Construct
-                        | OccurrenceKind::Reference
-                        | OccurrenceKind::JsxComponent
-                ) {
-                    return None;
-                }
-                let selection = d.alias_selection?;
-                document
-                    .occurrences
-                    .iter()
-                    .find(|o| {
-                        o.owner == d.node.data().id
-                            && o.kind == OccurrenceKind::Reference
-                            && !o.type_only
-                            && !o.dynamic
-                            && o.selection == selection
-                    })
-                    .cloned()
-            })
+        let value_alias = if alias.is_none()
+            && matches!(
+                kind,
+                OccurrenceKind::Call
+                    | OccurrenceKind::Construct
+                    | OccurrenceKind::Reference
+                    | OccurrenceKind::JsxComponent
+            ) {
+            document
+                .value_aliases
+                .iter()
+                .find(|alias| {
+                    alias.binding.start <= location.span.start_byte
+                        && location.span.end_byte <= alias.binding.end
+                })
+                .cloned()
         } else {
             None
         };
@@ -275,16 +272,25 @@ impl Resolver {
             }
             Some((position, selection.start, alias.type_only))
         } else if let Some(alias) = value_alias {
-            if runtime_value && self.type_only_binding(session, &location.path, &alias, project)? {
+            let position = text::position(&document.source, alias.selection.start)?;
+            if runtime_value
+                && self.type_only_binding(
+                    session,
+                    &location.path,
+                    alias.root_binding,
+                    &[],
+                    project,
+                )?
+            {
                 return Ok(None);
             }
-            Some((alias.position, alias.selection.start, alias.type_only))
+            Some((position, alias.selection.start, false))
         } else {
             None
         };
         if let Some((position, offset, type_only)) = query {
             if session.project().sources.contains_key(&location.path) {
-                session.collect_notes(&location.path, project)?;
+                session.check_runtime_type_usage(&location.path, project)?;
             }
             if runtime_value
                 && (type_only || session.runtime_type_error(&location.path, offset, project))
@@ -422,10 +428,7 @@ fn member_name(target: &Target) -> Option<&str> {
             | "object_method"
             | "field"
             | "static_field"
-            | "object_property"
             | "property"
-            | "parameter_property"
-            | "accessor_property"
             | "getter"
             | "setter"
     )
@@ -439,10 +442,7 @@ fn accepts(target: &Target, kind: OccurrenceKind) -> bool {
     let native = declaration.node.data().native_kind.as_str();
     let callable = declaration.callable_value.is_some()
         || declaration.node.category() == CodeCategory::Callable
-            && !matches!(
-                native,
-                "call_signature" | "construct_signature" | "getter" | "setter"
-            )
+            && !matches!(native, "getter" | "setter")
             && (declaration.parts.iter().any(|p| p.body.is_some())
                 || target.runtime
                 || declaration.ambient_function);
@@ -450,9 +450,6 @@ fn accepts(target: &Target, kind: OccurrenceKind) -> bool {
         OccurrenceKind::Call | OccurrenceKind::Reference => callable,
         OccurrenceKind::Construct => native == "class" || native == "constructor" && callable,
         OccurrenceKind::JsxComponent => callable || native == "class",
-        OccurrenceKind::Write => {
-            declaration.node.category() == CodeCategory::Value || native == "setter"
-        }
         OccurrenceKind::Extends | OccurrenceKind::Implements | OccurrenceKind::TypeUse => {
             declaration.node.category() == CodeCategory::Type
         }

@@ -4,6 +4,7 @@ use crate::structure_review::code_graph::CodeCategory;
 use oxc_ast::{ast::*, AstKind};
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::{GetSpan, Span};
+use std::collections::BTreeMap;
 
 /// 脱离 arena 的中间声明；原文和规范代码各构造一次并校验配对。
 pub(super) struct RawDeclaration {
@@ -15,13 +16,16 @@ pub(super) struct RawDeclaration {
     pub prefix: String,
     pub callable_value: Option<Span>,
     pub ambient_function: bool,
-    pub alias_selection: Option<Span>,
+    /// 被省略的数据包装仍提供词法身份，例如 handlers.save 中的 handlers。
+    pub identity_path: Vec<String>,
 }
 
 /// 声明遍历栈同时追踪词法所有者与未建模的回调、语句包装。
 pub(super) struct Collector<'a> {
     pub items: Vec<RawDeclaration>,
     stack: Vec<(AstKind<'a>, Option<usize>)>,
+    root_statement: Option<(Option<usize>, Span)>,
+    execution: BTreeMap<Option<usize>, BTreeMap<u32, Span>>,
 }
 impl<'a> Collector<'a> {
     /// 新建一次纯语法收集，不借用外部可变图状态。
@@ -29,6 +33,8 @@ impl<'a> Collector<'a> {
         Self {
             items: vec![],
             stack: vec![],
+            root_statement: None,
+            execution: BTreeMap::new(),
         }
     }
 
@@ -75,6 +81,22 @@ impl<'a> Collector<'a> {
                 }
             }
         }
+        let identity_path = self
+            .stack
+            .iter()
+            .rev()
+            .take_while(|(_, owner)| *owner == parent)
+            .filter_map(|(node, _)| match node {
+                AstKind::VariableDeclarator(v) => {
+                    v.id.get_binding_identifier().map(|id| id.name.to_string())
+                }
+                AstKind::ObjectProperty(p) => p.key.static_name().map(|name| name.into_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         let index = self.items.len();
         self.items.push(RawDeclaration {
             category,
@@ -85,7 +107,7 @@ impl<'a> Collector<'a> {
             prefix,
             callable_value: None,
             ambient_function: false,
-            alias_selection: None,
+            identity_path,
         });
         index
     }
@@ -96,6 +118,24 @@ impl<'a> Collector<'a> {
             self.stack.last(),
             Some((AstKind::Program(_) | AstKind::TSModuleBlock(_), _))
         )
+    }
+
+    /// 文件和显式 namespace 各自收集执行代码，同一语句中的多个调用只记录一次。
+    fn record_execution(&mut self, parent: Option<usize>, span: Span) {
+        self.execution
+            .entry(parent)
+            .or_default()
+            .insert(span.start, span);
+    }
+
+    /// 类与对象中的方法仍可建模，但任何函数/回调内部的 Callable 都归入外层对象。
+    fn inside_function(&self) -> bool {
+        self.stack.iter().any(|(node, _)| {
+            matches!(
+                node,
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+            )
+        })
     }
 
     /// AST 静态属性名保持语义值，动态计算名使用固定匿名键和词法顺序，不用源码偏移。
@@ -119,8 +159,44 @@ impl<'a> Collector<'a> {
     }
 }
 impl<'a> Visit<'a> for Collector<'a> {
-    /// 普通顶层执行语句独立建模；具名声明继续走统一 typed AST 入口。
+    /// 每个文件或 namespace 只生成一个执行区域；不改变其中具名声明的词法归属。
+    fn visit_program(&mut self, program: &Program<'a>) {
+        walk::walk_program(self, program);
+        for (parent, spans) in std::mem::take(&mut self.execution) {
+            let parts = spans
+                .into_values()
+                .map(|span| DeclarationPart {
+                    span,
+                    selection: Span::new(span.start, span.start),
+                    body: Some(span),
+                    parent_exclusion: span,
+                    source_span: span,
+                    names: vec![],
+                })
+                .collect::<Vec<_>>();
+            self.items.push(RawDeclaration {
+                category: CodeCategory::ExecutionRegion,
+                kind: "top_level",
+                name: Some("顶层执行".into()),
+                parent,
+                parts,
+                prefix: String::new(),
+                callable_value: None,
+                ambient_function: false,
+                identity_path: vec![],
+            });
+        }
+    }
+
+    /// 普通语句与初始化代码共用作用域执行区域；函数体由 Callable 自身承载。
     fn visit_statement(&mut self, statement: &Statement<'a>) {
+        let previous_statement = self.root_statement;
+        if self.top_statement() {
+            self.root_statement = Some((
+                self.stack.last().and_then(|(_, owner)| *owner),
+                statement.span(),
+            ));
+        }
         let execution = self.top_statement()
             && match statement {
                 Statement::ExpressionStatement(_)
@@ -150,36 +226,46 @@ impl<'a> Visit<'a> for Collector<'a> {
                 _ => false,
             };
         if execution {
-            let span = statement.span();
-            let id = self.push(
-                CodeCategory::ExecutionRegion,
-                "statement",
-                None,
-                (span, Span::new(span.start, span.start)),
-                Some(span),
-                String::new(),
+            self.record_execution(
+                self.stack.last().and_then(|(_, owner)| *owner),
+                statement.span(),
             );
-            let old = self.stack.last().unwrap().1;
-            self.stack.last_mut().unwrap().1 = Some(id);
-            walk::walk_statement(self, statement);
-            self.stack.last_mut().unwrap().1 = old;
-        } else {
-            walk::walk_statement(self, statement);
         }
+        walk::walk_statement(self, statement);
+        self.root_statement = previous_statement;
     }
 
-    /// 分类时解包 const 箭头的透明表达式，源码与规范签名仍保留断言等语义。
+    /// 分类时解包具名函数值的透明表达式，源码与规范签名仍保留断言等语义。
     fn enter_node(&mut self, node: AstKind<'a>) {
         use CodeCategory::*;
         let mut owner = self.stack.last().and_then(|(_, owner)| *owner);
         let mut prefix = String::new();
+        if let Some((parent, span)) = self.root_statement {
+            if owner == parent
+                && matches!(
+                    node,
+                    AstKind::CallExpression(_)
+                        | AstKind::NewExpression(_)
+                        | AstKind::TaggedTemplateExpression(_)
+                        | AstKind::AssignmentExpression(_)
+                        | AstKind::UpdateExpression(_)
+                        | AstKind::JSXOpeningElement(_)
+                )
+            {
+                self.record_execution(parent, span);
+            }
+        }
+        if let AstKind::Directive(d) = node {
+            if self.top_statement() {
+                self.record_execution(owner, d.span);
+            }
+        }
+        let inside_function = self.inside_function();
         let shape = match node {
             AstKind::Function(f)
-                if f.id.is_some()
-                    || matches!(
-                        f.r#type,
-                        FunctionType::FunctionDeclaration | FunctionType::TSDeclareFunction
-                    ) =>
+                if !inside_function
+                    && f.id.is_some()
+                    && !owner.is_some_and(|id| self.items[id].callable_value == Some(f.span)) =>
             {
                 Some((
                     Callable,
@@ -200,116 +286,91 @@ impl<'a> Visit<'a> for Collector<'a> {
                     None,
                 ))
             }
-            AstKind::Directive(d) if self.top_statement() => Some((
-                ExecutionRegion,
-                "directive",
-                None,
-                Span::new(d.span.start, d.span.start),
-                Some(d.span),
-            )),
-            AstKind::FormalParameter(p)
-                if p.accessibility.is_some() || p.readonly || p.r#override =>
+            AstKind::VariableDeclarator(v) if !inside_function => {
+                let identifier = v.id.get_binding_identifier();
+                let function = v.init.as_ref().and_then(function_value);
+                identifier.zip(function).map(|(identifier, (kind, body))| {
+                    prefix = self
+                        .stack
+                        .iter()
+                        .rev()
+                        .find_map(|(node, _)| match node {
+                            AstKind::VariableDeclaration(d) => Some(format!("{} ", d.kind)),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    (
+                        Callable,
+                        kind,
+                        Some(identifier.name.to_string()),
+                        identifier.span,
+                        body,
+                    )
+                })
+            }
+            AstKind::MethodDefinition(m)
+                if !inside_function
+                    && (m.key.static_name().is_some()
+                        || matches!(m.key, PropertyKey::PrivateIdentifier(_))) =>
             {
                 Some((
-                    Value,
-                    "parameter_property",
-                    p.pattern
-                        .get_binding_identifier()
-                        .map(|i| i.name.to_string()),
-                    p.pattern.span(),
-                    p.initializer.as_ref().map(|i| i.span()),
+                    Callable,
+                    match m.kind {
+                        MethodDefinitionKind::Constructor => "constructor",
+                        MethodDefinitionKind::Get => "getter",
+                        MethodDefinitionKind::Set => "setter",
+                        MethodDefinitionKind::Method if m.r#static => "static_method",
+                        _ => "method",
+                    },
+                    Some(self.key(&m.key)),
+                    self.key_selection(&m.key),
+                    m.value.body.as_ref().map(|b| b.span),
                 ))
             }
-            AstKind::VariableDeclarator(v) => {
-                let kind = self.stack.iter().rev().find_map(|(n, _)| {
-                    if let AstKind::VariableDeclaration(d) = n {
-                        Some(d.kind)
-                    } else {
-                        None
-                    }
-                });
-                prefix = kind.map_or(String::new(), |k| format!("{k} "));
-                let arrow = if kind == Some(VariableDeclarationKind::Const)
-                    && matches!(v.id, BindingPattern::BindingIdentifier(_))
-                {
-                    v.init.as_ref().and_then(|e| {
-                        if let Expression::ArrowFunctionExpression(a) = e.get_inner_expression() {
-                            Some(a)
-                        } else {
-                            None
-                        }
+            AstKind::ObjectProperty(p) if !inside_function && p.key.static_name().is_some() => {
+                function_value(&p.value).map(|(_, body)| {
+                    (
+                        Callable,
+                        match p.kind {
+                            PropertyKind::Get => "getter",
+                            PropertyKind::Set => "setter",
+                            _ => "object_method",
+                        },
+                        Some(self.key(&p.key)),
+                        self.key_selection(&p.key),
+                        body,
+                    )
+                })
+            }
+            AstKind::PropertyDefinition(p) => {
+                let function = p.value.as_ref().and_then(function_value);
+                if let Some((_, body)) = function {
+                    (!inside_function
+                        && (p.key.static_name().is_some()
+                            || matches!(p.key, PropertyKey::PrivateIdentifier(_))))
+                    .then(|| {
+                        (
+                            Callable,
+                            if p.r#static {
+                                "static_method"
+                            } else {
+                                "method"
+                            },
+                            Some(self.key(&p.key)),
+                            self.key_selection(&p.key),
+                            body,
+                        )
                     })
                 } else {
-                    None
-                };
-                let name = Some(
-                    v.id.get_binding_identifiers()
-                        .iter()
-                        .map(|i| i.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                Some((
-                    if arrow.is_some() { Callable } else { Value },
-                    if arrow.is_some() { "arrow" } else { "variable" },
-                    name,
-                    v.id.span(),
-                    if let Some(a) = arrow {
-                        Some(a.body.span())
-                    } else {
-                        v.init.as_ref().map(GetSpan::span)
-                    },
-                ))
+                    Some((
+                        Value,
+                        if p.r#static { "static_field" } else { "field" },
+                        Some(self.key(&p.key)),
+                        self.key_selection(&p.key),
+                        p.value.as_ref().map(GetSpan::span),
+                    ))
+                }
             }
-            AstKind::MethodDefinition(m) => Some((
-                Callable,
-                match m.kind {
-                    MethodDefinitionKind::Constructor => "constructor",
-                    MethodDefinitionKind::Get => "getter",
-                    MethodDefinitionKind::Set => "setter",
-                    MethodDefinitionKind::Method if m.r#static => "static_method",
-                    _ => "method",
-                },
-                Some(self.key(&m.key)),
-                self.key_selection(&m.key),
-                m.value.body.as_ref().map(|b| b.span),
-            )),
-            AstKind::ObjectProperty(p) => {
-                let function = match &p.value {
-                    Expression::FunctionExpression(f)
-                        if p.method || p.kind != PropertyKind::Init =>
-                    {
-                        Some(f)
-                    }
-                    _ => None,
-                };
-                Some((
-                    if function.is_some() { Callable } else { Value },
-                    match p.kind {
-                        PropertyKind::Get => "getter",
-                        PropertyKind::Set => "setter",
-                        _ if function.is_some() => "object_method",
-                        _ => "object_property",
-                    },
-                    Some(self.key(&p.key)),
-                    self.key_selection(&p.key),
-                    function.map_or(Some(p.value.span()), |f| f.body.as_ref().map(|b| b.span)),
-                ))
-            }
-            AstKind::PropertyDefinition(p) => Some((
-                Value,
-                if p.r#static { "static_field" } else { "field" },
-                Some(self.key(&p.key)),
-                self.key_selection(&p.key),
-                p.value.as_ref().map(GetSpan::span),
-            )),
-            AstKind::AccessorProperty(p) => Some((
-                Value,
-                "accessor_property",
-                Some(self.key(&p.key)),
-                self.key_selection(&p.key),
-                p.value.as_ref().map(GetSpan::span),
-            )),
             AstKind::StaticBlock(b) => Some((
                 ExecutionRegion,
                 "static_block",
@@ -348,31 +409,19 @@ impl<'a> Visit<'a> for Collector<'a> {
                 self.key_selection(&p.key),
                 None,
             )),
-            AstKind::TSMethodSignature(m) => Some((
-                Callable,
-                match m.kind {
-                    TSMethodSignatureKind::Get => "getter",
-                    TSMethodSignatureKind::Set => "setter",
-                    _ => "method",
-                },
-                Some(self.key(&m.key)),
-                self.key_selection(&m.key),
-                None,
-            )),
-            AstKind::TSCallSignatureDeclaration(d) => Some((
-                Callable,
-                "call_signature",
-                None,
-                Span::new(d.span.start, d.span.start),
-                None,
-            )),
-            AstKind::TSConstructSignatureDeclaration(d) => Some((
-                Callable,
-                "construct_signature",
-                None,
-                Span::new(d.span.start, d.span.start),
-                None,
-            )),
+            AstKind::TSMethodSignature(m) if !inside_function && m.key.static_name().is_some() => {
+                Some((
+                    Callable,
+                    match m.kind {
+                        TSMethodSignatureKind::Get => "getter",
+                        TSMethodSignatureKind::Set => "setter",
+                        _ => "method",
+                    },
+                    Some(self.key(&m.key)),
+                    self.key_selection(&m.key),
+                    None,
+                ))
+            }
             AstKind::TSIndexSignature(d) => Some((
                 Value,
                 "index_signature",
@@ -431,18 +480,6 @@ impl<'a> Visit<'a> for Collector<'a> {
                 })
                 .map(GetSpan::span);
             if let AstKind::VariableDeclarator(v) = node {
-                let constant = self.stack.last().is_some_and(|(n, _)| {
-                    matches!(n,
-                    AstKind::VariableDeclaration(d) if d.kind == VariableDeclarationKind::Const)
-                });
-                if constant && matches!(v.id, BindingPattern::BindingIdentifier(_)) {
-                    self.items[id].alias_selection = match initializer {
-                        Some(Expression::Identifier(i)) => Some(i.span),
-                        _ => None,
-                    };
-                }
-            }
-            if let AstKind::VariableDeclarator(v) = node {
                 let part = self.items[id].parts.last_mut().unwrap();
                 part.names =
                     v.id.get_binding_identifiers()
@@ -489,5 +526,18 @@ impl<'a> Visit<'a> for Collector<'a> {
     /// 离开节点恢复词法所有者，嵌套命名声明不会污染后续兄弟归属。
     fn leave_node(&mut self, _: AstKind<'a>) {
         self.stack.pop();
+    }
+}
+
+/// 只识别直接函数初始化器；工厂调用与条件表达式不能凭外形推断为函数。
+fn function_value(expression: &Expression<'_>) -> Option<(&'static str, Option<Span>)> {
+    match expression.get_inner_expression() {
+        Expression::ArrowFunctionExpression(function) => {
+            Some(("arrow", Some(function.body.span())))
+        }
+        Expression::FunctionExpression(function) => {
+            Some(("function", function.body.as_ref().map(|body| body.span)))
+        }
+        _ => None,
     }
 }

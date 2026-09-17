@@ -13,9 +13,9 @@ fn fixture(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 /// 固定工具缺失直接失败；真实语义验收通过 --ignored 显式执行。
-fn analyze(directory: &std::path::Path, files: &[&str]) -> AnalysisReport {
+fn analyze(directory: &std::path::Path, files: &[&str]) -> CodeGraph {
     TypeScriptLanguageAnalyzer::default()
-        .analyze_with_report(&AnalysisInput {
+        .analyze(&AnalysisInput {
             repository_root: directory.into(),
             files: files.iter().map(PathBuf::from).collect(),
             options: Default::default(),
@@ -52,21 +52,24 @@ fn graph_unverified_relative_imports_do_not_abort_analysis() {
         ("main.ts", "import './style.css'; import './missing.ts'; function target() {} export function caller() { target(); }"),
         ("style.css", "body { color: red; }"),
     ]);
-    let report = analyze(directory.path(), &["main.ts"]);
-    let target = named(&report.graph, "target").data().id.clone();
-    assert!(named(&report.graph, "caller")
+    let graph = analyze(directory.path(), &["main.ts"]);
+    let target = named(&graph, "target").data().id.clone();
+    assert!(named(&graph, "caller")
         .data()
         .references
         .iter()
         .any(|reference| reference.semantic == "code.calls"
             && reference.target == ReferenceTarget::Node(target.clone())));
-    assert_eq!(nodes(&report.graph).len(), 2);
-    assert!(
-        nodes(&report.graph)
-            .iter()
-            .all(|node| node.category()
-                == crate::structure_review::code_graph::CodeCategory::Callable)
+    assert_eq!(nodes(&graph).len(), 3);
+    assert_eq!(
+        graph.root().contains,
+        [named(&graph, "main.ts").data().id.clone()]
     );
+    assert!(nodes(&graph).iter().all(|node| matches!(
+        node.category(),
+        crate::structure_review::code_graph::CodeCategory::Callable
+            | crate::structure_review::code_graph::CodeCategory::Container
+    )));
 }
 
 /// TS/JS 共用选集身份，导入和 barrel 别名最终落到声明而非导入节点。
@@ -80,12 +83,12 @@ fn graph_cross_language_alias_barrel_and_callbacks() {
         ("main.ts", "import {forwarded as alias} from './barrel'; export const tsTarget = () => alias(); export function caller() { [1].map(() => { alias(); tsTarget(); }); }"),
         ("other.js", "import { tsTarget } from './main'; export function jsCaller() { tsTarget(); }"),
     ]);
-    let report = analyze(
+    let graph = &analyze(
         directory.path(),
         &["main.ts", "target.js", "other.js", "barrel.ts"],
     );
-    let graph = &report.graph;
-    assert_eq!(nodes(graph).len(), 4);
+    assert_eq!(nodes(graph).len(), 7);
+    assert_eq!(graph.root().contains.len(), 3);
     assert!(nodes(graph)
         .iter()
         .flat_map(|node| &node.data().references)
@@ -115,6 +118,141 @@ fn graph_cross_language_alias_barrel_and_callbacks() {
         .any(|n| n.data().native_kind == "arrow" && n.data().name.is_none()));
 }
 
+/// 真实 LSP 解析的调用在合并后仍属于正确执行区域，文件容器只承载包含关系。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_file_modules_keep_merged_execution_calls() {
+    use crate::structure_review::code_graph::CodeCategory;
+    let directory = fixture(&[
+        ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["*.ts"]}"#),
+        ("target.ts", "export function initialize() {} export function refresh() {} export function fromCallback() {}"),
+        ("main.ts", "import {initialize, refresh, fromCallback} from './target'; const a = initialize(); const b = initialize(); initialize(); if (a) refresh(); [1].forEach(() => fromCallback()); export function run() { refresh(); }"),
+    ]);
+    let graph = &analyze(directory.path(), &["main.ts", "target.ts"]);
+    assert_eq!(graph.root().contains.len(), 2);
+    let execution = named(graph, "顶层执行");
+    assert_eq!(
+        nodes(graph)
+            .iter()
+            .filter(|n| n.category() == CodeCategory::ExecutionRegion)
+            .count(),
+        1
+    );
+    assert!(named(graph, "main.ts")
+        .data()
+        .contains
+        .contains(&execution.data().id));
+    for name in ["initialize", "refresh", "fromCallback"] {
+        let target = named(graph, name);
+        assert!(
+            execution
+                .data()
+                .references
+                .iter()
+                .any(|r| r.semantic == "code.calls"
+                    && r.target == ReferenceTarget::Node(target.data().id.clone())),
+            "{name}: {:?}",
+            execution.data().references
+        );
+    }
+    assert!(nodes(graph)
+        .iter()
+        .filter(|n| n.category() == CodeCategory::Container)
+        .all(|n| n.data().references.is_empty()));
+}
+
+/// 缩减节点范围后，具名函数值、内部别名与被合并的初始化/回调调用仍由真实服务定位。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_named_function_values_and_omitted_initializers_keep_calls() {
+    use crate::structure_review::code_graph::CodeCategory;
+    let directory = fixture(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["*.ts"]}"#,
+        ),
+        (
+            "target.ts",
+            "export const target = () => 1; export const expression = function() {};",
+        ),
+        (
+            "main.ts",
+            r#"import {target, expression} from './target';
+            let mutable = () => target(); var legacy = function() { expression(); };
+            class Holder { handler = () => target(); static action = function() { expression(); }; }
+            const object = { handler: () => target(), objectExpression: function() { expression(); } };
+            const first = target(); const second = expression(); const alias = target;
+            function outer() { const localAlias = alias; localAlias(); mutable(); legacy();
+                const holder = new Holder(); holder.handler(); Holder.action(); object.handler(); object.objectExpression();
+                function nested() { target(); } const callback = () => expression();
+                [1].forEach(() => { const inside = 1; target(); }); nested(); callback(); }
+        "#,
+        ),
+    ]);
+    let graph = &analyze(directory.path(), &["main.ts", "target.ts"]);
+    for name in [
+        "first",
+        "second",
+        "alias",
+        "localAlias",
+        "object",
+        "nested",
+        "callback",
+        "inside",
+        "holder",
+    ] {
+        assert!(
+            nodes(graph)
+                .iter()
+                .all(|node| node.data().name.as_deref() != Some(name)),
+            "{name}"
+        );
+    }
+    assert!(nodes(graph)
+        .iter()
+        .all(|node| node.category() != CodeCategory::Value));
+    for name in ["mutable", "legacy", "handler", "action", "expression"] {
+        assert_eq!(named(graph, name).category(), CodeCategory::Callable);
+    }
+    let execution = named(graph, "顶层执行");
+    assert_eq!(execution.category(), CodeCategory::ExecutionRegion);
+    for owner in [execution, named(graph, "outer")] {
+        for name in ["target", "expression"] {
+            let target = named(graph, name);
+            assert!(
+                owner
+                    .data()
+                    .references
+                    .iter()
+                    .any(|reference| reference.semantic == "code.calls"
+                        && reference.target == ReferenceTarget::Node(target.data().id.clone())),
+                "{}: {:?}",
+                owner.data().name.as_deref().unwrap(),
+                owner.data().references
+            );
+        }
+    }
+    let outer = named(graph, "outer");
+    for target in nodes(graph).into_iter().filter(|node| {
+        matches!(
+            node.data().name.as_deref(),
+            Some("mutable" | "legacy" | "handler" | "action")
+        )
+    }) {
+        assert!(
+            outer
+                .data()
+                .references
+                .iter()
+                .any(|reference| reference.semantic == "code.calls"
+                    && reference.target == ReferenceTarget::Node(target.data().id.clone())),
+            "{:?}: {:?}",
+            target.data().name,
+            outer.data().references
+        );
+    }
+}
+
 /// 标准 Promise/Node 包装方法保持外部声明身份，JSDoc 原生类型推断可定位仓库方法。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
@@ -128,11 +266,10 @@ fn graph_runtime_wrappers_node_modules_and_jsdoc() {
         ("cjs.cts", "import fs = require('node:fs'); export function cjsReader() { return fs.readFileSync('x'); }"),
         ("common.cjs", "const fs = require('node:fs'); exports.read = function read() { return fs.readFileSync('x'); };"),
     ]);
-    let report = analyze(
+    let graph = &analyze(
         directory.path(),
         &["model.ts", "main.js", "esm.mts", "cjs.cts", "common.cjs"],
     );
-    let graph = &report.graph;
     let run = named(graph, "run").data().id.clone();
     assert!(named(graph, "jsdocCaller")
         .data()
@@ -154,13 +291,12 @@ fn graph_runtime_wrappers_node_modules_and_jsdoc() {
 /// JSX 组件调用单独分类；匿名属性回调内调用继续归属具名 render 函数。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
-fn graph_jsx_properties_heritage_writes_and_function_values() {
+fn graph_jsx_properties_heritage_and_function_values() {
     let directory = fixture(&[
         ("tsconfig.json", r#"{"compilerOptions":{"jsx":"preserve","allowJs":true,"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["**/*"]}"#),
-        ("main.tsx", "interface Contract {} class Base {} class Child extends Base implements Contract { value: Contract; method() { this.value = {}; } handler = () => {}; } function Component() { return <div/>; } function hit() {} const alias = (hit); function render() { const child = new Child(); child.handler(); alias(); return <div onClick={() => hit()}><Component/></div>; } const saved = hit; const data = 1; const copy = data;"),
+        ("main.tsx", "interface Contract {} class Base {} class Child extends Base implements Contract { value: Contract; method() { this.value = {}; } handler = () => {}; } function Component() { return <div/>; } function hit() {} const alias = (hit); function render() { const saved = hit; const child = new Child(); child.handler(); alias(); return <div onClick={() => hit()}><Component/></div>; } const saved = hit; const data = 1; const copy = data;"),
     ]);
-    let report = analyze(directory.path(), &["main.tsx"]);
-    let graph = &report.graph;
+    let graph = &analyze(directory.path(), &["main.tsx"]);
     let render = named(graph, "render");
     let component = named(graph, "Component").data().id.clone();
     assert!(render
@@ -176,10 +312,9 @@ fn graph_jsx_properties_heritage_writes_and_function_values() {
         ("Child", "code.extends", "Base"),
         ("Child", "code.implements", "Contract"),
         ("value", "code.type_use", "Contract"),
-        ("method", "code.writes", "value"),
         ("render", "code.calls", "hit"),
         ("render", "code.calls", "handler"),
-        ("saved", "code.references", "hit"),
+        ("render", "code.references", "hit"),
     ] {
         let target = named(graph, target).data().id.clone();
         assert!(
@@ -190,7 +325,47 @@ fn graph_jsx_properties_heritage_writes_and_function_values() {
             named(graph, source).data().references
         );
     }
-    assert!(named(graph, "copy").data().references.is_empty());
+    for name in ["saved", "alias", "data", "copy", "child"] {
+        assert!(
+            nodes(graph)
+                .iter()
+                .all(|node| node.data().name.as_deref() != Some(name)),
+            "{name}"
+        );
+    }
+    assert!(nodes(graph)
+        .iter()
+        .flat_map(|node| &node.data().references)
+        .all(|reference| !matches!(reference.semantic.as_str(), "code.writes" | "code.reads")));
+}
+
+/// 真实 TS/JS 语义不输出写入边，也不把函数值字段左值降级成普通引用。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_assignments_omit_writes_and_keep_calls_and_function_values() {
+    for path in ["main.ts", "main.js"] {
+        let directory = fixture(&[
+            ("tsconfig.json", r#"{"compilerOptions":{"allowJs":true,"checkJs":true,"target":"ES2022","types":[]},"include":["**/*"]}"#),
+            (path, "function source() { return 1; } function replacement() {} class Model { value = 0; handler = () => {}; update() { this.value = source(); this.value += 1; this.value++; this.handler = replacement; ({ item: this.handler } = {}); } }"),
+        ]);
+        let graph = &analyze(directory.path(), &[path]);
+        assert!(nodes(graph)
+            .iter()
+            .flat_map(|node| &node.data().references)
+            .all(|reference| !matches!(reference.semantic.as_str(), "code.writes" | "code.reads")));
+        let references = &named(graph, "update").data().references;
+        assert_eq!(references.len(), 2, "{path}: {references:?}");
+        for (semantic, target) in [("code.calls", "source"), ("code.references", "replacement")] {
+            assert!(
+                references.iter().any(|reference| {
+                    reference.semantic == semantic
+                        && reference.target
+                            == ReferenceTarget::Node(named(graph, target).data().id.clone())
+                }),
+                "{path}: missing {semantic} {target}"
+            );
+        }
+    }
 }
 
 /// 缺失业务依赖保留本地可靠事实；动态、结构调用签名和多个可能实现不猜测。
@@ -201,12 +376,11 @@ fn graph_missing_dynamic_ambiguous_and_type_only_are_unresolved() {
         ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["**/*"]}"#),
         ("main.ts", "import {missing} from 'missing-business'; function real() {} function other() {} interface Callable { (): void; method(): void; } declare const typed: Callable; function caller(flag: boolean) { real(); missing(); typed(); typed.method(); (flag ? real : other)(); const object = {action: real}; object['action'](); }"),
     ]);
-    let report = analyze(directory.path(), &["main.ts"]);
-    let refs = &named(&report.graph, "caller").data().references;
+    let graph = analyze(directory.path(), &["main.ts"]);
+    let refs = &named(&graph, "caller").data().references;
     assert!(
         refs.iter()
-            .any(|r| r.target
-                == ReferenceTarget::Node(named(&report.graph, "real").data().id.clone())),
+            .any(|r| r.target == ReferenceTarget::Node(named(&graph, "real").data().id.clone())),
         "{refs:?}"
     );
     for name in [
@@ -222,15 +396,6 @@ fn graph_missing_dynamic_ambiguous_and_type_only_are_unresolved() {
             "{name}: {refs:?}"
         );
     }
-    assert!(report
-        .notes
-        .iter()
-        .any(|n| n.message.contains("missing-business")));
-    assert!(report
-        .notes
-        .iter()
-        .all(|n| n.file.as_ref().is_none_or(|p| p.is_relative())
-            && n.project.as_ref().is_none_or(|p| p.is_relative())));
 }
 
 /// 同所有者重载合并到唯一 Callable；跨文件合并接口保留各自声明及全部类型关系。
@@ -242,8 +407,7 @@ fn graph_overloads_and_merged_fragments() {
         ("a.ts", "interface Shared { a: string; } function pick(x: string): string; function pick(x: number): number; function pick(x: any) { return x; } function caller() { pick(1); }"),
         ("b.ts", "interface Shared { b: string; } class Holder { value: Shared; }"),
     ]);
-    let report = analyze(directory.path(), &["a.ts", "b.ts"]);
-    let graph = &report.graph;
+    let graph = &analyze(directory.path(), &["a.ts", "b.ts"]);
     assert_eq!(
         nodes(graph)
             .iter()
@@ -281,7 +445,7 @@ fn graph_type_only_alias_chains_do_not_become_runtime_calls() {
         ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["*.ts"]}"#),
         ("target.ts", "export function action() {} export class Model { static run() {} }"),
         ("barrel.ts", "export type {action} from './target'; export {action as runtimeAction} from './target'; import type {Model as ImportedModel} from './target'; export {ImportedModel as BarrelModel};"),
-        ("main.ts", "import type {Model, action as direct} from './target'; import {action, runtimeAction, BarrelModel} from './barrel'; function caller() { action(); direct(); Model.run(); new Model(); BarrelModel.run(); new BarrelModel(); } function shadow() { function action() {} action(); class Model { static run() {} } Model.run(); new Model(); } function allowed() { runtimeAction(); }"),
+        ("main.ts", "import type {Model, action as direct} from './target'; import {action, runtimeAction, BarrelModel} from './barrel'; function caller() { action(); direct(); Model.run(); new Model(); BarrelModel.run(); new BarrelModel(); } namespace Shadow { function action() {} class Model { static run() {} } export function shadow() { action(); Model.run(); new Model(); } } function allowed() { runtimeAction(); }"),
     ]);
     let main = directory.path().join("main.ts");
     fs::write(
@@ -293,33 +457,43 @@ fn graph_type_only_alias_chains_do_not_become_runtime_calls() {
         ),
     )
     .unwrap();
-    let report = analyze(directory.path(), &["main.ts", "target.ts", "barrel.ts"]);
-    let refs = &named(&report.graph, "caller").data().references;
-    assert!(
-        refs.iter()
-            .filter(|r| r.semantic == "code.calls")
-            .all(|r| matches!(r.target, ReferenceTarget::Unresolved { .. })),
-        "{refs:?}"
-    );
-    assert!(named(&report.graph, "shadow")
-        .data()
-        .references
-        .iter()
-        .any(|r| r.semantic == "code.calls" && matches!(r.target, ReferenceTarget::Node(_))));
-    assert!(named(&report.graph, "many")
-        .data()
-        .references
-        .iter()
-        .all(|r| matches!(r.target, ReferenceTarget::Unresolved { .. })));
-    assert!(report.notes.len() <= 200);
-    assert!(report.notes.iter().any(|n| n.code == "typescript.TS1362"));
+    let graph = analyze(directory.path(), &["main.ts", "target.ts", "barrel.ts"]);
     fs::write(
         &main,
         format!("// @ts-nocheck\n{}", fs::read_to_string(&main).unwrap()),
     )
     .unwrap();
     let unchecked = analyze(directory.path(), &["main.ts", "target.ts", "barrel.ts"]);
-    for graph in [&report.graph, &unchecked.graph] {
+    for graph in [&graph, &unchecked] {
+        let calls = named(graph, "caller")
+            .data()
+            .references
+            .iter()
+            .filter(|r| r.semantic == "code.calls")
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 5, "{calls:?}");
+        assert!(
+            calls
+                .iter()
+                .all(|r| matches!(r.target, ReferenceTarget::Unresolved { .. })),
+            "{calls:?}"
+        );
+        for name in ["action", "direct", "run", "Model", "BarrelModel"] {
+            assert!(
+                calls
+                    .iter()
+                    .any(|r| r.target == ReferenceTarget::Unresolved { name: name.into() }),
+                "{name}: {calls:?}"
+            );
+        }
+        // 相同调用会合并为一个关系，重复次数不能使类型专用导入变成运行时目标。
+        let repeated = &named(graph, "many").data().references;
+        assert_eq!(repeated.len(), 1, "{repeated:?}");
+        assert!(repeated.iter().all(|r| r.semantic == "code.calls"
+            && r.target
+                == ReferenceTarget::Unresolved {
+                    name: "action".into()
+                }));
         for name in ["shadow", "allowed"] {
             let calls = named(graph, name)
                 .data()
@@ -336,22 +510,12 @@ fn graph_type_only_alias_chains_do_not_become_runtime_calls() {
             );
         }
     }
-    assert!(
-        named(&unchecked.graph, "caller")
-            .data()
-            .references
-            .iter()
-            .filter(|r| r.semantic == "code.calls")
-            .all(|r| matches!(r.target, ReferenceTarget::Unresolved { .. })),
-        "{:?}",
-        named(&unchecked.graph, "caller").data().references
-    );
 }
 
-/// 两个真实配置对同一调用目标不一致时保留未知关系和独立冲突说明。
+/// 两个真实配置对同一调用目标不一致时保留未知关系，本地确定调用仍可解析。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
-fn graph_project_conflicts_and_ts5_compatibility_notes() {
+fn graph_project_conflicts_keep_unknown_calls_and_local_targets() {
     let directory = fixture(&[
         ("a/tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","module":"CommonJS","moduleResolution":"Node","baseUrl":"..","paths":{"@impl":["a/impl.ts"]},"types":[]},"files":["../shared.ts","impl.ts"]}"#),
         ("b/tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","module":"CommonJS","moduleResolution":"Node","baseUrl":"..","paths":{"@impl":["b/impl.ts"]},"types":[]},"files":["../shared.ts","impl.ts"]}"#),
@@ -359,30 +523,27 @@ fn graph_project_conflicts_and_ts5_compatibility_notes() {
         ("b/impl.ts", "export function work() { return 2; }"),
         ("shared.ts", "import {work} from '@impl'; function reliable() {} function caller() { work(); reliable(); }"),
     ]);
-    let report = analyze(directory.path(), &["shared.ts", "a/impl.ts", "b/impl.ts"]);
-    let refs = &named(&report.graph, "caller").data().references;
-    assert!(
-        refs.iter().any(|r| r.target
-            == ReferenceTarget::Unresolved {
-                name: "work".into()
-            }),
-        "{refs:?}"
-    );
-    assert!(refs
-        .iter()
-        .any(|r| r.target
-            == ReferenceTarget::Node(named(&report.graph, "reliable").data().id.clone())));
-    assert!(report
-        .notes
-        .iter()
-        .any(|n| n.code == "typescript.conflicting_projects"));
-    assert!(
-        report
-            .notes
+    let graph = analyze(directory.path(), &["shared.ts", "a/impl.ts", "b/impl.ts"]);
+    let refs = &named(&graph, "caller").data().references;
+    assert_eq!(refs.len(), 2, "{refs:?}");
+    for target in [
+        ReferenceTarget::Unresolved {
+            name: "work".into(),
+        },
+        ReferenceTarget::Node(named(&graph, "reliable").data().id.clone()),
+    ] {
+        assert!(
+            refs.iter()
+                .any(|r| r.semantic == "code.calls" && r.target == target),
+            "{refs:?}"
+        );
+    }
+    assert_eq!(
+        nodes(&graph)
             .iter()
-            .any(|n| n.message.contains("deprecated")),
-        "{:?}",
-        report.notes
+            .filter(|node| node.data().name.as_deref() == Some("work"))
+            .count(),
+        2
     );
 }
 
@@ -421,13 +582,13 @@ fn graph_workspace_references_without_built_dist() {
             "import {service} from '@sample/lib'; export function caller() { service(); }",
         ),
     ]);
-    let report = analyze(
+    let graph = analyze(
         directory.path(),
         &["packages/app/src/main.ts", "packages/lib/src/index.ts"],
     );
     assert!(!directory.path().join("packages/lib/dist").exists());
-    let service = named(&report.graph, "service").data().id.clone();
-    assert!(named(&report.graph, "caller")
+    let service = named(&graph, "service").data().id.clone();
+    assert!(named(&graph, "caller")
         .data()
         .references
         .iter()
@@ -449,12 +610,12 @@ fn graph_test_membership_lazy_context_and_stable_external_symbols() {
     let b = fixture(&files);
     let one = analyze(a.path(), &["main.ts", "hidden.test.ts"]);
     let two = analyze(b.path(), &["main.ts"]);
-    assert!(one.graph.diff(&two.graph).unwrap().nodes.is_empty());
-    assert!(!nodes(&one.graph)
+    assert!(one.diff(&two).unwrap().nodes.is_empty());
+    assert!(!nodes(&one)
         .iter()
         .any(|n| n.data().name.as_deref() == Some("helper")));
     let with_tests = TypeScriptLanguageAnalyzer::default()
-        .analyze_with_report(&AnalysisInput {
+        .analyze(&AnalysisInput {
             repository_root: a.path().into(),
             files: vec!["main.ts".into(), "hidden.test.ts".into()],
             options: crate::structure_review::code_graph::AnalysisOptions {
@@ -462,8 +623,8 @@ fn graph_test_membership_lazy_context_and_stable_external_symbols() {
             },
         })
         .unwrap();
-    let helper = named(&with_tests.graph, "helper").data().id.clone();
-    assert!(named(&one.graph, "caller")
+    let helper = named(&with_tests, "helper").data().id.clone();
+    assert!(named(&one, "caller")
         .data()
         .references
         .iter()
@@ -471,17 +632,13 @@ fn graph_test_membership_lazy_context_and_stable_external_symbols() {
             == ReferenceTarget::External {
                 symbol: helper.0.clone()
             }));
-    assert!(named(&with_tests.graph, "caller")
+    assert!(named(&with_tests, "caller")
         .data()
         .references
         .iter()
         .any(|r| r.target == ReferenceTarget::Node(helper.clone())));
-    assert!(one
-        .graph
-        .external_symbols()
-        .values()
-        .any(|s| s.name == "helper"
-            && s.scope == crate::structure_review::code_graph::SymbolScope::Repository));
+    assert!(one.external_symbols().values().any(|s| s.name == "helper"
+        && s.scope == crate::structure_review::code_graph::SymbolScope::Repository));
 }
 
 /// 格式修改不产生图差异；子方法修改不污染父类，自身回调代码修改仍可见。
@@ -500,8 +657,8 @@ fn graph_diff_format_child_parent_and_inline_callback() {
     let a = analyze(before.path(), &["main.ts"]);
     let b = analyze(formatted.path(), &["main.ts"]);
     let c = analyze(changed.path(), &["main.ts"]);
-    assert!(a.graph.diff(&b.graph).unwrap().nodes.is_empty());
-    let diff = a.graph.diff(&c.graph).unwrap();
+    assert!(a.diff(&b).unwrap().nodes.is_empty());
+    let diff = a.diff(&c).unwrap();
     assert_eq!(diff.nodes.len(), 2);
     assert!(diff
         .nodes
@@ -510,7 +667,7 @@ fn graph_diff_format_child_parent_and_inline_callback() {
     assert!(!diff
         .nodes
         .iter()
-        .any(|d| d.id == named(&a.graph, "Parent").data().id));
+        .any(|d| d.id == named(&a, "Parent").data().id));
 }
 
 /// 动态名字来自 AST 规范表示，格式和引号变化无差异，字符串值变化仍可辨别。
@@ -524,13 +681,12 @@ fn graph_dynamic_unknown_names_ignore_format_but_preserve_literal_values() {
     let two = analyze(b.path(), &["main.ts"]);
     let three = analyze(c.path(), &["main.ts"]);
     assert!(
-        one.graph.diff(&two.graph).unwrap().nodes.is_empty(),
+        one.diff(&two).unwrap().nodes.is_empty(),
         "{:?}",
-        one.graph.diff(&two.graph).unwrap()
+        one.diff(&two).unwrap()
     );
     assert!(one
-        .graph
-        .diff(&three.graph)
+        .diff(&three)
         .unwrap()
         .nodes
         .iter()
@@ -546,21 +702,16 @@ fn graph_unicode_default_namespace_alias_and_union_evidence() {
         ("中文 path/实现.ts", "export default function action() {}\r\nexport function namedAction() {}"),
         ("main.ts", "import defaultAction, * as scope from './中文 path/实现';\r\nconst emoji = '😀'; const first = defaultAction; const second = (first as typeof first); class A { method() {} } class B { method() {} } function caller(value: A | B) { const saved = value.method; second(); scope.namedAction(); value.method(); }"),
     ]);
-    let report = analyze(directory.path(), &["main.ts", "中文 path/实现.ts"]);
-    let graph = &report.graph;
+    let graph = &analyze(directory.path(), &["main.ts", "中文 path/实现.ts"]);
     let refs = &named(graph, "caller").data().references;
     assert!(
-        named(graph, "saved")
-            .data()
-            .references
-            .iter()
-            .any(|r| r.semantic == "code.references"
-                && r.target
-                    == ReferenceTarget::Unresolved {
-                        name: "method".into()
-                    }),
+        refs.iter().any(|r| r.semantic == "code.references"
+            && r.target
+                == ReferenceTarget::Unresolved {
+                    name: "method".into()
+                }),
         "{:?}",
-        named(graph, "saved").data().references
+        refs
     );
     for target in ["action", "namedAction"] {
         assert!(
@@ -596,20 +747,16 @@ fn graph_repository_ambient_functions_and_nonambient_signature_boundary() {
     let selected = analyze(directory.path(), &["main.mts", "api.d.mts", "globals.d.ts"]);
     let unselected = analyze(directory.path(), &["main.mts"]);
     for target in ["api", "globalApi", "explicit", "ambient"] {
-        let id = named(&selected.graph, target).data().id.clone();
+        let id = named(&selected, target).data().id.clone();
         assert!(
-            named(&selected.graph, "caller")
-                .data()
-                .references
-                .iter()
-                .any(
-                    |r| r.semantic == "code.calls" && r.target == ReferenceTarget::Node(id.clone())
-                ),
+            named(&selected, "caller").data().references.iter().any(
+                |r| r.semantic == "code.calls" && r.target == ReferenceTarget::Node(id.clone())
+            ),
             "{target}: {:?}",
-            named(&selected.graph, "caller").data().references
+            named(&selected, "caller").data().references
         );
         if ["api", "globalApi"].contains(&target) {
-            assert!(named(&unselected.graph, "caller")
+            assert!(named(&unselected, "caller")
                 .data()
                 .references
                 .iter()
@@ -618,13 +765,13 @@ fn graph_repository_ambient_functions_and_nonambient_signature_boundary() {
                         symbol: id.0.clone()
                     }));
             assert_eq!(
-                unselected.graph.external_symbols()[&id.0].scope,
+                unselected.external_symbols()[&id.0].scope,
                 crate::structure_review::code_graph::SymbolScope::Repository
             );
         }
     }
     for target in ["isolated", "typed", "method"] {
-        assert!(named(&selected.graph, "caller")
+        assert!(named(&selected, "caller")
             .data()
             .references
             .iter()
@@ -644,9 +791,9 @@ fn graph_heterogeneous_union_members_preserve_ambiguity() {
         ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["*.ts"]}"#),
         ("main.ts", "class A { method() {} } class B { method = () => {}; } function forward(value: A | B) { value.method(); } function reversed(value: B | A) { value.method(); } class method {} class Producer { method(): method { return new method(); } } function single(value: Producer) { value.method(); }"),
     ]);
-    let report = analyze(directory.path(), &["main.ts"]);
+    let graph = analyze(directory.path(), &["main.ts"]);
     for name in ["forward", "reversed"] {
-        let calls = named(&report.graph, name)
+        let calls = named(&graph, name)
             .data()
             .references
             .iter()
@@ -661,7 +808,7 @@ fn graph_heterogeneous_union_members_preserve_ambiguity() {
             "{name}: {calls:?}"
         );
     }
-    let calls = named(&report.graph, "single")
+    let calls = named(&graph, "single")
         .data()
         .references
         .iter()
@@ -685,10 +832,10 @@ fn graph_repository_relative_test_classification_ignores_checkout_ancestors() {
         for (name, source) in [
             ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["**/*.ts"]}"#),
             ("src/main.ts", "export function production() { test(() => 1); } function test(callback: () => number) { return callback(); }"),
-            ("contest.ts", "export const contest = 1;"),
-            ("__tests__/main.ts", "export const directoryTest = 1;"),
-            ("src/main.test.ts", "export const suffixTest = 1;"),
-            ("src/main.spec.ts", "export const suffixSpec = 1;"),
+            ("contest.ts", "export const contest = () => 1;"),
+            ("__tests__/main.ts", "export const directoryTest = () => 1;"),
+            ("src/main.test.ts", "export const suffixTest = () => 1;"),
+            ("src/main.spec.ts", "export const suffixSpec = () => 1;"),
         ] {
             let path = root.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -703,27 +850,23 @@ fn graph_repository_relative_test_classification_ignores_checkout_ancestors() {
         ];
         let actual = analyze(&root, &files);
         assert_eq!(
-            named(&actual.graph, "production")
-                .data()
-                .source
-                .as_ref()
-                .unwrap(),
+            named(&actual, "production").data().source.as_ref().unwrap(),
             "export function production() { test(() => 1); }"
         );
-        assert!(nodes(&actual.graph)
+        assert!(nodes(&actual)
             .iter()
             .any(|node| node.data().name.as_deref() == Some("contest")));
         for name in ["directoryTest", "suffixTest", "suffixSpec"] {
-            assert!(!nodes(&actual.graph)
+            assert!(!nodes(&actual)
                 .iter()
                 .any(|node| node.data().name.as_deref() == Some(name)));
         }
         if let Some(expected) = &expected {
-            assert_eq!(actual.graph.root(), expected.root());
-            assert_eq!(nodes(&actual.graph), nodes(expected));
-            assert_eq!(actual.graph.external_symbols(), expected.external_symbols());
+            assert_eq!(actual.root(), expected.root());
+            assert_eq!(nodes(&actual), nodes(expected));
+            assert_eq!(actual.external_symbols(), expected.external_symbols());
         } else {
-            expected = Some(actual.graph);
+            expected = Some(actual);
         }
         let enabled = TypeScriptLanguageAnalyzer::default()
             .analyze(&AnalysisInput {
@@ -746,13 +889,13 @@ fn graph_repository_relative_test_classification_ignores_checkout_ancestors() {
 fn graph_config_dir_templates_retain_local_call() {
     for inherited in [false, true] {
         let fixture = super::super::config_dir_fixture::fixture(inherited);
-        let report = analyze(
+        let graph = analyze(
             fixture.path(),
             &["app/src/main.ts", "app/src/dep.ts", "config/src/dep.ts"],
         );
-        let target = named(&report.graph, "target").data().id.clone();
-        let wrong = named(&report.graph, "wrongTarget").data().id.clone();
-        let references = &named(&report.graph, "caller").data().references;
+        let target = named(&graph, "target").data().id.clone();
+        let wrong = named(&graph, "wrongTarget").data().id.clone();
+        let references = &named(&graph, "caller").data().references;
         assert!(
             references
                 .iter()
@@ -763,13 +906,5 @@ fn graph_config_dir_templates_retain_local_call() {
         assert!(!references
             .iter()
             .any(|reference| reference.target == ReferenceTarget::Node(wrong.clone())));
-        assert!(
-            !report
-                .notes
-                .iter()
-                .any(|note| note.message.contains("TS2307")),
-            "{:?}",
-            report.notes
-        );
     }
 }

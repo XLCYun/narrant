@@ -2,7 +2,7 @@
 use super::Resolver;
 use crate::structure_review::typescript_analyzer::{
     lsp::{CheckedLocation, DefinitionEvidence, TypeScriptLsp},
-    syntax::{aliases::Alias, Occurrence},
+    syntax::aliases::Alias,
     text, Result,
 };
 use oxc_span::Span;
@@ -17,17 +17,18 @@ impl Resolver {
         &mut self,
         session: &mut TypeScriptLsp,
         file: &Path,
-        occurrence: &Occurrence,
+        root_binding: Option<Span>,
+        members: &[String],
         project: &Path,
     ) -> Result<bool> {
-        let Some(binding) = occurrence.root_binding else {
+        let Some(binding) = root_binding else {
             return Ok(false);
         };
         let key = (
             file.to_path_buf(),
             project.to_path_buf(),
             binding.start,
-            occurrence.members.clone(),
+            members.to_vec(),
         );
         if let Some(result) = self.alias_cache.get(&key) {
             return Ok(*result);
@@ -42,7 +43,7 @@ impl Resolver {
                 session,
                 file,
                 &alias,
-                &occurrence.members,
+                members,
                 project,
                 &mut BTreeSet::new(),
             )?

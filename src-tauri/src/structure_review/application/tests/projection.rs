@@ -1,8 +1,5 @@
-use super::{AnalysisNote, Graph};
-use crate::structure_review::{
-    analysis,
-    code_graph::{CodeGraph, CodeRoot, ExternalSymbol, SymbolScope},
-};
+use super::Graph;
+use crate::structure_review::code_graph::{CodeGraph, CodeRoot, ExternalSymbol, SymbolScope};
 
 /// WebView 投影保留原始身份，以单独的名称与范围字段支持任意语言的展示。
 #[test]
@@ -37,25 +34,4 @@ fn serializes_external_symbol_names_and_repository_scope() {
         })
     );
     assert_eq!(json["nodes"], serde_json::json!([]));
-}
-
-/// 分析说明只投影公开字段，逐侧路径采用稳定的传输格式。
-#[test]
-fn projects_structured_analysis_notes_separately_from_graphs() {
-    let note = analysis::AnalysisNote {
-        code: "typescript.TS2307".into(),
-        message: "缺少声明".into(),
-        file: Some(std::path::PathBuf::from("src").join("main.ts")),
-        project: Some("tsconfig.json".into()),
-    };
-    let json = serde_json::to_value(AnalysisNote::from(&note)).unwrap();
-    assert_eq!(
-        json,
-        serde_json::json!({
-            "code": "typescript.TS2307",
-            "message": "缺少声明",
-            "file": "src/main.ts",
-            "project": "tsconfig.json",
-        })
-    );
 }

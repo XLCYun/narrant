@@ -7,7 +7,10 @@ use crate::{
 /// 构造真实原文坐标的证据，验证语义匹配不会按邻近所有者猜测。
 fn location(document: &Document, start: u32, end: u32) -> CheckedLocation {
     CheckedLocation {
-        path: document.path.clone(),
+        path: url::Url::parse(&document.uri)
+            .unwrap()
+            .to_file_path()
+            .unwrap(),
         uri: document.uri.clone(),
         unverified: false,
         span: CheckedRange {

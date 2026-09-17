@@ -18,7 +18,7 @@ JSON，不存放仓库源码、配置或标准声明副本。
 现存 tsconfig/jsconfig 的配置语义优先。TS 配置解析给出初始根文件候选；
 相对 paths 保留在原配置层，继承完成后按有效 baseUrl/pathsBasePath 校验范围。
 LSP 注册后再通过显式 projectInfo 确认包含 imported/reference 源文件的实际项目。只有没有实际
-配置项目的选中文件才使用下述推断 profile，并生成一条说明。
+配置项目的选中文件才使用下述推断 profile。
 
 - Node 上下文判据为 `.cjs`、`.mjs`、`.cts`、`.mts`，或最近 package.json 存在
   `engines.node`、依赖/开发依赖 `@types/node`、`type: commonjs`。
@@ -28,7 +28,11 @@ LSP 注册后再通过显式 projectInfo 确认包含 imported/reference 源文�
 - 这些是确定性的缺省规则，不代表对应用运行环境的自动检测。
   运行 TLS 的 Node 可执行版本绝不用于推断项目的 Node 类型版本。
 - 已配置项目的显式 target/lib/noLib/types/typeRoots 保持权威，不强制 noResolve。
-  缺失业务 extends/types 会得到说明或诊断，未提供的业务类型不会自动下载。
+  未提供的业务类型不会自动下载。
+
+会话只保留图解析需要的内部语义检查。TS1361、TS1362 与 TS2693 的原始位置
+用于阻止类型专用导入、导出或类型声明被误识别为运行时调用；不生成诊断报告。
+多个有效项目对同一引用给出冲突目标时，该引用保留为未解析关系。
 
 ## 文件与工作区边界
 

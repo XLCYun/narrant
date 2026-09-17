@@ -20,18 +20,6 @@ pub(crate) struct ProjectRegistration {
     pub options: Value,
 }
 
-/// 按文件或配置限定的有界分析说明，不冒充成功的完整语义。
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AnalysisNote {
-    #[serde(default)]
-    pub code: Option<String>,
-    #[serde(default)]
-    pub project: Option<PathBuf>,
-    pub file: PathBuf,
-    pub message: String,
-}
-
 /// 源码快照保留 Git workspace 的真实路径，不建立第二份源码目录。
 #[derive(Clone, Debug)]
 pub(crate) struct SourceSnapshot {
@@ -56,7 +44,6 @@ struct PreparedOutput {
     associations: Vec<FileProjects>,
     sources: Vec<PathBuf>,
     metadata: Vec<PathBuf>,
-    notes: Vec<AnalysisNote>,
 }
 
 /// 同一 Git workspace 的分析上下文；助手文件的回收晚于全部 LSP 子进程。
@@ -70,7 +57,6 @@ pub(crate) struct PreparedProject {
     pub registrations: Vec<ProjectRegistration>,
     pub files: Vec<FileProjects>,
     pub allowed_roots: Vec<PathBuf>,
-    pub notes: Vec<AnalysisNote>,
     pub sources: BTreeMap<PathBuf, SourceSnapshot>,
     pub metadata: BTreeSet<PathBuf>,
 }
@@ -142,7 +128,6 @@ impl PreparedProject {
             registrations: result.projects,
             files: result.associations,
             allowed_roots,
-            notes: result.notes,
             sources: BTreeMap::new(),
             metadata: BTreeSet::new(),
         };
@@ -210,15 +195,6 @@ impl PreparedProject {
                 || file.projects.iter().any(|name| !names.contains(name))
             {
                 return Err(failure("选中源码的项目关联无效"));
-            }
-        }
-        if self.notes.len() > 200 {
-            return Err(failure("助手分析说明超出上限"));
-        }
-        for note in &self.notes {
-            mapping::lexical_under(&self.workspace_root, &note.file)?;
-            if note.message.chars().count() > 4096 {
-                return Err(failure("助手分析说明过长"));
             }
         }
         Ok(())

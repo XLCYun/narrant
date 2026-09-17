@@ -255,11 +255,6 @@ fn fixed_service_excludes_business_and_supplies_node_closure() {
         .workspace_root
         .join("node_modules/business")
         .exists());
-    assert!(session
-        .project
-        .notes
-        .iter()
-        .any(|note| note.message.contains("business")));
     let definitions = session
         .definitions(
             &file,
@@ -428,7 +423,7 @@ fn fixed_service_unconfigured_js_and_uri_boundaries() {
     session.shutdown().unwrap();
 }
 
-/// 缺失业务 extends 留下明确说明；实际 noLib 和 types 配置保持权威。
+/// 缺失业务 extends 时仍沿用实际 noLib 和 types 配置。
 #[test]
 #[ignore = "需要固定工具"]
 fn fixed_service_missing_extends_and_authoritative_libraries() {
@@ -440,11 +435,6 @@ fn fixed_service_missing_extends_and_authoritative_libraries() {
         ("main.ts", "export function work() {}\nwork();"),
     ]);
     let mut session = start(fixture.path(), &["main.ts"]);
-    assert!(session
-        .project
-        .notes
-        .iter()
-        .any(|note| note.message.contains("缺失配置 extends")));
     let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     assert_eq!(session.validate_project(&file, &name).unwrap(), vec![file]);
@@ -740,11 +730,40 @@ fn fixed_service_browser_inference_and_unresolved() {
         .and_then(checked_definitions)
         .unwrap()
         .is_empty());
-    assert!(session
-        .project
-        .notes
-        .iter()
-        .any(|note| note.message.contains("missing")));
+    session.shutdown().unwrap();
+}
+
+/// 原生类型误用证据按源码字节位置保留，合法运行时调用不能被同名别名误伤。
+#[test]
+#[ignore = "需要固定工具"]
+fn fixed_service_preserves_native_runtime_type_errors() {
+    let source = "// 多字节前缀验证诊断位置转换。\nimport type { Model } from './target';\nimport { action, runtimeAction } from './barrel';\ninterface Contract {}\nnew Model();\naction();\nnew Contract();\nruntimeAction();\n";
+    let fixture = fixture(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"module":"Preserve","moduleResolution":"Bundler","target":"ES2022","types":[]},"files":["main.ts"]}"#,
+        ),
+        ("target.ts", "export class Model {}\nexport function action() {}"),
+        (
+            "barrel.ts",
+            "export type { action } from './target';\nexport { action as runtimeAction } from './target';",
+        ),
+        ("main.ts", source),
+    ]);
+    let session = start(fixture.path(), &["main.ts"]);
+    let file = session.project.files[0].file.clone();
+    let name = session.project.files[0].projects[0].clone();
+    // 分别覆盖类型专用导入、类型专用导出和只存在于类型空间的声明。
+    for (identifier, code) in [("Model", 1361), ("action", 1362), ("Contract", 2693)] {
+        let offset = source.rfind(identifier).unwrap() as u32;
+        assert!(
+            session.runtime_type_error(&file, offset, &name),
+            "TS{code} 应保留 {identifier} 的运行时类型误用位置"
+        );
+        assert!(!session.runtime_type_error(&file, offset + identifier.len() as u32, &name));
+    }
+    let allowed = source.rfind("runtimeAction()").unwrap() as u32;
+    assert!(!session.runtime_type_error(&file, allowed, &name));
     session.shutdown().unwrap();
 }
 

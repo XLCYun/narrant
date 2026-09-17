@@ -103,24 +103,14 @@ async fn sequential(
                     operation.cancellation(),
                 )
                 .unwrap();
-                let diff = before.graph.diff(&after.graph).unwrap();
+                let diff = before.diff(&after).unwrap();
                 let result = StructureComparison {
                     review_id,
                     snapshot_id,
                     comparison_base: workspace.comparison.comparison_base.clone(),
                     head_revision: workspace.comparison.head_revision.clone(),
-                    before: Graph::from(&before.graph),
-                    after: Graph::from(&after.graph),
-                    before_notes: before
-                        .notes
-                        .iter()
-                        .map(projection::AnalysisNote::from)
-                        .collect(),
-                    after_notes: after
-                        .notes
-                        .iter()
-                        .map(projection::AnalysisNote::from)
-                        .collect(),
+                    before: Graph::from(&before),
+                    after: Graph::from(&after),
                     diff: GraphDifference::from(&diff),
                     coverage,
                 };
@@ -170,10 +160,7 @@ async fn compares_sequential_and_parallel_repository_analysis() {
             });
             let analyzer = typescript_analyzer.clone();
             let analyze_typescript: Arc<AnalyzeTypeScript> = Arc::new(move |input, cancelled| {
-                analyzer
-                    .clone()
-                    .with_cancellation(cancelled)
-                    .analyze_with_report(input)
+                analyzer.clone().with_cancellation(cancelled).analyze(input)
             });
             let result = if execution == "sequential" {
                 sequential(&fixture, analyze, analyze_typescript, scope).await

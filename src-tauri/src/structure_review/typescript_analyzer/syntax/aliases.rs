@@ -18,6 +18,14 @@ pub(crate) struct Alias {
     pub scope: Span,
 }
 
+/// 普通 const 的直接名字别名只用于定义续查，不进入代码图。
+#[derive(Clone, Debug)]
+pub(crate) struct ValueAlias {
+    pub binding: Span,
+    pub selection: Span,
+    pub root_binding: Option<Span>,
+}
+
 /// 固定语义构建只用于读取词法绑定，避免按同名标识符误伤局部 shadow。
 pub(super) fn binding(scoping: &Scoping, reference: &IdentifierReference<'_>) -> Option<Span> {
     let resolved = scoping.get_reference(reference.reference_id.get()?);
@@ -33,6 +41,7 @@ pub(super) struct Collector<'s, 'a> {
     scoping: &'s Scoping,
     stack: Vec<AstKind<'a>>,
     pub aliases: Vec<Alias>,
+    pub value_aliases: Vec<ValueAlias>,
     root: Span,
 }
 impl<'s, 'a> Collector<'s, 'a> {
@@ -42,6 +51,7 @@ impl<'s, 'a> Collector<'s, 'a> {
             scoping,
             stack: vec![],
             aliases: vec![],
+            value_aliases: vec![],
             root,
         }
     }
@@ -97,6 +107,17 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
     /// 导入/导出语法提供路由，词法引用只用于区分同文件真实绑定。
     fn enter_node(&mut self, node: AstKind<'a>) {
         match node {
+            AstKind::VariableDeclarator(v) if self.stack.last().is_some_and(|node|
+                matches!(node, AstKind::VariableDeclaration(d) if d.kind == VariableDeclarationKind::Const)) => {
+                if let (Some(id), Some(Expression::Identifier(target))) =
+                    (v.id.get_binding_identifier(), v.init.as_ref().map(Expression::get_inner_expression)) {
+                    self.value_aliases.push(ValueAlias {
+                        binding: id.span,
+                        selection: target.span,
+                        root_binding: binding(self.scoping, target),
+                    });
+                }
+            }
             AstKind::ImportSpecifier(i) => self.import(
                 &i.local,
                 i.imported.name().to_string(),

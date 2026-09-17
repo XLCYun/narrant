@@ -1,11 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { isReferenceVisible, objectDetails } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, StructureComparison } from "@/structure-review/types";
+import type { DirectoryGroup } from "@/structure-review/directory-groups";
 import { StructureCodeDiff } from "./structure-code-diff";
 
 /** 统一呈现选中对象的两侧内容及可见关联，宽度和画布状态由外层分栏负责。 */
-export function StructureDetails({ comparison, selectedId, showImports, dark }: {
-  comparison: StructureComparison; selectedId?: string; showImports: boolean; dark: boolean;
+export function StructureDetails({ comparison, selectedId, directory, showImports, dark }: {
+  comparison: StructureComparison; selectedId?: string; directory?: DirectoryGroup; showImports: boolean; dark: boolean;
 }) {
   const { t } = useTranslation("structure");
   const details = selectedId === undefined ? undefined : objectDetails(comparison, selectedId);
@@ -14,10 +15,16 @@ export function StructureDetails({ comparison, selectedId, showImports, dark }: 
   const selectedReferences = selected?.references.filter((reference) => isReferenceVisible(reference, { showImports })) ?? [];
   return <aside className="structure-details flex h-full min-w-0 flex-col bg-muted/20" aria-label={t("detailsPanel")}>
     <header className="shrink-0 border-b bg-background/95 px-3 py-3">
-      <h3 className="text-sm font-semibold">{t("detailsTitle")}</h3>
+      <h3 className="text-sm font-semibold">{t(directory ? "directoryDetails" : "detailsTitle")}</h3>
     </header>
-    <div key={selectedId} className="min-h-0 flex-1 overflow-auto p-3" data-structure-detail-content>
-      {selectedId === undefined && <p className="py-5 text-sm text-muted-foreground">{t("selectObject")}</p>}
+    <div key={directory ? `directory:${directory.path}` : `object:${selectedId}`} className="min-h-0 flex-1 overflow-auto p-3" data-structure-detail-content>
+      {selectedId === undefined && !directory && <p className="py-5 text-sm text-muted-foreground">{t("selectObject")}</p>}
+      {directory && <>
+        <h3 className="break-all font-mono text-sm font-medium">{directory.path}</h3>
+        <h4 className="mb-2 mt-5 text-xs font-medium">{t("directoryFiles")}</h4>
+        <ul className="space-y-2 break-all font-mono text-xs text-muted-foreground">{directory.files.map((file) =>
+          <li key={file.objectId} title={file.path}>{file.path.slice(directory.path.length + 1)}</li>)}</ul>
+      </>}
       {selected && details && <>
         <h3 className="break-words font-mono text-sm font-medium">{selected.name ?? selected.signature ?? selected.nativeKind}</h3>
         <p className="mt-1 text-xs text-muted-foreground">{selected.language} · {selected.nativeKind} · {t(`status.${details.difference?.content ?? (details.difference ? "relations" : "unchanged")}`)}</p>

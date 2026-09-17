@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { structureCrateRootsFixture, structureFieldTypesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
+import { structureCrateRootsFixture, structureFieldTypesFixture, structureFileModulesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
 import { collapseStructureLayout, layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, NodeDifference, StructureComparison } from "@/structure-review/types";
 
@@ -20,6 +20,29 @@ function endpoint(layout: StructureLayout, id: string, side: "source" | "target"
 }
 
 describe("Structure Graph presentation Interface", () => {
+  it("groups file containers by directory while preserving same-named execution regions and member identities", async () => {
+    const comparison = structureFileModulesFixture();
+    const original = structuredClone(comparison);
+    const layout = await layoutStructureComparison(comparison, options);
+    expect(layout.nodes.filter((node) => !node.parentId).map((node) => node.data.directory?.path)).toEqual(["src"]);
+    const directory = layout.nodes.find((node) => node.data.directory?.path === "src/review/initialization")!;
+    expect(directory.data.label).toBe("review/initialization");
+    expect(entry(layout, "file-startup")?.object.label).toBe("startup.ts");
+    expect(entry(layout, "file-prepare-module")?.card.parentId).toBe(directory.id);
+    expect(entry(layout, "file-prepare-module")?.object.filePath).toBe("src/review/initialization/prepare-review-workspace-for-selected-repository.ts");
+    for (const [region, parent] of [["file-startup-execution", "file-startup"], ["file-prepare-execution", "file-prepare-module"]]) {
+      expect(entry(layout, region)?.card.parentId).toBe(entry(layout, parent)?.card.id);
+      expect(entry(layout, region)?.object.label).toBe("顶层执行");
+    }
+    expect(layout.nodes.some((node) => node.id === "members-root")).toBe(false);
+    const collapsed = collapseStructureLayout(layout, new Set(["file-startup"]));
+    expect(entry(collapsed, "file-startup-execution")).toBeUndefined();
+    expect(entry(collapsed, "file-prepare-execution")).toBeDefined();
+    expect(layout).toMatchObject({ total: comparison.after.nodes.length, visible: comparison.after.nodes.length, changed: comparison.diff.nodes.length });
+    expect(directory.data.objectId).toBeUndefined();
+    expect(comparison).toEqual(original);
+  });
+
   it("prepares unchanged field types as context with exact member-to-type ports", async () => {
     const comparison = structureFieldTypesFixture();
     const original = structuredClone(comparison);
@@ -477,4 +500,87 @@ it("retains existing type-reference routes when folding leaves their title ports
   expect(closed.edges.find((item) => item.id === edge.id)).toBe(edge);
   expect(entry(closed, "Item")!.card.position).toBe(entry(opened, "Item")!.card.position);
   expect(collapseStructureLayout(opened, new Set(["unknown"]))).toBe(opened);
+});
+
+it("groups only visible explicit files, keeping removed files, root files and language modules distinct", async () => {
+  const file = (id: string, path: string, children: string[]) => diagramNode(id, "container", { nativeKind: "file", name: path, contains: children });
+  const a = file("opaque-a", "src/one/index.ts", ["namespace"]);
+  const namespace = diagramNode("namespace", "container", { nativeKind: "namespace", name: "N", contains: ["load"] });
+  const load = diagramNode("load", "callable");
+  const b = file("opaque-b", "src/two/index.ts", ["old"]), old = diagramNode("old", "callable");
+  const unused = file("unused", "unrelated/deep/file.ts", []);
+  const root = file("root", "app.ts", []);
+  const module = diagramNode("semantic-module", "container", { nativeKind: "module", name: "not/a/file.ts" });
+  const comparison = diagramComparison([a, namespace, load, b, old, unused], [a, namespace, load, unused, root, module], [
+    { id: "load", content: "modified", contains: [], references: [] },
+    { id: b.id, content: "removed", contains: [{ kind: "removed", value: "old" }], references: [] },
+    ...["old"].map((id): NodeDifference => ({ id, content: "removed", contains: [], references: [] })),
+    ...[root.id, module.id].map((id): NodeDifference => ({ id, content: "added", contains: [], references: [] })),
+  ]);
+  const original = structuredClone(comparison);
+  const layout = await layoutStructureComparison(comparison, options);
+  expect(layout.directoryPaths).toEqual(["src", "src/one", "src/two"]);
+  expect(entry(layout, a.id)?.object).toMatchObject({ label: "index.ts", status: "unchanged" });
+  expect(entry(layout, b.id)?.object).toMatchObject({ label: "index.ts", status: "removed" });
+  expect(entry(layout, a.id)?.card.parentId).not.toBe(entry(layout, b.id)?.card.parentId);
+  expect(entry(layout, namespace.id)?.card.parentId).toBe(entry(layout, a.id)?.card.id);
+  expect(entry(layout, "load")?.card.id).toBe(entry(layout, namespace.id)?.card.id);
+  expect(entry(layout, root.id)?.card.parentId).toBeUndefined();
+  expect(entry(layout, module.id)?.card.parentId).toBeUndefined();
+  expect(entry(layout, module.id)?.object.label).toBe("not/a/file.ts");
+  expect(layout.nodes.find((node) => node.data.directory?.path === "src/one")?.data).toMatchObject({ status: "unchanged", collapse: { changed: 1 } });
+  expect(layout.changed).toBe(comparison.diff.nodes.length);
+  expect(objectDetails(comparison, b.id).before).toEqual(b);
+  expect(objectDetails(comparison, b.id).after).toBeUndefined();
+  expect(comparison).toEqual(original);
+  const all = await layoutStructureComparison(comparison, { ...options, showAll: true });
+  expect(all.directoryPaths).toContain("unrelated/deep");
+  expect(all.visible).toBe(all.total);
+});
+
+it("keeps cross-file edge identities and coordinates when a directory or its nested file is collapsed", async () => {
+  const comparison = structureFileModulesFixture();
+  const opened = await layoutStructureComparison(comparison, options);
+  const original = structuredClone(opened);
+  const path = "src/review/initialization";
+  const closed = collapseStructureLayout(opened, new Set(["file-prepare-module"]), new Set([path]));
+  const directory = closed.nodes.find((node) => node.data.directory?.path === path)!;
+  expect(directory.data.objectId).toBeUndefined();
+  expect(entry(closed, "file-prepare-module")).toBeUndefined();
+  const edge = closed.edges.find((edge) => edge.data?.sourceObjectId === "file-start" && edge.data.targetObjectId === "file-prepare")!;
+  expect(edge).toMatchObject({ source: endpoint(closed, "file-start", "source").card, target: directory.id,
+    targetHandle: directory.data.ports.find((port) => port.side === "target")!.id,
+    data: { sourceObjectId: "file-start", targetObjectId: "file-prepare", collapsedTarget: "prepare" } });
+  expect(edge.data?.route).toBeUndefined();
+  expect(closed.edges.some((edge) => edge.data?.sourceObjectId === "file-prepare-execution")).toBe(false);
+  expect(closed.visible).toBe(opened.visible - 3);
+  for (const node of closed.nodes) {
+    const initial = opened.nodes.find((candidate) => candidate.id === node.id)!;
+    expect(node.position).toBe(initial.position);
+    expect(node.parentId).toBe(initial.parentId);
+  }
+  const fileStillClosed = collapseStructureLayout(opened, new Set(["file-prepare-module"]));
+  expect(entry(fileStillClosed, "file-prepare-module")?.card.data.collapse?.collapsed).toBe(true);
+  expect(entry(fileStillClosed, "file-prepare")).toBeUndefined();
+  const allClosed = collapseStructureLayout(opened, new Set(opened.collapsibleIds), new Set(opened.directoryPaths));
+  expect(allClosed.nodes).toHaveLength(1);
+  expect(allClosed.nodes[0].data.directory?.path).toBe("src");
+  expect(allClosed.edges).toEqual([]);
+  expect(allClosed.visible).toBe(0);
+  expect(allClosed.total).toBe(opened.total);
+  expect(opened).toEqual(original);
+});
+
+it("keeps directory paths separate from opaque object identities without decoding names", async () => {
+  const file = diagramNode("opaque:file", "container", { nativeKind: "file", name: "源码/with spaces/%2F/file.ts", contains: ["源码/with spaces/%2F"] });
+  const type = diagramNode("源码/with spaces/%2F", "type", { name: "Model", contains: ["field"] });
+  const nodes = [file, type, diagramNode("field", "value")];
+  const layout = await layoutStructureComparison(diagramComparison(nodes, nodes), { ...options, showAll: true });
+  expect(layout.directoryPaths).toEqual(["源码/with spaces/%2F"]);
+  const closedType = collapseStructureLayout(layout, new Set([type.id]));
+  expect(closedType.nodes.find((node) => node.data.directory)?.data.collapse?.collapsed).toBe(false);
+  expect(entry(closedType, type.id)?.card.data.collapse?.collapsed).toBe(true);
+  const closedDirectory = collapseStructureLayout(layout, new Set(), new Set([type.id]));
+  expect(entry(closedDirectory, type.id)).toBeUndefined();
+  expect(closedDirectory.nodes[0].data.directory?.files).toEqual([{ objectId: file.id, path: file.name }]);
 });

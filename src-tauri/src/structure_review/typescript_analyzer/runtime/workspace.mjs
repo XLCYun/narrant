@@ -58,7 +58,6 @@ export function createWorkspace(input) {
   const links = new Map();
   const overlays = new Map();
   const manifests = [];
-  const notes = [];
   /** 已有 workspace 链接只恢复到同一仓库中的第一方目标。 */
   function existingLinks(directory) {
     if (!fs.existsSync(directory)) return;
@@ -88,10 +87,6 @@ export function createWorkspace(input) {
     }
   }
   visit(root);
-  /** 有界说明跟随当前会话，不借助全局文件或持久化缓存。 */
-  function note(file, message) {
-    if (notes.length < 200) notes.push({ file, message: message.slice(0, 4096) });
-  }
   const rootManifest = path.join(root, 'package.json');
   const packageData = manifests.includes(rootManifest) ? JSON.parse(fs.readFileSync(rootManifest, 'utf8')) : {};
   let patterns = packageData.workspaces?.packages ?? packageData.workspaces ?? [];
@@ -100,7 +95,6 @@ export function createWorkspace(input) {
   if (fs.existsSync(pnpm)) {
     const lines = fs.readFileSync(pnpm, 'utf8').match(/^packages:\s*\r?\n((?:[ \t]+.*\r?\n?)*)/m)?.[1] ?? '';
     patterns = [...patterns, ...Array.from(lines.matchAll(/^\s*-\s*['"]?([^'"\r\n]+?)['"]?\s*$/gm), match => match[1])];
-    if (!lines || patterns.length === 0) note(pnpm, '无法读取 pnpm workspace 字符串列表；仅使用已有第一方链接');
   }
   /** 保留原有简单 workspace glob，不猜测包 exports 的源码入口。 */
   function matcher(pattern) {
@@ -125,7 +119,7 @@ export function createWorkspace(input) {
   }
   // Node 声明的依赖从同一固定工具目录解析，不另建 node_modules 物理副本。
   links.set(path.join(runtime, 'node_modules/undici-types'), path.join(runtime, 'undici-types'));
-  return { root, runtime, sources, metadata, links, overlays, notes, note, policyError: input.policy_error };
+  return { root, runtime, sources, metadata, links, overlays, policyError: input.policy_error };
 }
 
 /** 给 TypeScript 的文件读取接口限定上下文，所有真实源码仍从 Git workspace 原位读取。 */

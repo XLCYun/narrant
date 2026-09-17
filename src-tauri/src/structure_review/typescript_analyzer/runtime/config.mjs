@@ -46,7 +46,6 @@ export function prepareConfigurations(context, ts, sources) {
         }
       }
     }
-    context.note(directory, `缺失配置 extends：${request}`);
     return null;
   }
   /** 保留每层 extends/references；只剥离插件入口和改写路径。 */
@@ -131,7 +130,6 @@ export function prepareConfigurations(context, ts, sources) {
     for (const key of ['validatedFilesSpec', 'validatedIncludeSpecs', 'validatedExcludeSpecs']) {
       for (const value of specs[key] ?? []) validateEffectivePath(value, configDirectory, key);
     }
-    for (const error of parsed.errors) context.note(original, `TS${error.code}: ${ts.flattenDiagnosticMessageText(error.messageText, '\n')}`);
     for (const file of parsed.fileNames) {
       validateEffectivePath(file, configDirectory, '配置成员');
       candidates.get(file)?.push(config);

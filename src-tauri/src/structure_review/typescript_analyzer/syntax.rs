@@ -29,7 +29,7 @@ pub(crate) struct DeclarationPart {
     pub body: Option<Span>,
     /// 父内容扣除变量语句等包装时使用，精确声明定位仍使用 span。
     pub parent_exclusion: Span,
-    /// 解构绑定的所有名字；一般声明只含一个，匿名声明为空。
+    /// 声明的定位名字；重载汇总各片段，匿名声明为空。
     pub names: Vec<Span>,
     /// 完整展示范围包含 const/export 等声明包装，不参与位置归属或比较。
     pub source_span: Span,
@@ -47,8 +47,6 @@ pub(crate) struct Declaration {
     pub callable_value: Option<Span>,
     /// 声明文件或显式 ambient 上下文中的具名函数引入值绑定；不包含结构调用签名。
     pub ambient_function: bool,
-    /// const 的透明直接引用初始化器；别名续查不能跨条件、工厂或可写绑定。
-    pub alias_selection: Option<Span>,
 }
 
 /// 语法意图只是语义解析的候选证据，不等于已确认关系。
@@ -57,7 +55,6 @@ pub(crate) enum OccurrenceKind {
     Call,
     Construct,
     Reference,
-    Write,
     Extends,
     Implements,
     TypeUse,
@@ -69,7 +66,6 @@ impl OccurrenceKind {
         match self {
             Self::Call | Self::Construct => "code.calls",
             Self::Reference => "code.references",
-            Self::Write => "code.writes",
             Self::Extends => "code.extends",
             Self::Implements => "code.implements",
             Self::TypeUse => "code.type_use",
@@ -99,13 +95,14 @@ pub(crate) struct Occurrence {
 /// 一个固定源码文件，不将 Oxc 的 arena 生命周期泄漏到语言服务层。
 #[derive(Debug)]
 pub(crate) struct Document {
-    pub path: PathBuf,
     pub uri: String,
     pub source: String,
     pub declarations: Vec<Declaration>,
     pub occurrences: Vec<Occurrence>,
     pub excluded: bool,
     pub aliases: Vec<aliases::Alias>,
+    /// 被省略的 const 仍可作为内部别名，不需要为续查创建数据节点。
+    pub value_aliases: Vec<aliases::ValueAlias>,
 }
 impl Document {
     /// 先解析原文，再用 Oxc 生成无注释规范代码；两次 typed AST 遍历按声明配对。
@@ -153,12 +150,12 @@ impl Document {
         let excluded = !options.include_tests && test_code::is_test(relative);
         let mut document = Self {
             uri: file_uri(&path).map_err(failure)?,
-            path,
             source: source.clone(),
             declarations: vec![],
             occurrences: vec![],
             excluded,
             aliases: vec![],
+            value_aliases: vec![],
         };
         if excluded {
             return Ok(document);
@@ -193,8 +190,13 @@ impl Document {
         let mut counts = BTreeMap::<String, usize>::new();
         for raw in &original.items {
             let owner = raw.parent.map_or(scope.as_str(), |i| ids[i].0.as_str());
+            let path = raw
+                .identity_path
+                .iter()
+                .map(|name| format!("::binding:{}", identity::component(name)))
+                .collect::<String>();
             let base = format!(
-                "{owner}::{}:{}",
+                "{owner}{path}::{}:{}",
                 raw.kind,
                 identity::component(raw.name.as_deref().unwrap_or("anonymous"))
             );
@@ -211,6 +213,7 @@ impl Document {
                 || raw.name != norm.name
                 || raw.parts.len() != norm.parts.len()
                 || raw.parent != norm.parent
+                || raw.identity_path != norm.identity_path
             {
                 return Err(failure("Oxc 规范化改变了声明结构"));
             }
@@ -288,16 +291,57 @@ impl Document {
                     || source_type.is_typescript_definition()
                         && raw.kind == "function"
                         && raw.name.is_some(),
-                alias_selection: raw.alias_selection,
             });
         }
         let mut aliases = aliases::Collector::new(checked.semantic.scoping(), parsed.program.span);
         aliases.visit_program(&parsed.program);
         document.aliases = aliases.aliases;
+        document.value_aliases = aliases.value_aliases;
         let mut references = occurrences::Collector::new(&document, checked.semantic.scoping());
         references.visit_program(&parsed.program);
         document.occurrences = references.finish()?;
+        document.attach_file_container(NodeId(scope), language, relative);
         Ok(document)
+    }
+
+    /// 文件容器只组织现有对象，不代表语言模块；路径统一用斜线，不参与子对象内容比较。
+    fn attach_file_container(&mut self, id: NodeId, language: &str, relative: &Path) {
+        if self.declarations.is_empty() {
+            return;
+        }
+        let mut children = Vec::new();
+        for declaration in &mut self.declarations {
+            if declaration.parent.is_none() {
+                children.push(declaration.node.data().id.clone());
+                declaration.parent = Some(id.clone());
+            }
+        }
+        self.declarations.push(Declaration {
+            node: CodeNode::Container(CodeNodeData {
+                id,
+                language: LanguageId(language.into()),
+                native_kind: "file".into(),
+                name: Some(
+                    relative
+                        .iter()
+                        .map(|part| part.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/"),
+                ),
+                signature: None,
+                code: None,
+                source: Some(self.source.clone()),
+                contains: children,
+                references: vec![],
+                extensions: BTreeMap::new(),
+            }),
+            parent: None,
+            span: Span::new(0, self.source.len() as u32),
+            selections: vec![],
+            parts: vec![],
+            callable_value: None,
+            ambient_function: false,
+        });
     }
 
     /// 查找最内层精确声明；匿名回调的出现位置仍落入具名词法所有者。

@@ -7,6 +7,7 @@
 .structure-object { position: relative; width: 100%; height: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--structure-color) 65%, var(--border)); border-radius: 6px; background: var(--background); color: var(--foreground); box-shadow: 0 2px 6px #00000008; }
 .structure-object-header { box-sizing: border-box; padding: 8px 12px; }
 .structure-object.structure-group { background: color-mix(in srgb, var(--structure-color) 4%, var(--background)); }
+.structure-object.structure-directory { border-color: var(--border); background: color-mix(in srgb, var(--muted) 35%, var(--background)); box-shadow: none; }
 .structure-object.structure-removed { border-style: dashed; }
 .structure-object.structure-selected { outline: 2px solid var(--structure-color); outline-offset: 3px; }
 .structure-status { color: var(--structure-color); }

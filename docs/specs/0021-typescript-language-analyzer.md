@@ -26,21 +26,52 @@ semantic graph queries stay in the language service.
   (`.d.ts`, `.d.mts`, `.d.cts`) together. TS and JS share semantic projects but keep
   appropriate graph/editor language labels. `.js` can contain JSX, as in tsserver.
 - Extract modules/namespaces (Container); classes/interfaces/type aliases/enums (Type);
-  functions/methods/constructors/accessors (Callable); variables/fields/properties/enum
-  members (Value); top-level executable statements and static blocks (ExecutionRegion).
+  named functions/methods/constructors/getters/setters (Callable); explicit class fields,
+  interface/type-literal properties, index signatures and enum members (Value);
+  top-level executable statements and static blocks (ExecutionRegion).
+- Every selected file with graph objects has one file Container (`native_kind: file`),
+  named by its repository-relative path with `/` separators on every platform.
+  It contains the file's top-level declarations and
+  execution region; explicit namespaces/modules retain their own nested containment.
+  The file container organizes source ownership, including script/declaration files,
+  without changing the language service's module/global-scope semantics. It contributes
+  no signature or own code to diff; full file source is available only for display.
+  Empty, imports-only and excluded test files do not create empty containers.
+  Explicit language modules and namespaces retain `module` and `namespace` kinds;
+  directories are presentation groups and are not emitted by language analyzers.
+- Initializers, ordinary top-level statements and directives share one ExecutionRegion
+  per file or explicit namespace, in source order; no individual `statement` or
+  `directive` nodes are emitted. Functions and class static blocks keep their own
+  execution ownership. Adding/removing child declarations must not modify the
+  surrounding module's or execution region's own content.
+- Ordinary `const`/`let`/`var` and destructuring declarations never create Value nodes,
+  at either top level or inside functions, loops or callbacks. Ordinary object-literal
+  properties/shorthands, constructor parameter properties and auto-accessor properties
+  also create no nodes. Their code inside a modeled owner still participates in that
+  owner's content comparison. Calls in omitted top-level initializers share their scope's
+  ExecutionRegion with ordinary executable statements; calls inside functions/callbacks
+  belong to the enclosing modeled owner.
 - Import/export/re-export statements, including `import x = require(...)`, do not
   create graph nodes or import/re-export edges. Keep their module paths, lexical
   bindings and alias query locations internally so calls still resolve across files
-  and barrel exports. Exported functions/classes/values keep a single real declaration
+  and barrel exports. Export wrappers keep each retained declaration as a single real
   node, with export modifiers in its signature and original source. Executable export
-  expressions retain an execution owner; ordinary CommonJS variables and calls follow
-  the existing value/execution rules.
-- A direct const identifier binding with an arrow initializer is one Callable and no
-  duplicate Value. Unwrap transparent parentheses, assertions, non-null and satisfies
-  for classification only; preserve their semantic text. Inline callback arrows stay
-  in their nearest modeled owner's own code and never create anonymous graph nodes.
-  Call/factory/conditional/destructuring/let/var forms are not promoted by this rule.
-  Explicit named declarations inside callbacks still follow ordinary declaration rules.
+  expressions retain an execution owner; CommonJS require calls use the same execution
+  ownership rules, without creating variable nodes.
+- A simple `const`/`let`/`var` binding directly initialized with an arrow or function
+  expression is one Callable, using its binding name and no duplicate Value or inner-name
+  node. Direct function-valued class fields and statically named object properties are
+  Callables too. Unwrap transparent parentheses, assertions, non-null and satisfies for
+  classification only; preserve their semantic text. Call/factory/conditional/destructuring
+  forms are not inferred as functions.
+- Only named Callables outside every function/callback body are modeled. This includes
+  namespace functions, class methods, function-valued fields and top-level object methods.
+  Any nested function declaration/expression or callback stays in its enclosing owner's code;
+  its outgoing calls are still collected. Anonymous structural call/construct signatures
+  do not create Callable nodes. Omitted object wrappers retain lexical identity metadata
+  so equally named methods in different objects keep distinct stable IDs.
+- Keep direct immutable variable alias metadata internally for LSP definition continuation;
+  removing a variable node must not break reliable calls through const alias chains.
 - Keep every source declaration of a merged interface/namespace in its own file and
   containment tree. Do not combine cross-file fragments or choose the first definition
   arbitrarily. Same-owner function overloads form one Callable, preserving signature
@@ -74,7 +105,7 @@ validating UTF-8 boundaries and handling CRLF, Unicode paths and non-BMP charact
 ## Relationships
 
 Extract statically confirmed calls (including new where modeled),
-writes, function-value references, inheritance/implementation and field/property type
+function-value references, inheritance/implementation and field/property type
 relationships consistent with 0018 and the existing Rust scope. Keep a syntax occurrence
 even if call hierarchy omits it. Do not turn an import alias or a type-only signature into
 a definite runtime call. Dynamic/ambiguous targets remain Unresolved. Named function declarations in repository
@@ -85,6 +116,13 @@ structural call signatures/interface methods and isolated non-ambient overload s
 without an implementation do not establish runtime call targets. These edges identify
 verified source declarations; they do not assert that ambient declarations match a deployed
 runtime implementation.
+
+Omit `code.reads` and `code.writes`, including simple/compound assignments and update
+expressions. Keep traversing their expressions for calls and function-value references
+under the existing ownership rules; confirmed data accesses must not be relabeled as
+`code.references`. Field/property type relationships are unchanged. Assignment and
+update text remains part of its owner's normalized code and original source, so these
+edits still participate in content comparison without a separate read/write edge.
 
 Custom JSX occurrences use `jsx.uses_component`, distinct from `code.calls`. Intrinsic
 tags such as div/button have no nodes or component edges. Expressions and callbacks
@@ -123,9 +161,8 @@ flatten projects into one noResolve Program: that fails composite source redirec
 
 Normalize config paths within the same workspace while preserving module/moduleResolution, paths,
 imports/exports, package type and extension substitution. Support TS5/6 representative
-configurations without upgrading the reviewed source/config. Surface compatibility
-diagnostics and missing contexts; an expected deprecation alone is not unavailable
-semantic analysis. Config-less selected sources get an explicit, deterministic inferred
+configurations without upgrading the reviewed source/config. An expected deprecation
+alone does not make semantic analysis unavailable. Config-less selected sources get an explicit, deterministic inferred
 project profile, documented in the implementation; do not alter actual repository files.
 
 All input paths must belong to the allowed Git workspace or fixed runtime context.
@@ -137,7 +174,7 @@ Register projects before didOpen, use `useSyntaxServer: never`, and explicitly s
 and validate a project's real name for multi-project queries. TLS's public tsserverRequest
 extension is allowed. An invalid requested project must not silently fall back to another.
 One source declaration has one graph identity even when several projects include it;
-conflicting target evidence stays uncertain and produces an analysis note.
+conflicting target evidence stays unresolved.
 
 ## Tools and lifecycle
 
@@ -163,9 +200,12 @@ cross-language first-party references become Node correctly. Merge validated lan
 graphs without identity collisions. Coverage retains analyzed/absent/unsupported-kind/
 unsupported-language; excluded tests are still analyzed supported inputs.
 
-Report per-side analysis notes separately from semantic nodes and differences. Missing
-configuration/dependencies and conflicting contexts must be understandable; raw tsserver
-internals are not product controls. Synchronize Rust projection and frontend types.
+Language analyzers return CodeGraph directly. The application and frontend do not
+collect, transport or display analysis notes. Missing optional context and conflicting
+project targets retain the existing unresolved-reference behavior; hard service,
+configuration-boundary and lifecycle failures still fail the comparison explicitly.
+Only semantic diagnostics required to reject type-only values used as runtime functions
+are queried internally; compiler-option and syntax diagnostics are not collected for display.
 Retain existing tests toggle, cache/stale-result protection, external-reference hiding,
 single-card declaration placement and original-source details. Update Rust-only wording.
 
@@ -177,7 +217,7 @@ Node libraries, JSDoc, overload/merged declarations, unresolvable/dynamic calls 
 Unicode. Verify actual project members and definition URIs point to the original Git
 checkout or fixed standard libraries, the workspace tree/content remain unchanged,
 and helper cleanup never removes the workspace. Test cancellation and tool failures. Verify mixed Rust+TS/JS application
-composition, empty sides, extension changes, coverage and per-side notes.
+composition, empty sides, extension changes and coverage.
 
 Keep meaningful own-content tests for nested declarations, anonymous callbacks,
 format-only changes, ASI, templates/regex/JSX and stable identity across checkout roots.

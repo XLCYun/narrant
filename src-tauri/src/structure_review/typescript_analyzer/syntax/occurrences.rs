@@ -5,7 +5,7 @@ use oxc_ast::{ast::*, AstKind};
 use oxc_ast_visit::{walk, Visit};
 use oxc_codegen::{Codegen, CodegenOptions, CommentOptions};
 use oxc_span::{GetSpan, Span};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// 引用遍历器保留祖先上下文，并在结束时去掉被强语义覆盖的普通名字读取。
 pub(super) struct Collector<'d, 'a> {
@@ -15,6 +15,8 @@ pub(super) struct Collector<'d, 'a> {
     bindings: BTreeMap<(u32, u32), (Option<Span>, Vec<String>)>,
     canonical: BTreeMap<(u32, u32), String>,
     pending: Vec<(OccurrenceKind, Span, Span, bool, bool)>,
+    /// 赋值目标不查询语义，也不能回退成普通函数值引用。
+    assignment_targets: BTreeSet<(u32, u32)>,
 }
 impl<'d, 'a> Collector<'d, 'a> {
     /// 只借用拥有数据的文档，不改变声明树。
@@ -26,6 +28,7 @@ impl<'d, 'a> Collector<'d, 'a> {
             stack: vec![],
             pending: vec![],
             canonical: BTreeMap::new(),
+            assignment_targets: BTreeSet::new(),
         }
     }
 
@@ -38,6 +41,13 @@ impl<'d, 'a> Collector<'d, 'a> {
         dynamic: bool,
         type_only: bool,
     ) {
+        if kind == OccurrenceKind::Reference
+            && self
+                .assignment_targets
+                .contains(&(selection.start, selection.end))
+        {
+            return;
+        }
         self.pending
             .push((kind, span, selection, dynamic, type_only));
     }
@@ -57,6 +67,11 @@ impl<'d, 'a> Collector<'d, 'a> {
             let Some(owner) = self.document.owner(span.start) else {
                 continue;
             };
+            if *kind == OccurrenceKind::TypeUse
+                && owner.node.category() != crate::structure_review::code_graph::CodeCategory::Value
+            {
+                continue;
+            }
             if output.iter().any(|o: &Occurrence| {
                 o.owner == owner.node.data().id && o.kind == *kind && o.selection == *selection
             }) {
@@ -222,33 +237,29 @@ fn dynamic_receiver(expression: &Expression<'_>) -> bool {
 }
 
 impl<'a> Visit<'a> for Collector<'_, 'a> {
-    /// 每个具体左值分别记录，解构写入不会误标默认值或计算键的读取。
+    /// 跳过写入目标本身，继续收集接收对象、计算键与解构默认值中的调用。
     fn visit_simple_assignment_target(&mut self, target: &SimpleAssignmentTarget<'a>) {
-        let (selection, dynamic) = match target {
-            SimpleAssignmentTarget::AssignmentTargetIdentifier(i) => (i.span, false),
-            SimpleAssignmentTarget::StaticMemberExpression(m) => {
-                (m.property.span, dynamic_receiver(&m.object))
-            }
-            SimpleAssignmentTarget::PrivateFieldExpression(m) => {
-                (m.field.span, dynamic_receiver(&m.object))
-            }
-            SimpleAssignmentTarget::ComputedMemberExpression(m) => {
-                self.canonical(m.expression.span(), expression_text(&m.expression));
-                (m.expression.span(), true)
-            }
-            _ => (target.span(), true),
+        let selection = match target {
+            SimpleAssignmentTarget::AssignmentTargetIdentifier(i) => Some(i.span),
+            SimpleAssignmentTarget::StaticMemberExpression(m) => Some(m.property.span),
+            SimpleAssignmentTarget::PrivateFieldExpression(m) => Some(m.field.span),
+            _ => target.get_expression().and_then(|expression| {
+                match expression.get_inner_expression() {
+                    Expression::Identifier(i) => Some(i.span),
+                    Expression::StaticMemberExpression(m) => Some(m.property.span),
+                    Expression::PrivateFieldExpression(m) => Some(m.field.span),
+                    _ => None,
+                }
+            }),
         };
-        self.add(
-            OccurrenceKind::Write,
-            target.span(),
-            selection,
-            dynamic,
-            self.type_only(),
-        );
+        if let Some(selection) = selection {
+            self.assignment_targets
+                .insert((selection.start, selection.end));
+        }
         walk::walk_simple_assignment_target(self, target);
     }
 
-    /// 从具体节点记录调用、写入、类型与 JSX 候选，仍继续遍历内部表达式。
+    /// 从具体节点记录调用、类型与 JSX 候选，仍继续遍历内部表达式。
     fn enter_node(&mut self, node: AstKind<'a>) {
         use OccurrenceKind::*;
         let type_only = self.type_only();
@@ -272,7 +283,8 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
                 self.add(Construct, c.span, selection, dynamic, type_only);
             }
             AstKind::AssignmentTargetPropertyIdentifier(p) => {
-                self.add(Write, p.binding.span, p.binding.span, false, type_only)
+                self.assignment_targets
+                    .insert((p.binding.span.start, p.binding.span.end));
             }
             AstKind::IdentifierReference(i) if !self.alias_context() => {
                 self.bindings.insert(
@@ -333,22 +345,11 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
                         .type_annotation
                         .as_ref()
                         .is_some_and(|a| contains(a.span, t.span)),
-                    AstKind::AccessorProperty(p) => p
-                        .type_annotation
-                        .as_ref()
-                        .is_some_and(|a| contains(a.span, t.span)),
                     AstKind::TSPropertySignature(p) => p
                         .type_annotation
                         .as_ref()
                         .is_some_and(|a| contains(a.span, t.span)),
                     AstKind::TSIndexSignature(p) => contains(p.type_annotation.span, t.span),
-                    AstKind::FormalParameter(p)
-                        if p.accessibility.is_some() || p.readonly || p.r#override =>
-                    {
-                        p.type_annotation
-                            .as_ref()
-                            .is_some_and(|a| contains(a.span, t.span))
-                    }
                     _ => false,
                 }) =>
             {

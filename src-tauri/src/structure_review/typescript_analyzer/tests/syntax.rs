@@ -42,12 +42,142 @@ fn graph(documents: &[&Document]) -> CodeGraph {
     .unwrap()
 }
 
+/// 每个文件提供独立文件容器，子对象源码变化不能扩散成文件自身的内容变化。
+#[test]
+fn file_modules_contain_declarations_and_stay_stable_on_child_edits() {
+    let source =
+        "export class Model { value: number; } export function load() { return 1; } load();";
+    let before = parse("src/model.ts", source);
+    let after = parse("src/model.ts", &source.replace("return 1", "return 2"));
+    let other = parse("scripts/model.js", "export function load() {}");
+    let module = named(&before, "src/model.ts");
+    assert_eq!(module.node.category(), CodeCategory::Container);
+    assert_eq!(module.node.data().native_kind, "file");
+    assert_eq!(module.node.data().source.as_deref(), Some(source));
+    for name in ["Model", "load", "顶层执行"] {
+        let declaration = named(&before, name);
+        assert_eq!(declaration.parent.as_ref(), Some(&module.node.data().id));
+        assert!(module
+            .node
+            .data()
+            .contains
+            .contains(&declaration.node.data().id));
+    }
+    let combined = graph(&[&before, &other]);
+    assert_eq!(combined.root().contains.len(), 2);
+    assert!(combined
+        .root()
+        .contains
+        .iter()
+        .all(|id| combined.node(id).unwrap().category() == CodeCategory::Container));
+    let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(diff.nodes[0].id, named(&before, "load").node.data().id);
+}
+
+/// 普通脚本和声明文件都使用 file 容器；显式 namespace/module 保持语言种类。
+#[test]
+fn file_containers_do_not_claim_language_module_semantics() {
+    for (path, source) in [
+        ("scripts/start.js", "function start() {} start();"),
+        (
+            "types/model.d.ts",
+            "declare namespace N { interface Shape {} } declare module 'remote' { export interface Other {} }",
+        ),
+    ] {
+        let document = parse(path, source);
+        let file = named(&document, path);
+        assert_eq!(file.node.data().native_kind, "file");
+        assert!(file.parent.is_none());
+        assert!(file.node.data().code.is_none());
+        assert!(file.node.data().signature.is_none());
+        for declaration in document.declarations.iter().filter(|d| {
+            d.node.category() == CodeCategory::Container && d.node.data().id != file.node.data().id
+        }) {
+            assert!(matches!(
+                declaration.node.data().native_kind.as_str(),
+                "module" | "namespace"
+            ));
+            assert_eq!(declaration.parent.as_ref(), Some(&file.node.data().id));
+        }
+    }
+}
+
+/// 初始化、普通语句与回调合并为所在模块的一个区域，namespace 与函数保留各自归属。
+#[test]
+fn top_level_statements_and_initializers_share_scope_execution() {
+    let document = parse(
+        "a.ts",
+        r#"
+        'use strict';
+        function target() {} function outer() { if (enabled) target(); }
+        const a = target(); const b = target();
+        target(); if (enabled) target();
+        [1].forEach(() => { target(); });
+        namespace N { const c = target(); target(); export function inner() { target(); } }
+        class C { static { target(); } }
+    "#,
+    );
+    let execution = document
+        .declarations
+        .iter()
+        .filter(|d| d.node.data().native_kind == "top_level")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        execution.len(),
+        2,
+        "one file region and one namespace region"
+    );
+    let file = named(&document, "a.ts");
+    let namespace = named(&document, "N");
+    for (parent, count) in [(file, 5), (namespace, 2)] {
+        let region = execution
+            .iter()
+            .find(|d| d.parent.as_ref() == Some(&parent.node.data().id))
+            .unwrap();
+        assert_eq!(
+            document
+                .occurrences
+                .iter()
+                .filter(|o| o.owner == region.node.data().id
+                    && o.kind == OccurrenceKind::Call
+                    && o.text == "target")
+                .count(),
+            count
+        );
+    }
+    assert!(document.declarations.iter().all(|d| !matches!(
+        d.node.data().native_kind.as_str(),
+        "statement" | "directive"
+    )));
+    for name in ["outer", "inner"] {
+        assert_eq!(
+            document
+                .occurrences
+                .iter()
+                .filter(|o| o.owner == named(&document, name).node.data().id
+                    && o.kind == OccurrenceKind::Call)
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        document
+            .declarations
+            .iter()
+            .filter(|d| d.node.data().native_kind == "static_block")
+            .count(),
+        1
+    );
+    graph(&[&document]);
+}
+
 /// 全部扩展名和声明文件共享解析器，JS 文件也接受 JSX。
 #[test]
 fn supports_file_family_and_declarations() {
     for extension in ["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"] {
         let document = parse(&format!("a.{extension}"), "function f() { return 1; }");
-        assert_eq!(document.declarations.len(), 1);
+        assert_eq!(document.declarations.len(), 2);
         graph(&[&document]);
     }
     for path in ["a.d.ts", "a.d.mts", "a.d.cts"] {
@@ -55,34 +185,33 @@ fn supports_file_family_and_declarations() {
             path,
             "declare namespace N { interface I { p: string; } function f(): void; }",
         );
-        assert_eq!(document.declarations.len(), 4);
+        assert_eq!(document.declarations.len(), 5);
         graph(&[&document]);
     }
     assert!(
         parse("a.js", "const view = () => <div/>;")
             .declarations
             .len()
-            == 1
+            == 2
     );
 }
 
-/// 只有直接 const 标识符箭头被提升；命名的内部声明仍独立建模。
+/// 顶层具名函数值统一为 Callable，工厂/条件表达式和函数内声明不提升。
 #[test]
 fn direct_const_arrows_and_named_callback_declarations() {
     let document = parse("a.ts", "const direct = ((x: number) => x + 1) satisfies Fn; const asserted = (((x: number) => x) as Fn)!; let mutable = () => 0; var legacy = () => 0; const wrapped = memo(() => 1); const conditional = flag ? (() => 1) : (() => 2); const { a } = { a: () => 1 }; function outer() { run(() => { function inner() { return 1; } inner(); }); }");
-    for name in ["direct", "asserted"] {
+    for name in ["direct", "asserted", "mutable", "legacy"] {
         assert_eq!(
             named(&document, name).node.category(),
             CodeCategory::Callable
         );
     }
-    for name in ["mutable", "legacy", "wrapped", "conditional"] {
-        assert_eq!(named(&document, name).node.category(), CodeCategory::Value);
+    for name in ["wrapped", "conditional", "inner"] {
+        assert!(document
+            .declarations
+            .iter()
+            .all(|d| d.node.data().name.as_deref() != Some(name)));
     }
-    assert_eq!(
-        named(&document, "inner").parent.as_ref(),
-        Some(&named(&document, "outer").node.data().id)
-    );
     assert_eq!(
         document
             .declarations
@@ -103,7 +232,211 @@ fn direct_const_arrows_and_named_callback_declarations() {
     graph(&[&document]);
 }
 
-/// 类成员与命名嵌套声明各有自己的内容，父内容不会重复嵌入成员。
+/// 数据节点仅保留类型的显式字段、属性、索引签名与枚举成员。
+#[test]
+fn data_declarations_keep_type_members_only() {
+    let document = parse(
+        "a.ts",
+        r#"
+        const plain = 1; let mutable = 2; var legacy = 3;
+        const { value: renamed } = input; const [first] = list;
+        const object = { plain, property: 1, nested: { leaf: 2 } };
+        function outer() { let local = 1; for (const entry of list) { const item = entry; }
+            run(() => { const callbackLocal = 2; }); }
+        class Model { field: string; static total = 1;
+            constructor(public parameter: string) {} accessor automatic = ""; }
+        interface Contract { property: Model; [key: string]: Model; }
+        type RecordValue = { property: Model; [key: number]: Model };
+        enum Choice { One, Two }
+    "#,
+    );
+    let values = document
+        .declarations
+        .iter()
+        .filter(|d| d.node.category() == CodeCategory::Value)
+        .collect::<Vec<_>>();
+    assert_eq!(values.len(), 8, "{values:?}");
+    assert!(values.iter().all(|d| matches!(
+        d.node.data().native_kind.as_str(),
+        "field" | "static_field" | "property" | "index_signature" | "enum_member"
+    )));
+    for name in [
+        "plain",
+        "mutable",
+        "legacy",
+        "renamed",
+        "first",
+        "object",
+        "nested",
+        "leaf",
+        "local",
+        "entry",
+        "item",
+        "callbackLocal",
+        "parameter",
+        "automatic",
+    ] {
+        assert!(
+            document
+                .declarations
+                .iter()
+                .all(|d| d.node.data().name.as_deref() != Some(name)),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        document
+            .occurrences
+            .iter()
+            .filter(|o| o.kind == OccurrenceKind::TypeUse && o.text == "Model")
+            .count(),
+        4
+    );
+    graph(&[&document]);
+}
+
+/// 各种具名函数值使用外部名字且不重复建模，任何函数或回调内部的函数均被合并。
+#[test]
+fn named_function_values_exclude_function_interiors() {
+    let document = parse(
+        "a.ts",
+        r#"
+        const a = () => {}; const b = function internalName() {};
+        let mutable = function() {}; var legacy = () => {};
+        namespace N { export const member = () => {}; }
+        class C { handler = () => {}; static staticHandler = function() {}; #privateHandler = () => {}; method() {} }
+        const object = { arrow: () => {}, expression: function internalProperty() {}, method() {}, get getter() { return 1; } };
+        function outer() { function nested() { target(); } const local = () => target();
+            const localObject = { hidden() { target(); }, field: function namedLocal() { target(); } };
+            run(() => { function callbackInner() { target(); } const callbackValue = () => target(); }); }
+    "#,
+    );
+    for name in [
+        "a",
+        "b",
+        "mutable",
+        "legacy",
+        "member",
+        "handler",
+        "staticHandler",
+        "#privateHandler",
+        "arrow",
+        "expression",
+        "getter",
+        "outer",
+    ] {
+        assert_eq!(
+            named(&document, name).node.category(),
+            CodeCategory::Callable,
+            "{name}"
+        );
+    }
+    for name in [
+        "internalName",
+        "internalProperty",
+        "nested",
+        "local",
+        "hidden",
+        "namedLocal",
+        "callbackInner",
+        "callbackValue",
+    ] {
+        assert!(
+            document
+                .declarations
+                .iter()
+                .all(|d| d.node.data().name.as_deref() != Some(name)),
+            "{name}"
+        );
+    }
+    let outer = named(&document, "outer");
+    assert!(outer.node.data().contains.is_empty());
+    assert_eq!(
+        document
+            .occurrences
+            .iter()
+            .filter(|o| o.text == "target"
+                && o.kind == OccurrenceKind::Call
+                && o.owner == outer.node.data().id)
+            .count(),
+        6
+    );
+    graph(&[&document]);
+}
+
+/// 被省略的普通初始化声明共用一个执行区域，调用归属不吞掉同语句中的具名方法。
+#[test]
+fn omitted_initializers_share_one_execution_region() {
+    let before = parse("a.ts", "function load() {} const first = load(); let second = load(); const object = { value: load(), method() { load(); } }; const plain = 1;");
+    let execution = named(&before, "顶层执行");
+    assert_eq!(execution.node.category(), CodeCategory::ExecutionRegion);
+    assert_eq!(
+        before
+            .declarations
+            .iter()
+            .filter(|d| d.node.category() == CodeCategory::ExecutionRegion)
+            .count(),
+        1
+    );
+    assert_eq!(execution.parts.len(), 3);
+    let method = named(&before, "method");
+    for (owner, count) in [(execution, 3), (method, 1)] {
+        assert_eq!(
+            before
+                .occurrences
+                .iter()
+                .filter(|o| o.kind == OccurrenceKind::Call && o.owner == owner.node.data().id)
+                .count(),
+            count
+        );
+    }
+    let after = parse(
+        "a.ts",
+        &before
+            .source
+            .replace("method() { load(); }", "method() { load(); load(); }"),
+    );
+    let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(diff.nodes[0].id, method.node.data().id);
+    assert!(
+        parse("a.ts", "const first = 1; const object = { value: 2 };")
+            .declarations
+            .is_empty()
+    );
+}
+
+/// 省略对象包装仍保留词法身份，增加同名方法不会挤动已有对象的 ID。
+#[test]
+fn object_method_identity_survives_omitted_wrappers() {
+    let before = parse(
+        "a.ts",
+        "const first = { run() { return 1; } }; const second = { run: () => 2 };",
+    );
+    let after = parse("a.ts", "const another = { run() {} }; const first = { run() { return 1; } }; const second = { run: () => 2 };");
+    let after_graph = graph(&[&after]);
+    for declaration in before
+        .declarations
+        .iter()
+        .filter(|d| d.node.category() == CodeCategory::Callable)
+    {
+        assert_eq!(
+            after_graph.node(&declaration.node.data().id),
+            Some(&declaration.node)
+        );
+    }
+    let diff = graph(&[&before]).diff(&after_graph).unwrap();
+    assert_eq!(diff.nodes.len(), 2);
+    let module = diff
+        .nodes
+        .iter()
+        .find(|d| d.id == named(&before, "a.ts").node.data().id)
+        .unwrap();
+    assert!(module.content.is_none());
+    assert_eq!(module.contains.len(), 1);
+}
+
+/// 类成员独立比较；未建模的嵌套函数及回调变动计入外层方法。
 #[test]
 fn own_content_excludes_children_but_keeps_callbacks() {
     let before = parse("a.ts", "class C { p: T = make(); constructor() {} get value() { return 1; } set value(v: number) {} m() { function nested() { return 1; } run(() => 1); } static { run(); } }");
@@ -113,8 +446,11 @@ fn own_content_excludes_children_but_keeps_callbacks() {
     assert!(diff
         .nodes
         .iter()
-        .all(|d| d.id != named(&before, "C").node.data().id
-            && d.id != named(&before, "m").node.data().id));
+        .all(|d| d.id != named(&before, "C").node.data().id));
+    assert!(diff
+        .nodes
+        .iter()
+        .any(|d| d.id == named(&before, "m").node.data().id));
     let callback = parse(
         "a.ts",
         &before.source.replace("run(() => 1)", "run(() => 2)"),
@@ -180,8 +516,8 @@ fn meaningful_javascript_text_survives_normalization() {
             "function f() { return\n{ x: 1 }; }",
             "function f() { return { x: 1 }; }",
         ),
-        ("const x = `a b`;", "const x = `a  b`;"),
-        ("const x = /a b/;", "const x = /a  b/;"),
+        ("class C { x = `a b`; }", "class C { x = `a  b`; }"),
+        ("class C { x = /a b/; }", "class C { x = /a  b/; }"),
         ("const x = <div>a b</div>;", "const x = <div>a  b</div>;"),
         ("const x = tag`a\\nb`;", "const x = tag`a\nb`;"),
     ] {
@@ -231,7 +567,6 @@ fn reference_intents_are_explicit() {
     for kind in [
         OccurrenceKind::Call,
         OccurrenceKind::Construct,
-        OccurrenceKind::Write,
         OccurrenceKind::Reference,
         OccurrenceKind::Extends,
         OccurrenceKind::Implements,
@@ -294,7 +629,7 @@ fn exported_declarations_keep_single_nodes_and_own_modifiers() {
     ] {
         let before = parse("a.ts", before);
         let after = parse("a.ts", after);
-        assert_eq!(after.declarations.len(), 1);
+        assert_eq!(after.declarations.len(), 2);
         let declaration = named(&after, name);
         assert!(declaration
             .node
@@ -343,7 +678,10 @@ fn export_expressions_and_require_calls_keep_execution_owners() {
             .all(|d| d.node.category() != CodeCategory::Extension));
     }
     let document = parse("a.cjs", "const fs = require('node:fs'); require('./setup'); function read() { return require('./local'); }");
-    assert_eq!(named(&document, "fs").node.category(), CodeCategory::Value);
+    assert!(document
+        .declarations
+        .iter()
+        .all(|d| d.node.data().name.as_deref() != Some("fs")));
     let graph = graph(&[&document]);
     let owners = document
         .occurrences
@@ -354,7 +692,7 @@ fn export_expressions_and_require_calls_keep_execution_owners() {
     assert_eq!(
         owners,
         [
-            CodeCategory::Value,
+            CodeCategory::ExecutionRegion,
             CodeCategory::ExecutionRegion,
             CodeCategory::Callable
         ]
@@ -475,51 +813,130 @@ fn checked_utf16_and_crlf_conversion() {
     .is_err());
 }
 
-/// 变量语句的 const/逗号包装不将子变量变动混入父函数内容。
+/// 普通变量和对象属性不建模，其函数内变动属于外层函数，顶层方法独立比较。
 #[test]
 fn variable_children_and_object_members_have_own_content() {
     let before = parse("a.ts", "function f() { const a = 1, b = 2; } const obj = { field: 1, method() { return 1; }, get value() { return 1; } };");
     let after = parse("a.ts", "function f() { const a = 3, b = 4; } const obj = { field: 2, method() { return 2; }, get value() { return 1; } };");
     let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
-    assert_eq!(diff.nodes.len(), 4, "{diff:?}");
-    assert!(diff
-        .nodes
-        .iter()
-        .all(|d| d.id != named(&before, "f").node.data().id
-            && d.id != named(&before, "obj").node.data().id));
+    assert_eq!(diff.nodes.len(), 2, "{diff:?}");
+    for name in ["f", "method"] {
+        assert!(diff
+            .nodes
+            .iter()
+            .any(|d| d.id == named(&before, name).node.data().id));
+    }
     assert_eq!(
         named(&before, "method").node.category(),
         CodeCategory::Callable
     );
 }
 
-/// 解构声明的每个绑定能精确定位，解构赋值仅记录真正写入的名字。
+/// 解构绑定不生成节点或写入引用，默认值和右侧的读取证据仍保留。
 #[test]
-fn destructuring_names_and_writes_are_precise() {
+fn destructuring_assignment_targets_are_omitted() {
     let document = parse("a.ts", "const { a, renamed: b = initial } = input; function f() { ({ a, renamed: b = initial } = input); [a, b] = input; }");
-    let binding = document
-        .declarations
-        .iter()
-        .find(|d| d.node.data().native_kind == "variable")
-        .unwrap();
-    assert_eq!(binding.selections.len(), 2);
-    assert!(binding.selections.iter().all(|s| document
-        .declared_at(s.start)
-        .unwrap()
-        .node
-        .data()
-        .id
-        == binding.node.data().id));
+    assert_eq!(document.declarations.len(), 2);
+    assert_eq!(
+        named(&document, "f").node.category(),
+        CodeCategory::Callable
+    );
     assert!(document
         .declared_at(document.source.find("renamed").unwrap() as u32)
         .is_none());
-    let writes: Vec<_> = document
+    assert!(document
         .occurrences
         .iter()
-        .filter(|o| o.kind == OccurrenceKind::Write)
-        .map(|o| o.text.as_str())
-        .collect();
-    assert_eq!(writes, ["a", "b", "a", "b"]);
+        .all(|o| !matches!(o.text.as_str(), "a" | "b")));
+    for name in ["initial", "input"] {
+        assert!(document
+            .occurrences
+            .iter()
+            .any(|o| o.kind == OccurrenceKind::Reference && o.text == name));
+    }
+}
+
+/// 写入目标不回退为普通引用，赋值各部分的调用及右侧函数值仍保留。
+#[test]
+fn assignments_keep_calls_without_target_references() {
+    let source = r#"
+function replacement() {}
+class Model {
+    value = 0;
+    #secret = 0;
+    handler = () => {};
+    update() {
+        this.value = rhs();
+        this.value += rhs();
+        this.value++;
+        this.#secret = rhs();
+        this.handler = replacement;
+        ({ item: this.value = fallback() } = receiver());
+        [this.value = fallback()] = [rhs()];
+        receiver().value = rhs();
+        receiver()[key()] = rhs();
+        let handler;
+        ({ handler = replacement } = receiver());
+        handler = replacement;
+    }
+}
+"#;
+    for path in ["a.ts", "a.js"] {
+        let document = parse(path, source);
+        assert!(
+            document
+                .occurrences
+                .iter()
+                .all(|o| { !matches!(o.text.as_str(), "value" | "#secret" | "handler") }),
+            "{path}: {:?}",
+            document.occurrences
+        );
+        for name in ["rhs", "fallback", "receiver", "key"] {
+            assert!(
+                document.occurrences.iter().any(|o| {
+                    o.kind == OccurrenceKind::Call
+                        && o.text == name
+                        && o.owner == named(&document, "update").node.data().id
+                }),
+                "{path}: missing call {name}"
+            );
+        }
+        assert_eq!(
+            document
+                .occurrences
+                .iter()
+                .filter(|o| { o.kind == OccurrenceKind::Reference && o.text == "replacement" })
+                .count(),
+            3
+        );
+    }
+    let document = parse("a.ts", "class Model { handler = () => {}; update() { (this.handler as unknown) = replacement; this.handler! = replacement; } }");
+    assert!(document.occurrences.iter().all(|o| o.text != "handler"));
+}
+
+/// 省略写入关系不影响函数实现的源码展示与自身修改判定。
+#[test]
+fn assignment_changes_remain_in_callable_diff() {
+    for path in ["a.ts", "a.js"] {
+        let before = parse(
+            path,
+            "class Model { value = 0; update() { this.value = 1; } }",
+        );
+        let after = parse(
+            path,
+            "class Model { value = 0; update() { this.value = 2; } }",
+        );
+        let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
+        assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+        assert_eq!(diff.nodes[0].id, named(&after, "update").node.data().id);
+        assert!(named(&after, "update")
+            .node
+            .data()
+            .source
+            .as_deref()
+            .unwrap()
+            .contains("this.value = 2"));
+    }
 }
 
 /// Oxc 延迟检查的早期语法错误和非法正则也必须报告失败。
@@ -577,7 +994,7 @@ fn source_display_keeps_declaration_wrappers_and_jsdoc() {
 /// 简写对象属性仍是函数值引用，私有字段与动态计算键不会误用声明名范围。
 #[test]
 fn shorthand_private_and_computed_names_keep_reference_evidence() {
-    let document = parse("a.ts", "function handler() {} const obj = { handler }; class C { #secret = 1; [makeKey()]() { return this.#secret; } }");
+    let document = parse("a.ts", "function handler() {} function owner() { const obj = { handler }; } class C { #secret = 1; [makeKey()]() { return this.#secret; } }");
     assert!(document
         .occurrences
         .iter()
@@ -610,28 +1027,37 @@ fn qualified_type_occurrences_select_terminal_names() {
     }
 }
 
-/// 顶层指令与构造参数属性也是源码对象，普通参数仍留在方法签名里。
+/// 指令合入顶层执行区域；构造参数属性仅留在签名，其初始化调用属于构造函数。
 #[test]
-fn directives_and_parameter_properties_are_modeled() {
+fn directives_keep_execution_but_parameter_properties_are_omitted() {
     let document = parse("a.ts", "'use strict'; class C { constructor(public field: Model, readonly other = make(), ordinary: string) {} }");
-    assert!(document
-        .declarations
-        .iter()
-        .any(|d| d.node.data().native_kind == "directive"));
-    for name in ["field", "other"] {
-        assert_eq!(
-            named(&document, name).node.data().native_kind,
-            "parameter_property"
-        );
+    assert!(named(&document, "顶层执行")
+        .node
+        .data()
+        .code
+        .as_ref()
+        .unwrap()
+        .contains("use strict"));
+    for name in ["field", "other", "ordinary"] {
+        assert!(document
+            .declarations
+            .iter()
+            .all(|d| d.node.data().name.as_deref() != Some(name)));
     }
     assert!(document
         .declarations
         .iter()
         .all(|d| d.node.data().name.as_deref() != Some("ordinary")));
-    assert!(document
+    assert!(!document
         .occurrences
         .iter()
         .any(|o| o.kind == OccurrenceKind::TypeUse && o.text == "Model"));
+    assert!(document
+        .occurrences
+        .iter()
+        .any(|o| o.kind == OccurrenceKind::Call
+            && o.text == "make"
+            && o.owner == named(&document, "constructor").node.data().id));
     graph(&[&document]);
 }
 
@@ -844,11 +1270,10 @@ fn first_child_insertion_and_last_child_removal_preserve_owner_content() {
         ("interface I {}", "interface I { field: string; }", "I"),
         ("namespace N {}", "namespace N { function child() {} }", "N"),
         (
-            "function f() {}",
-            "function f() { function child() {} }",
-            "f",
+            "class C { value = {}; }",
+            "class C { value = { method() {} }; }",
+            "value",
         ),
-        ("const value = {};", "const value = { field: 1 };", "value"),
     ] {
         let before = parse("a.ts", before);
         let after = parse("a.ts", after);
@@ -870,16 +1295,16 @@ fn first_child_insertion_and_last_child_removal_preserve_owner_content() {
 /// 子声明在剩余语句两侧增删和换序不能改变剩余语句的排版投影。
 #[test]
 fn child_reordering_and_neighboring_statements_preserve_owner_content() {
-    let base = parse("a.ts", "function f() { before(); after(); }");
+    let base = parse("a.ts", "namespace N { before(); after(); }");
     let one = parse(
         "a.ts",
-        "function f() { before(); function a() {} after(); function b() {} }",
+        "namespace N { before(); function a() {} after(); function b() {} }",
     );
     let reordered = parse(
         "a.ts",
-        "function f() { function b() {} before(); function a() {} after(); }",
+        "namespace N { function b() {} before(); function a() {} after(); }",
     );
-    let id = &named(&base, "f").node.data().id;
+    let id = &named(&base, "N").node.data().id;
     for document in [&one, &reordered] {
         let diff = graph(&[&base]).diff(&graph(&[document])).unwrap();
         assert!(
@@ -902,14 +1327,14 @@ fn child_reordering_and_neighboring_statements_preserve_owner_content() {
 /// 对象属性间的逗号属于成员列表，删去子属性后不能污染剩余 spread 初始化内容。
 #[test]
 fn object_children_preserve_surviving_spreads_and_list_punctuation() {
-    let before = parse("a.ts", "const value = { ...left, ...right };");
+    let before = parse("a.ts", "class C { value = { ...left, ...right }; }");
     let after = parse(
         "a.ts",
-        "const value = { first: 1, ...left, middle() {}, ...right, last: 3 };",
+        "class C { value = { first() {}, ...left, middle() {}, ...right, last() {} }; }",
     );
     let reordered = parse(
         "a.ts",
-        "const value = { last: 3, first: 1, ...left, ...right, middle() {} };",
+        "class C { value = { last() {}, first() {}, ...left, ...right, middle() {} }; }",
     );
     let id = &named(&before, "value").node.data().id;
     for document in [&after, &reordered] {
@@ -931,13 +1356,12 @@ fn object_children_preserve_surviving_spreads_and_list_punctuation() {
         .is_empty());
 }
 
-/// 相同分隔符规则覆盖枚举、参数属性和作为参数的具名声明，保留普通列表成员。
+/// 枚举成员和类字段初始化里的具名函数独立比较，保留普通列表成员。
 #[test]
 fn child_list_separators_preserve_nonchild_values() {
     for (before, after, owner) in [
         ("enum E {}", "enum E { A = 1, B = 2 }", "E"),
-        ("class C { constructor(ordinary: string) {} }", "class C { constructor(public field: Type, ordinary: string, readonly other = 0) {} }", "constructor"),
-        ("const value = factory(before, after);", "const value = factory(function first() {}, before, function middle() {}, after, function last() {});", "value"),
+        ("class C { value = factory(before, after); }", "class C { value = factory(function first() {}, before, function middle() {}, after, function last() {}); }", "value"),
     ] {
         let before = parse("a.ts", before);
         let after = parse("a.ts", after);
@@ -952,10 +1376,13 @@ fn child_list_separators_preserve_nonchild_values() {
 /// 列表清理不能擦掉数组空位、逗号表达式或字面量中的有意义内容。
 #[test]
 fn own_content_keeps_semantic_punctuation_and_literal_text() {
-    let before = parse("a.ts", "const value = { ...build((a, b), c), ...right };");
+    let before = parse(
+        "a.ts",
+        "class C { value = { ...build((a, b), c), ...right }; }",
+    );
     let with_child = parse(
         "a.ts",
-        "const value = { child: 1, ...build((a, b), c), ...right, last: 2 };",
+        "class C { value = { child() {}, ...build((a, b), c), ...right, last() {} }; }",
     );
     let id = &named(&before, "value").node.data().id;
     let diff = graph(&[&before]).diff(&graph(&[&with_child])).unwrap();
@@ -980,8 +1407,8 @@ fn own_content_keeps_semantic_punctuation_and_literal_text() {
             "const value = <div>a,b</div>;",
         ),
     ] {
-        let before = parse("a.tsx", before);
-        let after = parse("a.tsx", after);
+        let before = parse("a.tsx", &format!("function owner() {{ {before} }}"));
+        let after = parse("a.tsx", &format!("function owner() {{ {after} }}"));
         assert!(
             !graph(&[&before])
                 .diff(&graph(&[&after]))
@@ -1010,8 +1437,8 @@ fn array_child_insertion_and_removal_preserve_owner_content() {
         ("[,,]", "[function First() {}, , class Last {}, ,]"),
         ("[`a, b`, /a,b/, <div>a,b</div>, ...rest]", "[class First {}, `a, b`, function Middle() {}, /a,b/, <div>a,b</div>, ...rest, function Last() {}]"),
     ] {
-        let before = parse("a.tsx", &format!("const value = {before};"));
-        let after = parse("a.tsx", &format!("const value = {after};"));
+        let before = parse("a.tsx", &format!("class C {{ value = {before}; }}"));
+        let after = parse("a.tsx", &format!("class C {{ value = {after}; }}"));
         let id = &named(&before, "value").node.data().id;
         for (before, after) in [(&before, &after), (&after, &before)] {
             let diff = graph(&[before]).diff(&graph(&[after])).unwrap();
@@ -1027,11 +1454,11 @@ fn array_child_insertion_and_removal_preserve_owner_content() {
 fn array_child_reordering_preserves_surviving_values_and_holes() {
     let before = parse(
         "a.ts",
-        "const value = [function First() {}, , keep, class Last {}, ...rest, ,];",
+        "class C { value = [function First() {}, , keep, class Last {}, ...rest, ,]; }",
     );
     let after = parse(
         "a.ts",
-        "const value = [, class Last {}, keep, ...rest, , function First() {}];",
+        "class C { value = [, class Last {}, keep, ...rest, , function First() {}]; }",
     );
     assert!(graph(&[&before])
         .diff(&graph(&[&after]))
@@ -1046,8 +1473,8 @@ fn sparse_array_hole_positions_and_counts_remain_distinct() {
     let arrays = ["[keep]", "[, keep]", "[keep, ,]", "[,,]", "[]"];
     for (index, left) in arrays.iter().enumerate() {
         for right in arrays.iter().skip(index + 1) {
-            let before = parse("a.ts", &format!("const value = {left};"));
-            let after = parse("a.ts", &format!("const value = {right};"));
+            let before = parse("a.ts", &format!("class C {{ value = {left}; }}"));
+            let after = parse("a.ts", &format!("class C {{ value = {right}; }}"));
             assert!(
                 !graph(&[&before])
                     .diff(&graph(&[&after]))

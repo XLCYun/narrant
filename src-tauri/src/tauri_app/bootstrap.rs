@@ -134,7 +134,7 @@ pub fn run() {
                     typescript_analyzer
                         .clone()
                         .with_cancellation(cancelled)
-                        .analyze_with_report(input)
+                        .analyze(input)
                 })),
             );
             app.manage(repository_application);

@@ -2,6 +2,7 @@ import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";
 import type { ChangeKind, CodeNode, CodeReference, NodeDifference, StructureComparison } from "./types";
+import { groupStructureFiles, type DirectoryGroup } from "./directory-groups";
 
 export type ObjectStatus = ChangeKind | "relations" | "unchanged";
 /** 成员保留原对象身份；每行的高度同时决定文字位置和连线端口。 */
@@ -24,6 +25,8 @@ export type ObjectData = Record<string, unknown> & {
   objectId?: string;
   label: string;
   nativeKind: string;
+  filePath?: string;
+  directory?: DirectoryGroup;
   status: ObjectStatus;
   group: boolean;
   hiddenChildren: number;
@@ -42,7 +45,7 @@ export type StructureEdge = Edge<{
   collapsedSource?: string; collapsedTarget?: string;
   route?: { path: string; labelX: number; labelY: number };
 }>;
-export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number; collapsibleIds: string[] };
+export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number; collapsibleIds: string[]; directoryPaths: string[] };
 export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; expanded: ReadonlySet<string> };
 
 /** 只显示图内已解析关系；导入开关仅决定图内导入关系是否出现。 */
@@ -194,7 +197,8 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     const card = visualIds.get(id)!;
     const hidden = hiddenChildren(id);
     const collapse = collapses.get(id);
-    data.set(card, { objectId: id, label: object.name ?? object.signature ?? object.nativeKind,
+    const filePath = object.category === "container" && object.nativeKind === "file" ? object.name ?? undefined : undefined;
+    data.set(card, { objectId: id, label: filePath?.split("/").at(-1) ?? object.name ?? object.signature ?? object.nativeKind, filePath,
       nativeKind: object.nativeKind, category: object.category, status: status(id), group: false,
       hiddenChildren: hidden, table: false, headerHeight: hidden > 0 ? 82 : 56, rows: [], ports: [], collapse });
     const parent = parents.get(id);
@@ -308,6 +312,30 @@ export async function layoutStructureComparison(comparison: StructureComparison,
       }
     }
   }
+  // 文件与代码对象的包含关系保持原样；目录只包装当前可见的根文件卡片。
+  const directories = groupStructureFiles([...data.entries()]
+    .filter(([card, content]) => content.filePath !== undefined && !cardParents.has(card))
+    .map(([, content]) => ({ objectId: content.objectId!, path: content.filePath! })));
+  const directoryCards = new Map(directories.map((directory, index) => [directory.path, `directory-${index}`]));
+  for (const directory of directories) {
+    const card = directoryCards.get(directory.path)!;
+    const collapse: ObjectCollapse = { collapsed: false, count: 0, changed: 0, values: 0, callables: 0 };
+    for (const file of directory.files) {
+      const content = data.get(visualIds.get(file.objectId)!)!;
+      collapse.count += 1 + (content.collapse?.count ?? 0);
+      collapse.changed += Number(differences.has(file.objectId)) + (content.collapse?.changed ?? 0);
+      collapse.values += content.collapse?.values ?? 0;
+      collapse.callables += content.collapse?.callables ?? 0;
+      // 祖先先到，最深的目录最终成为文件的直接展示父节点。
+      cardParents.set(visualIds.get(file.objectId)!, card);
+    }
+    data.set(card, { label: directory.label, nativeKind: "directory", directory, status: "unchanged",
+      group: true, hiddenChildren: 0, table: false, headerHeight: 56, rows: [], collapse,
+      ports: [{ id: `${card}-out`, side: "source", y: 28 }, { id: `${card}-in`, side: "target", y: 28 }],
+    });
+    if (directory.parentPath) cardParents.set(card, directoryCards.get(directory.parentPath)!);
+  }
+  const directoryPaths = directories.map((directory) => directory.path);
   const cardChildren = new Map<string, string[]>();
   for (const [child, parent] of cardParents) cardChildren.set(parent, [...(cardChildren.get(parent) ?? []), child]);
   /** ELK 只排列卡片；固定成员端口保证方法与属性仍可逐行连线。 */
@@ -327,7 +355,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     };
   };
   const roots = [...data.keys()].filter((id) => !cardParents.has(id)).sort().map(elkCard);
-  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0, changed: differences.size, collapsibleIds };
+  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0, changed: differences.size, collapsibleIds, directoryPaths };
   /** 容器祖先关系不参加层级求解，成员间和递归调用均交给 ELK 走线。 */
   const isAncestor = (ancestor: string, child: string) => {
     let parent = cardParents.get(child);
@@ -369,12 +397,14 @@ export async function layoutStructureComparison(comparison: StructureComparison,
       labelY: label?.y === undefined ? points[0].y : label.y + origin.y + (label.height ?? 0) / 2,
     } };
   }
-  return { nodes, edges, total: objects.size, visible: visible.size, changed: differences.size, collapsibleIds };
+  return { nodes, edges, total: objects.size, visible: visible.size, changed: differences.size, collapsibleIds, directoryPaths };
 }
 
 /** 从全展开布局同步投影折叠状态；保持每张卡片的原坐标及展开时的预留空间。 */
-export function collapseStructureLayout(layout: StructureLayout, collapsed: ReadonlySet<string>): StructureLayout {
-  const folded = new Set(layout.nodes.filter((node) => node.data.collapse && node.data.objectId && collapsed.has(node.data.objectId)).map((node) => node.id));
+export function collapseStructureLayout(layout: StructureLayout, collapsed: ReadonlySet<string>, collapsedDirectories: ReadonlySet<string> = new Set()): StructureLayout {
+  const folded = new Set(layout.nodes.filter(({ data }) => data.collapse &&
+    ((data.objectId !== undefined && collapsed.has(data.objectId)) || (data.directory && collapsedDirectories.has(data.directory.path))))
+    .map((node) => node.id));
   if (!folded.size) return layout;
   const representatives = new Map<string, string>();
   const nodes: ObjectNode[] = [];

@@ -1,5 +1,35 @@
 import type { CodeNode, CodeReference, StructureComparison } from "@/structure-review/types";
 
+/** 文件容器分别包含类、函数和唯一顶层执行区域，覆盖目录压缩、长路径及跨文件调用。 */
+export function structureFileModulesFixture(): StructureComparison {
+  /** 预览使用分析器相同的节点分类、包含关系与独立源码。 */
+  const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode>): CodeNode => ({
+    id, category, language: "typescript", nativeKind: category === "container" ? "file" : category === "type" ? "class" : category === "executionRegion" ? "top_level" : "function",
+    name: id, signature: null, code: null, source: null, contains: [], references: [], extensions: {}, ...extra,
+  });
+  const call: CodeReference = { semantic: "code.calls", target: { kind: "node", id: "file-prepare" } };
+  const nodes = [
+    node("file-startup", "container", { name: "src/startup.ts", source: "export class Repository {\n  root: string;\n}\nexport function start() {\n  prepare();\n}\nconst a = prepare();\nconst b = prepare();\nstart();\nif (enabled) prepare();", contains: ["file-repository", "file-start", "file-startup-execution"] }),
+    node("file-repository", "type", { name: "Repository", signature: "export class Repository", contains: ["file-root"], source: "export class Repository {\n  root: string;\n}" }),
+    node("file-root", "value", { name: "root", nativeKind: "field", signature: "root: string", source: "root: string;" }),
+    node("file-start", "callable", { name: "start", signature: "export function start()", source: "export function start() {\n  prepare();\n}", references: [call] }),
+    node("file-startup-execution", "executionRegion", {
+      name: "顶层执行", code: "const a = prepare(); const b = prepare(); start(); if (enabled) prepare();",
+      source: "const a = prepare();\nconst b = prepare();\nstart();\nif (enabled) prepare();", references: [call, { semantic: "code.calls", target: { kind: "node", id: "file-start" } }],
+    }),
+    node("file-prepare-module", "container", { name: "src/review/initialization/prepare-review-workspace-for-selected-repository.ts", source: "export function prepare() {\n  return new Map();\n}\nprepare();", contains: ["file-prepare", "file-prepare-execution"] }),
+    node("file-prepare", "callable", { name: "prepare", signature: "export function prepare()", source: "export function prepare() {\n  return new Map();\n}" }),
+    node("file-prepare-execution", "executionRegion", { name: "顶层执行", code: "prepare();", source: "prepare();", references: [call] }),
+  ];
+  return {
+    reviewId: "structure-preview", snapshotId: "structure-snapshot", comparisonBase: "1111111", headRevision: "2222222",
+    before: { root: [], nodes: [], externalSymbols: {} },
+    after: { root: ["file-startup", "file-prepare-module"], nodes, externalSymbols: {} },
+    diff: { nodes: nodes.map((node) => ({ id: node.id, content: "added", contains: node.contains.map((value) => ({ kind: "added", value })), references: node.references.map((value) => ({ kind: "added", value })) })) },
+    coverage: ["src/startup.ts", "src/review/initialization/prepare-review-workspace-for-selected-repository.ts"].map((path) => ({ path, oldPath: null, before: "absent", after: "analyzed" })),
+  };
+}
+
 /** 同一个 Snapshot 含 Rust 与 TypeScript，覆盖切换语言、长签名、同语言和跨语言关系。 */
 export function structureMixedLanguagesFixture(): StructureComparison {
   const comparison = structureFieldTypesFixture();
@@ -154,7 +184,6 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
   ] };
   const comparison: StructureComparison = {
     reviewId: "structure-preview", snapshotId: "structure-snapshot", comparisonBase: "1111111", headRevision: "2222222", before, after,
-    beforeNotes: [], afterNotes: [],
     diff: { nodes: [
       { id: "review", content: null, contains: [{ kind: "removed", value: "old" }, { kind: "added", value: "new" }, { kind: "removed", value: "use-old" }, { kind: "added", value: "use-new" }], references: [] },
       { id: "use-old", content: "removed", contains: [], references: [] },
@@ -182,7 +211,7 @@ export function structureReviewFixture({ importsOnly = false }: { importsOnly?: 
   };
 }
 
-/** 混合语言预览覆盖 TS/JS 共享目标、JSX 关系、同名声明、长源码与逐侧说明。 */
+/** 混合语言预览覆盖 TS/JS 共享目标、JSX 关系、同名声明和长源码。 */
 export function structureMixedLanguageFixture(): StructureComparison {
   const comparison = structureSourceDiffFixture();
   const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode>): CodeNode => ({
@@ -209,38 +238,18 @@ export function structureMixedLanguageFixture(): StructureComparison {
       node("javascript-helper", "callable", { language: "javascript", name: "formatReview", signature: "export function formatReview(value)", source: "export function formatReview(value) { return String(value); }" }),
       node("child-view", "callable", { name: "ReviewSummaryCard", signature: "export function ReviewSummaryCard(props: ReviewSummaryProps)", source: "export function ReviewSummaryCard(props: ReviewSummaryProps) { return <strong>{props.title}</strong>; }" }),
       node("typescript-component", "callable", {
-        name: "ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes",
-        signature: "export function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes()",
+        name: "ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithinTheDetailsPanel",
+        signature: "export function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithinTheDetailsPanel()",
         code: side === "before" ? "{ return <ReviewSummaryCard title={formatReview(review)} />; }" : "{ return <ReviewSummaryCard title={formatReview(review.title)} onOpen={() => openReview(review.id)} />; }",
         source: side === "before"
-          ? "/** 保留原生 JSDoc 与 JSX 源码。 */\nexport function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes() {\n  return <ReviewSummaryCard title={formatReview(review)} />;\n}"
-          : "/** 保留原生 JSDoc、长属性与 JSX 源码。 */\nexport function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithoutHidingAnalysisNotes() {\n  return (\n    <ReviewSummaryCard\n      title={formatReview(review.title)}\n      description=\"这是一段用于验证窄窗口详情面板、源码折行和滚动区域的很长 JSX 属性内容\"\n      onOpen={() => openReview(review.id)}\n    />\n  );\n}",
+          ? "/** 保留原生 JSDoc 与 JSX 源码。 */\nexport function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithinTheDetailsPanel() {\n  return <ReviewSummaryCard title={formatReview(review)} />;\n}"
+          : "/** 保留原生 JSDoc、长属性与 JSX 源码。 */\nexport function ReviewWorkspaceWithAnExtraordinarilyLongNameThatMustWrapWithinTheDetailsPanel() {\n  return (\n    <ReviewSummaryCard\n      title={formatReview(review.title)}\n      description=\"这是一段用于验证窄窗口详情面板、源码折行和滚动区域的很长 JSX 属性内容\"\n      onOpen={() => openReview(review.id)}\n    />\n  );\n}",
         references: [call("javascript-helper"), jsx("child-view")],
       }),
       node("merged-plugin-a", "type", { name: "PluginRegistry", signature: "export interface PluginRegistry", source: "export interface PluginRegistry { open(): void; }" }),
       node("merged-plugin-b", "type", { name: "PluginRegistry", signature: "export interface PluginRegistry", source: "export interface PluginRegistry { close(): void; }" }),
     );
   }
-  comparison.beforeNotes = [{
-    code: "typescript.context",
-    message: "变更前使用仓库配置与固定运行时声明进行分析。",
-    file: null,
-    project: "tsconfig.json",
-  }];
-  comparison.afterNotes = [
-    {
-      code: "typescript.context",
-      message: "变更后使用仓库配置与固定运行时声明进行分析。",
-      file: null,
-      project: "tsconfig.json",
-    },
-    {
-      code: "typescript.TS2307",
-      message: "缺少可选业务依赖的声明；已保留能够确认的本地对象与关系，这段较长说明用于验证弹层内容可以自然换行。",
-      file: "src/components/review-workspace-with-a-very-long-file-name.tsx",
-      project: "packages/application/tsconfig.json",
-    },
-  ];
   comparison.coverage.push(
     { path: "src/components/review-workspace.tsx", oldPath: null, before: "analyzed", after: "analyzed" },
     { path: "src/format-review.js", oldPath: null, before: "analyzed", after: "analyzed" },

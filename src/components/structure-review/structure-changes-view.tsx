@@ -7,15 +7,21 @@ import { StructureDetails } from "./structure-details";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { collapseStructureLayout, layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
-import type { AnalysisNote, StructureBinding, StructureComparison } from "@/structure-review/types";
+import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 import { comparisonForLanguage, structureLanguages } from "@/structure-review/language-view";
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
 
-const ObjectActions = createContext<{ selectedId?: string; connectedPorts: ReadonlySet<string>; expand(id: string): void; toggleCollapse(id: string): void; open(id: string): void }>({ connectedPorts: new Set(), expand: () => {}, toggleCollapse: () => {}, open: () => {} });
+/** 目录选择和代码对象选择分开保存，展示分组不会冒充 Code Graph 节点。 */
+type StructureSelection = { kind: "object"; id: string } | { kind: "directory"; path: string };
+const ObjectActions = createContext<{
+  selectedId?: string; selectedDirectory?: string; connectedPorts: ReadonlySet<string>;
+  expand(id: string): void; toggleCollapse(id: string): void; open(id: string): void;
+  toggleDirectory(path: string): void; openDirectory(path: string): void;
+}>({ connectedPorts: new Set(), expand: () => {}, toggleCollapse: () => {}, open: () => {}, toggleDirectory: () => {}, openDirectory: () => {} });
 const statusClasses: Record<ObjectStatus, string> = {
   added: "structure-added", removed: "structure-removed", modified: "structure-modified",
   relations: "structure-relations", unchanged: "structure-unchanged",
@@ -27,26 +33,27 @@ function CodeObjectNode({ id, data }: NodeProps<ObjectNode>) {
   const actions = useContext(ObjectActions);
   const updateNodeInternals = useUpdateNodeInternals();
   useEffect(() => { updateNodeInternals(id); }, [data.ports, id, updateNodeInternals]);
-  const selected = data.objectId !== undefined && actions.selectedId === data.objectId;
+  const selected = data.directory ? actions.selectedDirectory === data.directory.path : data.objectId !== undefined && actions.selectedId === data.objectId;
+  const title = data.filePath ?? data.directory?.path ?? data.label;
   const markers: Record<ObjectStatus, string> = { added: "+", removed: "−", modified: "~", relations: "↔", unchanged: "·" };
-  return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", data.table && "structure-member-table", selected && "structure-selected")}
-    data-object-id={data.objectId} data-object-status={data.status}>
+  return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", data.directory && "structure-directory", data.table && "structure-member-table", selected && "structure-selected")}
+    data-object-id={data.objectId} data-directory-path={data.directory?.path} data-object-status={data.directory ? undefined : data.status}>
     {!data.table && <div className="structure-object-header" style={{ height: data.headerHeight }}>
     <div className="flex items-center justify-between gap-2 text-[10px]">
-      <span className="min-w-0 truncate text-muted-foreground">{data.nativeKind}</span>
-      <span className="structure-status shrink-0">{t(`status.${data.status}`)}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{data.directory ? t("directory") : data.filePath ? t("file") : data.nativeKind}</span>
+      {!data.directory && <span className="structure-status shrink-0">{t(`status.${data.status}`)}</span>}
     </div>
     <div className="mt-0.5 flex min-w-0 items-center gap-1">
-    {data.collapse && data.objectId && <Button variant="ghost" size="icon" className="nodrag nopan size-6 shrink-0 text-sm"
-      aria-expanded={!data.collapse.collapsed} aria-label={t(data.collapse.collapsed ? "expandObject" : "collapseObject", { name: data.label })}
-      title={t(data.collapse.collapsed ? "expandObject" : "collapseObject", { name: data.label })}
-      onClick={(event) => { event.stopPropagation(); actions.toggleCollapse(data.objectId!); }}><span aria-hidden>{data.collapse.collapsed ? "▸" : "▾"}</span></Button>}
-    {data.objectId ? <Button variant="ghost" className="nodrag nopan h-6 min-w-0 flex-1 justify-start overflow-hidden px-0 font-mono text-sm font-semibold hover:bg-transparent hover:underline"
-      title={data.label} aria-pressed={selected} onClick={(event) => { event.stopPropagation(); actions.open(data.objectId!); }}><span className="truncate">{data.label}</span></Button>
+    {data.collapse && (data.objectId !== undefined || data.directory) && <Button variant="ghost" size="icon" className="nodrag nopan size-6 shrink-0 text-sm"
+      aria-expanded={!data.collapse.collapsed} aria-label={t(data.collapse.collapsed ? "expandObject" : "collapseObject", { name: title })}
+      title={t(data.collapse.collapsed ? "expandObject" : "collapseObject", { name: title })}
+      onClick={(event) => { event.stopPropagation(); if (data.directory) actions.toggleDirectory(data.directory.path); else actions.toggleCollapse(data.objectId!); }}><span aria-hidden>{data.collapse.collapsed ? "▸" : "▾"}</span></Button>}
+    {data.objectId !== undefined || data.directory ? <Button variant="ghost" className="nodrag nopan h-6 min-w-0 flex-1 justify-start overflow-hidden px-0 font-mono text-sm font-semibold hover:bg-transparent hover:underline"
+      title={title} aria-label={title} aria-pressed={selected} onClick={(event) => { event.stopPropagation(); if (data.directory) actions.openDirectory(data.directory.path); else actions.open(data.objectId!); }}><span className="truncate">{data.label}</span></Button>
       : <div className="mt-2 truncate font-mono text-sm font-medium" title={data.label}>{data.label}</div>}
     </div>
     {data.collapse?.collapsed && <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground" data-testid="collapse-summary">
-      <span className="truncate">{data.category === "type" && data.collapse.values + data.collapse.callables > 0
+      <span className="truncate">{data.directory ? t("collapsedDirectorySummary", { count: data.directory.files.length }) : data.category === "type" && data.collapse.values + data.collapse.callables > 0
         ? t("collapsedTypeSummary", { values: data.collapse.values, callables: data.collapse.callables })
         : t("collapsedSummary", { count: data.collapse.count })}</span>
       {data.collapse.changed > 0 && <span className="shrink-0 font-medium text-foreground">{t("collapsedChanges", { count: data.collapse.changed })}</span>}
@@ -101,34 +108,6 @@ function TestCodeSwitch({ binding }: { binding: StructureBinding }) {
   </div>;
 }
 
-/** 将公开分析说明按前后侧放入紧凑弹层，避免诊断占用图与详情的固定空间。 */
-function AnalysisNotes({ comparison }: { comparison: StructureComparison }) {
-  const { t } = useTranslation("structure");
-  const total = comparison.beforeNotes.length + comparison.afterNotes.length;
-  if (total === 0) return null;
-  const context = (note: AnalysisNote) => [note.file, note.project].filter(Boolean).join(" · ");
-  return <DropdownMenu>
-    <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-7 max-w-full text-xs" data-analysis-notes-trigger />}>
-      <span className="truncate">{t("analysisNotes", { count: total })}</span>
-    </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" className="w-[min(32rem,calc(100vw-2rem))]" data-analysis-notes data-testid="analysis-notes">
-      {(["before", "after"] as const).map((side) => {
-        const notes = side === "before" ? comparison.beforeNotes : comparison.afterNotes;
-        if (notes.length === 0) return null;
-        return <DropdownMenuGroup key={side}>
-          <DropdownMenuLabel className="font-medium text-foreground">{t(side)}</DropdownMenuLabel>
-          <div className="space-y-2 px-3 pb-3">
-            {notes.map((note, index) => <article key={`${note.code}-${note.file ?? ""}-${note.project ?? ""}-${index}`} className="min-w-0 rounded-lg border bg-background/70 p-2.5" role="note">
-              <p className="break-words text-xs leading-5">{note.message}</p>
-              <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">{note.code}{context(note) ? ` · ${context(note)}` : ""}</p>
-            </article>)}
-          </div>
-        </DropdownMenuGroup>;
-      })}
-    </DropdownMenuContent>
-  </DropdownMenu>;
-}
-
 /** loading、失败、取消与已证明的空 diff 使用不同状态，避免把分析失败当作无变化。 */
 export default function StructureChangesView({ binding, dark }: { binding?: StructureBinding; dark: boolean }) {
   const { t } = useTranslation(["structure", "common"]);
@@ -140,8 +119,10 @@ export default function StructureChangesView({ binding, dark }: { binding?: Stru
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto p-6 text-center" role={state?.kind === "failed" ? "alert" : "status"}>
     {loading && <Spinner className="size-6" />}
     <h3 className="font-medium">{t(!state ? "unavailable" : loading ? "loading" : state.kind === "cancelled" ? "cancelled" : "failed")}</h3>
-    <p className="max-w-xl whitespace-pre-wrap break-words text-sm text-muted-foreground">{state?.kind === "failed" ? state.detail : loading ? t("loadingDescription") : t("retryDescription")}</p>
-    {binding && <Button variant="outline" onClick={loading ? binding.cancel : binding.retry}>{loading ? t("common:cancel") : t("common:retry")}</Button>}
+    {!loading && <>
+      <p className="max-w-xl whitespace-pre-wrap break-words text-sm text-muted-foreground">{state?.kind === "failed" ? state.detail : t("retryDescription")}</p>
+      {binding && <Button variant="outline" onClick={binding.retry}>{t("common:retry")}</Button>}
+    </>}
     </div>
   </div>;
 }
@@ -158,10 +139,14 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   const [showImports, setShowImports] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string>();
+  const [collapsedDirectories, setCollapsedDirectories] = useState<ReadonlySet<string>>(new Set());
+  const [selection, setSelection] = useState<StructureSelection>();
+  const selectedId = selection?.kind === "object" ? selection.id : undefined;
+  const selectedDirectory = selection?.kind === "directory" ? selection.path : undefined;
   const [layoutResult, setLayoutResult] = useState<{ comparison: StructureComparison; layout: StructureLayout }>();
   const expandedLayout = layoutResult?.comparison === comparison ? layoutResult.layout : undefined;
-  const layout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed), [expandedLayout, collapsed]);
+  const layout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed, collapsedDirectories), [expandedLayout, collapsed, collapsedDirectories]);
+  const directory = expandedLayout?.nodes.find((node) => node.data.directory?.path === selectedDirectory)?.data.directory;
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
   // 按真实对象筛选双向关系；折叠端口共享后仍不混入其他成员的关系。
@@ -173,10 +158,19 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, expanded }), [expanded, showAll, showUnchangedReferences, showImports]);
   /** 折叠按钮始终选中被操作对象；只更新自己的状态，保留后代的收起选择。 */
   const toggleCollapse = (id: string) => {
-    setSelectedId(id);
+    setSelection({ kind: "object", id });
     setCollapsed((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  /** 目录折叠只投影已有布局，保留子目录和文件各自的折叠选择。 */
+  const toggleDirectory = (path: string) => {
+    setSelection({ kind: "directory", path });
+    setCollapsedDirectories((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
   };
@@ -201,9 +195,10 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
         <Select value={language ?? null} disabled={languages.length === 0} onValueChange={(value) => {
           if (!value || value === language) return;
           setPreferredLanguage(value);
-          setSelectedId(undefined);
+          setSelection(undefined);
           setExpanded(new Set());
           setCollapsed(new Set());
+          setCollapsedDirectories(new Set());
           setLayoutError(undefined);
           setLayingOut(true);
         }}>
@@ -215,7 +210,6 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
           </SelectContent>
         </Select>
       </div>
-      <AnalysisNotes comparison={comparison} />
       <TestCodeSwitch binding={binding} />
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={binding.retry}>{t("reanalyze")}</Button>
       <DropdownMenu>
@@ -226,19 +220,21 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
           <DropdownMenuSeparator />
           <DropdownMenuCheckboxItem checked={showImports} onCheckedChange={setShowImports}>{t("showImports")}</DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={!layout?.collapsibleIds.length} onClick={() => {
-            setSelectedId(undefined);
+          <DropdownMenuItem disabled={!layout?.collapsibleIds.length && !layout?.directoryPaths.length} onClick={() => {
+            setSelection(undefined);
             setCollapsed(new Set(layout?.collapsibleIds));
+            setCollapsedDirectories(new Set(layout?.directoryPaths));
           }}>{t("collapseAll")}</DropdownMenuItem>
-          <DropdownMenuItem disabled={collapsed.size === 0} onClick={() => {
+          <DropdownMenuItem disabled={collapsed.size === 0 && collapsedDirectories.size === 0} onClick={() => {
             setCollapsed(new Set());
+            setCollapsedDirectories(new Set());
           }}>{t("expandAll")}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
     <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1">
       <ResizablePanel id="structure-details" defaultSize="320px" minSize="180px" maxSize="55%" groupResizeBehavior="preserve-pixel-size">
-        <StructureDetails comparison={comparison} selectedId={selectedId} showImports={showImports} dark={dark} />
+        <StructureDetails comparison={comparison} selectedId={selectedId} directory={directory} showImports={showImports} dark={dark} />
       </ResizablePanel>
       <ResizableHandle withHandle aria-label={t("resizeDetails")} />
       <ResizablePanel id="structure-graph" minSize="45%">
@@ -247,12 +243,13 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
             {layoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{layoutError}</p>
               <Button variant="outline" onClick={() => setExpanded(new Set(expanded))}>{t("retryLayout")}</Button>
-            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, connectedPorts, toggleCollapse, expand: (id) => setExpanded((current) => new Set([...current, id])), open: setSelectedId }}>
+            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, selectedDirectory, connectedPorts, toggleCollapse, toggleDirectory,
+              expand: (id) => setExpanded((current) => new Set([...current, id])), open: (id) => setSelection({ kind: "object", id }), openDirectory: (path) => setSelection({ kind: "directory", path }) }}>
               <ReactFlow<ObjectNode, StructureEdge> key={language} nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                 colorMode={dark ? "dark" : "light"} fitView fitViewOptions={{ padding: 0.16, maxZoom: 1 }} minZoom={0.08} maxZoom={2}
                 nodesDraggable={false} nodesConnectable={false} nodesFocusable={false} edgesReconnectable={false} deleteKeyCode={null}
-                onNodeClick={(_, node) => { if (node.data.objectId) setSelectedId(node.data.objectId); }}
-                onPaneClick={() => setSelectedId(undefined)}
+                onNodeClick={(_, node) => { if (node.data.directory) setSelection({ kind: "directory", path: node.data.directory.path }); else if (node.data.objectId) setSelection({ kind: "object", id: node.data.objectId }); }}
+                onPaneClick={() => setSelection(undefined)}
                 ariaLabelConfig={{ "controls.zoomIn.ariaLabel": t("zoomIn"), "controls.zoomOut.ariaLabel": t("zoomOut"), "controls.fitView.ariaLabel": t("fitView") }}>
                 <Background gap={20} size={1} />
                 <Controls showInteractive={false} />

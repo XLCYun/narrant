@@ -10,7 +10,7 @@ Keep the user's six common categories as CodeNode enum variants:
 
 | Category | Rust variant | Examples |
 | --- | --- | --- |
-| Container | CodeNode::Container | Packages, modules, namespaces |
+| Container | CodeNode::Container | Files, packages, modules, namespaces |
 | Type | CodeNode::Type | Classes, structs, interfaces, traits, enums, aliases |
 | Callable | CodeNode::Callable | Functions, methods, constructors, accessors |
 | Value | CodeNode::Value | Fields, properties, constants, global bindings, enum members |
@@ -80,6 +80,12 @@ significant syntax, literals, modifiers, and declaration annotations are preserv
 A signature never embeds separately represented children or a callable's body.
 
 ## Containers and execution
+
+Physical source-file Containers use native kind `file` and a repository-relative name
+with `/` separators. They organize selected declarations without asserting a language
+module/global-scope interpretation. Their signature and own code are absent; original
+source is display-only. Semantic modules/namespaces keep their native kinds. Directory
+hierarchies are derived presentation groups, not additional Code Objects.
 
 Container has organizational responsibilities in this model; it has no implementation
 body (`code: None` in the Rust mapping). Actual module-level executable statements, if represented as graph objects,

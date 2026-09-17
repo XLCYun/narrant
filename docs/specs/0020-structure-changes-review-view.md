@@ -382,11 +382,14 @@ changes still count. If no visible changes remain, the view directs the user to 
 Changes. Original code shown in details is preserved, including any external names
 appearing in that code.
 
-The Rust policy omits `code.reads` and type relationships outside field declarations.
-Fields emit `code.type_use` only for graph-local Type targets, as specified in
+The Rust and TypeScript/JavaScript analyzers omit `code.reads` and `code.writes` before
+graph comparison. The Rust policy also omits type relationships outside field
+declarations. Fields emit `code.type_use` only for graph-local Type targets, as specified in
 [graph-local field type relationships](#graph-local-field-type-relationships).
 There is no separate type-use display checkbox. Signatures and source code still
-include other type annotations and value reads, and structural relationships such as
+include other type annotations, value reads and assignments, so those edits still
+participate in own-code comparison. File Changes is unaffected. Calls within assignment
+expressions, function-value references and structural relationships such as
 implementation and membership remain available.
 
 Complete backend graphs, graph differences and `externalSymbols` remain intact.
@@ -756,3 +759,38 @@ that language; retain both added and removed relations whose endpoints remain.
 Keep the full analysis result unchanged. Clear selected objects and folding/expansion
 state on a language switch and fit the new graph, while retaining the sidebar width
 and the display-option switches. No mixed-language “all” option is offered.
+
+## Directory and file grouping (2026-09-17)
+
+File Containers use `nativeKind: file` and a repository-relative `name` with `/`
+separators. This identifies physical files independently of semantic module and
+namespace Containers. The frontend derives directory groups only from visible root
+file Containers, after language and object/context filtering. It never decodes NodeId,
+infers a file from a semantic module's name, scans the repository, or adds directory
+nodes to either Code Graph or Code Graph Difference.
+
+Only paths required by those files appear. Consecutive directories with a single
+subdirectory and no direct files share one label, such as `src/review`. Root-level
+files stay at the graph root. File card titles show the basename, with the full path
+in their accessible name, tooltip and source details. Deleted files retain their
+before-side path and directory context. Same-basename files keep independent identity.
+Explicit language scopes and their code objects retain their existing containment.
+
+Directory groups have no own added/removed/modified status or source diff. Selecting
+one shows its path and the displayed files beneath it in the fixed details pane.
+Collapse summaries count files and aggregate existing descendant changes; code-object
+totals still exclude directories. File and directory collapse states are separate.
+The collapse button selects the group, preserves nested collapse choices and reuses
+the fully expanded layout without moving other cards or resetting the viewport.
+Collapse all/expand all apply to directories as well as existing containers and types.
+
+Edges keep their exact original code-object identities. When an endpoint is hidden
+inside a collapsed directory, the directory header supplies a display port and the
+tooltip names the actual endpoint. Selecting a directory does not select all its
+descendants' relationships. Source comparison and graph diff remain at code-object
+granularity; file and directory grouping does not promote child changes into parent
+content changes.
+
+The `structure-file-modules` preview covers nested/compacted directory groups, long
+file names, original file source, independent file execution regions and cross-file
+calls, with the same production layout and selection code.

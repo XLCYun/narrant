@@ -1,9 +1,5 @@
 //! 固定 TypeScript 会话：显式项目查询、来源校验和 UTF-16 证据标准化。
-use super::{
-    failure,
-    project::{AnalysisNote, PreparedProject},
-    text, Result,
-};
+use super::{failure, project::PreparedProject, text, Result};
 use crate::lsp::{CancellationCheck, LspClient, LspOptions, Position, Range};
 use serde_json::{json, Value};
 use std::{
@@ -57,13 +53,12 @@ pub(crate) struct CallEvidence {
 pub(crate) struct TypeScriptLsp {
     client: Option<LspClient>,
     project: PreparedProject,
-    diagnosed: BTreeSet<(PathBuf, PathBuf)>,
-    diagnosed_options: BTreeSet<PathBuf>,
+    checked_runtime_types: BTreeSet<(PathBuf, PathBuf)>,
     /// 原生诊断指出类型专用导入/导出被用作值；不能因 definition 越过别名而伪造调用。
     runtime_type_errors: BTreeMap<(PathBuf, PathBuf), Vec<CheckedRange>>,
 }
 impl TypeScriptLsp {
-    /// 配置注册完成后才打开文档，逐一验证真实项目与成员并收集显式诊断。
+    /// 配置注册完成后才打开文档，逐一验证真实项目与成员并检查类型被误用为值的位置。
     pub fn start(
         project: PreparedProject,
         timeout: Duration,
@@ -89,8 +84,7 @@ impl TypeScriptLsp {
         let mut session = Self {
             client: Some(client),
             project,
-            diagnosed: BTreeSet::new(),
-            diagnosed_options: BTreeSet::new(),
+            checked_runtime_types: BTreeSet::new(),
             runtime_type_errors: BTreeMap::new(),
         };
         for (index, registration) in session
@@ -157,32 +151,11 @@ impl TypeScriptLsp {
             }
             if actual.is_empty() {
                 actual = file.projects;
-                if let Some(registration) =
-                    session.project.registrations.iter().find(|registration| {
-                        actual.contains(&registration.name)
-                            && !session.project.config_files.contains(&registration.name)
-                    })
-                {
-                    if session.project.notes.len() < 200 {
-                        session.project.notes.push(AnalysisNote {
-                            code: Some("typescript.inferred_project".into()),
-                            project: Some(registration.name.clone()),
-                            file: file.file.clone(),
-                            message: format!(
-                                "未配置文件使用 {}/{} ES2022 推断配置",
-                                registration.options["module"].as_str().unwrap_or("未知"),
-                                registration.options["moduleResolution"]
-                                    .as_str()
-                                    .unwrap_or("未知")
-                            ),
-                        });
-                    }
-                }
             }
             session.project.files[file_index].projects = actual.clone();
             for name in &actual {
                 session.validate_project(&file.file, name)?;
-                session.collect_notes(&file.file, name)?;
+                session.check_runtime_type_usage(&file.file, name)?;
             }
         }
         Ok(session)
@@ -474,102 +447,45 @@ impl TypeScriptLsp {
         })
     }
 
-    /// 每个文件/项目最多收集一次诊断，明确查询防止最近通知覆盖其他文件信息。
-    pub fn collect_notes(&mut self, file: &Path, name: &Path) -> Result<()> {
+    /// 每个文件/项目只检查一次类型误用，保留图解析需要的位置证据。
+    pub fn check_runtime_type_usage(&mut self, file: &Path, name: &Path) -> Result<()> {
         self.guarded(|session| {
             session.validate_project_inner(file, name)?;
             if !session
-                .diagnosed
+                .checked_runtime_types
                 .insert((file.to_path_buf(), name.to_path_buf()))
             {
                 return Ok(());
             }
-            for command in [
-                "compilerOptionsDiagnostics-full",
-                "syntacticDiagnosticsSync",
+            let diagnostics = session.raw(
                 "semanticDiagnosticsSync",
-            ] {
-                if command == "compilerOptionsDiagnostics-full"
-                    && !session.diagnosed_options.insert(name.to_path_buf())
-                {
+                json!({"file":file, "projectFileName":name, "includeLinePosition":true}),
+                true,
+            )?;
+            for diagnostic in array(&diagnostics, "semanticDiagnosticsSync")? {
+                let code = diagnostic["code"]
+                    .as_u64()
+                    .ok_or_else(|| failure("语义诊断缺少 code"))?;
+                if !matches!(code, 1361 | 1362 | 2693) {
                     continue;
                 }
-                let diagnostics = session.raw(
-                    command,
-                    json!({"file":file, "projectFileName":name, "includeLinePosition":true}),
-                    true,
+                let start = diagnostic
+                    .get("startLocation")
+                    .or_else(|| diagnostic.get("start"))
+                    .ok_or_else(|| failure("运行时类型错误缺少起点"))?;
+                let end = diagnostic
+                    .get("endLocation")
+                    .or_else(|| diagnostic.get("end"))
+                    .ok_or_else(|| failure("运行时类型错误缺少终点"))?;
+                let span = checked_range(
+                    &session.project.source(file)?,
+                    &json!({"start":start,"end":end}),
                 )?;
-                let mut batches = vec![(file.to_path_buf(), diagnostics)];
-                // TS 的 compilerOptionsDiagnostics-full 丢弃附带配置文件的诊断，必须显式查询配置。
-                if command == "compilerOptionsDiagnostics-full"
-                    && session.project.config_files.contains(&name.to_path_buf())
-                {
-                    session.project.checked_path(name)?;
-                    let diagnostics = session.raw(
-                        "semanticDiagnosticsSync",
-                        json!({"file":name,"projectFileName":name,"includeLinePosition":true}),
-                        true,
-                    )?;
-                    batches.push((name.to_path_buf(), diagnostics));
-                }
-                for (diagnostic_file, diagnostics) in batches {
-                    for (index, diagnostic) in array(&diagnostics, command)?.iter().enumerate() {
-                        let code = diagnostic["code"]
-                            .as_u64()
-                            .ok_or_else(|| failure("诊断缺少 code"))?;
-                        if matches!(code, 1361 | 1362 | 2693) {
-                            let start = diagnostic
-                                .get("startLocation")
-                                .or_else(|| diagnostic.get("start"));
-                            let end = diagnostic
-                                .get("endLocation")
-                                .or_else(|| diagnostic.get("end"));
-                            let start = start.ok_or_else(|| failure("运行时类型错误缺少起点"))?;
-                            let end = end.ok_or_else(|| failure("运行时类型错误缺少终点"))?;
-                            let span = checked_range(
-                                &session.project.source(&diagnostic_file)?,
-                                &json!({"start":start,"end":end}),
-                            )?;
-                            session
-                                .runtime_type_errors
-                                .entry((diagnostic_file.clone(), name.to_path_buf()))
-                                .or_default()
-                                .push(span);
-                        }
-                        if index >= 40 {
-                            continue;
-                        }
-                        let message = diagnostic
-                            .get("text")
-                            .or_else(|| diagnostic.get("message"))
-                            .or_else(|| diagnostic.get("messageText"))
-                            .ok_or_else(|| failure("诊断缺少说明"))?;
-                        let message = diagnostic_message(message)?;
-                        if session.project.notes.len() < 200 {
-                            let original = session
-                                .project
-                                .sources
-                                .get(&diagnostic_file)
-                                .map(|source| source.path.clone())
-                                .or_else(|| session.project.metadata.get(&diagnostic_file).cloned())
-                                .unwrap_or_else(|| diagnostic_file.clone());
-                            session.project.notes.push(AnalysisNote {
-                                code: Some(format!("typescript.TS{code}")),
-                                project: Some(name.to_path_buf()),
-                                file: original,
-                                message: format!(
-                                    "{} TS{code}: {message}",
-                                    name.strip_prefix(&session.project.workspace_root)
-                                        .map_err(failure)?
-                                        .display()
-                                )
-                                .chars()
-                                .take(4096)
-                                .collect(),
-                            });
-                        }
-                    }
-                }
+                session
+                    .runtime_type_errors
+                    .entry((file.to_path_buf(), name.to_path_buf()))
+                    .or_default()
+                    .push(span);
             }
             Ok(())
         })
@@ -629,24 +545,6 @@ fn array<'a>(value: &'a Value, command: &str) -> Result<&'a [Value]> {
         .as_array()
         .map(Vec::as_slice)
         .ok_or_else(|| failure(format!("tsserver {command} 缺少数组")))
-}
-
-/// 递归诊断链仍是纯文字元数据；不将畸形对象转换成空说明。
-fn diagnostic_message(value: &Value) -> Result<String> {
-    if let Some(text) = value.as_str() {
-        return Ok(text.to_owned());
-    }
-    let mut message = value["messageText"]
-        .as_str()
-        .ok_or_else(|| failure("无效的诊断说明"))?
-        .to_owned();
-    if let Some(next) = value.get("next") {
-        for item in array(next, "diagnostic.next")? {
-            message.push('\n');
-            message.push_str(&diagnostic_message(item)?);
-        }
-    }
-    Ok(message)
 }
 
 /// TypeScript 的一基 line/offset 必须为正整数且对应有效 UTF-16 边界。

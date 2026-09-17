@@ -3,11 +3,8 @@
 mod projection;
 mod workspace;
 
+use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
 use super::rust_analyzer::RustDependencyScope;
-use super::{
-    analysis::AnalysisReport,
-    code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot},
-};
 use crate::{
     lsp::CancellationCheck,
     operation::OperationContext,
@@ -27,10 +24,9 @@ pub(crate) type AnalyzeGraph = dyn Fn(&AnalysisInput, CancellationCheck, RustDep
     + Send
     + Sync;
 
-/// TypeScript/JavaScript 共用一次语义项目，并把结构化说明留给应用投影。
-pub(crate) type AnalyzeTypeScript = dyn Fn(&AnalysisInput, CancellationCheck) -> Result<AnalysisReport, AnalysisError>
-    + Send
-    + Sync;
+/// TypeScript/JavaScript 共用一次语义项目并返回代码图。
+pub(crate) type AnalyzeTypeScript =
+    dyn Fn(&AnalysisInput, CancellationCheck) -> Result<CodeGraph, AnalysisError> + Send + Sync;
 
 /// 面向应用的失败类别，取消与能力缺失不会显示为无结构变化。
 #[derive(Debug, Serialize)]
@@ -183,26 +179,15 @@ fn run(
     }
     let (before, after) = (before.unwrap(), after.unwrap());
     let diff = before
-        .graph
-        .diff(&after.graph)
+        .diff(&after)
         .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
     Ok(StructureComparison {
         review_id,
         snapshot_id,
         comparison_base: workspace.comparison.comparison_base.clone(),
         head_revision: workspace.comparison.head_revision.clone(),
-        before: Graph::from(&before.graph),
-        after: Graph::from(&after.graph),
-        before_notes: before
-            .notes
-            .iter()
-            .map(projection::AnalysisNote::from)
-            .collect(),
-        after_notes: after
-            .notes
-            .iter()
-            .map(projection::AnalysisNote::from)
-            .collect(),
+        before: Graph::from(&before),
+        after: Graph::from(&after),
         diff: GraphDifference::from(&diff),
         coverage,
     })
@@ -287,12 +272,12 @@ fn analyze_side(
     cancelled: &CancellationCheck,
     dependency_scope: RustDependencyScope,
     stop: &CancellationToken,
-) -> Result<AnalysisReport, StructureReviewError> {
+) -> Result<CodeGraph, StructureReviewError> {
     if cancelled() {
         return Err(StructureReviewError::new("cancelled", "结构分析已停止。"));
     }
     if files.is_empty() {
-        return empty_report();
+        return empty_graph();
     }
     let rust_input = (!files.rust.is_empty()).then(|| AnalysisInput {
         repository_root: repository.to_owned(),
@@ -311,10 +296,6 @@ fn analyze_side(
             threads.spawn(move || {
                 run_worker(stop, errors, || {
                     (analyzers.rust)(&input, cancelled.clone(), dependency_scope)
-                        .map(|graph| AnalysisReport {
-                            graph,
-                            notes: Vec::new(),
-                        })
                         .map_err(analysis_error)
                 })
             })
@@ -333,17 +314,13 @@ fn analyze_side(
         .into_inner()
         .expect("语言 worker 不在错误锁内执行分析")
         .finish()?;
-    let mut report = empty_report()?;
+    let mut graph = empty_graph()?;
     for next in [rust, typescript].into_iter().flatten() {
-        report.graph = report
-            .graph
-            .merge(next.graph)
+        graph = graph
+            .merge(next)
             .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
-        report.notes.extend(next.notes);
     }
-    report.notes.sort();
-    report.notes.dedup();
-    Ok(report)
+    Ok(graph)
 }
 
 /// 将语言分析错误映射到稳定应用类别，并保留适配器提供的原始原因。
@@ -358,13 +335,10 @@ fn analysis_error(error: AnalysisError) -> StructureReviewError {
     )
 }
 
-/// 构造不启动任何语言工具的空报告。
-fn empty_report() -> Result<AnalysisReport, StructureReviewError> {
-    Ok(AnalysisReport {
-        graph: CodeGraph::new(CodeRoot::default(), Vec::new())
-            .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?,
-        notes: Vec::new(),
-    })
+/// 构造不启动任何语言工具的空图。
+fn empty_graph() -> Result<CodeGraph, StructureReviewError> {
+    CodeGraph::new(CodeRoot::default(), Vec::new())
+        .map_err(|error| StructureReviewError::new("analysis-failed", error.message))
 }
 
 /// 一侧的文件按 Rust 和共享 TS/JS 语义项目分组。
