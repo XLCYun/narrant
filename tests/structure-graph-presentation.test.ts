@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { structureCrateRootsFixture, structureFieldTypesFixture, structureFileModulesFixture, structureReviewFixture } from "@/dev/structure-review-fixture";
-import { collapseStructureLayout, layoutStructureComparison, objectDetails, type StructureLayout } from "@/structure-review/graph-presentation";
+import { collapseStructureLayout, layoutStructureComparison, objectDetails, relayoutStructureLayout, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { CodeNode, CodeReference, NodeDifference, StructureComparison } from "@/structure-review/types";
 
 const options = { showAll: false, showUnchangedReferences: false, showImports: false, expanded: new Set<string>() };
@@ -583,4 +583,104 @@ it("keeps directory paths separate from opaque object identities without decodin
   const closedDirectory = collapseStructureLayout(layout, new Set(), new Set([type.id]));
   expect(entry(closedDirectory, type.id)).toBeUndefined();
   expect(closedDirectory.nodes[0].data.directory?.files).toEqual([{ objectId: file.id, path: file.name }]);
+});
+
+/** 冻结缓存中的每层展示数据，避免重排意外修改原布局却未被快照发现。 */
+function freezeLayout(value: unknown): void {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  Object.values(value).forEach(freezeLayout);
+}
+
+/** 检查实际卡片在父框内、同层不重叠，且端口走线仍落在新的绝对位置上。 */
+function expectValidLayout(layout: StructureLayout): void {
+  const origins = new Map<string, { x: number; y: number }>();
+  for (const node of layout.nodes) {
+    const parent = layout.nodes.find((candidate) => candidate.id === node.parentId);
+    const origin = parent ? origins.get(parent.id)! : { x: 0, y: 0 };
+    expect(origin).toBeDefined();
+    origins.set(node.id, { x: origin.x + node.position.x, y: origin.y + node.position.y });
+    if (parent) {
+      expect(node.position.x).toBeGreaterThanOrEqual(0);
+      expect(node.position.y).toBeGreaterThanOrEqual(parent.data.headerHeight);
+      expect(node.position.x + Number(node.style!.width)).toBeLessThanOrEqual(Number(parent.style!.width));
+      expect(node.position.y + Number(node.style!.height)).toBeLessThanOrEqual(Number(parent.style!.height));
+    }
+    for (const sibling of layout.nodes.filter((candidate) => candidate.parentId === node.parentId && candidate.id !== node.id)) {
+      const separated = node.position.x + Number(node.style!.width) <= sibling.position.x
+        || sibling.position.x + Number(sibling.style!.width) <= node.position.x
+        || node.position.y + Number(node.style!.height) <= sibling.position.y
+        || sibling.position.y + Number(sibling.style!.height) <= node.position.y;
+      expect(separated).toBe(true);
+    }
+  }
+  for (const edge of layout.edges) {
+    const source = layout.nodes.find((node) => node.id === edge.source)!;
+    const target = layout.nodes.find((node) => node.id === edge.target)!;
+    const sourcePort = source.data.ports.find((port) => port.id === edge.sourceHandle)!;
+    const targetPort = target.data.ports.find((port) => port.id === edge.targetHandle)!;
+    expect(sourcePort.side).toBe("source");
+    expect(targetPort.side).toBe("target");
+    if (!edge.data?.route) continue; // 祖先关系仍由渲染组件的正交连接处理。
+    const points = [...edge.data.route.path.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)]
+      .map((match) => ({ x: Number(match[1]), y: Number(match[2]) }));
+    expect(points.length).toBeGreaterThanOrEqual(2);
+    expect(points[0].x).toBeCloseTo(origins.get(source.id)!.x + Number(source.style!.width));
+    expect(points[0].y).toBeCloseTo(origins.get(source.id)!.y + sourcePort.y);
+    expect(points.at(-1)!.x).toBeCloseTo(origins.get(target.id)!.x);
+    expect(points.at(-1)!.y).toBeCloseTo(origins.get(target.id)!.y + targetPort.y);
+    expect(Number.isFinite(edge.data.route.labelX)).toBe(true);
+    expect(Number.isFinite(edge.data.route.labelY)).toBe(true);
+  }
+}
+
+it.each([
+  { kind: "type", fixture: structureReviewFixture, objects: ["Review"], directories: [] },
+  { kind: "file", fixture: structureFileModulesFixture, objects: ["file-prepare-module"], directories: [] },
+  { kind: "directory", fixture: structureFileModulesFixture, objects: [], directories: ["src/review/initialization"] },
+])("reflows a collapsed $kind, shrinking ancestor containers without mutating the expanded layout", async ({ fixture, objects, directories }) => {
+  const opened = await layoutStructureComparison(fixture(), { ...options, showAll: true, showUnchangedReferences: true });
+  const original = structuredClone(opened);
+  freezeLayout(opened);
+  const projected = collapseStructureLayout(opened, new Set(objects), new Set(directories));
+  const projection = structuredClone(projected);
+  freezeLayout(projected);
+  const compact = await relayoutStructureLayout(projected);
+  expect(compact.nodes.map((node) => node.id)).toEqual(projected.nodes.map((node) => node.id));
+  expect(compact.edges.map((edge) => edge.id)).toEqual(projected.edges.map((edge) => edge.id));
+  const area = (layout: StructureLayout) => layout.nodes.filter((node) => !node.parentId)
+    .reduce((total, node) => total + Number(node.style!.width) * Number(node.style!.height), 0);
+  expect(area(compact)).toBeLessThan(area(opened));
+  expect(compact.nodes.some((node) => node.position.x !== projected.nodes.find((previous) => previous.id === node.id)!.position.x
+    || node.position.y !== projected.nodes.find((previous) => previous.id === node.id)!.position.y)).toBe(true);
+  for (const edge of compact.edges) {
+    const previous = projected.edges.find((item) => item.id === edge.id)!;
+    expect({ ...edge, data: undefined }).toEqual({ ...previous, data: undefined });
+    expect({ ...edge.data, route: undefined }).toEqual({ ...previous.data, route: undefined });
+  }
+  const proxied = compact.edges.filter((edge) => edge.data?.collapsedSource || edge.data?.collapsedTarget);
+  expect(proxied.length).toBeGreaterThan(0);
+  expect(proxied.every((edge) => edge.data?.route !== undefined)).toBe(true);
+  expectValidLayout(compact);
+  expect(opened).toEqual(original);
+  expect(projected).toEqual(projection);
+  expect(collapseStructureLayout(opened, new Set(), new Set())).toBe(opened);
+  const restored = await relayoutStructureLayout(opened);
+  expect(restored).toEqual(opened);
+});
+
+it("can reflow nested collapse states and empty layouts while respecting cancellation", async () => {
+  const opened = await layoutStructureComparison(structureFileModulesFixture(), options);
+  const fileClosed = collapseStructureLayout(opened, new Set(["file-prepare-module"]));
+  const directoryClosed = await relayoutStructureLayout(collapseStructureLayout(opened, new Set(["file-prepare-module"]), new Set(["src/review/initialization"])));
+  expect(entry(directoryClosed, "file-prepare-module")).toBeUndefined();
+  const directoryReopened = await relayoutStructureLayout(fileClosed);
+  expect(entry(directoryReopened, "file-prepare-module")!.card.data.collapse?.collapsed).toBe(true);
+  expect(entry(directoryReopened, "file-prepare")).toBeUndefined();
+  expectValidLayout(directoryReopened);
+  const empty = { ...opened, nodes: [], edges: [], visible: 0 };
+  expect(await relayoutStructureLayout(empty)).toEqual(empty);
+  const controller = new AbortController();
+  controller.abort();
+  await expect(relayoutStructureLayout(fileClosed, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
 });

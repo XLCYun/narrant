@@ -1,10 +1,10 @@
 import type { ComponentType, ReactNode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
 import { structureClassDiagramFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
-import type { ObjectData, ObjectNode, StructureEdge } from "@/structure-review/graph-presentation";
+import type { ObjectData, ObjectNode, StructureEdge, StructureLayout } from "@/structure-review/graph-presentation";
 import * as graphPresentation from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 import type { DiffEditorProps } from "@monaco-editor/react";
@@ -23,7 +23,7 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   ...await importOriginal<typeof import("@xyflow/react")>(),
   ReactFlow: ({ nodes, edges, nodeTypes, children, onPaneClick }: { nodes: ObjectNode[]; edges: StructureEdge[]; nodeTypes: { codeObject: ComponentType<{ id: string; data: ObjectData }> }; children: ReactNode; onPaneClick(): void }) => {
     const ports = new Map(nodes.flatMap((node) => node.data.ports.map((port) => [port.id, port.objectId] as const)));
-    return <div data-testid="rendered-graph">{nodes.map((node) => <nodeTypes.codeObject key={node.id} id={node.id} data={node.data} />)}{children}
+    return <div data-testid="rendered-graph" data-layout={JSON.stringify(nodes.map((node) => ({ id: node.id, position: node.position, style: node.style })))}>{nodes.map((node) => <nodeTypes.codeObject key={node.id} id={node.id} data={node.data} />)}{children}
       {edges.map((edge) => <div key={edge.id} data-testid="visible-relation" title={edge.data?.collapsedSource ?? edge.data?.collapsedTarget}>{ports.get(edge.sourceHandle!)} → {ports.get(edge.targetHandle!)} · {edge.label}</div>)}
       <button onClick={onPaneClick}>Graph background</button>
     </div>;
@@ -37,6 +37,16 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
 /** 用完整的比较结果驱动公开结构视图接口。 */
 function binding(comparison = structureReviewFixture()): StructureBinding {
   return { state: { kind: "ready", comparison }, options: { includeTests: false }, setOptions: vi.fn(), retry: vi.fn(), cancel: vi.fn() };
+}
+
+/** 勾选显示项后用 Escape 收起菜单，模拟继续操作画布。 */
+async function toggleRearrangement() {
+  if (!screen.queryByRole("menuitemcheckbox", { name: "折叠时重新布局" })) {
+    fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  }
+  const option = await screen.findByRole("menuitemcheckbox", { name: "折叠时重新布局" });
+  fireEvent.click(option);
+  fireEvent.keyDown(option, { key: "Escape" });
 }
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
@@ -328,6 +338,65 @@ it("offers collapse all and expand all while keeping context filters unchanged",
   expect(within(graph).queryByRole("button", { name: /pub fn restore\(/ })).not.toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
   expect(layoutCalls).toHaveBeenCalledTimes(1);
+});
+
+it("optionally rearranges folded containers and restores the expanded layout without reanalysis", async () => {
+  const layoutCalls = vi.spyOn(graphPresentation, "layoutStructureComparison");
+  const compactCalls = vi.spyOn(graphPresentation, "relayoutStructureLayout");
+  const current = binding(structureFileModulesFixture());
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  const fullGeometry = graph.dataset.layout;
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 src/review/initialization", exact: true }));
+  const fixedGeometry = graph.dataset.layout;
+  expect(compactCalls).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  const option = await screen.findByRole("menuitemcheckbox", { name: "折叠时重新布局" });
+  expect(option).toHaveAttribute("aria-checked", "false");
+  await toggleRearrangement();
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  expect(compactCalls).toHaveBeenCalledTimes(1);
+  expect(graph.dataset.layout).not.toBe(fixedGeometry);
+  expect(within(graph).getByRole("button", { name: "展开 src/review/initialization", exact: true })).toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: "export function start() · 新增", exact: true }));
+  expect(screen.getByTitle("prepare")).toHaveTextContent("+ code.calls");
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  expect(await screen.findByRole("menuitemcheckbox", { name: "折叠时重新布局" })).toHaveAttribute("aria-checked", "true");
+  await toggleRearrangement();
+  expect(graph.dataset.layout).toBe(fixedGeometry);
+  fireEvent.click(within(graph).getByRole("button", { name: "展开 src/review/initialization", exact: true }));
+  expect(graph.dataset.layout).toBe(fullGeometry);
+
+  await toggleRearrangement();
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "全部收起" }));
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  expect(within(graph).getByRole("button", { name: "展开 src", exact: true })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "全部展开" }));
+  expect(graph.dataset.layout).toBe(fullGeometry);
+  expect(layoutCalls).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
+});
+
+it("cancels pending rearrangement when disabled and ignores its late result", async () => {
+  let complete!: (layout: StructureLayout) => void;
+  const compactCalls = vi.spyOn(graphPresentation, "relayoutStructureLayout").mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+  render(<StructureChangesView binding={binding()} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 Review", exact: true }));
+  const fixedGeometry = graph.dataset.layout;
+  await toggleRearrangement();
+  expect(screen.getByText("正在排列结构图")).toBeInTheDocument();
+  const [input, signal] = compactCalls.mock.calls[0];
+  await toggleRearrangement();
+  expect(signal?.aborted).toBe(true);
+  expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument();
+  await act(async () => { complete({ ...input, nodes: [], edges: [] }); });
+  expect(graph.dataset.layout).toBe(fixedGeometry);
+  expect(within(graph).getByRole("button", { name: "展开 Review", exact: true })).toBeInTheDocument();
 });
 
 it("selects directories without inventing source diffs and preserves file folds and exact cross-directory relationships", async () => {

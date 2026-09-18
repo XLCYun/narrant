@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { collapseStructureLayout, layoutStructureComparison, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
+import { collapseStructureLayout, layoutStructureComparison, relayoutStructureLayout, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 import { comparisonForLanguage, structureLanguages } from "@/structure-review/language-view";
 import "@xyflow/react/dist/style.css";
@@ -140,15 +140,22 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [collapsedDirectories, setCollapsedDirectories] = useState<ReadonlySet<string>>(new Set());
+  const [relayoutOnCollapse, setRelayoutOnCollapse] = useState(false);
   const [selection, setSelection] = useState<StructureSelection>();
   const selectedId = selection?.kind === "object" ? selection.id : undefined;
   const selectedDirectory = selection?.kind === "directory" ? selection.path : undefined;
   const [layoutResult, setLayoutResult] = useState<{ comparison: StructureComparison; layout: StructureLayout }>();
   const expandedLayout = layoutResult?.comparison === comparison ? layoutResult.layout : undefined;
-  const layout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed, collapsedDirectories), [expandedLayout, collapsed, collapsedDirectories]);
+  const foldedLayout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed, collapsedDirectories), [expandedLayout, collapsed, collapsedDirectories]);
+  const [compactResult, setCompactResult] = useState<{ input: StructureLayout; layout?: StructureLayout; error?: string }>();
+  const needsCompactLayout = relayoutOnCollapse && foldedLayout !== undefined && foldedLayout !== expandedLayout;
+  const currentCompact = compactResult?.input === foldedLayout ? compactResult : undefined;
+  const layout = needsCompactLayout ? currentCompact?.layout ?? foldedLayout : foldedLayout;
   const directory = expandedLayout?.nodes.find((node) => node.data.directory?.path === selectedDirectory)?.data.directory;
   const [layoutError, setLayoutError] = useState<string>();
   const [layingOut, setLayingOut] = useState(true);
+  const visibleLayoutError = layoutError ?? (needsCompactLayout ? currentCompact?.error : undefined);
+  const arranging = layingOut || (needsCompactLayout && !currentCompact);
   // 按真实对象筛选双向关系；折叠端口共享后仍不混入其他成员的关系。
   const visibleEdges = useMemo(() => {
     if (!layout || selectedId === undefined) return [];
@@ -165,7 +172,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
       return next;
     });
   };
-  /** 目录折叠只投影已有布局，保留子目录和文件各自的折叠选择。 */
+  /** 目录与文件各自保留折叠选择，布局方式由显示选项统一控制。 */
   const toggleDirectory = (path: string) => {
     setSelection({ kind: "directory", path });
     setCollapsedDirectories((current) => {
@@ -186,6 +193,18 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
     });
     return () => { current = false; abort.abort(); };
   }, [comparison, options]);
+  // 每次折叠都从全展开缓存生成可见图；取消过期布局，避免快速切换时旧结果覆盖新状态。
+  useEffect(() => {
+    if (!needsCompactLayout || !foldedLayout) return;
+    let current = true;
+    const abort = new AbortController();
+    void relayoutStructureLayout(foldedLayout, abort.signal).then((result) => {
+      if (current) setCompactResult({ input: foldedLayout, layout: result });
+    }).catch((reason: unknown) => {
+      if (current) setCompactResult({ input: foldedLayout, error: String(reason) });
+    });
+    return () => { current = false; abort.abort(); };
+  }, [foldedLayout, needsCompactLayout]);
   const analyzed = comparison.coverage.some((file) => file.before === "analyzed" || file.after === "analyzed");
   const emptyState = !analyzed && comparison.coverage.length > 0 ? "unsupported"
     : comparison.diff.nodes.length > 0 ? "filtered" : "empty";
@@ -220,6 +239,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
           <DropdownMenuSeparator />
           <DropdownMenuCheckboxItem checked={showImports} onCheckedChange={setShowImports}>{t("showImports")}</DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem checked={relayoutOnCollapse} onCheckedChange={setRelayoutOnCollapse}>{t("relayoutOnCollapse")}</DropdownMenuCheckboxItem>
           <DropdownMenuItem disabled={!layout?.collapsibleIds.length && !layout?.directoryPaths.length} onClick={() => {
             setSelection(undefined);
             setCollapsed(new Set(layout?.collapsibleIds));
@@ -240,8 +260,8 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
       <ResizablePanel id="structure-graph" minSize="45%">
         <div className="relative flex h-full min-h-0 min-w-0 flex-col">
           <div className="relative min-h-0 flex-1" data-testid="structure-canvas">
-            {layoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-              <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{layoutError}</p>
+            {visibleLayoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+              <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{visibleLayoutError}</p>
               <Button variant="outline" onClick={() => setExpanded(new Set(expanded))}>{t("retryLayout")}</Button>
             </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, selectedDirectory, connectedPorts, toggleCollapse, toggleDirectory,
               expand: (id) => setExpanded((current) => new Set([...current, id])), open: (id) => setSelection({ kind: "object", id }), openDirectory: (path) => setSelection({ kind: "directory", path }) }}>
@@ -254,11 +274,11 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
                 <Background gap={20} size={1} />
                 <Controls showInteractive={false} />
               </ReactFlow>
-            </ObjectActions.Provider> : !layingOut && <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" role="status">
+            </ObjectActions.Provider> : !arranging && <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" role="status">
               <h3 className="font-medium">{t(`${emptyState}Title`)}</h3>
               <p className="max-w-md text-sm text-muted-foreground">{t(`${emptyState}Description`)}</p>
             </div>}
-            {layingOut && <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/80 text-sm" role="status"><Spinner />{t("layoutLoading")}</div>}
+            {arranging && <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/80 text-sm" role="status"><Spinner />{t("layoutLoading")}</div>}
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-2 text-[11px] text-muted-foreground" aria-label={t("legend")}>
             {(["added", "removed", "modified", "relations", "unchanged"] as const).map((status) => <span key={status} className={cn("structure-legend", statusClasses[status])}><span aria-hidden className="structure-dot" />{t(`status.${status}`)}</span>)}

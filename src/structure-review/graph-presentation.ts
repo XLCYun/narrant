@@ -81,7 +81,7 @@ function displayComparison(comparison: StructureComparison): StructureComparison
   return { ...comparison, before: graph(comparison.before), after: graph(comparison.after), diff: { nodes: differences } };
 }
 
-/** 按当前筛选生成全展开的类图布局；折叠直接复用此结果，不参与 ELK 计算。 */
+/** 按当前筛选生成全展开基线；折叠时可保留坐标或重新排列可见卡片。 */
 export async function layoutStructureComparison(comparison: StructureComparison, options: GraphOptions, signal?: AbortSignal): Promise<StructureLayout> {
   // 归属判定保留完整语义，不能因隐藏一个候选而把歧义关系误当成唯一归属。
   const semanticObjects = new Map([...comparison.before.nodes, ...comparison.after.nodes].map((node) => [node.id, node]));
@@ -336,6 +336,23 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     if (directory.parentPath) cardParents.set(card, directoryCards.get(directory.parentPath)!);
   }
   const directoryPaths = directories.map((directory) => directory.path);
+  const nodes: ObjectNode[] = [...data].map(([id, content]) => ({
+    id, type: "codeObject", data: content, parentId: cardParents.get(id), position: { x: 0, y: 0 },
+    style: sizes.get(id) ?? { width: 360, height: content.headerHeight + 6 }, draggable: false, connectable: false,
+  }));
+  return relayoutStructureLayout({ nodes, edges, total: objects.size, visible: visible.size, changed: differences.size, collapsibleIds, directoryPaths }, signal);
+}
+
+/** 根据可见卡片重新布局并收紧父框；复制展示数据，保留全展开缓存和真实关系身份。 */
+export async function relayoutStructureLayout(layout: StructureLayout, signal?: AbortSignal): Promise<StructureLayout> {
+  const originals = new Map(layout.nodes.map((node) => [node.id, node]));
+  const data = new Map(layout.nodes.map((node) => [node.id, {
+    ...node.data, rows: node.data.rows.map((row) => ({ ...row })),
+    ports: node.data.ports.map((port) => ({ ...port })),
+    collapse: node.data.collapse && { ...node.data.collapse },
+  }]));
+  const cardParents = new Map(layout.nodes.filter((node) => node.parentId).map((node) => [node.id, node.parentId!]));
+  const edges: StructureEdge[] = layout.edges.map((edge) => ({ ...edge, data: { ...edge.data!, route: undefined } }));
   const cardChildren = new Map<string, string[]>();
   for (const [child, parent] of cardParents) cardChildren.set(parent, [...(cardChildren.get(parent) ?? []), child]);
   /** ELK 只排列卡片；固定成员端口保证方法与属性仍可逐行连线。 */
@@ -343,7 +360,10 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     const content = data.get(id)!;
     const nested = (cardChildren.get(id) ?? []).sort();
     content.group = nested.length > 0;
-    const { width, height } = sizes.get(id) ?? { width: 360, height: content.headerHeight + 6 };
+    const original = originals.get(id)!;
+    // 展开的父框由当前可见子卡片重新决定尺寸，不能沿用全展开布局留下的宽高。
+    const width = nested.length ? 360 : Number(original.style?.width ?? 360);
+    const height = nested.length ? content.headerHeight + 6 : Number(original.style?.height ?? content.headerHeight + 6);
     return { id, width, height,
       ports: content.ports.map((port) => ({ id: port.id, width: 0, height: 0,
         ...(!nested.length ? { x: port.side === "source" ? width : 0, y: port.y } : {}),
@@ -355,14 +375,14 @@ export async function layoutStructureComparison(comparison: StructureComparison,
     };
   };
   const roots = [...data.keys()].filter((id) => !cardParents.has(id)).sort().map(elkCard);
-  if (!roots.length) return { nodes: [], edges: [], total: objects.size, visible: 0, changed: differences.size, collapsibleIds, directoryPaths };
+  if (!roots.length) return { ...layout, nodes: [], edges: [] };
   /** 容器祖先关系不参加层级求解，成员间和递归调用均交给 ELK 走线。 */
   const isAncestor = (ancestor: string, child: string) => {
     let parent = cardParents.get(child);
     while (parent) { if (parent === ancestor) return true; parent = cardParents.get(parent); }
     return false;
   };
-  const layout = await arrange({ id: "structure-root", children: roots,
+  const arranged = await arrange({ id: "structure-root", children: roots,
     edges: edges.filter((edge) => !isAncestor(edge.source, edge.target) && !isAncestor(edge.target, edge.source))
       .map((edge) => ({ id: edge.id, sources: [edge.sourceHandle!], targets: [edge.targetHandle!], labels: [{ text: String(edge.label), width: String(edge.label).length * 6, height: 16 }] })),
     layoutOptions: { "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.hierarchyHandling": "INCLUDE_CHILDREN",
@@ -370,19 +390,19 @@ export async function layoutStructureComparison(comparison: StructureComparison,
   }, signal);
   const nodes: ObjectNode[] = [];
   const origins = new Map<string, { x: number; y: number }>([["structure-root", { x: 0, y: 0 }]]);
-  const routedEdges = [...(layout.edges ?? [])];
+  const routedEdges = [...(arranged.edges ?? [])];
   /** React Flow 要求父卡片在前；成员行由卡片内部渲染，无额外节点盒子。 */
   const flatten = (node: ElkNode, parentId?: string) => {
     const origin = origins.get(parentId ?? "structure-root")!;
     origins.set(node.id, { x: origin.x + (node.x ?? 0), y: origin.y + (node.y ?? 0) });
     const objectData = data.get(node.id)!;
     for (const port of objectData.ports) port.y = node.ports?.find((item) => item.id === port.id)?.y ?? port.y;
-    nodes.push({ id: node.id, type: "codeObject", data: objectData, position: { x: node.x ?? 0, y: node.y ?? 0 }, parentId,
-      style: { width: node.width ?? 360, height: node.height ?? 64 }, draggable: false, connectable: false });
+    nodes.push({ ...originals.get(node.id)!, data: objectData, position: { x: node.x ?? 0, y: node.y ?? 0 }, parentId,
+      style: { ...originals.get(node.id)!.style, width: node.width ?? 360, height: node.height ?? 64 } });
     routedEdges.push(...(node.edges ?? []));
     node.children?.forEach((child) => flatten(child, node.id));
   };
-  layout.children?.forEach((node) => flatten(node));
+  arranged.children?.forEach((node) => flatten(node));
   for (const routed of routedEdges) {
     const edge = edges.find((item) => item.id === routed.id);
     const section = routed.sections?.[0];
@@ -397,7 +417,7 @@ export async function layoutStructureComparison(comparison: StructureComparison,
       labelY: label?.y === undefined ? points[0].y : label.y + origin.y + (label.height ?? 0) / 2,
     } };
   }
-  return { nodes, edges, total: objects.size, visible: visible.size, changed: differences.size, collapsibleIds, directoryPaths };
+  return { ...layout, nodes, edges };
 }
 
 /** 从全展开布局同步投影折叠状态；保持每张卡片的原坐标及展开时的预留空间。 */

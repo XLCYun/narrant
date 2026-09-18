@@ -301,7 +301,13 @@ from the object's own change status. ELK first lays out the current display scop
 fully expanded. Collapse synchronously hides descendant cards and member rows and
 shrinks only the folded card inside its original bounds. Other cards and their
 parents keep the initial coordinates and sizes, reserving space for expansion.
-It does not change graph
+The display menu offers **Rearrange when folding**, off by default. When enabled,
+folding or unfolding recomputes the visible layout, shrinks expanded ancestors to
+fit their visible children, and reroutes relationships. The option applies to
+directory groups, files, other Containers and Types, including Collapse all and
+Expand all. Turning it on immediately rearranges any existing folds; turning it
+off restores the expanded-layout positions with those same folds still applied.
+Neither mode changes graph
 membership, comparison counts, or the set of unchanged objects revealed by the
 existing context controls. The display menu offers Collapse all and Expand all;
 these affect every collapsible object already included in the current view,
@@ -317,13 +323,19 @@ only its readable object name, qualified by the containing Type for a member (fo
 example `Repository::load`), without a target or module-description prefix.
 External and Unresolved references remain hidden.
 
-Folding and unfolding project the cached expanded layout without running ELK,
+By default, folding and unfolding project the cached expanded layout without running ELK,
 showing a layout-loading overlay, adjusting the viewport or remounting React Flow.
 Existing edge routes are retained whenever their port positions stay the same;
 only a moved endpoint uses a local orthogonal connection to its collapsed card.
 Expanding restores the original positions, sizes, member ports and routed paths.
 Changing display filters or revealing additional context still computes a new
 expanded layout for the new display scope.
+Optional rearrangement uses only the frontend projection and never reruns code
+analysis. It preserves selection, nested folds, true relationship identities and
+the viewport. A layout-loading overlay covers asynchronous rearrangement; disabling
+the option, changing folds or leaving the comparison cancels obsolete work, and
+late results cannot overwrite the current state. Fully expanding restores the
+cached expanded layout in either mode.
 
 ### Compact class-diagram presentation
 
@@ -780,8 +792,9 @@ Directory groups have no own added/removed/modified status or source diff. Selec
 one shows its path and the displayed files beneath it in the fixed details pane.
 Collapse summaries count files and aggregate existing descendant changes; code-object
 totals still exclude directories. File and directory collapse states are separate.
-The collapse button selects the group, preserves nested collapse choices and reuses
-the fully expanded layout without moving other cards or resetting the viewport.
+The collapse button selects the group and preserves nested collapse choices. It
+reuses the fully expanded layout by default, or rearranges visible cards when
+**Rearrange when folding** is enabled, without resetting the viewport.
 Collapse all/expand all apply to directories as well as existing containers and types.
 
 Edges keep their exact original code-object identities. When an endpoint is hidden
