@@ -51,6 +51,14 @@ semantic graph queries stay in the language service.
   owner's content comparison. Calls in omitted top-level initializers share their scope's
   ExecutionRegion with ordinary executable statements; calls inside functions/callbacks
   belong to the enclosing modeled owner.
+- Property and index-signature Value nodes must be direct members of a named interface
+  body or a type alias's own object type, outside every function/callback scope.
+  Parentheses, unions and intersections may wrap the alias's object type; generic
+  arguments, arrays, nested property types and function types do not establish membership.
+  Inline parameter/return types, `useState<{ ... }>()` and members of function-local
+  interfaces/type aliases create no Value nodes. Their type text remains in the owning
+  declaration's content comparison. Existing local Type nodes are retained.
+  A function-typed property such as `interface C { run: () => void }` remains a Value.
 - Import/export/re-export statements, including `import x = require(...)`, do not
   create graph nodes or import/re-export edges. Keep their module paths, lexical
   bindings and alias query locations internally so calls still resolve across files

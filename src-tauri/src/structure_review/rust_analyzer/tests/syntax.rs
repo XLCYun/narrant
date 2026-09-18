@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::lsp::Position;
 
-use super::{byte_offset, position, Document};
+use super::Document;
 use crate::structure_review::code_graph::{ChangeKind, CodeGraph, CodeRoot};
 
 /// 只提取字段的类型结构；泛型嵌套可见，数组长度、常量泛型和宏 token 中的类型不混入。
@@ -333,31 +333,47 @@ fn preserves_cfg_declarations_and_rejects_parse_failures() {
     .is_err());
 }
 
-/// UTF-16 转换覆盖代理对、CRLF、末尾空行以及所有越界情形。
+/// AST 的 TextSize 经过共享索引往返后仍精确选中声明，中文和代理对不改变 CRLF 行列。
 #[test]
-fn positions_round_trip_and_reject_invalid_boundaries() {
-    let source = "中😀x\r\nz\n";
-    for byte in [0, 3, 7, 8, 10, 11, 12] {
-        let offset = ra_ap_syntax::TextSize::from(byte);
+fn document_positions_round_trip_ast_declarations_across_unicode_and_crlf() {
+    let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+    let source = "// 中文😀\r\nconst 提示: &str = \"😀\"; fn 运行() {}\r\n";
+    let document = Document::parse(
+        repository,
+        repository.join("lib.rs"),
+        source.into(),
+        Default::default(),
+    )
+    .unwrap();
+    for (name, character) in [("提示", 6), ("运行", 26)] {
+        let declaration = document
+            .declarations
+            .iter()
+            .find(|declaration| declaration.node.data().name.as_deref() == Some(name))
+            .unwrap();
+        let expected = Position { line: 1, character };
         assert_eq!(
-            byte_offset(source, &position(source, offset)).unwrap(),
-            offset
+            document.position(declaration.selection.start()).unwrap(),
+            expected
+        );
+        let offset = document.byte_offset(&expected).unwrap();
+        assert_eq!(offset, declaration.selection.start());
+        assert_eq!(
+            document.declared_at(offset).unwrap().node.data().id,
+            declaration.node.data().id
         );
     }
-    for invalid in [
-        Position {
-            line: 0,
-            character: 2,
-        },
-        Position {
-            line: 0,
-            character: 99,
-        },
-        Position {
-            line: 9,
-            character: 0,
-        },
-    ] {
-        assert!(byte_offset(source, &invalid).is_err());
-    }
+
+    // 文档适配层必须传播共享索引的边界错误，不能把无效响应转成邻近 AST 位置。
+    assert!(document
+        .byte_offset(&Position {
+            line: 1,
+            character: 19
+        })
+        .is_err());
+    assert!(document
+        .position(ra_ap_syntax::TextSize::from(
+            source.find("运行").unwrap() as u32 + 1
+        ))
+        .is_err());
 }

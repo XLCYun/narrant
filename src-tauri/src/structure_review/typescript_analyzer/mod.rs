@@ -7,7 +7,6 @@ mod references;
 mod runtime;
 pub(crate) mod syntax;
 mod test_code;
-pub(crate) mod text;
 pub(crate) mod tools;
 
 use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer};
@@ -123,13 +122,14 @@ impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
         let mut documents = BTreeMap::new();
         for (path, source) in selected {
             let path = project.checked_path(&path)?;
-            if project.source(&path)? != source {
+            let snapshot = project.source(&path)?;
+            if snapshot.as_str() != source {
                 return Err(failure("准备期间选中源文件已改变"));
             }
             let document = syntax::Document::parse(
                 &project.workspace_root,
                 path.clone(),
-                source,
+                snapshot,
                 input.options,
             )?;
             documents.insert(path, document);
@@ -159,7 +159,7 @@ fn validate_snapshots(
             .canonicalize()
             .map_err(failure)?
             .starts_with(&project.workspace_root)
-            || fs::read_to_string(&snapshot.path).map_err(failure)? != snapshot.source
+            || fs::read_to_string(&snapshot.path).map_err(failure)? != snapshot.source.as_str()
         {
             return Err(failure(format!(
                 "分析期间源文件已改变：{}",

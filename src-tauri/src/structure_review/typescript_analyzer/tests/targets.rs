@@ -1,7 +1,10 @@
 use super::*;
 use crate::{
     lsp::Range,
-    structure_review::typescript_analyzer::{lsp::CheckedRange, text},
+    structure_review::{
+        source_text::{LineBreakMode, SourceText},
+        typescript_analyzer::lsp::CheckedRange,
+    },
 };
 
 /// 构造真实原文坐标的证据，验证语义匹配不会按邻近所有者猜测。
@@ -17,8 +20,8 @@ fn location(document: &Document, start: u32, end: u32) -> CheckedLocation {
             start_byte: start,
             end_byte: end,
             range: Range {
-                start: text::position(&document.source, start).unwrap(),
-                end: text::position(&document.source, end).unwrap(),
+                start: document.source.position(start as usize).unwrap(),
+                end: document.source.position(end as usize).unwrap(),
             },
         },
     }
@@ -32,7 +35,7 @@ fn declaration_evidence_rejects_unverified_and_non_declaration_ranges() {
     let document = Document::parse(
         root.path(),
         root.path().join("main.ts"),
-        source.into(),
+        SourceText::new(source, LineBreakMode::TypeScript),
         AnalysisOptions::default(),
     )
     .unwrap();

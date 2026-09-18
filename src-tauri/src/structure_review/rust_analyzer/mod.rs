@@ -155,7 +155,7 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
         client.wait_ready()?;
         let graph = references::analyze(&mut client, &repository, &documents, input.options)?;
         for document in &documents {
-            if fs::read_to_string(&document.path).map_err(failure)? != document.source {
+            if fs::read_to_string(&document.path).map_err(failure)? != document.source.as_str() {
                 return Err(failure(format!(
                     "分析期间源文件已改变：{}",
                     document.path.display()

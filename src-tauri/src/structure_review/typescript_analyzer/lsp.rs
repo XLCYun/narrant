@@ -1,6 +1,7 @@
 //! 固定 TypeScript 会话：显式项目查询、来源校验和 UTF-16 证据标准化。
-use super::{failure, project::PreparedProject, text, Result};
+use super::{failure, project::PreparedProject, Result};
 use crate::lsp::{CancellationCheck, LspClient, LspOptions, Position, Range};
+use crate::structure_review::source_text::SourceText;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -262,7 +263,10 @@ impl TypeScriptLsp {
     /// 转换 checked 零基坐标为协议的一基坐标，并显式绑定项目。
     fn query_arguments(&mut self, file: &Path, position: Position, name: &Path) -> Result<Value> {
         self.validate_project_inner(file, name)?;
-        text::byte_offset(&self.project.source(file)?, &position)?;
+        self.project
+            .source(file)?
+            .byte_offset(&position)
+            .map_err(failure)?;
         Ok(
             json!({"file":file, "line":position.line.checked_add(1).ok_or_else(|| failure("行号溢出"))?, "offset":position.character.checked_add(1).ok_or_else(|| failure("列号溢出"))?, "projectFileName":name}),
         )
@@ -563,13 +567,15 @@ fn raw_position(value: &Value) -> Result<Position> {
 }
 
 /// 校验闭开区间的方向、行列与字节偏移，拒绝截断或反向范围。
-fn checked_range(source: &str, value: &Value) -> Result<CheckedRange> {
+fn checked_range(source: &SourceText, value: &Value) -> Result<CheckedRange> {
     let range = Range {
         start: raw_position(&value["start"])?,
         end: raw_position(&value["end"])?,
     };
-    let start_byte = text::byte_offset(source, &range.start)?;
-    let end_byte = text::byte_offset(source, &range.end)?;
+    let start_byte =
+        u32::try_from(source.byte_offset(&range.start).map_err(failure)?).map_err(failure)?;
+    let end_byte =
+        u32::try_from(source.byte_offset(&range.end).map_err(failure)?).map_err(failure)?;
     if start_byte > end_byte {
         return Err(failure("tsserver 范围起点晚于终点"));
     }

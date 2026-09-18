@@ -138,6 +138,27 @@ impl<'a> Collector<'a> {
         })
     }
 
+    /// 数据成员只属于命名类型的主体；联合、交叉与括号可包裹别名的对象类型。
+    fn named_type_data_member(&self) -> bool {
+        let mut ancestors = self.stack.iter().rev().map(|(node, _)| node);
+        match ancestors.next() {
+            Some(AstKind::TSInterfaceBody(_)) => {
+                matches!(ancestors.next(), Some(AstKind::TSInterfaceDeclaration(_)))
+            }
+            Some(AstKind::TSTypeLiteral(_)) => ancestors
+                .find(|node| {
+                    !matches!(
+                        node,
+                        AstKind::TSParenthesizedType(_)
+                            | AstKind::TSUnionType(_)
+                            | AstKind::TSIntersectionType(_)
+                    )
+                })
+                .is_some_and(|node| matches!(node, AstKind::TSTypeAliasDeclaration(_))),
+            _ => false,
+        }
+    }
+
     /// AST 静态属性名保持语义值，动态计算名使用固定匿名键和词法顺序，不用源码偏移。
     fn key(&self, key: &PropertyKey<'a>) -> String {
         match key {
@@ -402,13 +423,17 @@ impl<'a> Visit<'a> for Collector<'a> {
                 m.id.span(),
                 m.initializer.as_ref().map(GetSpan::span),
             )),
-            AstKind::TSPropertySignature(p) => Some((
-                Value,
-                "property",
-                Some(self.key(&p.key)),
-                self.key_selection(&p.key),
-                None,
-            )),
+            AstKind::TSPropertySignature(p)
+                if !inside_function && self.named_type_data_member() =>
+            {
+                Some((
+                    Value,
+                    "property",
+                    Some(self.key(&p.key)),
+                    self.key_selection(&p.key),
+                    None,
+                ))
+            }
             AstKind::TSMethodSignature(m) if !inside_function && m.key.static_name().is_some() => {
                 Some((
                     Callable,
@@ -422,13 +447,15 @@ impl<'a> Visit<'a> for Collector<'a> {
                     None,
                 ))
             }
-            AstKind::TSIndexSignature(d) => Some((
-                Value,
-                "index_signature",
-                None,
-                Span::new(d.span.start, d.span.start),
-                None,
-            )),
+            AstKind::TSIndexSignature(d) if !inside_function && self.named_type_data_member() => {
+                Some((
+                    Value,
+                    "index_signature",
+                    None,
+                    Span::new(d.span.start, d.span.start),
+                    None,
+                ))
+            }
             AstKind::TSNamespaceDeclaration(d) => Some((
                 Container,
                 "namespace",

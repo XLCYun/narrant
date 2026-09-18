@@ -130,7 +130,7 @@ fn fixed_service_reads_git_checkout_without_copying_or_mutating_files() {
             && file.ends_with("lib.es2015.promise.d.ts")
     ));
     let source = session.project.source(&file).unwrap();
-    let position = text::position(&source, source.rfind("work()").unwrap() as u32).unwrap();
+    let position = source.position(source.rfind("work()").unwrap()).unwrap();
     let definitions = session
         .definitions(&file, position, &name)
         .and_then(checked_definitions)
@@ -860,7 +860,7 @@ if (!target) throw new Error('original alias unresolved'); process.stdout.write(
     let file = session.project.files[0].file.clone();
     let name = session.project.workspace_root.join("app/tsconfig.json");
     let source = session.project.source(&file).unwrap();
-    let position = text::position(&source, source.rfind("value").unwrap() as u32).unwrap();
+    let position = source.position(source.rfind("value").unwrap()).unwrap();
     let definitions = session
         .definitions(&file, position, &name)
         .and_then(checked_definitions)
@@ -978,7 +978,7 @@ fn fixed_service_config_dir_templates_resolve_consumer_declaration() {
         }
         let file = session.project.workspace_root.join("app/src/main.ts");
         let source = session.project.source(&file).unwrap();
-        let position = text::position(&source, source.rfind("target").unwrap() as u32).unwrap();
+        let position = source.position(source.rfind("target").unwrap()).unwrap();
         let definitions = session
             .definitions(&file, position, &name)
             .and_then(checked_definitions)

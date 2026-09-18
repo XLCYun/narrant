@@ -5,7 +5,7 @@ use super::super::{
     failure,
     lsp::{CheckedLocation, DefinitionEvidence, TypeScriptLsp},
     syntax::{Declaration, Document, Occurrence, OccurrenceKind},
-    text, Result,
+    Result,
 };
 use crate::structure_review::code_graph::{
     AnalysisOptions, CodeCategory, ExternalSymbol, NodeId, ReferenceTarget, SymbolScope,
@@ -257,7 +257,10 @@ impl Resolver {
         // 导入/导出别名使用独立语法位置，不需要伪造一个图节点作为所有者。
         let query = if let Some(alias) = alias {
             let selection = alias.selection.expect("已按别名查询位置筛选");
-            let position = text::position(&document.source, selection.start)?;
+            let position = document
+                .source
+                .position(selection.start as usize)
+                .map_err(failure)?;
             if runtime_value
                 && self.alias_route(
                     session,
@@ -272,7 +275,10 @@ impl Resolver {
             }
             Some((position, selection.start, alias.type_only))
         } else if let Some(alias) = value_alias {
-            let position = text::position(&document.source, alias.selection.start)?;
+            let position = document
+                .source
+                .position(alias.selection.start as usize)
+                .map_err(failure)?;
             if runtime_value
                 && self.type_only_binding(
                     session,
@@ -377,10 +383,16 @@ impl Resolver {
         }
         let document = &self.documents[&checked];
         if document.uri != location.uri
-            || super::super::text::byte_offset(&document.source, &location.span.range.start)?
-                != location.span.start_byte
-            || super::super::text::byte_offset(&document.source, &location.span.range.end)?
-                != location.span.end_byte
+            || document
+                .source
+                .byte_offset(&location.span.range.start)
+                .map_err(failure)?
+                != location.span.start_byte as usize
+            || document
+                .source
+                .byte_offset(&location.span.range.end)
+                .map_err(failure)?
+                != location.span.end_byte as usize
         {
             return Err(failure("定义位置不属于原始文档快照"));
         }

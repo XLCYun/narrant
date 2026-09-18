@@ -1,5 +1,6 @@
 //! Oxc arena 仅存在于解析作用域；语义层消费拥有数据的文档、声明与引用位置。
-use super::{failure, identity, test_code, text, Result};
+use super::{failure, identity, test_code, Result};
+use crate::structure_review::source_text::SourceText;
 use crate::{
     lsp::{file_uri, Position},
     structure_review::code_graph::{
@@ -96,7 +97,7 @@ pub(crate) struct Occurrence {
 #[derive(Debug)]
 pub(crate) struct Document {
     pub uri: String,
-    pub source: String,
+    pub source: SourceText,
     pub declarations: Vec<Declaration>,
     pub occurrences: Vec<Occurrence>,
     pub excluded: bool,
@@ -109,7 +110,7 @@ impl Document {
     pub fn parse(
         repository: &Path,
         path: PathBuf,
-        source: String,
+        source: SourceText,
         options: AnalysisOptions,
     ) -> Result<Self> {
         let language = test_code::language(&path)
@@ -330,7 +331,7 @@ impl Document {
                 ),
                 signature: None,
                 code: None,
-                source: Some(self.source.clone()),
+                source: Some(self.source.to_string()),
                 contains: children,
                 references: vec![],
                 extensions: BTreeMap::new(),

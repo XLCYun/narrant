@@ -1,9 +1,10 @@
 //! 类型专用别名路线由词法绑定和原始模块语法确认，不依赖可被 nocheck 屏蔽的诊断。
 use super::Resolver;
 use crate::structure_review::typescript_analyzer::{
+    failure,
     lsp::{CheckedLocation, DefinitionEvidence, TypeScriptLsp},
     syntax::aliases::Alias,
-    text, Result,
+    Result,
 };
 use oxc_span::Span;
 use std::{
@@ -82,7 +83,10 @@ impl Resolver {
             if names.is_empty() {
                 return Ok(false);
             }
-            let position = text::position(&self.documents[file].source, source.start)?;
+            let position = self.documents[file]
+                .source
+                .position(source.start as usize)
+                .map_err(failure)?;
             let modules = session.definitions(file, position, project)?;
             if modules.is_empty() {
                 return Ok(true);

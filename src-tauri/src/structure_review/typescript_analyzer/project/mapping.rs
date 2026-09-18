@@ -1,5 +1,6 @@
 //! 路径和 URI 映射拒绝词法跳转与符号链接逃逸，所有文件保持真实身份。
 use super::PreparedProject;
+use crate::structure_review::source_text::{LineBreakMode, SourceText};
 use crate::structure_review::typescript_analyzer::{failure, Result};
 use std::path::{Component, Path, PathBuf};
 
@@ -80,12 +81,21 @@ impl PreparedProject {
         crate::lsp::file_uri(&self.checked_path(file)?).map_err(failure)
     }
 
-    /// 从固定快照读取第一方文本；运行时声明只能从已验证目录读取。
-    pub fn source(&self, file: &Path) -> Result<String> {
+    /// 第一方快照和按需加载的运行时文本共享索引；每次访问仍校验真实路径。
+    pub fn source(&self, file: &Path) -> Result<SourceText> {
         let checked = self.checked_path(file)?;
-        self.sources
-            .get(&checked)
-            .map(|source| Ok(source.source.clone()))
-            .unwrap_or_else(|| std::fs::read_to_string(checked).map_err(failure))
+        if let Some(snapshot) = self.sources.get(&checked) {
+            return Ok(snapshot.source.clone());
+        }
+        let mut loaded = self.loaded_sources.borrow_mut();
+        if let Some(source) = loaded.get(&checked) {
+            return Ok(source.clone());
+        }
+        let source = SourceText::new(
+            std::fs::read_to_string(&checked).map_err(failure)?,
+            LineBreakMode::TypeScript,
+        );
+        loaded.insert(checked, source.clone());
+        Ok(source)
     }
 }

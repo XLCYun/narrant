@@ -1,6 +1,9 @@
 //! 文档契约的聚焦回归：公共图验证与 diff 必须同样接受语法结果。
 use super::*;
-use crate::structure_review::code_graph::{CodeGraph, CodeRoot};
+use crate::structure_review::{
+    code_graph::{CodeGraph, CodeRoot},
+    source_text::{LineBreakMode, SourceText},
+};
 use std::path::Path;
 
 /// 使用内存文件稳定构造文档，无需语言服务或真实业务文件。
@@ -8,7 +11,7 @@ fn parse(path: &str, source: &str) -> Document {
     Document::parse(
         Path::new("/repo"),
         Path::new("/repo").join(path),
-        source.into(),
+        SourceText::new(source, LineBreakMode::TypeScript),
         AnalysisOptions::default(),
     )
     .unwrap()
@@ -293,6 +296,136 @@ fn data_declarations_keep_type_members_only() {
         4
     );
     graph(&[&document]);
+}
+
+/// 命名类型只展开直接成员，嵌套匿名类型的内容保留在所属属性中。
+#[test]
+fn data_declarations_require_named_type_members() {
+    let document = parse(
+        "a.ts",
+        r#"
+        interface Contract {
+            field: string;
+            run: () => void;
+            [key: string]: unknown;
+            child: { nested: string; [key: number]: string };
+        }
+        type RecordValue = { label: string; [key: number]: string };
+        type Combined = Contract & ({ active: boolean });
+        type Choice = { first: string } | ({ second: number });
+        namespace N { export interface Nested { member: string; } }
+        "#,
+    );
+    for (owner, expected) in [
+        (
+            "Contract",
+            vec![Some("field"), Some("run"), None, Some("child")],
+        ),
+        ("RecordValue", vec![Some("label"), None]),
+        ("Combined", vec![Some("active")]),
+        ("Choice", vec![Some("first"), Some("second")]),
+        ("Nested", vec![Some("member")]),
+    ] {
+        let owner = named(&document, owner);
+        let values = document
+            .declarations
+            .iter()
+            .filter(|d| {
+                d.node.category() == CodeCategory::Value
+                    && d.parent.as_ref() == Some(&owner.node.data().id)
+            })
+            .map(|d| d.node.data().name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(values, expected);
+    }
+    assert_eq!(
+        document
+            .declarations
+            .iter()
+            .filter(|d| d.node.category() == CodeCategory::Value)
+            .count(),
+        10,
+    );
+    assert_eq!(named(&document, "run").node.data().native_kind, "property");
+    assert!(named(&document, "child")
+        .node
+        .data()
+        .signature
+        .as_deref()
+        .unwrap()
+        .contains("nested"));
+    graph(&[&document]);
+}
+
+/// 函数内部及非命名类型主体中的匿名属性和索引签名不生成独立数据节点。
+#[test]
+fn data_declarations_exclude_function_and_anonymous_type_contexts() {
+    let document = parse(
+        "a.tsx",
+        r#"
+        const value: { variable: number; [key: string]: number } = { variable: 1 };
+        const arrow = (props: { arrowProp: number }): { arrowResult: number } => ({ arrowResult: 1 });
+        function render(props: { input: string; [key: string]: string }): { output: string } {
+            const [state] = useState<{ stateValue: number; [key: string]: number }>();
+            interface LocalInterface { localField: number; [key: string]: number; }
+            type LocalAlias = { localAliasField: number; [key: string]: number };
+            run(() => { type CallbackLocal = { callbackField: number }; });
+            return { output: props.input };
+        }
+        type Wrapped = Wrapper<{ wrapped: string; [key: string]: string }>;
+        type Factory = (props: { argument: number }) => { result: number };
+        type ArrayValue = { element: number }[];
+        type Generic<T extends { bound: number } = { fallback: number }> = T;
+        interface GenericInterface<T extends { interfaceBound: number }> {}
+        "#,
+    );
+    assert!(document
+        .declarations
+        .iter()
+        .all(|d| d.node.category() != CodeCategory::Value));
+    // 本次只收窄数据成员；局部命名类型仍保留原有的独立声明身份。
+    for name in ["LocalInterface", "LocalAlias", "CallbackLocal"] {
+        assert_eq!(named(&document, name).node.category(), CodeCategory::Type);
+    }
+    graph(&[&document]);
+}
+
+/// React 参数与 state 的匿名属性不泄漏为函数成员，类型修改仍计入函数自身差异。
+#[test]
+fn comparison_view_state_change_does_not_add_data_members() {
+    let source = "function ComparisonView({ comparison }: { comparison: StructureComparison }) { return comparison; }";
+    let before = parse("view.tsx", source);
+    let after = parse(
+        "view.tsx",
+        &source.replace("return comparison;", "const [layoutResult, setLayoutResult] = useState<{ comparison: StructureComparison; layout: StructureLayout }>(); return comparison;"),
+    );
+    let changed_type = parse(
+        "view.tsx",
+        &source.replace("StructureComparison", "OtherComparison"),
+    );
+    for document in [&before, &after, &changed_type] {
+        assert!(named(document, "ComparisonView")
+            .node
+            .data()
+            .contains
+            .is_empty());
+        assert!(document
+            .declarations
+            .iter()
+            .all(|d| d.node.category() != CodeCategory::Value));
+    }
+    for document in [&after, &changed_type] {
+        let diff = graph(&[&before]).diff(&graph(&[document])).unwrap();
+        assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+        assert_eq!(
+            diff.nodes[0].id,
+            named(&before, "ComparisonView").node.data().id
+        );
+        assert_eq!(
+            diff.nodes[0].content,
+            Some(crate::structure_review::code_graph::ChangeKind::Modified)
+        );
+    }
 }
 
 /// 各种具名函数值使用外部名字且不重复建模，任何函数或回调内部的函数均被合并。
@@ -710,7 +843,7 @@ fn tests_toggle_and_invalid_inputs() {
         let included = Document::parse(
             Path::new("/repo"),
             Path::new("/repo").join(path),
-            "test(() => run());".into(),
+            SourceText::new("test(() => run());", LineBreakMode::TypeScript),
             AnalysisOptions {
                 include_tests: true,
             },
@@ -725,7 +858,7 @@ fn tests_toggle_and_invalid_inputs() {
         assert!(Document::parse(
             Path::new("/repo"),
             path.into(),
-            "".into(),
+            SourceText::new("", LineBreakMode::TypeScript),
             AnalysisOptions::default()
         )
         .is_err());
@@ -733,7 +866,7 @@ fn tests_toggle_and_invalid_inputs() {
     assert!(Document::parse(
         Path::new("/repo"),
         "/repo/a.ts".into(),
-        "function {".into(),
+        SourceText::new("function {", LineBreakMode::TypeScript),
         AnalysisOptions::default()
     )
     .is_err());
@@ -747,7 +880,7 @@ fn ids_are_stable_across_roots_and_selection() {
     let b = Document::parse(
         Path::new("/other"),
         "/other/目录/a.ts".into(),
-        source.into(),
+        SourceText::new(source, LineBreakMode::TypeScript),
         AnalysisOptions::default(),
     )
     .unwrap();
@@ -767,50 +900,6 @@ fn ids_are_stable_across_roots_and_selection() {
         assert_eq!(selected.node(&d.node.data().id), Some(&d.node));
     }
     assert!(a.uri.contains("%E7%9B%AE"));
-}
-
-/// Unicode、CRLF 和非 BMP 的双向坐标必须精确往返并拒绝非法边界。
-#[test]
-fn checked_utf16_and_crlf_conversion() {
-    let source = "中😀x\r\nconst 名 = 1;\n";
-    for (offset, line, character) in [
-        (0, 0, 0),
-        (3, 0, 1),
-        (7, 0, 3),
-        (8, 0, 4),
-        (10, 1, 0),
-        (16, 1, 6),
-    ] {
-        let expected = Position { line, character };
-        assert_eq!(text::position(source, offset).unwrap(), expected);
-        assert_eq!(text::byte_offset(source, &expected).unwrap(), offset);
-    }
-    assert!(text::position(source, 4).is_err());
-    assert!(text::position(source, 9).is_err());
-    assert!(text::byte_offset(
-        source,
-        &Position {
-            line: 0,
-            character: 2
-        }
-    )
-    .is_err());
-    assert!(text::byte_offset(
-        source,
-        &Position {
-            line: 0,
-            character: 5
-        }
-    )
-    .is_err());
-    assert!(text::byte_offset(
-        source,
-        &Position {
-            line: 9,
-            character: 0
-        }
-    )
-    .is_err());
 }
 
 /// 普通变量和对象属性不建模，其函数内变动属于外层函数，顶层方法独立比较。
@@ -952,7 +1041,7 @@ fn invalid_early_errors_and_regex_are_not_empty_success() {
             Document::parse(
                 Path::new("/repo"),
                 "/repo/a.ts".into(),
-                source.into(),
+                SourceText::new(source, LineBreakMode::TypeScript),
                 AnalysisOptions::default()
             )
             .is_err(),
@@ -1145,121 +1234,40 @@ fn tagged_templates_capture_calls_and_substitution_evidence() {
         .all(|o| o.owner == named(&document, "f").node.data().id));
 }
 
-/// CR、CRLF、LF 和两个 Unicode 分隔符全部按固定语言服务规则往返转换。
+/// 实际调用的选区同时保留 UTF-8 字节和 TS 行列，混合换行及非 BMP 字符不能使定位偏移。
 #[test]
-fn native_line_boundaries_round_trip_and_reject_invalid_positions() {
-    for separator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
-        let source = format!("中😀x{separator}尾{separator}");
-        let second_start = 8 + separator.len();
-        for (offset, line, character) in [
-            (0, 0, 0),
-            (3, 0, 1),
-            (7, 0, 3),
-            (8, 0, 4),
-            (second_start, 1, 0),
-            (second_start + 3, 1, 1),
-            (source.len(), 2, 0),
-        ] {
-            let expected = Position { line, character };
-            assert_eq!(
-                text::position(&source, offset as u32).unwrap(),
-                expected,
-                "{separator:?}"
-            );
-            assert_eq!(
-                text::byte_offset(&source, &expected).unwrap(),
-                offset as u32,
-                "{separator:?}"
-            );
-        }
-        for offset in [1, 4, source.len() + 1] {
-            assert!(text::position(&source, offset as u32).is_err());
-        }
-        for position in [
-            Position {
-                line: 0,
-                character: 2,
-            },
-            Position {
-                line: 0,
-                character: 5,
-            },
-            Position {
-                line: 1,
-                character: 2,
-            },
-            Position {
-                line: 2,
-                character: 1,
-            },
-            Position {
-                line: 3,
-                character: 0,
-            },
-        ] {
-            assert!(
-                text::byte_offset(&source, &position).is_err(),
-                "{separator:?}: {position:?}"
-            );
-        }
-        for offset in 9..8 + separator.len() {
-            assert!(text::position(&source, offset as u32).is_err());
-        }
-        let document = parse(
-            "a.ts",
-            &format!("function f() {{{separator}tag`hello`;{separator}}}"),
+fn occurrence_selections_preserve_typescript_byte_and_utf16_positions() {
+    let source =
+        "function 调用() {}\r\nfunction f() {\u{2028}  \"😀中\"; 调用();\u{2029}  调用();\r\n}";
+    let document = parse("a.ts", source);
+    assert_eq!(document.source.as_str(), source);
+    let calls = document
+        .occurrences
+        .iter()
+        .filter(|occurrence| occurrence.kind == OccurrenceKind::Call)
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2);
+    for (occurrence, line, character) in [(calls[0], 2, 9), (calls[1], 3, 2)] {
+        let start = occurrence.selection.start as usize;
+        let end = occurrence.selection.end as usize;
+        assert_eq!(&document.source[start..end], "调用");
+        assert_eq!(occurrence.owner, named(&document, "f").node.data().id);
+        assert_eq!(occurrence.position, Position { line, character });
+        assert_eq!(
+            document.source.position(start).unwrap(),
+            occurrence.position
         );
         assert_eq!(
-            document
-                .occurrences
-                .iter()
-                .find(|o| o.kind == OccurrenceKind::Call)
-                .unwrap()
-                .position,
-            Position {
-                line: 1,
-                character: 0
-            }
+            document.source.byte_offset(&occurrence.position).unwrap(),
+            start
         );
+        let end_position = Position {
+            line,
+            character: character + 2,
+        };
+        assert_eq!(document.source.position(end).unwrap(), end_position);
+        assert_eq!(document.source.byte_offset(&end_position).unwrap(), end);
     }
-    // U+0085 是一个普通 UTF-16 单元，不是固定 TypeScript 接受的换行字符。
-    let source = "a\u{85}b\r\nc\rd\ne\u{2028}f\u{2029}";
-    assert_eq!(
-        text::position(source, 3).unwrap(),
-        Position {
-            line: 0,
-            character: 2
-        }
-    );
-    assert_eq!(
-        text::byte_offset(
-            source,
-            &Position {
-                line: 0,
-                character: 2
-            }
-        )
-        .unwrap(),
-        3
-    );
-    assert_eq!(
-        text::position(source, source.len() as u32).unwrap(),
-        Position {
-            line: 5,
-            character: 0
-        }
-    );
-    assert_eq!(
-        text::byte_offset(
-            source,
-            &Position {
-                line: 5,
-                character: 0
-            }
-        )
-        .unwrap(),
-        source.len() as u32
-    );
 }
 
 /// 独立子对象增删只改变父包含关系，不得产生空容器与带空格容器的内容差异。
@@ -1527,7 +1535,7 @@ fn repository_relative_test_classification_ignores_checkout_ancestors() {
         let actual = Document::parse(
             Path::new(root),
             Path::new(root).join("src/main.ts"),
-            source.into(),
+            SourceText::new(source, LineBreakMode::TypeScript),
             AnalysisOptions::default(),
         )
         .unwrap();
@@ -1541,7 +1549,7 @@ fn repository_relative_test_classification_ignores_checkout_ancestors() {
             !Document::parse(
                 Path::new(root),
                 Path::new(root).join("contest.ts"),
-                source.into(),
+                SourceText::new(source, LineBreakMode::TypeScript),
                 AnalysisOptions::default(),
             )
             .unwrap()

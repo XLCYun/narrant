@@ -1,6 +1,6 @@
 //! 收集语法意图与查询位置；此层绝不把名字相同当成已解析目标。
-use super::{contains, text, Document, Occurrence, OccurrenceKind};
-use crate::structure_review::typescript_analyzer::Result;
+use super::{contains, Document, Occurrence, OccurrenceKind};
+use crate::structure_review::typescript_analyzer::{failure, Result};
 use oxc_ast::{ast::*, AstKind};
 use oxc_ast_visit::{walk, Visit};
 use oxc_codegen::{Codegen, CodegenOptions, CommentOptions};
@@ -82,7 +82,11 @@ impl<'d, 'a> Collector<'d, 'a> {
                 kind: *kind,
                 span: *span,
                 selection: *selection,
-                position: text::position(&self.document.source, selection.start)?,
+                position: self
+                    .document
+                    .source
+                    .position(selection.start as usize)
+                    .map_err(failure)?,
                 text: self.document.source[selection.start as usize..selection.end as usize]
                     .to_owned(),
                 semantic_text: self

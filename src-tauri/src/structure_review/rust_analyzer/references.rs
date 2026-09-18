@@ -223,12 +223,12 @@ pub(super) fn analyze(
             .iter()
             .filter(|declaration| declaration.syntax.kind() == SyntaxKind::FN)
         {
-            let position = syntax::position(&document.source, declaration.selection.start());
+            let position = document.position(declaration.selection.start())?;
             for call in resolver.client.outgoing_calls(&document.uri, position)? {
                 let owners: Vec<_> = call
                     .from_ranges
                     .iter()
-                    .map(|range| syntax::byte_offset(&document.source, &range.start))
+                    .map(|range| document.byte_offset(&range.start))
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .filter_map(|offset| document.owner(offset))
@@ -326,7 +326,7 @@ impl Resolver<'_> {
             let document = self
                 .document(&location.uri)
                 .ok_or_else(|| failure("测试父模块文档不存在"))?;
-            let offset = syntax::byte_offset(&document.source, &location.position)?;
+            let offset = document.byte_offset(&location.position)?;
             if !document.excludes(offset) && !self.test_only_file(&location.uri)? {
                 return Ok(false);
             }
@@ -420,7 +420,7 @@ impl Resolver<'_> {
             let document = self
                 .document(&location.uri)
                 .ok_or_else(|| failure("父模块文档不可用"))?;
-            let offset = syntax::byte_offset(&document.source, &location.position)?;
+            let offset = document.byte_offset(&location.position)?;
             if document.excludes(offset) || self.test_files.get(&location.uri) == Some(&true) {
                 continue;
             }
@@ -460,7 +460,7 @@ impl Resolver<'_> {
                 .map_err(failure)?
                 .to_string_lossy()
                 .replace('\\', "/");
-            let source = document.source.clone();
+            let source = document.source.to_string();
             self.crate_roots.entry(id.clone()).or_insert_with(|| {
                 CodeNode::Container(CodeNodeData {
                     id: id.clone(),
@@ -527,7 +527,7 @@ impl Resolver<'_> {
             let document = self
                 .document(uri)
                 .ok_or_else(|| failure("引用来源文档不存在"))?;
-            let position = syntax::position(&document.source, name.text_range().start());
+            let position = document.position(name.text_range().start())?;
             let locations = self.client.definitions(uri, position)?;
             self.definitions.insert(key.clone(), locations);
         }
@@ -569,7 +569,7 @@ impl Resolver<'_> {
         let document = self
             .document(&uri)
             .ok_or_else(|| failure("定义目标文档不存在"))?;
-        let offset = syntax::byte_offset(&document.source, position)?;
+        let offset = document.byte_offset(position)?;
         if document.excludes(offset) || self.test_files.get(&uri) == Some(&true) {
             return Ok(Vec::new());
         }

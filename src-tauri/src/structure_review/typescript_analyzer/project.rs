@@ -2,9 +2,11 @@
 mod mapping;
 use super::{failure, runtime, tools::TypeScriptToolchain, Result};
 use crate::lsp::CancellationCheck;
+use crate::structure_review::source_text::{LineBreakMode, SourceText};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::Duration,
@@ -24,7 +26,7 @@ pub(crate) struct ProjectRegistration {
 #[derive(Clone, Debug)]
 pub(crate) struct SourceSnapshot {
     pub path: PathBuf,
-    pub source: String,
+    pub source: SourceText,
 }
 
 /// 选中源码对应的全部配置候选，供后续语义层分别查询并比较证据。
@@ -59,6 +61,8 @@ pub(crate) struct PreparedProject {
     pub allowed_roots: Vec<PathBuf>,
     pub sources: BTreeMap<PathBuf, SourceSnapshot>,
     pub metadata: BTreeSet<PathBuf>,
+    /// 固定运行时声明按需读取一次，后续查询共享原文和行索引。
+    loaded_sources: RefCell<BTreeMap<PathBuf, SourceText>>,
 }
 impl PreparedProject {
     /// 非空选集才验证工具并准备工作区读取上下文；空结果无需启动服务。
@@ -130,10 +134,14 @@ impl PreparedProject {
             allowed_roots,
             sources: BTreeMap::new(),
             metadata: BTreeSet::new(),
+            loaded_sources: RefCell::new(BTreeMap::new()),
         };
         for path in result.sources {
             mapping::checked_under(&prepared.workspace_root, &path)?;
-            let source = std::fs::read_to_string(&path).map_err(failure)?;
+            let source = SourceText::new(
+                std::fs::read_to_string(&path).map_err(failure)?,
+                LineBreakMode::TypeScript,
+            );
             if prepared
                 .sources
                 .insert(path.clone(), SourceSnapshot { path, source })
