@@ -9,14 +9,12 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { collapseStructureLayout, layoutStructureComparison, relayoutStructureLayout, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout } from "@/structure-review/graph-presentation";
+import { collapseStructureLayout, layoutStructureComparison, relayoutStructureLayout, selectStructureEdges, type ObjectNode, type ObjectStatus, type StructureEdge, type StructureLayout, type StructureSelection } from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 import { comparisonForLanguage, structureLanguages } from "@/structure-review/language-view";
 import "@xyflow/react/dist/style.css";
 import "./structure-changes.css";
 
-/** 目录选择和代码对象选择分开保存，展示分组不会冒充 Code Graph 节点。 */
-type StructureSelection = { kind: "object"; id: string } | { kind: "directory"; path: string };
 const ObjectActions = createContext<{
   selectedId?: string; selectedDirectory?: string; connectedPorts: ReadonlySet<string>;
   expand(id: string): void; toggleCollapse(id: string): void; open(id: string): void;
@@ -156,11 +154,11 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   const [layingOut, setLayingOut] = useState(true);
   const visibleLayoutError = layoutError ?? (needsCompactLayout ? currentCompact?.error : undefined);
   const arranging = layingOut || (needsCompactLayout && !currentCompact);
-  // 按真实对象筛选双向关系；折叠端口共享后仍不混入其他成员的关系。
+  // 容器按全展开的展示层级继承后代关系；叶成员仍只显示自身的双向关系。
   const visibleEdges = useMemo(() => {
-    if (!layout || selectedId === undefined) return [];
-    return layout.edges.filter((edge) => edge.data?.sourceObjectId === selectedId || edge.data?.targetObjectId === selectedId);
-  }, [layout, selectedId]);
+    if (!layout || !expandedLayout) return [];
+    return selectStructureEdges(expandedLayout, layout, selection);
+  }, [expandedLayout, layout, selection]);
   const connectedPorts = useMemo(() => new Set(visibleEdges.flatMap((edge) => [edge.sourceHandle, edge.targetHandle]).filter((id): id is string => typeof id === "string")), [visibleEdges]);
   const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, expanded }), [expanded, showAll, showUnchangedReferences, showImports]);
   /** 折叠按钮始终选中被操作对象；只更新自己的状态，保留后代的收起选择。 */
@@ -282,7 +280,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-2 text-[11px] text-muted-foreground" aria-label={t("legend")}>
             {(["added", "removed", "modified", "relations", "unchanged"] as const).map((status) => <span key={status} className={cn("structure-legend", statusClasses[status])}><span aria-hidden className="structure-dot" />{t(`status.${status}`)}</span>)}
-            <span className="ml-auto">{t(selectedId === undefined ? "selectRelations" : "relationLegend")}</span>
+            <span className="ml-auto">{t(selection === undefined ? "selectRelations" : "relationLegend")}</span>
           </div>
         </div>
       </ResizablePanel>

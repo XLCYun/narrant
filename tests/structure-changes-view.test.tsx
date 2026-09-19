@@ -215,7 +215,9 @@ it("keeps details beside the graph and switches exact objects without remounting
   fireEvent.click(within(graph).getByRole("button", { name: "Review", exact: true }));
   expect(within(sidebar).getByRole("heading", { name: "Review", exact: true })).toBeInTheDocument();
   expect(removed).toHaveAttribute("aria-pressed", "false");
-  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "run → new · + code.calls", "run → old · − code.calls",
+  ]);
 });
 
 it("keeps filtered references out of details when switching objects in the sidebar", async () => {
@@ -304,7 +306,9 @@ it("selects the toggled object, retains nested folds and never restarts analysis
   await waitFor(() => expect(within(graph).getByRole("button", { name: "展开 Review", exact: true })).toHaveAttribute("aria-expanded", "false"));
   expect(within(graph).queryByRole("button", { name: /pub async fn run_review/ })).not.toBeInTheDocument();
   expect(within(graph).getByText("内部 2 项变更")).toBeInTheDocument();
-  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "Review → new · + code.calls", "Review → old · − code.calls",
+  ]);
   fireEvent.click(within(graph).getByRole("button", { name: /fn prepare_snapshot.*新增/ }));
   expect(screen.getByTitle("Review::run_review")).toHaveTextContent("Review → new · + code.calls");
 
@@ -418,6 +422,8 @@ it("selects directories without inventing source diffs and preserves file folds 
   expect(within(sidebar).queryByText("关系变化", { exact: true })).not.toBeInTheDocument();
   expect(within(graph).getByRole("button", { name: path, exact: true })).toHaveAttribute("aria-pressed", "true");
   expect(within(graph).queryByRole("button", { name: filePath, exact: true })).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
+  expect(screen.getAllByTestId("visible-relation").every((edge) => edge.title === "prepare")).toBe(true);
   fireEvent.click(within(graph).getByRole("button", { name: "export function start() · 新增", exact: true }));
   expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
   expect(screen.getByTitle("prepare")).toHaveTextContent("+ code.calls");
@@ -432,6 +438,39 @@ it("selects directories without inventing source diffs and preserves file folds 
   fireEvent.click(await screen.findByRole("menuitem", { name: "全部展开" }));
   expect(within(graph).getByRole("button", { name: "export function prepare() · 新增", exact: true })).toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(layoutCalls).toHaveBeenCalledTimes(1);
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
+});
+
+it("inherits incoming and outgoing member relationships through selected types and folded modules", async () => {
+  const comparison = structureReviewFixture();
+  const incoming = { semantic: "code.calls", target: { kind: "node" as const, id: "run" } };
+  comparison.after.nodes = comparison.after.nodes.map((node) => node.id === "save" ? { ...node, references: [incoming] } : node);
+  comparison.diff.nodes.push({ id: "save", content: null, contains: [], references: [{ kind: "added", value: incoming }] });
+  const current = binding(comparison);
+  const layoutCalls = vi.spyOn(graphPresentation, "layoutStructureComparison");
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  const geometry = graph.dataset.layout;
+  fireEvent.click(within(graph).getByRole("button", { name: "Review", exact: true }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "run → new · + code.calls", "run → old · − code.calls", "save → run · + code.calls",
+  ]);
+  expect(graph.dataset.layout).toBe(geometry);
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 Review", exact: true }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "Review → new · + code.calls", "Review → old · − code.calls", "save → Review · + code.calls",
+  ]);
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 review", exact: true }));
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 storage", exact: true }));
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "review → storage · + code.calls", "storage → review · + code.calls",
+  ]);
+  fireEvent.click(within(graph).getByRole("button", { name: "review", exact: true }));
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
+  fireEvent.click(within(graph).getByRole("button", { name: "Graph background" }));
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
   expect(layoutCalls).toHaveBeenCalledTimes(1);
   expect(current.retry).not.toHaveBeenCalled();
   expect(current.setOptions).not.toHaveBeenCalled();

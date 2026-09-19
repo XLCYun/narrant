@@ -268,8 +268,10 @@ an explanatory sentence.
 ### Show relationships for the selected object
 
 The graph initially hides all relationship lines and their connection markers.
-Selecting an object reveals only incident lines to that exact Code Object, in both
-directions. Original relationship endpoints determine identity, so selecting a method in a class card
+Selecting a member reveals only incident lines to that exact Code Object, in both
+directions. Selecting a container, type or directory additionally includes its
+displayed descendants' incoming and outgoing lines, even when folded. Original
+relationship endpoints determine identity, so selecting a method in a class card
 does not reveal the other methods' lines. Calls between members of one card,
 recursive calls and removed relationships follow the same rule.
 
@@ -316,8 +318,15 @@ State is scoped to the current comparison; a new Snapshot starts expanded.
 
 Candidate relationships retain their original Code Object endpoints. If an endpoint
 is hidden by collapse, its visible collapsed ancestor provides the display port.
-Only relationships incident to the exact selected object appear; selecting a
-collapsed parent does not select all its descendants' relationships. Relationships
+Selecting a member shows relationships incident to that exact object. Selecting a
+container or type also includes incoming and outgoing relationships of every
+descendant in the current display hierarchy, including methods placed under a type
+through implementation ownership. The fully expanded hierarchy supplies membership
+even when descendants are folded. Expanded endpoints stay on their actual members;
+folded endpoints attach to their visible ancestor, including links between two
+folded containers. Relationship identity, direction and added/removed state remain
+unchanged, and a relationship is shown only once. Existing language, context, import
+and unchanged-relationship filters still apply. Relationships
 entirely inside one collapsed card are hidden. A proxied endpoint's tooltip contains
 only its readable object name, qualified by the containing Type for a member (for
 example `Repository::load`), without a target or module-description prefix.
@@ -799,8 +808,10 @@ Collapse all/expand all apply to directories as well as existing containers and 
 
 Edges keep their exact original code-object identities. When an endpoint is hidden
 inside a collapsed directory, the directory header supplies a display port and the
-tooltip names the actual endpoint. Selecting a directory does not select all its
-descendants' relationships. Source comparison and graph diff remain at code-object
+tooltip names the actual endpoint. Selecting a directory includes the incoming and
+outgoing relationships of its displayed descendant files and code objects, even
+when the directory or files are folded. Directory paths and code-object identities
+remain separate. Source comparison and graph diff remain at code-object
 granularity; file and directory grouping does not promote child changes into parent
 content changes.
 

@@ -47,6 +47,29 @@ export type StructureEdge = Edge<{
 }>;
 export type StructureLayout = { nodes: ObjectNode[]; edges: StructureEdge[]; total: number; visible: number; changed: number; collapsibleIds: string[]; directoryPaths: string[] };
 export type GraphOptions = { showAll: boolean; showUnchangedReferences: boolean; showImports: boolean; expanded: ReadonlySet<string> };
+/** 目录使用独立的展示身份，不与后端的不透明对象 ID 混用。 */
+export type StructureSelection = { kind: "object"; id: string } | { kind: "directory"; path: string };
+
+/** 选中容器时汇总展示后代的双向关系；用全展开层级保留折叠后隐藏的成员身份。 */
+export function selectStructureEdges(expandedLayout: StructureLayout, layout: StructureLayout, selection?: StructureSelection): StructureEdge[] {
+  if (!selection) return [];
+  const selectedCard = expandedLayout.nodes.find(({ data }) => selection.kind === "object"
+    ? data.objectId === selection.id : data.directory?.path === selection.path);
+  const objects = new Set<string>(selection.kind === "object" ? [selection.id] : []);
+  if (selectedCard) {
+    const cards = new Set([selectedCard.id]);
+    // 布局保证父卡片在前；同时收集独立子卡片和并入类卡片的字段、方法及 impl 行。
+    for (const node of expandedLayout.nodes) {
+      if (!cards.has(node.id) && (!node.parentId || !cards.has(node.parentId))) continue;
+      cards.add(node.id);
+      if (node.data.objectId !== undefined) objects.add(node.data.objectId);
+      for (const row of node.data.rows) if (row.objectId !== undefined) objects.add(row.objectId);
+    }
+  }
+  // 使用当前投影的端口与走线，避免复活折叠容器内部已省略的关系或改变实际端点。
+  return layout.edges.filter((edge) => edge.data !== undefined
+    && (objects.has(edge.data.sourceObjectId) || objects.has(edge.data.targetObjectId)));
+}
 
 /** 只显示图内已解析关系；导入开关仅决定图内导入关系是否出现。 */
 export function isReferenceVisible(reference: CodeReference, options: Pick<GraphOptions, "showImports">): boolean {
