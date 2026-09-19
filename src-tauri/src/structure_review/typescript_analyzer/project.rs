@@ -1,8 +1,8 @@
 //! 直接读取 Review 拥有的 Git workspace；临时目录仅保存分析工具和控制消息。
 mod mapping;
-use super::{failure, runtime, tools::TypeScriptToolchain, Result};
+use super::{failure, runtime, tools::TypeScriptToolchain, Result, LINE_BREAKS};
 use crate::lsp::CancellationCheck;
-use crate::structure_review::source_text::{LineBreakMode, SourceText};
+use crate::structure_review::source_text::SourceText;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -140,7 +140,7 @@ impl PreparedProject {
             mapping::checked_under(&prepared.workspace_root, &path)?;
             let source = SourceText::new(
                 std::fs::read_to_string(&path).map_err(failure)?,
-                LineBreakMode::TypeScript,
+                LINE_BREAKS,
             );
             if prepared
                 .sources

@@ -333,6 +333,37 @@ fn preserves_cfg_declarations_and_rejects_parse_failures() {
     .is_err());
 }
 
+/// 适配器沿用 rust-analyzer 的行索引，注释中的 CR、LS、PS 不增加行号。
+#[test]
+fn document_line_break_rules_match_rust_analyzer() {
+    let repository = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+    let source = "/* 中😀\r\u{2028}\u{2029} */ fn after() {}\r\nfn next() {}";
+    let document = Document::parse(
+        repository,
+        repository.join("lib.rs"),
+        source.into(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(document.source.as_str(), source);
+    for (name, line, character) in [("after", 0, 16), ("next", 1, 3)] {
+        let declaration = document
+            .declarations
+            .iter()
+            .find(|declaration| declaration.node.data().name.as_deref() == Some(name))
+            .unwrap();
+        let position = Position { line, character };
+        assert_eq!(
+            document.position(declaration.selection.start()).unwrap(),
+            position
+        );
+        assert_eq!(
+            document.byte_offset(&position).unwrap(),
+            declaration.selection.start()
+        );
+    }
+}
+
 /// AST 的 TextSize 经过共享索引往返后仍精确选中声明，中文和代理对不改变 CRLF 行列。
 #[test]
 fn document_positions_round_trip_ast_declarations_across_unicode_and_crlf() {

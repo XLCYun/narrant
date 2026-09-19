@@ -1,8 +1,9 @@
 //! 文档契约的聚焦回归：公共图验证与 diff 必须同样接受语法结果。
 use super::*;
+use crate::structure_review::typescript_analyzer::LINE_BREAKS;
 use crate::structure_review::{
     code_graph::{CodeGraph, CodeRoot},
-    source_text::{LineBreakMode, SourceText},
+    source_text::SourceText,
 };
 use std::path::Path;
 
@@ -11,7 +12,7 @@ fn parse(path: &str, source: &str) -> Document {
     Document::parse(
         Path::new("/repo"),
         Path::new("/repo").join(path),
-        SourceText::new(source, LineBreakMode::TypeScript),
+        SourceText::new(source, LINE_BREAKS),
         AnalysisOptions::default(),
     )
     .unwrap()
@@ -843,7 +844,7 @@ fn tests_toggle_and_invalid_inputs() {
         let included = Document::parse(
             Path::new("/repo"),
             Path::new("/repo").join(path),
-            SourceText::new("test(() => run());", LineBreakMode::TypeScript),
+            SourceText::new("test(() => run());", LINE_BREAKS),
             AnalysisOptions {
                 include_tests: true,
             },
@@ -858,7 +859,7 @@ fn tests_toggle_and_invalid_inputs() {
         assert!(Document::parse(
             Path::new("/repo"),
             path.into(),
-            SourceText::new("", LineBreakMode::TypeScript),
+            SourceText::new("", LINE_BREAKS),
             AnalysisOptions::default()
         )
         .is_err());
@@ -866,7 +867,7 @@ fn tests_toggle_and_invalid_inputs() {
     assert!(Document::parse(
         Path::new("/repo"),
         "/repo/a.ts".into(),
-        SourceText::new("function {", LineBreakMode::TypeScript),
+        SourceText::new("function {", LINE_BREAKS),
         AnalysisOptions::default()
     )
     .is_err());
@@ -880,7 +881,7 @@ fn ids_are_stable_across_roots_and_selection() {
     let b = Document::parse(
         Path::new("/other"),
         "/other/目录/a.ts".into(),
-        SourceText::new(source, LineBreakMode::TypeScript),
+        SourceText::new(source, LINE_BREAKS),
         AnalysisOptions::default(),
     )
     .unwrap();
@@ -1041,7 +1042,7 @@ fn invalid_early_errors_and_regex_are_not_empty_success() {
             Document::parse(
                 Path::new("/repo"),
                 "/repo/a.ts".into(),
-                SourceText::new(source, LineBreakMode::TypeScript),
+                SourceText::new(source, LINE_BREAKS),
                 AnalysisOptions::default()
             )
             .is_err(),
@@ -1238,7 +1239,7 @@ fn tagged_templates_capture_calls_and_substitution_evidence() {
 #[test]
 fn occurrence_selections_preserve_typescript_byte_and_utf16_positions() {
     let source =
-        "function 调用() {}\r\nfunction f() {\u{2028}  \"😀中\"; 调用();\u{2029}  调用();\r\n}";
+        "function 调用() {}\r\nfunction f() {\u{2028}  \"😀中\"; 调用();\u{2029}  调用();\r  调用();\r\n}";
     let document = parse("a.ts", source);
     assert_eq!(document.source.as_str(), source);
     let calls = document
@@ -1246,8 +1247,8 @@ fn occurrence_selections_preserve_typescript_byte_and_utf16_positions() {
         .iter()
         .filter(|occurrence| occurrence.kind == OccurrenceKind::Call)
         .collect::<Vec<_>>();
-    assert_eq!(calls.len(), 2);
-    for (occurrence, line, character) in [(calls[0], 2, 9), (calls[1], 3, 2)] {
+    assert_eq!(calls.len(), 3);
+    for (occurrence, line, character) in [(calls[0], 2, 9), (calls[1], 3, 2), (calls[2], 4, 2)] {
         let start = occurrence.selection.start as usize;
         let end = occurrence.selection.end as usize;
         assert_eq!(&document.source[start..end], "调用");
@@ -1535,7 +1536,7 @@ fn repository_relative_test_classification_ignores_checkout_ancestors() {
         let actual = Document::parse(
             Path::new(root),
             Path::new(root).join("src/main.ts"),
-            SourceText::new(source, LineBreakMode::TypeScript),
+            SourceText::new(source, LINE_BREAKS),
             AnalysisOptions::default(),
         )
         .unwrap();
@@ -1549,7 +1550,7 @@ fn repository_relative_test_classification_ignores_checkout_ancestors() {
             !Document::parse(
                 Path::new(root),
                 Path::new(root).join("contest.ts"),
-                SourceText::new(source, LineBreakMode::TypeScript),
+                SourceText::new(source, LINE_BREAKS),
                 AnalysisOptions::default(),
             )
             .unwrap()

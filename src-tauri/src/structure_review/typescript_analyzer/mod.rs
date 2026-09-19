@@ -10,6 +10,7 @@ mod test_code;
 pub(crate) mod tools;
 
 use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer};
+use super::source_text::LineBreakRules;
 use crate::lsp::CancellationCheck;
 use std::{
     collections::BTreeMap,
@@ -17,6 +18,12 @@ use std::{
     path::{Component, PathBuf},
     sync::Arc,
     time::Duration,
+};
+
+/// 查询使用 tsserver 原生行列，包含 CR、U+2028、U+2029，不能套用标准 LSP 换行集合。
+const LINE_BREAKS: LineBreakRules = LineBreakRules {
+    lone_cr: true,
+    unicode_separators: true,
 };
 
 /// 固定工具配置可克隆；每次调用读取传入的 Git workspace 并独立管理子进程。

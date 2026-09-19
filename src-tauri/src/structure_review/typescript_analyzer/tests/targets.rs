@@ -2,8 +2,8 @@ use super::*;
 use crate::{
     lsp::Range,
     structure_review::{
-        source_text::{LineBreakMode, SourceText},
-        typescript_analyzer::lsp::CheckedRange,
+        source_text::SourceText,
+        typescript_analyzer::{lsp::CheckedRange, LINE_BREAKS},
     },
 };
 
@@ -35,7 +35,7 @@ fn declaration_evidence_rejects_unverified_and_non_declaration_ranges() {
     let document = Document::parse(
         root.path(),
         root.path().join("main.ts"),
-        SourceText::new(source, LineBreakMode::TypeScript),
+        SourceText::new(source, LINE_BREAKS),
         AnalysisOptions::default(),
     )
     .unwrap();

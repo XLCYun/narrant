@@ -12,7 +12,7 @@ fn source_project() -> PreparedProject {
         std::fs::create_dir_all(path).unwrap();
     }
     let path = workspace_root.join("main.ts");
-    let source = SourceText::new("export const value = '固定😀';", LineBreakMode::TypeScript);
+    let source = SourceText::new("export const value = '固定😀';", LINE_BREAKS);
     std::fs::write(&path, source.as_str()).unwrap();
     std::fs::write(
         library_root.join("lib.fixture.d.ts"),

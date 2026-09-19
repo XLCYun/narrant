@@ -1,7 +1,7 @@
 //! 路径和 URI 映射拒绝词法跳转与符号链接逃逸，所有文件保持真实身份。
 use super::PreparedProject;
-use crate::structure_review::source_text::{LineBreakMode, SourceText};
-use crate::structure_review::typescript_analyzer::{failure, Result};
+use crate::structure_review::source_text::SourceText;
+use crate::structure_review::typescript_analyzer::{failure, Result, LINE_BREAKS};
 use std::path::{Component, Path, PathBuf};
 
 /// 先检查词法边界，不允许通过父目录片段掩盖来源。
@@ -93,7 +93,7 @@ impl PreparedProject {
         }
         let source = SourceText::new(
             std::fs::read_to_string(&checked).map_err(failure)?,
-            LineBreakMode::TypeScript,
+            LINE_BREAKS,
         );
         loaded.insert(checked, source.clone());
         Ok(source)

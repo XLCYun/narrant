@@ -10,12 +10,12 @@ use ra_ap_syntax::{
     WalkEvent,
 };
 
-use super::{failure, Result};
+use super::{failure, Result, LINE_BREAKS};
 use crate::lsp::{file_uri, Position};
 use crate::structure_review::code_graph::{
     AnalysisOptions, CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
 };
-use crate::structure_review::source_text::{LineBreakMode, SourceText};
+use crate::structure_review::source_text::SourceText;
 
 /// 临时源码位置只用于 LSP 关联，不进入图和节点身份。
 #[derive(Clone)]
@@ -45,7 +45,7 @@ impl Document {
         source: String,
         options: AnalysisOptions,
     ) -> Result<Self> {
-        let source = SourceText::new(source, LineBreakMode::Rust);
+        let source = SourceText::new(source, LINE_BREAKS);
         let scope = file_scope(repository, &path)
             .ok_or_else(|| failure("无法构造不依赖绝对路径的 Rust 文件身份"))?;
         let mut parsed = None;

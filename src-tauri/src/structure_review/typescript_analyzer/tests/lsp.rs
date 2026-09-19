@@ -1,10 +1,11 @@
 use super::*;
-use crate::structure_review::source_text::{LineBreakMode, SourceText};
+use crate::structure_review::source_text::SourceText;
+use crate::structure_review::typescript_analyzer::LINE_BREAKS;
 
 /// 原始 span 对齐 TS 行列语义，且拒绝代理对中点、零坐标与反向范围。
 #[test]
 fn raw_evidence_is_checked() {
-    let source = SourceText::new("a😀b\r\nnext", LineBreakMode::TypeScript);
+    let source = SourceText::new("a😀b\r\nnext", LINE_BREAKS);
     let range = checked_range(
         &source,
         &json!({"start":{"line":1,"offset":2},"end":{"line":1,"offset":4}}),

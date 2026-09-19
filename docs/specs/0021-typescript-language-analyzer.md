@@ -107,8 +107,14 @@ Normalization ignores formatting and ordinary comments but preserves ASI behavio
 template/regex values and meaningful JSX text. JSDoc can affect native semantic
 relationships without becoming its own signature/contract entry.
 
-Oxc byte spans and LSP UTF-16 positions must be converted against the same source,
+Oxc byte spans and tsserver UTF-16 positions must be converted against the same source,
 validating UTF-8 boundaries and handling CRLF, Unicode paths and non-BMP characters.
+The shared `SourceText` index always recognizes LF and CRLF (as one line break), with
+independent flags for lone CR and U+2028/U+2029. Each adapter owns its rules: the
+current rust-analyzer adapter disables both flags, while this adapter enables both
+to match native tsserver coordinates carried by `typescript.tsserverRequest`.
+Workspace snapshots and lazily loaded declaration files use the same adapter rules;
+the shared index does not select rules by language or normalize the original source.
 
 ## Relationships
 

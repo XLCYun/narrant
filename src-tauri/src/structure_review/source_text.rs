@@ -1,14 +1,16 @@
-//! 共享不可变源码及行边界缓存，统一校验 UTF-8 字节偏移和 LSP UTF-16 坐标。
+//! 共享不可变源码及行边界缓存，统一校验 UTF-8 字节偏移和 UTF-16 行列坐标。
 
 use std::{fmt, ops::Deref, sync::Arc};
 
 use crate::lsp::Position;
 
-/// 语言各自的换行规则；Rust 仅识别 LF 和 CRLF，TypeScript 还识别 CR、LS、PS。
+/// LF 和 CRLF 始终换行；其余字符由适配器按所用服务的坐标规则明确配置。
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum LineBreakMode {
-    Rust,
-    TypeScript,
+pub(crate) struct LineBreakRules {
+    /// 是否把单独出现的 CR 视为换行，不影响 CRLF 始终作为一次换行。
+    pub lone_cr: bool,
+    /// 是否把 Unicode 行分隔符 U+2028 和段落分隔符 U+2029 视为换行。
+    pub unicode_separators: bool,
 }
 
 /// 坐标必须指向源码字符边界，不能越过行尾或截断 UTF-16 代理对。
@@ -31,11 +33,11 @@ impl fmt::Display for SourceTextError {
             Self::OffsetOutOfBounds => "源码字节偏移越界",
             Self::InvalidUtf8Boundary => "源码偏移不是有效的 UTF-8 边界",
             Self::InsideLineBreak => "源码偏移位于换行符内部",
-            Self::LineOutOfBounds => "LSP 行号越界",
-            Self::InvalidUtf16Boundary => "LSP 位置位于 UTF-16 代理对中间",
-            Self::ColumnOutOfBounds => "LSP 列号超出当前行的内容范围",
-            Self::LineOverflow => "源码行号超出 LSP 支持的范围",
-            Self::ColumnOverflow => "源码 UTF-16 列号超出 LSP 支持的范围",
+            Self::LineOutOfBounds => "源码行号越界",
+            Self::InvalidUtf16Boundary => "源码位置位于 UTF-16 代理对中间",
+            Self::ColumnOutOfBounds => "源码 UTF-16 列号超出当前行的内容范围",
+            Self::LineOverflow => "源码行号超出 u32 支持的范围",
+            Self::ColumnOverflow => "源码 UTF-16 列号超出 u32 支持的范围",
         })
     }
 }
@@ -63,8 +65,8 @@ pub(crate) struct SourceText {
 }
 
 impl SourceText {
-    /// 按语言换行规则扫描一次源码，同时保留末尾换行之后的空行。
-    pub(super) fn new(source: impl Into<String>, mode: LineBreakMode) -> Self {
+    /// 按显式换行规则扫描一次源码，保留原文及末尾换行之后的空行。
+    pub(super) fn new(source: impl Into<String>, rules: LineBreakRules) -> Self {
         let source = source.into();
         let mut lines = Vec::new();
         let mut start = 0;
@@ -74,8 +76,8 @@ impl SourceText {
                 character == '\r' && characters.peek().is_some_and(|(_, next)| *next == '\n');
             let is_line_break = character == '\n'
                 || crlf
-                || matches!(mode, LineBreakMode::TypeScript)
-                    && matches!(character, '\r' | '\u{2028}' | '\u{2029}');
+                || (rules.lone_cr && character == '\r')
+                || (rules.unicode_separators && matches!(character, '\u{2028}' | '\u{2029}'));
             if is_line_break {
                 lines.push(Line { start, end: offset });
                 start = offset + character.len_utf8();
@@ -118,7 +120,7 @@ impl SourceText {
         if offset > line.end {
             return Err(SourceTextError::InsideLineBreak);
         }
-        lsp_position(index, source[line.start..offset].encode_utf16().count())
+        checked_position(index, source[line.start..offset].encode_utf16().count())
     }
 
     /// 在缓存行的内容范围内查找 UTF-16 列号，严格拒绝代理对中间和越行坐标。
@@ -166,7 +168,7 @@ impl fmt::Display for SourceText {
 }
 
 impl PartialEq for SourceText {
-    /// 文本文档按源码内容比较，相等性不受缓存分配或换行模式影响。
+    /// 文本文档按源码内容比较，相等性不受缓存分配或换行规则影响。
     fn eq(&self, other: &Self) -> bool {
         self.as_str() == other.as_str()
     }
@@ -174,8 +176,8 @@ impl PartialEq for SourceText {
 
 impl Eq for SourceText {}
 
-/// 校验 LSP 的有限行列范围，避免把超大源码位置静默截断为 u32。
-fn lsp_position(line: usize, character: usize) -> Result<Position, SourceTextError> {
+/// 校验坐标的有限行列范围，避免把超大源码位置静默截断为 u32。
+fn checked_position(line: usize, character: usize) -> Result<Position, SourceTextError> {
     Ok(Position {
         line: u32::try_from(line).map_err(|_| SourceTextError::LineOverflow)?,
         character: u32::try_from(character).map_err(|_| SourceTextError::ColumnOverflow)?,
