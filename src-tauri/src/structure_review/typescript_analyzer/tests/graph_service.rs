@@ -608,6 +608,10 @@ fn graph_test_membership_lazy_context_and_stable_external_symbols() {
     ];
     let a = fixture(&files);
     let b = fixture(&files);
+    // 未命中的上下文连文本都不读取，准备和结束阶段不能因其编码错误失败。
+    for directory in [&a, &b] {
+        fs::write(directory.path().join("unread.ts"), [0xff]).unwrap();
+    }
     let one = analyze(a.path(), &["main.ts", "hidden.test.ts"]);
     let two = analyze(b.path(), &["main.ts"]);
     assert!(one.diff(&two).unwrap().nodes.is_empty());

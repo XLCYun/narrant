@@ -29,7 +29,7 @@ pub(super) fn checked_under(root: &Path, file: &Path) -> Result<()> {
     Ok(())
 }
 impl PreparedProject {
-    /// 只允许已快照的第一方源码或固定标准声明作为语义位置来源。
+    /// 只允许清单中的第一方文件或固定标准声明，尚未读取的源码也保留其归属。
     pub fn checked_path(&self, file: &Path) -> Result<PathBuf> {
         if !file.is_absolute()
             || file
@@ -44,7 +44,7 @@ impl PreparedProject {
                 file.display()
             ))
         })?;
-        if self.sources.contains_key(&canonical) || self.metadata.contains(&canonical) {
+        if self.source_paths.contains(&canonical) || self.metadata.contains(&canonical) {
             return Ok(canonical);
         }
         if self
@@ -81,12 +81,9 @@ impl PreparedProject {
         crate::lsp::file_uri(&self.checked_path(file)?).map_err(failure)
     }
 
-    /// 第一方快照和按需加载的运行时文本共享索引；每次访问仍校验真实路径。
+    /// 首次访问才读取原文并建立索引；语法提取和 LSP 查询共用同一缓存。
     pub fn source(&self, file: &Path) -> Result<SourceText> {
         let checked = self.checked_path(file)?;
-        if let Some(snapshot) = self.sources.get(&checked) {
-            return Ok(snapshot.source.clone());
-        }
         let mut loaded = self.loaded_sources.borrow_mut();
         if let Some(source) = loaded.get(&checked) {
             return Ok(source.clone());

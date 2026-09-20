@@ -12,8 +12,7 @@ fn source_project() -> PreparedProject {
         std::fs::create_dir_all(path).unwrap();
     }
     let path = workspace_root.join("main.ts");
-    let source = SourceText::new("export const value = '固定😀';", LINE_BREAKS);
-    std::fs::write(&path, source.as_str()).unwrap();
+    std::fs::write(&path, "export const value = '固定😀';").unwrap();
     std::fs::write(
         library_root.join("lib.fixture.d.ts"),
         "declare const value: '运行时😀';\u{2029}declare function run(): void;\r\n",
@@ -31,23 +30,24 @@ fn source_project() -> PreparedProject {
         registrations: Vec::new(),
         files: Vec::new(),
         allowed_roots: vec![workspace_root, library_root],
-        sources: BTreeMap::from([(path.clone(), SourceSnapshot { path, source })]),
+        source_paths: BTreeSet::from([path]),
         metadata: BTreeSet::new(),
         loaded_sources: RefCell::new(BTreeMap::new()),
     }
 }
 
-/// 第一方源码沿用准备时快照，运行时声明首次读取后也固定文本并共享同一分配。
+/// 文件清单不提前读取内容；第一方与运行时首次读取后均共享同一份文本和索引。
 #[test]
-fn source_snapshots_and_lazy_runtime_reads_share_cached_text() {
+fn first_party_and_runtime_sources_load_lazily_and_share_cached_text() {
     let project = source_project();
     let file = project.workspace_root.join("main.ts");
-    let snapshot = &project.sources[&file].source;
-    std::fs::write(&file, "export const replaced = true;").unwrap();
+    assert_eq!(project.checked_path(&file).unwrap(), file);
+    std::fs::write(&file, "export const value = '首次读取😀';").unwrap();
     let first = project.source(&file).unwrap();
+    std::fs::write(&file, "export const replaced = true;").unwrap();
     let second = project.source(&file).unwrap();
-    assert_eq!(first.as_str(), "export const value = '固定😀';");
-    assert_eq!(first.as_str().as_ptr(), snapshot.as_str().as_ptr());
+    assert_eq!(first.as_str(), "export const value = '首次读取😀';");
+    assert_eq!(second.as_str(), first.as_str());
     assert_eq!(second.as_str().as_ptr(), first.as_str().as_ptr());
 
     let library = project
@@ -72,6 +72,38 @@ fn source_snapshots_and_lazy_runtime_reads_share_cached_text() {
             character: 0,
         }
     );
+}
+
+/// 项目发现保留完整路径清单；未读取文件的编码错误只有实际访问时才影响分析。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn preparation_keeps_unselected_sources_as_paths_until_requested() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let selected = root.join("main.ts");
+    let unread = root.join("unread.ts");
+    std::fs::write(&selected, "export function main() {}").unwrap();
+    std::fs::write(&unread, [0xff]).unwrap();
+    std::fs::write(root.join("tsconfig.json"), r#"{"files":["main.ts"]}"#).unwrap();
+    let project = PreparedProject::prepare(
+        &root,
+        std::slice::from_ref(&selected),
+        &TypeScriptToolchain::default(),
+        Duration::from_secs(30),
+        &(std::sync::Arc::new(|| false) as CancellationCheck),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        project.source_paths,
+        BTreeSet::from([selected.clone(), unread.clone()])
+    );
+    assert_eq!(project.checked_path(&unread).unwrap(), unread);
+    assert_eq!(
+        project.source(&selected).unwrap().as_str(),
+        "export function main() {}"
+    );
+    assert!(project.source(&unread).is_err());
 }
 
 /// 缓存命中前仍拒绝未授权源码和父目录片段，即使后者最终指向已缓存声明。

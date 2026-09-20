@@ -295,7 +295,7 @@ impl Resolver {
             None
         };
         if let Some((position, offset, type_only)) = query {
-            if session.project().sources.contains_key(&location.path) {
+            if session.project().source_paths.contains(&location.path) {
                 session.check_runtime_type_usage(&location.path, project)?;
             }
             if runtime_value
@@ -323,7 +323,7 @@ impl Resolver {
         }
         Ok(declaration.map(|declaration| {
             vec![Target {
-                runtime: !session.project().sources.contains_key(&location.path),
+                runtime: !session.project().source_paths.contains(&location.path),
                 declaration,
             }]
         }))
@@ -341,8 +341,8 @@ impl Resolver {
             return Ok(false);
         }
         if !self.documents.contains_key(&checked) {
-            let (root, path, runtime) = if let Some(snapshot) = project.sources.get(&checked) {
-                (project.workspace_root.clone(), snapshot.path.clone(), false)
+            let (root, path, runtime) = if project.source_paths.contains(&checked) {
+                (project.workspace_root.clone(), checked.clone(), false)
             } else {
                 let path = url::Url::parse(&location.uri)
                     .map_err(failure)?

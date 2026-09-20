@@ -1,6 +1,6 @@
 //! 直接读取 Review 拥有的 Git workspace；临时目录仅保存分析工具和控制消息。
 mod mapping;
-use super::{failure, runtime, tools::TypeScriptToolchain, Result, LINE_BREAKS};
+use super::{failure, runtime, tools::TypeScriptToolchain, Result};
 use crate::lsp::CancellationCheck;
 use crate::structure_review::source_text::SourceText;
 use serde::Deserialize;
@@ -20,13 +20,6 @@ pub(crate) struct ProjectRegistration {
     pub name: PathBuf,
     pub roots: Vec<PathBuf>,
     pub options: Value,
-}
-
-/// 源码快照保留 Git workspace 的真实路径，不建立第二份源码目录。
-#[derive(Clone, Debug)]
-pub(crate) struct SourceSnapshot {
-    pub path: PathBuf,
-    pub source: SourceText,
 }
 
 /// 选中源码对应的全部配置候选，供后续语义层分别查询并比较证据。
@@ -59,9 +52,10 @@ pub(crate) struct PreparedProject {
     pub registrations: Vec<ProjectRegistration>,
     pub files: Vec<FileProjects>,
     pub allowed_roots: Vec<PathBuf>,
-    pub sources: BTreeMap<PathBuf, SourceSnapshot>,
+    /// 完整第一方文件清单只保存路径，文件归属不依赖是否已读取内容。
+    pub source_paths: BTreeSet<PathBuf>,
     pub metadata: BTreeSet<PathBuf>,
-    /// 固定运行时声明按需读取一次，后续查询共享原文和行索引。
+    /// 第一方源码与固定运行时声明均按需读取一次，后续查询共享原文和行索引。
     loaded_sources: RefCell<BTreeMap<PathBuf, SourceText>>,
 }
 impl PreparedProject {
@@ -132,26 +126,16 @@ impl PreparedProject {
             registrations: result.projects,
             files: result.associations,
             allowed_roots,
-            sources: BTreeMap::new(),
+            source_paths: BTreeSet::new(),
             metadata: BTreeSet::new(),
             loaded_sources: RefCell::new(BTreeMap::new()),
         };
         for path in result.sources {
-            mapping::checked_under(&prepared.workspace_root, &path)?;
-            let source = SourceText::new(
-                std::fs::read_to_string(&path).map_err(failure)?,
-                LINE_BREAKS,
-            );
-            if prepared
-                .sources
-                .insert(path.clone(), SourceSnapshot { path, source })
-                .is_some()
-            {
+            if !prepared.source_paths.insert(path) {
                 return Err(failure("重复的 workspace 源码路径"));
             }
         }
         for path in result.metadata {
-            mapping::checked_under(&prepared.workspace_root, &path)?;
             if !prepared.metadata.insert(path) {
                 return Err(failure("重复的 workspace 元数据路径"));
             }
@@ -175,9 +159,16 @@ impl PreparedProject {
         self.support_root.join("server/lib/tsserver.js")
     }
 
-    /// 校验助手给出的每个项目名、注册根与选中关联，不信任宽松 JSON 输出。
+    /// 文件路径去重后只检查一次；项目注册与选中关联仍需保持一致。
     fn validate_output(&self, selected: &[PathBuf]) -> Result<()> {
-        for file in &self.config_files {
+        let paths = self
+            .source_paths
+            .iter()
+            .chain(&self.metadata)
+            .chain(&self.config_files)
+            .chain(self.registrations.iter().flat_map(|project| &project.roots))
+            .collect::<BTreeSet<_>>();
+        for file in paths {
             mapping::checked_under(&self.workspace_root, file)?;
         }
         let mut names = std::collections::BTreeSet::new();
@@ -189,16 +180,13 @@ impl PreparedProject {
             {
                 return Err(failure("无效或重复的项目注册"));
             }
-            for root in &project.roots {
-                mapping::checked_under(&self.workspace_root, root)?;
-            }
         }
         if self.files.len() != selected.len() {
             return Err(failure("助手未返回所有选中源码的关联"));
         }
         for (file, original) in self.files.iter().zip(selected) {
             if &file.file != original
-                || !self.sources.contains_key(&file.file)
+                || !self.source_paths.contains(&file.file)
                 || file.projects.is_empty()
                 || file.projects.iter().any(|name| !names.contains(name))
             {

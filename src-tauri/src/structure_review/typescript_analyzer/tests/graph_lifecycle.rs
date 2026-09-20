@@ -32,11 +32,12 @@ fn group_pids(pid: i32) -> BTreeSet<i32> {
         .collect()
 }
 
-/// 使用真实固定服务，观测所有正常/取消/故障/快照变化出口均先回收进程再释放助手文件。
+/// 使用真实固定服务，观测正常、取消与故障出口均先回收进程再释放助手文件。
+/// 工作区内容稳定性由 Review 生命周期检查，不在适配器中重复验证。
 #[test]
 #[ignore = "需要固定 TypeScript 工具；Unix 进程组验收"]
 fn public_adapter_preserves_workspace_and_reclaims_children_on_every_exit() {
-    for mode in ["normal", "cancel", "failure", "timeout", "changed", "panic"] {
+    for mode in ["normal", "cancel", "failure", "timeout", "panic"] {
         let repository = tempfile::tempdir().unwrap();
         let source = repository.path().join("main.ts");
         fs::write(
@@ -71,7 +72,6 @@ fn public_adapter_preserves_workspace_and_reclaims_children_on_every_exit() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         });
-        let changed = AtomicBool::new(false);
         let observed = pids.clone();
         let callback: CancellationCheck = Arc::new(move || {
             if observed.lock().unwrap().len() >= 2 {
@@ -80,9 +80,6 @@ fn public_adapter_preserves_workspace_and_reclaims_children_on_every_exit() {
                 }
                 if mode == "panic" {
                     panic!("主动触发适配器展开清理");
-                }
-                if mode == "changed" && !changed.swap(true, Ordering::SeqCst) {
-                    fs::write(&source, "export function changed() {}").unwrap();
                 }
             }
             false
@@ -122,11 +119,6 @@ fn public_adapter_preserves_workspace_and_reclaims_children_on_every_exit() {
             }
             "cancel" => assert!(result.unwrap().unwrap_err().is_cancelled()),
             "panic" => assert!(result.is_err()),
-            "changed" => assert!(result
-                .unwrap()
-                .unwrap_err()
-                .message
-                .contains("源文件已改变")),
             _ => {
                 assert!(result.unwrap().is_err());
             }

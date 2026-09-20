@@ -118,8 +118,8 @@ fn fixed_service_reads_git_checkout_without_copying_or_mutating_files() {
     );
     assert!(session
         .project
-        .sources
-        .keys()
+        .source_paths
+        .iter()
         .all(|file| file.starts_with(&root)));
     let file = root.join("main.ts");
     let name = root.join("tsconfig.json");

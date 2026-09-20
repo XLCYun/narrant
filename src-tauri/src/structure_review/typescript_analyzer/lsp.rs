@@ -110,11 +110,7 @@ impl TypeScriptLsp {
             session.raw("openExternalProject", json!({"projectFileName":alias, "rootFiles":registration.roots.iter().map(|file| json!({"fileName":file})).collect::<Vec<_>>(), "options":registration.options, "typeAcquisition":{"enable":false}}), false)?;
         }
         for (file_index, file) in session.project.files.clone().into_iter().enumerate() {
-            let snapshot = session
-                .project
-                .sources
-                .get(&file.file)
-                .ok_or_else(|| failure("缺少选中源码快照"))?;
+            let source = session.project.source(&file.file)?;
             let extension = file
                 .file
                 .extension()
@@ -134,7 +130,7 @@ impl TypeScriptLsp {
                     &crate::lsp::file_uri(&file.file).map_err(failure)?,
                     language,
                     1,
-                    &snapshot.source,
+                    &source,
                 )
                 .map_err(lsp_failure)?;
             let configured = session

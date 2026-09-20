@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 /// 公共入口先校验选集路径，过滤测试后无需存在语义工具。
 #[test]
@@ -18,15 +19,13 @@ fn excluded_and_empty_inputs_do_not_require_tools_but_validate_paths() {
     assert!(analyzer.analyze(&input).unwrap().root().contains.is_empty());
     fs::create_dir(repository.path().join("directory.test.ts")).unwrap();
     fs::write(repository.path().join("invalid.test.ts"), [0xff]).unwrap();
-    for file in [
-        "../hidden.test.ts",
-        "missing.test.ts",
-        "directory.test.ts",
-        "invalid.test.ts",
-    ] {
+    for file in ["../hidden.test.ts", "missing.test.ts", "directory.test.ts"] {
         input.files = vec![file.into()];
         assert!(analyzer.analyze(&input).is_err(), "{file}");
     }
+    // 已排除测试仍校验路径，但不读取、解码或解析其内容。
+    input.files = vec!["invalid.test.ts".into()];
+    assert!(analyzer.analyze(&input).unwrap().root().contains.is_empty());
     #[cfg(unix)]
     {
         let outside = tempfile::NamedTempFile::new().unwrap();

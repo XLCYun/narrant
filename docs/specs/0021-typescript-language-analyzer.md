@@ -167,6 +167,19 @@ or create physical workspace package links. The TS adapter may create temporary 
 only for its own trusted helpers, launcher and control metadata; it does not own or delete
 the Git workspace.
 
+Keep the first-party source inventory as paths, separate from loaded text. Preparing
+project registrations and file associations must not eagerly read every source or build
+its line index. Load selected source text through one cache shared by AST extraction and
+didOpen; load other source/declaration text and ASTs only when a semantic query needs
+them. File provenance uses the inventory even before a file is cached. tsserver may
+still load project files for its own semantic analysis.
+
+The caller keeps the input workspace stable for the analysis lifetime, as specified by
+AnalysisInput. Review owns checkout lifetime and revision/content checks. The TS adapter
+must not reread the entire source inventory before and after analysis to compare snapshots.
+Retain path scope, helper output consistency, service project and source position checks;
+deduplicate preparation paths before checking them.
+
 Preserve effective tsconfig/jsconfig, extends, references and package module metadata
 through a read-only TypeScript file host. Configuration overrides and first-party package
 lookup aliases exist only in memory. Read standard/runtime declarations directly from the

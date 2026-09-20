@@ -13,8 +13,7 @@ use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, Langu
 use super::source_text::LineBreakRules;
 use crate::lsp::CancellationCheck;
 use std::{
-    collections::BTreeMap,
-    fs,
+    collections::{BTreeMap, BTreeSet},
     path::{Component, PathBuf},
     sync::Arc,
     time::Duration,
@@ -57,7 +56,7 @@ impl TypeScriptLanguageAnalyzer {
         }
     }
 
-    /// 注入本次操作的取消观察，覆盖项目准备、查询与最终快照校验。
+    /// 注入本次操作的取消观察，覆盖项目准备、源码提取与语义查询。
     pub fn with_cancellation(mut self, cancelled: CancellationCheck) -> Self {
         self.cancelled = cancelled;
         self
@@ -79,14 +78,14 @@ impl TypeScriptLanguageAnalyzer {
 }
 
 impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
-    /// 提取选集图；上下文文档只在定义命中时解析。
+    /// 提取选集图，其余源码按需读取和解析；调用方保证分析期间工作区内容稳定。
     fn analyze(&self, input: &AnalysisInput) -> Result<CodeGraph> {
         self.check_cancelled()?;
         let repository = input.repository_root.canonicalize().map_err(failure)?;
         if !repository.is_dir() {
             return Err(failure("仓库根路径不是目录"));
         }
-        let mut selected = BTreeMap::new();
+        let mut selected = BTreeSet::new();
         // 所有输入先校验，测试过滤和空图短路不能掩盖越界或不支持的路径。
         for relative in &input.files {
             self.check_cancelled()?;
@@ -109,15 +108,17 @@ impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
             if test_code::language(&path).is_none() {
                 return Err(failure("TypeScript 分析器收到不支持的文件扩展名"));
             }
-            let source = fs::read_to_string(&path).map_err(failure)?;
+            if !path.is_file() {
+                return Err(failure("选中的源码路径不是文件"));
+            }
             if input.options.include_tests || !test_code::is_test(relative) {
-                selected.insert(path, source);
+                selected.insert(path);
             }
         }
         if selected.is_empty() {
             return CodeGraph::new(CodeRoot::default(), vec![]).map_err(failure);
         }
-        let paths = selected.keys().cloned().collect::<Vec<_>>();
+        let paths = selected.into_iter().collect::<Vec<_>>();
         let project = project::PreparedProject::prepare(
             &repository,
             &paths,
@@ -127,54 +128,25 @@ impl LanguageAnalyzer for TypeScriptLanguageAnalyzer {
         )?
         .ok_or_else(|| failure("非空选集缺少项目上下文"))?;
         let mut documents = BTreeMap::new();
-        for (path, source) in selected {
+        for path in paths {
+            self.check_cancelled()?;
             let path = project.checked_path(&path)?;
-            let snapshot = project.source(&path)?;
-            if snapshot.as_str() != source {
-                return Err(failure("准备期间选中源文件已改变"));
-            }
+            let source = project.source(&path)?;
             let document = syntax::Document::parse(
                 &project.workspace_root,
                 path.clone(),
-                snapshot,
+                source,
                 input.options,
             )?;
             documents.insert(path, document);
         }
-        validate_snapshots(&project, &self.cancelled)?;
         let mut session = lsp::TypeScriptLsp::start(project, self.timeout, self.cancelled.clone())?;
         let graph = references::analyze(&mut session, documents, &self.cancelled)?;
-        validate_snapshots(session.project(), &self.cancelled)?;
+        session.project().check_access()?;
         self.check_cancelled()?;
         session.shutdown()?;
         Ok(graph)
     }
-}
-
-/// 验证 Git workspace 的全部第一方源码仍等于分析前的内存快照，不只检查输出选集。
-fn validate_snapshots(
-    project: &project::PreparedProject,
-    cancelled: &CancellationCheck,
-) -> Result<()> {
-    project.check_access()?;
-    for snapshot in project.sources.values() {
-        if cancelled() {
-            return Err(AnalysisError::cancelled("TypeScript 结构分析已取消"));
-        }
-        if !snapshot
-            .path
-            .canonicalize()
-            .map_err(failure)?
-            .starts_with(&project.workspace_root)
-            || fs::read_to_string(&snapshot.path).map_err(failure)? != snapshot.source.as_str()
-        {
-            return Err(failure(format!(
-                "分析期间源文件已改变：{}",
-                snapshot.path.display()
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
