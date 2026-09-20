@@ -1,5 +1,5 @@
 //! 直接读取 Review 拥有的 Git workspace；临时目录仅保存分析工具和控制消息。
-mod mapping;
+mod files;
 use super::{failure, runtime, tools::TypeScriptToolchain, Result};
 use crate::lsp::CancellationCheck;
 use crate::structure_review::source_text::SourceText;
@@ -77,9 +77,9 @@ impl PreparedProject {
         let selected = selected
             .iter()
             .map(|file| {
-                mapping::lexical_under(root, file)?;
+                files::lexical_under(root, file)?;
                 let normalized = workspace_root.join(file.strip_prefix(root).map_err(failure)?);
-                mapping::checked_under(&workspace_root, &normalized)?;
+                files::checked_under(&workspace_root, &normalized)?;
                 // 同一个 Git 文件使用同一规范路径，不再维护原始路径与副本的映射。
                 normalized.canonicalize().map_err(failure)
             })
@@ -169,11 +169,11 @@ impl PreparedProject {
             .chain(self.registrations.iter().flat_map(|project| &project.roots))
             .collect::<BTreeSet<_>>();
         for file in paths {
-            mapping::checked_under(&self.workspace_root, file)?;
+            files::checked_under(&self.workspace_root, file)?;
         }
         let mut names = std::collections::BTreeSet::new();
         for project in &self.registrations {
-            mapping::lexical_under(&self.workspace_root, &project.name)?;
+            files::lexical_under(&self.workspace_root, &project.name)?;
             if !names.insert(&project.name)
                 || project.roots.is_empty()
                 || !project.options.is_object()
@@ -200,3 +200,7 @@ impl PreparedProject {
 #[cfg(test)]
 #[path = "tests/project.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "tests/project/lsp_session.rs"]
+mod lsp_session_tests;

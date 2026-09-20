@@ -82,9 +82,11 @@ const nodeTypes = { codeObject: CodeObjectNode };
 
 /** 绘制布局算法的避让路径；跨版本的旧包含边使用普通正交路径。 */
 function RoutedRelationEdge(props: EdgeProps<StructureEdge>) {
+  const { t } = useTranslation("structure");
   const fallback = props.data?.route ? undefined : getSmoothStepPath(props);
   const route = props.data?.route ?? { path: fallback![0], labelX: fallback![1], labelY: fallback![2] };
-  const names = [props.data?.collapsedSource, props.data?.collapsedTarget].filter(Boolean).join(" → ");
+  const names = props.data?.summary ? t("summarizedRelations", props.data.summary)
+    : [props.data?.collapsedSource, props.data?.collapsedTarget].filter(Boolean).join(" → ");
   return <g data-collapsed-endpoints={names || undefined}>
     {names && <title>{names}</title>}
     <BaseEdge id={props.id} path={route.path} markerEnd={props.markerEnd} style={props.style}
@@ -135,6 +137,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   const [showAll, setShowAll] = useState(false);
   const [showUnchangedReferences, setShowUnchangedReferences] = useState(false);
   const [showImports, setShowImports] = useState(false);
+  const [showDetailedRelations, setShowDetailedRelations] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [collapsedDirectories, setCollapsedDirectories] = useState<ReadonlySet<string>>(new Set());
@@ -157,8 +160,8 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   // 容器按全展开的展示层级继承后代关系；叶成员仍只显示自身的双向关系。
   const visibleEdges = useMemo(() => {
     if (!layout || !expandedLayout) return [];
-    return selectStructureEdges(expandedLayout, layout, selection);
-  }, [expandedLayout, layout, selection]);
+    return selectStructureEdges(expandedLayout, layout, selection, showDetailedRelations ? "detailed" : "compact");
+  }, [expandedLayout, layout, selection, showDetailedRelations]);
   const connectedPorts = useMemo(() => new Set(visibleEdges.flatMap((edge) => [edge.sourceHandle, edge.targetHandle]).filter((id): id is string => typeof id === "string")), [visibleEdges]);
   const options = useMemo(() => ({ showAll, showUnchangedReferences, showImports, expanded }), [expanded, showAll, showUnchangedReferences, showImports]);
   /** 折叠按钮始终选中被操作对象；只更新自己的状态，保留后代的收起选择。 */
@@ -233,6 +236,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
         <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-7 text-xs" />}>{t("displayOptions")}</DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">
           <DropdownMenuCheckboxItem checked={showAll} onCheckedChange={setShowAll}>{t("showAll")}</DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem checked={showDetailedRelations} onCheckedChange={setShowDetailedRelations}>{t("showDetailedRelations")}</DropdownMenuCheckboxItem>
           <DropdownMenuCheckboxItem checked={showUnchangedReferences} onCheckedChange={setShowUnchangedReferences}>{t("showUnchangedReferences")}</DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuCheckboxItem checked={showImports} onCheckedChange={setShowImports}>{t("showImports")}</DropdownMenuCheckboxItem>

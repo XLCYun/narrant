@@ -137,10 +137,6 @@ fn fixed_service_reads_git_checkout_without_copying_or_mutating_files() {
         .unwrap();
     assert_eq!(definitions.len(), 1);
     assert_eq!(definitions[0].path, root.join("worker.ts"));
-    assert_eq!(
-        definitions[0].uri,
-        crate::lsp::file_uri(&root.join("worker.ts")).unwrap()
-    );
     let support = session.project.support_root.clone();
     let artifacts = filesystem_snapshot(&support);
     assert_eq!(
@@ -196,7 +192,11 @@ fn fixed_service_definitions_and_calls() {
         .and_then(checked_definitions)
         .unwrap();
     assert_eq!(definitions.len(), 1);
-    assert_eq!(definitions[0].span.range.start.line, 0);
+    let source = session.project.source(&file).unwrap();
+    assert_eq!(
+        definitions[0].span.start_byte as usize,
+        source.find("target").unwrap()
+    );
     let outgoing = session
         .outgoing_calls(
             &file,
@@ -208,7 +208,10 @@ fn fixed_service_definitions_and_calls() {
         )
         .unwrap();
     assert_eq!(outgoing[0].target.name, "target");
-    assert_eq!(outgoing[0].from_spans[0].range.start.line, 1);
+    assert_eq!(
+        outgoing[0].from_spans[0].start_byte as usize,
+        source.rfind("target").unwrap()
+    );
     let incoming = session
         .incoming_calls(
             &file,
@@ -268,7 +271,7 @@ fn fixed_service_excludes_business_and_supplies_node_closure() {
         .unwrap();
     assert!(definitions
         .iter()
-        .any(|definition| definition.uri.contains("@types/node/fs.d.ts")));
+        .any(|definition| definition.path.ends_with("@types/node/fs.d.ts")));
     session.shutdown().unwrap();
 }
 
@@ -301,11 +304,11 @@ fn fixed_service_jsonc_paths_and_ambiguous_projects() {
             )
             .and_then(checked_definitions)
             .unwrap();
-        targets.extend(definitions.into_iter().map(|target| target.uri));
+        targets.extend(definitions.into_iter().map(|target| target.path));
     }
     assert_eq!(targets.len(), 2);
-    assert!(targets.iter().any(|target| target.ends_with("/a/impl.ts")));
-    assert!(targets.iter().any(|target| target.ends_with("/b/impl.ts")));
+    assert!(targets.iter().any(|target| target.ends_with("a/impl.ts")));
+    assert!(targets.iter().any(|target| target.ends_with("b/impl.ts")));
     let invalid = session
         .project
         .workspace_root
@@ -377,14 +380,14 @@ fn fixed_service_workspace_reference_without_dist() {
         .unwrap();
     assert!(definitions
         .iter()
-        .any(|target| target.uri.ends_with("/packages/lib/src/index.ts")));
+        .any(|target| target.path.ends_with("packages/lib/src/index.ts")));
     session.shutdown().unwrap();
 }
 
 /// 配置外 JS 使用显式独立推断项目，不被邻近配置的 exclude 静默丢弃。
 #[test]
 #[ignore = "需要固定工具"]
-fn fixed_service_unconfigured_js_and_uri_boundaries() {
+fn fixed_service_unconfigured_js_and_unicode_paths() {
     let fixture = fixture(&[
         ("package.json", r#"{"type":"commonjs"}"#),
         ("tsconfig.json", r#"{"files":["included.ts"],"compilerOptions":{"types":[],"noLib":true}}"#),
@@ -395,13 +398,6 @@ fn fixed_service_unconfigured_js_and_uri_boundaries() {
     let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
     assert!(name.to_string_lossy().contains(".narrant-inferred-"));
-    let uri = crate::lsp::file_uri(&file).unwrap();
-    assert_eq!(session.project.path_from_uri(&uri).unwrap(), file);
-    assert!(session
-        .project
-        .path_from_uri("https://example.com/source.ts")
-        .is_err());
-    assert!(session.project.path_from_uri("file:///etc/passwd").is_err());
     let members = session.validate_project(&file, &name).unwrap();
     assert!(members
         .iter()
@@ -419,7 +415,7 @@ fn fixed_service_unconfigured_js_and_uri_boundaries() {
         .unwrap();
     assert!(definitions
         .iter()
-        .any(|target| target.uri.contains("@types/node/path.d.ts")));
+        .any(|target| target.path.ends_with("@types/node/path.d.ts")));
     session.shutdown().unwrap();
 }
 
@@ -437,7 +433,10 @@ fn fixed_service_missing_extends_and_authoritative_libraries() {
     let mut session = start(fixture.path(), &["main.ts"]);
     let file = session.project.files[0].file.clone();
     let name = session.project.files[0].projects[0].clone();
-    assert_eq!(session.validate_project(&file, &name).unwrap(), vec![file]);
+    assert_eq!(
+        *session.validate_project(&file, &name).unwrap(),
+        BTreeSet::from([file])
+    );
     session.shutdown().unwrap();
 }
 
@@ -717,7 +716,7 @@ fn fixed_service_browser_inference_and_unresolved() {
         .unwrap();
     assert!(definitions
         .iter()
-        .any(|target| target.uri.ends_with("lib.dom.d.ts") && !target.unverified));
+        .any(|target| target.path.ends_with("lib.dom.d.ts")));
     assert!(session
         .definitions(
             &file,
@@ -833,7 +832,7 @@ fn fixed_service_jsconfig_and_first_party_layout() {
         .unwrap();
     assert!(definitions
         .iter()
-        .any(|target| target.uri.ends_with("/src/target/worker.js")));
+        .any(|target| target.path.ends_with("src/target/worker.js")));
     session.shutdown().unwrap();
 }
 
@@ -866,10 +865,7 @@ if (!target) throw new Error('original alias unresolved'); process.stdout.write(
         .and_then(checked_definitions)
         .unwrap();
     assert_eq!(definitions.len(), 1);
-    assert_eq!(
-        definitions[0].uri,
-        crate::lsp::file_uri(&root.join(expected)).unwrap()
-    );
+    assert_eq!(definitions[0].path, root.join(expected));
     session.shutdown().unwrap();
 }
 
@@ -984,10 +980,7 @@ fn fixed_service_config_dir_templates_resolve_consumer_declaration() {
             .and_then(checked_definitions)
             .unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(
-            definitions[0].uri,
-            crate::lsp::file_uri(&root.join("app/src/dep.ts")).unwrap()
-        );
+        assert_eq!(definitions[0].path, root.join("app/src/dep.ts"));
         session.shutdown().unwrap();
     }
 }

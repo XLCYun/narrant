@@ -6,27 +6,25 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
-/// 已同时校验原文 UTF-16 边界和字节边界的闭开范围。
+/// 已校验原文 UTF-16 坐标并转换成字节偏移的闭开范围。
 #[derive(Clone, Debug)]
 pub(crate) struct CheckedRange {
-    pub range: Range,
     pub start_byte: u32,
     pub end_byte: u32,
 }
 
-/// 第一方 URI 使用原始侧身份；path 仅用于会话续查。
+/// 已校验文件来源和源码范围的位置，供语义层匹配声明与继续查询。
 #[derive(Clone, Debug)]
 pub(crate) struct CheckedLocation {
     pub path: PathBuf,
-    pub uri: String,
-    pub unverified: bool,
     pub span: CheckedRange,
 }
 
-/// tsserver 的未验证定义可能指向不存在的文件，不能作为已读取的源码位置。
+/// 定义查询的确认状态；未验证定义可能指向不存在的文件，不能作为源码位置。
 #[derive(Clone, Debug)]
 pub(crate) enum DefinitionEvidence {
     Checked(CheckedLocation),
@@ -54,7 +52,8 @@ pub(crate) struct CallEvidence {
 pub(crate) struct TypeScriptLsp {
     client: Option<LspClient>,
     project: PreparedProject,
-    checked_runtime_types: BTreeSet<(PathBuf, PathBuf)>,
+    /// 固定 workspace 会话中复用实际项目成员，避免逐次查询重复扫描整个项目。
+    project_members: BTreeMap<PathBuf, Arc<BTreeSet<PathBuf>>>,
     /// 原生诊断指出类型专用导入/导出被用作值；不能因 definition 越过别名而伪造调用。
     runtime_type_errors: BTreeMap<(PathBuf, PathBuf), Vec<CheckedRange>>,
 }
@@ -85,7 +84,7 @@ impl TypeScriptLsp {
         let mut session = Self {
             client: Some(client),
             project,
-            checked_runtime_types: BTreeSet::new(),
+            project_members: BTreeMap::new(),
             runtime_type_errors: BTreeMap::new(),
         };
         for (index, registration) in session
@@ -109,7 +108,8 @@ impl TypeScriptLsp {
             };
             session.raw("openExternalProject", json!({"projectFileName":alias, "rootFiles":registration.roots.iter().map(|file| json!({"fileName":file})).collect::<Vec<_>>(), "options":registration.options, "typeAcquisition":{"enable":false}}), false)?;
         }
-        for (file_index, file) in session.project.files.clone().into_iter().enumerate() {
+        let files = session.project.files.clone();
+        for file in &files {
             let source = session.project.source(&file.file)?;
             let extension = file
                 .file
@@ -133,17 +133,20 @@ impl TypeScriptLsp {
                     &source,
                 )
                 .map_err(lsp_failure)?;
-            let configured = session
-                .project
-                .registrations
-                .iter()
-                .filter(|registration| session.project.config_files.contains(&registration.name))
-                .map(|registration| registration.name.clone())
-                .collect::<Vec<_>>();
+        }
+        // 所有文档打开后再确认项目，避免缓存建立后 didOpen 又改变项目归属。
+        let configured = session
+            .project
+            .registrations
+            .iter()
+            .filter(|registration| session.project.config_files.contains(&registration.name))
+            .map(|registration| registration.name.clone())
+            .collect::<Vec<_>>();
+        for (file_index, file) in files.into_iter().enumerate() {
             let mut actual = Vec::new();
-            for name in configured {
-                if session.inspect_project(&file.file, &name)?.is_some() {
-                    actual.push(name);
+            for name in &configured {
+                if session.inspect_project(&file.file, name)?.is_some() {
+                    actual.push(name.clone());
                 }
             }
             if actual.is_empty() {
@@ -151,7 +154,6 @@ impl TypeScriptLsp {
             }
             session.project.files[file_index].projects = actual.clone();
             for name in &actual {
-                session.validate_project(&file.file, name)?;
                 session.check_runtime_type_usage(&file.file, name)?;
             }
         }
@@ -187,14 +189,17 @@ impl TypeScriptLsp {
         response_body(command, response, body_required)
     }
 
-    /// 每次语义请求都验证实际项目名，避免 tsserver 对错误 projectFileName 静默回退。
-    pub fn validate_project(&mut self, file: &Path, name: &Path) -> Result<Vec<PathBuf>> {
+    /// 校验实际项目名与文件归属，已确认的成员集合在本次固定 workspace 会话内共享。
+    pub fn validate_project(&mut self, file: &Path, name: &Path) -> Result<Arc<BTreeSet<PathBuf>>> {
         self.guarded(|session| session.validate_project_inner(file, name))
     }
 
     /// 校验 projectInfo 的真实身份、服务状态及所有源码成员；配置路径单独校验。
-    fn validate_project_inner(&mut self, file: &Path, name: &Path) -> Result<Vec<PathBuf>> {
-        let file = self.project.checked_path(file)?;
+    fn validate_project_inner(
+        &mut self,
+        file: &Path,
+        name: &Path,
+    ) -> Result<Arc<BTreeSet<PathBuf>>> {
         if !self
             .project
             .registrations
@@ -203,13 +208,20 @@ impl TypeScriptLsp {
         {
             return Err(failure("查询使用未知项目名或注册别名"));
         }
-        self.inspect_project(&file, name)?
+        self.inspect_project(file, name)?
             .ok_or_else(|| failure("TypeScript 实际项目与请求不符或请求文件不属于项目"))
     }
 
     /// 配置解析只能提供根文件；显式查询补全经 imports/references 加入的选中成员。
     /// 探测得到的回退项目不产生证据，正式查询仍要求请求名与实际名完全相同。
-    fn inspect_project(&mut self, file: &Path, name: &Path) -> Result<Option<Vec<PathBuf>>> {
+    fn inspect_project(
+        &mut self,
+        file: &Path,
+        name: &Path,
+    ) -> Result<Option<Arc<BTreeSet<PathBuf>>>> {
+        if let Some(members) = self.project_members.get(name) {
+            return Ok(members.contains(file).then(|| Arc::clone(members)));
+        }
         let file = self.project.checked_path(file)?;
         let body = self.raw(
             "projectInfo",
@@ -226,7 +238,7 @@ impl TypeScriptLsp {
         let members = body["fileNames"]
             .as_array()
             .ok_or_else(|| failure("projectInfo 缺少 fileNames"))?;
-        let mut checked = Vec::new();
+        let mut checked = BTreeSet::new();
         for member in members {
             let path = Path::new(
                 member
@@ -248,17 +260,20 @@ impl TypeScriptLsp {
                 }
                 continue;
             }
-            checked.push(self.project.checked_path(path)?);
+            checked.insert(self.project.checked_path(path)?);
         }
-        if !matches || !checked.contains(&file) {
+        if !matches {
             return Ok(None);
         }
-        Ok(Some(checked))
+        let checked = Arc::new(checked);
+        self.project_members
+            .insert(name.to_path_buf(), Arc::clone(&checked));
+        Ok(checked.contains(&file).then_some(checked))
     }
 
     /// 转换 checked 零基坐标为协议的一基坐标，并显式绑定项目。
     fn query_arguments(&mut self, file: &Path, position: Position, name: &Path) -> Result<Value> {
-        self.validate_project_inner(file, name)?;
+        self.validate_project(file, name)?;
         self.project
             .source(file)?
             .byte_offset(&position)
@@ -268,7 +283,7 @@ impl TypeScriptLsp {
         )
     }
 
-    /// 定义证据始终带原始 URI；空数组是唯一的成功空定义响应。
+    /// 定义证据使用真实源码路径；空数组表示本次查询没有找到定义。
     pub fn definitions(
         &mut self,
         file: &Path,
@@ -316,7 +331,6 @@ impl TypeScriptLsp {
                         .map(DefinitionEvidence::Checked)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            session.validate_project_inner(file, name)?;
             Ok(result)
         })
     }
@@ -341,7 +355,6 @@ impl TypeScriptLsp {
                 .iter()
                 .map(|value| session.hierarchy_item(value))
                 .collect::<Result<Vec<_>>>()?;
-            session.validate_project_inner(file, name)?;
             Ok(items)
         })
     }
@@ -403,7 +416,6 @@ impl TypeScriptLsp {
                     Ok(CallEvidence { target, from_spans })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            session.validate_project_inner(file, name)?;
             Ok(result)
         })
     }
@@ -433,35 +445,27 @@ impl TypeScriptLsp {
         })
     }
 
-    /// 所有位置先验证范围和来源，再生成原始身份 URI。
+    /// 在语义响应入口校验来源和坐标，后续声明匹配直接复用字节范围。
     fn location(&self, file: &Path, span: &Value) -> Result<CheckedLocation> {
         let path = self.project.checked_path(file)?;
-        let unverified = definition_unverified(span)?;
         let span = checked_range(&self.project.source(&path)?, span)?;
-        let uri = self.project.source_uri(&path)?;
-        Ok(CheckedLocation {
-            path,
-            uri,
-            unverified,
-            span,
-        })
+        Ok(CheckedLocation { path, span })
     }
 
     /// 每个文件/项目只检查一次类型误用，保留图解析需要的位置证据。
     pub fn check_runtime_type_usage(&mut self, file: &Path, name: &Path) -> Result<()> {
         self.guarded(|session| {
-            session.validate_project_inner(file, name)?;
-            if !session
-                .checked_runtime_types
-                .insert((file.to_path_buf(), name.to_path_buf()))
-            {
+            let key = (file.to_path_buf(), name.to_path_buf());
+            if session.runtime_type_errors.contains_key(&key) {
                 return Ok(());
             }
+            session.validate_project(file, name)?;
             let diagnostics = session.raw(
                 "semanticDiagnosticsSync",
                 json!({"file":file, "projectFileName":name, "includeLinePosition":true}),
                 true,
             )?;
+            let mut errors = Vec::new();
             for diagnostic in array(&diagnostics, "semanticDiagnosticsSync")? {
                 let code = diagnostic["code"]
                     .as_u64()
@@ -481,12 +485,9 @@ impl TypeScriptLsp {
                     &session.project.source(file)?,
                     &json!({"start":start,"end":end}),
                 )?;
-                session
-                    .runtime_type_errors
-                    .entry((file.to_path_buf(), name.to_path_buf()))
-                    .or_default()
-                    .push(span);
+                errors.push(span);
             }
+            session.runtime_type_errors.insert(key, errors);
             Ok(())
         })
     }
@@ -576,7 +577,6 @@ fn checked_range(source: &SourceText, value: &Value) -> Result<CheckedRange> {
         return Err(failure("tsserver 范围起点晚于终点"));
     }
     Ok(CheckedRange {
-        range,
         start_byte,
         end_byte,
     })

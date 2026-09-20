@@ -1,4 +1,4 @@
-//! 路径和 URI 映射拒绝词法跳转与符号链接逃逸，所有文件保持真实身份。
+//! 项目文件访问：统一路径校验与源码的按需读取和缓存。
 use super::PreparedProject;
 use crate::structure_review::source_text::SourceText;
 use crate::structure_review::typescript_analyzer::{failure, Result, LINE_BREAKS};
@@ -60,29 +60,11 @@ impl PreparedProject {
         Err(failure(format!("服务引入未授权源码：{}", file.display())))
     }
 
-    /// 服务 URI 只能是本地 file URI，映射后仍执行同一来源范围检查。
-    pub fn path_from_uri(&self, uri: &str) -> Result<PathBuf> {
-        let parsed = url::Url::parse(uri).map_err(failure)?;
-        if parsed.query().is_some()
-            || parsed.fragment().is_some()
-            || parsed.host_str().is_some_and(|host| host != "localhost")
-        {
-            return Err(failure("服务 URI 含非本地来源或额外片段"));
-        }
-        self.checked_path(
-            &parsed
-                .to_file_path()
-                .map_err(|_| failure("服务 URI 不是本地文件"))?,
-        )
-    }
-
-    /// 语义位置直接使用 Git workspace 或固定标准库的真实 URI。
-    pub fn source_uri(&self, file: &Path) -> Result<String> {
-        crate::lsp::file_uri(&self.checked_path(file)?).map_err(failure)
-    }
-
-    /// 首次访问才读取原文并建立索引；语法提取和 LSP 查询共用同一缓存。
+    /// 首次访问校验来源并读取原文；固定 workspace 会话内复用缓存，不反复访问文件系统。
     pub fn source(&self, file: &Path) -> Result<SourceText> {
+        if let Some(source) = self.loaded_sources.borrow().get(file) {
+            return Ok(source.clone());
+        }
         let checked = self.checked_path(file)?;
         let mut loaded = self.loaded_sources.borrow_mut();
         if let Some(source) = loaded.get(&checked) {

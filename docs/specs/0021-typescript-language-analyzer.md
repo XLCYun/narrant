@@ -42,8 +42,21 @@ semantic graph queries stay in the language service.
 - Initializers, ordinary top-level statements and directives share one ExecutionRegion
   per file or explicit namespace, in source order; no individual `statement` or
   `directive` nodes are emitted. Functions and class static blocks keep their own
-  execution ownership. Adding/removing child declarations must not modify the
-  surrounding module's or execution region's own content.
+  execution ownership. Classes, interfaces, enum bodies, explicit namespaces/modules
+  and type aliases' own object types exclude independently modeled members from their
+  AST member lists before Oxc generates comparison text. Adding/removing or reordering
+  those members changes containment; reordering them alone is not a diff. Neither
+  operation changes the container's own content.
+  Unmodeled members and declaration headers remain in the comparison.
+- Initializers, parameter defaults, superclass expressions, function implementations
+  and top-level execution expressions are compared in full, even when they contain
+  independently modeled functions or classes. Inserting or reordering a named function
+  in a field's array/object initializer changes both the field's content and, where
+  applicable, its containment. Expression lists are never stripped or repaired manually;
+  array holes, spreads, argument order and literal text retain their meaning.
+  Mixed variable statements inside namespaces remove only independently modeled bindings,
+  preserving any remaining ordinary values. Projection affects comparison only, leaving
+  source excerpts, node identities and language-service positions unchanged.
 - Ordinary `const`/`let`/`var` and destructuring declarations never create Value nodes,
   at either top level or inside functions, loops or callbacks. Ordinary object-literal
   properties/shorthands, constructor parameter properties and auto-accessor properties
@@ -100,9 +113,11 @@ language, repository-relative path, lexical owner and source declaration identit
 never use line offsets, absolute checkout/analysis paths, or tsserver symbol numbers.
 No rename/move inference. Selection changes must not change an existing object's ID.
 
-Signature and code represent only the object's own content. A child method edit must
-not change its containing class's own content; an inline callback edit must change its
-owner. Source is complete original display text and does not participate in diff.
+Signature and code represent the object's own content under the declaration-member
+and complete-expression rules above. A child method edit must not change its containing
+class's own content; a function embedded in a field initializer remains part of that
+field's content even if also modeled independently. Source is complete original display
+text and does not participate in diff.
 Normalization ignores formatting and ordinary comments but preserves ASI behavior,
 template/regex values and meaningful JSX text. JSDoc can affect native semantic
 relationships without becoming its own signature/contract entry.
@@ -179,6 +194,17 @@ AnalysisInput. Review owns checkout lifetime and revision/content checks. The TS
 must not reread the entire source inventory before and after analysis to compare snapshots.
 Retain path scope, helper output consistency, service project and source position checks;
 deduplicate preparation paths before checking them.
+
+Checks belong to the layer receiving new input. Cache each confirmed project's actual
+member set for the fixed workspace session; subsequent queries check the explicit project
+name and file membership in memory, without `projectInfo` calls before and after every
+definition request. Project discovery seeds this same cache. Keep diagnostics per
+file/project, including empty results, so repeated queries need no extra validation or RPC.
+New service locations still pass source-scope and UTF-16/byte-boundary checks at the LSP
+adapter. Downstream declaration matching trusts that path and byte range instead of
+round-tripping self-generated URIs or converting the same coordinates again. Identity
+encoding is lexical and performs no filesystem checks. Cached source text is reused
+without reopening or rechecking its path; uncached paths still require provenance checks.
 
 Preserve effective tsconfig/jsconfig, extends, references and package module metadata
 through a read-only TypeScript file host. Configuration overrides and first-party package

@@ -7,6 +7,9 @@ use crate::structure_review::{
 };
 use std::path::Path;
 
+#[path = "syntax/content.rs"]
+mod content;
+
 /// 使用内存文件稳定构造文档，无需语言服务或真实业务文件。
 fn parse(path: &str, source: &str) -> Document {
     Document::parse(
@@ -531,8 +534,13 @@ fn omitted_initializers_share_one_execution_region() {
             .replace("method() { load(); }", "method() { load(); load(); }"),
     );
     let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
-    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
-    assert_eq!(diff.nodes[0].id, method.node.data().id);
+    assert_eq!(diff.nodes.len(), 2, "{diff:?}");
+    for owner in [method, execution] {
+        assert!(diff
+            .nodes
+            .iter()
+            .any(|change| { change.id == owner.node.data().id && change.content.is_some() }));
+    }
     assert!(
         parse("a.ts", "const first = 1; const object = { value: 2 };")
             .declarations
@@ -900,7 +908,12 @@ fn ids_are_stable_across_roots_and_selection() {
     for d in &a.declarations {
         assert_eq!(selected.node(&d.node.data().id), Some(&d.node));
     }
-    assert!(a.uri.contains("%E7%9B%AE"));
+    assert!(a.declarations.iter().all(|declaration| declaration
+        .node
+        .data()
+        .id
+        .0
+        .contains("%E7%9B%AE")));
 }
 
 /// 普通变量和对象属性不建模，其函数内变动属于外层函数，顶层方法独立比较。
@@ -1278,10 +1291,11 @@ fn first_child_insertion_and_last_child_removal_preserve_owner_content() {
         ("class C {}", "class C { method() {} }", "C"),
         ("interface I {}", "interface I { field: string; }", "I"),
         ("namespace N {}", "namespace N { function child() {} }", "N"),
+        ("enum E {}", "enum E { A = 1, B = 2 }", "E"),
         (
-            "class C { value = {}; }",
-            "class C { value = { method() {} }; }",
-            "value",
+            "type T = {}",
+            "type T = { field: string; method(): void }",
+            "T",
         ),
     ] {
         let before = parse("a.ts", before);
@@ -1333,9 +1347,9 @@ fn child_reordering_and_neighboring_statements_preserve_owner_content() {
         .is_empty());
 }
 
-/// 对象属性间的逗号属于成员列表，删去子属性后不能污染剩余 spread 初始化内容。
+/// 对象初始化器完整比较，增加或重排具名方法仍会改变字段值。
 #[test]
-fn object_children_preserve_surviving_spreads_and_list_punctuation() {
+fn object_members_and_spreads_participate_in_initializer_content() {
     let before = parse("a.ts", "class C { value = { ...left, ...right }; }");
     let after = parse(
         "a.ts",
@@ -1354,35 +1368,48 @@ fn object_children_preserve_surviving_spreads_and_list_punctuation() {
                 .find(|d| &d.id == id)
                 .unwrap()
                 .content
-                .is_none(),
+                .is_some(),
             "{diff:?}"
         );
     }
-    assert!(graph(&[&after])
-        .diff(&graph(&[&reordered]))
-        .unwrap()
-        .nodes
-        .is_empty());
+    let diff = graph(&[&after]).diff(&graph(&[&reordered])).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(&diff.nodes[0].id, id);
+    assert!(diff.nodes[0].content.is_some());
+    assert!(diff.nodes[0].contains.is_empty());
 }
 
-/// 枚举成员和类字段初始化里的具名函数独立比较，保留普通列表成员。
+/// 字段初始化中的对象、函数实参和条件表达式完整保留，不扣除独立子声明。
 #[test]
-fn child_list_separators_preserve_nonchild_values() {
-    for (before, after, owner) in [
-        ("enum E {}", "enum E { A = 1, B = 2 }", "E"),
-        ("class C { value = factory(before, after); }", "class C { value = factory(function first() {}, before, function middle() {}, after, function last() {}); }", "value"),
+fn initializer_expressions_keep_independent_declarations() {
+    for (before, after) in [
+        ("{}", "{ method() {} }"),
+        (
+            "factory(before, after)",
+            "factory(function first() {}, before, function middle() {}, after, function last() {})",
+        ),
+        (
+            "enabled ? fallback : null",
+            "enabled ? class Child {} : null",
+        ),
     ] {
-        let before = parse("a.ts", before);
-        let after = parse("a.ts", after);
-        let id = &named(&before, owner).node.data().id;
+        let before = parse("a.ts", &format!("class C {{ value = {before}; }}"));
+        let after = parse("a.ts", &format!("class C {{ value = {after}; }}"));
+        let id = &named(&before, "value").node.data().id;
         for (before, after) in [(&before, &after), (&after, &before)] {
             let diff = graph(&[before]).diff(&graph(&[after])).unwrap();
-            assert!(diff.nodes.iter().find(|d| &d.id == id).unwrap().content.is_none(), "{owner}: {diff:?}");
+            let owner = diff.nodes.iter().find(|d| &d.id == id).unwrap();
+            assert!(owner.content.is_some(), "{diff:?}");
+            assert!(!owner.contains.is_empty());
+            assert!(!diff
+                .nodes
+                .iter()
+                .any(|d| d.id == named(before, "C").node.data().id));
         }
     }
 }
 
-/// 列表清理不能擦掉数组空位、逗号表达式或字面量中的有意义内容。
+/// 完整表达式比较保留数组空位、逗号表达式或字面量中的有意义内容。
 #[test]
 fn own_content_keeps_semantic_punctuation_and_literal_text() {
     let before = parse(
@@ -1401,7 +1428,7 @@ fn own_content_keeps_semantic_punctuation_and_literal_text() {
         .find(|d| &d.id == id)
         .unwrap()
         .content
-        .is_none());
+        .is_some());
     for (before, after) in [
         ("const value = [];", "const value = [,];"),
         ("const value = [a];", "const value = [a,,];"),
@@ -1430,9 +1457,9 @@ fn own_content_keeps_semantic_punctuation_and_literal_text() {
     }
 }
 
-/// 数组具名函数和类作为独立子对象，增删只改变包含关系并保留相邻元素与空位。
+/// 数组中的具名函数和类仍独立建模，增删同时改变字段初始化值与包含关系。
 #[test]
-fn array_child_insertion_and_removal_preserve_owner_content() {
+fn array_child_insertion_and_removal_change_initializer_content() {
     for (before, after) in [
         ("[]", "[function Child() {}]"),
         ("[keep]", "[function Child() {}, keep]"),
@@ -1452,15 +1479,15 @@ fn array_child_insertion_and_removal_preserve_owner_content() {
         for (before, after) in [(&before, &after), (&after, &before)] {
             let diff = graph(&[before]).diff(&graph(&[after])).unwrap();
             let parent = diff.nodes.iter().find(|d| &d.id == id).unwrap();
-            assert!(parent.content.is_none(), "{} -> {}: {diff:?}", before.source, after.source);
+            assert!(parent.content.is_some(), "{} -> {}: {diff:?}", before.source, after.source);
             assert!(!parent.contains.is_empty());
         }
     }
 }
 
-/// 子声明跨越普通值、spread 和真实空位重排，不改变任何已有对象的自身内容。
+/// 数组顺序是字段值的一部分；重排改变字段内容，但独立子对象本身保持不变。
 #[test]
-fn array_child_reordering_preserves_surviving_values_and_holes() {
+fn array_child_reordering_changes_only_initializer_content() {
     let before = parse(
         "a.ts",
         "class C { value = [function First() {}, , keep, class Last {}, ...rest, ,]; }",
@@ -1469,11 +1496,11 @@ fn array_child_reordering_preserves_surviving_values_and_holes() {
         "a.ts",
         "class C { value = [, class Last {}, keep, ...rest, , function First() {}]; }",
     );
-    assert!(graph(&[&before])
-        .diff(&graph(&[&after]))
-        .unwrap()
-        .nodes
-        .is_empty());
+    let diff = graph(&[&before]).diff(&graph(&[&after])).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(diff.nodes[0].id, named(&before, "value").node.data().id);
+    assert!(diff.nodes[0].content.is_some());
+    assert!(diff.nodes[0].contains.is_empty());
 }
 
 /// 不同真实空位的位置与数量仍产生内容差异，数组分隔符不能被整体删光。

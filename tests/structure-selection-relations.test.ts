@@ -100,13 +100,13 @@ describe("structure selection relations", () => {
   });
 
   it("shows no relations before selection or for an absent object or directory", () => {
-    expect(selectStructureEdges(expanded, expanded)).toEqual([]);
-    expect(selectStructureEdges(expanded, expanded, { kind: "object", id: "absent" })).toEqual([]);
-    expect(selectStructureEdges(expanded, expanded, { kind: "directory", path: "absent" })).toEqual([]);
+    expect(selectStructureEdges(expanded, expanded, undefined, "detailed")).toEqual([]);
+    expect(selectStructureEdges(expanded, expanded, { kind: "object", id: "absent" }, "detailed")).toEqual([]);
+    expect(selectStructureEdges(expanded, expanded, { kind: "directory", path: "absent" }, "detailed")).toEqual([]);
   });
 
   it("inherits incoming and outgoing relations through displayed type membership and nested cards", () => {
-    const selected = selectStructureEdges(expanded, expanded, { kind: "object", id: "Review" });
+    const selected = selectStructureEdges(expanded, expanded, { kind: "object", id: "Review" }, "detailed");
     expect(relations(selected)).toEqual(typeRelations());
     expect(card(expanded, "run").data.rows.some((row) => row.objectId === "impl")).toBe(true);
     expect(card(expanded, "deep").parentId).toBe(card(expanded, "Review").id);
@@ -114,24 +114,24 @@ describe("structure selection relations", () => {
       expect(edge.sourceHandle).toBe(port(expanded, edge.data!.sourceObjectId, "source"));
       expect(edge.targetHandle).toBe(port(expanded, edge.data!.targetObjectId, "target"));
     }
-    expect(selectStructureEdges(expanded, expanded, { kind: "object", id: "implementation-file" })).toEqual([]);
+    expect(selectStructureEdges(expanded, expanded, { kind: "object", id: "implementation-file" }, "detailed")).toEqual([]);
   });
 
   it("inherits all descendant relations for modules and files while excluding unrelated callers", () => {
     const expected = [...typeRelations(), "helper -> save: code.calls"].sort();
     for (const id of ["review", "feature-file"]) {
-      expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id }))).toEqual(expected);
+      expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id }, "detailed"))).toEqual(expected);
     }
-    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "nested" }))).toEqual(["helper -> save: code.calls"]);
+    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "nested" }, "detailed"))).toEqual(["helper -> save: code.calls"]);
   });
 
   it("selects only a leaf member's own incoming and outgoing relations despite sharing a card", () => {
     expect(card(expanded, "run").id).toBe(card(expanded, "restore").id);
     expect(card(expanded, "run").id).toBe(card(expanded, "sibling").id);
-    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "run" }))).toEqual([
+    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "run" }, "detailed"))).toEqual([
       "caller -> run: code.calls", "run -> legacy: − code.calls", "run -> save: code.calls", "run -> sibling: code.calls",
     ]);
-    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "restore" }))).toEqual(["restore -> cleanup: code.calls"]);
+    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "restore" }, "detailed"))).toEqual(["restore -> cleanup: code.calls"]);
   });
 
   it("retains descendant relations after a type or ancestor module is collapsed without reviving internal edges", () => {
@@ -139,7 +139,7 @@ describe("structure selection relations", () => {
       const collapsed = collapseStructureLayout(expanded, new Set([id]));
       const expected = typeRelations().filter((value) => value !== "run -> sibling: code.calls");
       if (id !== "Review") expected.push("helper -> save: code.calls");
-      const selected = selectStructureEdges(expanded, collapsed, { kind: "object", id });
+      const selected = selectStructureEdges(expanded, collapsed, { kind: "object", id }, "detailed");
       expect(relations(selected)).toEqual(expected.sort());
       const outgoing = selected.find((edge) => edge.data!.sourceObjectId === "run" && edge.data!.targetObjectId === "save")!;
       const incoming = selected.find((edge) => edge.data!.sourceObjectId === "caller")!;
@@ -151,7 +151,7 @@ describe("structure selection relations", () => {
 
   it("connects both collapsed containers while retaining each original member relation and removed status", () => {
     const collapsed = collapseStructureLayout(expanded, new Set(["Review", "Store"]));
-    const selected = selectStructureEdges(expanded, collapsed, { kind: "object", id: "Review" });
+    const selected = selectStructureEdges(expanded, collapsed, { kind: "object", id: "Review" }, "detailed");
     const crossContainer = selected.filter((edge) => edge.data!.sourceObjectId !== "caller");
     expect(crossContainer).toHaveLength(6);
     for (const edge of crossContainer) {
@@ -170,16 +170,16 @@ describe("structure selection relations", () => {
     const removed = crossContainer.find((edge) => edge.data!.targetObjectId === "legacy")!;
     expect(removed.label).toBe("− code.calls");
     expect(removed.data).toMatchObject({ collapsedSource: "Review::run", collapsedTarget: "Store::legacy" });
-    expect(selected.every((edge) => selectStructureEdges(expanded, collapsed, { kind: "object", id: "Store" }).includes(edge) || edge.data!.sourceObjectId === "caller")).toBe(true);
+    expect(selected.every((edge) => selectStructureEdges(expanded, collapsed, { kind: "object", id: "Store" }, "detailed").includes(edge) || edge.data!.sourceObjectId === "caller")).toBe(true);
   });
 
   it("keeps directory paths separate from opaque object IDs and follows displayed file descendants", () => {
     const expected = [...typeRelations(), "helper -> save: code.calls"].sort();
-    expect(relations(selectStructureEdges(expanded, expanded, { kind: "directory", path: "src/features" }))).toEqual(expected);
-    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "src/features" }))).toEqual(["src/features -> cleanup: code.calls"]);
-    expect(selectStructureEdges(expanded, expanded, { kind: "directory", path: "src/implementations" })).toEqual([]);
+    expect(relations(selectStructureEdges(expanded, expanded, { kind: "directory", path: "src/features" }, "detailed"))).toEqual(expected);
+    expect(relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "src/features" }, "detailed"))).toEqual(["src/features -> cleanup: code.calls"]);
+    expect(selectStructureEdges(expanded, expanded, { kind: "directory", path: "src/implementations" }, "detailed")).toEqual([]);
     const collapsed = collapseStructureLayout(expanded, new Set(), new Set(["src/features", "src/storage"]));
-    const selected = selectStructureEdges(expanded, collapsed, { kind: "directory", path: "src/features" });
+    const selected = selectStructureEdges(expanded, collapsed, { kind: "directory", path: "src/features" }, "detailed");
     expect(relations(selected)).toEqual(expected.filter((value) => value !== "run -> sibling: code.calls"));
     const sourceDirectory = collapsed.nodes.find((item) => item.data.directory?.path === "src/features")!;
     const targetDirectory = collapsed.nodes.find((item) => item.data.directory?.path === "src/storage")!;
@@ -200,10 +200,10 @@ describe("structure selection relations", () => {
       const expected = showUnchangedReferences
         ? [...typeRelations().filter((value) => value !== "run -> sibling: code.calls"), "helper -> Store: code.imports", "helper -> save: code.calls"].sort()
         : ["field -> Store: code.type_use", "run -> legacy: − code.calls"];
-      expect(relations(selectStructureEdges(base, collapsed, { kind: "object", id: "review" }))).toEqual(expected);
+      expect(relations(selectStructureEdges(base, collapsed, { kind: "object", id: "review" }, "detailed"))).toEqual(expected);
       const rearranged = await relayoutStructureLayout(collapsed);
-      expect(relations(selectStructureEdges(base, rearranged, { kind: "object", id: "review" }))).toEqual(expected);
-      for (const edge of selectStructureEdges(base, rearranged, { kind: "object", id: "review" })) {
+      expect(relations(selectStructureEdges(base, rearranged, { kind: "object", id: "review" }, "detailed"))).toEqual(expected);
+      for (const edge of selectStructureEdges(base, rearranged, { kind: "object", id: "review" }, "detailed")) {
         expect(rearranged.edges).toContain(edge);
       }
     }
@@ -215,12 +215,110 @@ describe("structure selection relations", () => {
     const originalExpanded = structuredClone(expanded);
     const originalCollapsed = structuredClone(collapsed);
     for (const layout of [expanded, collapsed]) {
-      selectStructureEdges(expanded, layout, { kind: "object", id: "Review" });
-      selectStructureEdges(expanded, layout, { kind: "directory", path: "src/features" });
-      selectStructureEdges(expanded, layout, { kind: "object", id: "run" });
+      selectStructureEdges(expanded, layout, { kind: "object", id: "Review" }, "detailed");
+      selectStructureEdges(expanded, layout, { kind: "directory", path: "src/features" }, "detailed");
+      selectStructureEdges(expanded, layout, { kind: "object", id: "run" }, "detailed");
+      selectStructureEdges(expanded, layout, { kind: "object", id: "Review" }, "compact");
+      selectStructureEdges(expanded, layout, { kind: "directory", path: "src/features" }, "compact");
     }
     expect(comparison).toEqual(originalComparison);
     expect(expanded).toEqual(originalExpanded);
     expect(collapsed).toEqual(originalCollapsed);
+  });
+
+  it("summarizes a type's member relationships by direction and hides internal member links", () => {
+    const selected = selectStructureEdges(expanded, expanded, { kind: "object", id: "Review" }, "compact");
+    expect(selected).toHaveLength(2);
+    const outgoing = selected.find((edge) => edge.source === card(expanded, "Review").id)!;
+    expect(outgoing.data).toMatchObject({ change: "mixed", summary: { sourceName: "Review", targetName: "Store", count: 6 } });
+    expect(outgoing.target).toBe(card(expanded, "Store").id);
+    expect(outgoing.sourceHandle).toBe(port(expanded, "Review", "source"));
+    expect(outgoing.targetHandle).toBe(port(expanded, "Store", "target"));
+    expect(outgoing.data!.route).toBeUndefined();
+    expect(outgoing.label).toBeUndefined();
+    expect(outgoing.style).toMatchObject({ stroke: "#9333ea", strokeDasharray: undefined });
+    const incoming = selected.find((edge) => edge.target === card(expanded, "Review").id)!;
+    expect(incoming.data!.summary).toEqual({ sourceName: "tests/entry.rs", targetName: "Review", count: 1 });
+    expect(incoming.targetHandle).toBe(port(expanded, "Review", "target"));
+  });
+
+  it("promotes external nested types to the selected file or directory's display level", () => {
+    const files = selectStructureEdges(expanded, expanded, { kind: "object", id: "feature-file" }, "compact");
+    expect(files).toHaveLength(2);
+    expect(files.find((edge) => edge.source === card(expanded, "feature-file").id)!.data!.summary).toEqual({
+      sourceName: "src/features/review.rs", targetName: "src/storage/store.rs", count: 7,
+    });
+    const directories = selectStructureEdges(expanded, expanded, { kind: "directory", path: "src/features" }, "compact");
+    expect(directories).toHaveLength(2);
+    expect(directories.find((edge) => edge.data!.summary!.sourceName === "src/features")!.data!.summary).toEqual({
+      sourceName: "src/features", targetName: "src/storage", count: 7,
+    });
+    const root = selectStructureEdges(expanded, expanded, { kind: "directory", path: "src" }, "compact");
+    expect(root).toHaveLength(1);
+    expect(root[0].data!.summary).toEqual({ sourceName: "tests", targetName: "src", count: 3 });
+  });
+
+  it("retains summaries and header ports with both containers folded and after optional relayout", async () => {
+    const folded = collapseStructureLayout(expanded, new Set(["Review", "Store"]));
+    for (const layout of [folded, await relayoutStructureLayout(folded)]) {
+      const selected = selectStructureEdges(expanded, layout, { kind: "object", id: "Review" }, "compact");
+      expect(selected).toHaveLength(2);
+      const outgoing = selected.find((edge) => edge.data!.summary!.sourceName === "Review")!;
+      expect(outgoing.data!.summary).toEqual({ sourceName: "Review", targetName: "Store", count: 6 });
+      expect(outgoing.sourceHandle).toBe(port(layout, "Review", "source"));
+      expect(outgoing.targetHandle).toBe(port(layout, "Store", "target"));
+      expect(outgoing.data!.route).toBeUndefined();
+    }
+    const foldedAncestor = collapseStructureLayout(expanded, new Set(["storage-file"]));
+    expect(selectStructureEdges(expanded, foldedAncestor, { kind: "object", id: "Review" }, "compact")
+      .find((edge) => edge.data!.summary!.sourceName === "Review")!.data!.summary!.targetName).toBe("src/storage/store.rs");
+  });
+
+  it("keeps opposite directions separate and leaves a leaf's recursive and internal calls detailed", async () => {
+    const comparison = selectionFixture();
+    for (const graph of [comparison.before, comparison.after]) {
+      graph.nodes.find((node) => node.id === "save")!.references.push(reference("run"), reference("sibling"));
+      graph.nodes.find((node) => node.id === "run")!.references.push(reference("run"));
+    }
+    const layout = await layoutStructureComparison(comparison, options);
+    const selected = selectStructureEdges(layout, layout, { kind: "object", id: "Review" }, "compact");
+    expect(selected).toHaveLength(3);
+    expect(selected.find((edge) => edge.source === card(layout, "Store").id)!.data!.summary).toEqual({
+      sourceName: "Store", targetName: "Review", count: 2,
+    });
+    const leaf = selectStructureEdges(layout, layout, { kind: "object", id: "run" }, "compact");
+    expect(leaf).toEqual(selectStructureEdges(layout, layout, { kind: "object", id: "run" }, "detailed"));
+    expect(relations(leaf)).toContain("run -> run: code.calls");
+    expect(relations(leaf)).toContain("run -> sibling: code.calls");
+  });
+
+  it("retains separate ports for external functions without a container despite sharing a member table", async () => {
+    const comparison = selectionFixture();
+    for (const graph of [comparison.before, comparison.after]) {
+      graph.nodes.push(node("free-one", "callable"), node("free-two", "callable"));
+      graph.root.push("free-one", "free-two");
+      graph.nodes.find((node) => node.id === "run")!.references.push(reference("free-one"), reference("free-two"));
+    }
+    const layout = await layoutStructureComparison(comparison, options);
+    expect(card(layout, "free-one").id).toBe(card(layout, "free-two").id);
+    const selected = selectStructureEdges(layout, layout, { kind: "object", id: "Review" }, "compact");
+    for (const id of ["free-one", "free-two"]) {
+      const edge = selected.find((edge) => edge.data!.summary!.targetName === id)!;
+      expect(edge.targetHandle).toBe(port(layout, id, "target"));
+      expect(edge.data!.summary!.count).toBe(1);
+    }
+    expect(selected).toHaveLength(4);
+  });
+
+  it("summarizes only references enabled by the current display filters", async () => {
+    const base = await layoutStructureComparison(comparison, { ...options, showUnchangedReferences: false });
+    const selected = selectStructureEdges(base, base, { kind: "object", id: "Review" }, "compact");
+    expect(selected).toHaveLength(1);
+    expect(selected[0].data!.summary).toEqual({ sourceName: "Review", targetName: "Store", count: 2 });
+    const imports = await layoutStructureComparison(comparison, { ...options, showImports: true });
+    expect(selectStructureEdges(imports, imports, { kind: "object", id: "review" }, "compact")
+      .find((edge) => edge.data!.summary!.sourceName === "review")!.data!.summary!.count).toBe(8);
+    expect(selectStructureEdges(base, base, undefined, "compact")).toEqual([]);
+    expect(selectStructureEdges(base, base, { kind: "object", id: "absent" }, "compact")).toEqual([]);
   });
 });

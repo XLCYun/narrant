@@ -2,7 +2,7 @@
 use super::{failure, identity, test_code, Result};
 use crate::structure_review::source_text::SourceText;
 use crate::{
-    lsp::{file_uri, Position},
+    lsp::Position,
     structure_review::code_graph::{
         AnalysisOptions, CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
     },
@@ -28,8 +28,6 @@ pub(crate) struct DeclarationPart {
     pub span: Span,
     pub selection: Span,
     pub body: Option<Span>,
-    /// 父内容扣除变量语句等包装时使用，精确声明定位仍使用 span。
-    pub parent_exclusion: Span,
     /// 声明的定位名字；重载汇总各片段，匿名声明为空。
     pub names: Vec<Span>,
     /// 完整展示范围包含 const/export 等声明包装，不参与位置归属或比较。
@@ -96,7 +94,6 @@ pub(crate) struct Occurrence {
 /// 一个固定源码文件，不将 Oxc 的 arena 生命周期泄漏到语言服务层。
 #[derive(Debug)]
 pub(crate) struct Document {
-    pub uri: String,
     pub source: SourceText,
     pub declarations: Vec<Declaration>,
     pub occurrences: Vec<Occurrence>,
@@ -146,11 +143,10 @@ impl Document {
                 checked.diagnostics
             )));
         }
-        // file_scope 已校验词法/真实边界；分类只看仓库内部分，忽略 checkout 祖先名称。
+        // file_scope 已校验词法边界；分类只看仓库内部分，忽略 checkout 祖先名称。
         let relative = path.strip_prefix(repository).map_err(failure)?;
         let excluded = !options.include_tests && test_code::is_test(relative);
         let mut document = Self {
-            uri: file_uri(&path).map_err(failure)?,
             source: source.clone(),
             declarations: vec![],
             occurrences: vec![],
@@ -177,13 +173,14 @@ impl Document {
         if normalized_parse.fatal_error || !normalized_parse.diagnostics.is_empty() {
             return Err(failure("Oxc 规范代码无法重新解析"));
         }
+        let mut canonical = declarations::Collector::new();
+        canonical.visit_program(&normalized_parse.program);
         let content = content::Content::new(
             &normalized,
             &normalized_parse.tokens,
             &normalized_parse.program,
+            &canonical.items,
         );
-        let mut canonical = declarations::Collector::new();
-        canonical.visit_program(&normalized_parse.program);
         if original.items.len() != canonical.items.len() {
             return Err(failure("Oxc 规范化改变了声明数量"));
         }
@@ -225,29 +222,7 @@ impl Document {
                 .filter(|(_, c)| c.parent == Some(index))
                 .map(|(i, _)| ids[i].clone())
                 .collect();
-            let mut signature = Vec::new();
-            let mut bodies = Vec::new();
-            for part in &norm.parts {
-                // 所有独立建模的内部声明均排除；export 包装声明保持词法透明。
-                let nested: Vec<_> = canonical
-                    .items
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != index)
-                    .flat_map(|(_, c)| c.parts.iter().map(|p| p.parent_exclusion))
-                    .filter(|s| contains(part.span, *s) && *s != part.span)
-                    .collect();
-                let mut omitted = nested.clone();
-                if let Some(body) = part.body {
-                    omitted.push(body);
-                    bodies.push(content.own_text(body, &nested));
-                }
-                signature.push(format!(
-                    "{}{}",
-                    norm.prefix,
-                    content.own_text(part.span, &omitted)
-                ));
-            }
+            let (signature, code) = content.declaration(norm);
             let source_text = raw
                 .parts
                 .iter()
@@ -259,8 +234,8 @@ impl Document {
                 language: LanguageId(language.into()),
                 native_kind: raw.kind.into(),
                 name: raw.name.clone(),
-                signature: Some(signature.join("\n")),
-                code: (!bodies.is_empty()).then(|| bodies.join("\n")),
+                signature: Some(signature),
+                code,
                 source: Some(source_text),
                 contains: children,
                 references: vec![],

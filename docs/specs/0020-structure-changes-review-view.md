@@ -268,9 +268,30 @@ an explanatory sentence.
 ### Show relationships for the selected object
 
 The graph initially hides all relationship lines and their connection markers.
+Display options include **Show detailed relationships**, off by default. The default
+compact mode applies when selecting a container, type or directory:
+
+- Hide relationships whose endpoints are both within the selected subtree.
+- Connect the selected container's header to an external container's header, in the
+  original direction. Choose the external container at the same display depth,
+  counting container/type/directory ancestors and excluding synthetic member tables.
+  If that branch is shallower, use its closest available container. An external
+  function with no container keeps its own endpoint.
+- Merge relationships with the same directed pair of display endpoints into one line,
+  regardless of reference kind. Opposite directions remain separate. Hovering the
+  line shows its endpoint names and the number of underlying relationships.
+- Keep the added/removed/unchanged style when all merged relationships agree; use
+  the relationship-change color when their change states differ.
+
+Detailed mode restores individual member endpoints and includes internal relationships.
+Switching modes changes only displayed edges and markers; it preserves selection,
+layout, viewport and collapse state, and never restarts analysis. Both modes use
+the existing reference visibility filters. A new comparison starts in compact mode.
+
 Selecting a member reveals only incident lines to that exact Code Object, in both
-directions. Selecting a container, type or directory additionally includes its
-displayed descendants' incoming and outgoing lines, even when folded. Original
+directions in either mode. In detailed mode, selecting a container, type or directory
+additionally includes its displayed descendants' incoming and outgoing lines, even
+when folded. Original
 relationship endpoints determine identity, so selecting a method in a class card
 does not reveal the other methods' lines. Calls between members of one card,
 recursive calls and removed relationships follow the same rule.
@@ -318,8 +339,8 @@ State is scoped to the current comparison; a new Snapshot starts expanded.
 
 Candidate relationships retain their original Code Object endpoints. If an endpoint
 is hidden by collapse, its visible collapsed ancestor provides the display port.
-Selecting a member shows relationships incident to that exact object. Selecting a
-container or type also includes incoming and outgoing relationships of every
+Selecting a member shows relationships incident to that exact object. In detailed
+mode, selecting a container or type also includes incoming and outgoing relationships of every
 descendant in the current display hierarchy, including methods placed under a type
 through implementation ownership. The fully expanded hierarchy supplies membership
 even when descendants are folded. Expanded endpoints stay on their actual members;
@@ -331,6 +352,12 @@ entirely inside one collapsed card are hidden. A proxied endpoint's tooltip cont
 only its readable object name, qualified by the containing Type for a member (for
 example `Repository::load`), without a target or module-description prefix.
 External and Unresolved references remain hidden.
+
+In compact mode, aggregation uses the fully expanded hierarchy to keep the same
+display depth while folding. If an aggregate endpoint is hidden, its visible folded
+ancestor supplies the header port. Recompute paths for these promoted endpoints
+without changing node positions. Folding does not split deduplicated lines back into
+member lines; individual connections remain available by enabling detailed mode.
 
 By default, folding and unfolding project the cached expanded layout without running ELK,
 showing a layout-loading overlay, adjusting the viewport or remounting React Flow.
@@ -808,8 +835,8 @@ Collapse all/expand all apply to directories as well as existing containers and 
 
 Edges keep their exact original code-object identities. When an endpoint is hidden
 inside a collapsed directory, the directory header supplies a display port and the
-tooltip names the actual endpoint. Selecting a directory includes the incoming and
-outgoing relationships of its displayed descendant files and code objects, even
+tooltip names the actual endpoint. In detailed mode, selecting a directory includes
+the incoming and outgoing relationships of its displayed descendant files and code objects, even
 when the directory or files are folded. Directory paths and code-object identities
 remain separate. Source comparison and graph diff remain at code-object
 granularity; file and directory grouping does not promote child changes into parent

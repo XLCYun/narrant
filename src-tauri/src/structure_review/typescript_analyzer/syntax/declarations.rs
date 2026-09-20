@@ -54,7 +54,6 @@ impl<'a> Collector<'a> {
             span,
             selection,
             body,
-            parent_exclusion: span,
             source_span: span,
             names: if selection.is_empty() {
                 vec![]
@@ -190,7 +189,6 @@ impl<'a> Visit<'a> for Collector<'a> {
                     span,
                     selection: Span::new(span.start, span.start),
                     body: Some(span),
-                    parent_exclusion: span,
                     source_span: span,
                     names: vec![],
                 })
@@ -514,7 +512,6 @@ impl<'a> Visit<'a> for Collector<'a> {
                         .map(|i| i.span)
                         .collect();
                 if let Some(AstKind::VariableDeclaration(d)) = self.stack.last().map(|(n, _)| n) {
-                    part.parent_exclusion = d.span;
                     part.source_span = d.span;
                 }
             }
@@ -540,7 +537,6 @@ impl<'a> Visit<'a> for Collector<'a> {
                 let declaration = &mut self.items[id];
                 let part = declaration.parts.last_mut().unwrap();
                 part.source_span = export_span;
-                part.parent_exclusion = export_span;
                 if !declaration.prefix.starts_with(modifier) {
                     declaration.prefix.insert_str(0, modifier);
                 }

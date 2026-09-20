@@ -207,9 +207,7 @@ impl Resolver {
         kind: OccurrenceKind,
         visited: &mut BTreeSet<(PathBuf, u32)>,
     ) -> Result<Option<Vec<Target>>> {
-        if location.unverified
-            || visited.len() >= 32
-            || !visited.insert((location.path.clone(), location.span.start_byte))
+        if visited.len() >= 32 || !visited.insert((location.path.clone(), location.span.start_byte))
         {
             return Ok(None);
         }
@@ -329,37 +327,24 @@ impl Resolver {
         }))
     }
 
-    /// JSON 元数据不进入 Oxc；标准库和固定 Node 闭包使用独立稳定命名空间。
+    /// 复用 LSP 已校验的位置和共享源码；仅首次遇到目标文件时解析其声明。
     fn load(&mut self, session: &TypeScriptLsp, location: &CheckedLocation) -> Result<bool> {
         let project = session.project();
-        let checked =
-            project.path_from_uri(&crate::lsp::file_uri(&location.path).map_err(failure)?)?;
-        if checked != location.path || project.source_uri(&checked)? != location.uri {
-            return Err(failure("定义 URI 与受控源码身份不一致"));
-        }
-        if project.metadata.contains(&checked) {
+        let path = &location.path;
+        if project.metadata.contains(path) {
             return Ok(false);
         }
-        if !self.documents.contains_key(&checked) {
-            let (root, path, runtime) = if project.source_paths.contains(&checked) {
-                (project.workspace_root.clone(), checked.clone(), false)
+        if !self.documents.contains_key(path) {
+            let runtime = !project.source_paths.contains(path);
+            let root = if runtime {
+                &project.toolchain.runtime_root
             } else {
-                let path = url::Url::parse(&location.uri)
-                    .map_err(failure)?
-                    .to_file_path()
-                    .map_err(|_| failure("运行时 URI 无效"))?;
-                if !["typescript/lib", "@types/node", "undici-types"]
-                    .iter()
-                    .any(|p| path.starts_with(project.toolchain.runtime_root.join(p)))
-                {
-                    return Err(failure("定义不属于固定运行时源码"));
-                }
-                (project.toolchain.runtime_root.clone(), path, true)
+                &project.workspace_root
             };
             let mut document = Document::parse(
-                &root,
-                path,
-                project.source(&checked)?,
+                root,
+                path.clone(),
+                project.source(path)?,
                 AnalysisOptions {
                     include_tests: true,
                 },
@@ -379,22 +364,7 @@ impl Resolver {
                     occurrence.owner.0 = runtime_id(&occurrence.owner.0);
                 }
             }
-            self.documents.insert(checked.clone(), document);
-        }
-        let document = &self.documents[&checked];
-        if document.uri != location.uri
-            || document
-                .source
-                .byte_offset(&location.span.range.start)
-                .map_err(failure)?
-                != location.span.start_byte as usize
-            || document
-                .source
-                .byte_offset(&location.span.range.end)
-                .map_err(failure)?
-                != location.span.end_byte as usize
-        {
-            return Err(failure("定义位置不属于原始文档快照"));
+            self.documents.insert(path.clone(), document);
         }
         Ok(true)
     }
@@ -473,7 +443,7 @@ fn declaration_at<'a>(
     document: &'a Document,
     location: &CheckedLocation,
 ) -> Option<&'a Declaration> {
-    if location.unverified || location.span.start_byte >= location.span.end_byte {
+    if location.span.start_byte >= location.span.end_byte {
         return None;
     }
     document

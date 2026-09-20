@@ -2,7 +2,7 @@
 use super::{failure, Result};
 use std::path::{Component, Path};
 
-/// 校验词法路径并编码相对路径；拒绝越界、非 UTF-8 和不明确的根。
+/// 按词法相对路径编码身份；真实文件来源由项目访问层校验，内存语法解析无需磁盘访问。
 pub(super) fn file_scope(repository: &Path, path: &Path, language: &str) -> Result<String> {
     if !repository.is_absolute() || !path.is_absolute() {
         return Err(failure("TypeScript 分析路径必须为绝对路径"));
@@ -14,16 +14,6 @@ pub(super) fn file_scope(repository: &Path, path: &Path, language: &str) -> Resu
             .any(|c| !matches!(c, Component::Normal(_)))
     {
         return Err(failure("TypeScript 源文件路径不在仓库内"));
-    }
-    // 已存在的路径额外防止符号链接越出仓库；纯内存文档不要求文件存在。
-    if path.exists()
-        && repository.exists()
-        && !path
-            .canonicalize()
-            .map_err(failure)?
-            .starts_with(repository.canonicalize().map_err(failure)?)
-    {
-        return Err(failure("TypeScript 源文件链接越出仓库"));
     }
     let relative = relative
         .to_str()

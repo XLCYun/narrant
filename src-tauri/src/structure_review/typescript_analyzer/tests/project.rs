@@ -106,7 +106,7 @@ fn preparation_keeps_unselected_sources_as_paths_until_requested() {
     assert!(project.source(&unread).is_err());
 }
 
-/// 缓存命中前仍拒绝未授权源码和父目录片段，即使后者最终指向已缓存声明。
+/// 首次访问仍拒绝未授权源码和父目录片段，即使后者最终指向已缓存声明。
 #[test]
 fn source_cache_preserves_authorization_and_lexical_path_checks() {
     let project = source_project();
@@ -133,10 +133,10 @@ fn source_cache_preserves_authorization_and_lexical_path_checks() {
     }
 }
 
-/// 已缓存文件被替换成根外链接后，第一方和运行时读取都重新校验真实路径。
+/// 已读取的源码始终复用内存快照；后续路径变化不会触发再次读取或混入新文件。
 #[cfg(unix)]
 #[test]
-fn source_cache_rechecks_symlink_targets_after_warmup() {
+fn source_cache_keeps_snapshot_without_reopening_paths() {
     let project = source_project();
     let outside = project
         .workspace_root
@@ -151,11 +151,11 @@ fn source_cache_rechecks_symlink_targets_after_warmup() {
             .runtime_root
             .join("typescript/lib/lib.fixture.d.ts"),
     ] {
-        project.source(&file).unwrap();
+        let original = project.source(&file).unwrap();
         std::fs::remove_file(&file).unwrap();
         std::os::unix::fs::symlink(&outside, &file).unwrap();
         assert!(project.checked_path(&file).is_err(), "{}", file.display());
-        assert!(project.source(&file).is_err(), "{}", file.display());
+        assert_eq!(project.source(&file).unwrap().as_str(), original.as_str());
     }
 }
 

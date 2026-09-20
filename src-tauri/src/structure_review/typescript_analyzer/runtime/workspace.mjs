@@ -184,7 +184,7 @@ export function workspaceSystem(context, ts) {
     readDirectory: (directory, extensions, excludes, includes, depth) => ts.matchFiles(directory, extensions, excludes, includes,
       native.useCaseSensitiveFileNames, context.root, depth, entries, resolve),
     realpath: resolve,
-    // Git workspace 由 Review lease 管理；分析结束仍通过原始源码校验检测外部变化。
+    // Review 保证分析期间 Git workspace 稳定；服务不监听文件或配置变化。
     watchFile: () => ({ close() {} }),
     watchDirectory: () => ({ close() {} }),
     writeFile() { throw new Error('TypeScript 分析不能写入 Git workspace'); },

@@ -22,9 +22,9 @@ vi.mock("@monaco-editor/react", () => ({
 vi.mock("@xyflow/react", async (importOriginal) => ({
   ...await importOriginal<typeof import("@xyflow/react")>(),
   ReactFlow: ({ nodes, edges, nodeTypes, children, onPaneClick }: { nodes: ObjectNode[]; edges: StructureEdge[]; nodeTypes: { codeObject: ComponentType<{ id: string; data: ObjectData }> }; children: ReactNode; onPaneClick(): void }) => {
-    const ports = new Map(nodes.flatMap((node) => node.data.ports.map((port) => [port.id, port.objectId] as const)));
+    const ports = new Map(nodes.flatMap((node) => node.data.ports.map((port) => [port.id, port.objectId ?? node.data.directory?.path] as const)));
     return <div data-testid="rendered-graph" data-layout={JSON.stringify(nodes.map((node) => ({ id: node.id, position: node.position, style: node.style })))}>{nodes.map((node) => <nodeTypes.codeObject key={node.id} id={node.id} data={node.data} />)}{children}
-      {edges.map((edge) => <div key={edge.id} data-testid="visible-relation" title={edge.data?.collapsedSource ?? edge.data?.collapsedTarget}>{ports.get(edge.sourceHandle!)} → {ports.get(edge.targetHandle!)} · {edge.label}</div>)}
+      {edges.map((edge) => <div key={edge.id} data-testid="visible-relation" data-relation-count={edge.data?.summary?.count} title={edge.data?.collapsedSource ?? edge.data?.collapsedTarget}>{ports.get(edge.sourceHandle!)} → {ports.get(edge.targetHandle!)}{edge.label && <> · {edge.label}</>}</div>)}
       <button onClick={onPaneClick}>Graph background</button>
     </div>;
   },
@@ -45,6 +45,16 @@ async function toggleRearrangement() {
     fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
   }
   const option = await screen.findByRole("menuitemcheckbox", { name: "折叠时重新布局" });
+  fireEvent.click(option);
+  fireEvent.keyDown(option, { key: "Escape" });
+}
+
+/** 在同一画布切换连线详情，关闭菜单后继续验证对象选择与折叠。 */
+async function toggleDetailedRelations() {
+  if (!screen.queryByRole("menuitemcheckbox", { name: "显示详细连线" })) {
+    fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  }
+  const option = await screen.findByRole("menuitemcheckbox", { name: "显示详细连线" });
   fireEvent.click(option);
   fireEvent.keyDown(option, { key: "Escape" });
 }
@@ -194,6 +204,7 @@ it("keeps details beside the graph and switches exact objects without remounting
   expect(within(sidebar).getByText("选择图中的对象，在此查看详情。")).toBeInTheDocument();
   expect(screen.getByRole("separator", { name: "调整结构详情宽度" })).toBeInTheDocument();
   const graph = await screen.findByTestId("rendered-graph");
+  await toggleDetailedRelations();
   expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
   const added = within(graph).getByRole("button", { name: /fn prepare_snapshot.*新增/ });
   fireEvent.click(added);
@@ -297,6 +308,7 @@ it("selects the toggled object, retains nested folds and never restarts analysis
   const current = binding();
   render(<StructureChangesView binding={current} dark={false} />);
   const graph = await screen.findByTestId("rendered-graph");
+  await toggleDetailedRelations();
   expect(layoutCalls).toHaveBeenCalledTimes(1);
   const sidebar = screen.getByRole("complementary", { name: "结构详情" });
   fireEvent.click(within(graph).getByRole("button", { name: "收起 Review", exact: true }));
@@ -408,6 +420,7 @@ it("selects directories without inventing source diffs and preserves file folds 
   const current = binding(structureFileModulesFixture());
   render(<StructureChangesView binding={current} dark={false} />);
   const graph = await screen.findByTestId("rendered-graph");
+  await toggleDetailedRelations();
   const sidebar = screen.getByRole("complementary", { name: "结构详情" });
   const path = "src/review/initialization";
   const filePath = `${path}/prepare-review-workspace-for-selected-repository.ts`;
@@ -452,6 +465,7 @@ it("inherits incoming and outgoing member relationships through selected types a
   const layoutCalls = vi.spyOn(graphPresentation, "layoutStructureComparison");
   render(<StructureChangesView binding={current} dark={false} />);
   const graph = await screen.findByTestId("rendered-graph");
+  await toggleDetailedRelations();
   const geometry = graph.dataset.layout;
   fireEvent.click(within(graph).getByRole("button", { name: "Review", exact: true }));
   expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
@@ -472,6 +486,54 @@ it("inherits incoming and outgoing member relationships through selected types a
   fireEvent.click(within(graph).getByRole("button", { name: "Graph background" }));
   expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
   expect(layoutCalls).toHaveBeenCalledTimes(1);
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
+});
+
+it("defaults to compact container relationships and switches detail without moving nodes or reanalyzing", async () => {
+  const current = binding(structureFileModulesFixture());
+  const layoutCalls = vi.spyOn(graphPresentation, "layoutStructureComparison");
+  const compactCalls = vi.spyOn(graphPresentation, "relayoutStructureLayout");
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  const geometry = graph.dataset.layout;
+  fireEvent.click(screen.getByRole("button", { name: "显示选项" }));
+  const option = await screen.findByRole("menuitemcheckbox", { name: "显示详细连线" });
+  expect(option).toHaveAttribute("aria-checked", "false");
+  fireEvent.keyDown(option, { key: "Escape" });
+
+  fireEvent.click(within(graph).getByRole("button", { name: "src/startup.ts", exact: true }));
+  expect(screen.getByTestId("visible-relation")).toHaveTextContent("file-startup → src/review/initialization");
+  expect(screen.getByTestId("visible-relation")).toHaveAttribute("data-relation-count", "2");
+  await toggleDetailedRelations();
+  expect(screen.getAllByTestId("visible-relation").map((edge) => edge.textContent).sort()).toEqual([
+    "file-start → file-prepare · + code.calls", "file-startup-execution → file-prepare · + code.calls",
+    "file-startup-execution → file-start · + code.calls",
+  ]);
+  expect(graph.dataset.layout).toBe(geometry);
+  expect(within(graph).getByRole("button", { name: "src/startup.ts", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await toggleDetailedRelations();
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(1);
+  fireEvent.click(within(graph).getByRole("button", { name: "export function start() · 新增", exact: true }));
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
+  expect(screen.getAllByTestId("visible-relation").every((edge) => !edge.hasAttribute("data-relation-count"))).toBe(true);
+
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 src/startup.ts", exact: true }));
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 src/review/initialization", exact: true }));
+  const foldedGeometry = graph.dataset.layout;
+  expect(screen.getByTestId("visible-relation")).toHaveAttribute("data-relation-count", "2");
+  await toggleDetailedRelations();
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
+  expect(graph.dataset.layout).toBe(foldedGeometry);
+  await toggleDetailedRelations();
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(1);
+  fireEvent.click(within(graph).getByRole("button", { name: "src", exact: true }));
+  expect(screen.queryAllByTestId("visible-relation")).toHaveLength(0);
+  await toggleDetailedRelations();
+  expect(screen.getAllByTestId("visible-relation")).toHaveLength(2);
+  expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(layoutCalls).toHaveBeenCalledTimes(1);
+  expect(compactCalls).not.toHaveBeenCalled();
   expect(current.retry).not.toHaveBeenCalled();
   expect(current.setOptions).not.toHaveBeenCalled();
 });
