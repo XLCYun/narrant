@@ -197,11 +197,16 @@ declare!(generated);
     assert!(!all
         .values()
         .any(|node| node.data().name.as_deref() == Some("generated")));
+    assert!(all
+        .values()
+        .flat_map(|node| &node.data().references)
+        .all(|reference| reference.semantic != "code.writes"));
     assert!(find("update")
         .data()
         .references
         .iter()
-        .any(|reference| reference.semantic == "code.writes"));
+        .any(|reference| reference.semantic == "code.calls"
+            && reference.target == ReferenceTarget::Node(helper.clone())));
     assert!(find("function_value")
         .data()
         .references
@@ -503,10 +508,10 @@ union Storage { stored: std::mem::ManuallyDrop<types::Item> }
     save("field-types-after", &new);
 }
 
-/// 省略非字段类型和读取关系，同时保留调用、写入、函数值、实现归属及源码 diff。
+/// 省略非字段类型与读写关系，同时保留调用、函数值、实现归属及源码 diff。
 #[test]
 #[ignore = "需要已提供的 rust-analyzer 和 Rust 工具链，单独串行运行"]
-fn real_server_omits_non_field_type_uses_and_reads() {
+fn real_server_omits_non_field_type_uses_and_data_accesses() {
     let source = r#"
 mod store;
 trait Run {}
@@ -555,18 +560,14 @@ fn closure(state: &State) -> u32 { let f = || store::helper() + state.value + LO
         .values()
         .flat_map(|node| &node.data().references)
         .collect();
-    assert!(references
-        .iter()
-        .all(|reference| !matches!(reference.semantic.as_str(), "code.type_use" | "code.reads")));
+    assert!(references.iter().all(|reference| !matches!(
+        reference.semantic.as_str(),
+        "code.type_use" | "code.reads" | "code.writes"
+    )));
     assert_eq!(find("State").category(), CodeCategory::Type);
     assert_eq!(find("value").category(), CodeCategory::Value);
     assert!(find("mentions_type").data().references.is_empty());
     assert!(find("mentions_unit").data().references.is_empty());
-    assert!(find("update")
-        .data()
-        .references
-        .iter()
-        .any(|reference| reference.semantic == "code.writes"));
     assert!(find("update")
         .data()
         .references

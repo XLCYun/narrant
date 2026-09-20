@@ -20,6 +20,7 @@ export type CodeNode = {
   id: string;
   category: CodeCategory;
   language: string;
+  /** Container 的 file 种类以 name 提供斜线分隔的仓库相对路径；目录分组只在展示层生成。 */
   nativeKind: string;
   name: string | null;
   signature: string | null;

@@ -301,15 +301,18 @@ its underlying definition is not recursively substituted.
 It still skips type queries for ordinary callable signatures, type-alias definitions,
 generic bounds, local type annotations and record literal/pattern type names. Executable
 constant expressions and opaque macro tokens within a field type are not traversed
-for type relationships. `code.reads` remains omitted. Types and data declarations remain
-Code Objects, and their signatures and own code are still compared. Reading a different
-value can change an owner's code without producing a separate read edge.
+for type relationships. Both `code.reads` and `code.writes` are omitted. Types and data
+declarations remain Code Objects, and their signatures and own code are still compared.
+Reading or assigning a different value can change an owner's code without producing
+a separate read or write edge.
 
-Calls, imports, writes, macro use and structural relationships (`code.applies_to`,
-`code.implements`, `code.member_of`) remain. Compound assignments emit a write edge
-without a read edge. General path expressions still need semantic resolution to
-distinguish function values from data/type values: function-value references remain
-`code.references`, while confirmed data/type targets are omitted rather than relabeled.
+Calls, imports, macro use and structural relationships (`code.applies_to`,
+`code.implements`, `code.member_of`) remain. Assignments and compound assignments emit
+no data-access edges, while calls within their target and assigned expressions are
+still collected under the existing ownership rules. General path expressions still
+need semantic resolution to distinguish function values from data/type values:
+function-value references remain `code.references`, while confirmed data/type targets
+are omitted rather than relabeled.
 Unresolved general references retain their existing uncertainty.
 
 Skipping the other source queries reduces LSP round trips and target-description work;
@@ -578,8 +581,8 @@ the complete composition.
   annotation or a type declaration is not evidence that the generated method is that
   Type node.
 - Taking a function as a value uses `code.references`; only a call expression or LSP
-  outgoing-call observation uses `code.calls`. Data writes use `code.writes`; data reads
-  and general type uses are omitted from graph relationships.
+  outgoing-call observation uses `code.calls`. Data reads and writes are omitted from
+  graph relationships, as are general type uses outside the field-type scope above.
 
 ### Calling the adapter
 

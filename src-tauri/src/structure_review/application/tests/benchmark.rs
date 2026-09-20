@@ -1,7 +1,10 @@
 //! 显式运行的真实仓库基准；与生产并行入口比较同一输入下的原串行流程。
 
 use super::*;
-use crate::structure_review::{code_graph::LanguageAnalyzer, rust_analyzer::RustLanguageAnalyzer};
+use crate::structure_review::{
+    code_graph::LanguageAnalyzer, rust_analyzer::RustLanguageAnalyzer,
+    typescript_analyzer::TypeScriptLanguageAnalyzer,
+};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -58,8 +61,13 @@ async fn fixture() -> Fixture {
 async fn sequential(
     fixture: &Fixture,
     analyze: Arc<AnalyzeGraph>,
+    analyze_typescript: Arc<AnalyzeTypeScript>,
     dependency_scope: RustDependencyScope,
 ) -> StructureComparison {
+    let analyzers = LanguageAnalyzers {
+        rust: analyze,
+        typescript: analyze_typescript,
+    };
     let operation = OperationContext::background();
     let review_id = fixture.presentation.review_id.clone();
     let snapshot_id = fixture.presentation.snapshot_id.clone();
@@ -76,21 +84,23 @@ async fn sequential(
                     .then(|| workspace::BeforeCheckout::prepare(workspace, operation).unwrap());
                 let cancelled: CancellationCheck = Arc::new(|| false);
                 let before = analyze_side(
-                    &analyze,
+                    &analyzers,
                     &workspace.before_path,
                     before_files,
                     AnalysisOptions::default(),
                     &cancelled,
                     dependency_scope,
+                    operation.cancellation(),
                 )
                 .unwrap();
                 let after = analyze_side(
-                    &analyze,
+                    &analyzers,
                     &workspace.head_path,
                     after_files,
                     AnalysisOptions::default(),
                     &cancelled,
                     dependency_scope,
+                    operation.cancellation(),
                 )
                 .unwrap();
                 let diff = before.diff(&after).unwrap();
@@ -121,6 +131,7 @@ async fn compares_sequential_and_parallel_repository_analysis() {
     let fixture = fixture().await;
     let executable = std::env::var_os("NARRANT_RUST_ANALYZER").unwrap();
     let analyzer = RustLanguageAnalyzer::new(executable);
+    let typescript_analyzer = TypeScriptLanguageAnalyzer::default();
     let mut measurements = Vec::new();
     let scope: RustDependencyScope =
         serde_json::from_value(json!(std::env::var("NARRANT_STRUCTURE_BENCHMARK_SCOPE")
@@ -147,10 +158,15 @@ async fn compares_sequential_and_parallel_repository_analysis() {
                 }));
                 Ok(graph)
             });
+            let analyzer = typescript_analyzer.clone();
+            let analyze_typescript: Arc<AnalyzeTypeScript> = Arc::new(move |input, cancelled| {
+                analyzer.clone().with_cancellation(cancelled).analyze(input)
+            });
             let result = if execution == "sequential" {
-                sequential(&fixture, analyze, scope).await
+                sequential(&fixture, analyze, analyze_typescript, scope).await
             } else {
                 StructureReview::new(analyze)
+                    .with_typescript(analyze_typescript)
                     .analyze(
                         &fixture.lifecycle,
                         &OperationContext::background(),

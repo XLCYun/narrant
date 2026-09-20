@@ -253,7 +253,8 @@ impl LspClient {
     /// 消耗会话并退出；失败或提前返回时仍由进程守卫回收整个进程组。
     pub fn shutdown(mut self) -> Result<()> {
         self.request("shutdown", Value::Null)?;
-        self.notify("exit", Value::Null)
+        self.notify("exit", Value::Null)?;
+        self.transport.finish()
     }
 
     /// 处理标准反向请求并保存扩展通知；未实现的反向请求明确返回 MethodNotFound。

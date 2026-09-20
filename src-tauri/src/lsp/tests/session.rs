@@ -264,3 +264,39 @@ fn cancellation_interrupts_a_pending_response_and_reaps_server() {
     // SAFETY: 信号 0 只查询本测试启动的服务器。
     assert_eq!(unsafe { libc::kill(server.pid() as i32, 0) }, -1);
 }
+
+/// 真实后代进程必须在关闭返回或取消析构前消失，不能只检查直接服务器 PID。
+#[test]
+fn process_group_is_reclaimed_before_session_returns() {
+    for normal_shutdown in [true, false] {
+        let server = FakeServer::new(vec![
+            vec![initialized()],
+            vec![],
+            vec![json!({"jsonrpc":"2.0", "id":2, "result":null})],
+        ]);
+        let executable = server.workspace().join("server");
+        let script = std::fs::read_to_string(&executable).unwrap();
+        std::fs::write(
+            executable,
+            script.replace(
+                "set -eu\n",
+                "set -eu\nsleep 600 &\nprintf '%s' \"$!\" > descendant-pid\n",
+            ),
+        )
+        .unwrap();
+        let client = LspClient::start(server.command(), server.workspace(), options()).unwrap();
+        let descendant = std::fs::read_to_string(server.workspace().join("descendant-pid"))
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        // SAFETY: 信号 0 仅检查本测试创建的睡眠进程。
+        assert_eq!(unsafe { libc::kill(descendant, 0) }, 0);
+        if normal_shutdown {
+            client.shutdown().unwrap();
+        } else {
+            drop(client);
+        }
+        // SAFETY: 守卫必须已等待该后代退出，不能让测试自己轮询掩盖回收缺口。
+        assert_eq!(unsafe { libc::kill(descendant, 0) }, -1);
+    }
+}

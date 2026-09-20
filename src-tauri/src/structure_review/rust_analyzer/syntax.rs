@@ -10,11 +10,12 @@ use ra_ap_syntax::{
     WalkEvent,
 };
 
-use super::{failure, Result};
+use super::{failure, Result, LINE_BREAKS};
 use crate::lsp::{file_uri, Position};
 use crate::structure_review::code_graph::{
     AnalysisOptions, CodeCategory, CodeNode, CodeNodeData, LanguageId, NodeId,
 };
+use crate::structure_review::source_text::SourceText;
 
 /// 临时源码位置只用于 LSP 关联，不进入图和节点身份。
 #[derive(Clone)]
@@ -29,7 +30,7 @@ pub(super) struct Declaration {
 pub(super) struct Document {
     pub path: PathBuf,
     pub uri: String,
-    pub source: String,
+    pub source: SourceText,
     pub tree: SyntaxNode,
     pub declarations: Vec<Declaration>,
     /// 已确认的测试范围不生成对象，也不归入外层对象的代码或引用。
@@ -44,6 +45,7 @@ impl Document {
         source: String,
         options: AnalysisOptions,
     ) -> Result<Self> {
+        let source = SourceText::new(source, LINE_BREAKS);
         let scope = file_scope(repository, &path)
             .ok_or_else(|| failure("无法构造不依赖绝对路径的 Rust 文件身份"))?;
         let mut parsed = None;
@@ -88,6 +90,16 @@ impl Document {
             declarations,
             excluded,
         })
+    }
+
+    /// 将语法树的字节偏移交给共享索引，转换成经过边界校验的 LSP UTF-16 位置。
+    pub fn position(&self, offset: TextSize) -> Result<Position> {
+        self.source.position(usize::from(offset)).map_err(failure)
+    }
+
+    /// 严格校验 LSP 位置后再转换为语法树偏移，避免无效位置进入声明匹配。
+    pub fn byte_offset(&self, position: &Position) -> Result<TextSize> {
+        TextSize::try_from(self.source.byte_offset(position).map_err(failure)?).map_err(failure)
     }
 
     /// 范围按源码顺序且互不重叠，查询不随测试声明数量线性增长。
@@ -501,47 +513,6 @@ pub(super) fn field_type_names(node: &SyntaxNode) -> Vec<SyntaxNode> {
         }
     }
     names
-}
-
-/// 将 UTF-8 语法位置转换成协商后的 LSP UTF-16 位置。
-pub(super) fn position(source: &str, offset: TextSize) -> Position {
-    let preceding = &source[..usize::from(offset)];
-    Position {
-        line: preceding.bytes().filter(|byte| *byte == b'\n').count() as u32,
-        character: preceding
-            .rsplit('\n')
-            .next()
-            .unwrap_or_default()
-            .encode_utf16()
-            .count() as u32,
-    }
-}
-
-/// 严格校验行和 UTF-16 边界，拒绝跨行、越界或落在代理对中间的位置。
-pub(super) fn byte_offset(source: &str, position: &Position) -> Result<TextSize> {
-    let line = position.line as usize;
-    let column = u64::from(position.character);
-    let mut starts = vec![0];
-    starts.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
-    let start = *starts.get(line).ok_or_else(|| failure("LSP 行号越界"))?;
-    let end = starts
-        .get(line + 1)
-        .copied()
-        .map_or(source.len(), |end| end - 1);
-    let text = source[start..end]
-        .strip_suffix('\r')
-        .unwrap_or(&source[start..end]);
-    let mut units = 0_u64;
-    for (offset, ch) in text.char_indices() {
-        if units == column {
-            return TextSize::try_from(start + offset).map_err(failure);
-        }
-        units += ch.len_utf16() as u64;
-    }
-    if units == column {
-        return TextSize::try_from(start + text.len()).map_err(failure);
-    }
-    Err(failure("LSP 位置不是有效的 UTF-16 边界"))
 }
 
 /// 组装期修改公共数据，完成后图仍只提供只读查询。

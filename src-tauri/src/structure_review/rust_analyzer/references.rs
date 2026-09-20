@@ -223,12 +223,12 @@ pub(super) fn analyze(
             .iter()
             .filter(|declaration| declaration.syntax.kind() == SyntaxKind::FN)
         {
-            let position = syntax::position(&document.source, declaration.selection.start());
+            let position = document.position(declaration.selection.start())?;
             for call in resolver.client.outgoing_calls(&document.uri, position)? {
                 let owners: Vec<_> = call
                     .from_ranges
                     .iter()
-                    .map(|range| syntax::byte_offset(&document.source, &range.start))
+                    .map(|range| document.byte_offset(&range.start))
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .filter_map(|offset| document.owner(offset))
@@ -326,7 +326,7 @@ impl Resolver<'_> {
             let document = self
                 .document(&location.uri)
                 .ok_or_else(|| failure("测试父模块文档不存在"))?;
-            let offset = syntax::byte_offset(&document.source, &location.position)?;
+            let offset = document.byte_offset(&location.position)?;
             if !document.excludes(offset) && !self.test_only_file(&location.uri)? {
                 return Ok(false);
             }
@@ -420,7 +420,7 @@ impl Resolver<'_> {
             let document = self
                 .document(&location.uri)
                 .ok_or_else(|| failure("父模块文档不可用"))?;
-            let offset = syntax::byte_offset(&document.source, &location.position)?;
+            let offset = document.byte_offset(&location.position)?;
             if document.excludes(offset) || self.test_files.get(&location.uri) == Some(&true) {
                 continue;
             }
@@ -460,7 +460,7 @@ impl Resolver<'_> {
                 .map_err(failure)?
                 .to_string_lossy()
                 .replace('\\', "/");
-            let source = document.source.clone();
+            let source = document.source.to_string();
             self.crate_roots.entry(id.clone()).or_insert_with(|| {
                 CodeNode::Container(CodeNodeData {
                     id: id.clone(),
@@ -527,7 +527,7 @@ impl Resolver<'_> {
             let document = self
                 .document(uri)
                 .ok_or_else(|| failure("引用来源文档不存在"))?;
-            let position = syntax::position(&document.source, name.text_range().start());
+            let position = document.position(name.text_range().start())?;
             let locations = self.client.definitions(uri, position)?;
             self.definitions.insert(key.clone(), locations);
         }
@@ -569,7 +569,7 @@ impl Resolver<'_> {
         let document = self
             .document(&uri)
             .ok_or_else(|| failure("定义目标文档不存在"))?;
-        let offset = syntax::byte_offset(&document.source, position)?;
+        let offset = document.byte_offset(position)?;
         if document.excludes(offset) || self.test_files.get(&uri) == Some(&true) {
             return Ok(Vec::new());
         }
@@ -580,9 +580,6 @@ impl Resolver<'_> {
                     return Ok(Vec::new());
                 }
                 return Ok(vec![unknown(observed)]);
-            }
-            if semantic == "code.writes" && category != CodeCategory::Value {
-                return Ok(Vec::new());
             }
             if semantic == "code.type_use" && category != CodeCategory::Type {
                 return Ok(Vec::new());
@@ -703,7 +700,7 @@ fn add(
     }
 }
 
-/// 查询调用、导入、写入、函数值候选和宏使用；字段类型由声明遍历处理，其他类型位置省略。
+/// 查询调用、导入、函数值候选和宏使用；赋值目标与非字段类型位置不查询。
 fn reference_site(node: &SyntaxNode) -> Option<(&'static str, SyntaxNode)> {
     use SyntaxKind::*;
     match node.kind() {
@@ -724,48 +721,56 @@ fn reference_site(node: &SyntaxNode) -> Option<(&'static str, SyntaxNode)> {
         PATH_EXPR
             if node
                 .parent()
-                .is_none_or(|parent| parent.kind() != CALL_EXPR) =>
+                .is_none_or(|parent| parent.kind() != CALL_EXPR)
+                && !is_assignment_target(node) =>
         {
             child(node, PATH)
                 .and_then(|path| path_name(&path))
-                .map(|name| {
-                    let semantic = if is_write_target(node) {
-                        "code.writes"
-                    } else {
-                        "code.references"
-                    };
-                    (semantic, name)
-                })
-        }
-        FIELD_EXPR if is_write_target(node) => {
-            child(node, NAME_REF).map(|name| ("code.writes", name))
+                .map(|name| ("code.references", name))
         }
         _ => None,
     }
 }
 
-/// 赋值和复合赋值只保留左侧目标的写入，不额外产生读取关系。
-fn is_write_target(node: &SyntaxNode) -> bool {
-    let Some(parent) = node
-        .parent()
-        .filter(|parent| parent.kind() == SyntaxKind::BIN_EXPR)
-    else {
-        return false;
-    };
-    parent
-        .children()
-        .find(|child| ast::Expr::can_cast(child.kind()))
-        .as_ref()
-        == Some(node)
-        && parent
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .any(|token| {
-                matches!(
-                    token.text(),
-                    "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
-                )
-            })
+/// 沿赋值位置的组成部分上溯，省略目标查询；索引和调用参数中的函数值仍独立解析。
+fn is_assignment_target(node: &SyntaxNode) -> bool {
+    use SyntaxKind::*;
+    let mut current = node.clone();
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            BIN_EXPR => {
+                return ast::BinExpr::cast(parent).is_some_and(|expression| {
+                    matches!(expression.op_kind(), Some(ast::BinaryOp::Assignment { .. }))
+                        && expression
+                            .lhs()
+                            .is_some_and(|left| left.syntax() == &current)
+                });
+            }
+            PAREN_EXPR
+            | FIELD_EXPR
+            | TUPLE_EXPR
+            | ARRAY_EXPR
+            | RECORD_EXPR_FIELD
+            | RECORD_EXPR_FIELD_LIST
+            | RECORD_EXPR => current = parent,
+            PREFIX_EXPR
+                if ast::PrefixExpr::cast(parent.clone()).is_some_and(|expression| {
+                    expression.op_kind() == Some(ast::UnaryOp::Deref)
+                }) =>
+            {
+                current = parent;
+            }
+            INDEX_EXPR
+                if ast::IndexExpr::cast(parent.clone())
+                    .and_then(|expression| expression.base())
+                    .is_some_and(|base| base.syntax() == &current) =>
+            {
+                current = parent;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 #[cfg(test)]

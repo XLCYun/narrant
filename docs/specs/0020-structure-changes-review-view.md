@@ -268,8 +268,31 @@ an explanatory sentence.
 ### Show relationships for the selected object
 
 The graph initially hides all relationship lines and their connection markers.
-Selecting an object reveals only incident lines to that exact Code Object, in both
-directions. Original relationship endpoints determine identity, so selecting a method in a class card
+Display options include **Show detailed relationships**, off by default. The default
+compact mode applies when selecting a container, type or directory:
+
+- Hide relationships whose endpoints are both within the selected subtree.
+- Connect the selected container's header to an external container's header, in the
+  original direction. Choose the external container at the same display depth,
+  counting container/type/directory ancestors and excluding synthetic member tables.
+  If that branch is shallower, use its closest available container. An external
+  function with no container keeps its own endpoint.
+- Merge relationships with the same directed pair of display endpoints into one line,
+  regardless of reference kind. Opposite directions remain separate. Hovering the
+  line shows its endpoint names and the number of underlying relationships.
+- Keep the added/removed/unchanged style when all merged relationships agree; use
+  the relationship-change color when their change states differ.
+
+Detailed mode restores individual member endpoints and includes internal relationships.
+Switching modes changes only displayed edges and markers; it preserves selection,
+layout, viewport and collapse state, and never restarts analysis. Both modes use
+the existing reference visibility filters. A new comparison starts in compact mode.
+
+Selecting a member reveals only incident lines to that exact Code Object, in both
+directions in either mode. In detailed mode, selecting a container, type or directory
+additionally includes its displayed descendants' incoming and outgoing lines, even
+when folded. Original
+relationship endpoints determine identity, so selecting a method in a class card
 does not reveal the other methods' lines. Calls between members of one card,
 recursive calls and removed relationships follow the same rule.
 
@@ -301,7 +324,13 @@ from the object's own change status. ELK first lays out the current display scop
 fully expanded. Collapse synchronously hides descendant cards and member rows and
 shrinks only the folded card inside its original bounds. Other cards and their
 parents keep the initial coordinates and sizes, reserving space for expansion.
-It does not change graph
+The display menu offers **Rearrange when folding**, off by default. When enabled,
+folding or unfolding recomputes the visible layout, shrinks expanded ancestors to
+fit their visible children, and reroutes relationships. The option applies to
+directory groups, files, other Containers and Types, including Collapse all and
+Expand all. Turning it on immediately rearranges any existing folds; turning it
+off restores the expanded-layout positions with those same folds still applied.
+Neither mode changes graph
 membership, comparison counts, or the set of unchanged objects revealed by the
 existing context controls. The display menu offers Collapse all and Expand all;
 these affect every collapsible object already included in the current view,
@@ -310,20 +339,39 @@ State is scoped to the current comparison; a new Snapshot starts expanded.
 
 Candidate relationships retain their original Code Object endpoints. If an endpoint
 is hidden by collapse, its visible collapsed ancestor provides the display port.
-Only relationships incident to the exact selected object appear; selecting a
-collapsed parent does not select all its descendants' relationships. Relationships
+Selecting a member shows relationships incident to that exact object. In detailed
+mode, selecting a container or type also includes incoming and outgoing relationships of every
+descendant in the current display hierarchy, including methods placed under a type
+through implementation ownership. The fully expanded hierarchy supplies membership
+even when descendants are folded. Expanded endpoints stay on their actual members;
+folded endpoints attach to their visible ancestor, including links between two
+folded containers. Relationship identity, direction and added/removed state remain
+unchanged, and a relationship is shown only once. Existing language, context, import
+and unchanged-relationship filters still apply. Relationships
 entirely inside one collapsed card are hidden. A proxied endpoint's tooltip contains
 only its readable object name, qualified by the containing Type for a member (for
 example `Repository::load`), without a target or module-description prefix.
 External and Unresolved references remain hidden.
 
-Folding and unfolding project the cached expanded layout without running ELK,
+In compact mode, aggregation uses the fully expanded hierarchy to keep the same
+display depth while folding. If an aggregate endpoint is hidden, its visible folded
+ancestor supplies the header port. Recompute paths for these promoted endpoints
+without changing node positions. Folding does not split deduplicated lines back into
+member lines; individual connections remain available by enabling detailed mode.
+
+By default, folding and unfolding project the cached expanded layout without running ELK,
 showing a layout-loading overlay, adjusting the viewport or remounting React Flow.
 Existing edge routes are retained whenever their port positions stay the same;
 only a moved endpoint uses a local orthogonal connection to its collapsed card.
 Expanding restores the original positions, sizes, member ports and routed paths.
 Changing display filters or revealing additional context still computes a new
 expanded layout for the new display scope.
+Optional rearrangement uses only the frontend projection and never reruns code
+analysis. It preserves selection, nested folds, true relationship identities and
+the viewport. A layout-loading overlay covers asynchronous rearrangement; disabling
+the option, changing folds or leaving the comparison cancels obsolete work, and
+late results cannot overwrite the current state. Fully expanding restores the
+cached expanded layout in either mode.
 
 ### Compact class-diagram presentation
 
@@ -382,11 +430,14 @@ changes still count. If no visible changes remain, the view directs the user to 
 Changes. Original code shown in details is preserved, including any external names
 appearing in that code.
 
-The Rust policy omits `code.reads` and type relationships outside field declarations.
-Fields emit `code.type_use` only for graph-local Type targets, as specified in
+The Rust and TypeScript/JavaScript analyzers omit `code.reads` and `code.writes` before
+graph comparison. The Rust policy also omits type relationships outside field
+declarations. Fields emit `code.type_use` only for graph-local Type targets, as specified in
 [graph-local field type relationships](#graph-local-field-type-relationships).
 There is no separate type-use display checkbox. Signatures and source code still
-include other type annotations and value reads, and structural relationships such as
+include other type annotations, value reads and assignments, so those edits still
+participate in own-code comparison. File Changes is unaffected. Calls within assignment
+expressions, function-value references and structural relationships such as
 implementation and membership remain available.
 
 Complete backend graphs, graph differences and `externalSymbols` remain intact.
@@ -740,3 +791,57 @@ recursive field and unrelated unchanged call relationships.
   or browser exception. Viewport overrides are cleared afterward. The in-app preview
   request remains queued and no in-app interaction tool is available; in-app
   interaction verification remains pending.
+
+## Language selection (2026-09-15)
+
+The left edge of the Structure Changes toolbar contains a single-select language
+control. Options come from the union of `CodeNode.language` values in both graphs,
+sorted by language ID, including languages present only in removed objects. Select
+the first available language by default; show a disabled empty selector when no
+objects provide a language. New language analyzers require no selector registry.
+
+Switching language is a local presentation operation and never restarts analysis.
+Project both graphs and their differences to the selected language before layout
+and detail rendering. Containment and graph-internal references must stay within
+that language; retain both added and removed relations whose endpoints remain.
+Keep the full analysis result unchanged. Clear selected objects and folding/expansion
+state on a language switch and fit the new graph, while retaining the sidebar width
+and the display-option switches. No mixed-language “all” option is offered.
+
+## Directory and file grouping (2026-09-17)
+
+File Containers use `nativeKind: file` and a repository-relative `name` with `/`
+separators. This identifies physical files independently of semantic module and
+namespace Containers. The frontend derives directory groups only from visible root
+file Containers, after language and object/context filtering. It never decodes NodeId,
+infers a file from a semantic module's name, scans the repository, or adds directory
+nodes to either Code Graph or Code Graph Difference.
+
+Only paths required by those files appear. Consecutive directories with a single
+subdirectory and no direct files share one label, such as `src/review`. Root-level
+files stay at the graph root. File card titles show the basename, with the full path
+in their accessible name, tooltip and source details. Deleted files retain their
+before-side path and directory context. Same-basename files keep independent identity.
+Explicit language scopes and their code objects retain their existing containment.
+
+Directory groups have no own added/removed/modified status or source diff. Selecting
+one shows its path and the displayed files beneath it in the fixed details pane.
+Collapse summaries count files and aggregate existing descendant changes; code-object
+totals still exclude directories. File and directory collapse states are separate.
+The collapse button selects the group and preserves nested collapse choices. It
+reuses the fully expanded layout by default, or rearranges visible cards when
+**Rearrange when folding** is enabled, without resetting the viewport.
+Collapse all/expand all apply to directories as well as existing containers and types.
+
+Edges keep their exact original code-object identities. When an endpoint is hidden
+inside a collapsed directory, the directory header supplies a display port and the
+tooltip names the actual endpoint. In detailed mode, selecting a directory includes
+the incoming and outgoing relationships of its displayed descendant files and code objects, even
+when the directory or files are folded. Directory paths and code-object identities
+remain separate. Source comparison and graph diff remain at code-object
+granularity; file and directory grouping does not promote child changes into parent
+content changes.
+
+The `structure-file-modules` preview covers nested/compacted directory groups, long
+file names, original file source, independent file execution regions and cross-file
+calls, with the same production layout and selection code.

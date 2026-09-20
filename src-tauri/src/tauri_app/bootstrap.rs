@@ -117,15 +117,26 @@ pub fn run() {
                 });
             let rust_analyzer =
                 crate::structure_review::rust_analyzer::RustLanguageAnalyzer::new(rust_executable);
-            app.manage(crate::structure_review::StructureReview::new(Arc::new(
-                move |input, cancelled, scope| {
-                    rust_analyzer
+            // 启动时固定 TypeScript 工具路径与超时；前后两侧只克隆同一份设置并注入本次取消。
+            let typescript_analyzer =
+                crate::structure_review::typescript_analyzer::TypeScriptLanguageAnalyzer::default();
+            app.manage(
+                crate::structure_review::StructureReview::new(Arc::new(
+                    move |input, cancelled, scope| {
+                        rust_analyzer
+                            .clone()
+                            .with_cancellation(cancelled)
+                            .with_dependency_scope(scope)
+                            .analyze(input)
+                    },
+                ))
+                .with_typescript(Arc::new(move |input, cancelled| {
+                    typescript_analyzer
                         .clone()
                         .with_cancellation(cancelled)
-                        .with_dependency_scope(scope)
                         .analyze(input)
-                },
-            )));
+                })),
+            );
             app.manage(repository_application);
             app.manage(auth);
             let application_settings = ApplicationSettingsApplication::new(settings_path.clone());

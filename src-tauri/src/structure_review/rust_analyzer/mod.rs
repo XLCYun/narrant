@@ -14,9 +14,16 @@ use std::{
 };
 
 use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, CodeRoot, LanguageAnalyzer};
+use super::source_text::LineBreakRules;
 use crate::lsp::CancellationCheck;
 
 type Result<T> = std::result::Result<T, AnalysisError>;
+
+/// 匹配 rust-analyzer 的 LF 行索引及 CRLF 归一化；其余分隔符仍占据列宽。
+const LINE_BREAKS: LineBreakRules = LineBreakRules {
+    lone_cr: false,
+    unicode_separators: false,
+};
 
 /// Rust 语义分析允许加载的依赖范围；不改变 Code Graph 的文件范围。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -155,7 +162,7 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
         client.wait_ready()?;
         let graph = references::analyze(&mut client, &repository, &documents, input.options)?;
         for document in &documents {
-            if fs::read_to_string(&document.path).map_err(failure)? != document.source {
+            if fs::read_to_string(&document.path).map_err(failure)? != document.source.as_str() {
                 return Err(failure(format!(
                     "分析期间源文件已改变：{}",
                     document.path.display()

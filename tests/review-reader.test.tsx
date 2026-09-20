@@ -18,14 +18,14 @@ vi.mock("@monaco-editor/react", async () => {
   const React = await import("react");
   return {
     loader: { config: () => undefined, init: () => Promise.resolve({}) },
-    DiffEditor: ({ onMount }: { onMount?: (editor: unknown) => void }) => {
+    DiffEditor: ({ onMount, language, originalLanguage, modifiedLanguage }: { onMount?: (editor: unknown) => void; language?: string; originalLanguage?: string; modifiedLanguage?: string }) => {
       const [editor] = React.useState(() => {
         const next = { saveViewState: vi.fn(), restoreViewState: vi.fn() };
         monacoEditors.push(next);
         return next;
       });
       React.useLayoutEffect(() => { onMount?.(editor); }, [editor, onMount]);
-      return <div data-testid="mock-diff-editor" />;
+      return <div data-testid="mock-diff-editor" data-language={language} data-original-language={originalLanguage} data-modified-language={modifiedLanguage} />;
     },
   };
 });
@@ -208,6 +208,18 @@ describe("ReviewReader", () => {
 
     fireEvent.click(switchToInline);
     expect(screen.getByRole("button", { name: "双栏" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("为 CommonJS 的 cjs 与 cts 文件选择对应的 Monaco 语言", () => {
+    const content = (path: string) => ({
+      kind: "ready" as const,
+      path,
+      content: { path, oldPath: null, status: "modified" as const, contentKind: "text" as const, beforeSize: 3, afterSize: 3, before: "old", after: "new" },
+    });
+    const view = render(<ReviewReader review={reviewBinding({ snapshot: { ...snapshot, fileChanges: [{ path: "src/module.cjs", oldPath: null, status: "modified" }] }, view: "file-changes", fileChange: content("src/module.cjs") })} appearance={appearance} />);
+    expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute("data-language", "javascript");
+    view.rerender(<ReviewReader review={reviewBinding({ snapshot: { ...snapshot, fileChanges: [{ path: "src/module.cts", oldPath: null, status: "modified" }] }, view: "file-changes", fileChange: content("src/module.cts") })} appearance={appearance} />);
+    expect(screen.getByTestId("mock-diff-editor")).toHaveAttribute("data-language", "typescript");
   });
 
   it("把 Overview、文件树和外层内容区的真实滚动位置交给 lifecycle 并恢复", () => {
