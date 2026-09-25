@@ -54,6 +54,78 @@ fn member<'a>(graph: &'a CodeGraph, owner: &str, name: &str) -> &'a CodeNode {
         .unwrap()
 }
 
+/// 参数属性进入真实图并承载类型与默认值关系，普通参数不被提升为字段。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_parameter_properties_keep_field_types_and_default_calls() {
+    use crate::structure_review::code_graph::CodeCategory;
+    let directory = fixture(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["*.ts"]}"#,
+        ),
+        (
+            "model.ts",
+            "export class Model {} export function make(): Model { return new Model(); }",
+        ),
+        (
+            "main.ts",
+            r#"import {Model, make} from './model';
+            export class Client {
+                constructor(private readonly model: Model = make(), public optional?: Model,
+                    ordinary?: Model, readonly callback: () => Model = () => make()) {}
+            }
+            export function run(client: Client) { client.callback(); }
+        "#,
+        ),
+    ]);
+    let graph = analyze(directory.path(), &["main.ts", "model.ts"]);
+    let class = named(&graph, "Client").data();
+    let constructor = named(&graph, "constructor").data();
+    for name in ["model", "optional", "callback"] {
+        let field = named(&graph, name);
+        assert_eq!(field.category(), CodeCategory::Value);
+        assert_eq!(field.data().native_kind, "field");
+        assert!(class.contains.contains(&field.data().id));
+        assert!(!constructor.contains.contains(&field.data().id));
+        assert!(
+            field.data().references.iter().any(|reference| {
+                reference.semantic == "code.type_use"
+                    && reference.target
+                        == ReferenceTarget::Node(named(&graph, "Model").data().id.clone())
+            }),
+            "{name}: {:?}",
+            field.data().references
+        );
+    }
+    for name in ["model", "callback"] {
+        assert!(named(&graph, name)
+            .data()
+            .references
+            .iter()
+            .any(|reference| {
+                reference.semantic == "code.calls"
+                    && reference.target
+                        == ReferenceTarget::Node(named(&graph, "make").data().id.clone())
+            }));
+    }
+    assert!(nodes(&graph)
+        .iter()
+        .all(|node| node.data().name.as_deref() != Some("ordinary")));
+    assert!(constructor.references.is_empty());
+    assert!(
+        named(&graph, "run")
+            .data()
+            .references
+            .iter()
+            .all(|reference| {
+                reference.target
+                    != ReferenceTarget::Node(named(&graph, "callback").data().id.clone())
+            }),
+        "可被实参覆盖的默认函数不提供确定的调用目标"
+    );
+}
+
 /// 资源与缺失模块的纯导入不生成图对象，也不阻断有效代码的调用图。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]

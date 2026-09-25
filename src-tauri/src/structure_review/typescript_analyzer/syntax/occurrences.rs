@@ -353,6 +353,13 @@ impl<'a> Visit<'a> for Collector<'_, 'a> {
                         .type_annotation
                         .as_ref()
                         .is_some_and(|a| contains(a.span, t.span)),
+                    AstKind::FormalParameter(p) if p.has_modifier() => {
+                        // 未建模匿名类中的参数不能把类型关系归到外层字段。
+                        self.document.declared_at(p.pattern.span().start).is_some()
+                            && p.type_annotation
+                                .as_ref()
+                                .is_some_and(|a| contains(a.span, t.span))
+                    }
                     AstKind::TSIndexSignature(p) => contains(p.type_annotation.span, t.span),
                     _ => false,
                 }) =>
