@@ -345,6 +345,13 @@ membership, comparison counts, or the set of unchanged objects revealed by the
 existing context controls. The display menu offers Collapse all and Expand all;
 these affect every collapsible object already included in the current view,
 including descendants hidden under collapsed parents. Collapse all clears selection.
+Each Container or directory with collapsible descendant cards also offers a header
+button to expand or collapse all its descendant cards. This includes nested cards
+hidden beneath folded children. The action selects and expands the container itself,
+preserves other branches and the current display filters, and follows the existing
+rearrangement setting. If any descendant or the container itself is collapsed, the
+button expands them all; otherwise it collapses all descendants. The original
+single-card chevron still preserves each descendant's individual collapse state.
 State is scoped to the current comparison; a new Snapshot starts expanded.
 
 Candidate relationships retain their original Code Object endpoints. If an endpoint

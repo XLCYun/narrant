@@ -1,4 +1,4 @@
-import { structureClassDiagramFixture, structureCrateRootsFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureReviewFixture, structureSourceDiffFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import { structureClassDiagramFixture, structureCrateRootsFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureSourceDiffFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { AnalysisOptions, StructureState } from "@/structure-review/types";
 import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -446,7 +446,7 @@ function ReviewReaderPreview({
   merged?: boolean;
   updateState?: "idle" | "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes" | "structure-changes";
-  structureKind?: "source-diff" | "mixed-languages" | "file-modules" | "crate-roots" | "dense" | "field-types" | "ready" | "loading" | "failed" | "empty" | "tests-only" | "unsupported" | "imports-only" | "hidden-references";
+  structureKind?: "source-diff" | "mixed-languages" | "nested-containers" | "file-modules" | "crate-roots" | "dense" | "field-types" | "ready" | "loading" | "failed" | "empty" | "tests-only" | "unsupported" | "imports-only" | "hidden-references";
   shortContent?: boolean;
   themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
@@ -516,7 +516,7 @@ function ReviewReaderPreview({
   const [structureOptions, setStructureOptions] = useState<AnalysisOptions>({ includeTests: false });
   /** 代表性源码对应的分析结果，重试与切换范围使用同一份预览输入。 */
   const structureReadyState = (includeTests: boolean): StructureState => {
-    const comparison = { ...(structureKind === "file-modules" ? structureFileModulesFixture() : structureKind === "source-diff" ? structureSourceDiffFixture() : structureKind === "mixed-languages" ? structureMixedLanguageFixture() : structureKind === "field-types" ? structureFieldTypesFixture() : structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureKind === "hidden-references" ? structureHiddenReferencesFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
+    const comparison = { ...(structureKind === "nested-containers" ? structureMixedLanguagesFixture() : structureKind === "file-modules" ? structureFileModulesFixture() : structureKind === "source-diff" ? structureSourceDiffFixture() : structureKind === "mixed-languages" ? structureMixedLanguageFixture() : structureKind === "field-types" ? structureFieldTypesFixture() : structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureKind === "hidden-references" ? structureHiddenReferencesFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
     if (structureKind === "empty" || structureKind === "tests-only") return { kind: "ready", comparison: structureTestCodeFixture({ ...comparison, before: comparison.after, diff: { nodes: [] } }, structureKind === "tests-only" && includeTests) };
     if (structureKind === "unsupported") return { kind: "ready", comparison: { ...comparison, before: { root: [], nodes: [], externalSymbols: {} }, after: { root: [], nodes: [], externalSymbols: {} }, diff: { nodes: [] }, coverage: comparison.coverage.slice(-1) } };
     return { kind: "ready", comparison: structureTestCodeFixture(comparison, includeTests) };
@@ -730,6 +730,7 @@ const previews: Record<string, PreviewDefinition> = {
     scenarios: {
       default: { label: "多种文件状态", render: () => <ReviewReaderPreview /> },
       "structure-changes": { label: "结构改动与嵌套关系", render: () => <ReviewReaderPreview initialView="structure-changes" /> },
+      "structure-container-controls": { label: "容器批量折叠与长名称", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="nested-containers" /> },
       "structure-source-diff": { label: "对象原始源码与长实现对比", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="source-diff" /> },
       "structure-mixed-languages": { label: "TS/JS/Rust 混合图与长源码", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="mixed-languages" /> },
       "structure-file-modules": { label: "目录、文件容器与合并顶层执行", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="file-modules" /> },
