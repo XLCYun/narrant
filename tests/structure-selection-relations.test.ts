@@ -242,6 +242,41 @@ describe("structure selection relations", () => {
     expect(incoming.targetHandle).toBe(port(expanded, "Review", "target"));
   });
 
+  it("hides summaries to ancestors while retaining sibling containers and precise member relationships", async () => {
+    const comparison = selectionFixture();
+    for (const graph of [comparison.before, comparison.after]) {
+      graph.nodes.find((node) => node.id === "review")!.contains.push("module-helper");
+      graph.nodes.find((node) => node.id === "feature-file")!.contains.push("file-helper");
+      graph.nodes.push(
+        node("module-helper", "callable", { references: [reference("run")] }),
+        node("file-helper", "callable", { references: [reference("run")] }),
+      );
+      graph.nodes.find((node) => node.id === "run")!.references.push(
+        reference("module-helper"), reference("file-helper"), reference("helper"),
+      );
+      graph.nodes.find((node) => node.id === "helper")!.references.push(reference("run"));
+    }
+    const expanded = await layoutStructureComparison(comparison, options);
+    const folded = collapseStructureLayout(expanded, new Set(["Review", "nested"]));
+    const foldedParent = collapseStructureLayout(expanded, new Set(["review"]));
+    for (const layout of [expanded, folded, foldedParent, await relayoutStructureLayout(folded)]) {
+      const selected = selectStructureEdges(expanded, layout, { kind: "object", id: "Review" }, "compact");
+      const displayed = selected.map((edge) => `${edge.data!.summary!.sourceName} -> ${edge.data!.summary!.targetName}`).sort();
+      expect(displayed).toEqual(layout === foldedParent
+        ? ["review -> Store", "tests/entry.rs -> review"]
+        : ["Review -> Store", "Review -> nested", "nested -> Review", "tests/entry.rs -> Review"]);
+    }
+    const detailed = relations(selectStructureEdges(expanded, expanded, { kind: "object", id: "Review" }, "detailed"));
+    expect(detailed).toEqual([...typeRelations(),
+      "run -> module-helper: code.calls", "module-helper -> run: code.calls",
+      "run -> file-helper: code.calls", "file-helper -> run: code.calls",
+      "run -> helper: code.calls", "helper -> run: code.calls",
+    ].sort());
+    const member = selectStructureEdges(expanded, expanded, { kind: "object", id: "run" }, "compact");
+    expect(member).toEqual(selectStructureEdges(expanded, expanded, { kind: "object", id: "run" }, "detailed"));
+    expect(relations(member)).toContain("run -> file-helper: code.calls");
+  });
+
   it("promotes external nested types to the selected file or directory's display level", () => {
     const files = selectStructureEdges(expanded, expanded, { kind: "object", id: "feature-file" }, "compact");
     expect(files).toHaveLength(2);

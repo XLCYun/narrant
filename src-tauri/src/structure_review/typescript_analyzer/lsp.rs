@@ -283,38 +283,17 @@ impl TypeScriptLsp {
         )
     }
 
-    /// 定义证据使用真实源码路径；空数组表示本次查询没有找到定义。
+    /// 使用编辑器 definition 导航结果，并校验真实源码路径与声明位置。
     pub fn definitions(
         &mut self,
         file: &Path,
         position: Position,
         name: &Path,
     ) -> Result<Vec<DefinitionEvidence>> {
-        self.locations("definition", file, position, name)
-    }
-
-    /// 联合成员调用的 definition 可能只给出选中签名，类型定义补充同名成员的完整候选。
-    pub fn type_definitions(
-        &mut self,
-        file: &Path,
-        position: Position,
-        name: &Path,
-    ) -> Result<Vec<DefinitionEvidence>> {
-        self.locations("typeDefinition", file, position, name)
-    }
-
-    /// 未验证定义只保留不确定性；已验证定义共用严格项目与源码位置检查。
-    fn locations(
-        &mut self,
-        command: &str,
-        file: &Path,
-        position: Position,
-        name: &Path,
-    ) -> Result<Vec<DefinitionEvidence>> {
         self.guarded(|session| {
             let arguments = session.query_arguments(file, position, name)?;
-            let response = session.raw(command, arguments, true)?;
-            let result = array(&response, command)?
+            let response = session.raw("definition", arguments, true)?;
+            let result = array(&response, "definition")?
                 .iter()
                 .map(|value| {
                     // 相对资源和缺失模块可返回 unverified；协议不保证这些文件存在。

@@ -87,7 +87,7 @@ beforeEach(async () => { vi.clearAllMocks(); await i18n.changeLanguage("zh-CN");
 afterEach(() => { cleanup(); monacoEditors.length = 0; });
 
 describe("ReviewReader", () => {
-  it("单击图标先检查再刷新，后台发现更新不会自行刷新", async () => {
+  it("单击图标先检查再刷新，已有更新状态不会自行刷新", async () => {
     const checkForUpdate = vi.fn(async () => true);
     const refresh = vi.fn(async () => ({ kind: "refreshed" as const, reviewId: "review-1", snapshotId: "snapshot-2" }));
     render(<ReviewReader review={reviewBinding({ update: { kind: "available", update: availableUpdate }, checkForUpdate, refresh })} appearance={appearance} />);

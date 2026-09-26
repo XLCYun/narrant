@@ -242,6 +242,7 @@ describe("Babysit contract spine", () => {
     });
     await waitFor(() => expect(result.current.reader?.fileChange.kind).toBe("ready"));
     await act(async () => {
+      await result.current.reader?.checkForUpdate();
       await result.current.reader?.refresh();
     });
 

@@ -137,7 +137,8 @@ Extract statically confirmed calls (including new where modeled),
 function-value references, inheritance/implementation and field/property type
 relationships consistent with 0018 and the existing Rust scope. Keep a syntax occurrence
 even if call hierarchy omits it. Do not turn an import alias or a type-only signature into
-a definite runtime call. Dynamic/ambiguous targets remain Unresolved. Named function declarations in repository
+a definite runtime call. Dynamic, unresolved or untrusted definition evidence remains
+Unresolved. Named function declarations in repository
 `.d.ts`/`.d.mts`/`.d.cts` files and explicit `declare function` declarations (including
 legal ambient contexts) introduce function-value bindings and may be static call targets:
 selected declarations are Node, unselected declarations are Repository External. Bare
@@ -145,6 +146,14 @@ structural call signatures/interface methods and isolated non-ambient overload s
 without an implementation do not establish runtime call targets. These edges identify
 verified source declarations; they do not assert that ambient declarations match a deployed
 runtime implementation.
+
+Call edges follow the language service's `definition` source-navigation result rather
+than enumerating possible runtime implementations. A single verified, eligible target
+produces an edge, including a union member call where TypeScript navigates only to
+`A.method` for `A | B`. Do not supplement candidates with `typeDefinition`. Multiple
+distinct candidates returned by definition, conflicting project results, unresolved
+aliases or untrusted evidence remain Unresolved. Existing declaration eligibility,
+alias-following and type-only-import checks still apply.
 
 Omit `code.reads` and `code.writes`, including simple/compound assignments and update
 expressions. Keep traversing their expressions for calls and function-value references

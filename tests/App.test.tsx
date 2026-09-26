@@ -417,7 +417,7 @@ describe("App", () => {
     expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent(/草稿.*#42.*octocat/s);
   });
 
-  it("自动检查不切换 Snapshot，单击更新图标检查并刷新 Review", async () => {
+  it("进入 PR Review 不自动检查，单击更新图标检查并刷新", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
@@ -464,6 +464,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /开始审核 #42 Refreshable/ }));
     await waitFor(() => expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled());
     expect(screen.getByLabelText("审核阅读器")).not.toHaveTextContent("base-1 → head-1");
+    expect(invoke.mock.calls.some(([command]) => command === "check_pull_request_review_update" || command === "check_branch_review_updates")).toBe(false);
     expect(invoke.mock.calls.some(([command]) => command === "refresh_pull_request_review" || command === "refresh_branch_review")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_pull_request_review", {
@@ -901,7 +902,7 @@ describe("App", () => {
     expect(screen.queryByTestId("diff-editor")).not.toBeInTheDocument();
   });
 
-  it("检查到分支移动后保留当前 Snapshot，直到用户明确刷新", async () => {
+  it("进入分支 Review 不自动检查，单击更新图标检查并刷新", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entry = {
@@ -955,6 +956,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled());
     expect(screen.getByRole("button", { name: /old.txt/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new.txt/ })).not.toBeInTheDocument();
+    expect(invoke.mock.calls.some(([command]) => command === "check_pull_request_review_update" || command === "check_branch_review_updates")).toBe(false);
     expect(invoke.mock.calls.some(([command]) => command === "refresh_pull_request_review" || command === "refresh_branch_review")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
 

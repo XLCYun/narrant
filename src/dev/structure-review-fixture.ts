@@ -61,7 +61,7 @@ export function structureMixedLanguagesFixture(): StructureComparison {
   return comparison;
 }
 
-/** 原文对比预览覆盖长实现、长字符串、注释与字段，避免用规范化文本模拟展示数据。 */
+/** 原文对比预览覆盖长实现、整段增删与末尾折行，便于检查滚动到底后的完整内容。 */
 export function structureSourceDiffFixture(): StructureComparison {
   const comparison = structureReviewFixture();
   const longSignature = "pub async fn recover_all_previously_opened_review_workspaces_with_very_long_descriptive_names(&self) -> Result<(), RecoveryError>";
@@ -73,6 +73,10 @@ export function structureSourceDiffFixture(): StructureComparison {
     node.code = side === "before" ? "{ restore_step(); save_snapshot(); }" : "{ restore_step(); validate_snapshot()?; save_snapshot(); }";
     comparison[side].nodes.find((node) => node.id === "Review")!.source = `pub struct Review {\n    pub id: ReviewId,\n    pub snapshot: ${side === "before" ? "Option<Snapshot>" : "Snapshot"},\n}`;
   }
+  const prepare = comparison.after.nodes.find((node) => node.id === "new")!;
+  prepare.source = `fn prepare_snapshot(review: Review, options: SnapshotOptions) {\n${Array.from({ length: 240 }, (_, index) => `    prepare_part(${index}, review, options);`).join("\n")}\n    finish_preparing_all_snapshot_parts_and_release_temporary_resources(review, options);\n    save_snapshot();\n}`;
+  const removed = comparison.before.nodes.find((node) => node.id === "old")!;
+  removed.source = `fn load_legacy_state() {\n${Array.from({ length: 240 }, (_, index) => `    load_part(${index});`).join("\n")}\n    finish_loading_all_legacy_parts_and_release_temporary_resources();\n    save_snapshot();\n}`;
   comparison.diff.nodes.push({ id: "long", content: "modified", contains: [], references: [] });
   return comparison;
 }

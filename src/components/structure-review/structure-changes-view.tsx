@@ -256,7 +256,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
     </div>
     <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1">
       <ResizablePanel id="structure-details" defaultSize="320px" minSize="180px" maxSize="55%" groupResizeBehavior="preserve-pixel-size">
-        <StructureDetails comparison={comparison} selectedId={selectedId} directory={directory} showImports={showImports} dark={dark} />
+        <StructureDetails comparison={comparison} selectedId={selectedId} directory={directory} dark={dark} />
       </ResizablePanel>
       <ResizableHandle withHandle aria-label={t("resizeDetails")} />
       <ResizablePanel id="structure-graph" minSize="45%">

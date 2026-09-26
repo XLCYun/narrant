@@ -9,3 +9,4 @@ src-tauri/target/
 .DS_Store
 .design-qa/
 .apple/
+/.spikes/rust-code-graph/

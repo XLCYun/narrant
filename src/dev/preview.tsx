@@ -433,16 +433,18 @@ const readerSnapshot: ReviewReaderSnapshot = {
 function ReviewReaderPreview({
   empty = false,
   merged = false,
-  updateState = "current",
+  updateState = "idle",
   initialView = "overview",
   shortContent = false,
   themeSample = false,
   babysitKind,
   structureKind = "ready",
+  inAppShell = false,
 }: {
+  inAppShell?: boolean;
   empty?: boolean;
   merged?: boolean;
-  updateState?: "current" | "checking" | "failed" | "available";
+  updateState?: "idle" | "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes" | "structure-changes";
   structureKind?: "source-diff" | "mixed-languages" | "file-modules" | "crate-roots" | "dense" | "field-types" | "ready" | "loading" | "failed" | "empty" | "tests-only" | "unsupported" | "imports-only" | "hidden-references";
   shortContent?: boolean;
@@ -539,7 +541,7 @@ function ReviewReaderPreview({
       ? { kind: "available", update: { currentBaseRevision: snapshot.baseRevision, currentHeadRevision: snapshot.headRevision, availableBaseRevision: "next-base", availableHeadRevision: "next-head" } }
       : updateState === "checking" ? { kind: "checking" }
       : updateState === "failed" ? { kind: "failed", failure: { kind: "operation-failed", detail: "无法连接上游，请稍后重试。", retryable: true } }
-      : { kind: "current" },
+      : { kind: updateState },
     babysit: {
       eligibility: { kind: "resolved", result: { eligible: true, reason: null } },
       state: babysitState,
@@ -566,7 +568,7 @@ function ReviewReaderPreview({
     refresh: async () => ({ kind: "refreshed", reviewId: snapshot.reviewId, snapshotId: "preview-refreshed" }),
     close: async () => ({ kind: "closed" }),
   };
-  return <div className="h-[calc(100vh-8.5rem)]">
+  return <div className={inAppShell ? "h-[calc(100vh-4.5rem)]" : "h-[calc(100vh-8.5rem)]"}>
     <ReviewReader
       review={review}
       appearance={{
@@ -626,6 +628,12 @@ const previews: Record<string, PreviewDefinition> = {
       default: {
         label: "Windows 标题栏",
         render: () => <HomePage reviews={[]} onOpenReview={() => undefined} onOpenFolder={() => undefined} />,
+      },
+      "structure-source-diff": {
+        label: "完整应用中的长源码侧栏",
+        render: () => <HomePage reviews={[]} showHome={false} activeRepositoryId={1} activeReviewId="review-reader-preview" onOpenReview={() => undefined} onOpenFolder={() => undefined}>
+          <ReviewReaderPreview initialView="structure-changes" structureKind="source-diff" inAppShell />
+        </HomePage>,
       },
     },
   },

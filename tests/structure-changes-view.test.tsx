@@ -231,17 +231,20 @@ it("keeps details beside the graph and switches exact objects without remounting
   ]);
 });
 
-it("keeps filtered references out of details when switching objects in the sidebar", async () => {
+it("shows source without relationship lists when switching objects in the sidebar", async () => {
   render(<StructureChangesView binding={binding()} dark={false} />);
   const graph = await screen.findByTestId("rendered-graph");
   const sidebar = screen.getByRole("complementary", { name: "结构详情" });
   fireEvent.click(within(graph).getByRole("button", { name: /fn prepare_snapshot.*新增/ }));
-  expect(within(sidebar).getAllByText(/code.calls → save_snapshot/)).toHaveLength(2);
+  expect(within(sidebar).getByRole("region", { name: "源码差异" })).toBeInTheDocument();
+  expect(within(sidebar).queryByRole("heading", { name: "关系变化" })).not.toBeInTheDocument();
+  expect(within(sidebar).queryByRole("heading", { name: "关联目标" })).not.toBeInTheDocument();
+  expect(sidebar).not.toHaveTextContent(/code.calls → save_snapshot|当前筛选下没有关系变化|当前筛选下没有关联目标/);
   expect(sidebar).not.toHaveTextContent(/serde_json|verify_snapshot|Arc<T>|%2F|code.imports/);
   fireEvent.click(within(graph).getByRole("button", { name: /pub async fn run_review.*自身修改/ }));
   expect(within(sidebar).getByRole("heading", { name: "run_review" })).toBeInTheDocument();
   expect(sidebar).toHaveTextContent("generated::on_review_opened()");
-  expect(within(sidebar).getAllByRole("listitem").every((item) => !item.textContent?.includes("generated::on_review_opened"))).toBe(true);
+  expect(within(sidebar).queryByRole("list")).not.toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
 });
 
@@ -259,7 +262,7 @@ it("presents long source, JSX relations and duplicate declarations in a mixed-la
   fireEvent.click(within(graph).getByRole("button", { name: /ReviewWorkspaceWithAnExtraordinarilyLongName.*自身修改/ }));
   const details = screen.getByRole("complementary", { name: "结构详情" });
   expect(details).not.toHaveTextContent("code.calls → formatReview");
-  expect(details).toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
+  expect(details).not.toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
   expect(screen.getByTestId("source-diff")).toHaveAttribute("data-original-language", "typescript");
   expect(screen.getByTestId("modified-source").textContent).toBe(comparison.after.nodes.find((node) => node.id === "typescript-component")!.source);
 

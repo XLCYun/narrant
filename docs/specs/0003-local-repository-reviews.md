@@ -199,12 +199,12 @@ the Review silently. A successful refresh:
 4. presents the new File Changes.
 
 The Review Reader keeps one user-visible update action available for every presented
-Branch or Pull Request Review. It checks once when a Review is first opened and then
-lets the user check again explicitly. The same action becomes the explicit refresh
-action when an update is available. Checking and refreshing disable that action for the
-operation's duration, and duplicate requests do not replace an operation already in
-flight. A successful refresh restores the manual check action without immediately
-checking again.
+Branch or Pull Request Review. Opening, switching, or restoring a Review does not check
+for updates, and a failed switch does not restart a cancelled check. Clicking the action
+explicitly checks the presented Review and refreshes it if an update is available.
+Checking and refreshing disable that action for the operation's duration, and duplicate
+requests do not replace an operation already in flight. A successful refresh restores
+the manual check action without immediately checking again.
 
 A no-update result remains visible until the next check or Snapshot transition. Check
 and refresh failures use non-blocking notifications while the action retains the

@@ -257,10 +257,9 @@ export function useReviewLifecycle(
       ...current,
       update: operation.previous.kind === "checking" ? { kind: "current" } : operation.previous,
     }));
-    return { reviewId: operation.reviewId, snapshotId: operation.snapshotId, generation: operation.generation };
   }, [updateEntry]);
 
-  /** 为一个 Presented Review 检查 Selection 更新；离开 Reader 后立即取消该检查。 */
+  /** 按用户操作检查 Presented Review 的 Selection 更新；离开 Reader 后立即取消。 */
   const checkForUpdate = useCallback(async (current: ReviewSnapshot): Promise<boolean | undefined> => {
     if (refreshOperation.current) return;
     const running = updateOperation.current;
@@ -361,7 +360,7 @@ export function useReviewLifecycle(
     const abort = new AbortController();
     lifecycleAbort.current = abort;
     const previousReviewId = activeReviewIdRef.current;
-    const cancelledUpdate = cancelUpdateCheck();
+    cancelUpdateCheck();
     const previousEntry = previousReviewId ? entries.current.get(previousReviewId) : undefined;
     setOpeningTarget(target);
     if (previousReviewId) setTransition({ kind: "switching", target });
@@ -380,25 +379,18 @@ export function useReviewLifecycle(
       presentEntry(next.reviewId);
       if (!reusedSnapshot) {
         resetSnapshotReader(next);
-        checkForUpdate(next);
       }
       return { kind: "opened", reviewId: next.reviewId, snapshotId: next.snapshotId, snapshot: entries.current.get(next.reviewId)!.snapshot };
     } catch (reason) {
       if (previousEntry && activeReviewIdRef.current === previousReviewId) {
         setTransition({ kind: "stable" });
-        if (cancelledUpdate
-          && cancelledUpdate.reviewId === previousReviewId
-          && cancelledUpdate.snapshotId === previousEntry.snapshot.snapshotId
-          && cancelledUpdate.generation === updateGeneration.current) {
-          checkForUpdate(previousEntry.snapshot);
-        }
       }
       return { kind: "failed", failure: operationFailure(reason), previousReviewPreserved: true };
     } finally {
       if (lifecycleAbort.current === abort) lifecycleAbort.current = undefined;
       setOpeningTarget(undefined);
     }
-  }, [adapter, cancelUpdateCheck, checkForUpdate, clearBabysitSnapshot, installSnapshot, invalidateBabysitSelection, presentEntry, resetSnapshotReader]);
+  }, [adapter, cancelUpdateCheck, clearBabysitSnapshot, installSnapshot, invalidateBabysitSelection, presentEntry, resetSnapshotReader]);
 
   /** 显式刷新 Presented Review；只替换该 Review 的 Snapshot-scoped state。 */
   const refresh = useCallback(async (): Promise<ReviewRefreshResult> => {

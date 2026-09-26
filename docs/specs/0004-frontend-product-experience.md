@@ -88,8 +88,8 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 50. 作为本地分支审核者，我希望概览面板展示分支和 revision 信息，以便 Pull Request 与分支 Review 使用一致界面。
 51. 作为安全敏感用户，我希望 Pull Request 描述禁止原始 HTML 和远程图片，以便查看描述不会静默加载外部内容。
 52. 作为 Pull Request 阅读者，我希望外部链接由系统浏览器打开，以便 Narrant 不承担内嵌网页浏览。
-53. 作为 Review 阅读者，我希望打开已有 Review 后在后台自动检查更新，以便及时知道 Selection 是否移动。
-54. 作为 Review 阅读者，我希望自动检查不阻塞当前 Snapshot 的阅读，以便网络或 Git 操作不会中断工作。
+53. 作为 Review 阅读者，我希望打开或恢复 Review 时不自动检查更新，由我点击工具栏发起检查，以便自主决定检查时机。
+54. 作为 Review 阅读者，我希望手动检查不阻塞当前 Snapshot 的阅读，以便网络或 Git 操作不会中断工作。
 55. 作为 Review 阅读者，我希望只有点击“刷新审核”才切换 Snapshot，以便正在阅读的内容不会静默变化。
 56. 作为 Review 阅读者，我希望更新提示展示当前与可用短 revision，以便理解刷新影响。
 57. 作为 Review 阅读者，我希望点击“刷新审核”后直接执行而不再二次确认，以便明确操作不会受到重复打断。
@@ -191,7 +191,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Base 与 Head 使用相同、具有清晰边框和背景对比的中性 Badge 样式，不用颜色区分角色或暗示状态；悬停不得降低其对比度，当前 Review 由条目整体的选中背景表达。
 - revision 之间的变化继续使用从旧 revision 指向新 revision 的向右箭头，避免把版本演进误表达为分支合入关系。
 - Pull Request 描述使用安全 Markdown：跳过原始 HTML、阻止远程图片自动加载，HTTP/HTTPS 链接交给系统浏览器。
-- 打开已有 Review 后后台自动检查 Selection 更新，但不自动刷新 Review Snapshot。
+- 打开、切换或恢复 Review 时不自动检查 Selection 更新；切换失败也不自动重启已取消的检查。用户点击工具栏才检查，有更新则接续刷新 Review Snapshot。
 - 检测到 Pull Request 更新时显示“检测到 PR 分支有更新”，检测到 Branch Selection 更新时显示“检测到所选分支有更新”。“刷新审核”按钮本身构成明确确认，不再弹出二次 Dialog。刷新期间按钮显示 Loading 图标并保留当前 Snapshot 与旧 Diff，同时禁用 Review 切换；成功后原子切换，失败后保留旧 Snapshot。
 - 点击另一条 Review 直接切换；切换失败保留当前 Review。切换成功后保留旧 Review 的 Workspace、runtime reader 和阅读状态，切回时不得重新创建 Workspace。
 - 页面导航不关闭当前 Review 的运行时资源；工具栏中的“退出审核”仅返回所属 Repository 的审核历史，不删除 Review、Snapshot 或运行时状态。从 Review 阅读器点击所属 Repository 名称也返回其“审核历史”标签并定位刚离开的 Review；从首页或其他 Repository 直接打开仓库概览时仍默认进入 `Pull Requests`。
@@ -237,7 +237,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 中文测试显式使用 `zh-CN`；首页、Repository 空状态和 Review 更新至少各有英文 smoke test。
 - i18n 测试覆盖可见文案以外的 ARIA label、Tooltip、Toast、Dialog 和恢复动作，确保辅助技术接收到同一语言。
 - 新增的系统 locale、默认分支和当前分支应用边界需要 Rust 契约测试；现有 Review、Snapshot、Workspace 和 SQLite 行为继续由已有 Rust 测试覆盖，不因 UI 重构重复测试内部实现。
-- Snapshot 更新测试必须证明自动检查不改变当前 Snapshot、失败刷新保留旧 Snapshot、成功刷新后数据库、File Changes 和 Review Workspace 一致。
+- Snapshot 更新测试必须证明打开或恢复 Review 不发起更新检查、手动检查与刷新仍可用、失败刷新保留旧 Snapshot、成功刷新后数据库、File Changes 和 Review Workspace 一致。
 - 安全 Markdown 测试必须证明原始 HTML 不执行、远程图片不请求、外部链接交给系统浏览器。
 - 可访问性测试覆盖焦点进入和返回、Dialog 焦点约束、Sheet 关闭后的焦点恢复、非颜色状态表达以及 900×600 下的关键操作可达性。
 - 构建和静态检查必须验证翻译 key 类型、TypeScript、ESLint 和现有测试套件；翻译资源必须离线可用。

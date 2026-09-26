@@ -72,7 +72,10 @@ export function selectStructureEdges(
   for (const edge of related) {
     if (objects.has(edge.data!.sourceObjectId) && objects.has(edge.data!.targetObjectId)) continue;
     const source = endpoint(edge, "source"), target = endpoint(edge, "target");
-    if (source.card === target.card) continue;
+    // 汇总或折叠后的端点若互为祖先与后代，不绘制指回所属容器的连线。
+    if (source.card === target.card
+      || containerPaths.get(source.card)!.includes(target.card)
+      || containerPaths.get(target.card)!.includes(source.card)) continue;
     // 用有向端口对去重；两个无容器的外部函数即使共用成员表，也不应合并。
     const key = JSON.stringify([source.handle, target.handle]);
     const group = groups.get(key);

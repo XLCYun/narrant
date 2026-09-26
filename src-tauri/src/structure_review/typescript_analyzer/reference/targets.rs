@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// 已解析的声明身份保留原生类别，用于拒绝类型签名和运行时目标歧义。
+/// 已解析的声明身份保留原生类别，用于校验值声明和定义查询的歧义。
 #[derive(Clone)]
 struct Target {
     declaration: Declaration,
@@ -40,7 +40,7 @@ impl Resolver {
         }
     }
 
-    /// 每个项目保留完整目标集合；任意不可信或不匹配证据都会使本次关系不确定。
+    /// 以每个项目的 definition 导航结果为准；不可信或不匹配证据保持不确定。
     pub fn resolve(
         &mut self,
         session: &mut TypeScriptLsp,
@@ -115,36 +115,6 @@ impl Resolver {
             };
             for target in resolved {
                 targets.insert(target.declaration.node.data().id.clone(), target);
-            }
-        }
-        let member_names = targets
-            .values()
-            .filter_map(member_name)
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
-        if occurrence.kind == OccurrenceKind::Call && !member_names.is_empty() {
-            for definition in session.type_definitions(file, occurrence.position, project)? {
-                let DefinitionEvidence::Checked(location) = definition else {
-                    return Ok(None);
-                };
-                if let Some(additional) = self.follow(
-                    session,
-                    &location,
-                    project,
-                    occurrence.kind,
-                    &mut BTreeSet::new(),
-                )? {
-                    for target in additional {
-                        let data = target.declaration.node.data();
-                        // 同名成员可能采用方法或函数值字段；返回类型本身不是成员，不能混入候选。
-                        if member_name(&target).is_some_and(|name| member_names.contains(name)) {
-                            targets.insert(data.id.clone(), target);
-                        }
-                    }
-                } else {
-                    // 无法映射的补充位置也不能被悄悄丢弃后恢复确定性。
-                    uncertain = true;
-                }
             }
         }
         if targets.is_empty() {
@@ -398,24 +368,6 @@ impl Resolver {
 /// 运行时的相对包路径仍保留；安装目录和临时侧路径永不进入身份。
 fn runtime_id(id: &str) -> String {
     id.replacen(":repo:", ":runtime:", 1)
-}
-
-/// 同名成员证据跨越方法、字段和结构声明；是否可调用在完整候选集合上统一检查。
-fn member_name(target: &Target) -> Option<&str> {
-    let data = target.declaration.node.data();
-    matches!(
-        data.native_kind.as_str(),
-        "method"
-            | "static_method"
-            | "object_method"
-            | "field"
-            | "static_field"
-            | "property"
-            | "getter"
-            | "setter"
-    )
-    .then_some(data.name.as_deref())
-    .flatten()
 }
 
 /// 明确声明类别与语义意图对应；裸调用签名和 import alias 永远不是运行时实现。

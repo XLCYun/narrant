@@ -248,16 +248,22 @@ card or member updates the sidebar and highlights that exact object. One read-on
 Monaco inline diff compares the before/after `source` excerpts, combining declaration
 and implementation with their original comments, whitespace and nested members.
 The editor shares File Changes' light/dark themes, wraps long lines for display only,
-and grows for short excerpts up to a bounded height with independent scrolling.
+and fills all remaining sidebar height for both short and long excerpts. Long source
+scrolls inside the editor; there is no fixed or viewport-relative editor height cap.
+The visible editor container owns Monaco's layout dimensions and resizes it when
+the available space changes. Scrolling with the wheel or the Down key must reveal
+the final source line, including excerpts without a trailing newline.
+Object metadata and any language-specific information appear above the source diff,
+with their own scroll area capped at 40% of the details content height. The sidebar
+does not display Relationship changes or Reference targets sections.
 An added/removed object has an empty original/modified side. A present node without
 source shows an unavailable message rather than a fabricated addition or deletion.
 No formatter reconstructs source from the normalized signature and implementation.
 These display excerpts do not participate in structural comparison: comment-only or
 child changes in a parent's excerpt do not make its own graph content modified.
 Source is retained in the comparison before the temporary checkout is cleaned up.
-The sidebar scrolls independently; selecting another object starts its
-details at the top. A new Snapshot clears the previous selection.
-The existing object/reference display filters apply to sidebar details as well.
+Selecting another object resets its metadata and source scroll positions. Directory
+file lists scroll independently. A new Snapshot clears the previous selection.
 
 The toolbar contains the test-code switch, reanalysis and display options, aligned
 to the right. Object counters and the file-coverage button and details mode are
@@ -277,6 +283,10 @@ compact mode applies when selecting a container, type or directory:
   counting container/type/directory ancestors and excluding synthetic member tables.
   If that branch is shallower, use its closest available container. An external
   function with no container keeps its own endpoint.
+- After promotion and folding, hide summary lines whose displayed endpoints are the
+  same card or form an ancestor/descendant pair. Do not hide lines between separate
+  sibling containers merely because they share an ancestor. Detailed mode and direct
+  member selection retain the original relationships.
 - Merge relationships with the same directed pair of display endpoints into one line,
   regardless of reference kind. Opposite directions remain separate. Hovering the
   line shows its endpoint names and the number of underlying relationships.
@@ -405,7 +415,7 @@ Each member has distinct incoming/outgoing handles at its row, so grouping does 
 merge method calls into class-level relationships. Calls within one card, recursive
 calls, removed placement and former implementation-target relationships remain
 representable. Ownership already expressed by the containing card is not drawn as
-a duplicate edge; changes to displayed relationships remain in object details.
+a duplicate edge; displayed relationship changes remain available on the graph.
 The graph contract and Rust extraction are unchanged by this presentation policy.
 
 ELK arranges cards while member ports have fixed positions. React Flow connects
@@ -423,8 +433,8 @@ these targets. The Display options menu has three controls: all objects, unchang
 relationships and imports. These controls apply only to displayed graph nodes and
 their relationships.
 
-Canvas layout, object counts, change markers, expansion and both relationship lists
-in object details use the same projection. An object whose only differences are
+Canvas layout, object counts, change markers and expansion use the same projection.
+An object whose only differences are
 hidden relationships is unchanged in this projection; its own declaration or code
 changes still count. If no visible changes remain, the view directs the user to File
 Changes. Original code shown in details is preserved, including any external names
@@ -449,7 +459,7 @@ target. The import toggle does not change the changed-object count.
 Rust `use` Extension nodes, including `pub use`, are always omitted from this view,
 including Show all objects, expansion and Show imports. Their incident relationships
 and import-only targets do not enter the layout. Object totals, changed-object counts,
-expansion hints and relationship details apply the same projection. A parent whose
+expansion hints and displayed relationships apply the same projection. A parent whose
 only relationship changes involve hidden `use` nodes is unchanged in the projection.
 An otherwise empty graph explains that source changes can still be read in File
 Changes. The complete analyzer graphs still retain import declarations and their
