@@ -16,6 +16,10 @@
 Rust 项目仍需要用户已有的 Cargo/rustc；标准库或完整依赖范围还需要对应工具链的 rust-src。
 应用不运行 rustup 安装命令。纯仓库范围不加载标准库。支持包不包含 npm/pnpm，TS/JS 不会安装被审查项目的依赖；Rust 的“所有依赖”范围保留原有 Cargo 策略。
 
+工具链检查在实际发现的 Rust 项目目录执行，包含 `src-tauri/` 这类直接子项目。
+首版一个分析会话只配置一套标准库；同一仓库内多个独立项目若使用不同 sysroot，
+标准库/所有依赖范围明确报错并提示切换为“仅仓库”，不把仓库根目录的默认工具链套给所有项目。
+
 ## 本地构建与验收
 
 使用仓库支持的 Node 和 `pnpm install --frozen-lockfile` 后运行：
@@ -32,12 +36,12 @@ pnpm build:language-packs --target aarch64-apple-darwin --native
 上游下载每次校验固定摘要，缓存位于 `.tools/language-pack-downloads`；不执行 npm 安装脚本。
 归档按稳定文件顺序、固定时间及权限创建，不包含系统扩展属性。清单包含归档及每个文件的 SHA-256。
 
-真实安装和 TS/JS 分析验证（先构建当前平台产物）：
+真实安装和 Rust、TS/JS 分析验证（先构建当前平台产物；Rust 使用已有 Cargo/rustc）：
 
 ```sh
 NARRANT_LANGUAGE_PACK_FIXTURE="$PWD/.tools/language-support-pack-artifacts" \
   scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --lib \
-  real_installed_typescript_pack_analyzes_without_development_tools -- --ignored
+  real_installed_ -- --ignored
 ```
 
 PR 上 `Language support packs` workflow 在两个原生 runner 构建并启动工具，保存完整产物。

@@ -88,7 +88,11 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
   `RUSTUP_AUTO_INSTALL=0`。但 rustup 对后者的定义只覆盖缺失 active toolchain 的
   自动安装；当前所验证 rust-analyzer 的源码仍存在显式执行
   `rustup component add rust-src` 的分支。仅凭这两个变量不能证明不会安装组件。
-  这是代码阅读发现，尚未执行缺失组件实验；实现时应明确验证并隔离这一行为。
+  实现通过项目目录内的只读探测检查已有工具链；需要标准库时，向服务器显式传入
+  已存在的 sysroot 与 rust-src 路径，缺少时在启动服务器前失败。仅仓库范围传入
+  `cargo.sysroot=null`。隔离工具链测试覆盖了缺少组件时不执行安装的行为。
+- 首版在一个服务器会话中使用一套标准库。发现多个独立 Rust 项目且 sysroot 不同
+  时，标准库/所有依赖范围会明确报错并提示切换为仅仓库；不会静默使用错误工具链。
 - 依据：[现行 Rust 规格](0019-rust-language-analyzer.md)、
   [rustup 环境变量说明](https://rust-lang.github.io/rustup/environment-variables.html)、
   [已验证 rust-analyzer 版本的 sysroot 处理](https://github.com/rust-lang/rust-analyzer/blob/9074e9b4c6bc31d7986ccf4e22d18af70e5508da/crates/project-model/src/sysroot.rs#L429-L440)。
@@ -165,6 +169,9 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
 5. 后端在占用 Review Workspace 前，先用固定 Snapshot 的文件元数据识别需要的包；
    等待下载结束后，通过原工作区入口再次校验 Snapshot，才开始分析。准备阶段
    不因等待网络长期占用 Review 工作区。
+6. 同一快照提供按分析请求标识关联的必要包列表，由后端使用真实语言与测试过滤
+   规则登记，随分析租约释放；准备失败的错误也携带必要包标识。前端不重复按后缀
+   猜测，其他 Review 的包错误不能遮住当前工具链或分析错误。
 
 因此自动进度只需要新增一个本地快照查询 command、一个共享 hook，以及后端包准备
 逻辑；设置管理按已确认需求增加显式操作。无需通用任务框架、事件总线、外部状态库
@@ -225,3 +232,20 @@ TS/JS 不安装项目依赖，Rust 保留既有依赖范围策略，但不得安
 - `scripts/build-language-support-packs.mjs` 生成四个产物；独立 workflow 原生执行工具，
   发布脚本先验证归档再公开清单，并验证用户访问的 HTTPS 地址。
 - [构建和发布操作说明](../language-support-packs.md) 记录首次上线条件、版本升级与回退。
+
+## 实现验收记录
+
+- Rust 全量测试 704 通过、59 个需要显式环境的测试跳过；审查修复后受影响服务、
+  工具链和结构分析应用测试 32 通过。额外运行两个真实支持包集成测试均通过，
+  覆盖独立 Node 的 TS/JS 分析和直接子目录 Cargo 项目的 Rust 分析。
+- 前端全量 47 个文件、424 个测试通过；脚本测试 170 通过；TypeScript 检查、
+  ESLint、生产构建及 Rust Clippy 通过。
+- 本地生成两个语言包在两个平台的四份归档，并在 macOS arm64 执行真实工具。
+  Windows 原生执行由 PR workflow 验证；本地生成 Windows 归档不等于原生运行验收。
+- Preview Harness 在 1440×900、760×760、400×760 检查浅色/深色、下载、未知总量、
+  安装、长错误、重试和设置删除保护。支持包卡片无横向溢出，长内容可滚动到操作入口；
+  验收后恢复默认视口。
+- 规范与需求两条独立审查均已完成：存储故障隔离、项目工具链目录、Windows 锁竞争、
+  当前请求的包需求和错误契约等发现已修复，复审无剩余发现。
+
+生产分发尚未执行；首次可下载性以受保护发布流程完成公开 HTTPS 回读为准。

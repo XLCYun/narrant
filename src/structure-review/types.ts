@@ -66,8 +66,8 @@ export interface StructureReviewAdapter {
 /** 未分析、失败和取消都不等价于已经证明的空差异。 */
 export type StructureState =
   | { kind: "idle" | "loading" | "cancelled" }
-  | { kind: "failed"; detail: string }
+  | { kind: "failed"; detail: string; supportPacks?: PackId[] }
   | { kind: "ready"; comparison: StructureComparison };
 
 /** 结构视图只消费状态和用户意图，不自行发出 Tauri 命令。 */
-export type StructureBinding = { supportPacks?: PackId[]; state: StructureState; options: AnalysisOptions; setOptions(options: AnalysisOptions): void; retry(): void; cancel(): void };
+export type StructureBinding = { supportRequest?: string; state: StructureState; options: AnalysisOptions; setOptions(options: AnalysisOptions): void; retry(): void; cancel(): void };

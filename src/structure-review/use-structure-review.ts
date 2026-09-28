@@ -54,7 +54,8 @@ export function useStructureReview(adapter: StructureReviewAdapter | undefined, 
       entry.abort = undefined;
       entry.state = typeof reason === "object" && reason !== null && "code" in reason && reason.code === "cancelled"
         ? { kind: "cancelled" }
-        : { kind: "failed", detail: typeof reason === "object" && reason !== null && "detail" in reason
+        : { kind: "failed", supportPacks: typeof reason === "object" && reason !== null && "supportPacks" in reason && Array.isArray(reason.supportPacks)
+          ? reason.supportPacks.filter((id): id is PackId => id === "rust" || id === "typescript-javascript") : undefined, detail: typeof reason === "object" && reason !== null && "detail" in reason
           ? String(reason.detail) : String(reason) };
       publish();
     });
@@ -80,11 +81,7 @@ export function useStructureReview(adapter: StructureReviewAdapter | undefined, 
   const options = entry && entry.snapshotId === snapshot?.snapshotId ? entry.options : DEFAULT_OPTIONS;
   const binding: StructureBinding | undefined = adapter && snapshot ? {
     state: entry && entry.snapshotId === snapshot.snapshotId ? entry.state : IDLE,
-    supportPacks: [...new Set(snapshot.fileChanges.flatMap((change): PackId[] => [change.oldPath, change.path].flatMap((path): PackId[] => {
-      if (path?.endsWith(".rs")) return ["rust"];
-      if (path && /\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) return ["typescript-javascript"];
-      return [];
-    })))],
+    supportRequest: JSON.stringify([snapshot.reviewId, snapshot.snapshotId, options.includeTests]),
     options,
     setOptions: (next) => {
       if (next.includeTests === options.includeTests) return;

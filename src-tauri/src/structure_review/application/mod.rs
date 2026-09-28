@@ -33,6 +33,8 @@ pub(crate) type AnalyzeTypeScript =
 pub(crate) struct StructureReviewError {
     pub code: &'static str,
     pub detail: String,
+    #[serde(rename = "supportPacks", skip_serializing_if = "Option::is_none")]
+    pub support_packs: Option<Vec<crate::language_support::PackId>>,
 }
 
 impl StructureReviewError {
@@ -41,6 +43,7 @@ impl StructureReviewError {
         Self {
             code,
             detail: error.to_string(),
+            support_packs: None,
         }
     }
 }
@@ -122,21 +125,25 @@ impl StructureReview {
                     }
                 }
             }
+            let ids = ids.into_iter().collect::<Vec<_>>();
+            let request = serde_json::to_string(&(review_id, snapshot_id, options.include_tests))
+                .expect("分析身份可序列化");
             let lease = support
-                .ensure(
-                    &ids.into_iter().collect::<Vec<_>>(),
-                    operation.cancellation(),
-                )
+                .ensure(&ids, operation.cancellation(), Some(request))
                 .await
                 .map_err(|error| {
-                    StructureReviewError::new(
+                    let mut failure = StructureReviewError::new(
                         if operation.cancellation().is_cancelled() {
                             "cancelled"
                         } else {
                             "language-pack-unavailable"
                         },
                         error,
-                    )
+                    );
+                    if !operation.cancellation().is_cancelled() {
+                        failure.support_packs = Some(ids.clone());
+                    }
+                    failure
                 })?;
             if let Some(root) = lease.path(PackId::Rust) {
                 let analyzer =

@@ -38,7 +38,7 @@ export type TauriCommandContract = {
   language_support_snapshot: { args: EmptyArgs; result: PackCollection };
   language_support_retry: { args: { id: PackId }; result: PackCollection };
   language_support_remove: { args: { id: PackId; version: string }; result: PackCollection };
-  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string; includeTests: boolean }; result: StructureComparison; error: { code: string; detail: string } };
+  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string; includeTests: boolean }; result: StructureComparison; error: { code: string; detail: string; supportPacks?: PackId[] } };
   application_update_snapshot: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_manual_check: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_set_automatic_download: { args: { enabled: boolean }; result: ApplicationUpdateSnapshot };

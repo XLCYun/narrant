@@ -42,6 +42,7 @@ struct Inner {
 struct State {
     sequence: u64,
     entries: BTreeMap<PackKey, Entry>,
+    requirements: BTreeMap<String, (Vec<PackId>, usize)>,
 }
 
 /// 使用计数只控制本进程，文件锁同时保护其他应用进程的使用者。
@@ -54,6 +55,7 @@ struct Entry {
 pub(crate) struct PackLease {
     owner: LanguageSupportPacks,
     held: Vec<(PackKey, PathBuf, File)>,
+    request: Option<String>,
 }
 
 impl PackLease {
@@ -70,10 +72,22 @@ impl Drop for PackLease {
     /// 文件锁和计数随实际 worker 一同释放，调用方取消等待不会提前删除工具。
     fn drop(&mut self) {
         let mut state = self.owner.inner.state.lock().unwrap();
-        for (key, _, _) in &self.held {
+        for (key, _, lock) in &self.held {
             if let Some(entry) = state.entries.get_mut(key) {
                 entry.users -= 1;
                 entry.snapshot.in_use = entry.users != 0;
+            }
+            // 显式解锁，避免其他线程 fork 时短暂继承描述符而延迟 close 的释放。
+            if let Err(error) = FileExt::unlock(lock) {
+                tracing::warn!(%error, "释放语言支持包使用锁失败");
+            }
+        }
+        if let Some(request) = &self.request {
+            if let Some((_, count)) = state.requirements.get_mut(request) {
+                *count -= 1;
+                if *count == 0 {
+                    state.requirements.remove(request);
+                }
             }
         }
         self.held.clear();
@@ -96,14 +110,23 @@ impl LanguageSupportPacks {
 
     /// 装配存储与已验证版本，测试可用本地 HTTP 服务器经过同一下载路径。
     fn with_origin(root: PathBuf, origin: String, target: String) -> Result<Self, String> {
-        fs::create_dir_all(&root).map_err(display)?;
+        // 可选能力的目录故障不能阻止 File Changes 和整个应用启动。
+        let mut initialization_error = fs::create_dir_all(&root).err().map(display);
         let storage = Storage {
-            root: root.canonicalize().map_err(display)?,
+            root: root.canonicalize().unwrap_or(root),
             target,
         };
-        storage.recover()?;
+        if let Err(error) = storage.recover() {
+            initialization_error = Some(error);
+        }
         let expected = versions();
-        let mut keys = storage.keys("installed")?;
+        let mut keys = match storage.keys("installed") {
+            Ok(keys) => keys,
+            Err(error) => {
+                initialization_error = Some(error);
+                Vec::new()
+            }
+        };
         keys.extend(expected.iter().map(|(id, version)| PackKey {
             id: *id,
             version: version.clone(),
@@ -112,6 +135,11 @@ impl LanguageSupportPacks {
             .into_iter()
             .map(|key| {
                 let installed = storage.inspect(&key).ok();
+                let error = if installed.is_none() {
+                    initialization_error.clone()
+                } else {
+                    None
+                };
                 let entry = Entry {
                     snapshot: PackSnapshot {
                         id: key.id,
@@ -120,6 +148,8 @@ impl LanguageSupportPacks {
                         required: expected.get(&key.id) == Some(&key.version),
                         phase: if installed.is_some() {
                             PackPhase::Ready
+                        } else if initialization_error.is_some() {
+                            PackPhase::Failed
                         } else {
                             PackPhase::NotInstalled
                         },
@@ -128,7 +158,7 @@ impl LanguageSupportPacks {
                         installed_bytes: installed
                             .map_or(0, |m| m.files.iter().map(|f| f.size).sum()),
                         in_use: false,
-                        error: None,
+                        error,
                     },
                     users: 0,
                 };
@@ -150,6 +180,7 @@ impl LanguageSupportPacks {
                 state: Mutex::new(State {
                     sequence: 1,
                     entries,
+                    requirements: BTreeMap::new(),
                 }),
                 changed,
                 stop: CancellationToken::new(),
@@ -163,6 +194,11 @@ impl LanguageSupportPacks {
         let state = self.inner.state.lock().unwrap();
         PackCollection {
             sequence: state.sequence,
+            requirements: state
+                .requirements
+                .iter()
+                .map(|(key, (ids, _))| (key.clone(), ids.clone()))
+                .collect(),
             packs: state
                 .entries
                 .values()
@@ -176,11 +212,26 @@ impl LanguageSupportPacks {
         &self,
         ids: &[PackId],
         cancelled: &CancellationToken,
+        request: Option<String>,
     ) -> Result<PackLease, String> {
         if cancelled.is_cancelled() {
             return Err("结构分析已取消".into());
         }
         let mut updates = self.inner.changed.subscribe();
+        let mut lease = PackLease {
+            owner: self.clone(),
+            held: vec![],
+            request,
+        };
+        if let Some(request) = &lease.request {
+            let mut state = self.inner.state.lock().unwrap();
+            let entry = state
+                .requirements
+                .entry(request.clone())
+                .or_insert_with(|| (ids.to_vec(), 0));
+            entry.1 += 1;
+            self.publish(&mut state);
+        }
         let mut keys = vec![];
         for id in ids {
             let key = self.start(*id)?;
@@ -188,10 +239,6 @@ impl LanguageSupportPacks {
                 keys.push(key);
             }
         }
-        let mut lease = PackLease {
-            owner: self.clone(),
-            held: vec![],
-        };
         for key in keys {
             loop {
                 if cancelled.is_cancelled() || self.inner.stop.is_cancelled() {
@@ -211,7 +258,7 @@ impl LanguageSupportPacks {
                         let file = self.inner.storage.lock_file(&key)?;
                         let lock_result = FileExt::try_lock_shared(&file);
                         if let Err(error) = &lock_result {
-                            if error.kind() != std::io::ErrorKind::WouldBlock {
+                            if !lock_contended(error) {
                                 return Err(display(error));
                             }
                         }
@@ -345,9 +392,20 @@ impl LanguageSupportPacks {
             if self.inner.stop.is_cancelled() {
                 return Err("应用正在退出".into());
             }
+            // 其他应用可能已完成安装并持有使用租约；复用不需要等待独占锁。
+            match FileExt::try_lock_shared(&lock) {
+                Ok(()) => {
+                    if let Ok(manifest) = self.inner.storage.inspect(key) {
+                        return Ok(manifest.files.iter().map(|file| file.size).sum());
+                    }
+                    FileExt::unlock(&lock).map_err(display)?;
+                }
+                Err(error) if lock_contended(&error) => {}
+                Err(error) => return Err(display(error)),
+            }
             match lock.try_lock_exclusive() {
                 Ok(()) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error) if lock_contended(&error) => {
                     tokio::time::sleep(Duration::from_millis(250)).await
                 }
                 Err(error) => return Err(display(error)),
@@ -440,6 +498,12 @@ impl LanguageSupportPacks {
         state.sequence += 1;
         self.inner.changed.send_replace(state.sequence);
     }
+}
+
+/// fs2 在 Windows 使用 ERROR_LOCK_VIOLATION，不一定映射成 WouldBlock。
+fn lock_contended(error: &std::io::Error) -> bool {
+    error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+        || error.kind() == std::io::ErrorKind::WouldBlock
 }
 
 /// 面向调用方保留可诊断的失败原因。

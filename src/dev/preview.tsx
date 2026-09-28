@@ -593,23 +593,23 @@ function ReviewReaderPreview({
 /** 使用真实共享 hook 和组件检查进度、重试、后台提示及设置删除。 */
 function LanguageSupportPreview({ phase = "downloading", management = false, unknownTotal = false }: { phase?: PackPhase; management?: boolean; unknownTotal?: boolean }) {
   const model = useMemo(() => {
-    let current: PackCollection = { sequence: 1, packs: [
+    let current: PackCollection = { sequence: 1, requirements: { preview: ["rust", "typescript-javascript"] }, packs: [
       { id: "rust", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "ready", downloadedBytes: 0, totalBytes: null, installedBytes: 40_000_000, inUse: true, error: null },
       { id: "typescript-javascript", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase, downloadedBytes: 18_000_000, totalBytes: unknownTotal ? null : 50_000_000, installedBytes: phase === "ready" ? 150_000_000 : 0, inUse: false, error: phase === "failed" ? "连接中断，语言支持包未完成安装。" + "请检查网络连接后重试，已经完成的 Rust 语言支持包会继续保留。".repeat(4) : null },
     ] };
     const application: LanguageSupportApplication = {
       snapshot: async () => current,
-      retry: async (id) => { current = { sequence: current.sequence + 1, packs: current.packs.map(pack => pack.id === id ? { ...pack, phase: "downloading", error: null } : pack) }; return current; },
-      remove: async (id, version) => { current = { sequence: current.sequence + 1, packs: current.packs.map(pack => pack.id === id && pack.version === version ? { ...pack, phase: "not-installed", installedBytes: 0 } : pack) }; return current; },
+      retry: async (id) => { current = { ...current, sequence: current.sequence + 1, packs: current.packs.map(pack => pack.id === id ? { ...pack, phase: "downloading", error: null } : pack) }; return current; },
+      remove: async (id, version) => { current = { ...current, sequence: current.sequence + 1, packs: current.packs.map(pack => pack.id === id && pack.version === version ? { ...pack, phase: "not-installed", installedBytes: 0 } : pack) }; return current; },
     };
-    return { application, finish: () => { current = { sequence: current.sequence + 1, packs: current.packs.map(pack => ({ ...pack, phase: "ready", installedBytes: 150_000_000, error: null })) }; } };
+    return { application, finish: () => { current = { ...current, sequence: current.sequence + 1, packs: current.packs.map(pack => ({ ...pack, phase: "ready", installedBytes: 150_000_000, error: null })) }; } };
   }, [phase, unknownTotal]);
   const analysis = useMemo(() => ({ analyze: async () => structureReviewFixture() }), []);
   const binding = useLanguageSupportPacks(model.application, analysis);
   return <LanguageSupportContext.Provider value={binding}>
     <div className="mb-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => { model.finish(); binding.reload(); }}>模拟安装完成</Button><div className="w-60"><LanguageSupportAttention binding={binding} onOpen={binding.reload} /></div></div>
     {management ? <SettingsPreview initialSection="language-support" languageSupport={binding} />
-      : <div className="flex h-[36rem] flex-col rounded-xl border"><StructureChangesView dark binding={{ state: phase === "failed" && binding.snapshot?.packs.some(pack => pack.phase === "failed") ? { kind: "failed", detail: "语言支持包准备失败" } : { kind: "loading" }, supportPacks: ["rust", "typescript-javascript"], options: { includeTests: false }, setOptions: () => {}, retry: () => { void binding.retry("typescript-javascript"); }, cancel: () => {} }} /></div>}
+      : <div className="flex h-[36rem] flex-col rounded-xl border"><StructureChangesView dark binding={{ state: phase === "failed" && binding.snapshot?.packs.some(pack => pack.phase === "failed") ? { kind: "failed", detail: "语言支持包准备失败", supportPacks: ["rust", "typescript-javascript"] } : { kind: "loading" }, supportRequest: "preview", options: { includeTests: false }, setOptions: () => {}, retry: () => { void binding.retry("typescript-javascript"); }, cancel: () => {} }} /></div>}
   </LanguageSupportContext.Provider>;
 }
 

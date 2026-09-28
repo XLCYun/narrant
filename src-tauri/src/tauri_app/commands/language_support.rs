@@ -8,9 +8,9 @@ pub(crate) fn language_support_snapshot(
     packs.snapshot()
 }
 
-/// 设置页显式重试当前应用要求的版本，多个使用者共享后台任务。
+/// 在异步运行时中登记重试，多个使用者共享后台任务。
 #[tauri::command]
-pub(crate) fn language_support_retry(
+pub(crate) async fn language_support_retry(
     packs: tauri::State<'_, LanguageSupportPacks>,
     id: PackId,
 ) -> Result<PackCollection, String> {

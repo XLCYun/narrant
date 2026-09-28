@@ -186,19 +186,20 @@ evidence before assigning External.
 
 ### Project loading belongs to rust-analyzer
 
-The adapter delegates project discovery, Cargo metadata loading, crate graph construction,
-module ownership and `#[path]` semantics to rust-analyzer. These are not separate Rust
+The adapter delegates Cargo metadata loading, crate graph construction, module ownership
+and `#[path]` semantics to rust-analyzer. These are not separate Rust
 features that the user needs to elect to reimplement. The previous Cargo-versus-workspace
 scope question mixed server capabilities with adapter implementation responsibilities.
 
-Initialize supplies the prepared repository as workspace context. Use server discovery
-by default rather than the spike's fixed crate name and fixed `linkedProjects` value.
-The official discovery implementation checks the current/ancestor project manifests and
-can look one directory level down for Cargo manifests when needed, which covers this
-repository's `src-tauri/Cargo.toml` layout. It is not an unrestricted recursive search;
-an explicit project path remains available when discovery cannot identify the intended
-project. The production adapter's real-server test has now verified discovery in this
-repository without specifying linkedProjects; the earlier spike used a fixed project.
+Initialize supplies the prepared repository as workspace context. The language-pack
+integration mirrors the pinned server's manifest discovery for toolchain preflight:
+current/ancestor project manifests first, then Cargo manifests one directory level down.
+It checks Cargo/rustc from each discovered project directory, including `src-tauri/`,
+and passes those manifests as `linkedProjects` so preflight and server loading agree.
+This does not infer crate names, load a second Cargo graph, or search recursively.
+The real installed-pack test verifies a directly nested Cargo project. A single session
+currently accepts one sysroot for standard-library/all-dependencies analysis; mixed
+toolchains report an explicit error with repository-only as the supported alternative.
 [Initialization](https://github.com/rust-lang/rust-analyzer/blob/master/crates/rust-analyzer/src/session.rs),
 [Project discovery](https://github.com/rust-lang/rust-analyzer/blob/master/crates/project-model/src/lib.rs),
 [linkedProjects configuration](https://rust-analyzer.github.io/book/configuration.html#rust-analyzer.linkedProjects).

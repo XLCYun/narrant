@@ -15,6 +15,7 @@ pub(super) struct RustToolchain {
     pub sysroot: Option<PathBuf>,
     pub sources: Option<PathBuf>,
     pub path: OsString,
+    pub manifests: Vec<PathBuf>,
 }
 
 impl RustToolchain {
@@ -39,7 +40,39 @@ impl RustToolchain {
             }
         }
         let path = std::env::join_paths(paths).map_err(failure)?;
-        Self::resolve_with_path(repository, scope, cancelled, path)
+        Self::resolve_projects(repository, scope, cancelled, path)
+    }
+
+    /// 固定发现的项目集合，逐个使用 manifest 目录解析 rustup 的项目覆盖。
+    fn resolve_projects(
+        repository: &Path,
+        scope: RustDependencyScope,
+        cancelled: &CancellationCheck,
+        path: OsString,
+    ) -> Result<Self> {
+        let manifests = discover_manifests(repository)?;
+        let directories = if manifests.is_empty() {
+            vec![repository.to_owned()]
+        } else {
+            manifests
+                .iter()
+                .filter_map(|manifest| manifest.parent().map(Path::to_owned))
+                .collect()
+        };
+        let mut resolved: Option<Self> = None;
+        for directory in directories {
+            let candidate = Self::resolve_with_path(&directory, scope, cancelled, path.clone())?;
+            if let Some(previous) = &resolved {
+                if previous.sysroot != candidate.sysroot {
+                    return Err(failure("此仓库的多个 Rust 项目使用不同工具链；当前标准库分析尚不支持这种组合。请切换为仅仓库范围，Narrant 不会自动安装组件或替换项目工具链。"));
+                }
+            } else {
+                resolved = Some(candidate);
+            }
+        }
+        let mut resolved = resolved.ok_or_else(|| failure("没有可检查的 Rust 项目"))?;
+        resolved.manifests = manifests;
+        Ok(resolved)
     }
 
     /// 将工具发现与项目检查分开，测试使用隔离工具目录而不修改进程环境。
@@ -70,6 +103,7 @@ impl RustToolchain {
                 sysroot: None,
                 sources: None,
                 path,
+                manifests: vec![],
             });
         }
         let sources = root.join("lib/rustlib/src/rust/library");
@@ -80,8 +114,31 @@ impl RustToolchain {
             sysroot: Some(root),
             sources: Some(sources),
             path,
+            manifests: vec![],
         })
     }
+}
+
+/// 对齐固定 rust-analyzer 的发现层级：父级显式项目优先，否则只看直接子目录。
+fn discover_manifests(repository: &Path) -> Result<Vec<PathBuf>> {
+    for name in ["rust-project.json", ".rust-project.json", "Cargo.toml"] {
+        if let Some(manifest) = repository
+            .ancestors()
+            .map(|directory| directory.join(name))
+            .find(|path| path.is_file())
+        {
+            return Ok(vec![manifest]);
+        }
+    }
+    let mut manifests = Vec::new();
+    for entry in std::fs::read_dir(repository).map_err(failure)? {
+        let manifest = entry.map_err(failure)?.path().join("Cargo.toml");
+        if manifest.is_file() {
+            manifests.push(manifest);
+        }
+    }
+    manifests.sort();
+    Ok(manifests)
 }
 
 /// 短探测进程在超时、取消和提前返回时均被回收。

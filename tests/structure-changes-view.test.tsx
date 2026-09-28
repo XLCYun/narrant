@@ -8,6 +8,8 @@ import type { ObjectData, ObjectNode, StructureEdge, StructureLayout } from "@/s
 import * as graphPresentation from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
 import type { DiffEditorProps } from "@monaco-editor/react";
+import { LanguageSupportContext } from "@/language-support/context";
+import type { LanguageSupportBinding } from "@/language-support/use-language-support-packs";
 
 // 编辑器本身在浏览器验收；组件测试验证送入 Monaco 的两侧原文和展示选项。
 vi.mock("@/infrastructure/local-monaco", () => ({ configureLocalMonaco: vi.fn() }));
@@ -61,6 +63,28 @@ async function toggleDetailedRelations() {
 
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+it("uses the current request's authoritative packs and preserves unrelated analysis errors", () => {
+  const packs: LanguageSupportBinding = {
+    snapshot: { sequence: 1, requirements: { current: ["rust"] }, packs: [
+      { id: "rust", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "downloading", downloadedBytes: 10, totalBytes: 100, installedBytes: 0, inUse: false, error: null },
+      { id: "typescript-javascript", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "failed", downloadedBytes: 0, totalBytes: null, installedBytes: 0, inUse: false, error: "another review download failed" },
+    ] },
+    queryError: false, actionError: undefined, pending: undefined, structureAdapter: { analyze: vi.fn() },
+    reload: vi.fn(), retry: vi.fn(), remove: vi.fn(),
+  };
+  const current = { ...binding(), supportRequest: "current" };
+  const view = render(<LanguageSupportContext.Provider value={packs}><StructureChangesView binding={{ ...current, state: { kind: "loading" } }} dark={false} /></LanguageSupportContext.Provider>);
+  expect(screen.getByRole("article", { name: "Rust 1.0.0" })).toBeInTheDocument();
+  expect(screen.queryByText("TypeScript / JavaScript")).not.toBeInTheDocument();
+  view.rerender(<LanguageSupportContext.Provider value={packs}><StructureChangesView binding={{ ...current, state: { kind: "failed", detail: "项目缺少 rust-src" } }} dark={false} /></LanguageSupportContext.Provider>);
+  expect(screen.getByRole("alert")).toHaveTextContent("项目缺少 rust-src");
+  expect(screen.queryByText("another review download failed")).not.toBeInTheDocument();
+  view.rerender(<LanguageSupportContext.Provider value={packs}><StructureChangesView binding={{ ...current, state: { kind: "failed", detail: "支持包准备失败", supportPacks: ["typescript-javascript"] } }} dark={false} /></LanguageSupportContext.Provider>);
+  expect(screen.getByText("another review download failed")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  expect(current.retry).toHaveBeenCalledOnce();
+});
 
 it("switches graph languages locally, clears old details and keeps cross-language relationships hidden", async () => {
   const current = binding(structureMixedLanguagesFixture());

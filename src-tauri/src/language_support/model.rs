@@ -88,6 +88,7 @@ pub(crate) struct PackSnapshot {
 pub(crate) struct PackCollection {
     pub sequence: u64,
     pub packs: Vec<PackSnapshot>,
+    pub requirements: BTreeMap<String, Vec<PackId>>,
 }
 
 /// 固定发布清单包含包身份、归档摘要和解压后文件摘要。

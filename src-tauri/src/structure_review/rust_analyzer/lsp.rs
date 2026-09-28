@@ -67,6 +67,9 @@ impl RustLsp {
         if let Some(toolchain) = toolchain {
             options.initialization_options["cargo"]["sysroot"] = json!(toolchain.sysroot);
             options.initialization_options["cargo"]["sysrootSrc"] = json!(toolchain.sources);
+            if !toolchain.manifests.is_empty() {
+                options.initialization_options["linkedProjects"] = json!(toolchain.manifests);
+            }
         }
         let mut command = Command::new(executable);
         if let Some(toolchain) = toolchain {
