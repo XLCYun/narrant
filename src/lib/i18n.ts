@@ -88,6 +88,7 @@ export const resources = {
       remoteUpdateCheckFailed: "无法检查 {{branch}} 的远程更新", branchUpdateCheckFailed: "无法检查分支更新", reviewMayBeStale: "当前审核版本可能不是最新",
       continueExistingReview: "继续现有审核",
     },
+    languageSupport: { title: "语言支持包", description: "按需下载语言工具，供此设备上的所有仓库共用。删除后，下次需要时会重新下载。", preparationFailed: "语言工具准备失败，重试后会继续分析。已安装的支持包仍会保留。", preparing: "正在准备分析需要的语言工具。完成后会自动继续，你也可以先阅读文件改动。", loading: "正在读取语言支持包…", queryFailed: "暂时无法读取准备进度，后台任务仍可能在运行。", retry: "重试", remove: "删除", previous: "历史版本", diskUsage: "占用 {{size}}", inUse: "正在使用", onDemand: "需要时自动下载", downloadProgress: "{{name}} 下载进度", background: "正在准备 {{count}} 个语言支持包", backgroundFailed: "语言支持包准备失败", phase: { "not-installed": "未安装", downloading: "下载中", verifying: "校验中", installing: "解压并安装中", ready: "已安装", failed: "准备失败" } },
     structure: {
       reanalyze: "重新分析",
       graphLanguage: "结构图语言", noGraphLanguages: "暂无语言",
@@ -245,6 +246,7 @@ export const resources = {
       remoteUpdateCheckFailed: "Could not check remote updates for {{branch}}", branchUpdateCheckFailed: "Could not check branch updates", reviewMayBeStale: "The current review version may not be up to date",
       continueExistingReview: "Continue existing review",
     },
+    languageSupport: { title: "Language Support Packs", description: "Language tools are downloaded on demand and shared by all repositories on this device. Removed packs download again when needed.", preparationFailed: "Language preparation failed. Retry to continue analysis; installed packs are retained.", preparing: "Preparing the language tools needed for analysis. Analysis continues automatically when ready. You can read File Changes meanwhile.", loading: "Loading language support packs…", queryFailed: "Unable to read progress. Background tasks may still be running.", retry: "Retry", remove: "Remove", previous: "Previous version", diskUsage: "Uses {{size}}", inUse: "In use", onDemand: "Downloads when needed", downloadProgress: "{{name}} download progress", background: "Preparing {{count}} language support packs", backgroundFailed: "Language support preparation failed", phase: { "not-installed": "Not installed", downloading: "Downloading", verifying: "Verifying", installing: "Extracting and installing", ready: "Installed", failed: "Preparation failed" } },
     structure: {
       reanalyze: "Analyze again",
       graphLanguage: "Graph language", noGraphLanguages: "No languages",

@@ -366,6 +366,12 @@ trait ApplicationStopSteps: Send + Sync {
 impl<R: tauri::Runtime> ApplicationStopSteps for TauriApplicationStopSteps<R> {
     /// 使用共享 operation registry 执行 cancel/drain。
     async fn close_operations(&self) -> Result<(), String> {
+        if let Some(packs) = self
+            .app
+            .try_state::<crate::language_support::LanguageSupportPacks>()
+        {
+            packs.shutdown().await;
+        }
         self.app
             .state::<operation::CancellableOperations>()
             .close_and_drain()

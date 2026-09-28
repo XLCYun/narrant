@@ -1,3 +1,4 @@
+import type { PackId } from "@/language-support/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReviewSnapshot } from "@/review/types";
 import type { AnalysisOptions, StructureBinding, StructureReviewAdapter, StructureState } from "./types";
@@ -79,6 +80,11 @@ export function useStructureReview(adapter: StructureReviewAdapter | undefined, 
   const options = entry && entry.snapshotId === snapshot?.snapshotId ? entry.options : DEFAULT_OPTIONS;
   const binding: StructureBinding | undefined = adapter && snapshot ? {
     state: entry && entry.snapshotId === snapshot.snapshotId ? entry.state : IDLE,
+    supportPacks: [...new Set(snapshot.fileChanges.flatMap((change): PackId[] => [change.oldPath, change.path].flatMap((path): PackId[] => {
+      if (path?.endsWith(".rs")) return ["rust"];
+      if (path && /\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) return ["typescript-javascript"];
+      return [];
+    })))],
     options,
     setOptions: (next) => {
       if (next.includeTests === options.includeTests) return;

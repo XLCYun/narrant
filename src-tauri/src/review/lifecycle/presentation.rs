@@ -7,6 +7,29 @@ pub(super) struct PresentOutcome {
 }
 
 impl ReviewLifecycle {
+    /// 准备可选工具时只读取已打开 Snapshot 的元数据，不占用 Review 工作目录。
+    pub(crate) fn analysis_comparison(
+        &self,
+        review_id: &str,
+        snapshot_id: &str,
+    ) -> Result<ChangeComparison, ReviewLifecycleError> {
+        if self.is_shutting_down() {
+            return Err(ReviewLifecycleError::ShuttingDown);
+        }
+        let saved = self
+            .store
+            .open_review(review_id)
+            .map_err(ReviewLifecycleError::persistence)?;
+        let runtime = self.open_review_runtime(review_id)?.ok_or_else(|| {
+            ReviewLifecycleError::ReviewUnavailable("Review 已关闭，请重新打开。".into())
+        })?;
+        if saved.snapshot_identity() != snapshot_id || runtime.snapshot_id != snapshot_id {
+            return Err(ReviewLifecycleError::StaleSnapshot);
+        }
+        self.require_trusted_repository(saved.repository_id)?;
+        Ok(saved.to_change_comparison())
+    }
+
     /// 返回 durable Review 当前 Snapshot identity，供跨模块缓存清理绑定旧 revision。
     pub fn snapshot_id(&self, review_id: &str) -> Result<String, ReviewLifecycleError> {
         self.store

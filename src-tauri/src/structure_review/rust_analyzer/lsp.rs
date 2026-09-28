@@ -26,11 +26,23 @@ pub(super) struct RustLsp {
 
 impl RustLsp {
     /// 使用 Rust 初始化约定建立会话，并检查本分析器依赖的能力。
+    #[cfg(test)]
     pub fn start(
         executable: &Path,
         repository: &Path,
         cancelled: CancellationCheck,
         scope: RustDependencyScope,
+    ) -> Result<Self> {
+        Self::start_with_toolchain(executable, repository, cancelled, scope, None)
+    }
+
+    /// 使用已经检查过的源码目录启动服务，避免服务器隐式执行 rustup component add。
+    pub fn start_with_toolchain(
+        executable: &Path,
+        repository: &Path,
+        cancelled: CancellationCheck,
+        scope: RustDependencyScope,
+        toolchain: Option<&super::toolchain::RustToolchain>,
     ) -> Result<Self> {
         let mut options = LspOptions {
             initialization_options: json!({
@@ -52,7 +64,14 @@ impl RustLsp {
             ..LspOptions::default()
         };
         options.capabilities["experimental"] = json!({"serverStatusNotification": true});
+        if let Some(toolchain) = toolchain {
+            options.initialization_options["cargo"]["sysroot"] = json!(toolchain.sysroot);
+            options.initialization_options["cargo"]["sysrootSrc"] = json!(toolchain.sources);
+        }
         let mut command = Command::new(executable);
+        if let Some(toolchain) = toolchain {
+            command.env("PATH", &toolchain.path);
+        }
         // 只约束本次分析进程及其子进程，不修改用户的 Cargo/rustup 全局设置。
         if scope != RustDependencyScope::AllDependencies {
             command.env("CARGO_NET_OFFLINE", "true");

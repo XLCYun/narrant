@@ -7,6 +7,9 @@ the full specification.
 The TypeScript / JavaScript Code Graph is specified in
 [0021 — TypeScript / JavaScript Code Graph](0021-typescript-language-analyzer.md).
 
+On-demand Language Support Packs are being designed in
+[0022 — Language Support Packs](0022-language-support-packs.md) (accepted).
+
 ## Conventions
 
 - Name files `NNNN-short-feature-name.md`, using a zero-padded sequence number.

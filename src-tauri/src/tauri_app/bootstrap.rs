@@ -1,8 +1,8 @@
 use super::commands::{
     application_settings as application_settings_commands,
     application_update as application_update_commands, babysit as babysit_commands,
-    github as github_commands, repository, review as review_commands,
-    structure_review as structure_review_commands,
+    github as github_commands, language_support as language_support_commands, repository,
+    review as review_commands, structure_review as structure_review_commands,
 };
 use super::shutdown::{self, ApplicationShutdown, PostStopCoordinator};
 use crate::{
@@ -105,38 +105,28 @@ pub fn run() {
             );
             let _ = lifecycle.recover();
             app.manage(lifecycle);
-            use crate::structure_review::code_graph::LanguageAnalyzer;
-            let rust_executable = std::env::var_os("NARRANT_RUST_ANALYZER")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
-                        "../.tools/rust-analyzer.exe"
-                    } else {
-                        "../.tools/rust-analyzer"
-                    })
-                });
-            let rust_analyzer =
-                crate::structure_review::rust_analyzer::RustLanguageAnalyzer::new(rust_executable);
-            // 启动时固定 TypeScript 工具路径与超时；前后两侧只克隆同一份设置并注入本次取消。
-            let typescript_analyzer =
-                crate::structure_review::typescript_analyzer::TypeScriptLanguageAnalyzer::default();
+            let support = crate::language_support::LanguageSupportPacks::new(
+                application_data.join("language-support-packs"),
+            )?;
             app.manage(
-                crate::structure_review::StructureReview::new(Arc::new(
-                    move |input, cancelled, scope| {
-                        rust_analyzer
-                            .clone()
-                            .with_cancellation(cancelled)
-                            .with_dependency_scope(scope)
-                            .analyze(input)
-                    },
-                ))
-                .with_typescript(Arc::new(move |input, cancelled| {
-                    typescript_analyzer
-                        .clone()
-                        .with_cancellation(cancelled)
-                        .analyze(input)
-                })),
+                crate::structure_review::StructureReview::new(Arc::new(|_, _, _| {
+                    Err(crate::structure_review::code_graph::AnalysisError::new(
+                        "Rust 语言支持包尚未准备",
+                    ))
+                }))
+                .with_typescript(Arc::new(|input, cancelled| {
+                    use crate::structure_review::code_graph::LanguageAnalyzer;
+                    // 全部文件被测试过滤时可以直接返回空图，无需准备或查找工具。
+                    crate::structure_review::typescript_analyzer::TypeScriptLanguageAnalyzer::new(
+                        std::path::PathBuf::new(),
+                        std::path::PathBuf::new(),
+                    )
+                    .with_cancellation(cancelled)
+                    .analyze(input)
+                }))
+                .with_support_packs(support.clone()),
             );
+            app.manage(support);
             app.manage(repository_application);
             app.manage(auth);
             let application_settings = ApplicationSettingsApplication::new(settings_path.clone());
@@ -155,6 +145,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             structure_review_commands::analyze_structure_review,
+            language_support_commands::language_support_snapshot,
+            language_support_commands::language_support_retry,
+            language_support_commands::language_support_remove,
             application_settings_commands::load_application_settings,
             application_settings_commands::load_application_custom_connection,
             application_settings_commands::save_application_custom_connection,

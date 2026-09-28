@@ -1,3 +1,4 @@
+import type { PackId } from "@/language-support/types";
 import type { ReviewIdentity } from "@/review/types";
 
 /** 通用 Code Graph 的语义分类；保留 nativeKind 中的原语言区别。 */
@@ -69,4 +70,4 @@ export type StructureState =
   | { kind: "ready"; comparison: StructureComparison };
 
 /** 结构视图只消费状态和用户意图，不自行发出 Tauri 命令。 */
-export type StructureBinding = { state: StructureState; options: AnalysisOptions; setOptions(options: AnalysisOptions): void; retry(): void; cancel(): void };
+export type StructureBinding = { supportPacks?: PackId[]; state: StructureState; options: AnalysisOptions; setOptions(options: AnalysisOptions): void; retry(): void; cancel(): void };

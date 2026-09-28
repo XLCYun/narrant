@@ -1,3 +1,6 @@
+import { LanguageSupportContext } from "@/language-support/context";
+import { isPackActive } from "@/language-support/types";
+import { LanguageSupportPacks } from "@/components/language-support/language-support-packs";
 import { createContext, useContext, useEffect, useId, useMemo, useState } from "react";
 import { Background, BaseEdge, Controls, Handle, Position, ReactFlow, getSmoothStepPath, useUpdateNodeInternals, type EdgeProps, type NodeProps } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
@@ -117,17 +120,22 @@ function TestCodeSwitch({ binding }: { binding: StructureBinding }) {
 /** loading、失败、取消与已证明的空 diff 使用不同状态，避免把分析失败当作无变化。 */
 export default function StructureChangesView({ binding, dark }: { binding?: StructureBinding; dark: boolean }) {
   const { t } = useTranslation(["structure", "common"]);
+  const packs = useContext(LanguageSupportContext);
+  const relevantPacks = packs?.snapshot?.packs.filter(pack => pack.required && binding?.supportPacks?.includes(pack.id));
+  const preparing = relevantPacks?.some(isPackActive);
   const state = binding?.state;
   if (state?.kind === "ready" && binding) return <ComparisonView key={JSON.stringify([state.comparison.reviewId, state.comparison.snapshotId, binding.options.includeTests])} comparison={state.comparison} binding={binding} dark={dark} />;
   const loading = state?.kind === "loading" || state?.kind === "idle";
+  const showPacks = (loading && (preparing || packs?.queryError)) || (state?.kind === "failed" && relevantPacks?.some(pack => pack.phase === "failed"));
   return <div className="flex min-h-0 flex-1 flex-col">
     {binding && <div className="flex shrink-0 justify-end border-b px-3 py-3"><TestCodeSwitch binding={binding} /></div>}
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-auto p-6 text-center" role={state?.kind === "failed" ? "alert" : "status"}>
-    {loading && <Spinner className="size-6" />}
-    <h3 className="font-medium">{t(!state ? "unavailable" : loading ? "loading" : state.kind === "cancelled" ? "cancelled" : "failed")}</h3>
-    {!loading && <>
+    <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-auto p-6 text-center" role={state?.kind === "failed" ? "alert" : "status"}>
+    {showPacks && packs && <div className="my-auto w-full max-w-xl"><LanguageSupportPacks binding={packs} ids={binding?.supportPacks} onRetry={binding?.retry} /></div>}
+    {loading && !showPacks && <Spinner className="mt-auto size-6" />}
+    {!showPacks && <h3 className={cn("font-medium", !loading && "mt-auto", loading && "mb-auto")}>{t(!state ? "unavailable" : loading ? "loading" : state.kind === "cancelled" ? "cancelled" : "failed")}</h3>}
+    {!loading && !showPacks && <>
       <p className="max-w-xl whitespace-pre-wrap break-words text-sm text-muted-foreground">{state?.kind === "failed" ? state.detail : t("retryDescription")}</p>
-      {binding && <Button variant="outline" onClick={binding.retry}>{t("common:retry")}</Button>}
+      {binding && <Button className="mb-auto" variant="outline" onClick={binding.retry}>{t("common:retry")}</Button>}
     </>}
     </div>
   </div>;

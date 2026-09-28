@@ -1,3 +1,7 @@
+import { createTauriLanguageSupportAdapter } from "@/infrastructure/tauri-language-support-adapter";
+import { useLanguageSupportPacks } from "@/language-support/use-language-support-packs";
+import { LanguageSupportContext } from "@/language-support/context";
+import { LanguageSupportAttention } from "@/components/language-support/language-support-packs";
 import { createTauriStructureReviewAdapter } from "@/infrastructure/tauri-structure-review-adapter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -76,7 +80,10 @@ export function App() {
     () => createTauriReviewApplicationAdapter(tauriTransport),
     [],
   );
-  const structureApplicationAdapter = useMemo(() => createTauriStructureReviewAdapter(tauriTransport), []);
+  const rawStructureAdapter = useMemo(() => createTauriStructureReviewAdapter(tauriTransport), []);
+  const languageSupportApplication = useMemo(() => createTauriLanguageSupportAdapter(tauriTransport), []);
+  const languageSupport = useLanguageSupportPacks(languageSupportApplication, rawStructureAdapter, desktopRuntimeEnabled && !testHarnessEnabled);
+  const structureApplicationAdapter = languageSupport.structureAdapter;
   const babysitApplicationAdapter = useMemo(
     () => createTauriBabysitApplicationAdapter(tauriTransport),
     [],
@@ -359,7 +366,7 @@ export function App() {
   }, [repositoryOverview.reloadNavigation]);
 
   /** 统一将完整 object id 压缩为用户可辨认的短 revision。 */
-  return <>
+  return <LanguageSupportContext.Provider value={languageSupport}>
   <AppShell
     navigation={{
       ...appShell,
@@ -372,7 +379,7 @@ export function App() {
     enabled={desktopRuntimeEnabled && (!testHarnessEnabled || Boolean(selectedRepository))}
     fallbackClassName="narrant-app"
     githubIdentityEntry={renderGitHubIdentityEntry()}
-    applicationUpdateAttention={<ApplicationUpdateAttention snapshot={applicationUpdate.snapshot} onOpen={applicationUpdate.openSurface} />}
+    applicationUpdateAttention={<div><LanguageSupportAttention binding={languageSupport} onOpen={() => void appShell.navigate({ kind: "settings", initialSection: "language-support" })} /><ApplicationUpdateAttention snapshot={applicationUpdate.snapshot} onOpen={applicationUpdate.openSurface} /></div>}
   >
     <Toaster position="top-right" />
     {(!desktopRuntimeEnabled || testHarnessEnabled) && <header><h1>{t("brand")}</h1><p>{t("subtitle")}</p></header>}
@@ -450,6 +457,7 @@ export function App() {
       application={applicationSettings}
       githubIdentity={githubIdentity}
       applicationUpdate={applicationUpdate}
+      languageSupport={languageSupport}
       initialSection={appShell.destination.initialSection}
       onBack={() => void appShell.returnFromSettings()}
     />}
@@ -513,5 +521,5 @@ export function App() {
     onCancel={appShell.dismissTrust}
     onConfirm={() => void appShell.confirmTrust()}
   />}
-  </>;
+  </LanguageSupportContext.Provider>;
 }

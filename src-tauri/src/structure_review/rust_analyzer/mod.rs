@@ -5,6 +5,7 @@ mod references;
 mod symbols;
 mod syntax;
 mod test_code;
+mod toolchain;
 
 use std::{
     collections::BTreeMap,
@@ -150,11 +151,14 @@ impl LanguageAnalyzer for RustLanguageAnalyzer {
                 input.options,
             )?);
         }
-        let mut client = lsp::RustLsp::start(
+        let toolchain =
+            toolchain::RustToolchain::resolve(&repository, self.dependency_scope, &self.cancelled)?;
+        let mut client = lsp::RustLsp::start_with_toolchain(
             &executable,
             &repository,
             self.cancelled.clone(),
             self.dependency_scope,
+            Some(&toolchain),
         )?;
         for document in &documents {
             client.open(&document.uri, &document.source)?;

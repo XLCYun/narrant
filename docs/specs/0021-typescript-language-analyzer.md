@@ -251,10 +251,12 @@ conflicting target evidence stays unresolved.
 
 ## Tools and lifecycle
 
-Use a fixed external toolchain, matching the Rust development tool convention. The
-application does not download tools during analysis. Provide an explicit development
-setup command with pinned versions/integrities and clear missing-tool errors.
-Formal bundled runtime distribution remains deferred.
+Use fixed tools supplied to the adapter; the adapter does not download them during
+analysis. Production now uses the shared TypeScript / JavaScript
+[Language Support Pack](0022-language-support-packs.md), containing Node and the
+fixed language service/runtime declarations. The application prepares this pack before
+analysis. The explicit development setup command remains for standalone adapter tests.
+Neither preparation nor analysis installs dependencies into the reviewed project.
 
 The TS adapter owns its temporary helper/control directory and all child processes. Use the
 existing CancellationCheck and process lifetime guards. Cancellation, timeout, errors
@@ -351,7 +353,7 @@ The setup-script suite passed 166 tests without failures or skips.
 The research documents remain historical experiments; the acceptance above comes from the
 production adapter and application paths. Native service execution was verified on macOS.
 Windows shared-LSP production code and tests were cross-type-checked, but Windows and Linux
-were not executed natively. Packaged distribution of the fixed tools remains deferred, and
+were not executed natively. At that verification point packaged distribution of the fixed tools was deferred, and
 the repository and language-service file-host checks do not provide an OS-level sandbox.
 
 The shared-workspace revision on 2026-09-15 removes the copied analysis tree and all

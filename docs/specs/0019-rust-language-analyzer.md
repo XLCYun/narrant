@@ -55,8 +55,8 @@ the language-independent `AnalysisOptions` contract.
 | Stored scope | Standard library | Project dependencies | Server configuration |
 | --- | --- | --- | --- |
 | `repository-only` | Disabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot=null`, Cargo offline |
-| `standard-library` (default) | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot="discover"`, Cargo offline |
-| `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot="discover"`, inherit Cargo network settings |
+| `standard-library` (default) | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot=<validated local sysroot>`, `cargo.sysrootSrc=<existing rust-src>`, Cargo offline |
+| `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot=<validated local sysroot>`, `cargo.sysrootSrc=<existing rust-src>`, inherit Cargo network settings |
 
 All modes keep build scripts, procedural macros, checks, diagnostics and cache priming
 disabled, and prevent rustup auto-installation. Broader server context helps identify
@@ -216,9 +216,13 @@ Resolve that path before constructing the analyzer and pass the executable path 
 the concrete adapter. Do not assume that `AnalysisInput.repository_root`, which may
 point to any analyzed repository, contains the tool binary.
 
-This slice requires an already supplied executable. A missing or unusable binary must
-produce a clear analysis failure; there is no implicit download fallback. Binary
-discovery/provisioning does not change the common AnalysisInput contract.
+The adapter requires an already supplied executable and never downloads tools itself.
+Production provisioning is now owned by the application-level
+[Language Support Packs](0022-language-support-packs.md) service before analysis begins.
+It supplies a pinned rust-analyzer and checks the existing project Cargo/rustc and,
+when needed, rust-src. Explicit sysroot/source paths prevent automatic component
+installation; repository-only scope disables sysroot. Missing project tools produce
+a clear failure. This does not change the common AnalysisInput contract.
 
 ## Accepted code representation and integration
 
