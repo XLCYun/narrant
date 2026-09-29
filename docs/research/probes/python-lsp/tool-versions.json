@@ -1,0 +1,24 @@
+{
+  "recordedAt": "2026-09-29",
+  "platform": "aarch64-apple-darwin",
+  "node": "24.18.0",
+  "probeClientPython": "3.14.6",
+  "pyright": {
+    "version": "1.1.414",
+    "url": "https://registry.npmjs.org/pyright/-/pyright-1.1.414.tgz",
+    "integrity": "sha512-FPZZb51jepDX4eP7TEYDeNFtmE3WgwkkEcJpvH3/QmUSsj0EAy3LXu+xB4T/FWDejtsXlCfFr/rbWFjwuwuXww==",
+    "extractTo": "pyright"
+  },
+  "ty": {
+    "version": "0.0.84",
+    "releaseCommit": "8dd9a7f7fa35a18275d82117e6593ba45507065f",
+    "ruffSourceCommit": "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a",
+    "url": "https://github.com/astral-sh/ty/releases/download/0.0.84/ty-aarch64-apple-darwin.tar.gz",
+    "digest": "sha256:c65c09f27bcef726c0b043dcee8d0f1e578bd1936799e5bc447235cbc3e19d91",
+    "extractTo": "ty"
+  },
+  "scriptsSha256": {
+    "probe.py": "7d6719d6d75426d0f82ebefd5fce2aab436693d9cf1e72fc080a0a2c25a1f8e8",
+    "ty-probe.py": "7e92b5884a25b0a1d517165f36506f4447afb1e95b97ab28c7feb2dc3ec856ae"
+  }
+}

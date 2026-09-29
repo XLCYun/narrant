@@ -1,0 +1,3332 @@
+{
+  "recordedAt": "2026-09-29",
+  "scope": "Two documentSymbol requests and 14 definition queries per server; original corrected-fixture responses, not a graph integration test.",
+  "effectivePythonVersions": {
+    "pyright": "3.14",
+    "ty": "3.11"
+  },
+  "originalRawEvidenceDirectory": "/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv",
+  "lifecycle": {
+    "checked_at": "2026-09-29T07:05:34.851379+00:00",
+    "final_pyright_pid": 82604,
+    "final_pyright_exit": 0,
+    "final_ty_pid": 82614,
+    "final_ty_exit": 0,
+    "remaining_matching_server_processes": [],
+    "exploratory_sessions": "Pyright 3 sessions and ty 2 sessions each returned exit 0; only final corrected fixture sessions archived in protocol logs.",
+    "interpreter_log_scope": "Pyright interpreter log is cumulative across its 3 sessions (18 invocations); ty interpreter log is empty across 2 sessions."
+  },
+  "services": [
+    {
+      "service": "pyright",
+      "version": "1.1.414",
+      "command": [
+        "node",
+        "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/langserver.index.js",
+        "--stdio"
+      ],
+      "settings": {
+        "python": {
+          "pythonPath": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fake-python",
+          "defaultInterpreterPath": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fake-python",
+          "analysis": {
+            "autoSearchPaths": true,
+            "diagnosticMode": "openFilesOnly",
+            "typeCheckingMode": "basic",
+            "logLevel": "Trace",
+            "useLibraryCodeForTypes": true
+          }
+        }
+      },
+      "fixture_root": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture",
+      "initialize": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "capabilities": {
+            "textDocumentSync": 2,
+            "definitionProvider": {
+              "workDoneProgress": true
+            },
+            "declarationProvider": {
+              "workDoneProgress": true
+            },
+            "typeDefinitionProvider": {
+              "workDoneProgress": true
+            },
+            "referencesProvider": {
+              "workDoneProgress": true
+            },
+            "documentSymbolProvider": {
+              "workDoneProgress": true
+            },
+            "workspaceSymbolProvider": {
+              "workDoneProgress": true
+            },
+            "hoverProvider": {
+              "workDoneProgress": true
+            },
+            "documentHighlightProvider": {
+              "workDoneProgress": true
+            },
+            "renameProvider": {
+              "prepareProvider": true,
+              "workDoneProgress": true
+            },
+            "completionProvider": {
+              "triggerCharacters": [
+                ".",
+                "[",
+                "\"",
+                "'"
+              ],
+              "resolveProvider": true,
+              "workDoneProgress": true,
+              "completionItem": {
+                "labelDetailsSupport": true
+              }
+            },
+            "signatureHelpProvider": {
+              "triggerCharacters": [
+                "(",
+                ",",
+                ")"
+              ],
+              "workDoneProgress": true
+            },
+            "codeActionProvider": {
+              "codeActionKinds": [
+                "quickfix",
+                "source.organizeImports"
+              ],
+              "workDoneProgress": true
+            },
+            "executeCommandProvider": {
+              "commands": [],
+              "workDoneProgress": true
+            },
+            "callHierarchyProvider": true,
+            "workspace": {
+              "workspaceFolders": {
+                "supported": true,
+                "changeNotifications": true
+              }
+            }
+          }
+        }
+      },
+      "document_symbols": {
+        "api.py": {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "result": [
+            {
+              "name": "deco",
+              "kind": 12,
+              "range": {
+                "start": {
+                  "line": 0,
+                  "character": 0
+                },
+                "end": {
+                  "line": 1,
+                  "character": 13
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 0,
+                  "character": 4
+                },
+                "end": {
+                  "line": 0,
+                  "character": 8
+                }
+              },
+              "children": [
+                {
+                  "name": "fn",
+                  "kind": 13,
+                  "range": {
+                    "start": {
+                      "line": 0,
+                      "character": 9
+                    },
+                    "end": {
+                      "line": 0,
+                      "character": 11
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 0,
+                      "character": 9
+                    },
+                    "end": {
+                      "line": 0,
+                      "character": 11
+                    }
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "decorated",
+              "kind": 12,
+              "range": {
+                "start": {
+                  "line": 3,
+                  "character": 0
+                },
+                "end": {
+                  "line": 5,
+                  "character": 16
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 4,
+                  "character": 4
+                },
+                "end": {
+                  "line": 4,
+                  "character": 13
+                }
+              },
+              "children": [
+                {
+                  "name": "value",
+                  "kind": 13,
+                  "range": {
+                    "start": {
+                      "line": 4,
+                      "character": 14
+                    },
+                    "end": {
+                      "line": 4,
+                      "character": 24
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 4,
+                      "character": 14
+                    },
+                    "end": {
+                      "line": 4,
+                      "character": 24
+                    }
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "first",
+              "kind": 12,
+              "range": {
+                "start": {
+                  "line": 7,
+                  "character": 0
+                },
+                "end": {
+                  "line": 8,
+                  "character": 18
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 7,
+                  "character": 4
+                },
+                "end": {
+                  "line": 7,
+                  "character": 9
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "second",
+              "kind": 12,
+              "range": {
+                "start": {
+                  "line": 10,
+                  "character": 0
+                },
+                "end": {
+                  "line": 11,
+                  "character": 19
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 10,
+                  "character": 4
+                },
+                "end": {
+                  "line": 10,
+                  "character": 10
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "Worker",
+              "kind": 5,
+              "range": {
+                "start": {
+                  "line": 13,
+                  "character": 0
+                },
+                "end": {
+                  "line": 18,
+                  "character": 20
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 13,
+                  "character": 6
+                },
+                "end": {
+                  "line": 13,
+                  "character": 12
+                }
+              },
+              "children": [
+                {
+                  "name": "__init__",
+                  "kind": 6,
+                  "range": {
+                    "start": {
+                      "line": 14,
+                      "character": 4
+                    },
+                    "end": {
+                      "line": 15,
+                      "character": 21
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 14,
+                      "character": 8
+                    },
+                    "end": {
+                      "line": 14,
+                      "character": 16
+                    }
+                  },
+                  "children": []
+                },
+                {
+                  "name": "run",
+                  "kind": 6,
+                  "range": {
+                    "start": {
+                      "line": 17,
+                      "character": 4
+                    },
+                    "end": {
+                      "line": 18,
+                      "character": 20
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 17,
+                      "character": 8
+                    },
+                    "end": {
+                      "line": 17,
+                      "character": 11
+                    }
+                  },
+                  "children": []
+                },
+                {
+                  "name": "item",
+                  "kind": 13,
+                  "range": {
+                    "start": {
+                      "line": 15,
+                      "character": 13
+                    },
+                    "end": {
+                      "line": 15,
+                      "character": 17
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 15,
+                      "character": 13
+                    },
+                    "end": {
+                      "line": 15,
+                      "character": 17
+                    }
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "中文函数",
+              "kind": 12,
+              "range": {
+                "start": {
+                  "line": 20,
+                  "character": 0
+                },
+                "end": {
+                  "line": 21,
+                  "character": 12
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 20,
+                  "character": 4
+                },
+                "end": {
+                  "line": 20,
+                  "character": 8
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        "client.py": {
+          "jsonrpc": "2.0",
+          "id": 3,
+          "result": [
+            {
+              "name": "result",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 5,
+                  "character": 0
+                },
+                "end": {
+                  "line": 5,
+                  "character": 6
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 5,
+                  "character": 0
+                },
+                "end": {
+                  "line": 5,
+                  "character": 6
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "direct_alias",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 6,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 12
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 6,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 12
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "a",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 7,
+                  "character": 0
+                },
+                "end": {
+                  "line": 7,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 7,
+                  "character": 0
+                },
+                "end": {
+                  "line": 7,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "rebound",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 8,
+                  "character": 0
+                },
+                "end": {
+                  "line": 8,
+                  "character": 7
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 8,
+                  "character": 0
+                },
+                "end": {
+                  "line": 8,
+                  "character": 7
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "b",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 10,
+                  "character": 0
+                },
+                "end": {
+                  "line": 10,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 10,
+                  "character": 0
+                },
+                "end": {
+                  "line": 10,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "worker",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 11,
+                  "character": 0
+                },
+                "end": {
+                  "line": 11,
+                  "character": 6
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 11,
+                  "character": 0
+                },
+                "end": {
+                  "line": 11,
+                  "character": 6
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "c",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 12,
+                  "character": 0
+                },
+                "end": {
+                  "line": 12,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 12,
+                  "character": 0
+                },
+                "end": {
+                  "line": 12,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "d",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 13,
+                  "character": 0
+                },
+                "end": {
+                  "line": 13,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 13,
+                  "character": 0
+                },
+                "end": {
+                  "line": 13,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "e",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 14,
+                  "character": 0
+                },
+                "end": {
+                  "line": 14,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 14,
+                  "character": 0
+                },
+                "end": {
+                  "line": 14,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "choose",
+              "kind": 12,
+              "range": {
+                "start": {
+                  "line": 15,
+                  "character": 0
+                },
+                "end": {
+                  "line": 17,
+                  "character": 22
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 15,
+                  "character": 4
+                },
+                "end": {
+                  "line": 15,
+                  "character": 10
+                }
+              },
+              "children": [
+                {
+                  "name": "flag",
+                  "kind": 13,
+                  "range": {
+                    "start": {
+                      "line": 15,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 15,
+                      "character": 21
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 15,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 15,
+                      "character": 21
+                    }
+                  },
+                  "children": []
+                },
+                {
+                  "name": "ambiguous",
+                  "kind": 13,
+                  "range": {
+                    "start": {
+                      "line": 16,
+                      "character": 4
+                    },
+                    "end": {
+                      "line": 16,
+                      "character": 13
+                    }
+                  },
+                  "selectionRange": {
+                    "start": {
+                      "line": 16,
+                      "character": 4
+                    },
+                    "end": {
+                      "line": 16,
+                      "character": 13
+                    }
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "g",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 18,
+                  "character": 0
+                },
+                "end": {
+                  "line": 18,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 18,
+                  "character": 0
+                },
+                "end": {
+                  "line": 18,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "prefix",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 19,
+                  "character": 0
+                },
+                "end": {
+                  "line": 19,
+                  "character": 6
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 19,
+                  "character": 0
+                },
+                "end": {
+                  "line": 19,
+                  "character": 6
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "h",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 19,
+                  "character": 15
+                },
+                "end": {
+                  "line": 19,
+                  "character": 16
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 19,
+                  "character": 15
+                },
+                "end": {
+                  "line": 19,
+                  "character": 16
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "i",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 20,
+                  "character": 0
+                },
+                "end": {
+                  "line": 20,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 20,
+                  "character": 0
+                },
+                "end": {
+                  "line": 20,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "j",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 21,
+                  "character": 0
+                },
+                "end": {
+                  "line": 21,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 21,
+                  "character": 0
+                },
+                "end": {
+                  "line": 21,
+                  "character": 1
+                }
+              },
+              "children": []
+            },
+            {
+              "name": "k",
+              "kind": 13,
+              "range": {
+                "start": {
+                  "line": 22,
+                  "character": 0
+                },
+                "end": {
+                  "line": 22,
+                  "character": 1
+                }
+              },
+              "selectionRange": {
+                "start": {
+                  "line": 22,
+                  "character": 0
+                },
+                "end": {
+                  "line": 22,
+                  "character": 1
+                }
+              },
+              "children": []
+            }
+          ]
+        }
+      },
+      "observations": [
+        {
+          "case": "relative_import",
+          "file": "client.py",
+          "position": {
+            "line": 5,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py",
+                "range": {
+                  "start": {
+                    "line": 4,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 4,
+                    "character": 13
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "start": {
+                  "line": 4,
+                  "character": 4
+                },
+                "end": {
+                  "line": 4,
+                  "character": 13
+                }
+              },
+              "line_text": "def decorated(value: int) -> int:",
+              "selected": "decorated"
+            }
+          ]
+        },
+        {
+          "case": "immutable_alias",
+          "file": "client.py",
+          "position": {
+            "line": 7,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py",
+                "range": {
+                  "start": {
+                    "line": 6,
+                    "character": 0
+                  },
+                  "end": {
+                    "line": 6,
+                    "character": 12
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "start": {
+                  "line": 6,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 12
+                }
+              },
+              "line_text": "direct_alias = first",
+              "selected": "direct_alias"
+            }
+          ]
+        },
+        {
+          "case": "runtime_rebinding",
+          "file": "client.py",
+          "position": {
+            "line": 10,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py",
+                "range": {
+                  "start": {
+                    "line": 8,
+                    "character": 0
+                  },
+                  "end": {
+                    "line": 8,
+                    "character": 7
+                  }
+                }
+              },
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py",
+                "range": {
+                  "start": {
+                    "line": 9,
+                    "character": 0
+                  },
+                  "end": {
+                    "line": 9,
+                    "character": 7
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "start": {
+                  "line": 8,
+                  "character": 0
+                },
+                "end": {
+                  "line": 8,
+                  "character": 7
+                }
+              },
+              "line_text": "rebound = first",
+              "selected": "rebound"
+            },
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "start": {
+                  "line": 9,
+                  "character": 0
+                },
+                "end": {
+                  "line": 9,
+                  "character": 7
+                }
+              },
+              "line_text": "rebound = second",
+              "selected": "rebound"
+            }
+          ]
+        },
+        {
+          "case": "class_constructor",
+          "file": "client.py",
+          "position": {
+            "line": 11,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py",
+                "range": {
+                  "start": {
+                    "line": 13,
+                    "character": 6
+                  },
+                  "end": {
+                    "line": 13,
+                    "character": 12
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "start": {
+                  "line": 13,
+                  "character": 6
+                },
+                "end": {
+                  "line": 13,
+                  "character": 12
+                }
+              },
+              "line_text": "class Worker:",
+              "selected": "Worker"
+            }
+          ]
+        },
+        {
+          "case": "instance_method",
+          "file": "client.py",
+          "position": {
+            "line": 12,
+            "character": 11
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py",
+                "range": {
+                  "start": {
+                    "line": 17,
+                    "character": 8
+                  },
+                  "end": {
+                    "line": 17,
+                    "character": 11
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "start": {
+                  "line": 17,
+                  "character": 8
+                },
+                "end": {
+                  "line": 17,
+                  "character": 11
+                }
+              },
+              "line_text": "    def run(self) -> str:",
+              "selected": "run"
+            }
+          ]
+        },
+        {
+          "case": "instance_attribute",
+          "file": "client.py",
+          "position": {
+            "line": 13,
+            "character": 11
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py",
+                "range": {
+                  "start": {
+                    "line": 15,
+                    "character": 13
+                  },
+                  "end": {
+                    "line": 15,
+                    "character": 17
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "start": {
+                  "line": 15,
+                  "character": 13
+                },
+                "end": {
+                  "line": 15,
+                  "character": 17
+                }
+              },
+              "line_text": "        self.item = 1",
+              "selected": "item"
+            }
+          ]
+        },
+        {
+          "case": "stub_precedence",
+          "file": "client.py",
+          "position": {
+            "line": 14,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/stubbed.pyi",
+                "range": {
+                  "start": {
+                    "line": 0,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 0,
+                    "character": 11
+                  }
+                }
+              },
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/stubbed.py",
+                "range": {
+                  "start": {
+                    "line": 0,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 0,
+                    "character": 11
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/stubbed.pyi",
+              "range": {
+                "start": {
+                  "line": 0,
+                  "character": 4
+                },
+                "end": {
+                  "line": 0,
+                  "character": 11
+                }
+              },
+              "line_text": "def stubbed(value: int) -> int: ...",
+              "selected": "stubbed"
+            },
+            {
+              "path": "src/pkg/stubbed.py",
+              "range": {
+                "start": {
+                  "line": 0,
+                  "character": 4
+                },
+                "end": {
+                  "line": 0,
+                  "character": 11
+                }
+              },
+              "line_text": "def stubbed(value):",
+              "selected": "stubbed"
+            }
+          ]
+        },
+        {
+          "case": "ambiguous_union",
+          "file": "client.py",
+          "position": {
+            "line": 17,
+            "character": 11
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py",
+                "range": {
+                  "start": {
+                    "line": 16,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 16,
+                    "character": 13
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "start": {
+                  "line": 16,
+                  "character": 4
+                },
+                "end": {
+                  "line": 16,
+                  "character": 13
+                }
+              },
+              "line_text": "    ambiguous = first if flag else second",
+              "selected": "ambiguous"
+            }
+          ]
+        },
+        {
+          "case": "dynamic_getattr",
+          "file": "client.py",
+          "position": {
+            "line": 18,
+            "character": 21
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 12,
+            "result": null
+          },
+          "targets": []
+        },
+        {
+          "case": "unicode_utf16",
+          "file": "client.py",
+          "position": {
+            "line": 19,
+            "character": 19
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 13,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py",
+                "range": {
+                  "start": {
+                    "line": 20,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 20,
+                    "character": 8
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "start": {
+                  "line": 20,
+                  "character": 4
+                },
+                "end": {
+                  "line": 20,
+                  "character": 8
+                }
+              },
+              "line_text": "def 中文函数() -> int:",
+              "selected": "中文函数"
+            }
+          ]
+        },
+        {
+          "case": "src_layout_absolute",
+          "file": "absolute_client.py",
+          "position": {
+            "line": 1,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 14,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py",
+                "range": {
+                  "start": {
+                    "line": 7,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 7,
+                    "character": 9
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "start": {
+                  "line": 7,
+                  "character": 4
+                },
+                "end": {
+                  "line": 7,
+                  "character": 9
+                }
+              },
+              "line_text": "def first() -> str:",
+              "selected": "first"
+            }
+          ]
+        },
+        {
+          "case": "builtin_len",
+          "file": "client.py",
+          "position": {
+            "line": 20,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 15,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/dist/typeshed-fallback/stdlib/builtins.pyi",
+                "range": {
+                  "start": {
+                    "line": 1826,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 1826,
+                    "character": 7
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/dist/typeshed-fallback/stdlib/builtins.pyi",
+              "range": {
+                "start": {
+                  "line": 1826,
+                  "character": 4
+                },
+                "end": {
+                  "line": 1826,
+                  "character": 7
+                }
+              },
+              "line_text": "def len(obj: Sized, /) -> int: ...",
+              "selected": "len"
+            }
+          ]
+        },
+        {
+          "case": "stdlib_path",
+          "file": "client.py",
+          "position": {
+            "line": 21,
+            "character": 12
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 16,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/dist/typeshed-fallback/stdlib/pathlib/__init__.pyi",
+                "range": {
+                  "start": {
+                    "line": 153,
+                    "character": 6
+                  },
+                  "end": {
+                    "line": 153,
+                    "character": 10
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/dist/typeshed-fallback/stdlib/pathlib/__init__.pyi",
+              "range": {
+                "start": {
+                  "line": 153,
+                  "character": 6
+                },
+                "end": {
+                  "line": 153,
+                  "character": 10
+                }
+              },
+              "line_text": "class Path(PurePath):",
+              "selected": "Path"
+            }
+          ]
+        },
+        {
+          "case": "stdlib_json",
+          "file": "client.py",
+          "position": {
+            "line": 22,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 17,
+            "result": [
+              {
+                "uri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/dist/typeshed-fallback/stdlib/json/__init__.pyi",
+                "range": {
+                  "start": {
+                    "line": 10,
+                    "character": 4
+                  },
+                  "end": {
+                    "line": 10,
+                    "character": 9
+                  }
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/pyright/package/dist/typeshed-fallback/stdlib/json/__init__.pyi",
+              "range": {
+                "start": {
+                  "line": 10,
+                  "character": 4
+                },
+                "end": {
+                  "line": 10,
+                  "character": 9
+                }
+              },
+              "line_text": "def dumps(",
+              "selected": "dumps"
+            }
+          ]
+        }
+      ],
+      "shutdown": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "result": null
+      },
+      "process_exit_code": 0,
+      "process_id": 82604,
+      "interpreter_invocations": "-I\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(tuple(sys.version_info), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-I\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(tuple(sys.version_info), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-I\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(tuple(sys.version_info), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-I\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(tuple(sys.version_info), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-I\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(tuple(sys.version_info), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-I\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(tuple(sys.version_info), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n-c\nimport os, os.path, sys; normalize = lambda p: os.path.normcase(os.path.normpath(p)); cwd = normalize(os.getcwd()); orig_sys_path = [p for p in sys.path if p != \"\"]; sys.path[:] = [p for p in sys.path if p != \"\" and normalize(p) != cwd]; import sys, json; json.dump(dict(path=orig_sys_path, prefix=sys.prefix), sys.stdout)\n"
+    },
+    {
+      "service": "ty",
+      "version": "0.0.84",
+      "command": [
+        "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/ty/ty-aarch64-apple-darwin/ty",
+        "server"
+      ],
+      "settings": {},
+      "fixture_root": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture",
+      "initialize": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "capabilities": {
+            "callHierarchyProvider": true,
+            "codeActionProvider": {
+              "codeActionKinds": [
+                "quickfix"
+              ]
+            },
+            "completionProvider": {
+              "triggerCharacters": [
+                ".",
+                "\"",
+                "'"
+              ]
+            },
+            "declarationProvider": true,
+            "definitionProvider": true,
+            "diagnosticProvider": {
+              "identifier": "ty",
+              "interFileDependencies": true,
+              "workDoneProgress": true,
+              "workspaceDiagnostics": true
+            },
+            "documentHighlightProvider": true,
+            "documentSymbolProvider": true,
+            "executeCommandProvider": {
+              "commands": [
+                "ty.printDebugInformation"
+              ],
+              "workDoneProgress": false
+            },
+            "foldingRangeProvider": true,
+            "hoverProvider": true,
+            "implementationProvider": true,
+            "inlayHintProvider": {},
+            "notebookDocumentSync": {
+              "notebookSelector": [
+                {
+                  "cells": [
+                    {
+                      "language": "python"
+                    }
+                  ]
+                }
+              ],
+              "save": false
+            },
+            "positionEncoding": "utf-16",
+            "referencesProvider": true,
+            "renameProvider": {
+              "prepareProvider": true
+            },
+            "selectionRangeProvider": true,
+            "semanticTokensProvider": {
+              "full": true,
+              "legend": {
+                "tokenModifiers": [
+                  "definition",
+                  "readonly",
+                  "async",
+                  "documentation"
+                ],
+                "tokenTypes": [
+                  "namespace",
+                  "class",
+                  "parameter",
+                  "selfParameter",
+                  "clsParameter",
+                  "variable",
+                  "property",
+                  "function",
+                  "method",
+                  "keyword",
+                  "string",
+                  "number",
+                  "decorator",
+                  "builtinConstant",
+                  "typeParameter",
+                  "operator",
+                  "regexp"
+                ]
+              },
+              "range": true
+            },
+            "signatureHelpProvider": {
+              "retriggerCharacters": [
+                ")"
+              ],
+              "triggerCharacters": [
+                "(",
+                ","
+              ]
+            },
+            "textDocumentSync": {
+              "change": 2,
+              "openClose": true,
+              "save": {
+                "includeText": false
+              }
+            },
+            "typeDefinitionProvider": true,
+            "typeHierarchyProvider": true,
+            "workspace": {
+              "workspaceFolders": {
+                "changeNotifications": true,
+                "supported": true
+              }
+            },
+            "workspaceSymbolProvider": true
+          },
+          "serverInfo": {
+            "name": "ty",
+            "version": "0.0.84 (8dd9a7f7f 2026-09-24)"
+          }
+        }
+      },
+      "document_symbols": {
+        "api.py": {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "result": [
+            {
+              "children": [],
+              "kind": 12,
+              "name": "deco",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 0,
+                  "line": 0
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 8,
+                  "line": 0
+                },
+                "start": {
+                  "character": 4,
+                  "line": 0
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 12,
+              "name": "decorated",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 3
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 13,
+                  "line": 4
+                },
+                "start": {
+                  "character": 4,
+                  "line": 4
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 12,
+              "name": "first",
+              "range": {
+                "end": {
+                  "character": 18,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 9,
+                  "line": 7
+                },
+                "start": {
+                  "character": 4,
+                  "line": 7
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 12,
+              "name": "second",
+              "range": {
+                "end": {
+                  "character": 19,
+                  "line": 11
+                },
+                "start": {
+                  "character": 0,
+                  "line": 10
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 10,
+                  "line": 10
+                },
+                "start": {
+                  "character": 4,
+                  "line": 10
+                }
+              }
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "kind": 9,
+                  "name": "__init__",
+                  "range": {
+                    "end": {
+                      "character": 21,
+                      "line": 15
+                    },
+                    "start": {
+                      "character": 4,
+                      "line": 14
+                    }
+                  },
+                  "selectionRange": {
+                    "end": {
+                      "character": 16,
+                      "line": 14
+                    },
+                    "start": {
+                      "character": 8,
+                      "line": 14
+                    }
+                  }
+                },
+                {
+                  "children": [],
+                  "kind": 6,
+                  "name": "run",
+                  "range": {
+                    "end": {
+                      "character": 20,
+                      "line": 18
+                    },
+                    "start": {
+                      "character": 4,
+                      "line": 17
+                    }
+                  },
+                  "selectionRange": {
+                    "end": {
+                      "character": 11,
+                      "line": 17
+                    },
+                    "start": {
+                      "character": 8,
+                      "line": 17
+                    }
+                  }
+                }
+              ],
+              "kind": 5,
+              "name": "Worker",
+              "range": {
+                "end": {
+                  "character": 20,
+                  "line": 18
+                },
+                "start": {
+                  "character": 0,
+                  "line": 13
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 12,
+                  "line": 13
+                },
+                "start": {
+                  "character": 6,
+                  "line": 13
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 12,
+              "name": "中文函数",
+              "range": {
+                "end": {
+                  "character": 12,
+                  "line": 21
+                },
+                "start": {
+                  "character": 0,
+                  "line": 20
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 8,
+                  "line": 20
+                },
+                "start": {
+                  "character": 4,
+                  "line": 20
+                }
+              }
+            }
+          ]
+        },
+        "client.py": {
+          "jsonrpc": "2.0",
+          "id": 3,
+          "result": [
+            {
+              "children": [],
+              "kind": 13,
+              "name": "result",
+              "range": {
+                "end": {
+                  "character": 21,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 6,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "direct_alias",
+              "range": {
+                "end": {
+                  "character": 20,
+                  "line": 6
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 12,
+                  "line": 6
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "a",
+              "range": {
+                "end": {
+                  "character": 18,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 7
+                },
+                "start": {
+                  "character": 0,
+                  "line": 7
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "rebound",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 8
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 7,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 8
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "rebound",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 9
+                },
+                "start": {
+                  "character": 0,
+                  "line": 9
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 7,
+                  "line": 9
+                },
+                "start": {
+                  "character": 0,
+                  "line": 9
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "b",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 10
+                },
+                "start": {
+                  "character": 0,
+                  "line": 10
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 10
+                },
+                "start": {
+                  "character": 0,
+                  "line": 10
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "worker",
+              "range": {
+                "end": {
+                  "character": 17,
+                  "line": 11
+                },
+                "start": {
+                  "character": 0,
+                  "line": 11
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 6,
+                  "line": 11
+                },
+                "start": {
+                  "character": 0,
+                  "line": 11
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "c",
+              "range": {
+                "end": {
+                  "character": 16,
+                  "line": 12
+                },
+                "start": {
+                  "character": 0,
+                  "line": 12
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 12
+                },
+                "start": {
+                  "character": 0,
+                  "line": 12
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "d",
+              "range": {
+                "end": {
+                  "character": 15,
+                  "line": 13
+                },
+                "start": {
+                  "character": 0,
+                  "line": 13
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 13
+                },
+                "start": {
+                  "character": 0,
+                  "line": 13
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "e",
+              "range": {
+                "end": {
+                  "character": 14,
+                  "line": 14
+                },
+                "start": {
+                  "character": 0,
+                  "line": 14
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 14
+                },
+                "start": {
+                  "character": 0,
+                  "line": 14
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 12,
+              "name": "choose",
+              "range": {
+                "end": {
+                  "character": 22,
+                  "line": 17
+                },
+                "start": {
+                  "character": 0,
+                  "line": 15
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 10,
+                  "line": 15
+                },
+                "start": {
+                  "character": 4,
+                  "line": 15
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "g",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 18
+                },
+                "start": {
+                  "character": 0,
+                  "line": 18
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 18
+                },
+                "start": {
+                  "character": 0,
+                  "line": 18
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "prefix",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 19
+                },
+                "start": {
+                  "character": 0,
+                  "line": 19
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 6,
+                  "line": 19
+                },
+                "start": {
+                  "character": 0,
+                  "line": 19
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "h",
+              "range": {
+                "end": {
+                  "character": 25,
+                  "line": 19
+                },
+                "start": {
+                  "character": 15,
+                  "line": 19
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 16,
+                  "line": 19
+                },
+                "start": {
+                  "character": 15,
+                  "line": 19
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "i",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 20
+                },
+                "start": {
+                  "character": 0,
+                  "line": 20
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 20
+                },
+                "start": {
+                  "character": 0,
+                  "line": 20
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "j",
+              "range": {
+                "end": {
+                  "character": 21,
+                  "line": 21
+                },
+                "start": {
+                  "character": 0,
+                  "line": 21
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 21
+                },
+                "start": {
+                  "character": 0,
+                  "line": 21
+                }
+              }
+            },
+            {
+              "children": [],
+              "kind": 13,
+              "name": "k",
+              "range": {
+                "end": {
+                  "character": 18,
+                  "line": 22
+                },
+                "start": {
+                  "character": 0,
+                  "line": 22
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 1,
+                  "line": 22
+                },
+                "start": {
+                  "character": 0,
+                  "line": 22
+                }
+              }
+            }
+          ]
+        }
+      },
+      "observations": [
+        {
+          "case": "relative_import",
+          "file": "client.py",
+          "position": {
+            "line": 5,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 18,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 9,
+                    "line": 5
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 16,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 3
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 4
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 4
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 4
+                },
+                "start": {
+                  "character": 4,
+                  "line": 4
+                }
+              },
+              "line_text": "def decorated(value: int) -> int:",
+              "selected": "decorated"
+            }
+          ]
+        },
+        {
+          "case": "immutable_alias",
+          "file": "client.py",
+          "position": {
+            "line": 7,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 16,
+                    "line": 7
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 7
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 18,
+                    "line": 8
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 7
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 9,
+                    "line": 7
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 7
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              },
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 16,
+                    "line": 7
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 7
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 20,
+                    "line": 6
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 6
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 6
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 6
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 7
+                },
+                "start": {
+                  "character": 4,
+                  "line": 7
+                }
+              },
+              "line_text": "def first() -> str:",
+              "selected": "first"
+            },
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "end": {
+                  "character": 12,
+                  "line": 6
+                },
+                "start": {
+                  "character": 0,
+                  "line": 6
+                }
+              },
+              "line_text": "direct_alias = first",
+              "selected": "direct_alias"
+            }
+          ]
+        },
+        {
+          "case": "runtime_rebinding",
+          "file": "client.py",
+          "position": {
+            "line": 10,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 10
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 10
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 19,
+                    "line": 11
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 10
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 10,
+                    "line": 10
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 10
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              },
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 10
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 10
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 15,
+                    "line": 8
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 8
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 8
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 8
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py"
+              },
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 10
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 10
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 16,
+                    "line": 9
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 9
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 9
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 9
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 10
+                },
+                "start": {
+                  "character": 4,
+                  "line": 10
+                }
+              },
+              "line_text": "def second() -> str:",
+              "selected": "second"
+            },
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 8
+                },
+                "start": {
+                  "character": 0,
+                  "line": 8
+                }
+              },
+              "line_text": "rebound = first",
+              "selected": "rebound"
+            },
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 9
+                },
+                "start": {
+                  "character": 0,
+                  "line": 9
+                }
+              },
+              "line_text": "rebound = second",
+              "selected": "rebound"
+            }
+          ]
+        },
+        {
+          "case": "class_constructor",
+          "file": "client.py",
+          "position": {
+            "line": 11,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 15,
+                    "line": 11
+                  },
+                  "start": {
+                    "character": 9,
+                    "line": 11
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 20,
+                    "line": 18
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 13
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 13
+                  },
+                  "start": {
+                    "character": 6,
+                    "line": 13
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 12,
+                  "line": 13
+                },
+                "start": {
+                  "character": 6,
+                  "line": 13
+                }
+              },
+              "line_text": "class Worker:",
+              "selected": "Worker"
+            }
+          ]
+        },
+        {
+          "case": "instance_method",
+          "file": "client.py",
+          "position": {
+            "line": 12,
+            "character": 11
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 14,
+                    "line": 12
+                  },
+                  "start": {
+                    "character": 11,
+                    "line": 12
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 20,
+                    "line": 18
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 17
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 17
+                  },
+                  "start": {
+                    "character": 8,
+                    "line": 17
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 17
+                },
+                "start": {
+                  "character": 8,
+                  "line": 17
+                }
+              },
+              "line_text": "    def run(self) -> str:",
+              "selected": "run"
+            }
+          ]
+        },
+        {
+          "case": "instance_attribute",
+          "file": "client.py",
+          "position": {
+            "line": 13,
+            "character": 11
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 15,
+                    "line": 13
+                  },
+                  "start": {
+                    "character": 11,
+                    "line": 13
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 21,
+                    "line": 15
+                  },
+                  "start": {
+                    "character": 8,
+                    "line": 15
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 17,
+                    "line": 15
+                  },
+                  "start": {
+                    "character": 8,
+                    "line": 15
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 17,
+                  "line": 15
+                },
+                "start": {
+                  "character": 8,
+                  "line": 15
+                }
+              },
+              "line_text": "        self.item = 1",
+              "selected": "self.item"
+            }
+          ]
+        },
+        {
+          "case": "stub_precedence",
+          "file": "client.py",
+          "position": {
+            "line": 14,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 14
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 14
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 16,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 0
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/stubbed.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/stubbed.py",
+              "range": {
+                "end": {
+                  "character": 11,
+                  "line": 0
+                },
+                "start": {
+                  "character": 4,
+                  "line": 0
+                }
+              },
+              "line_text": "def stubbed(value):",
+              "selected": "stubbed"
+            }
+          ]
+        },
+        {
+          "case": "ambiguous_union",
+          "file": "client.py",
+          "position": {
+            "line": 17,
+            "character": 11
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 20,
+                    "line": 17
+                  },
+                  "start": {
+                    "character": 11,
+                    "line": 17
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 18,
+                    "line": 8
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 7
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 9,
+                    "line": 7
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 7
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              },
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 20,
+                    "line": 17
+                  },
+                  "start": {
+                    "character": 11,
+                    "line": 17
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 41,
+                    "line": 16
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 16
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 16
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 16
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/client.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 7
+                },
+                "start": {
+                  "character": 4,
+                  "line": 7
+                }
+              },
+              "line_text": "def first() -> str:",
+              "selected": "first"
+            },
+            {
+              "path": "src/pkg/client.py",
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 16
+                },
+                "start": {
+                  "character": 4,
+                  "line": 16
+                }
+              },
+              "line_text": "    ambiguous = first if flag else second",
+              "selected": "ambiguous"
+            }
+          ]
+        },
+        {
+          "case": "dynamic_getattr",
+          "file": "client.py",
+          "position": {
+            "line": 18,
+            "character": 21
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 12,
+            "result": null
+          },
+          "targets": []
+        },
+        {
+          "case": "unicode_utf16",
+          "file": "client.py",
+          "position": {
+            "line": 19,
+            "character": 19
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 13,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 23,
+                    "line": 19
+                  },
+                  "start": {
+                    "character": 19,
+                    "line": 19
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 21
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 20
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 8,
+                    "line": 20
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 20
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 8,
+                  "line": 20
+                },
+                "start": {
+                  "character": 4,
+                  "line": 20
+                }
+              },
+              "line_text": "def 中文函数() -> int:",
+              "selected": "中文函数"
+            }
+          ]
+        },
+        {
+          "case": "src_layout_absolute",
+          "file": "absolute_client.py",
+          "position": {
+            "line": 1,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 14,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 14,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 9,
+                    "line": 1
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 18,
+                    "line": 8
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 7
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 9,
+                    "line": 7
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 7
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/fixture/src/pkg/api.py"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "src/pkg/api.py",
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 7
+                },
+                "start": {
+                  "character": 4,
+                  "line": 7
+                }
+              },
+              "line_text": "def first() -> str:",
+              "selected": "first"
+            }
+          ]
+        },
+        {
+          "case": "builtin_len",
+          "file": "client.py",
+          "position": {
+            "line": 20,
+            "character": 4
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 15,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 20
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 20
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 52,
+                    "line": 4140
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 4139
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 4139
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 4139
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/isolated-cache/ty/vendored/typeshed/76b8c9f83b8bb876e841248b638f3728da3f86fe/stdlib/builtins.pyi"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/isolated-cache/ty/vendored/typeshed/76b8c9f83b8bb876e841248b638f3728da3f86fe/stdlib/builtins.pyi",
+              "range": {
+                "end": {
+                  "character": 7,
+                  "line": 4139
+                },
+                "start": {
+                  "character": 4,
+                  "line": 4139
+                }
+              },
+              "line_text": "def len(obj: Sized, /) -> int:",
+              "selected": "len"
+            }
+          ]
+        },
+        {
+          "case": "stdlib_path",
+          "file": "client.py",
+          "position": {
+            "line": 21,
+            "character": 12
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 16,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 16,
+                    "line": 21
+                  },
+                  "start": {
+                    "character": 12,
+                    "line": 21
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 39,
+                    "line": 778
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 306
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 10,
+                    "line": 306
+                  },
+                  "start": {
+                    "character": 6,
+                    "line": 306
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/isolated-cache/ty/vendored/typeshed/76b8c9f83b8bb876e841248b638f3728da3f86fe/stdlib/pathlib/__init__.pyi"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/isolated-cache/ty/vendored/typeshed/76b8c9f83b8bb876e841248b638f3728da3f86fe/stdlib/pathlib/__init__.pyi",
+              "range": {
+                "end": {
+                  "character": 10,
+                  "line": 306
+                },
+                "start": {
+                  "character": 6,
+                  "line": 306
+                }
+              },
+              "line_text": "class Path(PurePath):",
+              "selected": "Path"
+            }
+          ]
+        },
+        {
+          "case": "stdlib_json",
+          "file": "client.py",
+          "position": {
+            "line": 22,
+            "character": 9
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 17,
+            "result": [
+              {
+                "originSelectionRange": {
+                  "end": {
+                    "character": 14,
+                    "line": 22
+                  },
+                  "start": {
+                    "character": 9,
+                    "line": 22
+                  }
+                },
+                "targetRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 163
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 108
+                  }
+                },
+                "targetSelectionRange": {
+                  "end": {
+                    "character": 9,
+                    "line": 108
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 108
+                  }
+                },
+                "targetUri": "file:///private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/isolated-cache/ty/vendored/typeshed/76b8c9f83b8bb876e841248b638f3728da3f86fe/stdlib/json/__init__.pyi"
+              }
+            ]
+          },
+          "targets": [
+            {
+              "path": "/private/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/isolated-cache/ty/vendored/typeshed/76b8c9f83b8bb876e841248b638f3728da3f86fe/stdlib/json/__init__.pyi",
+              "range": {
+                "end": {
+                  "character": 9,
+                  "line": 108
+                },
+                "start": {
+                  "character": 4,
+                  "line": 108
+                }
+              },
+              "line_text": "def dumps(",
+              "selected": "dumps"
+            }
+          ]
+        }
+      ],
+      "shutdown": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "result": null
+      },
+      "process_exit_code": 0,
+      "process_id": 82614,
+      "interpreter_invocations": ""
+    }
+  ]
+}
