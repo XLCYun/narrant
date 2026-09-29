@@ -6,6 +6,7 @@ mod workspace;
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
 use super::rust_analyzer::RustDependencyScope;
 use crate::{
+    language_support::PackLease,
     lsp::CancellationCheck,
     operation::OperationContext,
     review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
@@ -98,6 +99,36 @@ impl StructureReview {
         options: AnalysisOptions,
         dependency_scope: RustDependencyScope,
     ) -> Result<StructureComparison, StructureReviewError> {
+        let (analyzers, lease) = self
+            .prepare_analyzers(lifecycle, operation, review_id, snapshot_id, options)
+            .await?;
+        let result_review_id = review_id.to_owned();
+        let result_snapshot_id = snapshot_id.to_owned();
+        lifecycle
+            .run_in_workspace(operation, review_id, snapshot_id, move |workspace| {
+                // 租约由实际 worker 持有到两侧分析结束，取消 IPC 等待不能提前释放。
+                let _lease = lease;
+                run(
+                    workspace,
+                    analyzers,
+                    result_review_id,
+                    result_snapshot_id,
+                    options,
+                    dependency_scope,
+                )
+            })
+            .await
+    }
+
+    /// 占用工作区前校验 Snapshot、准备必要支持包并装配分析器，返回由实际 worker 持有的租约。
+    async fn prepare_analyzers(
+        &self,
+        lifecycle: &ReviewLifecycle,
+        operation: &OperationContext,
+        review_id: &str,
+        snapshot_id: &str,
+        options: AnalysisOptions,
+    ) -> Result<(LanguageAnalyzers, Option<PackLease>), StructureReviewError> {
         let mut analyzers = self.analyzers.clone();
         let lease = if let Some(support) = &self.support {
             use super::code_graph::LanguageAnalyzer;
@@ -177,22 +208,7 @@ impl StructureReview {
         } else {
             None
         };
-        let result_review_id = review_id.to_owned();
-        let result_snapshot_id = snapshot_id.to_owned();
-        lifecycle
-            .run_in_workspace(operation, review_id, snapshot_id, move |workspace| {
-                // 租约由实际 worker 持有到两侧分析结束，取消 IPC 等待不能提前释放。
-                let _lease = lease;
-                run(
-                    workspace,
-                    analyzers,
-                    result_review_id,
-                    result_snapshot_id,
-                    options,
-                    dependency_scope,
-                )
-            })
-            .await
+        Ok((analyzers, lease))
     }
 }
 
