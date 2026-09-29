@@ -17,9 +17,10 @@ import "./structure-changes.css";
 
 const ObjectActions = createContext<{
   selectedId?: string; selectedDirectory?: string; connectedPorts: ReadonlySet<string>;
+  collapsedDescendants: ReadonlyMap<string, boolean>; toggleDescendants(cardId: string): void;
   expand(id: string): void; toggleCollapse(id: string): void; open(id: string): void;
   toggleDirectory(path: string): void; openDirectory(path: string): void;
-}>({ connectedPorts: new Set(), expand: () => {}, toggleCollapse: () => {}, open: () => {}, toggleDirectory: () => {}, openDirectory: () => {} });
+}>({ connectedPorts: new Set(), collapsedDescendants: new Map(), toggleDescendants: () => {}, expand: () => {}, toggleCollapse: () => {}, open: () => {}, toggleDirectory: () => {}, openDirectory: () => {} });
 const statusClasses: Record<ObjectStatus, string> = {
   added: "structure-added", removed: "structure-removed", modified: "structure-modified",
   relations: "structure-relations", unchanged: "structure-unchanged",
@@ -33,6 +34,8 @@ function CodeObjectNode({ id, data }: NodeProps<ObjectNode>) {
   useEffect(() => { updateNodeInternals(id); }, [data.ports, id, updateNodeInternals]);
   const selected = data.directory ? actions.selectedDirectory === data.directory.path : data.objectId !== undefined && actions.selectedId === data.objectId;
   const title = data.filePath ?? data.directory?.path ?? data.label;
+  const expandDescendants = data.collapse?.collapsed || actions.collapsedDescendants.get(id);
+  const descendantsLabel = t(expandDescendants ? "expandDescendants" : "collapseDescendants", { name: title });
   const markers: Record<ObjectStatus, string> = { added: "+", removed: "−", modified: "~", relations: "↔", unchanged: "·" };
   return <div className={cn("structure-object", statusClasses[data.status], data.group && "structure-group", data.directory && "structure-directory", data.table && "structure-member-table", selected && "structure-selected")}
     data-object-id={data.objectId} data-directory-path={data.directory?.path} data-object-status={data.directory ? undefined : data.status}>
@@ -49,6 +52,9 @@ function CodeObjectNode({ id, data }: NodeProps<ObjectNode>) {
     {data.objectId !== undefined || data.directory ? <Button variant="ghost" className="nodrag nopan h-6 min-w-0 flex-1 justify-start overflow-hidden px-0 font-mono text-sm font-semibold hover:bg-transparent hover:underline"
       title={title} aria-label={title} aria-pressed={selected} onClick={(event) => { event.stopPropagation(); if (data.directory) actions.openDirectory(data.directory.path); else actions.open(data.objectId!); }}><span className="truncate">{data.label}</span></Button>
       : <div className="mt-2 truncate font-mono text-sm font-medium" title={data.label}>{data.label}</div>}
+    {actions.collapsedDescendants.has(id) && <Button variant="ghost" size="sm" className="nodrag nopan h-6 shrink-0 px-1.5 text-[10px]"
+      aria-label={descendantsLabel} title={descendantsLabel}
+      onClick={(event) => { event.stopPropagation(); actions.toggleDescendants(id); }}>{t(expandDescendants ? "expandAll" : "collapseAll")}</Button>}
     </div>
     {data.collapse?.collapsed && <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground" data-testid="collapse-summary">
       <span className="truncate">{data.directory ? t("collapsedDirectorySummary", { count: data.directory.files.length }) : data.category === "type" && data.collapse.values + data.collapse.callables > 0
@@ -147,6 +153,27 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
   const selectedDirectory = selection?.kind === "directory" ? selection.path : undefined;
   const [layoutResult, setLayoutResult] = useState<{ comparison: StructureComparison; layout: StructureLayout }>();
   const expandedLayout = layoutResult?.comparison === comparison ? layoutResult.layout : undefined;
+  // 使用完整展示树寻找子卡片，保证已被祖先折叠的深层卡片也能一起切换。
+  const descendantCards = useMemo(() => {
+    const nodes = new Map(expandedLayout?.nodes.map((node) => [node.id, node]));
+    const descendants = new Map<string, ObjectNode[]>();
+    for (const node of nodes.values()) {
+      if (!node.data.collapse) continue;
+      let parent = node.parentId ? nodes.get(node.parentId) : undefined;
+      while (parent) {
+        if (parent.data.category === "container" || parent.data.directory) {
+          const children = descendants.get(parent.id) ?? [];
+          children.push(node);
+          descendants.set(parent.id, children);
+        }
+        parent = parent.parentId ? nodes.get(parent.parentId) : undefined;
+      }
+    }
+    return descendants;
+  }, [expandedLayout]);
+  const collapsedDescendants = useMemo(() => new Map([...descendantCards].map(([id, children]) => [id,
+    children.some(({ data }) => data.directory ? collapsedDirectories.has(data.directory.path) : data.objectId !== undefined && collapsed.has(data.objectId)),
+  ])), [descendantCards, collapsed, collapsedDirectories]);
   const foldedLayout = useMemo(() => expandedLayout && collapseStructureLayout(expandedLayout, collapsed, collapsedDirectories), [expandedLayout, collapsed, collapsedDirectories]);
   const [compactResult, setCompactResult] = useState<{ input: StructureLayout; layout?: StructureLayout; error?: string }>();
   const needsCompactLayout = relayoutOnCollapse && foldedLayout !== undefined && foldedLayout !== expandedLayout;
@@ -179,6 +206,32 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
     setCollapsedDirectories((current) => {
       const next = new Set(current);
       if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  };
+  /** 批量切换当前容器的后代并展开自身；混合状态先全部展开，其他分支保持原状。 */
+  const toggleDescendants = (cardId: string) => {
+    const parent = expandedLayout?.nodes.find((node) => node.id === cardId)?.data;
+    const children = descendantCards.get(cardId);
+    if (!parent || !children) return;
+    const expand = collapsedDescendants.get(cardId) || (parent.directory
+      ? collapsedDirectories.has(parent.directory.path) : parent.objectId !== undefined && collapsed.has(parent.objectId));
+    if (parent.directory) setSelection({ kind: "directory", path: parent.directory.path });
+    else if (parent.objectId !== undefined) setSelection({ kind: "object", id: parent.objectId });
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (parent.objectId !== undefined) next.delete(parent.objectId);
+      for (const { data } of children) if (data.objectId !== undefined) {
+        if (expand) next.delete(data.objectId); else next.add(data.objectId);
+      }
+      return next;
+    });
+    setCollapsedDirectories((current) => {
+      const next = new Set(current);
+      if (parent.directory) next.delete(parent.directory.path);
+      for (const { data } of children) if (data.directory) {
+        if (expand) next.delete(data.directory.path); else next.add(data.directory.path);
+      }
       return next;
     });
   };
@@ -256,7 +309,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
     </div>
     <ResizablePanelGroup orientation="horizontal" className="h-auto! min-h-0 flex-1">
       <ResizablePanel id="structure-details" defaultSize="320px" minSize="180px" maxSize="55%" groupResizeBehavior="preserve-pixel-size">
-        <StructureDetails comparison={comparison} selectedId={selectedId} directory={directory} showImports={showImports} dark={dark} />
+        <StructureDetails comparison={comparison} selectedId={selectedId} directory={directory} dark={dark} />
       </ResizablePanel>
       <ResizableHandle withHandle aria-label={t("resizeDetails")} />
       <ResizablePanel id="structure-graph" minSize="45%">
@@ -265,7 +318,7 @@ function ComparisonView({ comparison: fullComparison, binding, dark }: { compari
             {visibleLayoutError ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <h3>{t("layoutFailed")}</h3><p className="max-w-xl break-words text-xs text-muted-foreground">{visibleLayoutError}</p>
               <Button variant="outline" onClick={() => setExpanded(new Set(expanded))}>{t("retryLayout")}</Button>
-            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, selectedDirectory, connectedPorts, toggleCollapse, toggleDirectory,
+            </div> : layout && layout.nodes.length > 0 ? <ObjectActions.Provider value={{ selectedId, selectedDirectory, connectedPorts, collapsedDescendants, toggleDescendants, toggleCollapse, toggleDirectory,
               expand: (id) => setExpanded((current) => new Set([...current, id])), open: (id) => setSelection({ kind: "object", id }), openDirectory: (path) => setSelection({ kind: "directory", path }) }}>
               <ReactFlow<ObjectNode, StructureEdge> key={language} nodes={layout.nodes} edges={visibleEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
                 colorMode={dark ? "dark" : "light"} fitView fitViewOptions={{ padding: 0.16, maxZoom: 1 }} minZoom={0.08} maxZoom={2}

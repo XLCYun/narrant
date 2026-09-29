@@ -26,8 +26,9 @@ semantic graph queries stay in the language service.
   (`.d.ts`, `.d.mts`, `.d.cts`) together. TS and JS share semantic projects but keep
   appropriate graph/editor language labels. `.js` can contain JSX, as in tsserver.
 - Extract modules/namespaces (Container); classes/interfaces/type aliases/enums (Type);
-  named functions/methods/constructors/getters/setters (Callable); explicit class fields,
-  interface/type-literal properties, index signatures and enum members (Value);
+  named functions/methods/constructors/getters/setters (Callable); class fields (including
+  constructor parameter properties), interface/type-literal properties, index signatures
+  and enum members (Value);
   top-level executable statements and static blocks (ExecutionRegion).
 - Every selected file with graph objects has one file Container (`native_kind: file`),
   named by its repository-relative path with `/` separators on every platform.
@@ -59,11 +60,21 @@ semantic graph queries stay in the language service.
   source excerpts, node identities and language-service positions unchanged.
 - Ordinary `const`/`let`/`var` and destructuring declarations never create Value nodes,
   at either top level or inside functions, loops or callbacks. Ordinary object-literal
-  properties/shorthands, constructor parameter properties and auto-accessor properties
-  also create no nodes. Their code inside a modeled owner still participates in that
+  properties/shorthands and auto-accessor properties also create no nodes.
+  Their code inside a modeled owner still participates in that
   owner's content comparison. Calls in omitted top-level initializers share their scope's
   ExecutionRegion with ordinary executable statements; calls inside functions/callbacks
   belong to the enclosing modeled owner.
+- Constructor [parameter properties](https://www.typescriptlang.org/docs/handbook/2/classes.html#parameter-properties)
+  introduced by `public`, `private`, `protected`, `readonly`, or `override` (including
+  legal combinations) are Value nodes with `native_kind: field`, directly contained by
+  their modeled class. They share ordinary instance fields' owner/name identity, rather
+  than becoming constructor children. Preserve modifiers, decorators, optional markers,
+  type annotations, defaults and original parameter source. Field type uses and calls
+  within defaults belong to the field; constructor signatures still compare the complete
+  ordered parameter list and defaults. Ordinary and rest parameters create no fields.
+  A function-valued default does not prove the property's runtime callable identity,
+  since a caller may supply a different argument.
 - Property and index-signature Value nodes must be direct members of a named interface
   body or a type alias's own object type, outside every function/callback scope.
   Parentheses, unions and intersections may wrap the alias's object type; generic
@@ -137,7 +148,8 @@ Extract statically confirmed calls (including new where modeled),
 function-value references, inheritance/implementation and field/property type
 relationships consistent with 0018 and the existing Rust scope. Keep a syntax occurrence
 even if call hierarchy omits it. Do not turn an import alias or a type-only signature into
-a definite runtime call. Dynamic/ambiguous targets remain Unresolved. Named function declarations in repository
+a definite runtime call. Dynamic, unresolved or untrusted definition evidence remains
+Unresolved. Named function declarations in repository
 `.d.ts`/`.d.mts`/`.d.cts` files and explicit `declare function` declarations (including
 legal ambient contexts) introduce function-value bindings and may be static call targets:
 selected declarations are Node, unselected declarations are Repository External. Bare
@@ -145,6 +157,14 @@ structural call signatures/interface methods and isolated non-ambient overload s
 without an implementation do not establish runtime call targets. These edges identify
 verified source declarations; they do not assert that ambient declarations match a deployed
 runtime implementation.
+
+Call edges follow the language service's `definition` source-navigation result rather
+than enumerating possible runtime implementations. A single verified, eligible target
+produces an edge, including a union member call where TypeScript navigates only to
+`A.method` for `A | B`. Do not supplement candidates with `typeDefinition`. Multiple
+distinct candidates returned by definition, conflicting project results, unresolved
+aliases or untrusted evidence remain Unresolved. Existing declaration eligibility,
+alias-following and type-only-import checks still apply.
 
 Omit `code.reads` and `code.writes`, including simple/compound assignments and update
 expressions. Keep traversing their expressions for calls and function-value references

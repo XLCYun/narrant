@@ -89,6 +89,8 @@ describe("Review lifecycle module", () => {
     const { result } = renderHook(() => useReviewLifecycle(adapter));
 
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    expect(adapter.checkReviewUpdate).not.toHaveBeenCalled();
+    act(() => { void result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(checks).toHaveLength(1));
     act(() => checks[0].resolve(null));
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("current"));
@@ -112,6 +114,7 @@ describe("Review lifecycle module", () => {
     adapter.refreshReview = async () => ({ kind: "refreshed", snapshot: { ...firstSnapshot, snapshotId: "snapshot-2", headRevision: "head-2" } });
     const { result } = renderHook(() => useReviewLifecycle(adapter));
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
 
     await act(async () => { await result.current.reader!.refresh(); });
@@ -131,6 +134,7 @@ describe("Review lifecycle module", () => {
     }));
     const { result } = renderHook(() => useReviewLifecycle(adapter));
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
 
     let first: Promise<unknown>;
@@ -152,6 +156,7 @@ describe("Review lifecycle module", () => {
       .mockRejectedValueOnce({ code: "update-confirmation-stale", detail: "selection moved" });
     const { result } = renderHook(() => useReviewLifecycle(adapter));
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-1" }); });
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
 
     await act(async () => { await result.current.reader!.refresh(); });
@@ -161,8 +166,9 @@ describe("Review lifecycle module", () => {
     expect(adapter.refreshReview).toHaveBeenCalledTimes(2);
   });
 
-  it("打开 Review 后按稳定路径顺序选择第一个 File Change", async () => {
+  it("打开 Review 后直接读取第一个 File Change，不检查更新", async () => {
     const adapter = createAdapter();
+    const checkReviewUpdate = vi.spyOn(adapter, "checkReviewUpdate");
     const { result } = renderHook(() => useReviewLifecycle(adapter));
 
     await act(async () => {
@@ -174,6 +180,8 @@ describe("Review lifecycle module", () => {
       kind: "ready",
       path: "a-first.ts",
     }));
+    expect(result.current.reader?.update.kind).toBe("idle");
+    expect(checkReviewUpdate).not.toHaveBeenCalled();
   });
 
   it("目标 Review 打开失败时保留原 Review Reader", async () => {
@@ -217,6 +225,7 @@ describe("Review lifecycle module", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
 
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     let refresh: Promise<unknown>;
     let switching: Promise<unknown>;
     await act(async () => {
@@ -263,6 +272,7 @@ describe("Review lifecycle module", () => {
       await result.current.open({ kind: "saved-review", reviewId: "review-1" });
     });
 
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     let refresh: Promise<unknown>;
     let closing: Promise<unknown>;
     await act(async () => {
@@ -340,7 +350,7 @@ describe("Review lifecycle module", () => {
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
 
     expect(switchReview).toHaveBeenCalledTimes(3);
-    expect(checkReviewUpdate).toHaveBeenCalledTimes(2);
+    expect(checkReviewUpdate).not.toHaveBeenCalled();
     expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
     expect(result.current.reader?.fileChange).toMatchObject({ kind: "ready", path: "nested/b.ts" });
     expect(result.current.reader?.view).toBe("file-changes");
@@ -350,7 +360,7 @@ describe("Review lifecycle module", () => {
     expect(result.current.reader?.scrollPositions).toEqual({ overview: 41, fileTree: 63, content: 87 });
   });
 
-  it("切换会结束 inactive checking，warm present 复用缓存且不重复检查", async () => {
+  it("切换或退出取消手动检查，打开与恢复 Review 不自动检查", async () => {
     const snapshots: Record<string, ReviewSnapshot> = {
       "review-a": { ...firstSnapshot, reviewId: "review-a", snapshotId: "snapshot-a" },
       "review-b": { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" },
@@ -368,12 +378,17 @@ describe("Review lifecycle module", () => {
     const { result } = renderHook(() => useReviewLifecycle(adapter));
 
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    expect(checks).toHaveLength(0);
+    act(() => { void result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(checks).toHaveLength(1));
     expect(result.current.reader?.update.kind).toBe("checking");
 
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
-    await waitFor(() => expect(checks).toHaveLength(2));
+    expect(checks).toHaveLength(1);
     expect(checks[0].signal.aborted).toBe(true);
+    expect(result.current.reader?.update.kind).toBe("idle");
+    act(() => { void result.current.reader?.checkForUpdate(); });
+    await waitFor(() => expect(checks).toHaveLength(2));
 
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
     expect(checks).toHaveLength(2);
@@ -386,9 +401,18 @@ describe("Review lifecycle module", () => {
     expect(checks).toHaveLength(2);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-a");
     expect(result.current.reader?.update.kind).toBe("idle");
+
+    act(() => { void result.current.reader?.checkForUpdate(); });
+    expect(checks).toHaveLength(3);
+    act(() => result.current.unpresent());
+    expect(checks[2].signal.aborted).toBe(true);
+    await act(async () => { checks.forEach((check) => check.resolve(null)); });
+    await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    expect(checks).toHaveLength(3);
+    expect(result.current.reader?.update.kind).toBe("idle");
   });
 
-  it("打开 C 失败后为仍 Presented 的 B 重启 update check，并隔离旧请求", async () => {
+  it("切换失败后不重启已取消的检查，忽略旧结果并允许手动重试", async () => {
     const adapter = createAdapter();
     const snapshotB = { ...firstSnapshot, reviewId: "review-b", snapshotId: "snapshot-b" };
     const checks: Array<{ signal: AbortSignal; resolve: (value: null) => void }> = [];
@@ -400,24 +424,30 @@ describe("Review lifecycle module", () => {
     const { result } = renderHook(() => useReviewLifecycle(adapter));
 
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+    act(() => { void result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(checks).toHaveLength(1));
     expect(result.current.reader?.update.kind).toBe("checking");
 
     await act(async () => {
       expect(await result.current.open({ kind: "saved-review", reviewId: "review-c" })).toMatchObject({ kind: "failed" });
     });
-    await waitFor(() => expect(checks).toHaveLength(2));
+    expect(checks).toHaveLength(1);
     expect(checks[0].signal.aborted).toBe(true);
     expect(result.current.reader?.snapshot.reviewId).toBe("review-b");
+    expect(result.current.reader?.transition.kind).toBe("stable");
+    expect(result.current.reader?.update.kind).toBe("idle");
+
+    await act(async () => checks[0].resolve(null));
+    expect(result.current.reader?.update.kind).toBe("idle");
+    act(() => { void result.current.reader?.checkForUpdate(); });
+    expect(checks).toHaveLength(2);
     expect(result.current.reader?.update.kind).toBe("checking");
 
-    act(() => checks[0].resolve(null));
-    expect(result.current.reader?.update.kind).toBe("checking");
     act(() => checks[1].resolve(null));
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("current"));
   });
 
-  it.each(["current", "available", "failed"] as const)(
+  it.each(["idle", "current", "available", "failed"] as const)(
     "打开 C 失败时保留 B 的稳定 %s update 状态且不发起额外检查",
     async (stableKind) => {
       const adapter = createAdapter();
@@ -434,6 +464,7 @@ describe("Review lifecycle module", () => {
       const { result } = renderHook(() => useReviewLifecycle(adapter));
 
       await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-b" }); });
+      if (stableKind !== "idle") await act(async () => { await result.current.reader?.checkForUpdate(); });
       await waitFor(() => expect(result.current.reader?.update.kind).toBe(stableKind));
       checkReviewUpdate.mockClear();
 
@@ -540,6 +571,7 @@ describe("Review lifecycle module", () => {
       result.current.reader?.setFileViewState({ reviewId: "review-b", snapshotId: "snapshot-b", path: "a-first.ts" }, stateB);
     });
     await act(async () => { await result.current.open({ kind: "saved-review", reviewId: "review-a" }); });
+    await act(async () => { await result.current.reader?.checkForUpdate(); });
     await waitFor(() => expect(result.current.reader?.update.kind).toBe("available"));
 
     await act(async () => { expect((await result.current.reader!.refresh()).kind).toBe("refreshed"); });

@@ -9,6 +9,8 @@ use std::path::Path;
 
 #[path = "syntax/content.rs"]
 mod content;
+#[path = "syntax/parameter_properties.rs"]
+mod parameter_properties;
 
 /// 使用内存文件稳定构造文档，无需语言服务或真实业务文件。
 fn parse(path: &str, source: &str) -> Document {
@@ -239,7 +241,7 @@ fn direct_const_arrows_and_named_callback_declarations() {
     graph(&[&document]);
 }
 
-/// 数据节点仅保留类型的显式字段、属性、索引签名与枚举成员。
+/// 数据节点仅保留类型的字段（含参数属性）、属性、索引签名与枚举成员。
 #[test]
 fn data_declarations_keep_type_members_only() {
     let document = parse(
@@ -262,7 +264,7 @@ fn data_declarations_keep_type_members_only() {
         .iter()
         .filter(|d| d.node.category() == CodeCategory::Value)
         .collect::<Vec<_>>();
-    assert_eq!(values.len(), 8, "{values:?}");
+    assert_eq!(values.len(), 9, "{values:?}");
     assert!(values.iter().all(|d| matches!(
         d.node.data().native_kind.as_str(),
         "field" | "static_field" | "property" | "index_signature" | "enum_member"
@@ -280,7 +282,6 @@ fn data_declarations_keep_type_members_only() {
         "entry",
         "item",
         "callbackLocal",
-        "parameter",
         "automatic",
     ] {
         assert!(
@@ -1130,9 +1131,9 @@ fn qualified_type_occurrences_select_terminal_names() {
     }
 }
 
-/// 指令合入顶层执行区域；构造参数属性仅留在签名，其初始化调用属于构造函数。
+/// 指令合入顶层执行区域；参数属性单独承载字段类型和默认值调用。
 #[test]
-fn directives_keep_execution_but_parameter_properties_are_omitted() {
+fn directives_and_parameter_properties_keep_separate_execution_owners() {
     let document = parse("a.ts", "'use strict'; class C { constructor(public field: Model, readonly other = make(), ordinary: string) {} }");
     assert!(named(&document, "顶层执行")
         .node
@@ -1141,26 +1142,29 @@ fn directives_keep_execution_but_parameter_properties_are_omitted() {
         .as_ref()
         .unwrap()
         .contains("use strict"));
-    for name in ["field", "other", "ordinary"] {
-        assert!(document
-            .declarations
-            .iter()
-            .all(|d| d.node.data().name.as_deref() != Some(name)));
+    for name in ["field", "other"] {
+        assert_eq!(named(&document, name).node.category(), CodeCategory::Value);
+        assert_eq!(
+            named(&document, name).parent.as_ref(),
+            Some(&named(&document, "C").node.data().id)
+        );
     }
     assert!(document
         .declarations
         .iter()
         .all(|d| d.node.data().name.as_deref() != Some("ordinary")));
-    assert!(!document
+    assert!(document
         .occurrences
         .iter()
-        .any(|o| o.kind == OccurrenceKind::TypeUse && o.text == "Model"));
+        .any(|o| o.kind == OccurrenceKind::TypeUse
+            && o.text == "Model"
+            && o.owner == named(&document, "field").node.data().id));
     assert!(document
         .occurrences
         .iter()
         .any(|o| o.kind == OccurrenceKind::Call
             && o.text == "make"
-            && o.owner == named(&document, "constructor").node.data().id));
+            && o.owner == named(&document, "other").node.data().id));
     graph(&[&document]);
 }
 

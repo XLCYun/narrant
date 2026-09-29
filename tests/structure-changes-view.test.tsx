@@ -231,17 +231,20 @@ it("keeps details beside the graph and switches exact objects without remounting
   ]);
 });
 
-it("keeps filtered references out of details when switching objects in the sidebar", async () => {
+it("shows source without relationship lists when switching objects in the sidebar", async () => {
   render(<StructureChangesView binding={binding()} dark={false} />);
   const graph = await screen.findByTestId("rendered-graph");
   const sidebar = screen.getByRole("complementary", { name: "结构详情" });
   fireEvent.click(within(graph).getByRole("button", { name: /fn prepare_snapshot.*新增/ }));
-  expect(within(sidebar).getAllByText(/code.calls → save_snapshot/)).toHaveLength(2);
+  expect(within(sidebar).getByRole("region", { name: "源码差异" })).toBeInTheDocument();
+  expect(within(sidebar).queryByRole("heading", { name: "关系变化" })).not.toBeInTheDocument();
+  expect(within(sidebar).queryByRole("heading", { name: "关联目标" })).not.toBeInTheDocument();
+  expect(sidebar).not.toHaveTextContent(/code.calls → save_snapshot|当前筛选下没有关系变化|当前筛选下没有关联目标/);
   expect(sidebar).not.toHaveTextContent(/serde_json|verify_snapshot|Arc<T>|%2F|code.imports/);
   fireEvent.click(within(graph).getByRole("button", { name: /pub async fn run_review.*自身修改/ }));
   expect(within(sidebar).getByRole("heading", { name: "run_review" })).toBeInTheDocument();
   expect(sidebar).toHaveTextContent("generated::on_review_opened()");
-  expect(within(sidebar).getAllByRole("listitem").every((item) => !item.textContent?.includes("generated::on_review_opened"))).toBe(true);
+  expect(within(sidebar).queryByRole("list")).not.toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
 });
 
@@ -259,7 +262,7 @@ it("presents long source, JSX relations and duplicate declarations in a mixed-la
   fireEvent.click(within(graph).getByRole("button", { name: /ReviewWorkspaceWithAnExtraordinarilyLongName.*自身修改/ }));
   const details = screen.getByRole("complementary", { name: "结构详情" });
   expect(details).not.toHaveTextContent("code.calls → formatReview");
-  expect(details).toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
+  expect(details).not.toHaveTextContent("JSX 使用组件 → ReviewSummaryCard");
   expect(screen.getByTestId("source-diff")).toHaveAttribute("data-original-language", "typescript");
   expect(screen.getByTestId("modified-source").textContent).toBe(comparison.after.nodes.find((node) => node.id === "typescript-component")!.source);
 
@@ -354,6 +357,60 @@ it("offers collapse all and expand all while keeping context filters unchanged",
   expect(within(graph).queryByRole("button", { name: /pub fn restore\(/ })).not.toBeInTheDocument();
   expect(screen.getByTestId("rendered-graph")).toBe(graph);
   expect(layoutCalls).toHaveBeenCalledTimes(1);
+});
+
+it("toggles every descendant card within a container, preserving siblings and filtered context", async () => {
+  const layoutCalls = vi.spyOn(graphPresentation, "layoutStructureComparison");
+  const current = binding();
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 storage", exact: true }));
+  fireEvent.click(within(graph).getByRole("button", { name: "折叠 review 的所有子卡片", exact: true }));
+  expect(within(graph).getByRole("button", { name: "收起 review", exact: true })).toHaveAttribute("aria-expanded", "true");
+  expect(within(graph).getByRole("button", { name: "展开 Review", exact: true })).toBeInTheDocument();
+  expect(within(graph).getByRole("button", { name: "展开 storage", exact: true })).toBeInTheDocument();
+  expect(within(screen.getByRole("complementary", { name: "结构详情" })).getByRole("heading", { name: "review", exact: true })).toBeInTheDocument();
+
+  // 混合状态先全部展开，再递归折叠；重新打开中间层仍能观察到深层卡片被收起。
+  fireEvent.click(within(graph).getByRole("button", { name: "展开 narrant 的所有子卡片", exact: true }));
+  expect(within(graph).getByRole("button", { name: "收起 storage", exact: true })).toBeInTheDocument();
+  expect(within(graph).getByRole("button", { name: /pub async fn run_review/ })).toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: "折叠 narrant 的所有子卡片", exact: true }));
+  expect(within(graph).getByRole("button", { name: "收起 narrant", exact: true })).toHaveAttribute("aria-expanded", "true");
+  expect(within(graph).queryByRole("button", { name: "Review", exact: true })).not.toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: "展开 review", exact: true }));
+  expect(within(graph).getByRole("button", { name: "展开 Review", exact: true })).toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: "展开 narrant 的所有子卡片", exact: true }));
+  expect(within(graph).getByRole("button", { name: /pub async fn run_review/ })).toBeInTheDocument();
+  expect(within(graph).queryByRole("button", { name: /pub fn restore\(/ })).not.toBeInTheDocument();
+  expect(screen.getByTestId("rendered-graph")).toBe(graph);
+  expect(layoutCalls).toHaveBeenCalledTimes(1);
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
+});
+
+it("expands folded directories and all nested files and types, including with rearrangement enabled", async () => {
+  const current = binding(structureFileModulesFixture());
+  render(<StructureChangesView binding={current} dark={false} />);
+  const graph = await screen.findByTestId("rendered-graph");
+  await toggleRearrangement();
+  fireEvent.click(within(graph).getByRole("button", { name: "折叠 src 的所有子卡片", exact: true }));
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  expect(within(graph).getByRole("button", { name: "收起 src", exact: true })).toBeInTheDocument();
+  expect(within(graph).getByRole("button", { name: "展开 src/startup.ts", exact: true })).toBeInTheDocument();
+  fireEvent.click(within(graph).getByRole("button", { name: "展开 src/review/initialization", exact: true }));
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  expect(within(graph).getByRole("button", { name: "展开 src/review/initialization/prepare-review-workspace-for-selected-repository.ts", exact: true })).toBeInTheDocument();
+
+  fireEvent.click(within(graph).getByRole("button", { name: "收起 src", exact: true }));
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  fireEvent.click(within(graph).getByRole("button", { name: "展开 src 的所有子卡片", exact: true }));
+  await waitFor(() => expect(screen.queryByText("正在排列结构图")).not.toBeInTheDocument());
+  expect(within(graph).getByRole("button", { name: "root: string · 新增", exact: true })).toBeInTheDocument();
+  expect(within(graph).getByRole("button", { name: "收起 src/review/initialization/prepare-review-workspace-for-selected-repository.ts", exact: true })).toBeInTheDocument();
+  expect(within(screen.getByRole("complementary", { name: "结构详情" })).getByRole("heading", { name: "src", exact: true })).toBeInTheDocument();
+  expect(current.retry).not.toHaveBeenCalled();
+  expect(current.setOptions).not.toHaveBeenCalled();
 });
 
 it("optionally rearranges folded containers and restores the expanded layout without reanalysis", async () => {

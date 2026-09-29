@@ -137,6 +137,21 @@ impl<'a> Collector<'a> {
         })
     }
 
+    /// 参数属性属于最近的已建模类；匿名类不能借用外层类或构造函数的身份。
+    fn parameter_property_owner(&self) -> Option<usize> {
+        let (class, owner) = self
+            .stack
+            .iter()
+            .rev()
+            .find(|(node, _)| matches!(node, AstKind::Class(_)))?;
+        let owner = (*owner)?;
+        self.items[owner]
+            .parts
+            .iter()
+            .any(|part| part.span == class.span())
+            .then_some(owner)
+    }
+
     /// 数据成员只属于命名类型的主体；联合、交叉与括号可包裹别名的对象类型。
     fn named_type_data_member(&self) -> bool {
         let mut ancestors = self.stack.iter().rev().map(|(node, _)| node);
@@ -280,6 +295,12 @@ impl<'a> Visit<'a> for Collector<'a> {
             }
         }
         let inside_function = self.inside_function();
+        let parameter_property_owner = match node {
+            AstKind::FormalParameter(parameter) if parameter.has_modifier() => {
+                self.parameter_property_owner()
+            }
+            _ => None,
+        };
         let shape = match node {
             AstKind::Function(f)
                 if !inside_function
@@ -390,6 +411,18 @@ impl<'a> Visit<'a> for Collector<'a> {
                     ))
                 }
             }
+            AstKind::FormalParameter(parameter) if parameter_property_owner.is_some() => parameter
+                .pattern
+                .get_binding_identifier()
+                .map(|identifier| {
+                    (
+                        Value,
+                        "field",
+                        Some(identifier.name.to_string()),
+                        identifier.span,
+                        parameter.initializer.as_ref().map(|value| value.span()),
+                    )
+                }),
             AstKind::StaticBlock(b) => Some((
                 ExecutionRegion,
                 "static_block",
@@ -479,6 +512,10 @@ impl<'a> Visit<'a> for Collector<'a> {
         };
         if let Some((category, kind, name, selection, body)) = shape {
             let id = self.push(category, kind, name, (node.span(), selection), body, prefix);
+            if let Some(parent) = parameter_property_owner {
+                // 源码范围仍在参数列表中，但包含关系和稳定身份与普通实例字段一致。
+                self.items[id].parent = Some(parent);
+            }
             if let AstKind::Function(f) = node {
                 self.items[id].ambient_function |= f.id.is_some()
                     && (f.declare

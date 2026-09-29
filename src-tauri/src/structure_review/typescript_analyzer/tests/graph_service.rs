@@ -43,6 +43,89 @@ fn named<'a>(graph: &'a CodeGraph, name: &str) -> &'a CodeNode {
         .unwrap()
 }
 
+/// 按所属类定位同名成员，避免把不同类的方法混为同一目标。
+fn member<'a>(graph: &'a CodeGraph, owner: &str, name: &str) -> &'a CodeNode {
+    named(graph, owner)
+        .data()
+        .contains
+        .iter()
+        .map(|id| graph.node(id).unwrap())
+        .find(|node| node.data().name.as_deref() == Some(name))
+        .unwrap()
+}
+
+/// 参数属性进入真实图并承载类型与默认值关系，普通参数不被提升为字段。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_parameter_properties_keep_field_types_and_default_calls() {
+    use crate::structure_review::code_graph::CodeCategory;
+    let directory = fixture(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"target":"ES2022","module":"Preserve","moduleResolution":"Bundler","types":[]},"include":["*.ts"]}"#,
+        ),
+        (
+            "model.ts",
+            "export class Model {} export function make(): Model { return new Model(); }",
+        ),
+        (
+            "main.ts",
+            r#"import {Model, make} from './model';
+            export class Client {
+                constructor(private readonly model: Model = make(), public optional?: Model,
+                    ordinary?: Model, readonly callback: () => Model = () => make()) {}
+            }
+            export function run(client: Client) { client.callback(); }
+        "#,
+        ),
+    ]);
+    let graph = analyze(directory.path(), &["main.ts", "model.ts"]);
+    let class = named(&graph, "Client").data();
+    let constructor = named(&graph, "constructor").data();
+    for name in ["model", "optional", "callback"] {
+        let field = named(&graph, name);
+        assert_eq!(field.category(), CodeCategory::Value);
+        assert_eq!(field.data().native_kind, "field");
+        assert!(class.contains.contains(&field.data().id));
+        assert!(!constructor.contains.contains(&field.data().id));
+        assert!(
+            field.data().references.iter().any(|reference| {
+                reference.semantic == "code.type_use"
+                    && reference.target
+                        == ReferenceTarget::Node(named(&graph, "Model").data().id.clone())
+            }),
+            "{name}: {:?}",
+            field.data().references
+        );
+    }
+    for name in ["model", "callback"] {
+        assert!(named(&graph, name)
+            .data()
+            .references
+            .iter()
+            .any(|reference| {
+                reference.semantic == "code.calls"
+                    && reference.target
+                        == ReferenceTarget::Node(named(&graph, "make").data().id.clone())
+            }));
+    }
+    assert!(nodes(&graph)
+        .iter()
+        .all(|node| node.data().name.as_deref() != Some("ordinary")));
+    assert!(constructor.references.is_empty());
+    assert!(
+        named(&graph, "run")
+            .data()
+            .references
+            .iter()
+            .all(|reference| {
+                reference.target
+                    != ReferenceTarget::Node(named(&graph, "callback").data().id.clone())
+            }),
+        "可被实参覆盖的默认函数不提供确定的调用目标"
+    );
+}
+
 /// 资源与缺失模块的纯导入不生成图对象，也不阻断有效代码的调用图。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
@@ -726,10 +809,7 @@ fn graph_unicode_default_namespace_alias_and_union_evidence() {
     }
     assert!(
         refs.iter().any(|r| r.semantic == "code.calls"
-            && r.target
-                == ReferenceTarget::Unresolved {
-                    name: "method".into()
-                }),
+            && r.target == ReferenceTarget::Node(member(graph, "A", "method").data().id.clone())),
         "{refs:?}"
     );
     assert!(!nodes(graph)
@@ -787,16 +867,66 @@ fn graph_repository_ambient_functions_and_nonambient_signature_boundary() {
     }
 }
 
-/// 同名方法和箭头字段是不同运行时候选，联合顺序不能制造确定调用。
+/// 类内异步方法和回调内的成员调用都应解析到实际方法声明。
 #[test]
 #[ignore = "需要固定 TypeScript 工具"]
-fn graph_heterogeneous_union_members_preserve_ambiguity() {
+fn graph_async_member_calls_keep_concrete_targets() {
     let directory = fixture(&[
-        ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["*.ts"]}"#),
-        ("main.ts", "class A { method() {} } class B { method = () => {}; } function forward(value: A | B) { value.method(); } function reversed(value: B | A) { value.method(); } class method {} class Producer { method(): method { return new method(); } } function single(value: Producer) { value.method(); }"),
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["*.ts"]}"#,
+        ),
+        (
+            "main.ts",
+            r#"
+            class TickHttpClient {
+                public async request() { return this.sendOnce(); }
+                public requestTick() { return this.request(); }
+                public async retry() { return [1].map(() => this.sendOnce()); }
+                private async sendOnce(): Promise<number> { return this.parseResult(); }
+                private parseResult() { return 1; }
+            }
+            class Other { public async request() { return 2; } }
+            function unionRequest(client: TickHttpClient | Other) { return client.request(); }
+        "#,
+        ),
     ]);
     let graph = analyze(directory.path(), &["main.ts"]);
-    for name in ["forward", "reversed"] {
+    let method = |name| member(&graph, "TickHttpClient", name);
+    for (caller, callee) in [
+        ("request", "sendOnce"),
+        ("requestTick", "request"),
+        ("retry", "sendOnce"),
+        ("sendOnce", "parseResult"),
+    ] {
+        let calls = &method(caller).data().references;
+        assert!(
+            calls
+                .iter()
+                .any(|reference| reference.semantic == "code.calls"
+                    && reference.target == ReferenceTarget::Node(method(callee).data().id.clone())),
+            "{caller} -> {callee}: {calls:?}"
+        );
+    }
+    let calls = &named(&graph, "unionRequest").data().references;
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(
+        calls[0].target,
+        ReferenceTarget::Node(method("request").data().id.clone())
+    );
+}
+
+/// 联合成员调用保留 definition 导航到的方法或箭头字段，不补齐其他运行时实现。
+#[test]
+#[ignore = "需要固定 TypeScript 工具"]
+fn graph_heterogeneous_union_members_follow_definition_navigation() {
+    let directory = fixture(&[
+        ("tsconfig.json", r#"{"compilerOptions":{"target":"ES2022","types":[]},"include":["*.ts"]}"#),
+        ("main.ts", "class A { method() {} } class B { method = () => {}; } function forward(value: A | B) { value.method(); } function reversed(value: B | A) { value.method(); } function field(value: B) { value.method(); } class method {} class Producer { method(): method { return new method(); } } function single(value: Producer) { value.method(); }"),
+    ]);
+    let graph = analyze(directory.path(), &["main.ts"]);
+    // 固定 TypeScript 服务将两种联合写法都导航到 A；直接访问 B 时仍定位其箭头字段。
+    for (name, owner) in [("forward", "A"), ("reversed", "A"), ("field", "B")] {
         let calls = named(&graph, name)
             .data()
             .references
@@ -806,9 +936,7 @@ fn graph_heterogeneous_union_members_preserve_ambiguity() {
         assert_eq!(calls.len(), 1, "{name}: {calls:?}");
         assert_eq!(
             calls[0].target,
-            ReferenceTarget::Unresolved {
-                name: "method".into()
-            },
+            ReferenceTarget::Node(member(&graph, owner, "method").data().id.clone()),
             "{name}: {calls:?}"
         );
     }

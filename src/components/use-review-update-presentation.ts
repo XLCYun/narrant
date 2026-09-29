@@ -11,7 +11,7 @@ export type ReviewUpdatePresentation = {
   run(): void;
 };
 
-/** 仅把用户本轮检查接续为刷新，后台检查仍只报告更新状态。 */
+/** 将用户本轮手动检查接续为刷新，并隔离已离开的 Review 请求。 */
 export function useReviewUpdatePresentation(
   review: Pick<ReviewReaderBinding, "snapshot" | "update" | "transition" | "checkForUpdate" | "refresh">,
 ): ReviewUpdatePresentation {
