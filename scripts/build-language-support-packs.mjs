@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { create as createTar } from 'tar';
+import { verifyPythonRuntime } from './python-language-support-smoke.mjs';
 import { validateArchive } from './setup-typescript-analyzer.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -12,7 +13,7 @@ const targets = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'];
 
 /** 产物键只由受支持的包、版本和平台组成。 */
 function validateIdentity({ id, version, target }) {
-  if (!['rust', 'typescript-javascript'].includes(id) || !/^\d+\.\d+\.\d+$/.test(version) || !targets.includes(target)) throw new Error('Invalid language support pack identity');
+  if (!['rust', 'typescript-javascript', 'python'].includes(id) || !/^\d+\.\d+\.\d+$/.test(version) || !targets.includes(target)) throw new Error('Invalid language support pack identity');
 }
 
 /** 将准备完成的普通文件目录打包，清单只记录实际产物的完整身份和摘要。 */
@@ -89,6 +90,22 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
         if (!response.ok) throw new Error(`Unable to fetch pinned rust-analyzer ${name}`);
         await fs.writeFile(path.join(payload, 'licenses', name), Buffer.from(await response.arrayBuffer()));
       }
+    } else if (id === 'python') {
+      const upstreamRoot = `ty-${target}`;
+      const filename = `${upstreamRoot}.${windows ? 'zip' : 'tar.gz'}`;
+      const bytes = await download(`https://github.com/astral-sh/ty/releases/download/${definition.ty}/${filename}`, `sha256-${definition.upstreamSha256[target]}`, cache);
+      const archive = path.join(temporary, filename);
+      await fs.writeFile(archive, bytes);
+      const binary = `ty${windows ? '.exe' : ''}`;
+      const archiveBinary = windows ? binary : `${upstreamRoot}/${binary}`;
+      execFileSync('tar', ['-xf', archive, '-C', temporary, archiveBinary]);
+      await fs.copyFile(path.join(temporary, archiveBinary), path.join(payload, 'bin', binary));
+      await fs.mkdir(path.join(payload, 'control'));
+      await fs.writeFile(path.join(payload, 'control/ty.toml'), '');
+      // 标准库直接封装在固定 ty 二进制中；来源与许可证仍独立记录。
+      for (const license of definition.licenses) {
+        await fs.writeFile(path.join(payload, 'licenses', license.name), await download(license.url, `sha256-${license.sha256}`, cache));
+      }
     } else {
       const nodeRoot = `node-v${definition.node}-${windows ? 'win-x64' : 'darwin-arm64'}`;
       const nodeArchive = `${nodeRoot}.${windows ? 'zip' : 'tar.gz'}`;
@@ -116,9 +133,14 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
     const destination = await packageDirectory(identity, payload, output);
     // 在目标宿主上执行实际工具入口；跨平台产物必须由对应 CI runner 再验证。
     if ((windows && process.platform === 'win32' && process.arch === 'x64') || (!windows && process.platform === 'darwin' && process.arch === 'arm64')) {
-      const executable = path.join(payload, 'bin', id === 'rust' ? `rust-analyzer${windows ? '.exe' : ''}` : `node${windows ? '.exe' : ''}`);
+      const executable = path.join(payload, 'bin', `${({ rust: 'rust-analyzer', python: 'ty', 'typescript-javascript': 'node' })[id]}${windows ? '.exe' : ''}`);
       const runOptions = { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' } };
-      console.log(execFileSync(executable, ['--version'], runOptions).trim());
+      const version = execFileSync(executable, ['--version'], runOptions).trim();
+      console.log(version);
+      if (id === 'python') {
+        if (!version.startsWith(`ty ${definition.ty} `) && version !== `ty ${definition.ty}`) throw new Error('Python pack ty version mismatch');
+        await verifyPythonRuntime(executable, path.join(payload, 'control/ty.toml'));
+      }
       if (id === 'typescript-javascript') {
         console.log(execFileSync(executable, [path.join(payload, 'runtime/typescript-language-server/lib/cli.mjs'), '--version'], runOptions).trim());
         execFileSync(executable, ['-e', `const ts = require(process.argv[1]); if (!ts.transpileModule('const n: number = 1', {}).outputText.includes('1')) process.exit(1)`, path.join(payload, 'runtime/typescript/lib/typescript.js')], runOptions);
@@ -136,7 +158,7 @@ async function main() {
   const output = option('--output') ?? path.join(repository, 'dist/language-support-packs');
   const selectedTargets = args.includes('--all') ? targets : [option('--target') ?? (process.platform === 'win32' ? targets[1] : targets[0])];
   if (args.includes('--native') && selectedTargets.some(target => target !== ({ 'darwin-arm64': targets[0], 'win32-x64': targets[1] })[`${process.platform}-${process.arch}`])) throw new Error('Native verification requires a matching OS and CPU');
-  const ids = option('--id') ? [option('--id')] : ['rust', 'typescript-javascript'];
+  const ids = option('--id') ? [option('--id')] : ['rust', 'typescript-javascript', 'python'];
   for (const target of selectedTargets) for (const id of ids) await buildPack({ id, target, output });
 }
 

@@ -514,3 +514,7 @@ fn display(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 #[path = "tests/service.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/python.rs"]
+mod python_tests;

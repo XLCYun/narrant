@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// 应用声明的两个独立语言能力包，TS 与 JS 共用一套工具。
+/// 应用声明的独立语言能力包，TS 与 JS 共用一套工具。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackId {
     Rust,
     #[serde(rename = "typescript-javascript")]
     TypeScriptJavascript,
+    Python,
 }
 
 impl PackId {
@@ -16,6 +17,7 @@ impl PackId {
         match self {
             Self::Rust => "rust",
             Self::TypeScriptJavascript => "typescript-javascript",
+            Self::Python => "python",
         }
     }
 
@@ -28,6 +30,13 @@ impl PackId {
             } else {
                 "bin/rust-analyzer"
             }],
+            Self::Python => vec![
+                if windows { "bin/ty.exe" } else { "bin/ty" },
+                "control/ty.toml",
+                "licenses/ty-LICENSE",
+                "licenses/ruff-LICENSE",
+                "licenses/typeshed-LICENSE",
+            ],
             Self::TypeScriptJavascript => vec![
                 if windows { "bin/node.exe" } else { "bin/node" },
                 "runtime/typescript/lib/tsserver.js",

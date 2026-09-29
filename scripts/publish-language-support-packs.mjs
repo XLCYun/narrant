@@ -38,7 +38,7 @@ export async function publishArtifacts(artifacts, storage) {
   }
 }
 
-/** 仅发布受保护流程交付的四个产物，使用独立前缀和短期 STS 凭据。 */
+/** 仅发布受保护流程交付的全部固定产物，使用独立前缀和短期 STS 凭据。 */
 async function main() {
   const artifacts = await readArtifacts(path.resolve(process.argv[2] ?? 'dist/language-support-packs'));
   const storage = createOssutilStorage({ prefix: PACK_PREFIX, bucket: process.env.OSS_BUCKET, region: process.env.OSS_REGION,

@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "@/lib/i18n";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
-import { structureClassDiagramFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
+import { structurePythonFixture, structureClassDiagramFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
 import type { ObjectData, ObjectNode, StructureEdge, StructureLayout } from "@/structure-review/graph-presentation";
 import * as graphPresentation from "@/structure-review/graph-presentation";
 import type { StructureBinding, StructureComparison } from "@/structure-review/types";
@@ -68,7 +68,7 @@ it("uses the current request's authoritative packs and preserves unrelated analy
   const packs: LanguageSupportBinding = {
     snapshot: { sequence: 1, requirements: { current: ["rust"] }, packs: [
       { id: "rust", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "downloading", downloadedBytes: 10, totalBytes: 100, installedBytes: 0, inUse: false, error: null },
-      { id: "typescript-javascript", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "failed", downloadedBytes: 0, totalBytes: null, installedBytes: 0, inUse: false, error: "another review download failed" },
+      { id: "python", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "failed", downloadedBytes: 0, totalBytes: null, installedBytes: 0, inUse: false, error: "another review download failed" },
     ] },
     queryError: false, actionError: undefined, pending: undefined, structureAdapter: { analyze: vi.fn() },
     reload: vi.fn(), retry: vi.fn(), remove: vi.fn(),
@@ -80,7 +80,8 @@ it("uses the current request's authoritative packs and preserves unrelated analy
   view.rerender(<LanguageSupportContext.Provider value={packs}><StructureChangesView binding={{ ...current, state: { kind: "failed", detail: "项目缺少 rust-src" } }} dark={false} /></LanguageSupportContext.Provider>);
   expect(screen.getByRole("alert")).toHaveTextContent("项目缺少 rust-src");
   expect(screen.queryByText("another review download failed")).not.toBeInTheDocument();
-  view.rerender(<LanguageSupportContext.Provider value={packs}><StructureChangesView binding={{ ...current, state: { kind: "failed", detail: "支持包准备失败", supportPacks: ["typescript-javascript"] } }} dark={false} /></LanguageSupportContext.Provider>);
+  view.rerender(<LanguageSupportContext.Provider value={packs}><StructureChangesView binding={{ ...current, state: { kind: "failed", detail: "支持包准备失败", supportPacks: ["python"] } }} dark={false} /></LanguageSupportContext.Provider>);
+  expect(screen.getByRole("article", { name: "Python 1.0.0" })).toBeInTheDocument();
   expect(screen.getByText("another review download failed")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "重试" }));
   expect(current.retry).toHaveBeenCalledOnce();
@@ -617,4 +618,22 @@ it("defaults to compact container relationships and switches detail without movi
   expect(compactCalls).not.toHaveBeenCalled();
   expect(current.retry).not.toHaveBeenCalled();
   expect(current.setOptions).not.toHaveBeenCalled();
+});
+
+it("shows Python members and deleted stubs with Python source while hiding uncertain and external targets", async () => {
+  const comparison = structurePythonFixture();
+  render(<StructureChangesView binding={binding(comparison)} dark={false} />);
+  fireEvent.click(screen.getByRole("combobox", { name: "结构图语言" }));
+  const option = await screen.findByRole("option", { name: "Python" });
+  fireEvent.pointerDown(option); fireEvent.pointerUp(option); fireEvent.click(option);
+  const method = await screen.findByRole("button", { name: /def prepare_review_workspace_for_selected_repository.*自身修改/ });
+  fireEvent.click(method);
+  expect(screen.getByTestId("source-diff")).toHaveAttribute("data-modified-language", "python");
+  expect(screen.getByTestId("modified-source").textContent).toBe(comparison.after.nodes.find(node => node.id === "py-prepare")!.source);
+  await waitFor(() => expect(screen.getAllByTestId("visible-relation").map(edge => edge.textContent)).toEqual(["py-prepare → py-normalize · + code.calls"]));
+  expect(screen.getByRole("complementary", { name: "结构详情" })).not.toHaveTextContent("dynamic.resolve");
+  fireEvent.click(screen.getByRole("button", { name: /def legacy_review.*删除/ }));
+  expect(screen.getByTestId("source-diff")).toHaveAttribute("data-original-language", "python");
+  expect(screen.getByTestId("original-source")).toHaveTextContent("def legacy_review() -> None: ...");
+  expect(screen.getByTestId("modified-source")).toBeEmptyDOMElement();
 });

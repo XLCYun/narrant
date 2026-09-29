@@ -55,7 +55,7 @@ export function useStructureReview(adapter: StructureReviewAdapter | undefined, 
       entry.state = typeof reason === "object" && reason !== null && "code" in reason && reason.code === "cancelled"
         ? { kind: "cancelled" }
         : { kind: "failed", supportPacks: typeof reason === "object" && reason !== null && "supportPacks" in reason && Array.isArray(reason.supportPacks)
-          ? reason.supportPacks.filter((id): id is PackId => id === "rust" || id === "typescript-javascript") : undefined, detail: typeof reason === "object" && reason !== null && "detail" in reason
+          ? reason.supportPacks.filter((id): id is PackId => id === "rust" || id === "typescript-javascript" || id === "python") : undefined, detail: typeof reason === "object" && reason !== null && "detail" in reason
           ? String(reason.detail) : String(reason) };
       publish();
     });

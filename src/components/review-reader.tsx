@@ -85,7 +85,7 @@ function editorLanguage(path: string) {
   const languages: Record<string, string> = {
     js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript", ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
     md: "markdown", json: "json", css: "css", html: "html", rs: "rust",
-    py: "python", go: "go", java: "java", yml: "yaml", yaml: "yaml",
+    py: "python", pyi: "python", go: "go", java: "java", yml: "yaml", yaml: "yaml",
     c: "c", cpp: "cpp", h: "cpp", cs: "csharp", sh: "shell",
     sql: "sql", php: "php", rb: "ruby", kt: "kotlin", xml: "xml",
   };

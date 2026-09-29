@@ -70,7 +70,7 @@ impl Storage {
     /// 发现当前平台的历史版本，拒绝链接目录及任意目录名。
     pub fn keys(&self, area: &str) -> Result<Vec<PackKey>, String> {
         let mut keys = vec![];
-        for id in [PackId::Rust, PackId::TypeScriptJavascript] {
+        for id in [PackId::Rust, PackId::TypeScriptJavascript, PackId::Python] {
             let base = self.root.join(area).join(id.slug());
             if !base.exists() {
                 continue;
@@ -106,6 +106,13 @@ impl Storage {
             let metadata = fs::symlink_metadata(root.join(&file.path)).map_err(error)?;
             if !metadata.file_type().is_file() || metadata.len() != file.size {
                 return Err("已安装语言支持包文件损坏，请重试安装".into());
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if file.executable && metadata.permissions().mode() & 0o111 == 0 {
+                    return Err("语言支持包工具不可执行，请重试安装".into());
+                }
             }
             let canonical = root.join(&file.path).canonicalize().map_err(error)?;
             if !canonical.starts_with(root.canonicalize().map_err(error)?) {
@@ -237,7 +244,7 @@ pub(super) fn validate_manifest(
     for file in &manifest.files {
         size = size.checked_add(file.size).ok_or("语言支持包大小越界")?;
         if !safe_path(&file.path)
-            || !["bin/", "runtime/", "licenses/"]
+            || !["bin/", "runtime/", "licenses/", "control/"]
                 .iter()
                 .any(|p| file.path.starts_with(p))
             || !valid_hash(&file.sha256)
@@ -255,6 +262,18 @@ pub(super) fn validate_manifest(
         .any(|path| !names.contains(path))
     {
         return Err("语言支持包缺少必需入口".into());
+    }
+    if manifest
+        .files
+        .iter()
+        .any(|file| file.path.starts_with("bin/") && !file.executable)
+        || (key.id == PackId::Python
+            && manifest
+                .files
+                .iter()
+                .any(|file| file.path == "control/ty.toml" && (file.size != 0 || file.executable)))
+    {
+        return Err("语言支持包工具权限或固定控制文件无效".into());
     }
     Ok(())
 }

@@ -29,6 +29,10 @@ pub(crate) type AnalyzeGraph = dyn Fn(&AnalysisInput, CancellationCheck, RustDep
 pub(crate) type AnalyzeTypeScript =
     dyn Fn(&AnalysisInput, CancellationCheck) -> Result<CodeGraph, AnalysisError> + Send + Sync;
 
+/// Python 在同侧原始工作区内按配置划分受控语义项目。
+pub(crate) type AnalyzePython =
+    dyn Fn(&AnalysisInput, CancellationCheck) -> Result<CodeGraph, AnalysisError> + Send + Sync;
+
 /// 面向应用的失败类别，取消与能力缺失不会显示为无结构变化。
 #[derive(Debug, Serialize)]
 pub(crate) struct StructureReviewError {
@@ -54,6 +58,7 @@ impl StructureReviewError {
 struct LanguageAnalyzers {
     rust: Arc<AnalyzeGraph>,
     typescript: Arc<AnalyzeTypeScript>,
+    python: Arc<AnalyzePython>,
 }
 
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
@@ -70,6 +75,7 @@ impl StructureReview {
             analyzers: LanguageAnalyzers {
                 rust: analyze_rust,
                 typescript: Arc::new(|_, _| Err(AnalysisError::new("TypeScript 分析器尚未装配"))),
+                python: Arc::new(|_, _| Err(AnalysisError::new("Python 分析器尚未装配"))),
             },
         }
     }
@@ -77,6 +83,12 @@ impl StructureReview {
     /// 装配共享的 TypeScript/JavaScript 分析入口；非空语言组才会调用它。
     pub fn with_typescript(mut self, analyze_typescript: Arc<AnalyzeTypeScript>) -> Self {
         self.analyzers.typescript = analyze_typescript;
+        self
+    }
+
+    /// 装配 Python 分析入口；测试过滤在适配器内保持一致。
+    pub fn with_python(mut self, analyze_python: Arc<AnalyzePython>) -> Self {
+        self.analyzers.python = analyze_python;
         self
     }
 
@@ -152,6 +164,11 @@ impl StructureReview {
                         {
                             ids.insert(PackId::TypeScriptJavascript);
                         }
+                        Some(LanguageGroup::Python)
+                            if super::python_analyzer::needs_tools(path, options) =>
+                        {
+                            ids.insert(PackId::Python);
+                        }
                         _ => {}
                     }
                 }
@@ -201,6 +218,18 @@ impl StructureReview {
                     root.join("runtime"),
                 );
                 analyzers.typescript = Arc::new(move |input, cancelled| {
+                    analyzer.clone().with_cancellation(cancelled).analyze(input)
+                });
+            }
+            if let Some(root) = lease.path(PackId::Python) {
+                let analyzer = super::python_analyzer::PythonLanguageAnalyzer::new(root.join(
+                    if cfg!(windows) {
+                        "bin/ty.exe"
+                    } else {
+                        "bin/ty"
+                    },
+                ));
+                analyzers.python = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
@@ -399,8 +428,13 @@ fn analyze_side(
         files: files.typescript,
         options,
     });
+    let python_input = (!files.python.is_empty()).then(|| AnalysisInput {
+        repository_root: repository.to_owned(),
+        files: files.python,
+        options,
+    });
     let errors = Mutex::new(WorkerErrors::default());
-    let (rust, typescript) = std::thread::scope(|threads| {
+    let (rust, typescript, python) = std::thread::scope(|threads| {
         let rust = rust_input.map(|input| {
             let errors = &errors;
             threads.spawn(move || {
@@ -410,22 +444,33 @@ fn analyze_side(
                 })
             })
         });
-        let typescript = typescript_input.and_then(|input| {
+        let typescript = typescript_input.map(|input| {
+            let errors = &errors;
+            threads.spawn(move || {
+                run_worker(stop, errors, || {
+                    (analyzers.typescript)(&input, cancelled.clone()).map_err(analysis_error)
+                })
+            })
+        });
+        let python = python_input.and_then(|input| {
             run_worker(stop, &errors, || {
-                (analyzers.typescript)(&input, cancelled.clone()).map_err(analysis_error)
+                (analyzers.python)(&input, cancelled.clone()).map_err(analysis_error)
             })
         });
         let rust = rust.and_then(|worker| {
             run_worker(stop, &errors, || worker.join().map_err(panic_error)).flatten()
         });
-        (rust, typescript)
+        let typescript = typescript.and_then(|worker| {
+            run_worker(stop, &errors, || worker.join().map_err(panic_error)).flatten()
+        });
+        (rust, typescript, python)
     });
     errors
         .into_inner()
         .expect("语言 worker 不在错误锁内执行分析")
         .finish()?;
     let mut graph = empty_graph()?;
-    for next in [rust, typescript].into_iter().flatten() {
+    for next in [rust, typescript, python].into_iter().flatten() {
         graph = graph
             .merge(next)
             .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
@@ -451,17 +496,18 @@ fn empty_graph() -> Result<CodeGraph, StructureReviewError> {
         .map_err(|error| StructureReviewError::new("analysis-failed", error.message))
 }
 
-/// 一侧的文件按 Rust 和共享 TS/JS 语义项目分组。
+/// 一侧文件按 Rust、共享 TS/JS 与 Python 分组，共用原始 Git 工作区。
 #[derive(Default)]
 struct SideFiles {
     rust: Vec<PathBuf>,
     typescript: Vec<PathBuf>,
+    python: Vec<PathBuf>,
 }
 
 impl SideFiles {
     /// 没有支持文件时跳过 checkout 与全部语言工具。
     fn is_empty(&self) -> bool {
-        self.rust.is_empty() && self.typescript.is_empty()
+        self.rust.is_empty() && self.typescript.is_empty() && self.python.is_empty()
     }
 
     /// 按路径对应的语言组加入输入，未知扩展保持在 coverage 中。
@@ -469,6 +515,7 @@ impl SideFiles {
         match language {
             Some(LanguageGroup::Rust) => self.rust.push(path),
             Some(LanguageGroup::TypeScript) => self.typescript.push(path),
+            Some(LanguageGroup::Python) => self.python.push(path),
             None => {}
         }
     }
@@ -479,14 +526,17 @@ impl SideFiles {
         self.rust.dedup();
         self.typescript.sort();
         self.typescript.dedup();
+        self.python.sort();
+        self.python.dedup();
     }
 }
 
-/// 应用层只需要两个明确语言组，不引入通用插件注册表。
+/// 应用层只需要三个明确语言组，不引入通用插件注册表。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LanguageGroup {
     Rust,
     TypeScript,
+    Python,
 }
 
 /// 分侧选择支持的源码文件，并保留所有改动文件的覆盖说明。
@@ -539,6 +589,7 @@ fn language_group(
     }
     match std::path::Path::new(path).extension()?.to_str()? {
         "rs" => Some(LanguageGroup::Rust),
+        "py" | "pyi" => Some(LanguageGroup::Python),
         "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => {
             Some(LanguageGroup::TypeScript)
         }

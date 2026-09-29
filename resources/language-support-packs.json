@@ -39,6 +39,32 @@
           "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
         }
       ]
+    },
+    "python": {
+      "version": "1.0.0",
+      "ty": "0.0.84",
+      "sourceCommit": "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a",
+      "upstreamSha256": {
+        "aarch64-apple-darwin": "c65c09f27bcef726c0b043dcee8d0f1e578bd1936799e5bc447235cbc3e19d91",
+        "x86_64-pc-windows-msvc": "e4b3c7cd30ff8b4ee4c2a62621f293341ad3c89fb3e7c6e4d2686150a4dbcf08"
+      },
+      "licenses": [
+        {
+          "name": "ty-LICENSE",
+          "url": "https://raw.githubusercontent.com/astral-sh/ty/0.0.84/LICENSE",
+          "sha256": "860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c"
+        },
+        {
+          "name": "ruff-LICENSE",
+          "url": "https://raw.githubusercontent.com/astral-sh/ruff/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/LICENSE",
+          "sha256": "2597d854122b77ddc71971564ca2350a37608575ce324adc5650a2b2051c8f18"
+        },
+        {
+          "name": "typeshed-LICENSE",
+          "url": "https://raw.githubusercontent.com/astral-sh/ruff/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/crates/ty_vendored/vendor/typeshed/LICENSE",
+          "sha256": "295f8538c94ae5c3043301cf7cff1c852dab6a786a8ddee471e061b40d5ecabe"
+        }
+      ]
     }
   }
 }

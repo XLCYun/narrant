@@ -124,6 +124,15 @@ pub fn run() {
                     .with_cancellation(cancelled)
                     .analyze(input)
                 }))
+                .with_python(Arc::new(|input, cancelled| {
+                    use crate::structure_review::code_graph::LanguageAnalyzer;
+                    // 全部测试文件被过滤时，无需下载或启动 Python 支持包。
+                    crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
+                        std::path::PathBuf::new(),
+                    )
+                    .with_cancellation(cancelled)
+                    .analyze(input)
+                }))
                 .with_support_packs(support.clone()),
             );
             app.manage(support);

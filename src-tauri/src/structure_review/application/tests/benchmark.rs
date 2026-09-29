@@ -67,6 +67,7 @@ async fn sequential(
     let analyzers = LanguageAnalyzers {
         rust: analyze,
         typescript: analyze_typescript,
+        python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
     };
     let operation = OperationContext::background();
     let review_id = fixture.presentation.review_id.clone();

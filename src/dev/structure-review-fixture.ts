@@ -352,3 +352,38 @@ export function structureCrateRootsFixture(): StructureComparison {
     ],
   };
 }
+
+/** Python 的类、字段、访问器、删除声明与长名称，用于真实图形和源码组件验收。 */
+export function structurePythonFixture(): StructureComparison {
+  const comparison = structureMixedLanguagesFixture();
+  /** 使用图契约的实际 language 与成员归属，保留未知和标准库关系的隐藏行为。 */
+  const node = (id: string, category: CodeNode["category"], extra: Partial<CodeNode> = {}): CodeNode => ({
+    id, category, language: "python", nativeKind: category === "container" ? "file" : category === "type" ? "class" : "function",
+    name: id, signature: null, code: null, source: null, contains: [], references: [], extensions: {}, ...extra,
+  });
+  const call: CodeReference = { semantic: "code.calls", target: { kind: "node", id: "py-normalize" } };
+  for (const side of ["before", "after"] as const) {
+    const changed = side === "after";
+    comparison[side].root.push("py-file");
+    comparison[side].nodes.push(
+      node("py-file", "container", { name: "services/review/prepare_review_workspace_for_selected_repository.py", contains: ["py-class", "py-normalize", "py-body"] }),
+      node("py-class", "type", { name: "ReviewWorkspace", signature: "class ReviewWorkspace:", contains: ["py-field", "py-getter", "py-prepare"], source: "class ReviewWorkspace:\n    name: str\n\n    def prepare(self):\n        return normalize(self.name)\n" }),
+      node("py-field", "value", { nativeKind: "field", name: "name", signature: "name: str", source: "    name: str\n", references: [{ semantic: "code.member_of", target: { kind: "node", id: "py-class" } }] }),
+      node("py-getter", "callable", { nativeKind: "getter", name: "title", signature: "@property\ndef title(self) -> str:", source: "    @property\n    def title(self) -> str:\n        return self.name\n" }),
+      node("py-prepare", "callable", { nativeKind: "method", name: "prepare_review_workspace_for_selected_repository", signature: "def prepare_review_workspace_for_selected_repository(self, repository: RepositoryConfiguration) -> ReviewWorkspace:", code: changed ? "return normalize(self.name).strip()" : "return self.name", source: `    def prepare_review_workspace_for_selected_repository(\n        self, repository: RepositoryConfiguration,\n    ) -> ReviewWorkspace:\n        """保留中文与 emoji 🐍 的原始源码。"""\n        return ${changed ? "normalize(self.name).strip()" : "self.name"}\n`, references: changed ? [call, { semantic: "code.calls", target: { kind: "unresolved", name: "dynamic.resolve" } }, { semantic: "code.calls", target: { kind: "external", symbol: "python:stdlib:len" } }] : [] }),
+      node("py-normalize", "callable", { name: "normalize", signature: "def normalize(value: str) -> str:", source: "def normalize(value: str) -> str:\n    return value.casefold()\n" }),
+      node("py-body", "executionRegion", { nativeKind: "module_body", name: "模块执行", source: "from pathlib import Path\n", code: "from pathlib import Path" }),
+    );
+    comparison[side].externalSymbols["python:stdlib:len"] = { name: "len", scope: "dependency" };
+  }
+  const removed = node("py-stub-removed", "callable", { name: "legacy_review", signature: "def legacy_review() -> None:", source: "def legacy_review() -> None: ...\n" });
+  comparison.before.root.push("py-stub");
+  comparison.before.nodes.push(node("py-stub", "container", { name: "services/review/legacy.pyi", contains: [removed.id] }), removed);
+  comparison.diff.nodes.push(
+    { id: "py-prepare", content: "modified", contains: [], references: [{ kind: "added", value: call }] },
+    { id: "py-stub", content: "removed", contains: [{ kind: "removed", value: removed.id }], references: [] },
+    { id: removed.id, content: "removed", contains: [], references: [] },
+  );
+  comparison.coverage.push({ path: "services/review/prepare_review_workspace_for_selected_repository.py", oldPath: null, before: "analyzed", after: "analyzed" }, { path: "services/review/legacy.pyi", oldPath: null, before: "analyzed", after: "absent" });
+  return comparison;
+}

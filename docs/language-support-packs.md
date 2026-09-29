@@ -6,10 +6,11 @@
 ## 版本和内容
 
 `resources/language-support-packs.json` 同时供 Rust 应用和 Node 打包脚本读取。改变任何文件内容时
-提升对应包版本并保留历史产物，不覆盖同版本。首版两个包均为 `1.0.0`：
+提升对应包版本并保留历史产物，不覆盖同版本。首版三个包均为 `1.0.0`：
 
 | 包 | 内容 | 平台 |
 | --- | --- | --- |
+| Python | ty 0.0.84 原生服务、内置固定 stdlib、空控制配置及 ty/Ruff/typeshed 许可证 | macOS arm64、Windows x64 |
 | Rust | rust-analyzer 2026-09-07，MIT/Apache 许可证 | macOS arm64、Windows x64 |
 | TypeScript / JavaScript | Node 24.18.0、TypeScript 6.0.3、TLS 6.0.0、@types/node 22.20.1、undici-types 6.21.0，随附上游许可证 | 同上 |
 
@@ -26,7 +27,7 @@ Rust 项目仍需要用户已有的 Cargo/rustc；标准库或完整依赖范围
 
 ```sh
 pnpm build:language-packs --all
-# 仅当前目标；--native 会拒绝宿主架构不匹配，执行包内工具和 TS 引擎。
+# 仅当前目标；--native 会拒绝宿主架构不匹配，执行包内工具、TS 引擎及 Python 真实 LSP 查询。
 pnpm build:language-packs --target aarch64-apple-darwin --native
 # 或 --target x86_64-pc-windows-msvc --native
 ```
@@ -44,6 +45,18 @@ NARRANT_LANGUAGE_PACK_FIXTURE="$PWD/.tools/language-support-pack-artifacts" \
   real_installed_ -- --ignored
 ```
 
+Python 不需要用户 Python、venv 或 Node；Ruff parser/AST/codegen 编译进应用，ty 来自独立包。
+输入支持 UTF-8 `.py/.pyi`、Python 3.7–3.14，只分析本侧仓库和固定标准库。详见
+[Python 规格](specs/0023-python-language-analyzer.md)及[实现验收](research/python-implementation-validation.md)。
+
+```sh
+pnpm build:language-packs --id python --native --output .tools/language-support-pack-artifacts
+node scripts/verify-python-analyzer.mjs .tools/language-support-pack-artifacts
+```
+
+验证脚本会从本地产物提取固定 ty，通过仓库 Cargo 包装器依次运行语法/真实语义、真实安装租约、
+混合语言两侧 Review 测试；正常退出后清理临时工具目录。`--version` 不能替代这些验收。
+
 PR 上 `Language support packs` workflow 在两个原生 runner 构建并启动工具，保存完整产物。
 它与应用发布、quality-gate 分开；不要手动触发 quality-gate。
 
@@ -58,7 +71,7 @@ PR 上 `Language support packs` workflow 在两个原生 runner 构建并启动�
    不要扩大现有应用 Stable promotion 角色的权限。通过 bucket/CDN 为该前缀提供公开只读 HTTPS。
 3. 合入 main 后运行 `Language support packs`，勾选 `publish`。该流程先原生构建验证，再进入
    Environment 保护，串行发布；从其他分支触发只允许构建，发布 job 不会运行。
-4. 脚本先校验四份本地产物，再上传归档并回读，最后上传清单并回读；已有字节完全一致则复用，
+4. 脚本先校验三种语言的六份本地产物，再上传归档并回读，最后上传清单并回读；已有字节完全一致则复用，
    不同则失败。最后通过用户实际访问的 HTTPS 地址逐字节验证。此步骤成功后才能发布引用这些版本的应用。
 
 发布信任来自受保护的仓库版本、OIDC 权限和固定 HTTPS 来源；SHA-256 验证下载损坏及清单/归档一致性，
