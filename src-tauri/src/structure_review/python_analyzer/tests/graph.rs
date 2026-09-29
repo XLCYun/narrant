@@ -100,6 +100,72 @@ fn fields_deduplicate_receiver_bindings_without_stealing_method_content() {
     assert_eq!(difference.nodes[0].id, named(&before, "run").data().id);
 }
 
+/// import 与模式捕获会重绑定参数；内层作用域的同名局部变量不会覆盖外层实例。
+#[test]
+fn receiver_fields_follow_lexical_bindings() {
+    let graph = analyze("class Service:\n    def imported(receiver):\n        import sys as receiver\n        receiver.fake_import = 1\n    def imported_from(receiver):\n        from sys import version as receiver\n        receiver.fake_from = 1\n    def captured(receiver, value):\n        match value:\n            case {'x': receiver}: pass\n        receiver.fake_capture = 1\n    def nested(receiver):\n        def inner():\n            receiver = None\n        class Local:\n            receiver = None\n        receiver.good = 1\n    def nonlocal_write(receiver):\n        def inner():\n            nonlocal receiver\n            receiver = None\n        receiver.fake_nonlocal = 1\n");
+    let fields = named(&graph, "Service")
+        .data()
+        .contains
+        .iter()
+        .map(|id| graph.node(id).unwrap())
+        .filter(|node| matches!(node, CodeNode::Value(_)))
+        .map(|node| node.data().name.as_deref().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(fields, ["good"]);
+}
+
+/// 推导式迭代变量和 lambda 局部赋值独立作用域，推导式 walrus 则写入外层。
+#[test]
+fn receiver_fields_distinguish_expression_scopes_and_outer_walrus() {
+    let graph = analyze("class Service:\n    def comprehension(receiver, items):\n        [receiver for receiver in items]\n        {receiver for receiver in items}\n        {receiver: 1 for receiver in items}\n        (receiver for receiver in items)\n        receiver.good_comprehension = 1\n    def callback(receiver):\n        action = lambda: (receiver := None)\n        receiver.good_lambda = 1\n    def outer_walrus(receiver, items):\n        [(receiver := value) for value in items]\n        receiver.fake_outer = 1\n");
+    let fields = named(&graph, "Service")
+        .data()
+        .contains
+        .iter()
+        .map(|id| graph.node(id).unwrap())
+        .filter(|node| matches!(node, CodeNode::Value(_)))
+        .map(|node| node.data().name.as_deref().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(fields, ["good_comprehension", "good_lambda"]);
+}
+
+/// 内部链接按选中的词法路径拥有节点，真实路径仅用于边界核验。
+#[test]
+fn internal_links_preserve_selected_paths_and_distinct_identities() {
+    let server = graph_server();
+    fs::write(server.workspace().join("impl.py"), "def service(): pass\n").unwrap();
+    for alias in ["alias.py", "api.pyi"] {
+        std::os::unix::fs::symlink("impl.py", server.workspace().join(alias)).unwrap();
+    }
+    let analyze = |files: &[&str]| {
+        PythonLanguageAnalyzer::new(server.workspace().join("server"))
+            .analyze(&AnalysisInput {
+                repository_root: server.workspace().into(),
+                files: files.iter().map(PathBuf::from).collect(),
+                options: Default::default(),
+            })
+            .unwrap()
+    };
+    let single = analyze(&["alias.py"]);
+    assert_eq!(single.root().contains.len(), 1);
+    let alias_id = single.root().contains[0].clone();
+    assert_eq!(
+        single.node(&alias_id).unwrap().data().name.as_deref(),
+        Some("alias.py")
+    );
+    let all = analyze(&["alias.py", "impl.py", "api.pyi"]);
+    assert_eq!(all.root().contains.len(), 3);
+    assert!(all.root().contains.contains(&alias_id));
+    assert_eq!(
+        named(&single, "service").data().id,
+        all.node(&named(&single, "service").data().id)
+            .unwrap()
+            .data()
+            .id
+    );
+}
+
 /// 不支持的目标语法须按项目范围拒绝，不能默认为宿主或最新版本解析。
 #[test]
 fn project_requires_python_controls_syntax_before_starting_the_tool() {
@@ -309,6 +375,7 @@ fn invalid_versions_and_encodings_fail_before_startup() {
         ("[environment]\npython-version='3.6'", "def run(): pass"),
         ("[environment]\npython-version='3.15'", "def run(): pass"),
         ("", "# coding: latin-1\ndef run(): pass"),
+        ("", "# coding note; coding: latin-1\ntext = 'é'"),
         ("", "#!/usr/bin/python\r# coding: latin-1\rdef run(): pass"),
     ] {
         let server = graph_server();
@@ -325,6 +392,19 @@ fn invalid_versions_and_encodings_fail_before_startup() {
         );
         assert!(!server.workspace().join("pid").exists());
     }
+}
+
+/// Python 只采用首个有效 cookie，后续行上的编码文字不覆盖已选编码。
+#[test]
+fn first_valid_utf8_cookie_controls_source_decoding() {
+    let graph =
+        analyze("# coding note; coding: utf-8\n# coding: latin-1\ndef text(): return '中文'\n");
+    assert!(named(&graph, "text")
+        .data()
+        .code
+        .as_ref()
+        .unwrap()
+        .contains("中文"));
 }
 
 /// 调用方取消、协议坐标错误、超时与 panic 均先回收进程，再允许调用返回。
@@ -354,15 +434,16 @@ fn failure_and_cancellation_reap_the_python_process() {
         let signal = stop.clone();
         let started_file = pid_file.clone();
         let trigger = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !started_file.exists() && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(5));
             }
             std::thread::sleep(Duration::from_millis(50));
             signal.store(true, Ordering::SeqCst);
+            std::time::Instant::now()
         });
         let analyzer = PythonLanguageAnalyzer::new(server.workspace().join("server"))
-            .with_timeout(Duration::from_secs(1))
+            .with_timeout(Duration::from_secs(5))
             .with_cancellation(Arc::new(move || {
                 if mode == "panic" && pid_file.exists() {
                     panic!("模拟调用方观察器 panic");
@@ -377,14 +458,21 @@ fn failure_and_cancellation_reap_the_python_process() {
                 options: Default::default(),
             })
         }));
-        trigger.join().unwrap();
+        let signalled_at = trigger.join().unwrap();
         if mode == "panic" {
             assert!(result.is_err());
         } else {
             let error = result.unwrap().unwrap_err();
+            if mode == "timeout" {
+                assert!(error.message.contains("超时"), "{mode}: {error:?}");
+            }
             assert_eq!(error.is_cancelled(), mode == "cancel");
         }
-        assert!(started.elapsed() < Duration::from_secs(3), "{mode}");
+        // 新脚本首次加载可能超过一秒；取消后的回收延迟独立于操作系统启动耗时。
+        if mode == "cancel" || mode == "panic" {
+            assert!(signalled_at.elapsed() < Duration::from_secs(3), "{mode}");
+        }
+        assert!(started.elapsed() < Duration::from_secs(8), "{mode}");
         assert!(
             server.workspace().join("pid").exists(),
             "{mode}: 未记录启动 PID"

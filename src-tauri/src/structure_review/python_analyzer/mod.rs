@@ -105,7 +105,7 @@ impl LanguageAnalyzer for PythonLanguageAnalyzer {
                 || (!is_test(relative)
                     && !is_test(actual.strip_prefix(&repository).map_err(failure)?))
             {
-                selected.insert(actual);
+                selected.insert(path);
             }
         }
         let mut groups = BTreeMap::new();
@@ -142,7 +142,7 @@ impl LanguageAnalyzer for PythonLanguageAnalyzer {
                     .client()
                     .open_document(&file_uri(&path).map_err(lsp_failure)?, "python", 1, &source)
                     .map_err(lsp_failure)?;
-                parsed.insert(path.canonicalize().map_err(failure)?, document);
+                parsed.insert(path, document);
             }
             let (documents, symbols) = references::analyze(
                 &mut session,

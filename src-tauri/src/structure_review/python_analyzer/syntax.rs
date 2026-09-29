@@ -38,6 +38,7 @@ pub(super) struct Declaration {
     pub selection: TextRange,
     pub id: NodeId,
     pub eligible: bool,
+    pub instance_field: bool,
 }
 
 impl Document {
@@ -146,16 +147,31 @@ impl Builder<'_> {
     ) -> (Vec<Stmt>, Vec<NodeId>) {
         let mut projection = Vec::new();
         let mut children = Vec::new();
-        let mut properties = BTreeSet::new();
+        let mut properties = BTreeSet::<String>::new();
         let mut index = 0;
         while index < body.len() {
             let statement = &body[index];
+            // decorator 表达式先于默认值求值，当前访问器身份不能被后续头部赋值追溯取消。
+            let role = match statement {
+                Stmt::FunctionDef(function) => self.role(function, &properties, direct),
+                _ => None,
+            };
+            if !properties.is_empty() {
+                let bindings = super::bindings::Bindings::new(
+                    std::slice::from_ref(statement),
+                    self.source.len(),
+                );
+                let declaration = match statement {
+                    Stmt::FunctionDef(value) => Some(value.name.range),
+                    _ => None,
+                };
+                properties.retain(|name| !bindings.rebinds_except(name, declaration));
+            }
             match statement {
                 Stmt::FunctionDef(function) => {
-                    let role = self.role(function, &properties, direct);
-                    if role == Some("getter") {
+                    if role.is_some() {
                         properties.insert(function.name.to_string());
-                    } else if role.is_none() {
+                    } else {
                         properties.remove(function.name.as_str());
                     }
                     let count = if direct {
@@ -295,6 +311,7 @@ impl Builder<'_> {
                 if matches!(value.value.as_ref(), Expr::Name(name) if name.id.as_str() == function.name.as_str() && properties.contains(name.id.as_str()))
                 {
                     return match value.attr.as_str() {
+                        "getter" => Some("getter"),
                         "setter" => Some("setter"),
                         "deleter" => Some("deleter"),
                         _ => None,
@@ -371,13 +388,22 @@ impl Builder<'_> {
                 unreachable!()
             };
             let mut header = value.clone();
-            header.body.clear();
+            if self.is_overload(value) {
+                // 文档跟随对应的 overload 签名，空实现标记不参与比较。
+                header.body.retain(|statement| {
+                    matches!(statement,
+                    Stmt::Expr(value) if matches!(value.value.as_ref(), Expr::StringLiteral(_)))
+                });
+            } else {
+                header.body.clear();
+            }
             signatures.push(normalize(&Stmt::FunctionDef(header)));
             sources.push(self.source[statement.range()].to_owned());
             self.declarations.push(Declaration {
                 selection: value.name.range,
                 id: id.clone(),
                 eligible: role.is_none() && self.known_decorators(value),
+                instance_field: false,
             });
             self.owners.insert(statement.start().to_usize(), id.clone());
             selections.push(value.name.range);
@@ -409,6 +435,7 @@ impl Builder<'_> {
             selection: class.name.range,
             id: id.clone(),
             eligible: class.decorator_list.is_empty(),
+            instance_field: false,
         });
         self.owners.insert(class.start().to_usize(), id.clone());
         let mut header = class.clone();
@@ -493,6 +520,7 @@ impl Builder<'_> {
             selection,
             id: id.clone(),
             eligible: true,
+            instance_field: false,
         });
         self.owners.insert(statement.start().to_usize(), id.clone());
         if member {
@@ -524,6 +552,7 @@ impl Builder<'_> {
             selection,
             id: id.clone(),
             eligible: true,
+            instance_field: !class,
         });
         let index = if let Some(index) = self.nodes.iter().position(|node| node.data().id == id) {
             index

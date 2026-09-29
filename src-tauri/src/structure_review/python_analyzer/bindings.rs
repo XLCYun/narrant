@@ -28,8 +28,10 @@ pub(super) struct Binding {
 /// 方法的词法闭包跳过类命名空间，类头和装饰器仍在外层求值。
 struct Scope {
     range: TextRange,
+    outer_expression: Option<TextRange>,
     parent: Option<usize>,
     class: bool,
+    comprehension: bool,
     wildcard: bool,
     names: BTreeMap<String, Vec<Binding>>,
 }
@@ -46,8 +48,10 @@ impl Bindings {
         let mut index = Self {
             scopes: vec![Scope {
                 range: TextRange::new(TextSize::ZERO, TextSize::try_from(len).unwrap()),
+                outer_expression: None,
                 parent: None,
                 class: false,
+                comprehension: false,
                 wildcard: false,
                 names: BTreeMap::new(),
             }],
@@ -71,6 +75,22 @@ impl Bindings {
                 self.groups.insert(range.start(), index);
             }
         }
+    }
+
+    /// 当前套件的绑定会使旧证据失效；嵌套作用域的普通局部声明不影响外层。
+    pub fn rebinds(&self, name: &str) -> bool {
+        self.rebinds_except(name, None)
+    }
+
+    /// 当前函数声明可以接续旧 property；声明头中其它同名赋值仍会使旧证据失效。
+    pub fn rebinds_except(&self, name: &str, declaration: Option<TextRange>) -> bool {
+        self.scopes[0].wildcard
+            || self.scopes[0].names.get(name).is_some_and(|bindings| {
+                bindings
+                    .iter()
+                    .any(|binding| Some(binding.selection) != declaration)
+            })
+            || self.nonlocal_writes.contains(name)
     }
     /// 普通重复声明仍有歧义；不能只因同名而折叠。
     fn unique(&self, bindings: &[Binding]) -> bool {
@@ -112,7 +132,12 @@ impl Bindings {
                 .iter()
                 .enumerate()
                 .rev()
-                .find(|(_, scope)| scope.range.contains(point))
+                .find(|(_, scope)| {
+                    scope.range.contains(point)
+                        && !scope
+                            .outer_expression
+                            .is_some_and(|range| range.contains(point))
+                })
                 .map_or(0, |(index, _)| index),
         );
         while let Some(index) = scope {
@@ -202,8 +227,10 @@ impl Collector<'_> {
         self.scope = self.index.scopes.len();
         self.index.scopes.push(Scope {
             range: TextRange::new(first.start(), body.last().unwrap().end()),
+            outer_expression: None,
             parent,
             class,
+            comprehension: false,
             wildcard: false,
             names: BTreeMap::new(),
         });
@@ -220,6 +247,70 @@ impl Collector<'_> {
         visitor::walk_body(self, body);
         self.scope = previous;
         self.conditional = condition;
+    }
+
+    /// lambda 与推导式都有自己的绑定表；推导式首个 iterable 在外层求值。
+    fn expression_scope(
+        &mut self,
+        range: TextRange,
+        parameters: Option<&ast::Parameters>,
+        outer_expression: Option<TextRange>,
+        comprehension: bool,
+    ) -> (usize, bool) {
+        let previous = (self.scope, self.conditional);
+        let parent = if self.index.scopes[self.scope].class {
+            self.index.scopes[self.scope].parent
+        } else {
+            Some(self.scope)
+        };
+        self.scope = self.index.scopes.len();
+        self.index.scopes.push(Scope {
+            range,
+            outer_expression,
+            parent,
+            class: false,
+            comprehension,
+            wildcard: false,
+            names: BTreeMap::new(),
+        });
+        self.conditional = comprehension;
+        if let Some(parameters) = parameters {
+            for parameter in parameters.iter() {
+                self.add(
+                    parameter.name().as_str(),
+                    parameter.name().range(),
+                    BindingKind::Parameter,
+                );
+            }
+        }
+        previous
+    }
+
+    /// 各迭代目标属于推导式；其中 walrus 由 visit_expr 写入最近的非推导式作用域。
+    fn comprehension(
+        &mut self,
+        range: TextRange,
+        generators: &[ast::Comprehension],
+        values: &[&Expr],
+    ) {
+        let Some(first) = generators.first() else {
+            return;
+        };
+        self.visit_expr(&first.iter);
+        let previous = self.expression_scope(range, None, Some(first.iter.range()), true);
+        for (index, generator) in generators.iter().enumerate() {
+            if index > 0 {
+                self.visit_expr(&generator.iter);
+            }
+            self.visit_expr(&generator.target);
+            for condition in &generator.ifs {
+                self.visit_expr(condition);
+            }
+        }
+        for value in values {
+            self.visit_expr(value);
+        }
+        (self.scope, self.conditional) = previous;
     }
     /// 解构只记录绑定，不把一个共享 RHS 拆成多个假别名。
     fn target(&mut self, target: &Expr, value: Option<&Expr>) {
@@ -339,6 +430,59 @@ impl<'a> Visitor<'a> for Collector<'_> {
     }
     /// 捕获 for、with、增量赋值及命名表达式中的 Store/Del。
     fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Lambda(value) => {
+                if let Some(parameters) = &value.parameters {
+                    for parameter in parameters.iter_non_variadic_params() {
+                        if let Some(default) = &parameter.default {
+                            self.visit_expr(default);
+                        }
+                    }
+                }
+                let previous = self.expression_scope(
+                    value.body.range(),
+                    value.parameters.as_deref(),
+                    None,
+                    false,
+                );
+                self.visit_expr(&value.body);
+                (self.scope, self.conditional) = previous;
+                return;
+            }
+            Expr::ListComp(value) => {
+                self.comprehension(value.range, &value.generators, &[&value.elt]);
+                return;
+            }
+            Expr::SetComp(value) => {
+                self.comprehension(value.range, &value.generators, &[&value.elt]);
+                return;
+            }
+            Expr::Generator(value) => {
+                self.comprehension(value.range, &value.generators, &[&value.elt]);
+                return;
+            }
+            Expr::DictComp(value) => {
+                let values = value
+                    .key
+                    .as_deref()
+                    .into_iter()
+                    .chain(std::iter::once(value.value.as_ref()))
+                    .collect::<Vec<_>>();
+                self.comprehension(value.range, &value.generators, &values);
+                return;
+            }
+            Expr::Named(value) => {
+                let previous = self.scope;
+                while self.index.scopes[self.scope].comprehension {
+                    self.scope = self.index.scopes[self.scope].parent.unwrap_or(0);
+                }
+                self.target(&value.target, Some(&value.value));
+                self.scope = previous;
+                self.visit_expr(&value.value);
+                return;
+            }
+            _ => {}
+        }
         if let Expr::Name(name) = expr {
             if name.ctx != ast::ExprContext::Load {
                 self.add(name.id.as_str(), name.range, BindingKind::Assignment(None));
@@ -353,6 +497,20 @@ impl<'a> Visitor<'a> for Collector<'_> {
             self.add(name.as_str(), name.range, BindingKind::Assignment(None));
         }
         visitor::walk_except_handler(self, handler);
+    }
+
+    /// match 捕获是名称绑定，而不是 Name 表达式；包含解构中的星号和剩余映射。
+    fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+        let name = match pattern {
+            ast::Pattern::MatchAs(value) => value.name.as_ref(),
+            ast::Pattern::MatchStar(value) => value.name.as_ref(),
+            ast::Pattern::MatchMapping(value) => value.rest.as_ref(),
+            _ => None,
+        };
+        if let Some(name) = name {
+            self.add(name.as_str(), name.range, BindingKind::Assignment(None));
+        }
+        visitor::walk_pattern(self, pattern);
     }
 }
 

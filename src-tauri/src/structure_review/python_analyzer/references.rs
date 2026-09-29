@@ -137,14 +137,16 @@ impl Resolver<'_> {
     /// 确定关系要求唯一合格声明；缺少第三方上下文仅令这一出现保持未解析。
     fn resolve(&mut self, path: &Path, occurrence: &Occurrence) -> Result<Option<ReferenceTarget>> {
         let mut candidates = BTreeMap::new();
+        let mut conflict = false;
         let ambiguous = occurrence.root.as_ref().is_some_and(|name| {
             self.documents[path]
                 .bindings
                 .ambiguous(name, occurrence.offset, occurrence.direct)
         });
         if occurrence.queryable && !ambiguous {
-            let locations = self.query(path, occurrence.offset)?;
-            for location in locations {
+            let mut locations = self.query(path, occurrence.offset)?;
+            let mut aliases = BTreeSet::new();
+            while let Some(location) = locations.pop() {
                 let Some(target) = self.locate(&location)? else {
                     return Ok(None);
                 };
@@ -176,6 +178,43 @@ impl Resolver<'_> {
                         .selection
                         .contains(ruff_text_size::TextSize::try_from(offset).unwrap())
                 }) else {
+                    // ty 也可能同时返回赋值锚点；沿已证明唯一的简单别名查询 RHS，保留其所有反证。
+                    let binding = document.bindings.at(offset).filter(|(_, unique)| *unique);
+                    let alias = binding.and_then(|(binding, _)| match &binding.kind {
+                        super::bindings::BindingKind::Assignment(Some(
+                            value @ (Expr::Name(_) | Expr::Attribute(_)),
+                        )) => Some(value),
+                        _ => None,
+                    });
+                    if let Some(alias) = alias {
+                        let offset = match alias {
+                            Expr::Attribute(value) => value.attr.start().to_usize(),
+                            _ => alias.start().to_usize(),
+                        };
+                        if super::bindings::root_name(alias).is_none_or(|name| {
+                            document.bindings.ambiguous(
+                                name,
+                                offset,
+                                occurrence.semantic == "code.calls"
+                                    && matches!(alias, Expr::Name(_)),
+                            )
+                        }) || aliases.len() >= 64
+                        {
+                            conflict = true;
+                        } else if aliases.insert((actual.clone(), offset)) {
+                            let definitions = self.query(&actual, offset)?;
+                            conflict |= definitions.is_empty();
+                            locations.extend(definitions);
+                        }
+                        continue;
+                    }
+                    // 唯一 import 锚点可跳过，其余真实目标不能被过滤成另一个确定目标。
+                    conflict |= !document
+                        .bindings
+                        .at(offset)
+                        .is_some_and(|(binding, unique)| {
+                            unique && matches!(binding.kind, super::bindings::BindingKind::Import)
+                        });
                     continue;
                 };
                 let node = document
@@ -193,6 +232,7 @@ impl Resolver<'_> {
                         _ => false,
                     };
                 if !valid {
+                    conflict = true;
                     continue;
                 }
                 let symbol = if scope == SymbolScope::Dependency {
@@ -212,7 +252,7 @@ impl Resolver<'_> {
                 );
             }
         }
-        if candidates.len() == 1 {
+        if !conflict && candidates.len() == 1 {
             let (symbol, description) = candidates.pop_first().unwrap();
             self.externals.insert(symbol.clone(), description);
             Ok(Some(ReferenceTarget::External { symbol }))
@@ -308,13 +348,7 @@ impl Resolver<'_> {
                 .is_some_and(|class_node| {
                     self.documents[path].declarations.iter().any(|declaration| {
                         class_node.data().contains.contains(&declaration.id)
-                            && self.documents[path].nodes.iter().any(|node| {
-                                node.data().id == declaration.id
-                                    && node.category() == CodeCategory::Value
-                                    && node.data().name.as_ref().is_some_and(|name| {
-                                        declaration.selection.len().to_usize() > name.len()
-                                    })
-                            })
+                            && declaration.instance_field
                     })
                 });
             if !has_instance_writes {
@@ -348,20 +382,12 @@ impl Resolver<'_> {
         }
         let mut changed = false;
         for declaration in &self.documents[path].declarations {
-            if blocked.contains(&declaration.id) {
-                let node = self.documents[path]
-                    .nodes
-                    .iter()
-                    .find(|node| node.data().id == declaration.id)
-                    .unwrap();
-                if declaration.selection.len().to_usize() > node.data().name.as_ref().unwrap().len()
-                {
-                    proofs.insert(
-                        declaration.selection.start().to_usize(),
-                        super::known::Known::NotInstanceField,
-                    );
-                    changed = true;
-                }
+            if blocked.contains(&declaration.id) && declaration.instance_field {
+                proofs.insert(
+                    declaration.selection.start().to_usize(),
+                    super::known::Known::NotInstanceField,
+                );
+                changed = true;
             }
         }
         if changed {
@@ -404,14 +430,34 @@ impl Resolver<'_> {
                     let Some(target) = self.locate(&location)? else {
                         return Ok(None);
                     };
+                    if self.conflicting_projects.contains(&target.path) {
+                        return Ok(None);
+                    }
                     self.prepare(&target.path)?;
                     let document = &self.documents[&target.path];
+                    if document
+                        .bindings
+                        .at(target.offset)
+                        .is_some_and(|(_, unique)| !unique)
+                    {
+                        return Ok(None);
+                    }
                     let Some(declaration) = document.declarations.iter().find(|declaration| {
                         declaration
                             .selection
                             .contains(ruff_text_size::TextSize::try_from(target.offset).unwrap())
                     }) else {
-                        continue;
+                        if document
+                            .bindings
+                            .at(target.offset)
+                            .is_some_and(|(binding, unique)| {
+                                unique
+                                    && matches!(binding.kind, super::bindings::BindingKind::Import)
+                            })
+                        {
+                            continue;
+                        }
+                        return Ok(None);
                     };
                     let node = document
                         .nodes
@@ -457,7 +503,7 @@ impl Resolver<'_> {
             .to_file_path()
             .map_err(|_| failure("ty 定义不是本地 file URI"))?;
         let actual = target.canonicalize().map_err(failure)?;
-        let (relative, scope) = if actual.starts_with(self.repository) {
+        let (mut relative, scope) = if actual.starts_with(self.repository) {
             let relative = actual
                 .strip_prefix(self.repository)
                 .map_err(failure)?
@@ -465,7 +511,9 @@ impl Resolver<'_> {
             if project::environment_path(self.repository, &actual) {
                 return Err(failure("ty 返回了用户 Python 环境中的目标"));
             }
-            if !self.include_tests && is_test(&relative) {
+            if !self.include_tests
+                && (is_test(&relative) || target.strip_prefix(self.repository).is_ok_and(is_test))
+            {
                 return Ok(None);
             }
             (relative, SymbolScope::Repository)
@@ -486,6 +534,21 @@ impl Resolver<'_> {
                     .collect(),
                 SymbolScope::Dependency,
             )
+        };
+        // canonical 路径只验证访问边界，选中链接仍按自己的路径拥有源码对象。
+        let actual = if scope == SymbolScope::Repository {
+            let path = if let Some(relative) = project::lexical_relative(self.repository, &target) {
+                self.repository.join(relative)
+            } else {
+                actual
+            };
+            relative = path
+                .strip_prefix(self.repository)
+                .map_err(failure)?
+                .to_owned();
+            path
+        } else {
+            actual
         };
         if !self.documents.contains_key(&actual) {
             if (self.cancelled)() {

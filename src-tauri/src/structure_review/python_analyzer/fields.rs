@@ -40,12 +40,8 @@ pub(super) fn instance_fields(
             continue;
         };
         let receiver = parameter.parameter.name.as_str();
-        let mut binding = Rebinding {
-            receiver,
-            found: false,
-        };
-        visitor::walk_body(&mut binding, &method.body);
-        if binding.found {
+        let bindings = super::bindings::Bindings::new(&method.body, method.end().to_usize());
+        if bindings.rebinds(receiver) {
             continue;
         }
         let mut writes = Writes {
@@ -55,50 +51,6 @@ pub(super) fn instance_fields(
         visitor::walk_body(&mut writes, &method.body);
     }
     fields
-}
-
-/// 任何显式重绑定都使整方法内的接收者证据不再可靠。
-struct Rebinding<'a> {
-    receiver: &'a str,
-    found: bool,
-}
-impl<'a> Visitor<'a> for Rebinding<'_> {
-    /// except 的别名也会覆盖并删除接收者绑定。
-    fn visit_except_handler(&mut self, handler: &'a ast::ExceptHandler) {
-        let ast::ExceptHandler::ExceptHandler(value) = handler;
-        self.found |= value
-            .name
-            .as_ref()
-            .is_some_and(|name| name.as_str() == self.receiver);
-        visitor::walk_except_handler(self, handler);
-    }
-
-    /// Store/Del 包括普通、循环、解构和命名表达式赋值。
-    fn visit_expr(&mut self, expr: &'a Expr) {
-        if let Expr::Name(name) = expr {
-            if name.id.as_str() == self.receiver && name.ctx != ast::ExprContext::Load {
-                self.found = true;
-            }
-        }
-        visitor::walk_expr(self, expr);
-    }
-    /// 同名声明及 global/nonlocal 也不能视为原来的参数绑定。
-    fn visit_stmt(&mut self, stmt: &'a Stmt) {
-        self.found |= match stmt {
-            Stmt::FunctionDef(value) => value.name.as_str() == self.receiver,
-            Stmt::ClassDef(value) => value.name.as_str() == self.receiver,
-            Stmt::Global(value) => value
-                .names
-                .iter()
-                .any(|name| name.as_str() == self.receiver),
-            Stmt::Nonlocal(value) => value
-                .names
-                .iter()
-                .any(|name| name.as_str() == self.receiver),
-            _ => false,
-        };
-        visitor::walk_stmt(self, stmt);
-    }
 }
 
 /// 只收集直接接收者的属性写入；不穿越新函数/类边界或跟踪别名。

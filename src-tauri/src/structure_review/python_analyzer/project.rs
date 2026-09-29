@@ -119,21 +119,37 @@ fn add_roots(
 
 /// 配置中的 Windows 普通绝对路径与 canonical 的扩展前缀等价；最终仍校验真实路径。
 fn configured_inside(repository: &Path, path: &Path) -> bool {
+    lexical_relative(repository, path).is_some()
+}
+
+/// URI 常省略 Windows 扩展前缀；恢复仓库路径表示时保留链接的词法文件名。
+pub(super) fn lexical_relative(repository: &Path, path: &Path) -> Option<PathBuf> {
     let path = lexical_normalize(path);
     #[cfg(windows)]
     {
         let comparable = |path: &Path| {
-            path.to_string_lossy()
-                .trim_start_matches(r"\\?\")
-                .to_ascii_lowercase()
+            let value = path.to_string_lossy();
+            if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+                format!(r"\\{unc}")
+            } else {
+                value.trim_start_matches(r"\\?\").to_owned()
+            }
         };
         let root = comparable(repository);
         let candidate = comparable(&path);
-        candidate == root || candidate.starts_with(&format!("{root}\\"))
+        let lower_root = root.to_ascii_lowercase();
+        let lower_candidate = candidate.to_ascii_lowercase();
+        if lower_candidate == lower_root {
+            Some(PathBuf::new())
+        } else if lower_candidate.starts_with(&format!("{lower_root}\\")) {
+            Some(PathBuf::from(&candidate[root.len() + 1..]))
+        } else {
+            None
+        }
     }
     #[cfg(not(windows))]
     {
-        path.starts_with(repository)
+        path.strip_prefix(repository).ok().map(Path::to_owned)
     }
 }
 
@@ -293,26 +309,32 @@ pub(super) fn read_source(path: &Path) -> Result<String> {
         if !line.starts_with('#') && !line.is_empty() {
             break;
         }
-        if let Some(index) = line.find("coding").filter(|index| {
-            line.as_bytes()
+        let cookie = line.match_indices("coding").find_map(|(index, _)| {
+            if !line
+                .as_bytes()
                 .get(index + 6)
                 .is_some_and(|byte| matches!(byte, b':' | b'='))
-        }) {
-            let rest = line[index + 7..].trim_start_matches([' ', '\t']);
-            let encoding = rest
+            {
+                return None;
+            }
+            let encoding = line[index + 7..]
+                .trim_start_matches([' ', '\t'])
                 .chars()
                 .take_while(|character| {
                     character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
                 })
-                .collect::<String>()
-                .to_ascii_lowercase()
-                .replace('_', "-");
+                .collect::<String>();
+            (!encoding.is_empty()).then_some(encoding)
+        });
+        if let Some(encoding) = cookie {
+            let encoding = encoding.to_ascii_lowercase().replace('_', "-");
             if !matches!(encoding.as_str(), "utf-8" | "utf8") && !encoding.starts_with("utf-8-") {
                 return Err(failure(format!(
                     "{}：不支持 Python 编码 {encoding}，仅支持 UTF-8",
                     path.display()
                 )));
             }
+            break;
         }
     }
     if source.len() > u32::MAX as usize {

@@ -13,8 +13,8 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-python-native
 
 /** 每条 Cargo 命令都经仓库锁；完成当前用例后才启动下一组。 */
 async function verify(filter) {
-  const child = spawn('bash', ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', filter, '--', '--include-ignored', '--nocapture'], {
-    stdio: 'inherit', env: { ...process.env, NARRANT_TY_PATH: path.join(temporary, 'bin', process.platform === 'win32' ? 'ty.exe' : 'ty'), NARRANT_LANGUAGE_PACK_FIXTURE: artifacts },
+  const child = spawn('bash', ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', filter, '--', '--include-ignored', '--nocapture', '--test-threads=4'], {
+    stdio: 'inherit', env: { ...process.env, ...(process.platform === 'win32' ? { NARRANT_WINDOWS_TEST_MANIFEST: '1' } : {}), NARRANT_TY_PATH: path.join(temporary, 'bin', process.platform === 'win32' ? 'ty.exe' : 'ty'), NARRANT_LANGUAGE_PACK_FIXTURE: artifacts },
   });
   await new Promise((resolve, reject) => {
     child.once('error', reject);

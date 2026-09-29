@@ -118,6 +118,177 @@ fn native_properties_overloads_and_explicit_aliases_keep_source_ownership() {
     assert!(matches!(named(&graph, "_item"), CodeNode::Value(_)));
 }
 
+/// 未知装饰器是目标歧义的反证，不能删掉后把另一个联合成员当成唯一调用。
+#[test]
+#[ignore = "需要固定 ty 0.0.84 支持包"]
+fn native_union_with_unknown_decorator_stays_unresolved() {
+    let graph = analyze_native(&[("main.py", "def opaque(f): return f\nclass A:\n    def act(self): pass\nclass B:\n    @opaque\n    def act(self): pass\ndef run(obj: A | B):\n    obj.act()\n")], &["main.py"]);
+    let calls = named(&graph, "run")
+        .data()
+        .references
+        .iter()
+        .filter(|reference| reference.semantic == "code.calls")
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(
+        matches!(&calls[0].target, ReferenceTarget::Unresolved { name } if name == "obj.act"),
+        "{calls:?}"
+    );
+}
+
+/// 物理文件相同不意味着 Python 模块相同；链接中的显式 import 保留真正目标路径。
+#[test]
+#[ignore = "需要固定 ty 0.0.84 支持包"]
+fn native_internal_links_do_not_rewrite_definition_ownership() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("impl")).unwrap();
+    fs::write(
+        root.path().join("impl/__init__.py"),
+        "import impl\ndef service(): return impl.service()\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("impl", root.path().join("alias")).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(root.path().join("alias"))
+        .arg(root.path().join("impl"))
+        .status()
+        .unwrap()
+        .success());
+    let analyzer = PythonLanguageAnalyzer::new(std::env::var_os("NARRANT_TY_PATH").unwrap());
+    let input = |files: &[&str]| AnalysisInput {
+        repository_root: root.path().into(),
+        files: files.iter().map(PathBuf::from).collect(),
+        options: Default::default(),
+    };
+    let single = analyzer.analyze(&input(&["alias/__init__.py"])).unwrap();
+    let both = analyzer
+        .analyze(&input(&["alias/__init__.py", "impl/__init__.py"]))
+        .unwrap();
+    let alias = named(&single, "service");
+    let reference = alias
+        .data()
+        .references
+        .iter()
+        .find(|reference| reference.semantic == "code.calls")
+        .unwrap();
+    let ReferenceTarget::External { symbol } = &reference.target else {
+        panic!("import impl 不得重写为 alias 自调用：{reference:?}");
+    };
+    let actual = crate::structure_review::code_graph::NodeId(symbol.clone());
+    assert_ne!(actual, alias.data().id);
+    assert!(both.node(&actual).is_some());
+    assert!(both
+        .node(&alias.data().id)
+        .unwrap()
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.target == ReferenceTarget::Node(actual.clone())));
+
+    fs::write(
+        root.path().join("main.py"),
+        "import alias\ndef run(): return alias.service()\n",
+    )
+    .unwrap();
+    let unselected = analyzer.analyze(&input(&["main.py"])).unwrap();
+    let selected = analyzer
+        .analyze(&input(&["main.py", "alias/__init__.py"]))
+        .unwrap();
+    let target = named(&unselected, "run")
+        .data()
+        .references
+        .iter()
+        .find(|reference| reference.semantic == "code.calls")
+        .unwrap();
+    let ReferenceTarget::External { symbol } = &target.target else {
+        panic!("{target:?}")
+    };
+    let target_id = crate::structure_review::code_graph::NodeId(symbol.clone());
+    assert!(selected.node(&target_id).is_some());
+    assert!(named(&selected, "run")
+        .data()
+        .references
+        .iter()
+        .any(|reference| reference.target == ReferenceTarget::Node(target_id.clone())));
+}
+
+/// overload 的有效文档属于对应签名，修改文档必须修改合并后的 Callable。
+#[test]
+#[ignore = "需要固定 ty 0.0.84 支持包"]
+fn native_overload_docstrings_participate_in_content_comparison() {
+    for name in ["api.py", "api.pyi"] {
+        let mut source = "from typing import overload\n@overload\ndef convert(x: int) -> int:\n    \"old doc\"\n    ...\n@overload\ndef convert(x: str) -> str: ...\n".to_owned();
+        if name.ends_with(".py") {
+            source.push_str("def convert(x): return x\n");
+        }
+        let before = analyze_native(&[(name, &source)], &[name]);
+        let after = analyze_native(&[(name, &source.replace("old doc", "new doc"))], &[name]);
+        let difference = before.diff(&after).unwrap();
+        assert_eq!(difference.nodes.len(), 1, "{name}: {difference:?}");
+        assert_eq!(difference.nodes[0].id, named(&before, "convert").data().id);
+        assert_eq!(
+            difference.nodes[0].content,
+            Some(crate::structure_review::code_graph::ChangeKind::Modified)
+        );
+    }
+}
+
+/// property 链遇到显式重绑定后失效，合法 getter 替换则保留访问器身份。
+#[test]
+#[ignore = "需要固定 ty 0.0.84 支持包"]
+fn native_property_chains_require_current_lexical_binding() {
+    for (middle, decorator, expected) in [
+        ("", "getter", "getter"),
+        (
+            "    from helper import replacement as item\n",
+            "setter",
+            "method",
+        ),
+        ("    import helper as item\n", "setter", "method"),
+        ("    del item\n", "setter", "method"),
+        ("    type item = int\n", "setter", "method"),
+        (
+            "    def other(value=(item := replacement)): pass\n",
+            "setter",
+            "method",
+        ),
+    ] {
+        let source = format!("class Service:\n    @property\n    def item(self): return 1\n{middle}    @item.{decorator}\n    def item(self, value=None): pass\n");
+        let graph = analyze_native(
+            &[
+                ("main.py", &source),
+                ("helper.py", "replacement = object()\n"),
+            ],
+            &["main.py"],
+        );
+        let roles = named(&graph, "Service")
+            .data()
+            .contains
+            .iter()
+            .map(|id| graph.node(id).unwrap())
+            .filter(|node| {
+                matches!(node, CodeNode::Callable(_)) && node.data().name.as_deref() == Some("item")
+            })
+            .map(|node| node.data().native_kind.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(roles, ["getter", expected], "{middle:?} {decorator}");
+    }
+    // 当前 decorator 已先取得 setter，默认值临时重绑不改变最终重新赋回的 property。
+    let graph = analyze_native(&[("main.py", "class Service:\n    @property\n    def item(self): return 1\n    @item.setter\n    def item(self, value=(item := None)): pass\n    @item.deleter\n    def item(self): pass\n")], &["main.py"]);
+    let roles = named(&graph, "Service")
+        .data()
+        .contains
+        .iter()
+        .map(|id| graph.node(id).unwrap())
+        .filter(|node| matches!(node, CodeNode::Callable(_)))
+        .map(|node| node.data().native_kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(roles, ["getter", "setter", "deleter"]);
+}
+
 /// 各受支持 minor 都使用对应目标；旧版标准库关系实际运行而非只检查 --version。
 #[test]
 #[ignore = "需要固定 ty 0.0.84 支持包"]
