@@ -62,11 +62,12 @@ Harness 仅使用代表性数据，真实后端另由上述 Git/原生工具测�
 
 ## 合入与发布门槛
 
-- Windows x64 原生构建、LSP、图提取、环境隔离和 junction 验收由 PR 的独立 `Language support packs`
-  workflow 执行；跨平台打包成功不能替代 Windows 原生运行。首轮 macOS 通过；Windows 编译成功后，
-  单元测试进程加载出现 `STATUS_ENTRYPOINT_NOT_FOUND`，尚未运行用例。
-  Tauri 的资源链接只覆盖应用二进制；显式原生验收入口现为 Windows 库测试补充同一 Common Controls v6
-  manifest，等待新一轮原生结果。参考 [Tauri 上游问题](https://github.com/tauri-apps/tauri/issues/13419)
+- macOS ARM64 与 Windows x64 原生构建、LSP、图提取、环境隔离和 Review 生命周期验收均已通过，
+  Windows 另覆盖 junction 边界。验证对象为实现提交 `a3c5cad54f4f613d5288dc800b9a3f41b0f13fcd`，
+  见 [Language support packs 原生验收](https://github.com/XLCYun/narrant/actions/runs/36608881110)。
+  首轮 Windows 单元测试进程因缺少 manifest 出现 `STATUS_ENTRYPOINT_NOT_FOUND`；
+  显式原生验收入口为 Windows 库测试补充 Common Controls v6 manifest 后，真实用例执行通过。
+  Tauri 的默认资源链接只覆盖应用二进制。参考 [Tauri 上游问题](https://github.com/tauri-apps/tauri/issues/13419)
   和 [Microsoft manifest 依赖说明](https://learn.microsoft.com/en-us/cpp/build/reference/manifestdependency-specify-manifest-dependencies)。
 - Standards 与 Spec 分别审查；字段来源改为显式标记，六类规格发现及同类回归修复已复核收敛。
 - 用户要求先审阅实现，未经确认不合入 PR。不手动触发 quality-gate。
