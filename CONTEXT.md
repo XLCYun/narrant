@@ -111,6 +111,12 @@ A **Review View** that presents the **Code Graph Difference** and its surroundin
 **Code Objects** for the open **Review Snapshot**.
 _Avoid_: Repository map, new Review
 
+**Language Support Pack（语言支持包）**:
+An optional Narrant component that provides reusable capabilities for understanding
+one or more programming languages. **Structure Changes** is its first consumer; other
+language-aware features may also use those capabilities.
+_Avoid_: Structure-only support pack, translation pack, project dependencies
+
 **Review Snapshot**:
 An immutable **Change Comparison** that became current for a **Review**, pinned to exact
 base, comparison-base, and head revisions. Its identity and history remain saved even

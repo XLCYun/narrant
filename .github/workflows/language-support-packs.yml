@@ -1,0 +1,106 @@
+name: Language support packs
+
+on:
+  pull_request:
+    paths:
+      - resources/language-support-packs.json
+      - scripts/*language-support-packs.mjs
+      - scripts/tests/language-support-packs.test.mjs
+      - .github/workflows/language-support-packs.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish validated packs to the immutable OSS prefix
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --test scripts/tests/language-support-packs.test.mjs
+      - name: Build and execute native tools
+        run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: language-support-packs-${{ matrix.target }}
+          path: language-support-packs/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: language-support-packs
+    concurrency:
+      group: language-support-packs-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: language-support-packs-*
+          merge-multiple: true
+          path: language-support-packs
+      - name: Validate complete artifacts before obtaining credentials
+        run: node --input-type=module -e "import { readArtifacts } from './scripts/publish-language-support-packs.mjs'; await readArtifacts('language-support-packs')"
+      - name: Install checksum-verified ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error -o "$RUNNER_TEMP/ossutil.zip" https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
+          printf '%s  %s\n' dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343 "$RUNNER_TEMP/ossutil.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/ossutil.zip" -d "$RUNNER_TEMP/ossutil-extracted"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$RUNNER_TEMP/ossutil-extracted/ossutil-v1.7.19-linux-amd64/ossutil" "$RUNNER_TEMP/bin/ossutil"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Exchange isolated OSS publishing identity
+        id: oss
+        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0
+        with:
+          oidc-provider-arn: ${{ vars.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
+          role-to-assume: ${{ vars.ALIBABA_CLOUD_ROLE_ARN }}
+          role-session-name: narrant-packs-${{ github.run_id }}
+          role-session-expiration: 1800
+          audience: sts.aliyuncs.com
+      - name: Publish immutable artifacts and verify public downloads
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ steps.oss.outputs.aliyun-access-key-id }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ steps.oss.outputs.aliyun-access-key-secret }}
+          ALIBABA_CLOUD_SECURITY_TOKEN: ${{ steps.oss.outputs.aliyun-security-token }}
+          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
+          OSS_REGION: ${{ vars.OSS_REGION }}
+        run: node scripts/publish-language-support-packs.mjs language-support-packs

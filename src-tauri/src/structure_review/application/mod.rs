@@ -6,6 +6,7 @@ mod workspace;
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
 use super::rust_analyzer::RustDependencyScope;
 use crate::{
+    language_support::PackLease,
     lsp::CancellationCheck,
     operation::OperationContext,
     review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
@@ -33,6 +34,8 @@ pub(crate) type AnalyzeTypeScript =
 pub(crate) struct StructureReviewError {
     pub code: &'static str,
     pub detail: String,
+    #[serde(rename = "supportPacks", skip_serializing_if = "Option::is_none")]
+    pub support_packs: Option<Vec<crate::language_support::PackId>>,
 }
 
 impl StructureReviewError {
@@ -41,6 +44,7 @@ impl StructureReviewError {
         Self {
             code,
             detail: error.to_string(),
+            support_packs: None,
         }
     }
 }
@@ -55,12 +59,14 @@ struct LanguageAnalyzers {
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
 pub(crate) struct StructureReview {
     analyzers: LanguageAnalyzers,
+    support: Option<crate::language_support::LanguageSupportPacks>,
 }
 
 impl StructureReview {
     /// 接收固定的 Rust 分析依赖；测试和最小宿主可以保留既有单语言装配。
     pub fn new(analyze_rust: Arc<AnalyzeGraph>) -> Self {
         Self {
+            support: None,
             analyzers: LanguageAnalyzers {
                 rust: analyze_rust,
                 typescript: Arc::new(|_, _| Err(AnalysisError::new("TypeScript 分析器尚未装配"))),
@@ -74,6 +80,15 @@ impl StructureReview {
         self
     }
 
+    /// 生产通过应用共享支持包准备工具，测试仍可注入已有分析器闭包。
+    pub fn with_support_packs(
+        mut self,
+        support: crate::language_support::LanguageSupportPacks,
+    ) -> Self {
+        self.support = Some(support);
+        self
+    }
+
     /// 分析固定 Snapshot；真正 worker 持有 head 保护，调用方丢弃 future 也不会提前放行刷新。
     pub async fn analyze(
         &self,
@@ -84,11 +99,15 @@ impl StructureReview {
         options: AnalysisOptions,
         dependency_scope: RustDependencyScope,
     ) -> Result<StructureComparison, StructureReviewError> {
-        let analyzers = self.analyzers.clone();
+        let (analyzers, lease) = self
+            .prepare_analyzers(lifecycle, operation, review_id, snapshot_id, options)
+            .await?;
         let result_review_id = review_id.to_owned();
         let result_snapshot_id = snapshot_id.to_owned();
         lifecycle
             .run_in_workspace(operation, review_id, snapshot_id, move |workspace| {
+                // 租约由实际 worker 持有到两侧分析结束，取消 IPC 等待不能提前释放。
+                let _lease = lease;
                 run(
                     workspace,
                     analyzers,
@@ -99,6 +118,97 @@ impl StructureReview {
                 )
             })
             .await
+    }
+
+    /// 占用工作区前校验 Snapshot、准备必要支持包并装配分析器，返回由实际 worker 持有的租约。
+    async fn prepare_analyzers(
+        &self,
+        lifecycle: &ReviewLifecycle,
+        operation: &OperationContext,
+        review_id: &str,
+        snapshot_id: &str,
+        options: AnalysisOptions,
+    ) -> Result<(LanguageAnalyzers, Option<PackLease>), StructureReviewError> {
+        let mut analyzers = self.analyzers.clone();
+        let lease = if let Some(support) = &self.support {
+            use super::code_graph::LanguageAnalyzer;
+            use crate::language_support::PackId;
+            let comparison = lifecycle.analysis_comparison(review_id, snapshot_id)?;
+            let mut ids = std::collections::BTreeSet::new();
+            for change in &comparison.file_changes {
+                for (path, content) in [
+                    (
+                        change.old_path.as_deref().unwrap_or(&change.path),
+                        change.before.as_ref(),
+                    ),
+                    (change.path.as_str(), change.after.as_ref()),
+                ] {
+                    match language_group(path, content) {
+                        Some(LanguageGroup::Rust) => {
+                            ids.insert(PackId::Rust);
+                        }
+                        Some(LanguageGroup::TypeScript)
+                            if super::typescript_analyzer::needs_tools(path, options) =>
+                        {
+                            ids.insert(PackId::TypeScriptJavascript);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let ids = ids.into_iter().collect::<Vec<_>>();
+            let request = serde_json::to_string(&(review_id, snapshot_id, options.include_tests))
+                .expect("分析身份可序列化");
+            let lease = support
+                .ensure(&ids, operation.cancellation(), Some(request))
+                .await
+                .map_err(|error| {
+                    let mut failure = StructureReviewError::new(
+                        if operation.cancellation().is_cancelled() {
+                            "cancelled"
+                        } else {
+                            "language-pack-unavailable"
+                        },
+                        error,
+                    );
+                    if !operation.cancellation().is_cancelled() {
+                        failure.support_packs = Some(ids.clone());
+                    }
+                    failure
+                })?;
+            if let Some(root) = lease.path(PackId::Rust) {
+                let analyzer =
+                    super::rust_analyzer::RustLanguageAnalyzer::new(root.join(if cfg!(windows) {
+                        "bin/rust-analyzer.exe"
+                    } else {
+                        "bin/rust-analyzer"
+                    }));
+                analyzers.rust = Arc::new(move |input, cancelled, scope| {
+                    analyzer
+                        .clone()
+                        .with_cancellation(cancelled)
+                        .with_dependency_scope(scope)
+                        .analyze(input)
+                });
+            }
+            if let Some(root) = lease.path(PackId::TypeScriptJavascript) {
+                let analyzer = super::typescript_analyzer::TypeScriptLanguageAnalyzer::new(
+                    root.join(if cfg!(windows) {
+                        "bin/node.exe"
+                    } else {
+                        "bin/node"
+                    }),
+                    root.join("runtime"),
+                );
+                analyzers.typescript = Arc::new(move |input, cancelled| {
+                    analyzer.clone().with_cancellation(cancelled).analyze(input)
+                });
+            }
+            Some(lease)
+        } else {
+            None
+        };
+        Ok((analyzers, lease))
     }
 }
 

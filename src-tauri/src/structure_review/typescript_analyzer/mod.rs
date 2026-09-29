@@ -25,6 +25,11 @@ const LINE_BREAKS: LineBreakRules = LineBreakRules {
     unicode_separators: true,
 };
 
+/// 在下载工具前应用与分析器相同的文件级测试过滤。
+pub(crate) fn needs_tools(path: &str, options: super::code_graph::AnalysisOptions) -> bool {
+    options.include_tests || !test_code::is_test(std::path::Path::new(path))
+}
+
 /// 固定工具配置可克隆；每次调用读取传入的 Git workspace 并独立管理子进程。
 #[derive(Clone)]
 pub struct TypeScriptLanguageAnalyzer {

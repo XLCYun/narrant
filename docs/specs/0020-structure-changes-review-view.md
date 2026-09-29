@@ -506,10 +506,11 @@ follow it before computing the difference.
 - Presentation: React Flow uses after containment for surviving objects and before
   containment for deleted objects. Removed containment that cannot be expressed by
   the combined tree remains an explicit edge. Expansion does not change analysis scope.
-- Local tool configuration: `NARRANT_RUST_ANALYZER` overrides the development default
-  `<build-repository>/.tools/rust-analyzer` (`.exe` on Windows). Automatic installation
-  and packaged tool distribution remain deferred by specification 0019. Missing or
-  failed language tooling produces a retryable analysis failure, never an empty diff.
+- Production tooling is prepared by [Language Support Packs](0022-language-support-packs.md)
+  only when this view actually starts analysis. The application owns shared downloads
+  and the three UI surfaces share one local snapshot poller. Complete, validated
+  installed paths replace development checkout defaults. Missing project tools or
+  failed pack preparation produces a retryable failure, never an empty diff.
 - Automated acceptance covers one additional checkout, exact merge-base, side-specific
   additions/deletions, body changes, stale Snapshot rejection, cleanup failures,
   refresh/close revocation, abandoned async waiters and crash recovery. The ignored

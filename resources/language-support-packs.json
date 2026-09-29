@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "packs": {
+    "rust": {
+      "version": "1.0.0",
+      "rustAnalyzer": "2026-09-07",
+      "sourceCommit": "9074e9b4c6bc31d7986ccf4e22d18af70e5508da",
+      "upstreamSha256": {
+        "aarch64-apple-darwin": "16e9b2af9db7c0ce015ffe88f85db27669b05c84887a59c737d697d2c5f8d349",
+        "x86_64-pc-windows-msvc": "cd3dddd580edac199c5e84c6cceb3addea32769c25cb6b597024a200b3359b05"
+      }
+    },
+    "typescript-javascript": {
+      "version": "1.0.0",
+      "node": "24.18.0",
+      "upstreamSha256": {
+        "aarch64-apple-darwin": "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1",
+        "x86_64-pc-windows-msvc": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
+      },
+      "packages": [
+        {
+          "name": "typescript-language-server",
+          "version": "6.0.0",
+          "integrity": "sha512-LXtzY3UZGfghWA5eRU6/T5j1+YiGRgy14mR3GOKyTKlE1op1TYKQnLVxwBsmnXeDhGLuvzZyIHBAqvrekAITYQ=="
+        },
+        {
+          "name": "typescript",
+          "version": "6.0.3",
+          "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="
+        },
+        {
+          "name": "@types/node",
+          "version": "22.20.1",
+          "integrity": "sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q=="
+        },
+        {
+          "name": "undici-types",
+          "version": "6.21.0",
+          "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
+        }
+      ]
+    }
+  }
+}

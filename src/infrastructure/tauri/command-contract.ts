@@ -1,4 +1,5 @@
 import type { StructureComparison } from "@/structure-review/types";
+import type { PackCollection, PackId } from "@/language-support/types";
 import type { GitHubIdentity } from "@/components/github-identity-entry";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
 import type { PullRequestGroup } from "@/lib/review-types";
@@ -34,7 +35,10 @@ type GitHubRepository = PullRequestGroup["repository"];
 type EmptyArgs = Record<string, never>;
 
 export type TauriCommandContract = {
-  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string; includeTests: boolean }; result: StructureComparison; error: { code: string; detail: string } };
+  language_support_snapshot: { args: EmptyArgs; result: PackCollection };
+  language_support_retry: { args: { id: PackId }; result: PackCollection };
+  language_support_remove: { args: { id: PackId; version: string }; result: PackCollection };
+  analyze_structure_review: { args: { operationId: string; reviewId: string; snapshotId: string; includeTests: boolean }; result: StructureComparison; error: { code: string; detail: string; supportPacks?: PackId[] } };
   application_update_snapshot: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_manual_check: { args: EmptyArgs; result: ApplicationUpdateSnapshot };
   application_update_set_automatic_download: { args: { enabled: boolean }; result: ApplicationUpdateSnapshot };
@@ -106,6 +110,9 @@ export type CancellableCommandArgs<K extends CancellableTauriCommandName> = Omit
 
 /** 与 Rust command handler 对齐的完整 command inventory。 */
 export const TAURI_COMMAND_NAMES = [
+  "language_support_snapshot",
+  "language_support_retry",
+  "language_support_remove",
   "analyze_structure_review",
   "application_update_snapshot",
   "application_update_manual_check",

@@ -55,8 +55,8 @@ the language-independent `AnalysisOptions` contract.
 | Stored scope | Standard library | Project dependencies | Server configuration |
 | --- | --- | --- | --- |
 | `repository-only` | Disabled | Disabled | `cargo.noDeps=true`, `cargo.sysroot=null`, Cargo offline |
-| `standard-library` (default) | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot="discover"`, Cargo offline |
-| `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot="discover"`, inherit Cargo network settings |
+| `standard-library` (default) | Enabled | Disabled | `cargo.noDeps=false`, `cargo.metadataExtraArgs=["--no-deps"]`, `cargo.sysroot=<validated local sysroot>`, `cargo.sysrootSrc=<existing rust-src>`, Cargo offline |
+| `all-dependencies` | Enabled | Enabled | `cargo.noDeps=false`, `cargo.sysroot=<validated local sysroot>`, `cargo.sysrootSrc=<existing rust-src>`, inherit Cargo network settings |
 
 All modes keep build scripts, procedural macros, checks, diagnostics and cache priming
 disabled, and prevent rustup auto-installation. Broader server context helps identify
@@ -186,19 +186,20 @@ evidence before assigning External.
 
 ### Project loading belongs to rust-analyzer
 
-The adapter delegates project discovery, Cargo metadata loading, crate graph construction,
-module ownership and `#[path]` semantics to rust-analyzer. These are not separate Rust
+The adapter delegates Cargo metadata loading, crate graph construction, module ownership
+and `#[path]` semantics to rust-analyzer. These are not separate Rust
 features that the user needs to elect to reimplement. The previous Cargo-versus-workspace
 scope question mixed server capabilities with adapter implementation responsibilities.
 
-Initialize supplies the prepared repository as workspace context. Use server discovery
-by default rather than the spike's fixed crate name and fixed `linkedProjects` value.
-The official discovery implementation checks the current/ancestor project manifests and
-can look one directory level down for Cargo manifests when needed, which covers this
-repository's `src-tauri/Cargo.toml` layout. It is not an unrestricted recursive search;
-an explicit project path remains available when discovery cannot identify the intended
-project. The production adapter's real-server test has now verified discovery in this
-repository without specifying linkedProjects; the earlier spike used a fixed project.
+Initialize supplies the prepared repository as workspace context. The language-pack
+integration mirrors the pinned server's manifest discovery for toolchain preflight:
+current/ancestor project manifests first, then Cargo manifests one directory level down.
+It checks Cargo/rustc from each discovered project directory, including `src-tauri/`,
+and passes those manifests as `linkedProjects` so preflight and server loading agree.
+This does not infer crate names, load a second Cargo graph, or search recursively.
+The real installed-pack test verifies a directly nested Cargo project. A single session
+currently accepts one sysroot for standard-library/all-dependencies analysis; mixed
+toolchains report an explicit error with repository-only as the supported alternative.
 [Initialization](https://github.com/rust-lang/rust-analyzer/blob/master/crates/rust-analyzer/src/session.rs),
 [Project discovery](https://github.com/rust-lang/rust-analyzer/blob/master/crates/project-model/src/lib.rs),
 [linkedProjects configuration](https://rust-analyzer.github.io/book/configuration.html#rust-analyzer.linkedProjects).
@@ -216,9 +217,13 @@ Resolve that path before constructing the analyzer and pass the executable path 
 the concrete adapter. Do not assume that `AnalysisInput.repository_root`, which may
 point to any analyzed repository, contains the tool binary.
 
-This slice requires an already supplied executable. A missing or unusable binary must
-produce a clear analysis failure; there is no implicit download fallback. Binary
-discovery/provisioning does not change the common AnalysisInput contract.
+The adapter requires an already supplied executable and never downloads tools itself.
+Production provisioning is now owned by the application-level
+[Language Support Packs](0022-language-support-packs.md) service before analysis begins.
+It supplies a pinned rust-analyzer and checks the existing project Cargo/rustc and,
+when needed, rust-src. Explicit sysroot/source paths prevent automatic component
+installation; repository-only scope disables sysroot. Missing project tools produce
+a clear failure. This does not change the common AnalysisInput contract.
 
 ## Accepted code representation and integration
 

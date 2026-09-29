@@ -28,6 +28,7 @@ pub(crate) async fn analyze_structure_review(
         .map_err(|error| StructureReviewError {
             code: "settings-unavailable",
             detail: error.to_string(),
+            support_packs: None,
         })?
         .structure_review
         .rust
@@ -35,6 +36,7 @@ pub(crate) async fn analyze_structure_review(
     let operation = OperationId::new(operation_id).map_err(|error| StructureReviewError {
         code: "operation-failed",
         detail: error.to_string(),
+        support_packs: None,
     })?;
     operations
         .run(operation, |operation| async move {
@@ -55,5 +57,6 @@ pub(crate) async fn analyze_structure_review(
         .map_err(|error| StructureReviewError {
             code: "cancelled",
             detail: error.to_string(),
+            support_packs: None,
         })?
 }

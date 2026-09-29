@@ -100,6 +100,7 @@ describe("App", () => {
     vi.stubEnv("MODE", "development");
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invoke.mockImplementation((command: string) => {
+      if (command === "language_support_snapshot") return Promise.resolve({ sequence: 1, packs: [], requirements: {} });
       if (command === "github_auth_status") return Promise.resolve({ configured: true, signedIn: false, appInstallUrl: "https://github.com/apps/narrant-dev/installations/new" });
       return Promise.resolve({ repositories: [], recentReviews: [] });
     });
@@ -693,7 +694,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取分支" }));
 
     expect(await screen.findByRole("button", { name: "Start review" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Head and Base must be different branches.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Head and Base must be different branches.");
     await i18n.changeLanguage("zh-CN");
   });
 

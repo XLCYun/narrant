@@ -1,3 +1,4 @@
+import type { PackId } from "@/language-support/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReviewSnapshot } from "@/review/types";
 import type { AnalysisOptions, StructureBinding, StructureReviewAdapter, StructureState } from "./types";
@@ -53,7 +54,8 @@ export function useStructureReview(adapter: StructureReviewAdapter | undefined, 
       entry.abort = undefined;
       entry.state = typeof reason === "object" && reason !== null && "code" in reason && reason.code === "cancelled"
         ? { kind: "cancelled" }
-        : { kind: "failed", detail: typeof reason === "object" && reason !== null && "detail" in reason
+        : { kind: "failed", supportPacks: typeof reason === "object" && reason !== null && "supportPacks" in reason && Array.isArray(reason.supportPacks)
+          ? reason.supportPacks.filter((id): id is PackId => id === "rust" || id === "typescript-javascript") : undefined, detail: typeof reason === "object" && reason !== null && "detail" in reason
           ? String(reason.detail) : String(reason) };
       publish();
     });
@@ -79,6 +81,7 @@ export function useStructureReview(adapter: StructureReviewAdapter | undefined, 
   const options = entry && entry.snapshotId === snapshot?.snapshotId ? entry.options : DEFAULT_OPTIONS;
   const binding: StructureBinding | undefined = adapter && snapshot ? {
     state: entry && entry.snapshotId === snapshot.snapshotId ? entry.state : IDLE,
+    supportRequest: JSON.stringify([snapshot.reviewId, snapshot.snapshotId, options.includeTests]),
     options,
     setOptions: (next) => {
       if (next.includeTests === options.includeTests) return;
