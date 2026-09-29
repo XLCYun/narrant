@@ -262,6 +262,17 @@ Windows 环境隔离、多项目冲突、应用级取消或性能。ty/Pyright �
 
 实现票进入 GitHub Issues 并链接本规格。当前已完成调研和规格定稿，生产 Python 分析器、
 支持包及应用集成仍待实现。无需新增通用图类别或插件注册框架。
+
+| 实施票 | 范围 | 前置实施票 |
+| --- | --- | --- |
+| [#189](https://github.com/XLCYun/narrant/issues/189) | Ruff 语法阶段、代码对象、稳定身份与有序自身内容 | 无 |
+| [#190](https://github.com/XLCYun/narrant/issues/190) | 受控 ty 会话、项目配置、关系校验与兼容验证 | #189 |
+| [#191](https://github.com/XLCYun/narrant/issues/191) | Python 支持包、两平台工具入口与包生命周期 | #190 |
+| [#192](https://github.com/XLCYun/narrant/issues/192) | 两侧应用接入、结构视图与端到端验收 | #189、#190、#191 |
+
+规格与研究证据由[文档 PR #188](https://github.com/XLCYun/narrant/pull/188)交付。
+每张实施票仅跟踪自身范围、验收与依赖，完整产品要求以本页为准。
+
 实现时 Rust 类型/方法使用中文注释，测试置于模块 `tests/`；Cargo 统一通过
 `scripts/cargo-agent.sh`，优先聚焦验证，每 Issue 完成前一次全量测试。
 前端仍需类型检查、Lint、构建及应用内浏览器/Preview Harness 验收，不手动触发 quality-gate。
