@@ -8,7 +8,8 @@ namespace Narrant.CSharp.Helper;
 /// <summary>表示一个必须独立编译和分析的静态 C# 上下文。</summary>
 internal sealed record StaticConfiguration(string Id, string[] Files, string Tfm, LanguageVersion LanguageVersion,
     string[] Defines, bool ImplicitUsings, string[] SourcePaths, string[] ProjectReferences, bool TestOnly,
-    string[] InactiveFiles, string AssemblyName, NullableContextOptions Nullable, OutputKind Output);
+    string[] InactiveFiles, string AssemblyName, NullableContextOptions Nullable, OutputKind Output,
+    string ConfigurationName);
 
 /// <summary>从受限声明式文件或普通 SDK 项目静态建立编译配置。</summary>
 internal static class Configuration
@@ -69,7 +70,7 @@ internal static class Configuration
                 defines,
                 config.GetProperty("implicit_usings").GetBoolean(), ["narrant.csharp.json"], [],
                 config.TryGetProperty("test_only", out var test) && test.GetBoolean(), [],
-                id, NullableContextOptions.Disable, OutputKind.DynamicallyLinkedLibrary));
+                id, NullableContextOptions.Disable, OutputKind.DynamicallyLinkedLibrary, id));
         }
         if (output.Count == 0 || output.Select(c => c.Id).Distinct(StringComparer.Ordinal).Count() != output.Count)
             throw new HelperException("unsupported_configuration", "Source-set has no configurations or duplicate ids");
@@ -151,11 +152,29 @@ internal static class Configuration
         if (tfms.Any(string.IsNullOrWhiteSpace) || (properties.ContainsKey("TargetFramework") && properties.ContainsKey("TargetFrameworks")))
             throw new HelperException("unsupported_configuration", "A literal TFM or TFM list is required", relative);
         var projectDir = Path.GetDirectoryName(path)!;
-        var defaultItems = properties.GetValueOrDefault("EnableDefaultCompileItems", "true") != "false";
-        var configuration = properties.GetValueOrDefault("Configuration", "Debug");
+        var defaultItemsText = properties.GetValueOrDefault("EnableDefaultCompileItems", "true");
+        if (defaultItemsText is not ("true" or "false"))
+            throw new HelperException("unsupported_configuration", "Invalid EnableDefaultCompileItems", relative);
+        var defaultItems = defaultItemsText == "true";
+        var implicitUsingsText = properties.GetValueOrDefault("ImplicitUsings", "disable");
+        if (implicitUsingsText is not ("true" or "enable" or "false" or "disable"))
+            throw new HelperException("unsupported_configuration", "Invalid ImplicitUsings", relative);
+        var implicitUsings = implicitUsingsText is "true" or "enable";
+        var defaultConfiguration = properties.GetValueOrDefault("Configuration", "Debug");
         var targetPlatform = properties.GetValueOrDefault("Platform", "AnyCPU");
-        if (configuration is not ("Debug" or "Release") || targetPlatform != "AnyCPU")
+        if (defaultConfiguration is not ("Debug" or "Release") || targetPlatform != "AnyCPU")
             throw new HelperException("unsupported_configuration", "Only Debug/Release and AnyCPU are supported", relative);
+        var configurationVariants = new HashSet<string>(StringComparer.Ordinal) { defaultConfiguration };
+        foreach (var condition in compile.SelectMany(item => new[] { item.groupCondition, item.condition })
+            .Concat(projectReferences.SelectMany(item => new[] { item.groupCondition, item.condition })))
+        {
+            if (condition is null) continue;
+            var match = ParseCondition(condition, relative);
+            if (match.variable != "Configuration") continue;
+            if (match.literal is not ("Debug" or "Release"))
+                throw new HelperException("unsupported_configuration", "Unsupported Configuration literal", relative);
+            configurationVariants.Add(match.literal);
+        }
         var nullable = properties.GetValueOrDefault("Nullable", "disable") switch
         {
             "disable" => NullableContextOptions.Disable,
@@ -173,10 +192,12 @@ internal static class Configuration
         var assemblyName = properties.GetValueOrDefault("AssemblyName", Path.GetFileNameWithoutExtension(path));
         var output = new List<StaticConfiguration>();
         foreach (var tfm in tfms)
+        foreach (var configuration in configurationVariants.Order(StringComparer.Ordinal))
         {
             var conditionalCandidates = new HashSet<string>(StringComparer.Ordinal);
             var files = defaultItems
-                ? SafeFiles(projectDir, ".cs").Select(file => Path.GetRelativePath(root, file).Replace('\\', '/'))
+                ? SafeFiles(projectDir, ".cs", excludeHiddenDirectories: true)
+                    .Select(file => Path.GetRelativePath(root, file).Replace('\\', '/'))
                     .ToHashSet(StringComparer.Ordinal)
                 : new HashSet<string>(StringComparer.Ordinal);
             foreach (var item in compile)
@@ -199,20 +220,22 @@ internal static class Configuration
             if (configuration == "Debug") defines.Add("DEBUG");
             defines.Add("TRACE");
             if (tfm == "net10.0") defines.AddRange(["NET10_0", "NET10_0_OR_GREATER", "NETCOREAPP1_0_OR_GREATER",
-                "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP3_0_OR_GREATER", "NET5_0_OR_GREATER",
+                "NETCOREAPP1_1_OR_GREATER", "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP2_1_OR_GREATER",
+                "NETCOREAPP2_2_OR_GREATER", "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP3_1_OR_GREATER", "NET5_0_OR_GREATER",
                 "NET6_0_OR_GREATER", "NET7_0_OR_GREATER", "NET8_0_OR_GREATER", "NET9_0_OR_GREATER"]);
             else throw new HelperException("unsupported_configuration", $"Unsupported TFM {tfm}", relative);
             defines.AddRange(properties.GetValueOrDefault("DefineConstants", "").Split(';', StringSplitOptions.RemoveEmptyEntries));
-            output.Add(new StaticConfiguration(relative + ":" + tfm, files.Order(StringComparer.Ordinal).ToArray(), tfm,
+            output.Add(new StaticConfiguration(relative + ":" + tfm + ":" + configuration,
+                files.Order(StringComparer.Ordinal).ToArray(), tfm,
                 ParseLanguage(properties.GetValueOrDefault("LangVersion", "14.0")), defines.ToArray(),
-                properties.GetValueOrDefault("ImplicitUsings", "disable") == "enable", [relative],
+                implicitUsings, [relative],
                 projectReferences.Where(item =>
                     ConditionMatches(item.groupCondition, tfm, configuration, targetPlatform, relative) &&
                     ConditionMatches(item.condition, tfm, configuration, targetPlatform, relative))
                     .Select(item => item.path).ToArray(),
                 properties.GetValueOrDefault("IsTestProject", "false") == "true",
                 conditionalCandidates.Except(files).Order(StringComparer.Ordinal).ToArray(),
-                assemblyName, nullable, outputKind));
+                assemblyName, nullable, outputKind, configuration));
         }
         return output;
     }
@@ -221,12 +244,19 @@ internal static class Configuration
     private static bool ConditionMatches(string? condition, string tfm, string configuration, string platform, string path)
     {
         if (condition is null) return true;
+        var parsed = ParseCondition(condition, path);
+        var actual = parsed.variable switch { "TargetFramework" => tfm, "Configuration" => configuration, _ => platform };
+        var equal = actual == parsed.literal;
+        return parsed.operation == "==" ? equal : !equal;
+    }
+
+    /// <summary>只解析已列举属性的单一字面比较，不求值任意 MSBuild 表达式。</summary>
+    private static (string variable, string operation, string literal) ParseCondition(string condition, string path)
+    {
         var match = System.Text.RegularExpressions.Regex.Match(condition,
             "^\\s*['\"]\\$\\((TargetFramework|Configuration|Platform)\\)['\"]\\s*(==|!=)\\s*['\"]([^'\"]+)['\"]\\s*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         if (!match.Success) throw new HelperException("unsupported_configuration", "Unsupported Compile condition", path);
-        var actual = match.Groups[1].Value switch { "TargetFramework" => tfm, "Configuration" => configuration, _ => platform };
-        var equal = actual == match.Groups[3].Value;
-        return match.Groups[2].Value == "==" ? equal : !equal;
+        return (match.Groups[1].Value, match.Groups[2].Value, match.Groups[3].Value);
     }
 
     /// <summary>将版本限制在已经固定验证的 C# 14 语法。</summary>
@@ -251,7 +281,7 @@ internal static class Configuration
     }
 
     /// <summary>以不跟随目录链接的方式枚举受控源码或项目文件。</summary>
-    private static IEnumerable<string> SafeFiles(string root, string extension)
+    private static IEnumerable<string> SafeFiles(string root, string extension, bool excludeHiddenDirectories = false)
     {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -263,7 +293,9 @@ internal static class Configuration
                 var attributes = File.GetAttributes(entry);
                 if (attributes.HasFlag(FileAttributes.Directory))
                 {
-                    if (Path.GetFileName(entry) is "bin" or "obj" or ".git") continue;
+                    var name = Path.GetFileName(entry);
+                    if (name is "bin" or "obj" or ".git" ||
+                        (excludeHiddenDirectories && name.StartsWith(".", StringComparison.Ordinal))) continue;
                     if (attributes.HasFlag(FileAttributes.ReparsePoint))
                         throw new HelperException("unsupported_configuration", "Symbolic-link directory is unsupported",
                             Path.GetRelativePath(root, entry).Replace('\\', '/'));

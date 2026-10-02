@@ -72,12 +72,13 @@ Supported properties are `TargetFramework`/`TargetFrameworks` (`net10.0`),
 `EnableDefaultCompileItems`, `IsTestProject`, `Configuration` (`Debug` or
 `Release`), `Platform` (`AnyCPU`), `Nullable`, `OutputType`, `RootNamespace`,
 `AssemblyName`, and `TreatWarningsAsErrors`. Default `**/*.cs` discovery
-excludes `bin`, `obj`, and `.git`. Literal `Compile Include`/`Remove` and
+excludes `bin`, `obj`, and hidden directories. Literal `Compile Include`/`Remove` and
 `ProjectReference Include` work. `Compile` and `ProjectReference` may carry a
 literal equality/inequality condition on `TargetFramework`, `Configuration`, or
-`Platform`, directly or on their `ItemGroup`. `Debug` and `AnyCPU` are the fixed
-defaults; the corresponding `DEBUG`/`TRACE` and net10 preprocessor constants
-are provided. Explicitly conditionally omitted files receive `inactive`
+`Platform`, directly or on their `ItemGroup`. `Debug` and `AnyCPU` are defaults;
+literal Debug/Release branches are compiled separately and unioned. The matching
+`DEBUG`/`TRACE` and net10 preprocessor constants are provided. `ImplicitUsings`
+accepts `enable` or `true`. Explicitly conditionally omitted files receive `inactive`
 coverage. `IsTestProject=true` gives reliable `excluded_test` coverage when
 `include_tests=false`.
 

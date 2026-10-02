@@ -33,9 +33,10 @@ internal sealed class GraphAccumulator
             if (!origins.TryGetValue(item.Node.Id, out var paths)) origins[item.Node.Id] = paths = new(StringComparer.Ordinal);
             paths.Add(item.Path);
             if (item.Symbol is not null)
-                foreach (var syntax in item.Symbol.DeclaringSyntaxReferences.Where(s => s.SyntaxTree.FilePath == item.Path))
+                foreach (var related in RelatedSymbols(item.Symbol))
+                foreach (var syntax in related.DeclaringSyntaxReferences.Where(s => s.SyntaxTree.FilePath == item.Path))
                 {
-                    var key = LocationKey(syntax.SyntaxTree.FilePath, syntax.Span.Start, syntax.Span.Length);
+                    var key = LocationKey(syntax.SyntaxTree.FilePath, syntax.Span.Start, syntax.Span.Length, related);
                     if (!sourceNodes.TryGetValue(key, out var ids)) sourceNodes[key] = ids = new(StringComparer.Ordinal);
                     ids.Add(item.Node.Id);
                 }
@@ -109,9 +110,10 @@ internal sealed class GraphAccumulator
                 continue;
             }
             var targets = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var syntax in symbol.OriginalDefinition.DeclaringSyntaxReferences)
+            foreach (var related in RelatedSymbols(symbol))
+            foreach (var syntax in related.DeclaringSyntaxReferences)
             {
-                var key = LocationKey(syntax.SyntaxTree.FilePath, syntax.Span.Start, syntax.Span.Length);
+                var key = LocationKey(syntax.SyntaxTree.FilePath, syntax.Span.Start, syntax.Span.Length, related);
                 if (sourceNodes.TryGetValue(key, out var ids)) targets.UnionWith(ids);
             }
             if (targets.Count > 0)
@@ -126,7 +128,8 @@ internal sealed class GraphAccumulator
             var name = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             var origin = location?.SourceTree?.FilePath;
             var identity = "csharp:" + (origin is null ?
-                "metadata:" + symbol.ContainingAssembly?.Identity.Name : "source:" + origin) + "#" + name;
+                "metadata:" + symbol.ContainingAssembly?.Identity.Name : "source:" + origin) + "#" +
+                SymbolIdentity(symbol);
             if (external.TryGetValue(identity, out var existing) && (existing.Name != name || existing.Scope != scope))
                 throw new HelperException("union_conflict", $"Conflicting external symbol {identity}");
             external[identity] = new ExternalSymbol(identity, name, scope);
@@ -136,7 +139,24 @@ internal sealed class GraphAccumulator
     }
 
     /// <summary>构造仅在本次请求内使用的源码位置映射键。</summary>
-    private static string LocationKey(string path, int start, int length) => path + "\0" + start + ":" + length;
+    private static string LocationKey(string path, int start, int length, ISymbol symbol) =>
+        path + "\0" + start + ":" + length + ":" + SymbolIdentity(symbol);
+
+    /// <summary>将 partial 方法的定义与实现视作同一确认语义符号的两个源码片段。</summary>
+    private static IEnumerable<ISymbol> RelatedSymbols(ISymbol symbol)
+    {
+        yield return symbol.OriginalDefinition;
+        if (symbol is IMethodSymbol method)
+        {
+            if (method.PartialDefinitionPart is { } definition) yield return definition.OriginalDefinition;
+            if (method.PartialImplementationPart is { } implementation) yield return implementation.OriginalDefinition;
+        }
+    }
+
+    /// <summary>以包含 owner 与参数类型的声明 ID 区分不同外部方法和重载。</summary>
+    private static string SymbolIdentity(ISymbol symbol) => symbol.GetDocumentationCommentId() ??
+        (symbol.Kind + ":" + symbol.ContainingSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) +
+         ":" + symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
 
     /// <summary>去掉同一次及跨配置的重复引用事实。</summary>
     private static void AddReference(GraphNode owner, GraphReference reference)

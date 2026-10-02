@@ -177,9 +177,9 @@ public static class E { extension(string s) { public int Size() => s.Length; } }
         self.assertEqual(result["outcome"], "ok", result.get("error"))
         self.write("A/A.csproj", '''<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
 <ItemGroup><Compile Include="Main.cs" /></ItemGroup><ItemGroup Condition="'$(Configuration)' == 'Release'"><Compile Include="Extra.cs" /></ItemGroup></Project>''')
-        inactive = self.run_helper(self.request(["A/Main.cs", "A/Extra.cs"]))
-        self.assertEqual(inactive["outcome"], "ok", inactive.get("error"))
-        self.assertEqual(next(f for f in inactive["evidence"]["files"] if f["path"] == "A/Extra.cs")["disposition"], "inactive")
+        release = self.run_helper(self.request(["A/Main.cs", "A/Extra.cs"]))
+        self.assertEqual(release["outcome"], "ok", release.get("error"))
+        self.assertEqual(next(f for f in release["evidence"]["files"] if f["path"] == "A/Extra.cs")["disposition"], "analyzed")
         self.write("A/A.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><Import Project="bad.targets" /></Project>')
         rejected = self.run_helper(self.request(["A/Main.cs"]))
         self.assertEqual(rejected["error"]["code"], "unsupported_configuration")
@@ -235,6 +235,147 @@ public static class E { extension(string s) { public int Size() => s.Length; } }
         self.assertNotEqual(own["code"], next(n for n in first if n["name"] == "F")["code"])
         self.assertEqual(next(n for n in third if n["name"] == "A")["code"],
                          next(n for n in first if n["name"] == "A")["code"])
+
+    def test_sdk_defaults_hidden_files_and_true_usings(self):
+        """固定 SDK 常量、true implicit usings 与隐藏目录过滤应和目标 SDK 一致。"""
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>true</ImplicitUsings></PropertyGroup></Project>')
+        self.write("App/Main.cs", """class MainClass { void Run() {
+#if NETCOREAPP1_1_OR_GREATER
+Console.WriteLine(1);
+#else
+Missing.Call();
+#endif
+} }""")
+        self.write("App/.hidden/H.cs", "this is invalid C# !!!")
+        result = self.run_helper(self.request(["App/Main.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        run = next(n for n in result["graph"]["nodes"] if n["name"] == "Run")
+        self.assertTrue(any(r["semantic"] == "code.calls" and r["target"]["kind"] == "external"
+                            for r in run["references"]))
+        self.assertFalse(any(r["target"].get("name") == "Missing.Call" for r in run["references"]))
+
+    def test_literal_release_branch_is_analyzed(self):
+        """普通项目的明确 Release 分支必须与 Debug 分别分析后并集。"""
+        self.write("App/App.csproj", '''<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+<ItemGroup><Compile Include="Common.cs" /></ItemGroup>
+<ItemGroup Condition="'$(Configuration)' == 'Debug'"><Compile Include="Debug.cs" /></ItemGroup>
+<ItemGroup Condition="'$(Configuration)' == 'Release'"><Compile Include="Release.cs" /></ItemGroup></Project>''')
+        for name in ("Common", "Debug", "Release"):
+            self.write(f"App/{name}.cs", f"class {name} {{}}")
+        result = self.run_helper(self.request(["App/Common.cs", "App/Debug.cs", "App/Release.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        self.assertIn("Release", [n["name"] for n in result["graph"]["nodes"]])
+        self.assertEqual(next(f for f in result["evidence"]["files"] if f["path"] == "App/Release.cs")["disposition"], "analyzed")
+
+    def test_field_and_event_shared_headers(self):
+        """共享 field/event 类型、访问性与属性须进入每个变量声明内容。"""
+        self.write("A.cs", "class C { public int X; public event System.Action E; }")
+        self.source_set([self.config("main", ["A.cs"])])
+        first = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(first["outcome"], "ok")
+        x1 = next(n for n in first["graph"]["nodes"] if n["name"] == "X")
+        e = next(n for n in first["graph"]["nodes"] if n["name"] == "E")
+        self.assertIn("public", x1["signature"])
+        self.assertIn("int", x1["signature"])
+        self.assertIn("System.Action", e["signature"].replace(" ", ""))
+        self.write("A.cs", "class C { private int X; public event System.Action E; }")
+        second = self.run_helper(self.request(["A.cs"]))
+        x2 = next(n for n in second["graph"]["nodes"] if n["name"] == "X")
+        self.assertNotEqual(x1["signature"], x2["signature"])
+
+    def test_token_projection_preserves_operator_and_raw_literal(self):
+        """运算符分组及任意长度 raw 字符串中的空格必须保持语义差异。"""
+        self.write("A.cs", 'class C { int F(int x,int y){return x++ + y;} string S()=> """"a""" b""""; }')
+        self.source_set([self.config("main", ["A.cs"])])
+        first = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(first["outcome"], "ok", first.get("error"))
+        self.write("A.cs", 'class C { int F(int x,int y){return x + ++y;} string S()=> """"a"""  b""""; }')
+        second = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(second["outcome"], "ok", second.get("error"))
+        for name in ("F", "S"):
+            self.assertNotEqual(next(n for n in first["graph"]["nodes"] if n["name"] == name)["code"],
+                                next(n for n in second["graph"]["nodes"] if n["name"] == name)["code"])
+
+    def test_branch_id_ignores_comment_directives(self):
+        """注释和字符串里的伪指令不能改变后续声明身份。"""
+        self.write("A.cs", "class C { void F(){} }")
+        self.source_set([self.config("main", ["A.cs"])])
+        first = self.run_helper(self.request(["A.cs"]))
+        self.write("A.cs", 'class C { /*\n#if FAKE\n*/ string s = "#if STR"; void F(){} }')
+        second = self.run_helper(self.request(["A.cs"]))
+        f1 = next(n for n in first["graph"]["nodes"] if n["name"] == "F")
+        f2 = next(n for n in second["graph"]["nodes"] if n["name"] == "F")
+        self.assertEqual(f1["id"], f2["id"])
+
+    def test_distinct_lexical_parts_and_generic_rename(self):
+        """接口限定、同文件 partial/namespace 片段不碰撞；泛型改名不换 ID。"""
+        self.write("A.cs", """interface I { void F(); } interface J { void F(); }
+class C : I,J { void I.F(){} void J.F(){} }
+partial class P { void A(){} } partial class P { void B(){} }
+namespace N { class X{} } namespace N { class Y{} }
+class G { void M<T>(T value){} }""")
+        self.source_set([self.config("main", ["A.cs"])])
+        first = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(first["outcome"], "ok", first.get("error"))
+        ids = [n["id"] for n in first["graph"]["nodes"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        m1 = next(n for n in first["graph"]["nodes"] if n["name"] == "M")
+        self.write("A.cs", self.root.joinpath("A.cs").read_text().replace("M<T>(T value)", "M<U>(U value)"))
+        second = self.run_helper(self.request(["A.cs"]))
+        m2 = next(n for n in second["graph"]["nodes"] if n["name"] == "M")
+        self.assertEqual(m1["id"], m2["id"])
+
+    def test_partial_member_selected_implementation(self):
+        """未选定义与已选实现配对，调用必须指向最终图中的实现。"""
+        self.write("A.cs", "partial class C { partial void F(); }")
+        self.write("B.cs", "partial class C { partial void F(){} void G(){F();} }")
+        self.source_set([self.config("main", ["A.cs", "B.cs"])])
+        result = self.run_helper(self.request(["B.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        g = next(n for n in result["graph"]["nodes"] if n["name"] == "G")
+        self.assertTrue(any(r["semantic"] == "code.calls" and r["target"]["kind"] == "node" and
+                            "implementation" in r["target"]["id"] for r in g["references"]))
+
+    def test_external_method_identities_do_not_collapse(self):
+        """同文件/同程序集的不同 owner 或重载须保留各自 External。"""
+        self.write("A.cs", 'class C { void G(){X.F(1);Y.F("x");System.Math.Abs(1);System.Math.Abs(1.0);} }')
+        self.write("B.cs", "class X { public static void F(int x){} } class Y { public static void F(string x){} }")
+        self.source_set([self.config("main", ["A.cs", "B.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        g = next(n for n in result["graph"]["nodes"] if n["name"] == "G")
+        symbols = [r["target"]["symbol"] for r in g["references"] if r["semantic"] == "code.calls" and r["target"]["kind"] == "external"]
+        self.assertEqual(len(symbols), 4)
+        self.assertEqual(len(set(symbols)), 4)
+
+    def test_constructor_initializer_and_unknown_delegate(self):
+        """构造初始化器指向确定构造函数，委托 Invoke 保持未知。"""
+        self.write("A.cs", "class B { public B(int x){} } class C:B { public C():base(1){} void L(){} void M(){System.Action a=L;a();} int N(System.Func<int> fn){return fn();} }")
+        self.source_set([self.config("main", ["A.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        ctor = next(n for n in result["graph"]["nodes"] if n["name"] == "C" and n["category"] == "callable")
+        self.assertTrue(any(r["semantic"] == "code.calls" and r["target"]["kind"] == "node" for r in ctor["references"]))
+        m = next(n for n in result["graph"]["nodes"] if n["name"] == "M")
+        self.assertTrue(any(r["semantic"] == "code.calls" and r["target"]["kind"] == "unresolved" for r in m["references"]))
+        n = next(n for n in result["graph"]["nodes"] if n["name"] == "N")
+        self.assertTrue(any(r["semantic"] == "code.calls" and r["target"]["kind"] == "unresolved" for r in n["references"]))
+
+    def test_property_event_and_expression_getter_relations(self):
+        """属性、event、表达式 getter 的接口关系和 event 类型用途不可丢失。"""
+        self.write("A.cs", """interface I { int P {get;} event System.Action E; }
+class C:I { public int P => 1; public event System.Action E { add {} remove {} } }""")
+        self.source_set([self.config("main", ["A.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        nodes = result["graph"]["nodes"]
+        prop = next(n for n in nodes if n["name"] == "P" and "public" in n["signature"])
+        evt = next(n for n in nodes if n["name"] == "E" and "public" in n["signature"])
+        getter = next(n for n in nodes if n["name"] == "get" and n["id"].startswith(prop["id"] + "/"))
+        self.assertTrue(any(r["semantic"] == "code.implements" for r in prop["references"]))
+        self.assertTrue(any(r["semantic"] == "code.implements" for r in evt["references"]))
+        self.assertTrue(any(r["semantic"] == "code.type_use" for r in evt["references"]))
+        self.assertTrue(any(r["semantic"] == "code.implements" for r in getter["references"]))
 
 
 if __name__ == "__main__":

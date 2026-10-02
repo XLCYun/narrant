@@ -36,14 +36,17 @@ generator、analyzer 或项目自定义 target。微软的
 配置分别建 Compilation，最后按源码身份合并对象及确认的关系。普通 SDK-style `.csproj`
 只接受字面 `Microsoft.NET.Sdk` 和 README 所列的有限属性、默认 `**/*.cs`、字面
 `Compile Include/Remove` 与 `ProjectReference`。仅对
-`TargetFramework`、`Configuration`、`Platform` 的字面 `==` 或 `!=` 求值；默认 Debug / AnyCPU。
+`TargetFramework`、`Configuration`、`Platform` 的字面 `==` 或 `!=` 求值；默认 Debug / AnyCPU，
+显式 Debug/Release 分支分别建 Compilation 后并集。默认源码发现排除隐藏目录，
+`ImplicitUsings=true` 与 `enable` 同样启用隐式导入，并按固定 SDK 补全 net10 预处理常量。
 条件中未纳入的显式文件报 `inactive`；可靠的 `test_only` 或 `IsTestProject=true` 可报
 `excluded_test`。不读取 NuGet cache 或已生成的 obj/assets。
 
 编译单元包含未选中的仓内源码作绑定上下文，图成员只来自选集。通过原始相对文件路径、词法
 父级、kind、源码参数类型及分支标记形成身份；partial 片段逐文件保留，不能挑首个片段代表
 全部声明。所有明确配置的直接子声明跨度先合并，父对象的规范内容因此同时保留 `#if` 各
-分支原文，却用子对象锚点排除子方法体。关系目标在全配置对象集合形成后，依 Roslyn 的
+分支原文，却用子对象锚点排除子方法体。规范内容按 Roslyn token 保留运算符分组和 raw
+字符串字面值；分支 ID 只读取真实指令 trivia，避免注释中的伪 `#if`。关系目标在全配置对象集合形成后，依 Roslyn 的
 `DeclaringSyntaxReferences` 判为 Node、仓内 External、平台 External 或 Unresolved。
 
 已映射文件、namespace、type、delegate、record、扩展块、方法/构造/析构/运算符、
@@ -62,11 +65,13 @@ dotnet build native-helpers/csharp/Narrant.CSharp.Helper.csproj -c Release --no-
 dotnet publish native-helpers/csharp/Narrant.CSharp.Helper.csproj -c Release --no-restore -p:UseAppHost=false -o /tmp/narrant-csharp-publish
   publish succeeded; ready message observed from published helper
 python3 -W error::ResourceWarning -m unittest discover -s native-helpers/csharp/tests -v
-  Ran 10 tests ... OK
+  Ran 10 tests ... OK（首次提交；修复轮次扩展到 20 项，见 Task 4 报告）
 ```
 
 测试是独立进程 NDJSON 会话，覆盖 partial/重载和精确调用、跨 ProjectReference Node、
 条件调用与条件声明并集、缺依赖 Unresolved、目标缺失、extension block、接口实现、
+字段和事件共享声明头、同文件 partial 与接口限定 ID、泛型重命名、partial 实现调用、
+外部重载身份、构造初始化器与委托未知调用、属性/事件关系、SDK 固定默认值与 Release 分支、
 测试排除/启用、条件 Compile 的 inactive、格式/注释与 body-only 内容、取消、静态拒绝
 Target/Import 及分析前后仓内文件 SHA-256 一致。测试中的项目 target 含写入 marker，
 helper 返回 `unsupported_configuration` 且 marker 不存在。宿主到真实 CodeGraph/diff 的

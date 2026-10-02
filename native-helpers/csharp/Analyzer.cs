@@ -95,7 +95,8 @@ internal static class Analyzer
             var references = References(platform).ToList();
             foreach (var dependency in config.ProjectReferences)
             {
-                var target = configurations.SingleOrDefault(c => c.SourcePaths[0] == dependency && c.Tfm == config.Tfm);
+                var target = configurations.SingleOrDefault(c => c.SourcePaths[0] == dependency && c.Tfm == config.Tfm &&
+                    c.ConfigurationName == config.ConfigurationName);
                 if (target is null)
                     throw new HelperException("unsupported_configuration", $"ProjectReference lacks matching TFM: {dependency}", config.SourcePaths);
                 if (target.TestOnly && !input.IncludeTests)
@@ -248,7 +249,8 @@ internal static class Extractor
         if (syntax is NamespaceDeclarationSyntax or FileScopedNamespaceDeclarationSyntax)
         {
             var ns = (BaseNamespaceDeclarationSyntax)syntax;
-            var id = parent.Id + "/namespace:" + Escape(ns.Name.ToString());
+            var id = parent.Id + "/namespace:" + Escape(ns.Name.ToString()) +
+                FragmentMarker(ns, projection, ns.Name.ToString());
             var node = New("container", id, "namespace", ns.Name.ToString(), Normalize(ns.Name.ToString()),
                 Project(ns.ToFullString(), projection.Children(ns).Select(member => Shift(member.Span, ns.FullSpan.Start))), ns.ToFullString());
             parent.Contains.Add(node.Id);
@@ -268,7 +270,8 @@ internal static class Extractor
             var kind = syntax.Kind().ToString().Replace("Declaration", "", StringComparison.Ordinal).ToLowerInvariant();
             var arity = symbol is INamedTypeSymbol named ? named.Arity : 0;
             var branch = BranchMarker(tree, syntax.SpanStart);
-            var id = parent.Id + "/" + kind + ":" + Escape(name) + "`" + arity + branch;
+            var id = parent.Id + "/" + kind + ":" + Escape(name) + "`" + arity +
+                FragmentMarker(syntax, projection, name + "`" + arity) + branch;
             var children = syntax is TypeDeclarationSyntax type ? type.Members.Cast<SyntaxNode>().ToArray() :
                 syntax is EnumDeclarationSyntax enumeration ? enumeration.Members.Cast<SyntaxNode>().ToArray() : [];
             var allChildren = projection.Children(syntax);
@@ -363,9 +366,15 @@ internal static class Extractor
         string path, bool selected, SemanticModel model, List<ExtractedNode> output, CancellationToken cancellation)
     {
         var kind = declaration is EventFieldDeclarationSyntax ? "event" : "field";
+        var field = (BaseFieldDeclarationSyntax)declaration;
+        var first = field.Declaration.Variables[0];
+        var prefix = field.SyntaxTree.GetText().ToString(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(field.SpanStart, first.SpanStart));
+        var signature = Normalize(prefix + variable.Identifier.Text);
+        var source = prefix + variable.ToFullString() + ";";
         AddLeaf("value", kind, variable.Identifier.ValueText, variable, parent, path, selected,
             model.GetDeclaredSymbol(variable, cancellation), variable.Initializer is null ? null : Normalize(variable.Initializer.ToFullString()),
-            output, model, cancellation);
+            output, model, cancellation, signature, source);
     }
 
     /// <summary>提取显式访问器；属性表达式体形成一个有源码的 getter。</summary>
@@ -384,29 +393,46 @@ internal static class Extractor
             var node = New("callable", parent.Id + "/get", "get", "get", "get", Normalize(expression.ToFullString()),
                 expression.ToFullString());
             parent.Contains.Add(node.Id);
-            output.Add(new ExtractedNode(node, path, selected, null, References([expression], model, cancellation)));
+            var property = expression.Parent switch
+            {
+                PropertyDeclarationSyntax declaration => model.GetDeclaredSymbol(declaration, cancellation) as IPropertySymbol,
+                IndexerDeclarationSyntax declaration => model.GetDeclaredSymbol(declaration, cancellation) as IPropertySymbol,
+                _ => null
+            };
+            var getter = property?.GetMethod;
+            var references = References([expression], model, cancellation);
+            AppendMemberRelations(getter, references);
+            output.Add(new ExtractedNode(node, path, selected, getter, references));
         }
     }
 
     /// <summary>为一个有独立源码的成员建立稳定槽位并记录其引用。</summary>
     private static GraphNode AddLeaf(string category, string kind, string name, SyntaxNode syntax, GraphNode parent,
         string path, bool selected, ISymbol? symbol, string? code, List<ExtractedNode> output,
-        SemanticModel model, CancellationToken cancellation)
+        SemanticModel model, CancellationToken cancellation, string? signatureOverride = null, string? sourceOverride = null)
     {
         var parameters = syntax switch
         {
-            BaseMethodDeclarationSyntax method => string.Join(",", method.ParameterList.Parameters.Select(ParameterSlot)),
-            IndexerDeclarationSyntax indexer => string.Join(",", indexer.ParameterList.Parameters.Select(ParameterSlot)),
+            BaseMethodDeclarationSyntax method => string.Join(",", method.ParameterList.Parameters.Select(p => ParameterSlot(p, model))),
+            IndexerDeclarationSyntax indexer => string.Join(",", indexer.ParameterList.Parameters.Select(p => ParameterSlot(p, model))),
             _ => ""
         };
         var arity = symbol is IMethodSymbol m ? m.Arity : 0;
-        var slot = kind + ":" + name + "`" + arity + "(" + parameters + ")";
+        var qualifier = syntax switch
+        {
+            MethodDeclarationSyntax method => method.ExplicitInterfaceSpecifier?.Name.ToString(),
+            PropertyDeclarationSyntax property => property.ExplicitInterfaceSpecifier?.Name.ToString(),
+            EventDeclarationSyntax eventDeclaration => eventDeclaration.ExplicitInterfaceSpecifier?.Name.ToString(),
+            IndexerDeclarationSyntax indexer => indexer.ExplicitInterfaceSpecifier?.Name.ToString(),
+            _ => null
+        };
+        var slot = kind + ":" + (qualifier is null ? "" : qualifier + ".") + name + "`" + arity + "(" + parameters + ")";
         var role = symbol is IMethodSymbol partial ? partial.PartialImplementationPart is not null ? ":definition" :
             partial.PartialDefinitionPart is not null ? ":implementation" : "" : "";
         var branch = BranchMarker(syntax.SyntaxTree, syntax.SpanStart);
         var id = parent.Id + "/" + Escape(slot + role) + branch;
-        var signature = Header(syntax);
-        var node = New(category, id, kind, name, signature, code, syntax.ToFullString());
+        var signature = signatureOverride ?? Header(syntax);
+        var node = New(category, id, kind, name, signature, code, sourceOverride ?? syntax.ToFullString());
         parent.Contains.Add(id);
         var scope = syntax switch
         {
@@ -420,26 +446,93 @@ internal static class Extractor
             _ => null
         };
         var references = scope is null ? [] : References([scope], model, cancellation);
-        if (symbol?.ContainingType is { } owner) references.Add(new PendingReference("code.member_of", owner, null));
-        if (symbol is IFieldSymbol field) references.Add(new PendingReference("code.type_use", field.Type, null));
-        if (symbol is IPropertySymbol prop) references.Add(new PendingReference("code.type_use", prop.Type, null));
-        if (symbol is IMethodSymbol implementation && implementation.ContainingType is { } containing)
-        {
-            if (implementation.OverriddenMethod is { } overridden)
-                references.Add(new PendingReference("code.extends", overridden, null));
-            foreach (var contract in containing.AllInterfaces.SelectMany(iface => iface.GetMembers()))
-                if (SymbolEqualityComparer.Default.Equals(containing.FindImplementationForInterfaceMember(contract), implementation))
-                    references.Add(new PendingReference("code.implements", contract, null));
-        }
+        if (syntax is ConstructorDeclarationSyntax constructor && constructor.Initializer is not null)
+            references.AddRange(References([constructor.Initializer], model, cancellation));
+        AppendMemberRelations(symbol, references);
         output.Add(new ExtractedNode(node, path, selected, symbol, references));
         return node;
     }
 
+    /// <summary>收集成员归属、类型用途、override 与已确认的接口实现。</summary>
+    private static void AppendMemberRelations(ISymbol? symbol, List<PendingReference> references)
+    {
+        if (symbol?.ContainingType is not { } containing) return;
+        references.Add(new PendingReference("code.member_of", containing, null));
+        switch (symbol)
+        {
+            case IFieldSymbol field:
+                references.Add(new PendingReference("code.type_use", field.Type, null));
+                break;
+            case IPropertySymbol property:
+                references.Add(new PendingReference("code.type_use", property.Type, null));
+                if (property.OverriddenProperty is { } overriddenProperty)
+                    references.Add(new PendingReference("code.extends", overriddenProperty, null));
+                break;
+            case IEventSymbol evt:
+                references.Add(new PendingReference("code.type_use", evt.Type, null));
+                if (evt.OverriddenEvent is { } overriddenEvent)
+                    references.Add(new PendingReference("code.extends", overriddenEvent, null));
+                break;
+            case IMethodSymbol method when method.OverriddenMethod is { } overriddenMethod:
+                references.Add(new PendingReference("code.extends", overriddenMethod, null));
+                break;
+        }
+        foreach (var contract in containing.AllInterfaces.SelectMany(iface => iface.GetMembers()))
+        {
+            var implementation = containing.FindImplementationForInterfaceMember(contract);
+            if (SymbolEqualityComparer.Default.Equals(implementation, symbol))
+                references.Add(new PendingReference("code.implements", contract, null));
+            if (symbol is IMethodSymbol method && contract is IPropertySymbol interfaceProperty &&
+                implementation is IPropertySymbol implementationProperty &&
+                SymbolEqualityComparer.Default.Equals(implementationProperty.GetMethod, method) &&
+                interfaceProperty.GetMethod is not null)
+                references.Add(new PendingReference("code.implements", interfaceProperty.GetMethod, null));
+            if (symbol is IMethodSymbol eventMethod && contract is IEventSymbol interfaceEvent &&
+                implementation is IEventSymbol implementationEvent)
+            {
+                if (SymbolEqualityComparer.Default.Equals(implementationEvent.AddMethod, eventMethod) &&
+                    interfaceEvent.AddMethod is not null)
+                    references.Add(new PendingReference("code.implements", interfaceEvent.AddMethod, null));
+                if (SymbolEqualityComparer.Default.Equals(implementationEvent.RemoveMethod, eventMethod) &&
+                    interfaceEvent.RemoveMethod is not null)
+                    references.Add(new PendingReference("code.implements", interfaceEvent.RemoveMethod, null));
+            }
+        }
+    }
+
     /// <summary>仅用源码参数类型与传递方式构造重载槽，不纳入参数名。</summary>
-    private static string ParameterSlot(ParameterSyntax parameter)
+    private static string ParameterSlot(ParameterSyntax parameter, SemanticModel model)
     {
         var passing = string.Join(" ", parameter.Modifiers.Select(m => m.ValueText));
-        return passing + ":" + Normalize(parameter.Type?.ToFullString() ?? "");
+        if (parameter.Type is null) return passing + ":";
+        var typeTokens = parameter.Type.DescendantTokens().Select(token =>
+        {
+            if (token.Parent is IdentifierNameSyntax identifier && identifier.Identifier == token &&
+                model.GetSymbolInfo(identifier).Symbol is ITypeParameterSymbol typeParameter)
+                return (typeParameter.DeclaringMethod is null ? "type!" : "method!") + typeParameter.Ordinal;
+            return token.Text;
+        });
+        return passing + ":" + string.Join(" ", typeTokens);
+    }
+
+    /// <summary>同一文件内同名词法片段使用声明顺序槽，不把物理行号写入身份。</summary>
+    private static string FragmentMarker(SyntaxNode syntax, ProjectionIndex projection, string name)
+    {
+        if (syntax.Parent is null) return "";
+        var same = projection.Children(syntax.Parent).Where(candidate => candidate.Kind() == syntax.Kind() &&
+            candidate switch
+            {
+                BaseNamespaceDeclarationSyntax ns => ns.Name.ToString() == name,
+                BaseTypeDeclarationSyntax type => type.Identifier.ValueText + "`" +
+                    (type is TypeDeclarationSyntax declaration ? declaration.TypeParameterList?.Parameters.Count ?? 0 : 0) == name,
+                DelegateDeclarationSyntax declaration => declaration.Identifier.ValueText + "`" +
+                    (declaration.TypeParameterList?.Parameters.Count ?? 0) == name,
+                _ => false
+            }).OrderBy(candidate => candidate.SpanStart).ToArray();
+        if (same.Length <= 1) return "";
+        var index = Array.FindIndex(same, candidate => candidate.Span == syntax.Span);
+        if (index < 0) throw new HelperException("object_extraction_failed", "Cannot locate lexical declaration fragment");
+        return "~part" + (index + 1);
     }
 
     /// <summary>收集显式调用、构造与方法组；无法确认的调用保留观测名称。</summary>
@@ -452,8 +545,9 @@ internal static class Extractor
             {
                 cancellation.ThrowIfCancellationRequested();
                 var symbol = model.GetSymbolInfo(invocation, cancellation).Symbol;
-                result.Add(new PendingReference("code.calls", symbol is IMethodSymbol ? symbol : null,
-                    symbol is IMethodSymbol ? null : invocation.Expression.ToString()));
+                var direct = symbol is IMethodSymbol method && method.MethodKind != MethodKind.DelegateInvoke;
+                result.Add(new PendingReference("code.calls", direct ? symbol : null,
+                    direct ? null : invocation.Expression.ToString()));
             }
             foreach (var creation in root.DescendantNodesAndSelf().OfType<ObjectCreationExpressionSyntax>())
             {
@@ -515,18 +609,30 @@ internal static class Extractor
     /// <summary>用相对路径和预处理分支字面条件标识同名条件声明。</summary>
     private static string BranchMarker(SyntaxTree tree, int offset)
     {
-        var text = tree.GetText().ToString(new Microsoft.CodeAnalysis.Text.TextSpan(0, offset));
-        var stack = new List<string>();
-        foreach (var line in text.Split('\n'))
+        var stack = new List<(string Root, string Branch)>();
+        foreach (var trivia in tree.GetRoot().DescendantTrivia(descendIntoTrivia: true)
+            .Where(trivia => trivia.SpanStart < offset && trivia.IsDirective).OrderBy(trivia => trivia.SpanStart))
         {
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("#if ", StringComparison.Ordinal)) stack.Add(trimmed);
-            else if (trimmed.StartsWith("#elif ", StringComparison.Ordinal) && stack.Count > 0) stack[^1] = trimmed;
-            else if (trimmed.StartsWith("#else", StringComparison.Ordinal) && stack.Count > 0) stack[^1] += ":else";
-            else if (trimmed.StartsWith("#endif", StringComparison.Ordinal) && stack.Count > 0) stack.RemoveAt(stack.Count - 1);
+            switch (trivia.GetStructure())
+            {
+                case IfDirectiveTriviaSyntax ifDirective:
+                    var condition = Normalize(ifDirective.Condition.ToFullString());
+                    stack.Add((condition, "if:" + condition));
+                    break;
+                case ElifDirectiveTriviaSyntax elifDirective when stack.Count > 0:
+                    stack[^1] = (stack[^1].Root, "elif:" + Normalize(elifDirective.Condition.ToFullString()));
+                    break;
+                case ElseDirectiveTriviaSyntax when stack.Count > 0:
+                    stack[^1] = (stack[^1].Root, "else");
+                    break;
+                case EndIfDirectiveTriviaSyntax when stack.Count > 0:
+                    stack.RemoveAt(stack.Count - 1);
+                    break;
+            }
         }
         if (stack.Count == 0) return "";
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("/", stack)));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("/", stack.Select(frame =>
+            frame.Root + ":" + frame.Branch))));
         return "~" + Convert.ToHexString(hash[..6]).ToLowerInvariant();
     }
 
@@ -565,53 +671,39 @@ internal static class Extractor
     /// <summary>去除普通注释与排版，同时保存字面量及预处理文字。</summary>
     internal static string Normalize(string text)
     {
-        var builder = new StringBuilder(text.Length);
-        var pendingSpace = false;
-        for (var i = 0; i < text.Length;)
+        var parts = new List<string>();
+        foreach (var token in SyntaxFactory.ParseTokens(text,
+            options: new CSharpParseOptions(LanguageVersion.CSharp14)))
         {
-            var c = text[i];
-            if (char.IsWhiteSpace(c)) { pendingSpace = true; i++; continue; }
-            if (c == '/' && i + 1 < text.Length && text[i + 1] == '/')
-            {
-                i += 2;
-                while (i < text.Length && text[i] is not ('\n' or '\r')) i++;
-                pendingSpace = true;
-                continue;
-            }
-            if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
-            {
-                i += 2;
-                while (i + 1 < text.Length && !(text[i] == '*' && text[i + 1] == '/')) i++;
-                i = Math.Min(i + 2, text.Length);
-                pendingSpace = true;
-                continue;
-            }
-            if (pendingSpace && builder.Length > 0 && (char.IsLetterOrDigit(builder[^1]) || builder[^1] == '_') &&
-                (char.IsLetterOrDigit(c) || c == '_')) builder.Append(' ');
-            pendingSpace = false;
-            if (c is '"' or '\'' || (c == '@' && i + 1 < text.Length && text[i + 1] == '"'))
-            {
-                var verbatim = c == '@';
-                if (verbatim) { builder.Append('@'); i++; c = text[i]; }
-                var quote = c;
-                var raw = quote == '"' && i + 2 < text.Length && text[i + 1] == '"' && text[i + 2] == '"';
-                var count = raw ? 3 : 1;
-                for (var n = 0; n < count; n++) builder.Append(text[i++]);
-                while (i < text.Length)
-                {
-                    var next = text[i++];
-                    builder.Append(next);
-                    if (!verbatim && !raw && next == '\\' && i < text.Length) { builder.Append(text[i++]); continue; }
-                    if (verbatim && next == '"' && i < text.Length && text[i] == '"') { builder.Append(text[i++]); continue; }
-                    if (!raw && next == quote) break;
-                    if (raw && next == '"' && i + 1 < text.Length && text[i] == '"' && text[i + 1] == '"')
-                    { builder.Append(text[i++]); builder.Append(text[i++]); break; }
-                }
-                continue;
-            }
-            builder.Append(c);
-            i++;
+            CollectTrivia(token.LeadingTrivia);
+            if (token.RawKind != (int)SyntaxKind.EndOfFileToken && token.Text.Length > 0)
+                parts.Add(token.Text);
+            CollectTrivia(token.TrailingTrivia);
         }
-        return builder.ToString();
+        return string.Join(" ", parts);
+
+        // 只忽略普通注释/排版；指令和非活动源码仍以 Roslyn token 为单位进入投影。
+        void CollectTrivia(SyntaxTriviaList triviaList)
+        {
+            foreach (var trivia in triviaList)
+            {
+                if (trivia.IsKind(SyntaxKind.DisabledTextTrivia))
+                {
+                    var inactive = Normalize(trivia.ToFullString());
+                    if (inactive.Length > 0) parts.Add("disabled(" + inactive + ")");
+                }
+                else if (trivia.IsDirective)
+                {
+                    var directive = trivia.GetStructure();
+                    var tokens = directive?.DescendantTokens().Where(t => t.Text.Length > 0)
+                        .Select(t => t.Text) ?? [];
+                    parts.Add("directive(" + string.Join(" ", tokens) + ")");
+                }
+                else if (trivia.IsKind(SyntaxKind.SkippedTokensTrivia) && trivia.GetStructure() is { } skipped)
+                {
+                    parts.Add("skipped(" + string.Join(" ", skipped.DescendantTokens().Select(t => t.Text)) + ")");
+                }
+            }
+        }
     }
 }
