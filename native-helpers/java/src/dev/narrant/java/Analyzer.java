@@ -23,6 +23,7 @@ import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.ToolFactory;
 import org.eclipse.jdt.core.compiler.IScanner;
 import org.eclipse.jdt.core.compiler.ITerminalSymbols;
+import org.eclipse.jdt.core.compiler.IProblem;
 import org.eclipse.jdt.core.dom.*;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import static dev.narrant.java.Main.Failure;
@@ -35,8 +36,6 @@ final class Analyzer {
     private final long resultLimit;
     private final ProjectModel model;
     private final TreeMap<String, GraphNode> nodes = new TreeMap<>();
-    private final Map<String, String> bindingNodes = new HashMap<>();
-    private final Map<String, String> bindingRepository = new HashMap<>();
     private final Map<String, External> externals = new TreeMap<>();
     private final Map<String, FilePart> parts = new HashMap<>();
     private final List<String> roots = new ArrayList<>();
@@ -45,6 +44,23 @@ final class Analyzer {
     private static final class UnionConflict extends RuntimeException {
         /** 保存冲突身份。 */
         UnionConflict(String id) { super(id); }
+    }
+
+    /** 同一配置的源码声明重复，不能把两处当成一个对象。 */
+    private static final class DuplicateDeclaration extends RuntimeException {
+        /** 保留重复的源码身份。 */
+        DuplicateDeclaration(String id) { super(id); }
+    }
+
+    /** JDT binding key 只能在创建它的配置语义环境内使用。 */
+    private static final class ConfigState {
+        final ProjectModel.Configuration config;
+        final Map<String, String> bindingSources = new HashMap<>();
+        final Map<String, ASTNode> seen = new HashMap<>();
+        final Map<String, String> topLevelTypes = new HashMap<>();
+
+        /** 为一次配置解析建立隔离的声明索引。 */
+        ConfigState(ProjectModel.Configuration config) { this.config = config; }
     }
 
     /** 已归属到一个源码声明的图节点。 */
@@ -81,12 +97,14 @@ final class Analyzer {
         final String semantic;
         final String observed;
         final IBinding binding;
+        final ConfigState state;
 
         /** 保留原始绑定和恢复状态直到图成员固定。 */
-        Pending(String semantic, String observed, IBinding binding) {
+        Pending(String semantic, String observed, IBinding binding, ConfigState state) {
             this.semantic = semantic;
             this.observed = observed;
             this.binding = binding;
+            this.state = state;
         }
     }
 
@@ -147,8 +165,7 @@ final class Analyzer {
     JsonObject run() throws Failure {
         for (ProjectModel.Configuration config : model.configurations) {
             checkpoint();
-            boolean needed = model.files.stream().anyMatch(file -> model.selected.get(file) == config &&
-                (model.includeTests || !model.isTest(file)));
+            boolean needed = model.files.stream().anyMatch(file -> model.activeConfigurations(file).contains(config));
             if (!needed) continue;
             List<String> context = model.context(config);
             for (String file : context) if (file.endsWith("/module-info.java") || file.equals("module-info.java"))
@@ -166,13 +183,14 @@ final class Analyzer {
 
     /** 检查取消与分析总时限，JDT 回调间也执行。 */
     private void checkpoint() throws Failure {
-        if (cancelled.get()) throw new Failure("resource_limit", "analysis cancelled");
+        if (cancelled.get()) throw Failure.cancelled();
         if (System.nanoTime() > deadline) throw new Failure("resource_limit", "analysis timeout");
     }
 
     /** 对一个配置创建独立 JDT 语义环境。 */
     private void parseConfiguration(ProjectModel.Configuration config, List<String> context) throws Failure {
         try {
+            ConfigState state = new ConfigState(config);
             ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
             Map<String, String> options = new HashMap<>();
             JavaCore.setComplianceOptions(config.release, options);
@@ -206,10 +224,13 @@ final class Analyzer {
                         parts.put(relative, part);
                         rejectMalformed(part);
                         verifyPackage(config, part);
-                        boolean selected = model.selected.get(relative) == config &&
-                            (model.includeTests || !model.isTest(relative));
-                        new Visitor(part, selected).extract();
+                        boolean selected = model.selected.containsKey(relative) &&
+                            model.activeConfigurations(relative).contains(config);
+                        new Visitor(part, selected, state).extract();
                     } catch (Failure problem) { callbackFailure[0] = problem; }
+                    catch (DuplicateDeclaration problem) {
+                        callbackFailure[0] = new Failure("object_extraction_failed", "duplicate Java declaration: " + problem.getMessage());
+                    }
                     catch (UnionConflict problem) {
                         callbackFailure[0] = new Failure("union_conflict", "incompatible source identity: " + problem.getMessage());
                     }
@@ -227,10 +248,11 @@ final class Analyzer {
             for (String file : context) if (!parts.containsKey(file))
                 throw new Failure("object_extraction_failed", "JDT omitted source", List.of(file));
         } catch (Failure e) { throw e; }
+        catch (DuplicateDeclaration e) { throw new Failure("object_extraction_failed", "duplicate Java declaration: " + e.getMessage()); }
         catch (UnionConflict e) { throw new Failure("union_conflict", "incompatible source identity: " + e.getMessage()); }
         catch (Exception e) {
             if (System.nanoTime() > deadline) throw new Failure("resource_limit", "analysis timeout");
-            if (cancelled.get()) throw new Failure("resource_limit", "analysis cancelled");
+            if (cancelled.get()) throw Failure.cancelled();
             throw new Failure("object_extraction_failed", "JDT parser failed: " + e.getMessage());
         }
     }
@@ -245,6 +267,12 @@ final class Analyzer {
             }
         });
         if (malformed[0]) throw new Failure("object_extraction_failed", "malformed Java syntax", List.of(part.path));
+        Set<Integer> duplicates = Set.of(IProblem.DuplicateMethod, IProblem.DuplicateField,
+            IProblem.DuplicateTypes, IProblem.DuplicateNestedType, IProblem.DuplicateMethodErasure,
+            IProblem.DuplicateParameterizedMethods, IProblem.DuplicateAnnotationMember,
+            IProblem.RecordDuplicateComponent);
+        for (IProblem problem : part.unit.getProblems()) if (problem.isError() && duplicates.contains(problem.getID()))
+            throw new Failure("object_extraction_failed", "duplicate Java declaration", List.of(part.path));
     }
 
     /** 源码包名须与明确源码根下的真实目录一致。 */
@@ -267,23 +295,26 @@ final class Analyzer {
     private final class Visitor extends ASTVisitor {
         private final FilePart part;
         private final boolean selected;
+        private final ConfigState state;
         private final Deque<GraphNode> owners = new ArrayDeque<>();
         private final Map<ASTNode, GraphNode> opened = new HashMap<>();
         private final Map<String, Integer> slots = new HashMap<>();
 
         /** 建立文件局部访问状态。 */
-        Visitor(FilePart part, boolean selected) { this.part = part; this.selected = selected; }
+        Visitor(FilePart part, boolean selected, ConfigState state) {
+            this.part = part;
+            this.selected = selected;
+            this.state = state;
+        }
 
         /** 添加物理文件与本文件的 package 声明。 */
         void extract() throws Failure {
-            if (selected) {
-                String id = "java:" + part.path + "#file";
-                GraphNode file = add("container", id, "file", part.path, null, part.unit, null);
-                roots.add(id);
-                owners.push(file);
-            }
+            String id = "java:" + part.path + "#file";
+            GraphNode file = add("container", id, "file", part.path, null, part.unit, null);
+            if (selected && !roots.contains(id)) roots.add(id);
+            owners.push(file);
             part.unit.accept(this);
-            if (selected) owners.pop();
+            owners.pop();
         }
 
         /** 按词法 owner 建立稳定声明身份。 */
@@ -304,18 +335,20 @@ final class Analyzer {
         /** 创建选中节点，并保证同一源码身份兼容。 */
         private GraphNode add(String category, String id, String kind, String name,
                               String signature, ASTNode ast, IBinding binding) {
-            if (!selected) {
-                if (usable(binding)) bindingRepository.put(binding.getKey(), symbol(binding));
-                return null;
-            }
+            ASTNode seen = state.seen.putIfAbsent(id, ast);
+            if (seen != null && seen != ast) throw new DuplicateDeclaration(id);
             String startSource = ast == part.unit ? part.source : excerpt(part.source, ast);
             GraphNode node = new GraphNode(category, id, kind, name, signature, part.path, ast, startSource);
-            GraphNode existing = nodes.putIfAbsent(id, node);
-            if (existing != null) {
-                if (!existing.category.equals(category) || !existing.nativeKind.equals(kind) ||
-                    !existing.path.equals(part.path) || !existing.source.equals(startSource))
-                    throw new UnionConflict(id);
-                node = existing;
+            if (selected) {
+                GraphNode existing = nodes.putIfAbsent(id, node);
+                if (existing != null) {
+                    if (!existing.category.equals(category) || !existing.nativeKind.equals(kind) ||
+                        !existing.path.equals(part.path) || !existing.source.equals(startSource) ||
+                        !java.util.Objects.equals(existing.name, name) ||
+                        !java.util.Objects.equals(existing.signature, signature))
+                        throw new UnionConflict(id);
+                    node = existing;
+                }
             }
             if (!owners.isEmpty() && !owners.peek().contains.contains(id)) owners.peek().contains.add(id);
             if (!owners.isEmpty()) {
@@ -324,7 +357,11 @@ final class Analyzer {
                     throw new UnionConflict(id);
                 node.parent = parent;
             }
-            if (usable(binding)) bindingNodes.put(binding.getKey(), id);
+            if (usable(binding)) {
+                String key = declaration(binding).getKey();
+                String previous = state.bindingSources.putIfAbsent(key, id);
+                if (previous != null && !previous.equals(id)) throw new DuplicateDeclaration(id);
+            }
             return node;
         }
 
@@ -341,16 +378,20 @@ final class Analyzer {
         /** 按 AST 具体形态创建源码声明。 */
         @Override public void preVisit(ASTNode ast) {
             if (ast instanceof TypeDeclaration node) {
+                checkTopLevel(node.getName().getIdentifier(), ast);
                 String kind = node.isInterface() ? "interface" : "class";
                 open(ast, add("type", id(kind, node.getName().getIdentifier(), null), kind,
                     node.getName().getIdentifier(), header(part.source, ast), ast, node.resolveBinding()));
             } else if (ast instanceof EnumDeclaration node) {
+                checkTopLevel(node.getName().getIdentifier(), ast);
                 open(ast, add("type", id("enum", node.getName().getIdentifier(), null), "enum",
                     node.getName().getIdentifier(), header(part.source, ast), ast, node.resolveBinding()));
             } else if (ast instanceof AnnotationTypeDeclaration node) {
+                checkTopLevel(node.getName().getIdentifier(), ast);
                 open(ast, add("type", id("annotation", node.getName().getIdentifier(), null), "annotation",
                     node.getName().getIdentifier(), header(part.source, ast), ast, node.resolveBinding()));
             } else if (ast instanceof RecordDeclaration node) {
+                checkTopLevel(node.getName().getIdentifier(), ast);
                 open(ast, add("type", id("record", node.getName().getIdentifier(), null), "record",
                     node.getName().getIdentifier(), header(part.source, ast), ast, node.resolveBinding()));
             } else if (ast instanceof AnonymousClassDeclaration node) {
@@ -480,7 +521,16 @@ final class Analyzer {
 
         /** 将关系归属最近的独立源码对象。 */
         private void refer(String semantic, String observed, IBinding binding) {
-            if (selected && !owners.isEmpty()) owners.peek().pending.add(new Pending(semantic, observed, binding));
+            if (selected && !owners.isEmpty()) owners.peek().pending.add(new Pending(semantic, observed, binding, state));
+        }
+
+        /** 同一配置下两份顶层同名类型不能形成两个确定对象。 */
+        private void checkTopLevel(String name, ASTNode ast) {
+            if (!(ast.getParent() instanceof CompilationUnit)) return;
+            String packageName = part.unit.getPackage() == null ? "" : part.unit.getPackage().getName().getFullyQualifiedName();
+            String qualified = packageName.isEmpty() ? name : packageName + "." + name;
+            String previous = state.topLevelTypes.putIfAbsent(qualified, part.path);
+            if (previous != null) throw new DuplicateDeclaration(qualified);
         }
     }
 
@@ -556,14 +606,17 @@ final class Analyzer {
         }
         IBinding declaration = declaration(pending.binding);
         String key = declaration.getKey();
-        String node = bindingNodes.get(key);
-        if (node != null) {
+        String sourceId = pending.state.bindingSources.get(key);
+        if (sourceId != null && nodes.containsKey(sourceId)) {
             target.addProperty("kind", "node");
-            target.addProperty("id", node);
+            target.addProperty("id", sourceId);
             return target;
         }
-        String symbol = symbol(declaration);
-        String scope = bindingRepository.containsKey(key) || repositoryOwner(declaration) ? "repository" : "dependency";
+        String ownerId = repositoryOwner(pending.state, declaration);
+        boolean repository = sourceId != null || ownerId != null;
+        String symbol = sourceId != null ? sourceId : ownerId != null ?
+            ownerId + "/implicit:" + escape(symbol(declaration)) : symbol(declaration);
+        String scope = repository ? "repository" : "dependency";
         target.addProperty("kind", "external");
         target.addProperty("symbol", symbol);
         externals.putIfAbsent(symbol, new External(symbol, display(declaration), scope));
@@ -571,11 +624,11 @@ final class Analyzer {
     }
 
     /** 默认构造器等隐式成员沿声明类型继承仓库来源。 */
-    private boolean repositoryOwner(IBinding binding) {
+    private static String repositoryOwner(ConfigState state, IBinding binding) {
         ITypeBinding owner = null;
         if (binding instanceof IMethodBinding method) owner = method.getDeclaringClass();
         if (binding instanceof IVariableBinding variable) owner = variable.getDeclaringClass();
-        return owner != null && bindingRepository.containsKey(owner.getTypeDeclaration().getKey());
+        return owner == null ? null : state.bindingSources.get(owner.getTypeDeclaration().getKey());
     }
 
     /** 建立与请求文件一一对应的来源证据。 */
@@ -595,7 +648,9 @@ final class Analyzer {
             JsonObject item = new JsonObject();
             item.addProperty("path", path);
             item.addProperty("disposition", !model.includeTests && model.isTest(path) ? "excluded_test" : "analyzed");
-            item.add("configuration_ids", Main.strings(List.of(model.selected.get(path).id)));
+            List<ProjectModel.Configuration> relevant = model.activeConfigurations(path);
+            if (relevant.isEmpty()) relevant = model.selected.get(path);
+            item.add("configuration_ids", Main.strings(relevant.stream().map(config -> config.id).toList()));
             files.add(item);
         }
         evidence.add("files", files);
@@ -687,9 +742,45 @@ final class Analyzer {
     private static String header(String source, ASTNode node) {
         int start = Math.max(0, node.getStartPosition());
         int end = Math.min(source.length(), start + node.getLength());
-        int brace = source.indexOf('{', start);
-        if (brace >= 0 && brace < end) end = brace;
+        if (node instanceof MethodDeclaration method && method.getBody() != null)
+            end = method.getBody().getStartPosition();
+        else if (node instanceof EnumConstantDeclaration constant && constant.getAnonymousClassDeclaration() != null)
+            end = constant.getAnonymousClassDeclaration().getStartPosition();
+        else if (node instanceof AnonymousClassDeclaration) end = start;
+        else {
+            int nameEnd = typeNameEnd(node);
+            if (nameEnd >= 0) end = typeBodyOpen(source, nameEnd, end);
+        }
         return canonical(source, start, end);
+    }
+
+    /** 返回具名类型标识符之后的位置。 */
+    private static int typeNameEnd(ASTNode node) {
+        SimpleName name = null;
+        if (node instanceof TypeDeclaration type) name = type.getName();
+        else if (node instanceof EnumDeclaration type) name = type.getName();
+        else if (node instanceof AnnotationTypeDeclaration type) name = type.getName();
+        else if (node instanceof RecordDeclaration type) name = type.getName();
+        return name == null ? -1 : name.getStartPosition() + name.getLength();
+    }
+
+    /** 词法寻找类型体开括号，跳过注解字符串和括号内数组初始化。 */
+    private static int typeBodyOpen(String source, int from, int limit) {
+        if (from >= limit) return limit;
+        IScanner scanner = ToolFactory.createScanner(true, false, false, false);
+        scanner.setSource(source.substring(from, limit).toCharArray());
+        int parens = 0;
+        try {
+            while (true) {
+                int token = scanner.getNextToken();
+                if (token == ITerminalSymbols.TokenNameEOF) break;
+                if (token == ITerminalSymbols.TokenNameLPAREN) parens++;
+                else if (token == ITerminalSymbols.TokenNameRPAREN) parens = Math.max(0, parens - 1);
+                else if (token == ITerminalSymbols.TokenNameLBRACE && parens == 0)
+                    return from + scanner.getCurrentTokenStartPosition();
+            }
+        } catch (Exception ignored) { /* 词法错误已在提取检查中处理。 */ }
+        return limit;
     }
 
     /** 自身投影保留有序子对象锚点而剥离其内容。 */

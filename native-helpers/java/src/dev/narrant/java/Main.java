@@ -72,7 +72,7 @@ public final class Main {
             if (completed.toString().getBytes(StandardCharsets.UTF_8).length > analyzer.maxResultBytes())
                 throw new Failure("resource_limit", "result exceeds max_result_bytes");
         } catch (Failure problem) {
-            if (cancelled.get() && !invalidCancel.get()) {
+            if (problem.cancellation && cancelled.get() && !invalidCancel.get()) {
                 completed.addProperty("outcome", "cancelled");
             } else {
                 completed.addProperty("outcome", "error");
@@ -217,15 +217,25 @@ public final class Main {
     static final class Failure extends Exception {
         final String code;
         final List<String> paths;
+        final boolean cancellation;
 
         /** 建立无路径错误。 */
         Failure(String code, String message) { this(code, message, List.of()); }
 
         /** 建立有路径错误。 */
         Failure(String code, String message, List<String> paths) {
+            this(code, message, paths, false);
+        }
+
+        /** 指明错误是否确实由取消造成。 */
+        private Failure(String code, String message, List<String> paths, boolean cancellation) {
             super(message);
             this.code = code;
             this.paths = paths;
+            this.cancellation = cancellation;
         }
+
+        /** 标记已观测到的取消终止，而不遮盖别的失败。 */
+        static Failure cancelled() { return new Failure("resource_limit", "analysis cancelled", List.of(), true); }
     }
 }

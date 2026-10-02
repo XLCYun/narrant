@@ -26,7 +26,11 @@ JDT `ASTParser.setEnvironment` 使用目标 JDK 的 `lib/jrt-fs.jar`，关闭运
 首版支持 release 17、UTF-8、非 JPMS 的两个静态入口：
 
 1. 仓内 `narrant-java.json`，schema 必须为 `java-static-v1`，含 release 字符串 `"17"` 和 `source_roots: [{"path":"src/main/java","role":"main"},{"path":"src/test/java","role":"test"}]`。源码根有明确 main/test 归属；存在 Gradle 脚本时也只消费此已在仓内的声明文件，不执行 Gradle。
-2. 仓内 `pom.xml`：解释字面 `maven.compiler.release`、仓内模块和默认或字面 main/test 目录；子模块可以继承仓内聚合 POM 的 release。外部 parent、profile、plugins、pluginManagement、repository 扩展及未知 release 拒绝。不会调用 Maven effective-model、下载业务 JAR、运行处理器或插件。业务依赖缺失只使相应关系保持 unresolved，源码对象仍完整时可成功。
+2. 仓内 `pom.xml`：解释字面 `maven.compiler.release`、仓内模块和默认或字面 main/test 目录；子模块只从其真实仓内 parent 链继承 release，并核对 parent 坐标。外部 parent、profile、plugins、pluginManagement、repository 扩展及未知 release 拒绝。不会调用 Maven effective-model、下载业务 JAR、运行处理器或插件。业务依赖缺失只使相应关系保持 unresolved，源码对象仍完整时可成功。
+
+元数据也可用 `{"schema":"java-static-v1","configurations":[{"id":"a","release":"17","source_roots":[...]},...]}` 声明有限、彼此隔离的配置。同一选中文件可归属多个配置：声明身份与自身源码内容兼容时汇成单节点，已确定和仍未知的关系分别保留。binding key 只在产生它的配置中查询；仓内未选目标的 External symbol 带真实源码身份，两个配置中同名但不同文件的目标不会混同。元数据及源码根先解析真实路径，仓外链接不能成为配置来源。
+
+Maven parent 按真实 `relativePath` 递归读取，核对声明的 groupId/artifactId/version 与父 POM 坐标，并记录实际读过的父链来源。模块遍历中的聚合 POM 不自动充当另一份 parent。重复方法、字段或同配置同名顶层类型使对象提取失败；不会把重复源码声明收敛为一个节点。
 
 源码真实路径不得越过固定仓库。每个已解析文件的 package 与声明源码根下目录对应；配置之间建立单独的 JDT parser 环境。选集控制最终图成员，源根内其余 `.java` 只用于上下文。`include_tests=false` 只排除明确 test 根的选中文件；生产类名含 `Test` 不被推断为测试。显式的 file/package/import、class/interface/annotation/enum/record、method/constructor、field/enum constant/record component、initializer、local/anonymous type 进入图，默认或生成成员不伪造成源码节点。局部变量、参数及 lambda 内容留在最近独立对象。
 
@@ -34,6 +38,6 @@ JDT `ASTParser.setEnvironment` 使用目标 JDK 的 `lib/jrt-fs.jar`，关闭运
 
 ## 已验证边界与待扩展项
 
-`python3 -m unittest native-helpers/java/tests/test_helper.py -v` 的 9 项合成仓库测试通过，包括跨文件重载、缺失依赖、目标 API 反例、body/child/格式变化、测试根、有限单/多模块 POM、Gradle/JPMS 拒绝、取消、期限及路径拒绝。测试用真实 JDT 和准确目标 JDK，不运行被测代码。没有在 Windows 原生运行；跨平台构建脚本和 `java.exe` 测试入口已准备，仍须 Windows CI 验证。并未证明 JDK 21/25、Java 8、JPMS、Android、任意 Maven 插件/外部 parent 或复杂 Gradle 动态配置可用，这些输入当前拒绝。仓内多模块之间尚未建立 Maven 依赖图，跨模块业务绑定可能 unresolved；不会用同名猜测补边。
+`python3 -m unittest native-helpers/java/tests/test_helper.py -v` 的 17 项合成仓库测试通过，包括跨文件重载、缺失依赖、目标 API 反例、body/child/格式变化、测试根、有限单/多模块 POM、跨配置关系并集、重复声明与元数据链接拒绝、错误优先于取消。测试用真实 JDT 和准确目标 JDK，不运行被测代码。没有在 Windows 原生运行；跨平台构建脚本和 `java.exe` 测试入口已准备，仍须 Windows CI 验证。并未证明 JDK 21/25、Java 8、JPMS、Android、任意 Maven 插件/外部 parent 或复杂 Gradle 动态配置可用，这些输入当前拒绝。仓内多模块之间尚未建立 Maven 依赖图，跨模块业务绑定可能 unresolved；不会用同名猜测补边。
 
 详细执行记录与待审风险见 `.superpowers/sdd/0024b-native-analyzer-implementation-plan/task-3-report.md`。

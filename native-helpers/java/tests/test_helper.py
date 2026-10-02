@@ -215,6 +215,110 @@ class Shapes {
         self.assertEqual(completed["outcome"], "ok", completed)
         self.assertEqual(len(completed["evidence"]["configurations"]), 2)
 
+    def test_binding_keys_are_scoped_to_each_maven_module(self):
+        """同名类在独立模块中不能借另一模块的 binding key 指向选中节点。"""
+        write(self.root, "pom.xml", "<project><modelVersion>4.0.0</modelVersion><groupId>p</groupId><artifactId>root</artifactId><version>1</version><packaging>pom</packaging><properties><maven.compiler.release>17</maven.compiler.release></properties><modules><module>a</module><module>b</module></modules></project>")
+        for module in ("a", "b"):
+            write(self.root, f"{module}/pom.xml", f"<project><modelVersion>4.0.0</modelVersion><parent><groupId>p</groupId><artifactId>root</artifactId><version>1</version></parent><artifactId>{module}</artifactId></project>")
+            write(self.root, f"{module}/src/main/java/p/Foo.java", "package p; class Foo { static void ping(){} }")
+        caller = "b/src/main/java/p/Caller.java"
+        write(self.root, caller, "package p; class Caller { void run(){ Foo.ping(); } }")
+        result = run(request(self.root, ["a/src/main/java/p/Foo.java", caller]))
+        self.assertEqual(result["outcome"], "ok", result)
+        call = [ref for ref in node(result["graph"], "/method:run()")["references"]
+                if ref["semantic"] == "code.calls"]
+        self.assertEqual(len(call), 1)
+        self.assertEqual(call[0]["target"]["kind"], "external")
+        self.assertIn("b/src/main/java/p/Foo.java", call[0]["target"]["symbol"])
+        self.assertEqual(result["graph"]["external_symbols"][0]["scope"], "repository")
+
+    def test_duplicate_declarations_fail_extraction(self):
+        """完全相同的方法和跨源码根重复类型都不能被合并。"""
+        metadata(self.root)
+        path = "src/main/java/p/Foo.java"
+        write(self.root, path, "package p; class Foo { void f(){} void f(){} }")
+        duplicate_method = run(request(self.root, [path]))
+        self.assertEqual(duplicate_method["error"]["code"], "object_extraction_failed")
+        (self.root / "narrant-java.json").write_text(json.dumps({"schema": "java-static-v1", "release": "17",
+            "source_roots": [{"path": "src/main/java", "role": "main"}, {"path": "second", "role": "main"}]}))
+        write(self.root, path, "package p; class Foo {}")
+        write(self.root, "second/p/Foo.java", "package p; class Foo {}")
+        duplicate_type = run(request(self.root, [path]))
+        self.assertEqual(duplicate_type["error"]["code"], "object_extraction_failed")
+
+    def test_actual_maven_parent_overrides_aggregator(self):
+        """子模块真正的仓内 parent 必须求值，不能继承无关聚合 POM 的 release。"""
+        write(self.root, "pom.xml", "<project><modelVersion>4.0.0</modelVersion><groupId>p</groupId><artifactId>root</artifactId><version>1</version><packaging>pom</packaging><properties><maven.compiler.release>17</maven.compiler.release></properties><modules><module>child</module></modules></project>")
+        write(self.root, "parents/parent/pom.xml", "<project><modelVersion>4.0.0</modelVersion><groupId>p</groupId><artifactId>other</artifactId><version>1</version><properties><maven.compiler.release>21</maven.compiler.release></properties></project>")
+        write(self.root, "child/pom.xml", "<project><modelVersion>4.0.0</modelVersion><parent><groupId>p</groupId><artifactId>other</artifactId><version>1</version><relativePath>../parents/parent/pom.xml</relativePath></parent><artifactId>child</artifactId></project>")
+        path = "child/src/main/java/p/Child.java"
+        write(self.root, path, "package p; class Child {}")
+        result = run(request(self.root, [path]))
+        self.assertEqual(result["error"]["code"], "unsupported_configuration")
+
+    def test_same_source_configuration_union(self):
+        """同一声明汇合多个隔离配置的确定与未知关系。"""
+        configs = [
+            {"id": "a", "release": "17", "source_roots": [{"path": "common", "role": "main"}, {"path": "a", "role": "main"}]},
+            {"id": "b", "release": "17", "source_roots": [{"path": "common", "role": "main"}, {"path": "b", "role": "main"}]},
+            {"id": "unknown", "release": "17", "source_roots": [{"path": "common", "role": "main"}]},
+        ]
+        write(self.root, "narrant-java.json", json.dumps({"schema": "java-static-v1", "configurations": configs}))
+        main = "common/p/Main.java"
+        write(self.root, main, "package p; class Main { void run(){ Helper.ping(); } }")
+        for folder in ("a", "b"):
+            write(self.root, f"{folder}/p/Helper.java", "package p; class Helper { static void ping(){} }")
+        result = run(request(self.root, [main]))
+        self.assertEqual(result["outcome"], "ok", result)
+        calls = [ref["target"] for ref in node(result["graph"], "/method:run()")["references"]
+                 if ref["semantic"] == "code.calls"]
+        self.assertEqual({target["kind"] for target in calls}, {"external", "unresolved"})
+        self.assertEqual(len([target for target in calls if target["kind"] == "external"]), 2)
+        self.assertEqual(len(result["evidence"]["files"][0]["configuration_ids"]), 3)
+
+    def test_external_metadata_symlink_rejected(self):
+        """仓外 JSON 不得借仓内链接成为配置来源。"""
+        outside = pathlib.Path(self.temp.name) / "outside.json"
+        outside.write_text(json.dumps({"schema": "java-static-v1", "release": "17",
+                                       "source_roots": [{"path": "src/main/java", "role": "main"}]}))
+        (self.root / "narrant-java.json").symlink_to(outside)
+        path = "src/main/java/p/Foo.java"
+        write(self.root, path, "package p; class Foo {}")
+        result = run(request(self.root, [path]))
+        self.assertEqual(result["error"]["code"], "unsupported_configuration")
+
+    def test_selected_implicit_constructor_is_repository_external(self):
+        """隐式构造器不造源码节点，但其选中类型仍证明仓内来源。"""
+        metadata(self.root)
+        path = "src/main/java/p/Foo.java"
+        write(self.root, path, "package p; class Foo {} class Caller { void run(){ new Foo(); } }")
+        result = run(request(self.root, [path]))
+        self.assertEqual(result["outcome"], "ok", result)
+        constructor = [item for item in result["graph"]["external_symbols"] if "<init>" in item["symbol"]]
+        self.assertEqual(len(constructor), 1)
+        self.assertEqual(constructor[0]["scope"], "repository")
+        self.assertFalse(any(entry["native_kind"] == "constructor" for entry in result["graph"]["nodes"]))
+
+    def test_real_error_wins_racing_cancel(self):
+        """配置错误即使和有效 cancel 同时到达，也保持 error。"""
+        path = "src/main/java/p/Foo.java"
+        write(self.root, path, "package p; class Foo {}")
+        write(self.root, "build.gradle", "throw new Error('never run')")
+        for _ in range(5):
+            result = run(request(self.root, [path]), cancel=True)
+            self.assertEqual(result["outcome"], "error", result)
+            self.assertEqual(result["error"]["code"], "unsupported_configuration")
+
+    def test_annotation_brace_does_not_truncate_signature(self):
+        """字符串中的左花括号不能截断类型或方法声明头。"""
+        metadata(self.root)
+        path = "src/main/java/p/Foo.java"
+        write(self.root, path, 'package p; @interface Note { String value(); } @Note("{") class Foo { @Note("{") void run(){} }')
+        result = run(request(self.root, [path]))
+        self.assertEqual(result["outcome"], "ok", result)
+        self.assertIn("class Foo", node(result["graph"], "/class:Foo")["signature"])
+        self.assertIn('"{"', node(result["graph"], "/method:run()")["signature"])
+
 
 if __name__ == "__main__":
     unittest.main()

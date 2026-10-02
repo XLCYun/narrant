@@ -31,7 +31,7 @@ final class ProjectModel {
     final Path targetJdk;
     final String targetPlatformId;
     final List<Configuration> configurations;
-    final Map<String, Configuration> selected;
+    final Map<String, List<Configuration>> selected;
     final List<String> files;
     final boolean includeTests;
 
@@ -62,7 +62,7 @@ final class ProjectModel {
 
     /** 完成路径及静态来源检查后保存请求模型。 */
     private ProjectModel(Path repository, Path targetJdk, String targetPlatformId, List<Configuration> configurations,
-                         Map<String, Configuration> selected, List<String> files, boolean includeTests) {
+                         Map<String, List<Configuration>> selected, List<String> files, boolean includeTests) {
         this.repository = repository;
         this.targetJdk = targetJdk;
         this.targetPlatformId = targetPlatformId;
@@ -105,8 +105,8 @@ final class ProjectModel {
         Path pom = root.resolve("pom.xml");
         if (Files.exists(metadata) && Files.exists(pom))
             throw new Failure("unsupported_configuration", "ambiguous Java metadata and POM");
-        if (Files.exists(metadata)) configs.add(readMetadata(root, metadata));
-        else if (Files.exists(pom)) readPomTree(root, root, configs, new HashSet<>(), null);
+        if (Files.exists(metadata)) configs.addAll(readMetadata(root, metadata));
+        else if (Files.exists(pom)) readPomTree(root, root, configs, new HashSet<>());
         else if (Files.exists(root.resolve("build.gradle")) || Files.exists(root.resolve("build.gradle.kts")) ||
                  Files.exists(root.resolve("settings.gradle")) || Files.exists(root.resolve("settings.gradle.kts")))
             throw new Failure("unsupported_configuration", "Gradle needs narrant-java.json static metadata");
@@ -117,18 +117,16 @@ final class ProjectModel {
         if (releases.size() != 1) throw new Failure("unsupported_configuration", "mixed target releases are unsupported");
         String release = releases.iterator().next();
         Target target = chooseTarget(environment, release);
-        Map<String, Configuration> selected = new HashMap<>();
+        Map<String, List<Configuration>> selected = new HashMap<>();
         for (String file : files) {
-            Configuration match = null;
+            List<Configuration> matches = new ArrayList<>();
             for (Configuration config : configs) for (SourceRoot sourceRoot : config.roots) {
                 if (file.startsWith(sourceRoot.path + "/")) {
-                    if (match != null && match != config)
-                        throw new Failure("unsupported_configuration", "overlapping source roots", List.of(file));
-                    match = config;
+                    if (!matches.contains(config)) matches.add(config);
                 }
             }
-            if (match == null) throw new Failure("unsupported_configuration", "selected file outside declared source roots", List.of(file));
-            selected.put(file, match);
+            if (matches.isEmpty()) throw new Failure("unsupported_configuration", "selected file outside declared source roots", List.of(file));
+            selected.put(file, List.copyOf(matches));
         }
         return new ProjectModel(root, target.path, target.id, configs, selected, files, includeTests);
     }
@@ -189,36 +187,70 @@ final class ProjectModel {
     private record Target(String id, Path path) {}
 
     /** 读取版本化的声明式源码根。 */
-    private static Configuration readMetadata(Path repository, Path file) throws Failure {
+    private static List<Configuration> readMetadata(Path repository, Path file) throws Failure {
         try {
-            JsonObject metadata = Main.parseObject(Files.readString(file, StandardCharsets.UTF_8));
-            Main.fields(metadata, Set.of("schema", "release", "source_roots"));
-            Main.requireString(metadata, "schema", Main.PROFILE);
-            String release = Main.string(metadata, "release");
-            validateRelease(release);
-            List<SourceRoot> roots = new ArrayList<>();
-            for (JsonElement item : Main.array(metadata, "source_roots")) {
+            Path actual = file.toRealPath();
+            if (!actual.startsWith(repository) || !Files.isRegularFile(actual))
+                throw new Failure("unsupported_configuration", "Java metadata outside repository");
+            JsonObject metadata = Main.parseObject(Files.readString(actual, StandardCharsets.UTF_8));
+            List<Configuration> configurations = new ArrayList<>();
+            if (metadata.has("configurations")) {
+                Main.fields(metadata, Set.of("schema", "configurations"));
+                Main.requireString(metadata, "schema", Main.PROFILE);
+                Set<String> ids = new HashSet<>();
+                for (JsonElement element : Main.array(metadata, "configurations")) {
+                    if (!element.isJsonObject()) throw new Failure("unsupported_configuration", "invalid Java configuration");
+                    JsonObject entry = element.getAsJsonObject();
+                    Main.fields(entry, Set.of("id", "release", "source_roots"));
+                    String id = Main.string(entry, "id");
+                    if (id.isEmpty() || !ids.add(id)) throw new Failure("unsupported_configuration", "duplicate Java configuration id");
+                    String release = Main.string(entry, "release");
+                    validateRelease(release);
+                    configurations.add(new Configuration("java-config:metadata:" + id, release,
+                        List.of("narrant-java.json"), readRoots(repository, entry)));
+                }
+            } else {
+                Main.fields(metadata, Set.of("schema", "release", "source_roots"));
+                Main.requireString(metadata, "schema", Main.PROFILE);
+                String release = Main.string(metadata, "release");
+                validateRelease(release);
+                configurations.add(new Configuration("java-config:metadata", release,
+                    List.of("narrant-java.json"), readRoots(repository, metadata)));
+            }
+            if (configurations.isEmpty()) throw new Failure("unsupported_configuration", "no Java configurations");
+            return configurations;
+        } catch (Failure e) { throw e; }
+        catch (Exception e) { throw new Failure("unsupported_configuration", "invalid narrant-java.json"); }
+    }
+
+    /** 读取并校验一个明确配置的源码根。 */
+    private static List<SourceRoot> readRoots(Path repository, JsonObject metadata) throws Failure {
+        List<SourceRoot> roots = new ArrayList<>();
+        Set<String> paths = new HashSet<>();
+        for (JsonElement item : Main.array(metadata, "source_roots")) {
                 if (!item.isJsonObject()) throw new Failure("unsupported_configuration", "invalid source root");
                 JsonObject entry = item.getAsJsonObject();
                 Main.fields(entry, Set.of("path", "role"));
                 String path = Main.string(entry, "path");
                 validateRelative(path);
+                if (!paths.add(path)) throw new Failure("unsupported_configuration", "duplicate source root");
                 String role = Main.string(entry, "role");
                 if (!role.equals("main") && !role.equals("test"))
                     throw new Failure("unsupported_configuration", "unknown source root role");
-                if (!Files.isDirectory(repository.resolve(path)))
+                Path actual;
+                try { actual = repository.resolve(path).toRealPath(); }
+                catch (Exception problem) { throw new Failure("unsupported_configuration", "source root missing: " + path); }
+                if (!actual.startsWith(repository) || !Files.isDirectory(actual))
                     throw new Failure("unsupported_configuration", "source root missing: " + path);
                 roots.add(new SourceRoot(path, role.equals("test")));
-            }
-            if (roots.isEmpty()) throw new Failure("unsupported_configuration", "source_roots is empty");
-            return new Configuration("java-config:metadata", release, List.of("narrant-java.json"), roots);
-        } catch (Failure e) { throw e; }
-        catch (Exception e) { throw new Failure("unsupported_configuration", "invalid narrant-java.json"); }
+        }
+        if (roots.isEmpty()) throw new Failure("unsupported_configuration", "source_roots is empty");
+        return roots;
     }
 
     /** 只读递归解释仓内 Maven 模块的受限字段。 */
     private static void readPomTree(Path repository, Path module, List<Configuration> output,
-                                    Set<Path> visited, String inheritedRelease) throws Failure {
+                                    Set<Path> visited) throws Failure {
         Path pom = module.resolve("pom.xml");
         try {
             pom = pom.toRealPath();
@@ -242,22 +274,11 @@ final class ProjectModel {
             if (build != null && (child(build, "plugins") != null || child(build, "pluginManagement") != null ||
                                   child(build, "extensions") != null))
                 throw new Failure("unsupported_configuration", "Maven plugins unsupported");
-            Element parent = child(project, "parent");
-            if (parent != null) {
-                String relative = text(parent, "relativePath");
-                if (relative == null) relative = "../pom.xml";
-                Path parentPom = module.resolve(relative).normalize();
-                if (Files.isDirectory(parentPom)) parentPom = parentPom.resolve("pom.xml");
-                if (!parentPom.toRealPath().startsWith(repository))
-                    throw new Failure("unsupported_configuration", "external Maven parent unsupported");
-            }
-            Element props = child(project, "properties");
-            String release = props == null ? null : text(props, "maven.compiler.release");
-            if (release == null && build != null) release = text(build, "release");
-            if (release == null) release = inheritedRelease;
+            PomResult resolved = effectivePom(repository, pom, new HashSet<>());
+            String release = resolved.release;
             Element modules = child(project, "modules");
             List<String> names = modules == null ? List.of() : texts(modules, "module");
-            if (!names.isEmpty() && release == null && parent == null) {
+            if (!names.isEmpty() && release == null) {
                 // 聚合 POM 可把目标 release 留给每个子模块。
             } else if (release != null) validateRelease(release);
             String modulePath = repository.relativize(module).toString().replace('\\', '/');
@@ -269,14 +290,77 @@ final class ProjectModel {
             if (!roots.isEmpty()) {
                 if (release == null) throw new Failure("unsupported_configuration", "Maven module lacks explicit maven.compiler.release");
                 output.add(new Configuration("java-config:" + (modulePath.isEmpty() ? "." : modulePath), release,
-                    List.of(repository.relativize(pom).toString().replace('\\', '/')), roots));
+                    resolved.sourcePaths, roots));
             }
             for (String name : names) {
                 validateRelative(name);
-                readPomTree(repository, module.resolve(name), output, visited, release);
+                readPomTree(repository, module.resolve(name), output, visited);
             }
         } catch (Failure e) { throw e; }
         catch (Exception e) { throw new Failure("unsupported_configuration", "cannot statically read POM"); }
+    }
+
+    /** 有限 POM 父链的有效 release、坐标及实际读取来源。 */
+    private record PomResult(String release, String group, String artifact, String version,
+                             List<String> sourcePaths) {}
+
+    /** 沿仓内 parent 真正求值，而不借用模块遍历时的聚合 POM。 */
+    private static PomResult effectivePom(Path repository, Path file, Set<Path> chain) throws Failure {
+        try {
+            Path pom = file.toRealPath();
+            if (!pom.startsWith(repository) || !Files.isRegularFile(pom) || !chain.add(pom))
+                throw new Failure("unsupported_configuration", "external or cyclic Maven parent");
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            Document doc;
+            try (InputStream stream = Files.newInputStream(pom)) { doc = factory.newDocumentBuilder().parse(stream); }
+            Element project = doc.getDocumentElement();
+            if (!"project".equals(project.getTagName()) || child(project, "profiles") != null ||
+                child(project, "repositories") != null || child(project, "pluginRepositories") != null)
+                throw new Failure("unsupported_configuration", "dynamic Maven parent unsupported");
+            Element build = child(project, "build");
+            if (build != null && (child(build, "plugins") != null || child(build, "pluginManagement") != null ||
+                                  child(build, "extensions") != null))
+                throw new Failure("unsupported_configuration", "Maven parent plugins unsupported");
+            PomResult parentResult = null;
+            Element parent = child(project, "parent");
+            if (parent != null) {
+                String relative = text(parent, "relativePath");
+                if (relative == null) relative = "../pom.xml";
+                if (relative.isEmpty()) throw new Failure("unsupported_configuration", "external Maven parent unsupported");
+                Path parentPom = pom.getParent().resolve(relative).normalize();
+                if (Files.isDirectory(parentPom)) parentPom = parentPom.resolve("pom.xml");
+                parentResult = effectivePom(repository, parentPom, chain);
+                if (!parentResult.group.equals(text(parent, "groupId")) ||
+                    !parentResult.artifact.equals(text(parent, "artifactId")) ||
+                    !parentResult.version.equals(text(parent, "version")))
+                    throw new Failure("unsupported_configuration", "Maven parent coordinates mismatch");
+            }
+            String group = text(project, "groupId");
+            String artifact = text(project, "artifactId");
+            String version = text(project, "version");
+            if (group == null && parentResult != null) group = parentResult.group;
+            if (version == null && parentResult != null) version = parentResult.version;
+            if (group == null || artifact == null || version == null ||
+                group.contains("${") || artifact.contains("${") || version.contains("${"))
+                throw new Failure("unsupported_configuration", "unresolved Maven coordinates");
+            Element props = child(project, "properties");
+            String release = props == null ? null : text(props, "maven.compiler.release");
+            if (release == null && build != null) release = text(build, "release");
+            if (release == null && parentResult != null) release = parentResult.release;
+            if (release != null) validateRelease(release);
+            List<String> paths = new ArrayList<>();
+            if (parentResult != null) paths.addAll(parentResult.sourcePaths);
+            paths.add(repository.relativize(pom).toString().replace('\\', '/'));
+            chain.remove(pom);
+            return new PomResult(release, group, artifact, version, List.copyOf(paths));
+        } catch (Failure e) { throw e; }
+        catch (Exception e) { throw new Failure("unsupported_configuration", "cannot statically read Maven parent"); }
     }
 
     /** 仅纳入实际存在的源码根。 */
@@ -316,25 +400,39 @@ final class ProjectModel {
 
     /** 判断所选文件是否来自确证的测试源码根。 */
     boolean isTest(String file) {
-        Configuration config = selected.get(file);
-        for (SourceRoot root : config.roots) if (root.test && file.startsWith(root.path + "/")) return true;
-        return false;
+        return selected.get(file).stream().allMatch(config -> isTest(file, config));
+    }
+
+    /** 判断某配置中的文件是否仅来自测试根。 */
+    boolean isTest(String file, Configuration config) {
+        boolean matched = false;
+        for (SourceRoot root : config.roots) if (file.startsWith(root.path + "/")) {
+            matched = true;
+            if (!root.test) return false;
+        }
+        return matched;
+    }
+
+    /** 返回本次实际分析此文件的配置集合。 */
+    List<Configuration> activeConfigurations(String file) {
+        return selected.get(file).stream().filter(config -> includeTests || !isTest(file, config)).toList();
     }
 
     /** 枚举配置允许的上下文源码，拒绝外向链接。 */
     List<String> context(Configuration config) throws Failure {
-        List<String> result = new ArrayList<>();
+        Set<String> discovered = new HashSet<>();
         for (SourceRoot sourceRoot : config.roots) {
             if (sourceRoot.test && !includeTests) continue;
             try (var stream = Files.walk(repository.resolve(sourceRoot.path))) {
                 for (Path path : stream.filter(p -> p.toString().endsWith(".java")).toList()) {
                     String relative = repository.relativize(path).toString().replace('\\', '/');
                     checkedFile(repository, relative);
-                    result.add(relative);
+                    discovered.add(relative);
                 }
             } catch (Failure e) { throw e; }
             catch (Exception e) { throw new Failure("object_extraction_failed", "cannot enumerate source root"); }
         }
+        List<String> result = new ArrayList<>(discovered);
         result.sort(Comparator.naturalOrder());
         return result;
     }
