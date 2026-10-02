@@ -95,6 +95,8 @@ func TestWorkspaceUnion(t *testing.T) {
 	writeFixture(t, root, "app/platform_linux.go", "//go:build linux\n\npackage app\nfunc platform(){ LinuxTarget() }\nfunc LinuxTarget(){}\n")
 	writeFixture(t, root, "app/platform_windows.go", "//go:build windows\n\npackage app\nfunc platform(){ WindowsTarget() }\nfunc WindowsTarget(){}\n")
 	req := fixtureRequest(t, root, "app/common.go", "app/platform_linux.go", "app/platform_windows.go")
+	// 此夹具只验证 Linux/Windows 两个目标；Windows 宿主的 host 条目会与 windows 重合。
+	req.Environment.Platforms = req.Environment.Platforms[:2]
 	before := snapshotFixture(t, root)
 	response := analyze(context.Background(), req)
 	if response.Outcome != "ok" {
