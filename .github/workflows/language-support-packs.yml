@@ -6,6 +6,8 @@ on:
       - resources/language-support-packs.json
       - resources/native-toolchains.json
       - scripts/provision-native-toolchains.mjs
+      - scripts/select-msvc-redist.mjs
+      - scripts/tests/select-msvc-redist.test.mjs
       - scripts/native-xz-extraction.mjs
       - scripts/tests/native-xz-extraction.test.mjs
       - scripts/verify-native-analyzers.mjs
@@ -106,7 +108,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Test native validation and pack scripts
-        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs
+        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
       - name: Provision checksum-verified private developer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains"
       - name: Select exact macOS target declarations
@@ -127,15 +129,15 @@ jobs:
           $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
           $fixed = (Get-Content resources/native-toolchains.json -Raw | ConvertFrom-Json).runner_prerequisites.'x86_64-pc-windows-msvc'
           $version = $fixed.msvc_tools
-          $redist = "$vs\VC\Redist\MSVC\$($fixed.msvc_redist)\x64\Microsoft.VC143.CRT"
           $msvc = "$vs\VC\Tools\MSVC\$version"
           $sdk = 'C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0'
-          foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared", $redist)) {
+          foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared")) {
             if (!(Test-Path $directory -PathType Container)) { throw "Missing exact SDK directory: $directory" }
           }
+          node scripts/select-msvc-redist.mjs "$vs" "$($fixed.msvc_runtime_version)"
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed MSVC runtime selection failed; see metadata and DLL version evidence above' }
           "NARRANT_MSVC_ROOT=$msvc" >> $env:GITHUB_ENV
           "NARRANT_MSVC_VERSION=$version" >> $env:GITHUB_ENV
-          "NARRANT_MSVC_REDIST=$redist" >> $env:GITHUB_ENV
           "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
           "NARRANT_WINDOWS_SDK_VERSION=10.0.26100.0" >> $env:GITHUB_ENV
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
