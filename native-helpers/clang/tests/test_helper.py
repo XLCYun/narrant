@@ -94,9 +94,9 @@ class NativeHelperTests(unittest.TestCase):
                            'max_diagnostic_bytes': 256 * 1024}}
 
     def launch(self):
-        """启动真实二进制并校验唯一 ready。"""
+        """按 NDJSON 的 UTF-8 契约打开三条管道，并校验真实二进制的唯一 ready。"""
         process = subprocess.Popen([str(HELPER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True)
+                                   stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='strict')
         ready = json.loads(process.stdout.readline())
         self.assertEqual(ready['helper_id'], 'narrant-clang')
         self.assertEqual(ready['projection_revision'], 'clang-source-v1')
