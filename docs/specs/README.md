@@ -10,6 +10,10 @@ The TypeScript / JavaScript Code Graph is specified in
 On-demand Language Support Packs are being designed in
 [0022 — Language Support Packs](0022-language-support-packs.md) (accepted).
 
+Python Structure Changes support is specified in
+[0023 — Python Code Graph](0023-python-language-analyzer.md) (accepted; Python 3.7–3.14,
+with dedicated compatibility acceptance for 3.7–3.9).
+
 ## Conventions
 
 - Name files `NNNN-short-feature-name.md`, using a zero-padded sequence number.

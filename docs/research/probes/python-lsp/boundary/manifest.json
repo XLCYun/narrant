@@ -1,0 +1,11 @@
+{
+  "version": "ty 0.0.84 (8dd9a7f7f 2026-09-24)",
+  "binary": "/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/ty/ty-aarch64-apple-darwin/ty",
+  "binary_sha256": "d1243725b609983ce07e2ec407f12a4d3234a215bc302fad54febd1129a7b62e",
+  "archive_sha256": "c65c09f27bcef726c0b043dcee8d0f1e578bd1936799e5bc447235cbc3e19d91",
+  "pinned_editor_settings_source": "https://github.com/astral-sh/ty/blob/0.0.84/docs/reference/editor-settings.md",
+  "pinned_configuration_source": "https://github.com/astral-sh/ty/blob/0.0.84/docs/reference/configuration.md",
+  "session_count": 8,
+  "script_sha256": "5179303bbb4f6b84d6a7f00db328f538f6b073f5d7ebdfad981c56eb92d906f6",
+  "original_evidence_directory": "/var/folders/rh/r3nld6vj35q0j73qk_2rflkr0000gn/T/narrant-python-lsp-probe-vz7ha6rv/boundary-probe"
+}

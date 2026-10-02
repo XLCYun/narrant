@@ -1,9 +1,24 @@
 use std::path::Path;
 
+/// 应用构建保留 Tauri 资源流程，原生测试按显式入口补齐 Windows 加载要求。
 fn main() {
     load_local_github_app_configuration();
     track_application_update_configuration();
+    configure_windows_native_tests();
     tauri_build::build()
+}
+
+/// Tauri 只向应用二进制链接 manifest；库单元测试也需要 Common Controls v6。
+fn configure_windows_native_tests() {
+    const FLAG: &str = "NARRANT_WINDOWS_TEST_MANIFEST";
+    println!("cargo:rerun-if-env-changed={FLAG}");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+        && std::env::var(FLAG).as_deref() == Ok("1")
+    {
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
+    }
 }
 
 /// 让编译期 updater trust root 变化必然触发应用 crate 重新编译。

@@ -6,6 +6,15 @@ on:
       - resources/language-support-packs.json
       - scripts/*language-support-packs.mjs
       - scripts/tests/language-support-packs.test.mjs
+      - scripts/python-language-support-smoke.mjs
+      - scripts/verify-python-analyzer.mjs
+      - src-tauri/src/structure_review/python_analyzer/**
+      - src-tauri/src/structure_review/application/**
+      - src-tauri/src/language_support/**
+      - src-tauri/src/lsp/**
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/build.rs
       - .github/workflows/language-support-packs.yml
   workflow_dispatch:
     inputs:
@@ -28,7 +37,7 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,6 +54,14 @@ jobs:
       - run: node --test scripts/tests/language-support-packs.test.mjs
       - name: Build and execute native tools
         run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: python-native-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Verify native Python graphs, installation, and Review lifecycle
+        run: node scripts/verify-python-analyzer.mjs language-support-packs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: language-support-packs-${{ matrix.target }}

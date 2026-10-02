@@ -265,6 +265,7 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
     let analyzers = LanguageAnalyzers {
         rust: analyze_rust,
         typescript: analyze_typescript,
+        python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
     };
     let not_cancelled: CancellationCheck = Arc::new(|| false);
     let graph = analyze_side(
@@ -273,6 +274,7 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
         SideFiles {
             rust: vec!["lib.rs".into()],
             typescript: vec!["main.ts".into(), "helper.js".into()],
+            ..SideFiles::default()
         },
         AnalysisOptions::default(),
         &not_cancelled,
@@ -311,6 +313,7 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
     let unavailable = LanguageAnalyzers {
         rust: unavailable_rust,
         typescript: unavailable_typescript,
+        python: Arc::new(|_, _| panic!("空组不应启动 Python")),
     };
     let not_cancelled: CancellationCheck = Arc::new(|| false);
     let empty = analyze_side(
@@ -329,13 +332,18 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
         Arc::new(|_, _, _| Ok(single_node_graph("collision", "rust", vec![])));
     let typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| Ok(single_node_graph("collision", "typescript", vec![])));
-    let colliding = LanguageAnalyzers { rust, typescript };
+    let colliding = LanguageAnalyzers {
+        rust,
+        typescript,
+        python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
+    };
     let error = analyze_side(
         &colliding,
         repository.path(),
         SideFiles {
             rust: vec!["lib.rs".into()],
             typescript: vec!["main.ts".into()],
+            ..SideFiles::default()
         },
         AnalysisOptions::default(),
         &not_cancelled,
@@ -370,13 +378,18 @@ fn language_failure_cancels_its_peer_and_preserves_original_cause() {
     });
     let typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| Err(AnalysisError::new("typescript original failure")));
-    let failing = LanguageAnalyzers { rust, typescript };
+    let failing = LanguageAnalyzers {
+        rust,
+        typescript,
+        python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
+    };
     let error = analyze_side(
         &failing,
         repository.path(),
         SideFiles {
             rust: vec!["lib.rs".into()],
             typescript: vec!["main.ts".into()],
+            ..SideFiles::default()
         },
         AnalysisOptions::default(),
         &cancelled,
@@ -398,6 +411,9 @@ fn routes_all_supported_extensions_without_excluding_tests_from_coverage() {
     };
     for path in [
         "lib.rs",
+        "main.py",
+        "api.pyi",
+        "tests/test_api.py",
         "main.ts",
         "view.tsx",
         "helper.js",
@@ -980,3 +996,6 @@ mod workspace_execution;
 
 #[path = "benchmark.rs"]
 mod benchmark;
+
+#[path = "python.rs"]
+mod python;
