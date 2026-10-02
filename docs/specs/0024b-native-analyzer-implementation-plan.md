@@ -30,7 +30,9 @@ Go/Java/C# 包构建与烟测通过，Clang 链接暴露 LLVM 导出的旧 DIA �
 `0e6f8e8` 已修正该路径，Windows 四包构建与烟测均通过；随后 Go 测试的宿主配置假设失败，
 `f749fbc` 已作测试数据修正。`2e56a6e` 已通过 Windows Go、Java25、C#29 套件；Clang
 Unicode 用例暴露测试驱动使用默认 cp1252 解码，当前改为协议规定的严格 UTF-8。
-Windows Rust Host、安装和公共图尚未执行。
+`360cd26` 已通过 Windows 全部四种语言原生套件，Clang25通过、1平台跳过；Rust Host首次执行
+6通过、9失败，Node夹具在初始化随机数时崩溃。修复让测试调用方显式提供生产入口已有的
+Windows SystemRoot，保持 Host 清洁环境；本机 Host17项通过。Windows factory、安装和公共图尚未执行。
 尚无 Windows 四语言完整验收结论。
 完成证据审计另外发现原矩阵中的负例未齐：Java 畸形源码与处理器哨兵已补充并通过 25 项测试；
 C# 已补齐畸形源码、analyzer/generator 哨兵，并增加明确 net8.0 目标与 net10.0 的 API 隔离和并集对照，

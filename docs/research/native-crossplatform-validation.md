@@ -1,12 +1,9 @@
 # 原生 helper 的双平台验收入口
 
-状态：`802fadf` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
-[PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包、CRT 目录及 Clang 链接，
-四包构建和启动、Go/Java/C# 套件成功，继续验证 Clang 测试与公共图。
-Windows 打包脚本的首跑失败已修复，
-尚不能把该步骤通过等同于 Windows helper、安装和图验收全部通过。
-后续 `85318b7` 增加 C# 两目标支持、负例和第八项真实图测试；本机安装及八项图验收已通过，
-测试修正提交为 `df62826`。该增量的 macOS CI 已通过，仍需取得 Windows 结果。
+状态：`360cd26` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过
+四包构建、启动及四种语言的原生测试，Rust Host 测试中的 Node 夹具启动失败，后续生产安装
+和公共图尚未执行；正在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中修复验证。
+本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
 
 ## 已取得的 CI 结果
 
@@ -101,7 +98,7 @@ Windows 使用 LLVM 的 `clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar.xz` 开发
 | CI 目标 | 固定声明与构建环境 | 验证边界 |
 | --- | --- | --- |
 | macOS ARM64 / `macos-15` | Xcode 16.4，macOS SDK 15.5 | 固定 `Xcode_16.4.app` 下 SDK，缺失直接失败；与本机 SDK 27.0 的验收分开记录 |
-| Windows x64 / `windows-2022` | VS 2022 Enterprise，MSVC Tools 14.44.35207，runtime 版本配置 14.44.35211，Windows SDK 10.0.26100.0 | 编译器与 SDK 目录已通过真实检查；runtime 目录及私有 DLL 版本仍待核实 |
+| Windows x64 / `windows-2022` | VS 2022 Enterprise，MSVC Tools 14.44.35207，runtime 版本配置 14.44.35211，Windows SDK 10.0.26100.0 | 编译器、SDK、runtime 元数据及十个私有 CRT DLL 的版本已通过真实检查 |
 
 macOS runner 的官方目录列出 Xcode 16.4 和 SDK 15.5。Windows Server 2022 runner 目录（镜像 20260927.320.1）列出
 VS 2022 17.14 系列、Windows SDK 10.0.26100.0 和 VC runtime 14.44.35211；其 README
@@ -145,6 +142,18 @@ UTF-8，不改变 helper 生产协议。Rust Host、factory、安装和八项图
 `/private/tmp/narrant-ci-native-windows-37072185184.log`。
 同轮 macOS 原生任务完整通过（Clang25通过+1跳过、安装1/89.70秒、图8/16.19秒）；既有
 Python Windows 的20/3/4项也通过（22.53/4.29/7.33秒），零失败、零跳过。
+`360cd26` 的[Windows 任务 111058341797](https://github.com/XLCYun/narrant/actions/runs/37073573624/job/111058341797)
+确认严格 UTF-8 测试驱动修复有效：Go（1.817秒）、Java25（44.341秒）、C#29（18.745秒）
+成功，Clang26项中25通过、1平台跳过（7.508秒），Unicode 用例通过。
+随后首次执行的 Rust Host 分组为6通过、9失败、0跳过（5.61秒）：Node24夹具在协议启动前
+发生 `ncrypto::CSPRNG(nullptr, 0)` 断言并以134退出，多个用例因此缺少协议消息或PID文件。
+生产 factory 原本显式传入 Windows `SystemRoot`，Node 夹具和公共图直连测试入口遗漏了该项；
+修复让这两个测试调用方采用相同的最小环境，保留 Host 的 `env_clear` 及其他注入变量隔离。
+新增真实 Session 回归检查 crypto、显式环境、scratch 与进程退出，本机 Host17项通过。
+实际 Windows 仍须复验该差异能否消除 CSPRNG 失败；factory、生产安装、公共图未执行。
+完整日志为 `/private/tmp/narrant-ci-native-windows-37073573624.log`。
+同轮 macOS 原生全流程成功，Host16、factory2、生产安装1（90.57秒）、公共图8（15.55秒）
+均零跳过；既有 Python 双平台也成功，Windows 的20/3/4项零失败、零跳过。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
