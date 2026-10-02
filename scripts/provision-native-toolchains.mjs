@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { extractTarXz } from './native-xz-extraction.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const nativeTargets = { 'darwin-arm64': 'aarch64-apple-darwin', 'win32-x64': 'x86_64-pc-windows-msvc' };
@@ -62,6 +63,7 @@ export async function provisionToolchains(output, target = nativeTargets[`${proc
     // 已存在目录不盲信旧内容；一次 CI 安装只接受新建的目标。
     try { await fs.access(destination); throw new Error(`Tool directory already exists: ${destination}`); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const temporary = await fs.mkdtemp(path.join(output, '.install-'));
+    let preserveTemporary = false;
     try {
       const archive = path.join(temporary, decodeURIComponent(new URL(entry.url).pathname.split('/').at(-1)));
       const extracted = path.join(temporary, 'unpacked');
@@ -70,13 +72,29 @@ export async function provisionToolchains(output, target = nativeTargets[`${proc
       await download(entry, archive);
       // 两平台的 bsdtar 支持 tar/zip；引用专用 nupkg 也是 zip，不运行其构建脚本。
       const extractionStarted = Date.now();
-      execFileSync(process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32/tar.exe') : '/usr/bin/tar', ['-xf', archive, '-C', extracted], { stdio: 'inherit' });
+      if (process.platform === 'win32' && archive.endsWith('.tar.xz')) {
+        // 已校验的 LLVM XZ 改用 runner 自带 7-Zip，避免 inbox tar 长时间不返回。
+        const sevenZip = path.win32.join(process.env.ProgramFiles ?? 'C:\\Program Files', '7-Zip/7z.exe');
+        if (!path.win32.isAbsolute(sevenZip)) throw new Error('7-Zip must use an absolute runner path');
+        const version = execFileSync(sevenZip, ['i'], { encoding: 'utf8', timeout: 10_000, maxBuffer: 128 * 1024, windowsHide: true }).split(/\r?\n/).find(line => line.includes('7-Zip'));
+        console.log(`Extracting ${entry.name} with ${sevenZip}: ${version ?? 'version unavailable'}; deadline 30m`);
+        await extractTarXz({ archive, destination: extracted, sevenZip });
+        const resolvedHome = await fs.realpath(path.join(extracted, entry.home));
+        const relativeHome = path.relative(await fs.realpath(extracted), resolvedHome);
+        if (relativeHome === '..' || relativeHome.startsWith(`..${path.sep}`) || path.isAbsolute(relativeHome)) throw new Error('Extracted tool home escapes isolated directory');
+      } else {
+        execFileSync(process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32/tar.exe') : '/usr/bin/tar', ['-xf', archive, '-C', extracted], { stdio: 'inherit' });
+      }
       console.log(`Extracted ${entry.name} in ${((Date.now() - extractionStarted) / 1000).toFixed(1)}s`);
       const home = path.join(extracted, entry.home);
       if (!(await fs.stat(home)).isDirectory()) throw new Error(`Missing tool home: ${entry.name}`);
       await fs.rename(extracted, destination);
       environment[entry.environment] = path.join(destination, entry.home);
-    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+    } catch (error) {
+      preserveTemporary = error.preserveTemporary === true;
+      if (preserveTemporary) console.error(`Extraction process cleanup unconfirmed; retained ${temporary}`);
+      throw error;
+    } finally { if (!preserveTemporary) await fs.rm(temporary, { recursive: true, force: true }); }
   }
   environment.DOTNET_ROOT = environment.NARRANT_DOTNET_SDK;
   environment.DOTNET_CLI_HOME = path.join(output, 'dotnet-home');

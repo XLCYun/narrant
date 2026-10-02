@@ -6,6 +6,8 @@ on:
       - resources/language-support-packs.json
       - resources/native-toolchains.json
       - scripts/provision-native-toolchains.mjs
+      - scripts/native-xz-extraction.mjs
+      - scripts/tests/native-xz-extraction.test.mjs
       - scripts/verify-native-analyzers.mjs
       - scripts/tests/native-analyzer-ci.test.mjs
       - src-tauri/tests/native_helper_graphs.rs
@@ -104,7 +106,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Test native validation and pack scripts
-        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/native-language-support-packs.test.mjs
+        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs
       - name: Provision checksum-verified private developer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains"
       - name: Select exact macOS target declarations
