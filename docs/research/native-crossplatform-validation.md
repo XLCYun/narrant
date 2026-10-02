@@ -1,7 +1,8 @@
 # 原生 helper 的双平台验收入口
 
 状态：`802fadf` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
-[PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包及 CRT 目录识别，继续验证 Clang 构建。
+[PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包、CRT 目录及 Clang 链接，
+四包构建和启动成功，继续验证原生测试与公共图。
 Windows 打包脚本的首跑失败已修复，
 尚不能把该步骤通过等同于 Windows helper、安装和图验收全部通过。
 后续 `85318b7` 增加 C# 两目标支持、负例和第八项真实图测试；本机安装及八项图验收已通过，
@@ -127,6 +128,15 @@ Go、Java、C# 包构建和 ready 烟测已通过；Clang 编译后链接失败�
 同轮 macOS 原生任务完整通过，生产安装 1 项（86.88秒）、公共图 8 项（13.79秒）均零跳过；
 Java25、C#29、Clang22通过加1项Windows专用跳过、Host16/factory2维持成功。
 Python Windows 的 Rust 20/3/4 项也全部通过（19.24/2.90/4.93秒），零失败、零跳过。
+`0e6f8e8` 的[下一轮 Windows 任务](https://github.com/XLCYun/narrant/actions/runs/37071028213/job/111050242159)
+确认 DIA 映射、Clang 链接成功，四包均完成构建及 ready 烟测。第一组 Go 测试随后在
+`TestWorkspaceUnion` 失败：fixture 总是追加宿主条目，在 Windows 上得到 host、linux、windows
+三个配置，而用例预期两个。`f749fbc` 仅把该 fixture 限定为要验证的 linux/windows 两项，
+生产配置发现和并集逻辑未变；三个相关测试在本机通过。后续 Windows Java/C#/Clang 套件、
+Host、安装及公共图测试尚未执行。完整日志为 `/private/tmp/narrant-ci-native-windows-37071028213.log`。
+同轮 macOS 全流程通过，Clang 加上 CMake 回归后共 25 项通过、1 项 Windows SDK 专用跳过；
+Java25、C#29、Host16/factory2、安装1（86.82秒）、图8（14.02秒）通过。Python Windows 20/3/4
+也通过（21.26/4.03/6.40秒），零失败、零跳过。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
