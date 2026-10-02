@@ -1,5 +1,6 @@
 // 固定版本 LibTooling helper；所有项目输入只作为受限数据解释。
 #include <clang/AST/RecursiveASTVisitor.h>
+#include <clang/AST/TypeLoc.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Index/USRGeneration.h>
@@ -22,8 +23,13 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <poll.h>
 #include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 namespace j = llvm::json;
@@ -93,14 +99,14 @@ static j::Value parse(const std::string &text) {
 }
 // 从磁盘读取小型配置；不执行文件、不写入项目。
 static std::string read(const fs::path &path) {
-  require(fs::is_regular_file(path), "missing file: " + path.string());
+  require(fs::is_regular_file(path), "missing file: " + path.u8string());
   require(fs::file_size(path)<=32*1024*1024, "input file too large", "resource_limit");
   std::ifstream in(path, std::ios::binary); require(bool(in), "cannot read file");
   return std::string(std::istreambuf_iterator<char>(in), {});
 }
 // 对路径做真实文件系统归一化，消除符号链接越界。
 static fs::path real(const fs::path &path) {
-  std::error_code ec; auto p=fs::canonical(path,ec); require(!ec,"unavailable path: "+path.string()); return p;
+  std::error_code ec; auto p=fs::canonical(path,ec); require(!ec,"unavailable path: "+path.u8string()); return p;
 }
 // 按路径组件判断包含关系，避免字符串前缀误判。
 static bool under(const fs::path &path, const fs::path &root) {
@@ -113,12 +119,12 @@ static bool excluded(const fs::path &relative) {
 }
 // 验证协议相对路径，不接受平台相关的替代分隔符或父级跳转。
 static fs::path relativePath(const std::string &s) {
-  fs::path p(s); require(!s.empty() && !p.is_absolute() && s.find('\\')==std::string::npos && s.find(':')==std::string::npos && s.find('\0')==std::string::npos, "invalid relative path");
+  fs::path p=fs::u8path(s); require(!s.empty() && !p.is_absolute() && s.find('\\')==std::string::npos && s.find(':')==std::string::npos && s.find('\0')==std::string::npos, "invalid relative path");
   for (const auto &part : p) require(part!=".." && part!=".","invalid path component"); return p;
 }
 // 保存本侧已批准的目标声明路径，不包含任意编译器参数。
 struct Platform {
-  std::string id, triple, resourceId; fs::path root, resource; std::vector<fs::path> includes;
+  std::string id, triple, resourceId; fs::path root, resource; std::vector<fs::path> includes, additionalIncludes; std::vector<std::string> additionalIds;
 };
 // 原生分析配置；只含白名单参数及可验证来源。
 struct Config { std::string id, language; fs::path file, directory; std::vector<std::string> args; size_t platform; };
@@ -135,7 +141,7 @@ class ReadBoundary : public llvm::vfs::ProxyFileSystem {
   Request &request; Platform &platform;
   // 对每次读取重新解析链接来源，禁止仓外头文件和业务依赖缓存。
   bool allowed(const llvm::Twine &name) {
-    request.checkpoint(); std::error_code ec; fs::path input(name.str()); if (input.is_relative()) input=request.root/input;
+    request.checkpoint(); std::error_code ec; fs::path input=fs::u8path(name.str()); if (input.is_relative()) input=request.root/input;
     auto path=fs::canonical(input,ec); if (ec) return false;
     if (under(path,request.root)) return !excluded(path.lexically_relative(request.root));
     if (under(path,platform.resource)) return true; for (auto &inc:platform.includes) if (under(path,inc)) return true;
@@ -155,8 +161,8 @@ public:
 };
 // 保存原始源码声明片段；偏移仅在当前快照内定位，不直接进入公开 ID。
 struct DeclInfo {
-  std::string key,path,name,category,kind,parent,usr,role,params,id,code,signature,source,language;
-  unsigned begin=0,end=0,body=0; bool selected=false;
+  std::string key,path,name,category,kind,parent,usr,role,params,id,code,signature,source,language,commonPrefix;
+  unsigned begin=0,end=0,body=0,nameOffset=0,typeEnd=0; bool selected=false;
 };
 // 调用关系首先保留后端绑定证据，最终集合完成后再分类。
 struct Edge { std::string owner,target,usr,unknown,semantic="code.calls"; bool operator<(const Edge &o) const { return std::tie(owner,target,usr,unknown,semantic)<std::tie(o.owner,o.target,o.usr,o.unknown,o.semantic); } };
@@ -171,12 +177,23 @@ struct Graph {
   // 绑定请求对象，所有并集数据仅在单次请求中生存。
   explicit Graph(Request &r) : request(r) {}
 };
+// 从原始缓冲区取得全部 token；最后一个有效 token 与 EOF 必须分别处理。
+static std::vector<Token> rawTokens(const std::string &source) {
+  LangOptions opts; opts.CPlusPlus=true; opts.CPlusPlus11=true; opts.CPlusPlus20=true; opts.LineComment=true;
+  Lexer lexer(SourceLocation(),opts,source.data(),source.data(),source.data()+source.size());
+  lexer.SetCommentRetentionState(false); std::vector<Token> tokens;
+  while(true) {
+    Token token; bool atEnd=lexer.LexFromRawLexer(token);
+    if(token.is(tok::eof)) break;
+    tokens.push_back(token);
+    if(atEnd) break;
+  }
+  return tokens;
+}
 // 在原始 token 上去注释和排版，保留字面量及预处理指令边界。
 static std::string normalize(const std::string &source) {
-  LangOptions opts; opts.CPlusPlus=true; opts.CPlusPlus20=true; opts.LineComment=true;
-  Lexer lexer(SourceLocation(),opts,source.data(),source.data(),source.data()+source.size());
-  lexer.SetCommentRetentionState(false); Token t; std::string out; bool directive=false;
-  while (!lexer.LexFromRawLexer(t)) {
+  std::string out; bool directive=false;
+  for(auto &t:rawTokens(source)) {
     if (t.isAtStartOfLine() && directive) { out+="\n"; directive=false; }
     if (t.isAtStartOfLine() && t.is(tok::hash)) directive=true;
     if (!out.empty() && out.back()!='\n') out+=' ';
@@ -192,9 +209,9 @@ class Collector : public RecursiveASTVisitor<Collector> {
   std::pair<std::string,unsigned> location(SourceLocation loc) {
     loc=sm.getExpansionLoc(loc); if (loc.isInvalid() || !loc.isFileID()) return {};
     auto file=sm.getFilename(loc); if (file.empty()) return {};
-    std::error_code ec; auto p=fs::canonical(file.str(),ec); if(ec) return {};
+    std::error_code ec; auto p=fs::canonical(fs::u8path(file.str()),ec); if(ec) return {};
     if (!under(p,graph.request.root)) return {};
-    auto rel=p.lexically_relative(graph.request.root).generic_string(); return {rel,sm.getFileOffset(loc)};
+    auto rel=p.lexically_relative(graph.request.root).generic_u8string(); return {rel,sm.getFileOffset(loc)};
   }
   // 仅显式承诺的对象成为节点，其余隐式或局部对象内联于 owner。
   std::string category(const Decl *d) {
@@ -236,10 +253,10 @@ class Collector : public RecursiveASTVisitor<Collector> {
     if(auto f=dyn_cast<FunctionDecl>(d)) if(auto t=f->getDescribedFunctionTemplate()) sourceRange=t->getSourceRange();
     if(auto r=dyn_cast<CXXRecordDecl>(d)) if(auto t=r->getDescribedClassTemplate()) sourceRange=t->getSourceRange();
     auto span=range(sourceRange,loc.first); auto key=keyFor(d);
-    auto &source=graph.files[loc.first]; if(source.empty()) source=read(graph.request.root/loc.first);
+    auto &source=graph.files[loc.first]; if(source.empty()) source=read(graph.request.root/fs::u8path(loc.first));
     require(span.second<=source.size() && span.first<span.second,"invalid declaration range","object_extraction_failed");
     unsigned end=span.second; if(end<source.size() && source[end]==';') ++end;
-    DeclInfo n; n.key=key; n.path=loc.first; n.name=name; n.category=cat; n.kind=d->getDeclKindName(); n.begin=span.first; n.end=end; n.body=end;
+    DeclInfo n; n.key=key; n.path=loc.first; n.name=name; n.category=cat; n.kind=d->getDeclKindName(); n.begin=span.first; n.end=end; n.body=end; n.nameOffset=loc.second;
     n.language=context.getLangOpts().CPlusPlus?"cpp":"c";
     if(auto tag=dyn_cast<RecordDecl>(d)) n.kind=tag->isUnion()?"UnionDecl":tag->isStruct()?"StructDecl":"ClassDecl";
     n.selected=graph.request.selected.count(loc.first); n.usr=usr(d); if(!n.usr.empty()) graph.symbolKeys[n.usr].insert(key); n.parent=owners.empty()?"":owners.back();
@@ -256,6 +273,17 @@ class Collector : public RecursiveASTVisitor<Collector> {
       if(f->isVariadic()) n.params+="...";
       if(auto m=dyn_cast<CXXMethodDecl>(f)) { if(m->isConst()) n.params+=" const"; if(m->isVolatile()) n.params+=" volatile"; n.params+=" ref"+std::to_string(m->getRefQualifier()); }
     } else if(auto t=dyn_cast<TagDecl>(d)) { n.role=t->isThisDeclarationADefinition()?"definition":"declaration"; if(t->getBraceRange().getBegin().isValid()) n.body=location(t->getBraceRange().getBegin()).second; }
+    if(auto linkage=dyn_cast<LinkageSpecDecl>(d)) {
+      auto language=location(linkage->getLocation());
+      n.body=language.second+Lexer::MeasureTokenLength(sm.getExpansionLoc(linkage->getLocation()),sm,context.getLangOpts());
+    }
+    if(isa<NamespaceDecl>(d)) {
+      for(auto &token:rawTokens(source.substr(n.begin,n.end-n.begin))) if(token.is(tok::l_brace)) { n.body=n.begin+token.getLocation().getRawEncoding(); break; }
+    }
+    if((isa<VarDecl>(d) || isa<FieldDecl>(d))) if(auto declarator=dyn_cast<DeclaratorDecl>(d)) if(auto info=declarator->getTypeSourceInfo()) {
+      TypeLoc type=info->getTypeLoc(); while(!type.getNextTypeLoc().isNull()) type=type.getNextTypeLoc();
+      auto typeRange=range(type.getSourceRange(),n.path); n.typeEnd=typeRange.second;
+    }
     n.signature=normalize(source.substr(n.begin,n.body-n.begin));
     n.source=source.substr(n.begin,n.end-n.begin);
     auto found=graph.decls.find(key);
@@ -284,7 +312,7 @@ public:
   bool VisitCallExpr(CallExpr *call) {
     if(owners.empty()) return true; Edge e; e.owner=owners.back();
     if(auto callee=call->getDirectCallee()) { e.target=keyFor(callee); e.usr=usr(callee); if(e.target.empty()) e.unknown=callee->getQualifiedNameAsString(); }
-    else { auto p=location(call->getExprLoc()); if(!p.first.empty()) { auto r=range(call->getCallee()->getSourceRange(),p.first); auto &source=graph.files[p.first]; if(source.empty()) source=read(graph.request.root/p.first); e.unknown=normalize(source.substr(r.first,r.second-r.first)); } }
+    else { auto p=location(call->getExprLoc()); if(!p.first.empty()) { auto r=range(call->getCallee()->getSourceRange(),p.first); auto &source=graph.files[p.first]; if(source.empty()) source=read(graph.request.root/fs::u8path(p.first)); e.unknown=normalize(source.substr(r.first,r.second-r.first)); } }
     if(e.target.empty() && e.usr.empty() && e.unknown.empty()) e.unknown="<indirect-call>";
     graph.edges.insert(std::move(e)); return true;
   }
@@ -301,8 +329,8 @@ class Macros : public PPCallbacks {
   std::pair<std::string,unsigned> where(SourceLocation loc) {
     loc=sm.getExpansionLoc(loc); if(loc.isInvalid() || !loc.isFileID()) return {};
     auto file=sm.getFilename(loc); if(file.empty()) return {};
-    std::error_code ec; auto path=fs::canonical(file.str(),ec); if(ec || !under(path,graph.request.root)) return {};
-    return {path.lexically_relative(graph.request.root).generic_string(),sm.getFileOffset(loc)};
+    std::error_code ec; auto path=fs::canonical(fs::u8path(file.str()),ec); if(ec || !under(path,graph.request.root)) return {};
+    return {path.lexically_relative(graph.request.root).generic_u8string(),sm.getFileOffset(loc)};
   }
 public:
   // 使用当前 TU 的原生预处理器记录定义与展开。
@@ -311,7 +339,7 @@ public:
   void MacroDefined(const Token &name,const MacroDirective *directive) override {
     auto info=directive->getMacroInfo(); auto pos=where(name.getLocation()); if(pos.first.empty()) return;
     auto end=where(info->getDefinitionEndLoc()); require(end.first==pos.first,"nonlocal macro definition","object_extraction_failed");
-    auto &source=graph.files[pos.first]; if(source.empty()) source=read(graph.request.root/pos.first);
+    auto &source=graph.files[pos.first]; if(source.empty()) source=read(graph.request.root/fs::u8path(pos.first));
     unsigned begin=pos.second; while(begin>0 && source[begin-1]!='\n') --begin;
     unsigned finish=end.second+Lexer::MeasureTokenLength(sm.getExpansionLoc(info->getDefinitionEndLoc()),sm,options);
     DeclInfo n; n.key=pos.first+":"+std::to_string(pos.second); n.path=pos.first; n.begin=begin; n.end=finish; n.body=finish;
@@ -339,7 +367,7 @@ public:
     Collector c(context,graph,config); c.TraverseDecl(context.getTranslationUnitDecl());
     auto &sm=context.getSourceManager();
     for(auto &file:graph.request.selected) {
-      auto entry=sm.getFileManager().getOptionalFileRef((graph.request.root/file).string());
+      auto entry=sm.getFileManager().getOptionalFileRef((graph.request.root/fs::u8path(file)).u8string());
       if(entry && sm.translateFile(*entry).isValid()) graph.coverage[file].insert(config);
     }
   }
@@ -385,18 +413,28 @@ static void platforms(Request &r,const j::Array &catalog) {
     require(!str(*o,"version").empty() && !str(*o,"fingerprint").empty(),"empty platform provenance");
   }
   for(auto &entry:entries) {
-    auto &o=*entry.second; auto kind=str(o,"kind"); require(kind=="clang-target" || kind=="clang-resource","unsupported platform kind");
+    auto &o=*entry.second; auto kind=str(o,"kind"); require(kind=="clang-target" || kind=="clang-resource" || kind=="clang-system-headers","unsupported platform kind");
     auto meta=o.getObject("metadata"); require(meta,"platform metadata must be an object");
+    if(kind=="clang-system-headers") { keys(*meta,{}); require(fs::u8path(str(o,"root")).is_absolute() && fs::is_directory(real(fs::u8path(str(o,"root")))),"invalid system header root"); continue; }
     if(kind=="clang-resource") { keys(*meta,{}); require(str(o,"version")=="21.1.8","incompatible resource headers","target_unavailable"); continue; }
-    keys(*meta,{"target_triple","c_standard","cpp_standard","system_include_directories","resource_platform_id"});
-    Platform p; p.id=entry.first; p.root=real(str(o,"root")); require(fs::path(str(o,"root")).is_absolute(),"platform root must be absolute");
+    auto required=j::Object(*meta); required.erase("additional_system_platform_ids");
+    keys(required,{"target_triple","c_standard","cpp_standard","system_include_directories","resource_platform_id"});
+    Platform p; p.id=entry.first; p.root=real(fs::u8path(str(o,"root"))); require(fs::u8path(str(o,"root")).is_absolute(),"platform root must be absolute");
     p.triple=str(*meta,"target_triple"); require(!p.triple.empty() && p.triple.find_first_of(" \t\r\n") == std::string::npos,"invalid target triple");
     require(str(*meta,"c_standard")=="c17" && str(*meta,"cpp_standard")=="c++20","unsupported language standard","target_unavailable");
     p.resourceId=str(*meta,"resource_platform_id"); auto resource=entries.find(p.resourceId); require(resource!=entries.end() && str(*resource->second,"kind")=="clang-resource","missing resource platform","target_unavailable");
     require(str(*resource->second,"version")=="21.1.8","incompatible resource headers","target_unavailable");
-    p.resource=real(str(*resource->second,"root")); require(fs::path(str(*resource->second,"root")).is_absolute(),"resource root must be absolute");
+    p.resource=real(fs::u8path(str(*resource->second,"root"))); require(fs::u8path(str(*resource->second,"root")).is_absolute(),"resource root must be absolute");
     auto dirs=meta->getArray("system_include_directories"); require(dirs,"system include directories must be an array");
     for(auto &d:*dirs) { auto s=d.getAsString(); require(s.has_value(),"include directory must be string"); auto dir=real(p.root/relativePath(s->str())); require(under(dir,p.root) && fs::is_directory(dir),"include directory escapes platform"); p.includes.push_back(dir); }
+    if(auto value=meta->get("additional_system_platform_ids")) {
+      auto ids=value->getAsArray(); require(ids,"additional system platform IDs must be an array"); std::set<std::string> seen;
+      for(auto &idValue:*ids) {
+        auto id=idValue.getAsString(); require(id && !id->empty() && seen.insert(id->str()).second && *id!=p.id,"invalid additional system platform ID");
+        auto found=entries.find(id->str()); require(found!=entries.end() && str(*found->second,"kind")=="clang-system-headers","missing additional system header platform","target_unavailable");
+        auto root=real(fs::u8path(str(*found->second,"root"))); p.includes.push_back(root); p.additionalIncludes.push_back(root); p.additionalIds.push_back(id->str());
+      }
+    }
     r.platforms.push_back(std::move(p));
   }
   require(!r.platforms.empty(),"no approved Clang target platform","target_unavailable");
@@ -404,38 +442,39 @@ static void platforms(Request &r,const j::Array &catalog) {
 // 编译数据库参数是数据；只重建经过白名单校验的编译上下文。
 static Config configuration(Request &r,const j::Object &o,size_t index) {
   for(auto &kv:o) require(kv.first=="directory" || kv.first=="file" || kv.first=="arguments" || kv.first=="output","unsupported compilation database field","unsupported_configuration");
-  Config c; c.id="tu-"+std::to_string(index); c.directory=real(str(o,"directory")); require(under(c.directory,r.root),"CDB directory outside repository","unsupported_configuration");
-  auto path=fs::path(str(o,"file")); c.file=real(path.is_absolute()?path:c.directory/path); require(under(c.file,r.root) && !excluded(c.file.lexically_relative(r.root)),"CDB source outside allowed repository","unsupported_configuration");
+  Config c; c.id="tu-"+std::to_string(index); c.directory=real(fs::u8path(str(o,"directory"))); require(under(c.directory,r.root),"CDB directory outside repository","unsupported_configuration");
+  auto path=fs::u8path(str(o,"file")); c.file=real(path.is_absolute()?path:c.directory/path); require(under(c.file,r.root) && !excluded(c.file.lexically_relative(r.root)),"CDB source outside allowed repository","unsupported_configuration");
   auto args=o.getArray("arguments"); require(args && !args->empty(),"CDB requires arguments array, command strings are not executable input","unsupported_configuration");
   std::vector<std::string> input; for(auto &v:*args) { auto s=v.getAsString(); require(s.has_value() && s->find('\0')==llvm::StringRef::npos,"invalid CDB argument"); input.push_back(s->str()); }
-  auto driver=fs::path(input.front()).filename().string(); require(driver=="clang" || driver=="clang++" || driver=="cc" || driver=="c++" || driver=="gcc" || driver=="g++","compiler wrappers are unsupported","unsupported_configuration");
+  auto driver=fs::u8path(input.front()).filename().u8string(); require(driver=="clang" || driver=="clang++" || driver=="clang.exe" || driver=="clang++.exe" || driver=="cc" || driver=="c++" || driver=="gcc" || driver=="g++","compiler wrappers are unsupported","unsupported_configuration");
   std::string triple,standard; std::vector<fs::path> roots; bool sourceSeen=false;
   c.language=c.file.extension()==".c"?"c":"cpp";
   // 参数值必须存在，禁止忽略截断的命令。
   auto next=[&](size_t &i)->std::string { require(i+1<input.size(),"missing CDB argument value","unsupported_configuration"); return input[++i]; };
   // 仓内 include 目录也必须排除安装缓存和符号链接越界。
   auto include=[&](std::string value)->std::string {
-    fs::path p(value); auto resolved=real(p.is_absolute()?p:c.directory/p);
+    fs::path p=fs::u8path(value); auto resolved=real(p.is_absolute()?p:c.directory/p);
     bool allowed=under(resolved,r.root) && !excluded(resolved.lexically_relative(r.root));
     for(auto &platform:r.platforms) for(auto &dir:platform.includes) if(under(resolved,dir)) allowed=true;
-    require(allowed && fs::is_directory(resolved),"unapproved include directory","unsupported_configuration"); return resolved.string();
+    require(allowed && fs::is_directory(resolved),"unapproved include directory","unsupported_configuration"); return resolved.u8string();
   };
   for(size_t i=1;i<input.size();++i) {
     auto a=input[i];
-    if(a=="-c" || a=="-fsyntax-only" || a=="-g" || a=="-O0" || a=="-O1" || a=="-O2" || a=="-O3") continue;
+    if(a=="-c" || a=="-fsyntax-only" || a=="-g") continue;
+    if(a=="-O0" || a=="-O1" || a=="-O2" || a=="-O3" || a=="-Os" || a=="-Oz" || a=="-Og") { c.args.push_back(a); continue; }
     if(a=="-o") { next(i); continue; }
     if(a=="-x") { auto mode=next(i); require(mode=="c" || mode=="c++","unsupported language mode","unsupported_configuration"); c.language=mode=="c"?"c":"cpp"; continue; }
     if(a.rfind("-std=",0)==0) { standard=a.substr(5); continue; }
     if(a=="-target" || a=="--target") { triple=next(i); continue; }
     if(a.rfind("--target=",0)==0) { triple=a.substr(9); continue; }
-    if(a=="-isysroot" || a=="--sysroot") { roots.push_back(real(next(i))); continue; }
-    if(a.rfind("--sysroot=",0)==0) { roots.push_back(real(a.substr(10))); continue; }
+    if(a=="-isysroot" || a=="--sysroot") { roots.push_back(real(fs::u8path(next(i)))); continue; }
+    if(a.rfind("--sysroot=",0)==0) { roots.push_back(real(fs::u8path(a.substr(10)))); continue; }
     if(a=="-I" || a=="-isystem" || a=="-iquote") { c.args.push_back(a); c.args.push_back(include(next(i))); continue; }
     if(a.rfind("-I",0)==0 && a.size()>2) { c.args.push_back("-I"+include(a.substr(2))); continue; }
     if(a=="-D" || a=="-U") { c.args.push_back(a+next(i)); continue; }
     if((a.rfind("-D",0)==0 || a.rfind("-U",0)==0) && a.size()>2) { c.args.push_back(a); continue; }
     if(!a.empty() && a[0]!='-' && a[0]!='@') {
-      fs::path f(a); std::error_code ec; auto resolved=fs::canonical(f.is_absolute()?f:c.directory/f,ec);
+      fs::path f=fs::u8path(a); std::error_code ec; auto resolved=fs::canonical(f.is_absolute()?f:c.directory/f,ec);
       require(!ec && resolved==c.file && !sourceSeen,"unexpected compilation input","unsupported_configuration"); sourceSeen=true; continue;
     }
     throw Failure("unsupported_configuration","unapproved compiler argument: "+a);
@@ -448,12 +487,12 @@ static Config configuration(Request &r,const j::Object &o,size_t index) {
     if(std::any_of(roots.begin(),roots.end(),[&](auto &root){return root!=p.root;})) continue; matches.push_back(i);
   }
   require(matches.size()==1,"target platform missing or ambiguous","target_unavailable"); c.platform=matches[0]; auto &p=r.platforms[c.platform];
-  std::vector<std::string> fixed={"-x",c.language=="c"?"c":"c++","-std="+standard,"--target="+p.triple,"-fsyntax-only","-nostdinc","-nostdinc++","-fno-modules","-fno-implicit-modules","-fno-implicit-module-maps","-fno-delayed-template-parsing","-pedantic-errors","-resource-dir",p.resource.string(),"-isysroot",p.root.string()};
+  std::vector<std::string> fixed={"-x",c.language=="c"?"c":"c++","-std="+standard,"--target="+p.triple,"-fsyntax-only","-nostdinc","-nostdinc++","-fno-modules","-fno-implicit-modules","-fno-implicit-module-maps","-fno-delayed-template-parsing","-pedantic-errors","-resource-dir",p.resource.u8string(),"-isysroot",p.root.u8string()};
   // 标准搜索次序为 C++ 包装头、编译器内建头、目标 C 头；否则 include_next 会选错 stddef。
   auto isCxx=[](const fs::path &dir) { return std::any_of(dir.begin(),dir.end(),[](const fs::path &part){return part=="c++";}); };
-  for(auto &dir:p.includes) if(isCxx(dir)) { fixed.push_back("-isystem"); fixed.push_back(dir.string()); }
-  fixed.push_back("-isystem"); fixed.push_back((p.resource/"include").string());
-  for(auto &dir:p.includes) if(!isCxx(dir)) { fixed.push_back("-isystem"); fixed.push_back(dir.string()); }
+  for(auto &dir:p.includes) if(isCxx(dir) || std::find(p.additionalIncludes.begin(),p.additionalIncludes.end(),dir)!=p.additionalIncludes.end()) { fixed.push_back("-isystem"); fixed.push_back(dir.u8string()); }
+  fixed.push_back("-isystem"); fixed.push_back((p.resource/"include").u8string());
+  for(auto &dir:p.includes) if(!isCxx(dir) && std::find(p.additionalIncludes.begin(),p.additionalIncludes.end(),dir)==p.additionalIncludes.end()) { fixed.push_back("-isystem"); fixed.push_back(dir.u8string()); }
   fixed.insert(fixed.end(),c.args.begin(),c.args.end()); c.args=std::move(fixed); return c;
 }
 // 校验请求、catalog 和静态 CDB；不运行项目发现脚本。
@@ -463,13 +502,13 @@ static void configure(Request &r,const j::Object &message) {
   auto in=message.getObject("input"), env=message.getObject("environment"), limits=message.getObject("limits"); require(in && env && limits,"invalid analyze objects");
   keys(*in,{"repository_root","files","include_tests","profile"}); keys(*env,{"scratch_root","platforms"}); keys(*limits,{"analysis_timeout_ms","max_result_bytes","max_diagnostic_bytes"});
   require(str(*in,"profile")=="clang-static-v1","unsupported profile"); require(in->getBoolean("include_tests").has_value(),"invalid include_tests");
-  require(fs::path(str(*in,"repository_root")).is_absolute(),"repository root must be absolute"); r.root=real(str(*in,"repository_root"));
-  auto scratch=real(str(*env,"scratch_root")); require(scratch.is_absolute() && !under(scratch,r.root),"scratch must be outside repository");
+  require(fs::u8path(str(*in,"repository_root")).is_absolute(),"repository root must be absolute"); r.root=real(fs::u8path(str(*in,"repository_root")));
+  auto scratch=real(fs::u8path(str(*env,"scratch_root"))); require(scratch.is_absolute() && !under(scratch,r.root),"scratch must be outside repository");
   auto timeout=limits->getInteger("analysis_timeout_ms"), result=limits->getInteger("max_result_bytes"), diagnostic=limits->getInteger("max_diagnostic_bytes");
   require(timeout && *timeout>0 && result && *result>0 && diagnostic && *diagnostic>0,"limits must be positive integers");
   r.deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(*timeout); r.maxResult=*result; r.maxDiagnostic=*diagnostic;
   auto files=in->getArray("files"), catalog=env->getArray("platforms"); require(files && catalog,"invalid files/platforms array");
-  for(auto &v:*files) { auto s=v.getAsString(); require(s.has_value(),"file must be string"); auto rel=relativePath(s->str()); auto full=real(r.root/rel); require(under(full,r.root) && !excluded(rel) && fs::is_regular_file(full),"source outside allowed repository"); require(r.selected.insert(rel.generic_string()).second,"duplicate source file"); }
+  for(auto &v:*files) { auto s=v.getAsString(); require(s.has_value(),"file must be string"); auto rel=relativePath(s->str()); auto full=real(r.root/rel); require(under(full,r.root) && !excluded(rel) && fs::is_regular_file(full),"source outside allowed repository"); require(r.selected.insert(rel.generic_u8string()).second,"duplicate source file"); }
   platforms(r,*catalog);
   auto path=r.root/"compile_commands.json"; require(fs::exists(path),"clang-static-v1 requires compile_commands.json","unsupported_configuration"); require(under(real(path),r.root),"CDB symlink escapes repository");
   auto cdb=parse(read(path)); auto entries=cdb.getAsArray(); require(entries && !entries->empty(),"CDB must be a nonempty array","unsupported_configuration");
@@ -480,8 +519,35 @@ static std::string escape(const std::string &s) {
   static const char *hex="0123456789ABCDEF"; std::string out;
   for(unsigned char c:s) { if(isalnum(c) || c=='_' || c=='-' || c=='.' || c=='/') out+=c; else { out+='%'; out+=hex[c>>4]; out+=hex[c&15]; } } return out;
 }
+// 按 AST 基础类型范围拆分共用声明前缀，保持每个 declarator 的初始化内容独立。
+static void splitDeclarators(Graph &graph) {
+  std::map<std::tuple<std::string,std::string,unsigned>,std::vector<DeclInfo *>> groups;
+  for(auto &entry:graph.decls) { auto &n=entry.second; if(n.typeEnd) groups[{n.path,n.parent,n.begin}].push_back(&n); }
+  for(auto &group:groups) {
+    auto &items=group.second; if(items.size()<2) continue;
+    std::sort(items.begin(),items.end(),[](auto a,auto b){return a->nameOffset<b->nameOffset;});
+    auto &first=*items.front(); auto &source=graph.files.at(first.path);
+    require(first.typeEnd<=first.nameOffset,"unsupported shared declarator type range","object_extraction_failed");
+    unsigned declarator=first.nameOffset;
+    for(auto &token:rawTokens(source.substr(first.typeEnd,first.nameOffset-first.typeEnd))) {
+      if(token.is(tok::star) || token.is(tok::amp) || token.is(tok::ampamp) || token.is(tok::l_paren)) { declarator=first.typeEnd+token.getLocation().getRawEncoding(); break; }
+    }
+    std::string prefix=source.substr(first.begin,declarator-first.begin);
+    unsigned previousEnd=first.end;
+    for(size_t i=1;i<items.size();++i) {
+      auto &n=*items[i]; require(previousEnd<=n.nameOffset,"overlapping declarator initializer","object_extraction_failed");
+      auto tokens=rawTokens(source.substr(previousEnd,n.nameOffset-previousEnd));
+      require(!tokens.empty() && tokens.front().is(tok::comma),"missing declarator separator","object_extraction_failed");
+      unsigned begin=tokens.size()>1?previousEnd+tokens[1].getLocation().getRawEncoding():n.nameOffset;
+      n.begin=begin; n.commonPrefix=prefix;
+      n.signature=normalize(prefix+source.substr(begin,n.body-begin));
+      previousEnd=n.end;
+    }
+  }
+}
 // 构造完成后的单图 DTO；任何未覆盖文件或不兼容归并都硬失败。
 static j::Object finish(Graph &g) {
+  splitDeclarators(g);
   auto &r=g.request; std::map<std::string,std::vector<DeclInfo *>> slots;
   for(auto &use:g.macroUses) {
     DeclInfo *owner=nullptr;
@@ -512,7 +578,7 @@ static j::Object finish(Graph &g) {
       require(c->begin>n.begin || c->end<n.end,"ambiguous equal-span declarations","object_extraction_failed"); boundary=c->begin;
       raw.replace(c->begin-n.begin,c->end-c->begin," __narrant_child_"+escape(c->id)+" "); if(c->selected) contains.push_back(c->id);
     }
-    n.code=normalize(raw);
+    n.code=normalize(n.commonPrefix+raw);
     if(n.parent.empty() || !g.decls.at(n.parent).selected) roots.push_back(n.id);
     for(auto &edge:g.edges) {
       if(edge.owner!=n.key) continue; j::Object target; DeclInfo *destination=nullptr;
@@ -531,13 +597,13 @@ static j::Object finish(Graph &g) {
       j::Object ref{{"semantic",edge.semantic},{"target",std::move(target)}}; if(refKeys.insert(jsonText(j::Value(j::Object(ref)))).second) refs.push_back(std::move(ref));
     }
     // 容器签名只包含声明头，独立子对象正文不能污染父节点。
-    auto signature=n.signature; if(n.category=="type" || n.category=="container") { auto brace=signature.find("{"); if(brace!=std::string::npos) signature=signature.substr(0,brace); }
+    auto signature=n.signature;
     nodes.push_back(j::Object{{"category",n.category},{"id",n.id},{"language",n.language},{"native_kind",n.kind},{"name",n.name},{"signature",signature},{"code",n.code},{"source",n.source},{"contains",std::move(contains)},{"references",std::move(refs)},{"extensions",j::Object{}}});
     origins.push_back(j::Object{{"node_id",n.id},{"selected_paths",j::Array{n.path}}});
   }
   for(auto &entry:externalMap) externals.push_back(std::move(entry.second));
   j::Array configs,files;
-  for(auto &c:r.configs) { auto &p=r.platforms[c.platform]; configs.push_back(j::Object{{"id",c.id},{"source_paths",j::Array{"compile_commands.json"}},{"platform_ids",j::Array{p.id,p.resourceId}}}); }
+  for(auto &c:r.configs) { auto &p=r.platforms[c.platform]; j::Array ids{p.id,p.resourceId}; for(auto &id:p.additionalIds) ids.push_back(id); configs.push_back(j::Object{{"id",c.id},{"source_paths",j::Array{"compile_commands.json"}},{"platform_ids",std::move(ids)}}); }
   for(auto &file:r.selected) { auto &coverage=g.coverage[file]; require(!coverage.empty(),"selected file has no complete TU context: "+file,"object_extraction_failed"); j::Array ids; for(auto &id:coverage) ids.push_back(id); files.push_back(j::Object{{"path",file},{"disposition","analyzed"},{"configuration_ids",std::move(ids)}}); }
   return j::Object{{"protocol",Protocol},{"type","completed"},{"id",r.id},{"outcome","ok"},{"graph",j::Object{{"root_contains",std::move(roots)},{"nodes",std::move(nodes)},{"external_symbols",std::move(externals)}}},{"evidence",j::Object{{"configurations",std::move(configs)},{"files",std::move(files)},{"origins",std::move(origins)}}}};
 }
@@ -545,9 +611,9 @@ static j::Object finish(Graph &g) {
 static j::Object analyze(Request &r) {
   Graph graph(r);
   for(auto &c:r.configs) {
-    r.checkpoint(); tooling::FixedCompilationDatabase db(c.directory.string(),c.args);
+    r.checkpoint(); tooling::FixedCompilationDatabase db(c.directory.u8string(),c.args);
     llvm::IntrusiveRefCntPtr<ReadBoundary> filesystem(new ReadBoundary(r,r.platforms[c.platform]));
-    tooling::ClangTool tool(db,{c.file.string()},std::make_shared<PCHContainerOperations>(),filesystem);
+    tooling::ClangTool tool(db,{c.file.u8string()},std::make_shared<PCHContainerOperations>(),filesystem);
     tool.setPrintErrorMessage(false); Diagnostics diagnostics(r.maxDiagnostic); tool.setDiagnosticConsumer(&diagnostics);
     Factory factory(graph,c.id); int status=0;
     try { status=tool.run(&factory); } catch(const Failure &f) { if(f.code=="object_extraction_failed" && !diagnostics.firstError.empty()) throw Failure(f.code,diagnostics.firstError); throw; }
@@ -559,9 +625,33 @@ static j::Object analyze(Request &r) {
 static j::Object error(const std::string &id,const Failure &f) {
   return j::Object{{"protocol",Protocol},{"type","completed"},{"id",id},{"outcome","error"},{"error",j::Object{{"code",f.code},{"message",std::string(f.what())},{"paths",j::Array{}}}}};
 }
+// 跨平台非阻塞读取协议管道；-2 表示暂时无数据，0 表示 Host 已关闭。
+static int readProtocol(char *buffer,size_t capacity) {
+#ifdef _WIN32
+  HANDLE pipe=GetStdHandle(STD_INPUT_HANDLE); DWORD available=0;
+  if(!PeekNamedPipe(pipe,nullptr,0,nullptr,&available,nullptr)) return GetLastError()==ERROR_BROKEN_PIPE?0:-1;
+  if(!available) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); return -2; }
+  DWORD readCount=0;
+  if(!ReadFile(pipe,buffer,static_cast<DWORD>(std::min<size_t>(capacity,available)),&readCount,nullptr)) return GetLastError()==ERROR_BROKEN_PIPE?0:-1;
+  return static_cast<int>(readCount);
+#else
+  pollfd descriptor{STDIN_FILENO,POLLIN|POLLHUP,0}; int ready=poll(&descriptor,1,10);
+  if(ready<0) return -1;
+  if(!ready || !(descriptor.revents&(POLLIN|POLLHUP))) return -2;
+  return static_cast<int>(::read(STDIN_FILENO,buffer,capacity));
+#endif
+}
+// 清除可能注入 include、驱动器或配置路径的宿主变量。
+static void clearEnvironment(const char *name) {
+#ifdef _WIN32
+  _putenv_s(name,"");
+#else
+  unsetenv(name);
+#endif
+}
 // 单次协议入口独立轮询取消；完成后立即退出，不等待 stdin EOF。
 int main() {
-  for(auto name:{"CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","OBJC_INCLUDE_PATH","SDKROOT","MACOSX_DEPLOYMENT_TARGET","CCC_OVERRIDE_OPTIONS","CLANG_CONFIG_FILE_SYSTEM_DIR","CLANG_CONFIG_FILE_USER_DIR"}) unsetenv(name);
+  for(auto name:{"CPATH","C_INCLUDE_PATH","CPLUS_INCLUDE_PATH","OBJC_INCLUDE_PATH","SDKROOT","MACOSX_DEPLOYMENT_TARGET","CCC_OVERRIDE_OPTIONS","CLANG_CONFIG_FILE_SYSTEM_DIR","CLANG_CONFIG_FILE_USER_DIR","INCLUDE","CL","_CL_"}) clearEnvironment(name);
   std::cout<<jsonText(j::Object{{"protocol",Protocol},{"type","ready"},{"helper_id","narrant-clang"},{"helper_version","0.1.0"},{"projection_revision","clang-source-v1"},{"languages",j::Array{"c","cpp"}},{"profiles",j::Array{"clang-static-v1"}}})<<std::endl;
   Request request; std::future<j::Object> work; std::string buffer; bool started=false,closed=false; size_t inputBytes=0;
   try {
@@ -571,10 +661,9 @@ int main() {
         if(output.size()>request.maxResult) output=jsonText(error(request.id,Failure("resource_limit","result byte limit exceeded")));
         if(!closed) std::cout<<output<<std::endl; return 0;
       }
-      pollfd descriptor{STDIN_FILENO,POLLIN|POLLHUP,0}; int ready=poll(&descriptor,1,10);
-      if(ready<0) { request.stopped=true; throw Failure("invalid_input","stdin poll failed"); }
-      if(ready && (descriptor.revents&(POLLIN|POLLHUP))) {
-        char chunk[4096]; auto count=::read(STDIN_FILENO,chunk,sizeof(chunk));
+      char chunk[4096]; int count=readProtocol(chunk,sizeof(chunk));
+      if(count==-1) { request.stopped=true; throw Failure("invalid_input","stdin pipe failed"); }
+      if(count!=-2) {
         if(count<=0) { request.stopped=true; closed=true; if(!started) return 1; if(work.valid()) work.wait(); return 1; }
         inputBytes+=count; require(inputBytes<=4*1024*1024,"request byte limit exceeded","resource_limit"); buffer.append(chunk,count);
         size_t newline;

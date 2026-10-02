@@ -99,3 +99,33 @@ Windows 构建、Windows 进程/路径原生验收由后续独立增量负责，
 的跨编辑稳定性仍需扩大样本；不能把这 15 项夹具当作所有 C/C++ 语法的完整证明。
 
 没有运行 Cargo、quality-gate、Git 提交或远端发布。
+
+## 275313e 之后的 Windows 增量与审查修复第一轮
+
+此节覆盖独立审查 `.superpowers/.../task-5-review.md` 的全部 4 个 Important，保留前文快照事实。
+新增 CMakeLists.txt/build.ps1、Windows PeekNamedPipe/ReadFile 取消读取、跨平台环境清理、显式
+UTF-8 filesystem 路径；新增 `clang-system-headers` 与可选 additional_system_platform_ids，
+附加根分别校验、按目标限定读取并写入 evidence。MacOS 标准头测试也接受固定 SDK 环境变量。
+Windows 官方 x64 dev archive 的 URL/hash 及 LLVM/Clang 精确许可证文件、URL/hash 记录于
+`native-helpers/clang/toolchain.json`；没有用 installer 代替开发 headers/libraries。
+
+新增的四个审查定点测试在旧二进制运行得到 `Ran 4 tests in 0.850s / FAILED (failures=4)`：
+
+- 单 token 宏 `NUMBER 1→9`、enum initializer 数字变化被末尾 token bug 吞掉；修复 lexer 循环，
+  先处理有效 token 再处理 EOF，补全原始 token 序列。
+- `-O0/-O2` 下的 `__OPTIMIZE__` 分支都变成 plain；安全优化白名单现原样进入真实 Clang。
+- 有/无花括号的 `extern "C"` 父 signature 混入子函数正文；现以语言字符串结束位置确定自身头部。
+- `int a=1,b=2` 的 b 混入 a initializer；现用原生 TypeLoc 的基础类型范围识别共享前缀，再把
+  每个 declarator 的片段分开。全局、字段、指针、数组均回归，字段父内容保持独立子锚点。
+
+修复后相同定点命令输出 `Ran 4 tests in 2.515s / OK`。
+完整命令 `python3 native-helpers/clang/tests/test_helper.py` 输出
+`Ran 22 tests in 4.304s / OK (skipped=1)`：21 项实际通过，Windows SDK 实测因无 Windows 根
+明确跳过；不能计为 Windows 通过。macOS SDK、独立附加根的真实头文件/宏/来源证据、Unicode
+文件名、前述 15 项基础行为及四项审查回归均实际执行。
+
+该轮 macOS binary SHA-256：
+`4e84eb0ffad0c28f3d13eccb3ebf3b9d4e10d66c97bee641ab7d3f97f8bc0d00`。
+构建仍为 `native-helpers/clang/build.sh /tmp/narrant-clang-native/LLVM-21.1.8-macOS-ARM64`，exit0。
+Windows CMake 与 PowerShell 分支仅已编写，尚待实际原生 CI；没有把宏定义源码对象、静态调用和
+有限标准头测试扩大宣称为所有 C++ 关系或大型项目完整性证明。此轮未运行 Cargo/quality-gate。

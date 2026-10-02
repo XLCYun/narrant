@@ -259,7 +259,8 @@ class NativeHelperTests(unittest.TestCase):
 
     def test_target_sdk_standard_headers(self):
         """明确 catalog 的本机 SDK 提供 C/C++ 标准头，不隐式使用宿主搜索路径。"""
-        sdk = Path('/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk')
+        sdk = Path(os.environ.get('NARRANT_MACOS_SDK', '/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk'))
+        version = os.environ.get('NARRANT_MACOS_SDK_VERSION', '27.0')
         if not sdk.exists():
             self.skipTest('MacOSX27.0 SDK not available; other tests remain freestanding')
         for mode, source in [('c', '#include <stdint.h>\n#include <stdio.h>\nint f(void){uint32_t n=1;return puts("hello")+(int)n;}\n'),
@@ -267,8 +268,8 @@ class NativeHelperTests(unittest.TestCase):
             request = self.prepare({'main.c' if mode == 'c' else 'main.cpp': source}, mode, (0,))
             target = request['environment']['platforms'][0]
             target['root'] = str(sdk)
-            target['version'] = '27.0'
-            target['metadata']['target_triple'] = 'arm64-apple-macosx27.0'
+            target['version'] = version
+            target['metadata']['target_triple'] = 'arm64-apple-macosx' + version
             target['metadata']['system_include_directories'] = ['usr/include/c++/v1', 'usr/include']
             graph = self.ok(request)
             self.assertTrue(graph['nodes'])
@@ -296,6 +297,98 @@ class NativeHelperTests(unittest.TestCase):
         second = self.ok(self.prepare({'main.cpp': b + a}))
         self.assertEqual({n['signature']: n['id'] for n in first['nodes']},
                          {n['signature']: n['id'] for n in second['nodes']})
+
+    def test_additional_system_header_catalog(self):
+        """分离的标准头根通过 ID 授权，来源、宏及证据不依赖共同父目录。"""
+        headers = self.base / 'approved-msvc-headers'
+        headers.mkdir()
+        (headers / 'extra.h').write_text('#define COUNT 2\nint platform_function(void);\n')
+        request = self.prepare({'main.cpp': '#include <extra.h>\nint f(){return platform_function()+COUNT;}\n'})
+        target = request['environment']['platforms'][0]
+        target['metadata']['additional_system_platform_ids'] = ['msvc-headers']
+        request['environment']['platforms'].append({'id': 'msvc-headers', 'kind': 'clang-system-headers',
+            'root': str(headers), 'version': 'fixture-1', 'fingerprint': 'fixture-headers', 'metadata': {}})
+        result = self.run_request(request)
+        self.assertEqual(result['outcome'], 'ok', result)
+        self.assertEqual(result['graph']['external_symbols'][0]['scope'], 'dependency')
+        self.assertTrue(all('msvc-headers' in x['platform_ids'] for x in result['evidence']['configurations']))
+        target['metadata']['additional_system_platform_ids'] = ['msvc-headers', 'msvc-headers']
+        self.assertEqual(self.run_request(request)['error']['code'], 'invalid_input')
+        target['metadata']['additional_system_platform_ids'] = ['missing']
+        self.assertEqual(self.run_request(request)['error']['code'], 'target_unavailable')
+
+    def test_unicode_source_path(self):
+        """协议路径按 UTF-8 往返，空格和中文不经过 shell 或系统 ANSI 编码。"""
+        graph = self.ok(self.prepare({'源码 space.cpp': 'int value(){return 1;}\n'}))
+        self.assertEqual(graph['nodes'][0]['name'], 'value')
+
+    def test_windows_sdk_standard_headers(self):
+        """Windows 原生 CI 使用精确 SDK Include 根与独立 MSVC include 根。"""
+        sdk = os.environ.get('NARRANT_WINDOWS_SDK')
+        msvc = os.environ.get('NARRANT_MSVC_ROOT')
+        if not sdk or not msvc:
+            self.skipTest('Windows SDK and MSVC roots not provided; not a Windows pass')
+        for mode, source in [('c', '#include <stdint.h>\n#include <stdio.h>\nint f(void){uint32_t n=1;return puts("hello")+(int)n;}\n'),
+                             ('cpp', '#include <vector>\nint f(){std::vector<int> v;v.push_back(1);return (int)v.size();}\n')]:
+            request = self.prepare({'main.c' if mode == 'c' else 'main.cpp': source}, mode, (0,))
+            target = request['environment']['platforms'][0]
+            target['root'] = sdk
+            target['version'] = Path(sdk).name
+            target['metadata']['target_triple'] = 'x86_64-pc-windows-msvc'
+            target['metadata']['system_include_directories'] = ['ucrt', 'shared', 'um', 'winrt']
+            target['metadata']['additional_system_platform_ids'] = ['msvc']
+            request['environment']['platforms'].append({'id': 'msvc', 'kind': 'clang-system-headers',
+                'root': str(Path(msvc) / 'include'), 'version': Path(msvc).name, 'fingerprint': 'ci-msvc', 'metadata': {}})
+            graph = self.ok(request)
+            self.assertTrue(graph['nodes'])
+            self.assertTrue(graph['external_symbols'])
+
+    def test_review_terminal_tokens_are_preserved(self):
+        """审查回归：缓冲区末尾宏数字和 enum initializer 的真实 token 不得丢失。"""
+        first = self.ok(self.prepare({'main.cpp': '#define NUMBER 1\nenum E { A=1, B=2 };\n'}))
+        second = self.ok(self.prepare({'main.cpp': '#define NUMBER 9\nenum E { A=9, B=8 };\n'}))
+        a = {n['name']: n for n in first['nodes']}
+        b = {n['name']: n for n in second['nodes']}
+        for name in ('NUMBER', 'A', 'B'):
+            self.assertNotEqual(a[name]['code'], b[name]['code'], name)
+        self.assertIn('1', a['NUMBER']['code'])
+        self.assertIn('2', a['B']['code'])
+
+    def test_review_optimization_predefined_macros(self):
+        """审查回归：优化参数影响预定义宏，因此必须传入真实 Clang 上下文。"""
+        source = '#ifdef __OPTIMIZE__\nint optimized;\n#else\nint plain;\n#endif\n'
+        plain = self.ok(self.prepare({'main.cpp': source}, order=(0,), extra=['-O0']))
+        optimized = self.ok(self.prepare({'main.cpp': source}, order=(0,), extra=['-O2']))
+        self.assertEqual([n['name'] for n in plain['nodes']], ['plain'])
+        self.assertEqual([n['name'] for n in optimized['nodes']], ['optimized'])
+
+    def test_review_linkage_signature_owns_only_header(self):
+        """审查回归：extern C 扩展的 signature/code 不包含独立子函数正文。"""
+        for first_source, second_source in [('extern "C" { int f(){return 1;} }', 'extern "C" { int f(){return 2;} }'),
+                                            ('extern "C" int f(){return 1;}', 'extern "C" int f(){return 2;}')]:
+            first = self.ok(self.prepare({'main.cpp': first_source}))
+            second = self.ok(self.prepare({'main.cpp': second_source}))
+            a = next(n for n in first['nodes'] if n['native_kind'] == 'LinkageSpec')
+            b = next(n for n in second['nodes'] if n['native_kind'] == 'LinkageSpec')
+            self.assertEqual(a['signature'], b['signature'])
+            self.assertEqual(a['code'], b['code'])
+            self.assertNotIn('return', a['signature'])
+
+    def test_review_multiple_declarators_are_independent(self):
+        """审查回归：普通全局变量、字段、指针与数组 declarator 的自身内容相互独立。"""
+        for source in ['int a=1, b=2;', 'struct Box { int a=1, b=2; };',
+                       'const char *a="one", *b="two";', 'int a[2]={1,2}, b[2]={3,4};']:
+            changed = source.replace('a=1', 'a=3').replace('a="one"', 'a="new"').replace('a[2]={1,2}', 'a[2]={5,6}')
+            first = self.ok(self.prepare({'main.cpp': source}))
+            second = self.ok(self.prepare({'main.cpp': changed}))
+            a = {n['name']: n for n in first['nodes']}
+            b = {n['name']: n for n in second['nodes']}
+            self.assertNotEqual(a['a']['code'], b['a']['code'], source)
+            self.assertEqual(a['b']['signature'], b['b']['signature'], source)
+            self.assertEqual(a['b']['code'], b['b']['code'], source)
+            self.assertEqual(a['b']['id'], b['b']['id'], source)
+            if 'Box' in a:
+                self.assertEqual(a['Box']['code'], b['Box']['code'])
 
     def test_duplicate_protocol_keys(self):
         """协议拒绝重复键而不是悄悄覆盖。"""

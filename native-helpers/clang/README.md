@@ -48,3 +48,37 @@ header。普通 C record/C++ record 的同一源 struct 使用 `StructDecl`，�
 
 测试脚本创建自身临时源码并核对分析前后完整文件摘要；helper 从原位置读取。取消在分析线程
 之外读取，VFS/AST 检查取消和总期限；Host 仍负责在宽限过后强制回收无法协作中止的原生解析。
+
+## Windows 增量与附加标准头
+
+Windows 构建入口已提供，须在实际 Windows 工具链中验证：
+
+```powershell
+./native-helpers/clang/build.ps1 -LlvmRoot C:/isolated/clang-llvm-21.1.8
+$env:NARRANT_LLVM_ROOT = 'C:/isolated/clang-llvm-21.1.8'
+$env:NARRANT_CLANG_HELPER = 'C:/repo/native-helpers/clang/build/narrant-clang.exe'
+$env:NARRANT_WINDOWS_SDK = 'C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0'
+$env:NARRANT_MSVC_ROOT = 'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207'
+python native-helpers/clang/tests/test_helper.py
+```
+
+CMake 固定 LLVM 21.1.8，优先 clang-cpp 导出目标，否则链接官方静态 Clang 依赖图；关闭 RTTI、
+开启 helper 自身异常及 UTF-8 源码。输出固定为 `build/narrant-clang.exe`；若 SDK 提供动态库，
+CMake 将声明的运行 DLL 放在程序旁边，发布包必须保留这种加载关系。
+
+`clang-target.metadata` 新增可选 `additional_system_platform_ids`，只能引用 catalog 内
+`kind: "clang-system-headers"`、`metadata: {}` 的精确批准根。Windows SDK 的 `Include/<版本>`
+与 MSVC `<版本>/include` 因此分别授权，无需放宽到 Program Files。附加平台 ID 进入 evidence。
+空/重复/错误种类/缺失引用会拒绝；每个 TU 只读取自身目标引用的这些根。MSVC 标准头先于 resource
+与 SDK C 头。直接调用和标准宏的上下文都通过同一 VFS。
+
+macOS CI 可设置 `NARRANT_MACOS_SDK` 与 `NARRANT_MACOS_SDK_VERSION` 指向固定 Xcode SDK。
+不设置 Windows SDK 环境时，该测试会明确 skip；这不是 Windows 验收通过。
+
+## 审查修复第一轮
+
+原始 token lexer 必须处理已产出的最后一个有效 token，不能把其 EOF 返回值当成“没有 token”。
+优化白名单 `-O0/-O1/-O2/-O3/-Os/-Oz/-Og` 原样传入 Clang，保留 `__OPTIMIZE__` 等语义。
+LinkageSpec 签名只保留 `extern` 与语言字符串。共用 Var/Field 声明通过 AST 基础 TypeLoc 取得
+共享声明前缀，然后分离每个 declarator；前一个 initializer 不进入后一个节点的 code/signature。
+这支持已验证的全局多变量、类字段、指针及数组声明，父节点仍只保留独立子对象锚点。
