@@ -41,3 +41,19 @@ Maven parent 按真实 `relativePath` 递归读取，核对声明的 groupId/art
 `python3 -m unittest native-helpers/java/tests/test_helper.py -v` 的 17 项合成仓库测试通过，包括跨文件重载、缺失依赖、目标 API 反例、body/child/格式变化、测试根、有限单/多模块 POM、跨配置关系并集、重复声明与元数据链接拒绝、错误优先于取消。测试用真实 JDT 和准确目标 JDK，不运行被测代码。没有在 Windows 原生运行；跨平台构建脚本和 `java.exe` 测试入口已准备，仍须 Windows CI 验证。并未证明 JDK 21/25、Java 8、JPMS、Android、任意 Maven 插件/外部 parent 或复杂 Gradle 动态配置可用，这些输入当前拒绝。仓内多模块之间尚未建立 Maven 依赖图，跨模块业务绑定可能 unresolved；不会用同名猜测补边。
 
 详细执行记录与待审风险见 `.superpowers/sdd/0024b-native-analyzer-implementation-plan/task-3-report.md`。
+
+## 最终审查修复补充（2026-10-03）
+
+以上保留此前实施快照。本轮修复使请求后的 Host stdin EOF 设置取消状态，
+既有真实错误仍经原错误分支返回；真实父 POM 链同时继承字面 main/test 源根，子声明
+可覆盖；方法参数中的泛型变量按词法类型/方法作用域与位置归一，内层变量正确遮蔽外层；
+record 的 signature 与 code 均以有序组件锚点代替组件内容。
+
+四项新增行为回归先在旧 classes 上失败。使用原固定 JDK 25/JDT 依赖重新执行
+`sh native-helpers/java/build.sh .tools/java-native/jdk-25.0.4.1+1/Contents/Home .tools/java-native/lib`
+成功；`python3 -m unittest native-helpers/java/tests/test_helper.py` 为 21 项通过。
+随后加强泛型作用域标记的断言，其聚焦回归也通过。测试驱动已在 completed 前保持
+stdin 打开，单独的真实入口测试验证提前 EOF 返回 cancelled、没有成功图。
+父 POM 测试验证默认目录被拒绝、继承主目录纳入，以及继承测试目录的排除/启用。
+泛型重命名覆盖类型、嵌套类型、方法及同名遮蔽；record 组件类型编辑保持父自身内容不变。
+Windows 原生和 CI SDK 15.5 验收仍不由这次本机源码验证替代。

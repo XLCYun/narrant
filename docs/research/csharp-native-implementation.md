@@ -90,3 +90,16 @@ glob、额外 TFM、source generator 和第三方业务依赖无法由静态子�
 当前测试尚未覆盖所有合法 C# 14 语法及引用边界组合，包括 file-based app 指令、所有
 LINQ/collection initializer 的隐式调用、通用运算符绑定、完整跨平台源码编码和大型项目
 性能。遇到未知声明或不能兼容归并的对象时 helper 失败；不能据此推断所有未测语法已支持。
+
+## 最终审查修复补充（2026-10-03）
+
+以上为此前快照。新增真实 helper 回归先复现接口继承被误报为 implements，
+再修正为同时检查源声明种类：接口继承接口输出 code.extends，类/结构体实现接口仍为
+code.implements。回归逐项断言 IBase/IDerived 的准确 Node 目标及唯一关系语义。
+
+在 native-helpers/csharp 中使用既有 .NET 10.0.100 执行
+`DOTNET_ROOT=/tmp/narrant-dotnet-10.0.100 DOTNET_CLI_HOME=/tmp/narrant-dotnet-home /tmp/narrant-dotnet-10.0.100/dotnet build -c Release --no-restore`
+成功，0 warning / 0 error；仓库根目录
+`python3 -m unittest native-helpers/csharp/tests/test_helper.py` 为 24 项通过。
+当前 bin/Release/net10.0 产物来自修复后的源码；支持包刷新及公共 Host 验收由后续整合
+执行，尚未声称 Windows x64 已真实运行。
