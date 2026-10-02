@@ -3,7 +3,7 @@
 //! 需要已固定的 helper 与目标平台 catalog；通过 `--ignored` 显式执行。
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -11,8 +11,8 @@ use std::{
 
 use narrant_lib::structure_review::{
     code_graph::{
-        AnalysisInput, AnalysisOptions, ChangeKind, CodeCategory, CodeGraph, LanguageAnalyzer,
-        NodeId, ReferenceTarget, SetChange, SymbolScope,
+        AnalysisInput, AnalysisOptions, ChangeKind, CodeCategory, CodeGraph, ExternalSymbol,
+        LanguageAnalyzer, NodeId, ReferenceTarget, SetChange, SymbolScope,
     },
     native_analyzer::{HelperCommand, HelperIdentity, NativeLanguageAnalyzer, Platform},
 };
@@ -569,6 +569,244 @@ fn exercise(mode: Mode) {
         "迁移仓库根后图语义或 ID 改变"
     );
     assert_calls(mode, &graphs[3]);
+}
+
+/// 保留单语言图中验证过的真实 ID，供合并图核对同名调用归属。
+#[derive(Debug, PartialEq, Eq)]
+struct MixedEvidence {
+    language: &'static str,
+    caller: NodeId,
+    target: NodeId,
+    changed: NodeId,
+    external_symbol: String,
+    external: ExternalSymbol,
+}
+
+/// 在尚未合并的语言图中记录身份，避免跨语言同名对象被全局名称搜索误配。
+fn mixed_evidence(mode: Mode, graph: &CodeGraph) -> MixedEvidence {
+    assert_calls(mode, graph);
+    let (caller_name, target_name, changed_name, _) = mode.expected();
+    let (caller, source) = find(graph, caller_name, CodeCategory::Callable);
+    let (target, _) = find(graph, target_name, CodeCategory::Callable);
+    let (changed, _) = find(graph, changed_name, CodeCategory::Callable);
+    let language = match mode {
+        Mode::Go => "go",
+        Mode::Java => "java",
+        Mode::Csharp => "csharp",
+        Mode::Cpp => "cpp",
+        Mode::C => unreachable!("混合 fixture 以 C++ 代表 Clang helper"),
+    };
+    let externals = source
+        .data()
+        .references
+        .iter()
+        .filter_map(|reference| {
+            if reference.semantic != "code.calls" {
+                return None;
+            }
+            match &reference.target {
+                ReferenceTarget::External { symbol }
+                    if symbol.to_ascii_lowercase().contains("hidden") =>
+                {
+                    Some(symbol.clone())
+                }
+                _ => None,
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        externals.len(),
+        1,
+        "{language} 未选 Hidden 应恰有一个确定身份"
+    );
+    let external_symbol = externals.into_iter().next().unwrap();
+    let external = graph
+        .external_symbols()
+        .get(&external_symbol)
+        .expect("单语言图须提供未选目标的描述")
+        .clone();
+    assert_eq!(external.scope, SymbolScope::Repository);
+    MixedEvidence {
+        language,
+        caller: caller.clone(),
+        target: target.clone(),
+        changed: changed.clone(),
+        external_symbol,
+        external,
+    }
+}
+
+/// 在同一仓库侧依次运行四个真实后端，并以生产合并器形成唯一跨语言图。
+fn mixed_side(
+    configs: &BTreeMap<String, HelperConfig>,
+    root: &Path,
+    variant: &str,
+) -> (CodeGraph, Vec<MixedEvidence>) {
+    const MODES: [Mode; 4] = [Mode::Go, Mode::Java, Mode::Csharp, Mode::Cpp];
+    let selections = MODES
+        .into_iter()
+        .map(|mode| {
+            let files = fixture(mode, root, variant, configs);
+            extend_fixture(mode, root, variant);
+            (mode, files)
+        })
+        .collect::<Vec<_>>();
+    let initial = snapshot(root);
+    let mut graphs = Vec::new();
+    let mut evidence = Vec::new();
+    for (mode, files) in selections {
+        let graph = analyze(mode, configs, root, files);
+        evidence.push(mixed_evidence(mode, &graph));
+        graphs.push(graph);
+    }
+    assert_eq!(
+        initial,
+        snapshot(root),
+        "四个后端合并分析后仓库路径或字节改变"
+    );
+    let mut graphs = graphs.into_iter();
+    let merged = graphs.next().expect("混合仓库必须有 Go 图");
+    let merged = graphs.fold(merged, |combined, graph| {
+        combined
+            .merge(graph)
+            .expect("真实单语言图应可合并成唯一 CodeGraph")
+    });
+    for entry in &evidence {
+        let source = merged.node(&entry.caller).expect("合并图遗漏已验证调用者");
+        assert_eq!(source.data().language.0, entry.language);
+        assert_eq!(
+            merged
+                .node(&entry.target)
+                .expect("合并图遗漏跨文件目标")
+                .data()
+                .language
+                .0,
+            entry.language
+        );
+        assert_eq!(
+            merged
+                .node(&entry.changed)
+                .expect("合并图遗漏正文子对象")
+                .data()
+                .language
+                .0,
+            entry.language
+        );
+        assert!(
+            source.data().references.iter().any(|reference| {
+                reference.semantic == "code.calls"
+                    && reference.target == ReferenceTarget::Node(entry.target.clone())
+            }),
+            "{} 同名调用在合并后改变目标",
+            entry.language
+        );
+        assert!(
+            source.data().references.iter().any(|reference| {
+                reference.semantic == "code.calls"
+                    && reference.target
+                        == ReferenceTarget::External {
+                            symbol: entry.external_symbol.clone(),
+                        }
+            }),
+            "{} 仓内未选调用在合并后丢失",
+            entry.language
+        );
+        assert_eq!(
+            merged.external_symbols().get(&entry.external_symbol),
+            Some(&entry.external),
+            "{} 图外元数据在合并时冲突或丢失",
+            entry.language
+        );
+    }
+    assert_eq!(
+        evidence
+            .iter()
+            .map(|item| &item.caller)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        4,
+        "四门语言的同名调用者身份被错误归并"
+    );
+    assert_eq!(
+        evidence
+            .iter()
+            .map(|item| &item.external_symbol)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        4,
+        "四门语言的未选仓内目标身份发生冲突"
+    );
+    (merged, evidence)
+}
+
+/// 真实四 helper 对同一仓库侧构图，再验收合并图的前后侧 diff 与迁移身份。
+#[test]
+#[ignore = "require-real-tools: 四个真实 helper 与固定目标平台必须同时可用"]
+fn mixed_repository_real_helper_graph_and_diff() {
+    let configs = config();
+    for key in ["go", "java", "csharp", "clang"] {
+        assert!(
+            configs.contains_key(key),
+            "混合验收缺少 {key} 真实 helper 配置"
+        );
+    }
+    let sandbox = TempDir::new().expect("无法建立混合 fixture 临时根");
+    let mut sides = Vec::new();
+    for (directory, variant) in [
+        ("before", "before"),
+        ("changed", "changed"),
+        ("relocated", "before"),
+    ] {
+        let root = sandbox.path().join(directory);
+        fs::create_dir(&root).expect("无法建立混合仓库侧目录");
+        sides.push(mixed_side(&configs, &root, variant));
+    }
+    let (before, before_ids) = &sides[0];
+    let (changed, changed_ids) = &sides[1];
+    let (relocated, relocated_ids) = &sides[2];
+    assert_eq!(
+        before_ids, changed_ids,
+        "正文变化改变了四门语言的对象或图外身份"
+    );
+    assert_eq!(
+        before_ids, relocated_ids,
+        "迁移仓库根改变了四门语言的对象或图外身份"
+    );
+    let expected = before_ids
+        .iter()
+        .map(|item| item.changed.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(expected.len(), 4, "四门语言的正文子对象身份必须互异");
+    let diff = before.diff(changed).expect("合并后的有效图可以比较");
+    assert_eq!(
+        diff.nodes.len(),
+        4,
+        "只改四个子对象正文，不应改变其他对象：{diff:?}"
+    );
+    for node in &diff.nodes {
+        assert!(
+            expected.contains(&node.id),
+            "正文变化污染了别的语言或祖先：{node:?}"
+        );
+        assert_eq!(node.content, Some(ChangeKind::Modified));
+        assert!(
+            node.contains.is_empty() && node.references.is_empty(),
+            "正文变化不应改变结构或关系：{node:?}"
+        );
+        assert_eq!(
+            before.node(&node.id).expect("前侧正文对象缺失").category(),
+            CodeCategory::Callable
+        );
+    }
+    assert_eq!(
+        before.root().contains,
+        relocated.root().contains,
+        "迁移仓库根后混合图顶层身份改变"
+    );
+    assert!(
+        before.diff(relocated).unwrap().nodes.is_empty(),
+        "同语义迁移仓库根后混合图产生差异"
+    );
 }
 
 /// 完整验收调用必须同时提供四个固定 helper，Clang 覆盖 C 与 C++ 两种语言模式。
