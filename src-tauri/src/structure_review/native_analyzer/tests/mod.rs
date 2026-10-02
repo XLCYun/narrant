@@ -554,7 +554,8 @@ fn subprocess_reaps_descendants_after_parent_exit() {
             .executable_analyzer(mode, &line(ready()), &line(result()))
             .analyze(&fixture.input());
         if mode == "descendant" {
-            assert!(result.is_err());
+            let error = result.unwrap_err();
+            assert!(error.message.contains("退出超时"), "{error}");
         } else {
             result.unwrap();
         }

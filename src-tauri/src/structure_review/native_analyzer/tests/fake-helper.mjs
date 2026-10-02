@@ -81,10 +81,20 @@ if (mode === 'startup_stderr_first') {
     if (mode === 'half') { fs.writeSync(1, '{"protocol":'); process.exit(0); }
     if (mode === 'duplicate_ready') output('ready');
     if (mode === 'descendant' || mode === 'descendant_closed') {
-      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      const marker = path.join(control, 'descendant');
+      spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000); require("node:fs").writeFileSync(process.argv[1], String(process.pid));', marker], {
         stdio: mode === 'descendant' ? ['ignore', 'inherit', 'inherit'] : 'ignore',
+        // Windows detached 仅绕过 Node 自己的随父退出 Job，未请求逃离 Host 的外层 Job。
+        // Unix 必须保持原进程组，让 Host 仍能完整回收后代。
+        detached: process.platform === 'win32',
       });
-      fs.writeFileSync(path.join(control, 'descendant'), String(child.pid));
+      // 后代亲自落下 PID，证明运行时和继承管道已就绪，再让父进程退出。
+      const ready = setInterval(() => {
+        if (!fs.existsSync(marker)) return;
+        clearInterval(ready);
+        complete();
+      }, 10);
+      return;
     }
     complete();
   });
