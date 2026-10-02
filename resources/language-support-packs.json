@@ -65,6 +65,55 @@
           "sha256": "295f8538c94ae5c3043301cf7cff1c852dab6a786a8ddee471e061b40d5ecabe"
         }
       ]
+    },
+    "java": {
+      "version": "0.1.0",
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-java",
+      "projectionRevision": "java-source-v1",
+      "profile": "java-static-v1",
+      "verifiedTargets": [],
+      "jdt": "3.47.0",
+      "runtimeJava": "25.0.4.1+1",
+      "targetJava": "17",
+      "targetJdk": "17.0.20.1+1"
+    },
+    "go": {
+      "version": "0.1.0",
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-go",
+      "projectionRevision": "go-source-v1",
+      "profile": "go-static-v1",
+      "verifiedTargets": [],
+      "go": "1.23.8",
+      "targetStandardLibrary": "bundled-go-src"
+    },
+    "csharp": {
+      "version": "0.1.0",
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-csharp",
+      "projectionRevision": "csharp-source-v1",
+      "profile": "csharp-static-v1",
+      "verifiedTargets": [],
+      "dotnetSdk": "10.0.100",
+      "dotnetRuntime": "10.0.0",
+      "referencePack": "Microsoft.NETCore.App.Ref",
+      "referencePackVersion": "10.0.0",
+      "tfm": "net10.0"
+    },
+    "c-cpp": {
+      "version": "0.1.0",
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-clang",
+      "projectionRevision": "clang-source-v1",
+      "profile": "clang-static-v1",
+      "verifiedTargets": [],
+      "llvm": "21.1.8",
+      "targetSdk": "local-approved-system-sdk"
     }
   }
 }

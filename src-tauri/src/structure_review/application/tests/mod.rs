@@ -263,6 +263,7 @@ fn dispatches_mixed_language_groups_and_keeps_typescript_javascript_node_targets
         .unwrap())
     });
     let analyzers = LanguageAnalyzers {
+        native: BTreeMap::new(),
         rust: analyze_rust,
         typescript: analyze_typescript,
         python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
@@ -311,6 +312,7 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
     let unavailable_typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| panic!("空组不应启动 TypeScript"));
     let unavailable = LanguageAnalyzers {
+        native: BTreeMap::new(),
         rust: unavailable_rust,
         typescript: unavailable_typescript,
         python: Arc::new(|_, _| panic!("空组不应启动 Python")),
@@ -333,6 +335,7 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
     let typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| Ok(single_node_graph("collision", "typescript", vec![])));
     let colliding = LanguageAnalyzers {
+        native: BTreeMap::new(),
         rust,
         typescript,
         python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
@@ -379,6 +382,7 @@ fn language_failure_cancels_its_peer_and_preserves_original_cause() {
     let typescript: Arc<AnalyzeTypeScript> =
         Arc::new(|_, _| Err(AnalysisError::new("typescript original failure")));
     let failing = LanguageAnalyzers {
+        native: BTreeMap::new(),
         rust,
         typescript,
         python: Arc::new(|_, _| panic!("该测试不应启动 Python")),
@@ -999,3 +1003,6 @@ mod benchmark;
 
 #[path = "python.rs"]
 mod python;
+
+#[path = "native.rs"]
+mod native;

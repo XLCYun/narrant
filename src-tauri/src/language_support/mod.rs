@@ -382,6 +382,12 @@ impl LanguageSupportPacks {
 
     /// 下载固定版本清单和归档，任何失败都在同盘 TempDir 中收尾。
     async fn install(&self, key: &PackKey) -> Result<u64, String> {
+        if self.inner.origin == ORIGIN && !model::published(key.id) {
+            return Err(format!(
+                "{} 原生语言支持包尚未发布；需要经过验证的本地安装包。",
+                key.id.slug()
+            ));
+        }
         if !["aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
             .contains(&self.inner.storage.target.as_str())
         {
@@ -518,3 +524,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/python.rs"]
 mod python_tests;
+
+#[cfg(test)]
+#[path = "tests/native.rs"]
+mod native_tests;

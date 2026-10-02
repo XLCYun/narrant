@@ -25,7 +25,7 @@ export function LanguageSupportPacks({ binding, ids, management = false, onRetry
 function PackRow({ pack, binding, management, onRetry }: { pack: PackSnapshot; binding: LanguageSupportBinding; management: boolean; onRetry?: () => void }) {
   const { t } = useTranslation("languageSupport");
   const active = isPackActive(pack);
-  const name = ({ rust: "Rust", "typescript-javascript": "TypeScript / JavaScript", python: "Python" })[pack.id];
+  const name = ({ rust: "Rust", "typescript-javascript": "TypeScript / JavaScript", python: "Python", java: "Java", go: "Go", csharp: "C#", "c-cpp": "C / C++" })[pack.id];
   const percentage = pack.totalBytes && pack.totalBytes > 0 ? Math.min(100, Math.floor(pack.downloadedBytes / pack.totalBytes * 100)) : null;
   return <article className="min-w-0 space-y-3 rounded-xl border bg-background/60 p-4" aria-label={`${name} ${pack.version}`}>
     <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">

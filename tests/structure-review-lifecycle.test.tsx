@@ -103,9 +103,9 @@ it("shows backend failures and rejects mismatched comparison identities", async 
 });
 
 it("retains backend pack requirements after preparation fails and changes the request identity with scope", async () => {
-  const adapter: StructureReviewAdapter = { analyze: vi.fn().mockRejectedValue({ code: "analysis-failed", detail: "download failed", supportPacks: ["rust", "python"] }) };
+  const adapter: StructureReviewAdapter = { analyze: vi.fn().mockRejectedValue({ code: "analysis-failed", detail: "download failed", supportPacks: ["rust", "python", "java", "go", "csharp", "c-cpp"] }) };
   const { result } = renderHook(() => useStructureReview(adapter, snapshot, true));
-  await waitFor(() => expect(result.current.binding?.state).toEqual({ kind: "failed", detail: "download failed", supportPacks: ["rust", "python"] }));
+  await waitFor(() => expect(result.current.binding?.state).toEqual({ kind: "failed", detail: "download failed", supportPacks: ["rust", "python", "java", "go", "csharp", "c-cpp"] }));
   expect(result.current.binding?.supportRequest).toBe(JSON.stringify([snapshot.reviewId, snapshot.snapshotId, false]));
   act(() => result.current.binding?.setOptions({ includeTests: true }));
   await waitFor(() => expect(result.current.binding?.state.kind).toBe("failed"));

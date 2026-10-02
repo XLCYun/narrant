@@ -70,7 +70,15 @@ impl Storage {
     /// 发现当前平台的历史版本，拒绝链接目录及任意目录名。
     pub fn keys(&self, area: &str) -> Result<Vec<PackKey>, String> {
         let mut keys = vec![];
-        for id in [PackId::Rust, PackId::TypeScriptJavascript, PackId::Python] {
+        for id in [
+            PackId::Rust,
+            PackId::TypeScriptJavascript,
+            PackId::Python,
+            PackId::Java,
+            PackId::Go,
+            PackId::Csharp,
+            PackId::CCpp,
+        ] {
             let base = self.root.join(area).join(id.slug());
             if !base.exists() {
                 continue;
@@ -263,15 +271,17 @@ pub(super) fn validate_manifest(
     {
         return Err("语言支持包缺少必需入口".into());
     }
-    if manifest
-        .files
-        .iter()
-        .any(|file| file.path.starts_with("bin/") && !file.executable)
-        || (key.id == PackId::Python
-            && manifest
-                .files
-                .iter()
-                .any(|file| file.path == "control/ty.toml" && (file.size != 0 || file.executable)))
+    if manifest.files.iter().any(|file| {
+        (file.path.starts_with("bin/")
+            || (key.id == PackId::Java
+                && (file.path == "runtime/jdk/bin/java"
+                    || file.path == "runtime/jdk/bin/java.exe")))
+            && !file.executable
+    }) || (key.id == PackId::Python
+        && manifest
+            .files
+            .iter()
+            .any(|file| file.path == "control/ty.toml" && (file.size != 0 || file.executable)))
     {
         return Err("语言支持包工具权限或固定控制文件无效".into());
     }

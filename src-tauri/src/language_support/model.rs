@@ -9,6 +9,11 @@ pub(crate) enum PackId {
     #[serde(rename = "typescript-javascript")]
     TypeScriptJavascript,
     Python,
+    Java,
+    Go,
+    Csharp,
+    #[serde(rename = "c-cpp")]
+    CCpp,
 }
 
 impl PackId {
@@ -18,6 +23,10 @@ impl PackId {
             Self::Rust => "rust",
             Self::TypeScriptJavascript => "typescript-javascript",
             Self::Python => "python",
+            Self::Java => "java",
+            Self::Go => "go",
+            Self::Csharp => "csharp",
+            Self::CCpp => "c-cpp",
         }
     }
 
@@ -30,6 +39,46 @@ impl PackId {
             } else {
                 "bin/rust-analyzer"
             }],
+            Self::Java => vec![
+                "control/native.json",
+                if windows {
+                    "runtime/jdk/bin/java.exe"
+                } else {
+                    "runtime/jdk/bin/java"
+                },
+                "runtime/helper/classes/dev/narrant/java/Main.class",
+            ],
+            Self::Go => vec![
+                "control/native.json",
+                "runtime/platform/go/VERSION",
+                "runtime/platform/go/src/builtin/builtin.go",
+                if windows {
+                    "bin/narrant-go.exe"
+                } else {
+                    "bin/narrant-go"
+                },
+            ],
+            Self::Csharp => vec![
+                "control/native.json",
+                if windows {
+                    "bin/dotnet.exe"
+                } else {
+                    "bin/dotnet"
+                },
+                "runtime/helper/Narrant.CSharp.Helper.dll",
+                "runtime/helper/Narrant.CSharp.Helper.deps.json",
+                "runtime/helper/Narrant.CSharp.Helper.runtimeconfig.json",
+                "runtime/helper/Microsoft.CodeAnalysis.dll",
+                "runtime/helper/Microsoft.CodeAnalysis.CSharp.dll",
+            ],
+            Self::CCpp => vec![
+                "control/native.json",
+                if windows {
+                    "bin/narrant-clang.exe"
+                } else {
+                    "bin/narrant-clang"
+                },
+            ],
             Self::Python => vec![
                 if windows { "bin/ty.exe" } else { "bin/ty" },
                 "control/ty.toml",
@@ -151,4 +200,15 @@ pub(super) fn valid_version(version: &str) -> bool {
     semver::Version::parse(version).is_ok_and(|value| {
         value.pre.is_empty() && value.build.is_empty() && value.to_string() == version
     })
+}
+
+/// 未发布的开发包只使用本机已验证安装，不能向生产分发源探测虚构版本。
+pub(super) fn published(id: PackId) -> bool {
+    let catalog: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../resources/language-support-packs.json"
+    ))
+    .expect("编译时语言支持包目录有效");
+    catalog["packs"][id.slug()]["published"]
+        .as_bool()
+        .unwrap_or(true)
 }

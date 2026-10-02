@@ -5,7 +5,7 @@ import { useLanguageSupportPacks, type LanguageSupportBinding } from "@/language
 import type { LanguageSupportApplication, PackCollection, PackPhase } from "@/language-support/types";
 import StructureChangesView from "@/components/structure-review/structure-changes-view";
 import { structurePythonFixture, structureClassDiagramFixture, structureCrateRootsFixture, structureFieldTypesFixture, structureFileModulesFixture, structureHiddenReferencesFixture, structureMixedLanguageFixture, structureMixedLanguagesFixture, structureReviewFixture, structureSourceDiffFixture, structureTestCodeFixture } from "@/dev/structure-review-fixture";
-import type { AnalysisOptions, StructureState } from "@/structure-review/types";
+import type { AnalysisOptions, StructureComparison, StructureState } from "@/structure-review/types";
 import { StrictMode, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -438,6 +438,35 @@ const readerSnapshot: ReviewReaderSnapshot = {
   },
 };
 
+/** 五种原生语言共用一份可切换的图，验证新增语言名称及切换后的对象投影。 */
+function structureNativeLanguagesFixture(): StructureComparison {
+  const comparison = structureReviewFixture();
+  const languages = [
+    { language: "java", path: "services/review/workspace/PrepareReviewWorkspaceForSelectedRepository.java", kind: "class", declaration: "class ReviewWorkspace", method: "void prepare()" },
+    { language: "go", path: "review/prepare.go", kind: "type", declaration: "type Workspace struct", method: "func Prepare()" },
+    { language: "csharp", path: "src/Review/PrepareWorkspace.cs", kind: "class", declaration: "class ReviewWorkspace", method: "void Prepare()" },
+    { language: "c", path: "src/review/prepare.c", kind: "struct", declaration: "struct review_workspace", method: "void prepare(void)" },
+    { language: "cpp", path: "src/review/prepare.cpp", kind: "class", declaration: "class ReviewWorkspace", method: "void prepare()" },
+  ] as const;
+  for (const { language, path, kind, declaration, method } of languages) {
+    const fileId = `${language}-file`;
+    const typeId = `${language}-type`;
+    const methodId = `${language}-method`;
+    for (const side of ["before", "after"] as const) {
+      const graph = comparison[side];
+      graph.root.push(fileId);
+      graph.nodes.push(
+        { id: fileId, category: "container", language, nativeKind: "file", name: path, signature: null, code: null, source: null, contains: [typeId], references: [], extensions: {} },
+        { id: typeId, category: "type", language, nativeKind: kind, name: "ReviewWorkspace", signature: declaration, code: null, source: declaration, contains: [methodId], references: [], extensions: {} },
+        { id: methodId, category: "callable", language, nativeKind: "method", name: "prepare", signature: method, code: side === "before" ? "return;" : "save();", source: `${method} { ${side === "before" ? "return;" : "save();"} }`, contains: [], references: [], extensions: {} },
+      );
+    }
+    comparison.diff.nodes.push({ id: methodId, content: "modified", contains: [], references: [] });
+    comparison.coverage.push({ path, oldPath: null, before: "analyzed", after: "analyzed" });
+  }
+  return comparison;
+}
+
 /** 用代表性长短路径和变更内容预览完整 Review Reader。 */
 function ReviewReaderPreview({
   empty = false,
@@ -455,7 +484,7 @@ function ReviewReaderPreview({
   merged?: boolean;
   updateState?: "idle" | "current" | "checking" | "failed" | "available";
   initialView?: "overview" | "file-changes" | "structure-changes";
-  structureKind?: "python" | "source-diff" | "mixed-languages" | "nested-containers" | "file-modules" | "crate-roots" | "dense" | "field-types" | "ready" | "loading" | "failed" | "empty" | "tests-only" | "unsupported" | "imports-only" | "hidden-references";
+  structureKind?: "python" | "native-languages" | "source-diff" | "mixed-languages" | "nested-containers" | "file-modules" | "crate-roots" | "dense" | "field-types" | "ready" | "loading" | "failed" | "empty" | "tests-only" | "unsupported" | "imports-only" | "hidden-references";
   shortContent?: boolean;
   themeSample?: boolean | "rust";
   babysitKind?: "completed" | "generating" | "repairing" | "failed" | "claude-recovery" | "claude-signed-out" | "custom-recovery";
@@ -525,7 +554,7 @@ function ReviewReaderPreview({
   const [structureOptions, setStructureOptions] = useState<AnalysisOptions>({ includeTests: false });
   /** 代表性源码对应的分析结果，重试与切换范围使用同一份预览输入。 */
   const structureReadyState = (includeTests: boolean): StructureState => {
-    const comparison = { ...(structureKind === "python" ? structurePythonFixture() : structureKind === "nested-containers" ? structureMixedLanguagesFixture() : structureKind === "file-modules" ? structureFileModulesFixture() : structureKind === "source-diff" ? structureSourceDiffFixture() : structureKind === "mixed-languages" ? structureMixedLanguageFixture() : structureKind === "field-types" ? structureFieldTypesFixture() : structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureKind === "hidden-references" ? structureHiddenReferencesFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
+    const comparison = { ...(structureKind === "native-languages" ? structureNativeLanguagesFixture() : structureKind === "python" ? structurePythonFixture() : structureKind === "nested-containers" ? structureMixedLanguagesFixture() : structureKind === "file-modules" ? structureFileModulesFixture() : structureKind === "source-diff" ? structureSourceDiffFixture() : structureKind === "mixed-languages" ? structureMixedLanguageFixture() : structureKind === "field-types" ? structureFieldTypesFixture() : structureKind === "crate-roots" ? structureCrateRootsFixture() : structureKind === "dense" ? structureClassDiagramFixture() : structureKind === "hidden-references" ? structureHiddenReferencesFixture() : structureReviewFixture({ importsOnly: structureKind === "imports-only" })), reviewId: snapshot.reviewId, snapshotId: snapshot.snapshotId, comparisonBase: snapshot.comparisonBase, headRevision: snapshot.headRevision };
     if (structureKind === "empty" || structureKind === "tests-only") return { kind: "ready", comparison: structureTestCodeFixture({ ...comparison, before: comparison.after, diff: { nodes: [] } }, structureKind === "tests-only" && includeTests) };
     if (structureKind === "unsupported") return { kind: "ready", comparison: { ...comparison, before: { root: [], nodes: [], externalSymbols: {} }, after: { root: [], nodes: [], externalSymbols: {} }, diff: { nodes: [] }, coverage: comparison.coverage.slice(-1) } };
     return { kind: "ready", comparison: structureTestCodeFixture(comparison, includeTests) };
@@ -591,12 +620,19 @@ function ReviewReaderPreview({
 }
 
 /** 使用真实共享 hook 和组件检查进度、重试、后台提示及设置删除。 */
-function LanguageSupportPreview({ phase = "downloading", management = false, unknownTotal = false }: { phase?: PackPhase; management?: boolean; unknownTotal?: boolean }) {
+function LanguageSupportPreview({ phase = "downloading", management = false, unknownTotal = false, native = false }: { phase?: PackPhase; management?: boolean; unknownTotal?: boolean; native?: boolean }) {
   const model = useMemo(() => {
-    let current: PackCollection = { sequence: 1, requirements: { preview: ["rust", "typescript-javascript", "python"] }, packs: [
+    const nativePacks: PackCollection["packs"] = native ? (["java", "go", "csharp", "c-cpp"] as const).map((id, index) => ({
+      id, version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase,
+      downloadedBytes: 12_000_000 + index * 2_000_000, totalBytes: unknownTotal ? null : 40_000_000 + index * 8_000_000,
+      installedBytes: phase === "ready" ? 65_000_000 + index * 12_000_000 : 0, inUse: false,
+      error: phase === "failed" && id === "java" ? "Java 分析器下载失败：" + "请检查代理设置与网络连接后重试。".repeat(8) : null,
+    })) : [];
+    let current: PackCollection = { sequence: 1, requirements: { preview: native ? ["java", "go", "csharp", "c-cpp"] : ["rust", "typescript-javascript", "python"] }, packs: [
       { id: "rust", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "ready", downloadedBytes: 0, totalBytes: null, installedBytes: 40_000_000, inUse: true, error: null },
-      { id: "typescript-javascript", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase, downloadedBytes: 18_000_000, totalBytes: unknownTotal ? null : 50_000_000, installedBytes: phase === "ready" ? 150_000_000 : 0, inUse: false, error: phase === "failed" ? "连接中断，语言支持包未完成安装。" + "请检查网络连接后重试，已经完成的 Rust 语言支持包会继续保留。".repeat(4) : null },
-      { id: "python", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase, downloadedBytes: 8_000_000, totalBytes: unknownTotal ? null : 20_000_000, installedBytes: phase === "ready" ? 45_000_000 : 0, inUse: false, error: phase === "failed" ? "Python 语言支持包下载中断，请重试。" : null },
+      { id: "typescript-javascript", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: native ? "ready" : phase, downloadedBytes: 18_000_000, totalBytes: unknownTotal ? null : 50_000_000, installedBytes: native || phase === "ready" ? 150_000_000 : 0, inUse: false, error: !native && phase === "failed" ? "连接中断，语言支持包未完成安装。" + "请检查网络连接后重试，已经完成的 Rust 语言支持包会继续保留。".repeat(4) : null },
+      { id: "python", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: native ? "ready" : phase, downloadedBytes: 8_000_000, totalBytes: unknownTotal ? null : 20_000_000, installedBytes: native || phase === "ready" ? 45_000_000 : 0, inUse: false, error: !native && phase === "failed" ? "Python 语言支持包下载中断，请重试。" : null },
+      ...nativePacks,
     ] };
     const application: LanguageSupportApplication = {
       snapshot: async () => current,
@@ -604,13 +640,13 @@ function LanguageSupportPreview({ phase = "downloading", management = false, unk
       remove: async (id, version) => { current = { ...current, sequence: current.sequence + 1, packs: current.packs.map(pack => pack.id === id && pack.version === version ? { ...pack, phase: "not-installed", installedBytes: 0 } : pack) }; return current; },
     };
     return { application, finish: () => { current = { ...current, sequence: current.sequence + 1, packs: current.packs.map(pack => ({ ...pack, phase: "ready", installedBytes: 150_000_000, error: null })) }; } };
-  }, [phase, unknownTotal]);
+  }, [native, phase, unknownTotal]);
   const analysis = useMemo(() => ({ analyze: async () => structureReviewFixture() }), []);
   const binding = useLanguageSupportPacks(model.application, analysis);
   return <LanguageSupportContext.Provider value={binding}>
     <div className="mb-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => { model.finish(); binding.reload(); }}>模拟安装完成</Button><div className="w-60"><LanguageSupportAttention binding={binding} onOpen={binding.reload} /></div></div>
     {management ? <SettingsPreview initialSection="language-support" languageSupport={binding} />
-      : <div className="flex h-[36rem] flex-col rounded-xl border"><StructureChangesView dark binding={{ state: phase === "failed" && binding.snapshot?.packs.some(pack => pack.phase === "failed") ? { kind: "failed", detail: "语言支持包准备失败", supportPacks: ["rust", "typescript-javascript", "python"] } : { kind: "loading" }, supportRequest: "preview", options: { includeTests: false }, setOptions: () => {}, retry: async () => { await binding.retry("typescript-javascript"); await binding.retry("python"); }, cancel: () => {} }} /></div>}
+      : <div className="flex h-[36rem] flex-col rounded-xl border"><StructureChangesView dark binding={{ state: phase === "failed" && binding.snapshot?.packs.some(pack => pack.phase === "failed") ? { kind: "failed", detail: "语言支持包准备失败", supportPacks: native ? ["java", "go", "csharp", "c-cpp"] : ["rust", "typescript-javascript", "python"] } : { kind: "loading" }, supportRequest: "preview", options: { includeTests: false }, setOptions: () => {}, retry: async () => { for (const id of native ? ["java", "go", "csharp", "c-cpp"] as const : ["typescript-javascript", "python"] as const) await binding.retry(id); }, cancel: () => {} }} /></div>}
   </LanguageSupportContext.Provider>;
 }
 
@@ -623,6 +659,9 @@ const previews: Record<string, PreviewDefinition> = {
       failed: { label: "长错误和重试", render: () => <LanguageSupportPreview phase="failed" /> },
       installing: { label: "安装阶段", render: () => <LanguageSupportPreview phase="installing" /> },
       management: { label: "设置管理与使用保护", render: () => <LanguageSupportPreview phase="ready" management /> },
+      "native-downloading": { label: "Java、Go、C#、C/C++ 下载进度", render: () => <LanguageSupportPreview native /> },
+      "native-failed": { label: "原生语言包长错误与重试", render: () => <LanguageSupportPreview phase="failed" native /> },
+      "native-management": { label: "原生语言包设置管理", render: () => <LanguageSupportPreview phase="ready" management native /> },
     },
   },
   settings: {
@@ -777,6 +816,7 @@ const previews: Record<string, PreviewDefinition> = {
       "structure-source-diff": { label: "对象原始源码与长实现对比", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="source-diff" /> },
       "structure-python": { label: "Python 类、访问器与删除声明", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="python" /> },
       "structure-mixed-languages": { label: "TS/JS/Rust 混合图与长源码", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="mixed-languages" /> },
+      "structure-native-languages": { label: "Java、Go、C#、C、C++ 结构图与语言筛选", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="native-languages" /> },
       "structure-file-modules": { label: "目录、文件容器与合并顶层执行", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="file-modules" /> },
       "structure-class-diagram": { label: "密集类图与成员关系", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="dense" /> },
       "structure-field-types": { label: "字段与图内类型关联", render: () => <ReviewReaderPreview initialView="structure-changes" structureKind="field-types" /> },

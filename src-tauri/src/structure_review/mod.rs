@@ -2,6 +2,7 @@
 
 pub mod code_graph;
 pub mod native_analyzer;
+pub(crate) mod native_languages;
 pub mod python_analyzer;
 pub mod rust_analyzer;
 pub mod typescript_analyzer;

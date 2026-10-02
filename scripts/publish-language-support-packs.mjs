@@ -12,7 +12,7 @@ const targets = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'];
 export async function readArtifacts(directory) {
   const catalog = JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'), 'utf8'));
   const artifacts = [];
-  for (const [id, definition] of Object.entries(catalog.packs)) for (const target of targets) {
+  for (const [id, definition] of Object.entries(catalog.packs).filter(([, definition]) => definition.published !== false)) for (const target of targets) {
     const key = `${PACK_PREFIX}/${id}/${definition.version}/${target}`;
     const root = path.join(directory, id, definition.version, target);
     const body = await fs.readFile(path.join(root, 'manifest.json'));
