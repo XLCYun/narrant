@@ -16,6 +16,7 @@ on:
       - native-helpers/**
       - scripts/native-language-support-packs.mjs
       - scripts/tests/native-language-support-packs.test.mjs
+      - src-tauri/src/structure_review/code_graph/**
       - src-tauri/src/structure_review/native_analyzer/**
       - src-tauri/src/structure_review/native_languages/**
       - src-tauri/src/structure_review/python_analyzer/**
@@ -85,7 +86,7 @@ jobs:
         include:
           - runner: macos-15
             target: aarch64-apple-darwin
-          - runner: windows-2025
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120

@@ -12,7 +12,7 @@ use std::{
 use narrant_lib::structure_review::{
     code_graph::{
         AnalysisInput, AnalysisOptions, ChangeKind, CodeCategory, CodeGraph, LanguageAnalyzer,
-        NodeId, ReferenceTarget, SymbolScope,
+        NodeId, ReferenceTarget, SetChange, SymbolScope,
     },
     native_analyzer::{HelperCommand, HelperIdentity, NativeLanguageAnalyzer, Platform},
 };
@@ -287,6 +287,34 @@ fn fixture(
     }
 }
 
+/// 为每种模式补充未知调用、可替换调用目标和具有直接字段的结构对象。
+fn extend_fixture(mode: Mode, root: &Path, variant: &str) {
+    let field = if variant == "structure" {
+        "Added"
+    } else {
+        "Removed"
+    };
+    let (file, old_call, new_call, prefix, declarations) = match mode {
+        Mode::Go => ("api.go", "Worker()", "AlternativeTarget()", "", format!(
+            "\nfunc AlternativeTarget() int {{ return 9 }}\nfunc Unknown(fn func() int) int {{ return fn() }}\ntype Shape struct {{ {field} int }}\n")),
+        Mode::Java => ("src/demo/Api.java", "Worker.value()", "Alternative.AlternativeTarget()", "", format!(
+            "\nclass Alternative {{ static int AlternativeTarget() {{ return 9; }} static void Unknown() {{ missing.Type.nope(); }} }}\nclass Shape {{ int {field}; }}\n")),
+        Mode::Csharp => ("Api.cs", "Worker.Value()", "Alternative.AlternativeTarget()", "", format!(
+            "\nstatic class Alternative {{ public static int AlternativeTarget() {{ return 9; }} static int Unknown(System.Func<int> fn) {{ return fn(); }} }}\nclass Shape {{ int {field}; }}\n")),
+        Mode::C => ("api.c", "Worker()", "AlternativeTarget()", "int AlternativeTarget(void) { return 9; }\n", format!(
+            "\nint Unknown(int (*fn)(void)) {{ return fn(); }}\nstruct Shape {{ int {field}; }};\n")),
+        Mode::Cpp => ("api.cpp", "Worker()", "AlternativeTarget()", "int AlternativeTarget() { return 9; }\n", format!(
+            "\nint Unknown(int (*fn)()) {{ return fn(); }}\nstruct Shape {{ int {field}; }};\n")),
+    };
+    let original = fs::read_to_string(root.join(file)).expect("无法读取待扩展 fixture");
+    let source = if variant == "relations" {
+        original.replace(old_call, new_call)
+    } else {
+        original
+    };
+    put(root, file, &format!("{prefix}{source}{declarations}"));
+}
+
 /// 保留路径与原始字节，证明分析没有改写配置、源文件或产生仓内文件。
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     walkdir::WalkDir::new(root)
@@ -386,7 +414,85 @@ fn assert_calls(mode: Mode, graph: &CodeGraph) {
     );
 }
 
-/// 对一个真实后端比较四个独立仓库快照，验收身份、内容投影和源码只读。
+/// 未知调用必须保留 Unresolved，不能猜测成图内对象或 External。
+fn assert_unknown(graph: &CodeGraph) {
+    let (_, source) = find(graph, "Unknown", CodeCategory::Callable);
+    assert!(source.data().references.iter().any(|reference| {
+        reference.semantic == "code.calls"
+            && matches!(&reference.target, ReferenceTarget::Unresolved { name } if !name.is_empty())
+    }), "未知调用缺少具名 Unresolved：{:?}", source.data().references);
+}
+
+/// 调用改绑必须在同一个稳定调用者上报告删除旧端点和增加新端点。
+fn assert_reference_diff(mode: Mode, before: &CodeGraph, after: &CodeGraph) {
+    let (caller, selected, _, _) = mode.expected();
+    let (caller_id, _) = find(before, caller, CodeCategory::Callable);
+    let (old_target, _) = find(before, selected, CodeCategory::Callable);
+    let (new_target, _) = find(after, "AlternativeTarget", CodeCategory::Callable);
+    assert_eq!(
+        caller_id,
+        find(after, caller, CodeCategory::Callable).0,
+        "调用者身份随调用端点改变"
+    );
+    let diff = before.diff(after).expect("关系改绑后的有效图可以比较");
+    let changed = diff
+        .nodes
+        .iter()
+        .find(|node| &node.id == caller_id)
+        .expect("调用者缺少关系 diff");
+    assert!(changed.references.iter().any(|change| matches!(change,
+        SetChange::Removed(reference) if reference.semantic == "code.calls" && reference.target == ReferenceTarget::Node(old_target.clone()))),
+        "关系 diff 没有移除原调用端点：{changed:?}");
+    assert!(changed.references.iter().any(|change| matches!(change,
+        SetChange::Added(reference) if reference.semantic == "code.calls" && reference.target == ReferenceTarget::Node(new_target.clone()))),
+        "关系 diff 没有新增替换调用端点：{changed:?}");
+}
+
+/// 删除与新增字段须同时体现在节点内容和所属 Type 的直接 contains 变化中。
+fn assert_structure_diff(before: &CodeGraph, after: &CodeGraph) {
+    let (owner, _) = find(before, "Shape", CodeCategory::Type);
+    let (removed, _) = find(before, "Removed", CodeCategory::Value);
+    let (added, _) = find(after, "Added", CodeCategory::Value);
+    assert_eq!(
+        owner,
+        find(after, "Shape", CodeCategory::Type).0,
+        "字段变化改变了父对象身份"
+    );
+    assert!(after.node(removed).is_none(), "删除对象仍留在后侧图");
+    assert!(before.node(added).is_none(), "新增对象提前出现在前侧图");
+    let diff = before.diff(after).expect("结构改变后的有效图可以比较");
+    let parent = diff
+        .nodes
+        .iter()
+        .find(|node| &node.id == owner)
+        .expect("父对象缺少 contains diff");
+    assert!(
+        parent
+            .contains
+            .contains(&SetChange::Removed(removed.clone())),
+        "contains 未移除原字段：{parent:?}"
+    );
+    assert!(
+        parent.contains.contains(&SetChange::Added(added.clone())),
+        "contains 未新增后侧字段：{parent:?}"
+    );
+    assert_eq!(
+        diff.nodes
+            .iter()
+            .find(|node| &node.id == removed)
+            .and_then(|node| node.content),
+        Some(ChangeKind::Removed)
+    );
+    assert_eq!(
+        diff.nodes
+            .iter()
+            .find(|node| &node.id == added)
+            .and_then(|node| node.content),
+        Some(ChangeKind::Added)
+    );
+}
+
+/// 对一个真实后端比较六个独立仓库快照，验收身份、三维 diff、未知关系和源码只读。
 fn exercise(mode: Mode) {
     let configs = config();
     let sandbox = TempDir::new().expect("无法建立 fixture 临时根");
@@ -396,14 +502,22 @@ fn exercise(mode: Mode) {
         ("changed", "changed"),
         ("formatted", "formatted"),
         ("relocated", "before"),
+        ("relations", "relations"),
+        ("structure", "structure"),
     ] {
         let root = sandbox.path().join(directory);
         fs::create_dir(&root).unwrap();
         let files = fixture(mode, &root, variant, &configs);
+        extend_fixture(mode, &root, variant);
         graphs.push(analyze(mode, &configs, &root, files));
     }
     let before = &graphs[0];
     assert_calls(mode, before);
+    for graph in &graphs {
+        assert_unknown(graph);
+    }
+    assert_reference_diff(mode, before, &graphs[4]);
+    assert_structure_diff(before, &graphs[5]);
     let (_, _, child, parent) = mode.expected();
     let (child_id, _) = find(before, child, CodeCategory::Callable);
     let changed = before.diff(&graphs[1]).expect("有效图可以比较");

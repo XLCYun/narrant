@@ -25,13 +25,15 @@ Windows 使用 LLVM 的 `clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar.xz` 开发
 | CI 目标 | 固定声明与构建环境 | 验证边界 |
 | --- | --- | --- |
 | macOS ARM64 / `macos-15` | Xcode 16.4，macOS SDK 15.5 | 固定 `Xcode_16.4.app` 下 SDK，缺失直接失败；与本机 SDK 27.0 的验收分开记录 |
-| Windows x64 / `windows-2025` | VS 2022 Enterprise，MSVC Tools 14.44.35207，CRT 14.44.35211，Windows SDK 10.0.26100.0 | 编译器和 CRT 完整目录版本尚待 Windows PR 首跑核实；目录不匹配必须失败，不自动选新版本 |
+| Windows x64 / `windows-2022` | VS 2022 Enterprise，MSVC Tools 14.44.35207，CRT 14.44.35211，Windows SDK 10.0.26100.0 | 编译器和 CRT 完整目录版本尚待 Windows PR 首跑核实；目录不匹配必须失败，不自动选新版本 |
 
-macOS runner 的官方目录列出 Xcode 16.4 和 SDK 15.5。Windows runner 目录列出
+macOS runner 的官方目录列出 Xcode 16.4 和 SDK 15.5。Windows Server 2022 runner 目录（镜像 20260927.320.1）列出
 VS 2022 17.14 系列、Windows SDK 10.0.26100.0 和 VC runtime 14.44.35211；其 README
 未提供默认 MSVC Tools 目录的完整版本，14.44.35207 是本次待 runner 验证的明确构建前提。
+当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
+`windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
-[Windows runner 镜像](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md)。
+[Windows runner 镜像](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md)。
 
 Windows 分别授权 `Windows Kits/10/Include/10.0.26100.0` 和
 `VC/Tools/MSVC/14.44.35207/include`。前者是 `clang-target`，后者以

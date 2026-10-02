@@ -113,7 +113,7 @@
       "macos_sdk": "15.5"
     },
     "x86_64-pc-windows-msvc": {
-      "runner": "windows-2025",
+      "runner": "windows-2022",
       "visual_studio": "2022/Enterprise",
       "msvc_tools": "14.44.35207",
       "msvc_redist": "14.44.35211",

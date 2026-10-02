@@ -25,7 +25,7 @@
     }]
   },
   "java": {"executable": "/absolute/pack/runtime/jdk/bin/java", "args": ["-cp", "/absolute/pack/runtime/helper/classes:/absolute/pack/runtime/helper/lib/*", "dev.narrant.java.Main"], "environment": {}, "trusted_roots": ["/absolute/pack"], "platforms": []},
-  "csharp": {"executable": "/absolute/pack/bin/narrant-csharp", "args": [], "environment": {}, "trusted_roots": ["/absolute/pack"], "platforms": []},
+  "csharp": {"executable": "/absolute/pack/bin/dotnet", "args": ["/absolute/pack/runtime/helper/Narrant.CSharp.Helper.dll"], "environment": {}, "trusted_roots": ["/absolute/pack"], "platforms": []},
   "clang": {"executable": "/absolute/pack/bin/narrant-clang", "args": [], "environment": {}, "trusted_roots": ["/absolute/pack"], "platforms": []}
 }
 ```
@@ -50,17 +50,22 @@ NARRANT_NATIVE_HELPERS_CONFIG=/absolute/native-helpers-config.json \
 
 每种 fixture 都有已选调用者、已选跨文件目标和未选的仓内目标。断言从实际
 `CodeGraph` 根遍历节点，再核对 `code.calls` 的 Node 端点、Repository External
-描述和目标身份，不依赖后端的私有 ID 编码。before/changed/format/relocated 四份
+描述和目标身份，不依赖后端的私有 ID 编码。before/changed/formatted/relocated/relations/structure 六份
 独立仓库验证子对象正文变化、普通注释与排版不变更、迁移绝对路径后的稳定身份，
-并在每次分析前后比对仓库相对路径与原始字节。C17 的顶层函数没有源码父对象，
+关系改绑变体将同一调用者的已选目标替换为另一个已选对象，断言 `NodeDiff.references`
+同时删除旧 Node 端点并添加新 Node 端点。结构变体将 `Shape` 的 `Removed` 字段替换为
+`Added`，断言父 Type 的 `NodeDiff.contains` 两项变化及字段节点的 Added/Removed。
+每个快照也断言 `Unknown` 调用的具名 Unresolved：Go/C/C++ 使用函数参数调用，
+C# 使用委托参数调用，Java 使用静态模型中缺失的绑定；不能猜测未知目标。
+所有变体均在每次分析前后比对仓库相对路径与原始字节。C17 的顶层函数没有源码父对象，
 因此“子正文不污染祖先”在有父节点的 Go、Java、C#、C++ fixture 中直接检验；
 C17 仍验证正文修改只落在该函数自身。
 
-本套件只覆盖基础真实图和 diff。取消、异常退出、进程树、协议畸形及拒绝越界
+本套件覆盖真实图、三维 diff 和未知调用。取消、异常退出、进程树、协议畸形及拒绝越界
 依赖现有公共 Host 专项测试；目标平台隔离、支持包入口与跨系统发行验收需另留
 证据。任何一项没有在对应平台实际运行，均记录为待验，不推断通过。
 
-## 2026-10-03 macOS ARM64 实测
+## 2026-10-03 macOS ARM64 初始实测（四快照版本）
 
 使用本地构建并安装的四个支持包清单
 `/private/tmp/narrant-native-packs/native-helpers-config.json` 执行上述完整命令。
@@ -73,3 +78,9 @@ Clang C++20 均经过 `NativeLanguageAnalyzer → CodeGraph → CodeGraph::diff`
 本轮没有 Windows x64 实机结果；该平台须用同一套件和对应 Windows 支持包再运行。
 本地支持包是开发验收产物，不代表远端发布。完整取消/进程树、目标隔离和支持包
 安装验收由对应专项测试与 Task 7 总记录提供证据。
+
+## Review fix round 1：六快照增强
+
+初始六测试通过记录对应四快照版本，不能直接用于证明新增关系/结构 diff 和未知调用。
+增强版本保持相同六个测试入口，每种模式现在分析六份独立仓库；实际命令与结果另记
+Task 7 crossplatform report。Windows x64 仍未执行，不将本机结果推广到 Windows。
