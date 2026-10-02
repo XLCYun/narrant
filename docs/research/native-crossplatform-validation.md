@@ -1,7 +1,8 @@
 # 原生 helper 的双平台验收入口
 
-状态：`802fadf` 最新实现的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
-[PR #200](https://github.com/XLCYun/narrant/pull/200) 中修复 LLVM 解包阻塞。Windows 打包脚本的首跑失败已修复，
+状态：`802fadf` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
+[PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包阻塞，继续验证 SDK 与构建。
+Windows 打包脚本的首跑失败已修复，
 尚不能把该步骤通过等同于 Windows helper、安装和图验收全部通过。
 后续 `85318b7` 增加 C# 两目标支持、负例和第八项真实图测试；本机安装及八项图验收已通过，
 测试修正提交为 `df62826`。该增量的 macOS CI 已通过，仍需取得 Windows 结果。
@@ -62,6 +63,18 @@ LLVM 在 03:19:46.939 完成下载、03:19:48.063 完成 SHA-256 校验，之后
 本机进程生命周期测试不能证明 Windows 解包成功；CI 强制运行真实 7-Zip 小归档测试，
 随后仍须完成同一官方 LLVM 归档及完整四语言验收。
 
+修复 `9e164b7` 随 `6d1081a` 推送后，
+[Windows 任务 111039380577](https://github.com/XLCYun/narrant/actions/runs/37067660266/job/111039380577)
+确认真实 7-Zip 小归档测试通过（306.6883 毫秒），runner 使用 7-Zip 26.03。
+完整 LLVM 归档解包成功，耗时 87.0 秒，六份工具链全部准备成功。
+任务随后在 SDK 目录检查失败：固定 MSVC Tools 14.44.35207 的 include 和 Windows SDK
+10.0.26100.0 的 ucrt/um/shared 均存在，但 `VC/Redist/MSVC/14.44.35211/x64/Microsoft.VC143.CRT`
+不存在。该值此前来自 runtime 版本清单，尚需核实其与分发目录版本的映射，不能猜测另一目录。
+本轮仍未执行 Windows helper 构建；完整日志为 `/private/tmp/narrant-ci-native-windows-37067660266.log`。
+同轮 macOS 原生任务完整成功：Java25、C#29、Clang22 通过及1项 Windows 专用跳过，
+Host16、factory2、生产安装1（96.63秒）、公共图8（16.91秒）通过。
+既有 Python 双平台任务也成功；这轮 workflow 总体仍因上述 Windows 原生任务而失败。
+
 ## 固定构件与隔离边界
 
 `resources/native-toolchains.json` 为 macOS ARM64 与 Windows x64 分别固定官方构件 URL、
@@ -87,11 +100,19 @@ Windows 使用 LLVM 的 `clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar.xz` 开发
 | CI 目标 | 固定声明与构建环境 | 验证边界 |
 | --- | --- | --- |
 | macOS ARM64 / `macos-15` | Xcode 16.4，macOS SDK 15.5 | 固定 `Xcode_16.4.app` 下 SDK，缺失直接失败；与本机 SDK 27.0 的验收分开记录 |
-| Windows x64 / `windows-2022` | VS 2022 Enterprise，MSVC Tools 14.44.35207，CRT 14.44.35211，Windows SDK 10.0.26100.0 | 编译器和 CRT 完整目录版本尚待 Windows PR 首跑核实；目录不匹配必须失败，不自动选新版本 |
+| Windows x64 / `windows-2022` | VS 2022 Enterprise，MSVC Tools 14.44.35207，runtime 版本配置 14.44.35211，Windows SDK 10.0.26100.0 | 编译器与 SDK 目录已通过真实检查；runtime 目录及私有 DLL 版本仍待核实 |
 
 macOS runner 的官方目录列出 Xcode 16.4 和 SDK 15.5。Windows Server 2022 runner 目录（镜像 20260927.320.1）列出
 VS 2022 17.14 系列、Windows SDK 10.0.26100.0 和 VC runtime 14.44.35211；其 README
-未提供默认 MSVC Tools 目录的完整版本，14.44.35207 是本次待 runner 验证的明确构建前提。
+未提供默认 MSVC Tools 目录的完整版本，14.44.35207 已由本次 runner 的真实目录检查确认。
+runtime 清单中的产品版本不能直接当成 Redist 目录名，也不能代替私有 CRT DLL 的版本检查。
+微软自身项目通过 `VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt` 读取目录标识再定位
+CRT；该标识与 Tools 版本独立。[Microsoft Xbox GDK 示例](https://github.com/microsoft/Xbox-GDK-Samples/blob/cdbec9e9b95fdf931b0802fc429fc3719c2efa47/Samples/Tools/CMakeXboxConsoleApp/CMakeGDKXbox.cmake#L65-L70)、
+[Microsoft DbgShell 示例](https://github.com/microsoft/DbgShell/blob/7f98155b863c00295cd24513cc2a4c1c0fdf346c/DbgEngWrapper/DbgEngWrapper.vcxproj#L79-L84)。
+修复 `8d896f4` 按该元数据选择唯一 CRT 根，并校验目录内全部 DLL 的数值版本前三段是否等于
+配置 `14.44.35211`，同时记录完整四段版本。元数据缺失、越界、必需 DLL 缺失或版本不符均失败，
+诊断中的目录列表仅用于定位，不用于选择最新版本。本机专项 11 项通过；Windows 版本资源
+读取测试为 CI 必跑项，不能用 macOS 的该项跳过代替实际私有 CRT 验证。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
