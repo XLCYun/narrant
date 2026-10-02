@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"go/build"
+	"go/build/constraint"
 	"os"
 	"path"
 	"path/filepath"
@@ -23,11 +24,12 @@ type module struct {
 
 // project 持有只读仓库模块索引和配置文件来源。
 type project struct {
-	Root       string
-	Modules    []*module
-	WorkSource string
-	WorkGo     string
-	Replace    map[string]string
+	Root        string
+	Modules     []*module
+	WorkSource  string
+	WorkGo      string
+	Replace     map[string]string
+	WorkReplace map[string]string
 }
 
 // within 拒绝词法及符号链接层面的仓外路径。
@@ -179,6 +181,9 @@ func parseMod(root, filename string) (*module, error) {
 			if err != nil {
 				return nil, err
 			}
+			if previous, ok := m.Replaces[old]; ok && previous != place {
+				return nil, fmt.Errorf("conflicting module replace for %s", old)
+			}
 			m.Replaces[old] = place
 		default:
 			return nil, fmt.Errorf("unsupported go.mod directive %q", p[0])
@@ -197,7 +202,7 @@ func parseMod(root, filename string) (*module, error) {
 
 // loadProject 静态发现仓内 module/workspace，不查询 go 命令或用户缓存。
 func loadProject(root string, selected []string) (*project, *analysisError) {
-	p := &project{Root: root, Replace: map[string]string{}}
+	p := &project{Root: root, Replace: map[string]string{}, WorkReplace: map[string]string{}}
 	work := filepath.Join(root, "go.work")
 	var useDirs []string
 	if _, err := os.Lstat(work); err == nil {
@@ -245,7 +250,10 @@ func loadProject(root string, selected []string) (*project, *analysisError) {
 				if err != nil {
 					return nil, fail("unsupported_configuration", err.Error(), "go.work")
 				}
-				p.Replace[parts[1]] = dir
+				if previous, ok := p.WorkReplace[parts[1]]; ok && previous != dir {
+					return nil, fail("unsupported_configuration", "conflicting go.work replace for "+parts[1], "go.work")
+				}
+				p.WorkReplace[parts[1]] = dir
 			default:
 				return nil, fail("unsupported_configuration", "unsupported go.work directive: "+parts[0], "go.work")
 			}
@@ -300,8 +308,16 @@ func loadProject(root string, selected []string) (*project, *analysisError) {
 	}
 	for _, m := range p.Modules {
 		for old, dir := range m.Replaces {
+			if previous, ok := p.Replace[old]; ok && previous != dir {
+				if _, override := p.WorkReplace[old]; !override {
+					return nil, fail("unsupported_configuration", "conflicting go.mod replace for "+old, m.Source)
+				}
+			}
 			p.Replace[old] = dir
 		}
+	}
+	for old, dir := range p.WorkReplace {
+		p.Replace[old] = dir
 	}
 	return p, nil
 }
@@ -310,15 +326,33 @@ func loadProject(root string, selected []string) (*project, *analysisError) {
 func (p *project) moduleForFile(filename string) *module {
 	var best *module
 	for _, m := range p.Modules {
-		if err := within(m.Dir, filename); err == nil && (best == nil || len(m.Dir) > len(best.Dir)) {
+		if err := within(m.Dir, filename); err == nil && !crossedModuleBoundary(m.Dir, filename) && (best == nil || len(m.Dir) > len(best.Dir)) {
 			best = m
 		}
 	}
 	return best
 }
 
+// crossedModuleBoundary 拒绝把未显式 use 的嵌套 go.mod 当作外层包。
+func crossedModuleBoundary(base, candidate string) bool {
+	dir := candidate
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		dir = filepath.Dir(candidate)
+	}
+	for dir != base {
+		if dir == filepath.Dir(dir) {
+			return true
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "go.mod")); err == nil {
+			return true
+		}
+		dir = filepath.Dir(dir)
+	}
+	return false
+}
+
 // importDirectory 将导入路径只映射到仓内 module 或批准的本地 replace。
-func (p *project) importDirectory(importPath string) (string, bool) {
+func (p *project) importDirectory(importPath string) (string, bool, error) {
 	var best *module
 	for _, m := range p.Modules {
 		if importPath == m.Path || strings.HasPrefix(importPath, m.Path+"/") {
@@ -327,16 +361,30 @@ func (p *project) importDirectory(importPath string) (string, bool) {
 			}
 		}
 	}
-	if best != nil {
-		suffix := strings.TrimPrefix(importPath, best.Path)
-		return filepath.Join(best.Dir, filepath.FromSlash(suffix)), true
-	}
-	for old, dir := range p.Replace {
+	bestReplacement := ""
+	for old := range p.Replace {
 		if importPath == old || strings.HasPrefix(importPath, old+"/") {
-			return filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(importPath, old))), true
+			if len(old) > len(bestReplacement) {
+				bestReplacement = old
+			}
 		}
 	}
-	return "", false
+	if bestReplacement != "" && (best == nil || len(bestReplacement) > len(best.Path)) {
+		base := p.Replace[bestReplacement]
+		dir := filepath.Join(base, filepath.FromSlash(strings.TrimPrefix(importPath, bestReplacement)))
+		if crossedModuleBoundary(base, dir) {
+			return "", false, fmt.Errorf("nested module outside explicit workspace mapping: %s", importPath)
+		}
+		return dir, true, nil
+	}
+	if best != nil {
+		dir := filepath.Join(best.Dir, filepath.FromSlash(strings.TrimPrefix(importPath, best.Path)))
+		if crossedModuleBoundary(best.Dir, dir) {
+			return "", false, fmt.Errorf("nested module outside explicit workspace use: %s", importPath)
+		}
+		return dir, true, nil
+	}
+	return "", false, nil
 }
 
 // standardTarget 从固定目录选择 Go 源码且关闭 cgo 与自定义 tag。
@@ -388,111 +436,160 @@ func validatePlatform(p platform) error {
 	return nil
 }
 
-// explicitTargets 由选中文件名及 build constraints 发现有限必要目标。
-func explicitTargets(root string, selected []string) (map[string]bool, *analysisError) {
-	targets := map[string]bool{}
-	knownOS := map[string]bool{"darwin": true, "linux": true, "windows": true}
-	knownArch := map[string]bool{"arm64": true, "amd64": true}
-	for _, rel := range selected {
-		parts := strings.Split(strings.TrimSuffix(path.Base(rel), ".go"), "_")
-		for _, part := range parts {
-			if knownOS[part] || knownArch[part] {
-				targets[part] = true
-			}
-		}
-		data, err := safeFile(root, filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			return nil, fail("invalid_input", err.Error(), rel)
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "// +build ") {
-				return nil, fail("unsupported_configuration", "legacy +build condition requires a separately verified profile", rel)
-			}
-			if !strings.HasPrefix(line, "//go:build ") && !strings.HasPrefix(line, "// +build ") {
-				if line != "" && !strings.HasPrefix(line, "//") {
-					break
-				}
-				continue
-			}
-			constraint := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "//go:build"), "// +build"))
-			if strings.Contains(constraint, "!") {
-				return nil, fail("unsupported_configuration", "negated build conditions require a separately verified profile", rel)
-			}
-			for _, word := range strings.FieldsFunc(constraint, func(r rune) bool {
-				return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.')
-			}) {
-				if word == "unix" {
-					targets["darwin"] = true
-					targets["linux"] = true
-					continue
-				}
-				if word == "go1.20" || word == "go1.21" || word == "go1.22" || word == "go1.23" {
-					continue
-				}
-				if word == "" || word == "cgo" {
-					if word == "cgo" {
-						return nil, fail("unsupported_configuration", "cgo build constraint is unsupported", rel)
-					}
-					continue
-				}
-				if knownOS[word] || knownArch[word] {
-					targets[word] = true
-					continue
-				}
-				return nil, fail("unsupported_configuration", "custom or unsupported build tag: "+word, rel)
-			}
-		}
-	}
-	return targets, nil
-}
-
 // discoverPlatforms 根据明确条件选择 catalog 候选；无条件时仅取宿主基线。
-func discoverPlatforms(root string, selected []string, candidates []platform) ([]platform, *analysisError) {
-	need, problem := explicitTargets(root, selected)
+func discoverPlatforms(project *project, selected []string, includeTests bool, candidates []platform) ([]platform, *analysisError) {
+	contextFiles, problem := projectContextFiles(project, selected, includeTests)
 	if problem != nil {
 		return nil, problem
 	}
-	knownOS := map[string]bool{"darwin": true, "linux": true, "windows": true}
-	knownArch := map[string]bool{"amd64": true, "arm64": true}
-	needOS, needArch := map[string]bool{}, map[string]bool{}
-	for item := range need {
-		if knownOS[item] {
-			needOS[item] = true
+	explicit := []string{}
+	for _, rel := range contextFiles {
+		hasTarget, problem := hasTargetConstraint(project.Root, rel)
+		if problem != nil {
+			return nil, problem
 		}
-		if knownArch[item] {
-			needArch[item] = true
-		}
-	}
-	var chosen []platform
-	for _, p := range candidates {
-		if len(need) > 0 && (len(needOS) == 0 || needOS[p.Metadata.GOOS]) && (len(needArch) == 0 || needArch[p.Metadata.GOARCH]) {
-			chosen = append(chosen, p)
+		if hasTarget {
+			explicit = append(explicit, rel)
 		}
 	}
-	if len(need) == 0 {
-		for _, p := range candidates {
-			if p.Metadata.GOOS == runtime.GOOS && p.Metadata.GOARCH == runtime.GOARCH {
-				chosen = append(chosen, p)
+	chosen := []platform{}
+	for _, candidate := range candidates {
+		if len(explicit) == 0 {
+			if candidate.Metadata.GOOS == runtime.GOOS && candidate.Metadata.GOARCH == runtime.GOARCH {
+				chosen = append(chosen, candidate)
+			}
+			continue
+		}
+		buildContext := standardTarget(candidate.Root, candidate.Metadata)
+		for _, rel := range explicit {
+			matches, err := buildContext.MatchFile(filepath.Join(project.Root, filepath.Dir(rel)), filepath.Base(rel))
+			if err != nil {
+				return nil, fail("unsupported_configuration", err.Error(), rel)
+			}
+			if matches {
+				chosen = append(chosen, candidate)
+				break
 			}
 		}
 	}
 	if len(chosen) == 0 {
-		return nil, fail("target_unavailable", "no catalog SDK matches statically discovered Go target")
-	}
-	for item := range need {
-		found := false
-		for _, p := range chosen {
-			if p.Metadata.GOOS == item || p.Metadata.GOARCH == item {
-				found = true
-			}
-		}
-		if !found {
-			return nil, fail("target_unavailable", "missing target for "+item)
-		}
+		return nil, fail("target_unavailable", "no approved Go SDK target satisfies discovered source constraints")
 	}
 	sort.Slice(chosen, func(i, j int) bool { return chosen[i].ID < chosen[j].ID })
 	return chosen, nil
+}
+
+// projectContextFiles 搜集选中包中的允许源码，包括未选中的平台实现文件。
+func projectContextFiles(p *project, selected []string, includeTests bool) ([]string, *analysisError) {
+	dirs := map[string]bool{}
+	for _, rel := range selected {
+		if !includeTests && strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		filename := filepath.Join(p.Root, filepath.FromSlash(rel))
+		if p.moduleForFile(filename) == nil {
+			return nil, fail("unsupported_configuration", "selected file is outside admitted module", rel)
+		}
+		dirs[filepath.Dir(filename)] = true
+	}
+	files := []string{}
+	for dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fail("object_extraction_failed", err.Error())
+		}
+		for _, entry := range entries {
+			if !strings.HasSuffix(entry.Name(), ".go") || (!includeTests && strings.HasSuffix(entry.Name(), "_test.go")) {
+				continue
+			}
+			filename := filepath.Join(dir, entry.Name())
+			if _, err := safeFile(p.Root, filename); err != nil {
+				return nil, fail("unsupported_configuration", err.Error())
+			}
+			rel, _ := filepath.Rel(p.Root, filename)
+			files = append(files, filepath.ToSlash(rel))
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// hasTargetConstraint 解析 Go 布尔条件并校验其中所有标签有固定含义。
+func hasTargetConstraint(root, rel string) (bool, *analysisError) {
+	data, err := safeFile(root, filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return false, fail("unsupported_configuration", err.Error(), rel)
+	}
+	base := strings.TrimSuffix(filepath.Base(rel), ".go")
+	pieces := strings.Split(base, "_")
+	explicit := false
+	for _, piece := range pieces {
+		if knownTargetTag(piece) {
+			explicit = true
+		}
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "//go:build ") && !strings.HasPrefix(line, "// +build ") {
+			if line != "" && !strings.HasPrefix(line, "//") {
+				break
+			}
+			continue
+		}
+		expr, err := constraint.Parse(line)
+		if err != nil {
+			return false, fail("unsupported_configuration", err.Error(), rel)
+		}
+		tags := map[string]bool{}
+		collectConstraintTags(expr, tags)
+		for tag := range tags {
+			if !supportedBuildTag(tag) {
+				return false, fail("unsupported_configuration", "unsupported build tag: "+tag, rel)
+			}
+			if knownTargetTag(tag) || tag == "unix" || tag == "cgo" {
+				explicit = true
+			}
+		}
+	}
+	return explicit, nil
+}
+
+// collectConstraintTags 递归读取布尔表达式中的原子标签。
+func collectConstraintTags(expr constraint.Expr, tags map[string]bool) {
+	switch e := expr.(type) {
+	case *constraint.TagExpr:
+		tags[e.Tag] = true
+	case *constraint.NotExpr:
+		collectConstraintTags(e.X, tags)
+	case *constraint.AndExpr:
+		collectConstraintTags(e.X, tags)
+		collectConstraintTags(e.Y, tags)
+	case *constraint.OrExpr:
+		collectConstraintTags(e.X, tags)
+		collectConstraintTags(e.Y, tags)
+	}
+}
+
+// knownTargetTag 标识 Go 文件选择中的系统或架构条件。
+func knownTargetTag(tag string) bool {
+	switch tag {
+	case "aix", "android", "darwin", "dragonfly", "freebsd", "hurd", "illumos", "ios", "js", "linux", "nacl", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows", "386", "amd64", "amd64p32", "arm", "arm64", "loong64", "mips", "mips64", "mips64le", "mipsle", "ppc64", "ppc64le", "riscv64", "s390x", "wasm":
+		return true
+	}
+	return false
+}
+
+// supportedBuildTag 限定静态可解释的目标、编译器与 Go 1.23 发布标签。
+func supportedBuildTag(tag string) bool {
+	if knownTargetTag(tag) || tag == "unix" || tag == "cgo" || tag == "gc" {
+		return true
+	}
+	for minor := 1; minor <= 23; minor++ {
+		if tag == fmt.Sprintf("go1.%d", minor) {
+			return true
+		}
+	}
+	return false
 }
 
 // projectSourcePaths 返回实际读取并影响配置的仓内配置文件。

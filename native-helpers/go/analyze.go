@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -47,6 +48,7 @@ type sourceLoader struct {
 	Cache     map[string]*packageUnit
 	Loading   map[string]bool
 	ObjectIDs map[types.Object]string
+	Fatal     *analysisError
 }
 
 // Import 满足 go/types.Importer，失败的第三方依赖永不查询缓存或网络。
@@ -81,7 +83,11 @@ func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (
 	if path.Clean(importPath) != importPath || strings.HasPrefix(importPath, "/") || strings.Contains(importPath, "\\") || importPath == "C" {
 		return nil, fmt.Errorf("rejected import %q", importPath)
 	}
-	dir, local := l.Project.importDirectory(importPath)
+	dir, local, routeErr := l.Project.importDirectory(importPath)
+	if routeErr != nil {
+		l.Fatal = fail("unsupported_configuration", routeErr.Error())
+		return nil, routeErr
+	}
 	allowed := l.Project.Root
 	if !local {
 		first := strings.Split(importPath, "/")[0]
@@ -111,8 +117,10 @@ func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (
 			rel, _ := filepath.Rel(l.Project.Root, filename)
 			contextFiles = append(contextFiles, filepath.ToSlash(rel))
 		}
-		if _, problem := explicitTargets(l.Project.Root, contextFiles); problem != nil {
-			return nil, fmt.Errorf("package %s: %s", importPath, problem.Message)
+		for _, rel := range contextFiles {
+			if _, problem := hasTargetConstraint(l.Project.Root, rel); problem != nil {
+				return nil, fmt.Errorf("package %s: %s", importPath, problem.Message)
+			}
 		}
 	}
 	meta, err := l.Build.ImportDir(dir, build.IgnoreVendor)
@@ -379,7 +387,14 @@ func (l *sourceLoader) objectTarget(obj types.Object) target {
 		return target{Kind: "external", Symbol: id, Scope: "repository", Display: obj.Name()}
 	}
 	if obj.Pkg() != nil {
-		return target{Kind: "external", Symbol: "go:external:" + obj.Pkg().Path() + "#" + obj.Name(), Scope: "dependency", Display: obj.Name()}
+		symbol := obj.Name()
+		if fn, ok := obj.(*types.Func); ok {
+			if signature, ok := fn.Type().(*types.Signature); ok && signature.Recv() != nil {
+				receiver := types.TypeString(signature.Recv().Type(), func(pkg *types.Package) string { return pkg.Path() })
+				symbol = receiver + "." + symbol
+			}
+		}
+		return target{Kind: "external", Symbol: "go:external:" + obj.Pkg().Path() + "#" + symbol, Scope: "dependency", Display: obj.Name()}
 	}
 	return target{Kind: "unresolved", Name: obj.Name()}
 }
@@ -394,29 +409,7 @@ func (l *sourceLoader) callsIn(b *graphBuilder, unit *packageUnit, owner string,
 		if !ok {
 			return true
 		}
-		var ident *ast.Ident
-		spelling := "call"
-		switch fun := call.Fun.(type) {
-		case *ast.Ident:
-			ident = fun
-			spelling = fun.Name
-		case *ast.SelectorExpr:
-			ident = fun.Sel
-			spelling = fun.Sel.Name
-			if prefix, ok := fun.X.(*ast.Ident); ok {
-				spelling = prefix.Name + "." + spelling
-			}
-		case *ast.IndexExpr:
-			if id, ok := fun.X.(*ast.Ident); ok {
-				ident = id
-				spelling = id.Name
-			}
-		case *ast.IndexListExpr:
-			if id, ok := fun.X.(*ast.Ident); ok {
-				ident = id
-				spelling = id.Name
-			}
-		}
+		ident, selection, spelling := callTarget(call.Fun)
 		if ident == nil {
 			b.addReference(owner, "code.calls", target{Kind: "unresolved", Name: spelling})
 			return true
@@ -425,7 +418,7 @@ func (l *sourceLoader) callsIn(b *graphBuilder, unit *packageUnit, owner string,
 		if fn, ok := obj.(*types.Func); ok {
 			t := l.objectTarget(fn)
 			b.addReference(owner, "code.calls", t)
-			if selection, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if selection != nil {
 				if sel := unit.Info.Selections[selection]; sel != nil && sel.Kind() == types.MethodVal {
 					if _, isInterface := sel.Recv().Underlying().(*types.Interface); isInterface {
 						b.addReference(owner, "go.dynamic_dispatch", target{Kind: "unresolved", Name: spelling})
@@ -437,6 +430,65 @@ func (l *sourceLoader) callsIn(b *graphBuilder, unit *packageUnit, owner string,
 		}
 		return true
 	})
+}
+
+// typeUses 仅从字段及显式嵌入等类型位置提取已确认类型目标。
+func (l *sourceLoader) typeUses(b *graphBuilder, unit *packageUnit, owner string, expression ast.Expr) {
+	if expression == nil {
+		return
+	}
+	ast.Inspect(expression, func(n ast.Node) bool {
+		if selector, ok := n.(*ast.SelectorExpr); ok && unit.Info.Uses[selector.Sel] == nil {
+			name := selector.Sel.Name
+			if prefix, ok := selector.X.(*ast.Ident); ok {
+				name = prefix.Name + "." + name
+			}
+			b.addReference(owner, "code.type_use", target{Kind: "unresolved", Name: name})
+			return false
+		}
+		ident, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		obj := unit.Info.Uses[ident]
+		if obj == nil {
+			b.addReference(owner, "code.type_use", target{Kind: "unresolved", Name: ident.Name})
+			return true
+		}
+		typeName, ok := obj.(*types.TypeName)
+		if !ok {
+			return true
+		}
+		if typeName.Parent() == types.Universe {
+			return true
+		}
+		if _, isParam := typeName.Type().(*types.TypeParam); isParam {
+			return true
+		}
+		b.addReference(owner, "code.type_use", l.objectTarget(typeName))
+		return true
+	})
+}
+
+// callTarget 递归解开泛型实例化与括号，保留真实 selector 绑定。
+func callTarget(expr ast.Expr) (*ast.Ident, *ast.SelectorExpr, string) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e, nil, e.Name
+	case *ast.SelectorExpr:
+		name := e.Sel.Name
+		if prefix, ok := e.X.(*ast.Ident); ok {
+			name = prefix.Name + "." + name
+		}
+		return e.Sel, e, name
+	case *ast.IndexExpr:
+		return callTarget(e.X)
+	case *ast.IndexListExpr:
+		return callTarget(e.X)
+	case *ast.ParenExpr:
+		return callTarget(e.X)
+	}
+	return nil, nil, "call"
 }
 
 // isFunctionValue 区分函数值与类型转换等非直接调用。
@@ -577,6 +629,11 @@ func (l *sourceLoader) extractFile(b *graphBuilder, unit *packageUnit, f *fileUn
 					if err := b.addNode(n, fileID, f.Rel); err != nil {
 						return err
 					}
+					if _, isStruct := s.Type.(*ast.StructType); !isStruct {
+						if _, isInterface := s.Type.(*ast.InterfaceType); !isInterface {
+							l.typeUses(b, unit, id, s.Type)
+						}
+					}
 					if st, ok := s.Type.(*ast.StructType); ok {
 						for _, field := range st.Fields.List {
 							names := field.Names
@@ -593,11 +650,15 @@ func (l *sourceLoader) extractFile(b *graphBuilder, unit *packageUnit, f *fileUn
 								if err := b.addNode(fn, id, f.Rel); err != nil {
 									return err
 								}
+								l.typeUses(b, unit, fid, field.Type)
 							}
 						}
 					}
 					if iface, ok := s.Type.(*ast.InterfaceType); ok {
 						for _, member := range iface.Methods.List {
+							if len(member.Names) == 0 {
+								l.typeUses(b, unit, id, member.Type)
+							}
 							for _, name := range member.Names {
 								methodKey := "interface_method:" + s.Name.Name + "." + name.Name
 								occurrence[methodKey]++
@@ -671,6 +732,7 @@ func (l *sourceLoader) extractFile(b *graphBuilder, unit *packageUnit, f *fileUn
 						if err := b.addNode(n, fileID, f.Rel); err != nil {
 							return err
 						}
+						l.typeUses(b, unit, id, s.Type)
 						if code != nil {
 							index := i
 							if len(effective) == 1 {
@@ -847,25 +909,37 @@ func analyze(ctx context.Context, req request) completed {
 			discoveryFiles = append(discoveryFiles, rel)
 		}
 	}
-	platforms, problem := discoverPlatforms(root, discoveryFiles, req.Environment.Platforms)
+	platforms, problem := discoverPlatforms(project, discoveryFiles, req.Input.IncludeTests, req.Environment.Platforms)
 	if problem != nil {
 		return returnError(problem)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(req.Limits.AnalysisTimeoutMS)*time.Millisecond)
 	defer cancel()
+	stopped := func() (completed, bool) {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return returnError(fail("resource_limit", "Go analysis exceeded analysis_timeout_ms")), true
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			base.Outcome = "cancelled"
+			return base, true
+		}
+		return completed{}, false
+	}
 	builder := newGraphBuilder()
 	active := map[string][]string{}
 	configs := []configurationEvidence{}
 	for _, sdk := range platforms {
-		if ctx.Err() != nil {
-			base.Outcome = "cancelled"
-			return base
+		if response, yes := stopped(); yes {
+			return response
 		}
 		configID := "go-" + sdk.ID
 		configs = append(configs, configurationEvidence{ID: configID, SourcePaths: project.projectSourcePaths(), PlatformIDs: []string{sdk.ID}})
 		loader := &sourceLoader{Ctx: ctx, Project: project, SDK: sdk, Build: standardTarget(sdk.Root, sdk.Metadata), Fset: token.NewFileSet(), Cache: map[string]*packageUnit{}, Loading: map[string]bool{}}
 		selectedPackages := map[string]bool{}
 		for _, rel := range req.Input.Files {
+			if response, yes := stopped(); yes {
+				return response
+			}
 			if strings.HasSuffix(rel, "_test.go") && !req.Input.IncludeTests {
 				continue
 			}
@@ -913,9 +987,24 @@ func analyze(ctx context.Context, req request) completed {
 		}
 		sort.Strings(packagePaths)
 		for _, importPath := range packagePaths {
+			if response, yes := stopped(); yes {
+				return response
+			}
 			unit, err := loader.load(importPath, true, req.Input.IncludeTests)
 			if err != nil {
+				if response, yes := stopped(); yes {
+					return response
+				}
+				if loader.Fatal != nil {
+					return returnError(loader.Fatal)
+				}
 				return returnError(fail("object_extraction_failed", err.Error()))
+			}
+			if response, yes := stopped(); yes {
+				return response
+			}
+			if loader.Fatal != nil {
+				return returnError(loader.Fatal)
 			}
 			for _, f := range unit.Files {
 				if !seen[f.Rel] || !containsString(active[f.Rel], configID) {
@@ -926,6 +1015,9 @@ func analyze(ctx context.Context, req request) completed {
 				}
 			}
 		}
+	}
+	if response, yes := stopped(); yes {
+		return response
 	}
 	fileEvidenceList := []fileEvidence{}
 	for _, rel := range req.Input.Files {
@@ -940,6 +1032,9 @@ func analyze(ctx context.Context, req request) completed {
 		fileEvidenceList = append(fileEvidenceList, fileEvidence{Path: rel, Disposition: disposition, ConfigurationIDs: configIDs})
 	}
 	result, ev := builder.finish(configs, fileEvidenceList)
+	if response, yes := stopped(); yes {
+		return response
+	}
 	base.Outcome = "ok"
 	base.Graph = &result
 	base.Evidence = &ev
@@ -949,6 +1044,9 @@ func analyze(ctx context.Context, req request) completed {
 	}
 	if len(encoded)+1 > req.Limits.MaxResultBytes {
 		return returnError(fail("resource_limit", "Go graph exceeds max_result_bytes"))
+	}
+	if response, yes := stopped(); yes {
+		return response
 	}
 	return base
 }
