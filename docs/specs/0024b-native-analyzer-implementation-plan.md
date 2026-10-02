@@ -4,6 +4,14 @@
 不是仅完成公共适配器或探针。依据 [0024](0024-native-analyzer-helper-protocol.md)、
 [0024a](0024a-native-language-analysis-profiles.md) 与 ADR-0034。
 
+实施票据：[公共适配器 #193](https://github.com/XLCYun/narrant/issues/193)、
+[Go #194](https://github.com/XLCYun/narrant/issues/194)、
+[Java #195](https://github.com/XLCYun/narrant/issues/195)、
+[C# #196](https://github.com/XLCYun/narrant/issues/196)、
+[C/C++ #197](https://github.com/XLCYun/narrant/issues/197)、
+[应用与支持包 #198](https://github.com/XLCYun/narrant/issues/198)、
+[贯通验收 #199](https://github.com/XLCYun/narrant/issues/199)。
+
 ## Global Constraints
 
 - 新语言使用原生 helper 完成语法、语义、源码身份、内容投影及单图并集；Rust 不再做语言 AST 映射。

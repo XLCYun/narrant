@@ -115,7 +115,8 @@ Host 同时独立执行这些限制，不依赖 helper 自觉报告；启动和�
 - `outcome: "error"`：必带 `error`；不带 `graph` / `evidence`。
 - `outcome: "cancelled"`：不带 `graph` / `evidence` / `error`，表示 helper 确认因取消终止。
 
-`graph` 仅有 `root_contains: string[]` 和 `nodes: Node[]`。虚拟根没有 ID、language 或源码。
+`graph` 包含 `root_contains: string[]`、`nodes: Node[]` 和 `external_symbols: ExternalSymbol[]`。
+虚拟根没有 ID、language 或源码。
 这是构造 DTO，不能直接当作已验证的 Rust CodeGraph，也不是当前 WebView 的展示 DTO。
 
 Node 所有字段均出现：
@@ -140,6 +141,13 @@ Reference 为 `{ "semantic": string, "target": Target }`；Target 恰好是以�
 以上 ID 只是展示字段的例子，不提前指定 Go 的最终身份编码。Node 表示已确定且属于最终图；
 External 表示已确定但不在图中，可能仍是仓内未选源码；Unresolved 只保留观测名。
 公共层不按同名、路径后缀或模糊匹配“补齐”关系。
+
+ExternalSymbol 为 `{symbol: string, name: string, scope: "repository" | "dependency"}`。
+每个最终 External 引用的 symbol 恰有一条描述，不接受重复/冲突、缺失或未被引用的描述。
+name 是 helper 从已解析符号取得的可读名称；scope 按该符号的真实来源判定，不能靠 ID 拼写猜测。
+本侧仓内未选声明及可证实的仓内隐式成员属于 repository；目标标准库属于 dependency。
+该表映射到现有 `CodeGraph::with_external_symbols`，支持已有界面的名称与依赖过滤，
+不参与图内容 diff，也不扩大业务依赖读取范围。没有 External 时仍输出空数组。
 
 `evidence` 是仅供适配器验证/诊断的控制元数据，不存入 CodeGraph、不参与内容 diff、不要求新 UI：
 
@@ -242,6 +250,7 @@ Host 仅在已记录取消原因时接受 outcome=cancelled；无取消请求却
 | P2 | 重复键/字段、未知协议、错 ID、重复 ready、双终结、半行 EOF、异常退出、无请求的 cancelled | 硬失败；不返回空图或前一结果 |
 | P3 | stderr 写满、结果超限、超时、后端不理取消、遗留子进程、Host 提前关 stdin | 无成功退出死锁；有界终止并回收进程树后才释放工作区 |
 | G1 | 重复 ID、悬空 Node、双父、包含环、孤儿节点 | Host 拒绝；引用环仍合法 |
+| G5 | 缺失/重复/多余图外符号描述，仓内未选目标及标准库 | 描述与 External 集合对应；名称/来源由后端给出，保留现有过滤能力 |
 | G2 | 两配置同一调用分别解析到不同目标 | 两个有证据的目标进入并集 |
 | G3 | 一配置已解析、一配置未知；局部 External 在最终并集入图 | 保留未知观测；只凭确定身份转成 Node |
 | G4 | 同名不同源码、同源码不同父级/类别、配置顺序变化 | 身份不混淆；真实冲突失败；顺序不制造 diff |
