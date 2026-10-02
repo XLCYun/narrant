@@ -1,0 +1,7 @@
+{
+  "version": "21.1.8",
+  "platform": "macOS-ARM64",
+  "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-macOS-ARM64.tar.xz",
+  "sha256": "b95bdd32a33a81ee4d40363aaeb26728a26783fcef26a4d80f65457433ea4669",
+  "metadata_source": "https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8"
+}
