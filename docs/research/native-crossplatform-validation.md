@@ -1,10 +1,10 @@
 # 原生 helper 的双平台验收入口
 
-状态：`974054b` 基线的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 正在草稿
-[PR #200](https://github.com/XLCYun/narrant/pull/200) 中验收。Windows 打包脚本的首跑失败已修复，
+状态：`802fadf` 最新实现的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
+[PR #200](https://github.com/XLCYun/narrant/pull/200) 中修复 LLVM 解包阻塞。Windows 打包脚本的首跑失败已修复，
 尚不能把该步骤通过等同于 Windows helper、安装和图验收全部通过。
 后续 `85318b7` 增加 C# 两目标支持、负例和第八项真实图测试；本机安装及八项图验收已通过，
-测试修正提交为 `df62826`。该增量仍需取得双平台 CI 结果，不能以此前基线结果代替。
+测试修正提交为 `df62826`。该增量的 macOS CI 已通过，仍需取得 Windows 结果。
 
 ## 已取得的 CI 结果
 
@@ -20,7 +20,7 @@ Rust Host16、factory2 项通过，
 测试也使用了 Windows 无法直接执行的 shell fixture。`974054b` 按目标平台识别 Windows
 `.exe`，保留 macOS 执行位检查，并让 Windows 测试真正执行打包后解出的程序。
 [修复后的自动运行](https://github.com/XLCYun/narrant/actions/runs/37046327780) 已通过两个
-Windows job 原来失败的 Node 步骤，其余 Windows 验收仍在进行。
+Windows job 原来失败的 Node 步骤；后续状态见下文，不将步骤通过等同平台验收通过。
 
 `974054b` 的[macOS 原生分析任务](https://github.com/XLCYun/narrant/actions/runs/37046327780/job/110968552316)
 随后也完整通过：四包构建、Go 套件、Java22 / C#24、Host16 / factory2 均成功；
@@ -29,6 +29,38 @@ Clang 同样为 22 通过、1 项 Windows SDK 专用测试预期跳过。
 这轮结果包含 Windows 打包元数据修复；既有 Python/macOS 任务同样成功。
 既有 [Python/Windows 任务](https://github.com/XLCYun/narrant/actions/runs/37046327780/job/110968552230)
 也已通过，Rust 分组分别为 20、3、4 项，全部零失败、零跳过。
+
+最新提交 `802fadf` 的[macOS 原生任务](https://github.com/XLCYun/narrant/actions/runs/37053187055/job/110991346136)
+于 2026-10-03 03:25（北京时间）完整成功。六份固定开发构件均下载、校验、解包成功，
+包含新 net8 引用包；四个支持包构建成功。真实 Java25 / C#29 项通过，Go 套件成功，
+Clang22 项通过、1 项 Windows SDK 专用测试预期跳过；Host16 / factory2 通过。
+生产四包安装 1 项（84.24 秒）及公共图/diff 8 项（14.79 秒）通过，两组零跳过。
+本轮直接包含 C# 两目标隔离、完整失败及执行哨兵增量，日志保留在
+`/private/tmp/narrant-ci-macos-37053187055.log`。既有 Python/macOS 任务也通过。
+同轮 [Python/Windows 任务](https://github.com/XLCYun/narrant/actions/runs/37053187055/job/110991346412)
+也完整通过，Rust 三组 20/3/4 项均零失败、零跳过；日志为
+`/private/tmp/narrant-ci-python-windows-37053187055.log`。这不代替新增四语言的 Windows 验收。
+
+`802fadf` 的任务已覆盖旧基线的全部检查，因此协调者在 03:35（北京时间）取消仅剩旧 Windows
+任务的 `37046327780`，停止过时的重复运行；最新 `37053187055` 保持执行。旧任务结果是
+**cancelled**，不是测试失败或成功。官方终结日志表明前四种工具迅速进入下一步，LLVM 准备从
+02:18 到取消时未结束；旧脚本没有子阶段计时，不能据此判断下载、校验还是解包慢。
+最新脚本已有三个阶段的计时，随后取得如下定位结果。
+
+`802fadf` 的 [Windows 原生任务](https://github.com/XLCYun/narrant/actions/runs/37053187055/job/110991346331)
+于 05:18（北京时间）到达任务的 120 分钟期限，官方结论为 **cancelled**；本轮没有人为取消。
+LLVM 在 03:19:46.939 完成下载、03:19:48.063 完成 SHA-256 校验，之后一直没有解包完成标记，
+直到 05:17:58 runner 取消。其余五份构件均已完成下载、校验和解包。
+因此问题定位在 Windows `System32/tar.exe` 解包固定 LLVM `.tar.xz` 的阶段；日志尚不能证明
+底层是 XZ、libarchive、磁盘或扫描的哪一种原因。该轮未执行 SDK 选择或四语言原生测试。
+完整官方日志保留为 `/private/tmp/narrant-ci-native-windows-37053187055.log`。
+
+修复只替换 Windows `.tar.xz` 的提取路径：使用 runner 已有的 7-Zip，以两个直接启动的进程
+连接 XZ 解码与 TAR 提取，二进制流传输，不生成巨型中间 TAR。两个进程都成功关闭才算解包
+成功；30 分钟独立期限触发后回收进程树，回收未确认则保留临时目录并失败。LLVM 下载源、
+摘要、版本和预期目录不变，其他归档格式及 macOS 继续使用原路径。
+本机进程生命周期测试不能证明 Windows 解包成功；CI 强制运行真实 7-Zip 小归档测试，
+随后仍须完成同一官方 LLVM 归档及完整四语言验收。
 
 ## 固定构件与隔离边界
 
