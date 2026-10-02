@@ -116,6 +116,65 @@ def node(graph, suffix):
     return matches[0]
 
 
+def snapshot_files(root):
+    """记录夹具仓库所有文件的相对路径与哈希，捕捉新增和改写。"""
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob("*") if path.is_file()}
+
+
+def build_lombok_sentinel(scratch, repository, marker):
+    """在仓外编译可由 ServiceLoader 实际发现的合成注解处理器。"""
+    source = scratch / "processor-source"
+    classes = scratch / "processor-classes"
+    source.mkdir(parents=True)
+    classes.mkdir(parents=True)
+    write(source, "lombok/Getter.java", """package lombok;
+import java.lang.annotation.*;
+/** 合成的 Lombok 入口注解，仅供隔离测试使用。 */
+@Retention(RetentionPolicy.SOURCE)
+@Target({ElementType.TYPE, ElementType.FIELD})
+public @interface Getter {}
+""")
+    write(source, "lombok/SentinelProcessor.java", """package lombok;
+import java.nio.file.*;
+import java.util.Set;
+import javax.annotation.processing.*;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.TypeElement;
+/** 合成处理器；一旦被加载，立即写入仓外哨兵。 */
+@SupportedAnnotationTypes("lombok.Getter")
+@SupportedSourceVersion(SourceVersion.RELEASE_17)
+public final class SentinelProcessor extends AbstractProcessor {
+  static {
+    try { Files.writeString(Path.of(""" + json.dumps(str(marker)) + """), "loaded"); }
+    catch (Exception error) { throw new RuntimeException(error); }
+  }
+  /** 处理流程无需生成代码，加载哨兵足以证明执行。 */
+  @Override public boolean process(Set<? extends TypeElement> types, RoundEnvironment round) { return false; }
+}
+""")
+    java_suffix = ".exe" if sys.platform == "win32" else ""
+    javac = RUNTIME / "bin" / ("javac" + java_suffix)
+    jar_tool = RUNTIME / "bin" / ("jar" + java_suffix)
+    subprocess.run([str(javac), "--release", "17", "-proc:none", "-d", str(classes),
+                    str(source / "lombok/Getter.java"), str(source / "lombok/SentinelProcessor.java")],
+                   check=True, capture_output=True, text=True, timeout=30)
+    write(classes, "META-INF/services/javax.annotation.processing.Processor", "lombok.SentinelProcessor\n")
+    archive = repository / "local-libs/lombok-sentinel.jar"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(jar_tool), "--create", "--file", str(archive), "-C", str(classes), "."],
+                   check=True, capture_output=True, text=True, timeout=30)
+    # 正对照只处理仓外临时源码；验证 JAR/服务入口确实能触发哨兵。
+    control = scratch / "control"
+    write(control, "Control.java", "import lombok.Getter; @Getter class Control {}")
+    subprocess.run([str(javac), "--release", "17", "-proc:only", "-classpath", str(archive),
+                    "-processorpath", str(archive), "-d", str(control), str(control / "Control.java")],
+                   check=True, capture_output=True, text=True, timeout=30)
+    assert marker.read_text() == "loaded"
+    marker.unlink()
+    return archive
+
+
 class JavaHelperTests(unittest.TestCase):
     """Verify structural completeness, semantic evidence and strict boundaries."""
 
@@ -145,6 +204,70 @@ class JavaHelperTests(unittest.TestCase):
                             for item in graph["external_symbols"]))
         self.assertTrue(all(hashlib.sha256((self.root / path).read_bytes()).hexdigest() == before[path] for path in files))
         self.assertEqual(len(completed["evidence"]["origins"]), len(graph["nodes"]))
+
+    def test_malformed_syntax_fails_without_graph_or_evidence(self):
+        """缺依赖可恢复，真正畸形语法必须完整失败，不能交付部分图。"""
+        metadata(self.root)
+        path = "src/main/java/p/Main.java"
+        write(self.root, path, "package p; class Main { void run(){ missing.Type.nope(); } }")
+        missing_dependency = run(request(self.root, [path]))
+        self.assertEqual(missing_dependency["outcome"], "ok", missing_dependency)
+        references = node(missing_dependency["graph"], "/method:run()")["references"]
+        self.assertTrue(any(ref["target"] == {"kind": "unresolved", "name": "nope"}
+                            for ref in references))
+        write(self.root, path, "package p; class Main { void broken( { } }")
+        before = snapshot_files(self.root)
+        malformed = run(request(self.root, [path]))
+        self.assertEqual(malformed["outcome"], "error", malformed)
+        self.assertEqual(malformed["error"]["code"], "object_extraction_failed")
+        self.assertNotIn("graph", malformed)
+        self.assertNotIn("evidence", malformed)
+        self.assertEqual(snapshot_files(self.root), before)
+
+    def test_lombok_processor_candidate_is_not_loaded(self):
+        """有效的 Lombok 候选处理器在静态分析中不得加载或改写仓库。"""
+        metadata(self.root)
+        scratch = pathlib.Path(self.temp.name) / "processor-work"
+        marker = scratch / "processor-loaded.txt"
+        archive = build_lombok_sentinel(scratch, self.root, marker)
+        self.assertTrue(archive.is_file())
+        self.assertFalse(marker.exists())
+        write(self.root, "build.gradle", "plugins { id 'java' }\n"
+              "dependencies { compileOnly 'org.projectlombok:lombok:1.18.42'; "
+              "annotationProcessor files('local-libs/lombok-sentinel.jar') }\n")
+        path = "src/main/java/p/Model.java"
+        write(self.root, path, "package p; @lombok.Getter class Model { int value; }")
+        before = snapshot_files(self.root)
+        result = run(request(self.root, [path]))
+        self.assertEqual(result["outcome"], "ok", result)
+        self.assertTrue(any(entry["id"].endswith("/class:Model") for entry in result["graph"]["nodes"]))
+        self.assertFalse(any("getValue" in entry["id"] for entry in result["graph"]["nodes"]))
+        self.assertFalse(marker.exists(), "annotation processor class was loaded")
+        self.assertEqual(snapshot_files(self.root), before)
+
+    def test_maven_lombok_processor_configuration_rejected_without_execution(self):
+        """声明 Maven Lombok 处理器的 POM 静态拒绝，不能调用构建或加载处理器。"""
+        scratch = pathlib.Path(self.temp.name) / "processor-work"
+        marker = scratch / "processor-loaded.txt"
+        build_lombok_sentinel(scratch, self.root, marker)
+        write(self.root, "pom.xml", """<project><modelVersion>4.0.0</modelVersion>
+<groupId>p</groupId><artifactId>sample</artifactId><version>1</version>
+<properties><maven.compiler.release>17</maven.compiler.release></properties>
+<build><plugins><plugin><groupId>org.apache.maven.plugins</groupId>
+<artifactId>maven-compiler-plugin</artifactId><configuration>
+<annotationProcessorPaths><path><groupId>org.projectlombok</groupId>
+<artifactId>lombok</artifactId><version>1.18.42</version></path>
+</annotationProcessorPaths></configuration></plugin></plugins></build></project>""")
+        path = "src/main/java/p/Model.java"
+        write(self.root, path, "package p; @lombok.Getter class Model { int value; }")
+        before = snapshot_files(self.root)
+        result = run(request(self.root, [path]))
+        self.assertEqual(result["outcome"], "error", result)
+        self.assertEqual(result["error"]["code"], "unsupported_configuration")
+        self.assertNotIn("graph", result)
+        self.assertNotIn("evidence", result)
+        self.assertFalse(marker.exists(), "annotation processor class was loaded")
+        self.assertEqual(snapshot_files(self.root), before)
 
     def test_target_api_does_not_leak_from_runtime(self):
         """Java 21 List API cannot bind in a Java 17 target graph."""
