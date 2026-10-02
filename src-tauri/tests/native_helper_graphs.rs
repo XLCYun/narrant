@@ -843,7 +843,7 @@ fn csharp_tfm_calls(graph: &CodeGraph) -> (NodeId, BTreeSet<ReferenceTarget>) {
     (id.clone(), calls)
 }
 
-/// 按 Host 附带的来源描述识别绑定到目标 reference assemblies 的依赖方法。
+/// 仅按公开的可读名称与来源描述识别目标 reference assemblies 的依赖方法。
 fn dependency_calls(
     graph: &CodeGraph,
     calls: &BTreeSet<ReferenceTarget>,
@@ -857,7 +857,7 @@ fn dependency_calls(
                     .external_symbols()
                     .get(symbol)
                     .is_some_and(|external| {
-                        external.scope == SymbolScope::Dependency && external.name.contains(name)
+                        external.scope == SymbolScope::Dependency && external.name == name
                     }) =>
             {
                 Some(symbol.clone())
@@ -914,30 +914,49 @@ fn csharp_real_target_framework_isolation_and_union() {
         "net8 必须保留 Lock 的具名未知调用：{calls8:?}"
     );
     assert!(
-        dependency_calls(&sides[0].2, &calls8, "System.Threading.Lock").is_empty(),
+        dependency_calls(&sides[0].2, &calls8, "Lock").is_empty(),
         "net8 不得借用运行时或 net10 的 Lock API"
     );
     assert!(
         !calls10.contains(&unknown),
         "net10 已绑定 Lock 时不应伪造未知调用"
     );
-    let lock10 = dependency_calls(&sides[1].2, &calls10, "System.Threading.Lock");
+    let lock10 = dependency_calls(&sides[1].2, &calls10, "Lock");
     assert_eq!(lock10.len(), 1, "net10 须绑定一个 Lock 构造器：{calls10:?}");
-    let console8 = dependency_calls(&sides[0].2, &calls8, "System.Console.WriteLine");
-    let console10 = dependency_calls(&sides[1].2, &calls10, "System.Console.WriteLine");
+    let console8 = dependency_calls(&sides[0].2, &calls8, "WriteLine");
+    let console10 = dependency_calls(&sides[1].2, &calls10, "WriteLine");
     assert_eq!(console8.len(), 1, "net8 普通标准 API 须绑定：{calls8:?}");
     assert_eq!(console10.len(), 1, "net10 普通标准 API 须绑定：{calls10:?}");
+    assert_eq!(
+        console8, console10,
+        "普通标准 API 的确定身份不应随目标 TFM 改变"
+    );
+    assert_eq!(
+        calls8.len(),
+        2,
+        "net8 应恰有 Lock 未知与 WriteLine 确定调用：{calls8:?}"
+    );
+    assert_eq!(
+        calls10.len(),
+        2,
+        "net10 应恰有 Lock 与 WriteLine 两个确定调用：{calls10:?}"
+    );
     assert!(
         calls_both.contains(&unknown),
         "双 TFM 并集丢失 net8 未知观测"
     );
     assert_eq!(
-        dependency_calls(&sides[2].2, &calls_both, "System.Threading.Lock"),
+        calls_both.len(),
+        3,
+        "双 TFM 应只保留 Lock 未知、Lock 确定及 WriteLine 确定调用：{calls_both:?}"
+    );
+    assert_eq!(
+        dependency_calls(&sides[2].2, &calls_both, "Lock"),
         lock10,
         "双 TFM 并集丢失 net10 确定的 Lock 调用"
     );
     assert_eq!(
-        dependency_calls(&sides[2].2, &calls_both, "System.Console.WriteLine").len(),
+        dependency_calls(&sides[2].2, &calls_both, "WriteLine").len(),
         1,
         "双 TFM 的普通标准 API 应归并为一个确定调用"
     );

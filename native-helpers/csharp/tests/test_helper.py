@@ -356,7 +356,7 @@ public sealed class SentinelAnalyzer : DiagnosticAnalyzer {
         compile_generator = subprocess.run(
             [DOTNET, str(compiler), "/nologo", "/target:library", f"/out:{sentinel}",
              f"/reference:{sdk_roslyn / 'Microsoft.CodeAnalysis.dll'}", *references, str(generator_source)],
-            capture_output=True, text=True, env=env, check=False)
+            capture_output=True, text=True, env=env, check=False, timeout=30)
         self.assertEqual(compile_generator.returncode, 0, compile_generator.stdout + compile_generator.stderr)
         self.assertTrue(sentinel.is_file())
 
@@ -367,7 +367,7 @@ public sealed class SentinelAnalyzer : DiagnosticAnalyzer {
             [DOTNET, str(compiler), "/nologo", "/target:library",
              f"/out:{Path(self.temp.name) / 'Validation.dll'}", f"/analyzer:{sentinel}",
              *references, str(validation_source)],
-            capture_output=True, text=True, env=env, check=False)
+            capture_output=True, text=True, env=env, check=False, timeout=30)
         self.assertEqual(validate_generator.returncode, 0, validate_generator.stdout + validate_generator.stderr)
         self.assertTrue(marker.is_file(), "the real generator must have executed during control compilation")
         self.assertEqual(marker.read_text(encoding="utf-8"), "executed")
