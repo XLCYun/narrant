@@ -7,22 +7,45 @@ import { execFileSync, ChildProcess } from 'node:child_process';
 import { packageDirectory } from '../build-language-support-packs.mjs';
 import { copyToolTree, smokeNativeHelper } from '../native-language-support-packs.mjs';
 
-/** Java 私有 runtime 的权限必须穿过打包、解压两层，不能只验证原目录。 */
+/** 私有 runtime 的执行入口必须穿过打包与解压，两个平台都真实启动解包后的文件。 */
 test('native runtime executable survives archive extraction', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-native-permissions-'));
   try {
     const input = path.join(root, 'input');
+    const windows = process.platform === 'win32';
+    const entry = windows ? 'runtime/jdk/bin/java.exe' : 'runtime/jdk/bin/java';
     await fs.mkdir(path.join(input, 'runtime/jdk/bin'), { recursive: true });
-    await fs.writeFile(path.join(input, 'runtime/jdk/bin/java'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    const output = await packageDirectory({ id: 'java', version: '0.1.0', target: 'aarch64-apple-darwin' }, input, path.join(root, 'output'));
+    if (windows) await fs.copyFile(process.execPath, path.join(input, entry));
+    else await fs.writeFile(path.join(input, entry), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const target = windows ? 'x86_64-pc-windows-msvc' : 'aarch64-apple-darwin';
+    const output = await packageDirectory({ id: 'java', version: '0.1.0', target }, input, path.join(root, 'output'));
     const manifest = JSON.parse(await fs.readFile(path.join(output, 'manifest.json')));
-    assert.equal(manifest.files[0].executable, true);
+    assert.equal(manifest.files.find(file => file.path === entry)?.executable, true);
     const extracted = path.join(root, 'extracted');
     await fs.mkdir(extracted);
     execFileSync('tar', ['-xzf', path.join(output, 'pack.tar.gz'), '-C', extracted]);
-    if (process.platform !== 'win32') {
-      assert.ok((await fs.stat(path.join(extracted, 'runtime/jdk/bin/java'))).mode & 0o111);
-      execFileSync(path.join(extracted, 'runtime/jdk/bin/java'));
+    const executable = path.join(extracted, entry);
+    if (windows) assert.equal(execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 10_000 }).trim(), process.version);
+    else {
+      assert.ok((await fs.stat(executable)).mode & 0o111);
+      execFileSync(executable, [], { timeout: 10_000 });
+    }
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** Windows 的 .exe 入口不依赖 POSIX 位；同名非执行文件不会让 macOS 产物获得执行权限。 */
+test('runtime executable metadata follows target platform', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-runtime-target-'));
+  try {
+    const input = path.join(root, 'input');
+    await fs.mkdir(path.join(input, 'runtime/jdk/bin'), { recursive: true });
+    await fs.writeFile(path.join(input, 'runtime/jdk/bin/java.exe'), 'fixture', { mode: 0o644 });
+    await fs.writeFile(path.join(input, 'runtime/jdk/bin/java.dll'), 'fixture', { mode: 0o644 });
+    for (const target of ['x86_64-pc-windows-msvc', 'aarch64-apple-darwin']) {
+      const output = await packageDirectory({ id: 'java', version: '0.1.0', target }, input, path.join(root, 'output'));
+      const manifest = JSON.parse(await fs.readFile(path.join(output, 'manifest.json')));
+      assert.equal(manifest.files.find(file => file.path.endsWith('java.exe')).executable, target === 'x86_64-pc-windows-msvc');
+      assert.equal(manifest.files.find(file => file.path.endsWith('java.dll')).executable, false);
     }
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

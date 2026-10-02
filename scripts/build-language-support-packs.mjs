@@ -31,7 +31,9 @@ export async function packageDirectory(identity, payload, output) {
       if (metadata.isDirectory()) await visit(file);
       else if (metadata.isFile()) {
         const bytes = await fs.readFile(path.join(payload, file));
-        files.push({ path: file, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), executable: file.startsWith('bin/') || (file.startsWith('runtime/') && (metadata.mode & 0o111) !== 0) });
+        // Windows 运行入口由目标平台和 .exe 后缀确定；POSIX 仍保留真实执行权限。
+        const runtimeExecutable = file.startsWith('runtime/') && (identity.target === 'x86_64-pc-windows-msvc' ? file.toLowerCase().endsWith('.exe') : (metadata.mode & 0o111) !== 0);
+        files.push({ path: file, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), executable: file.startsWith('bin/') || runtimeExecutable });
       } else throw new Error('支持包只能包含普通文件和目录');
     }
   }

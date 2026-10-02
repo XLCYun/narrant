@@ -21,8 +21,9 @@
 最终生产源码 `e1b1586` 的四包安装和完整七项真实图验收通过（无跳过）；`42e5a26` 只补充
 Java 测试驱动的超时保护，不改变已验收构件。整分支审查及后续定点复核的所有发现已关闭。
 
-Windows x64 与 CI macOS SDK15.5 尚未实际运行；推送实现分支并创建草稿 PR 的授权待确认，
-未创建 PR，未发布支持包或合并主分支。当前不能将 Task 7 或全部目标标记完成。
+经用户授权，已推送实现分支并创建 [草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，
+Windows x64 与 CI macOS SDK15.5 的自动验收已经启动，尚待两个平台的完整成功结果。
+未发布支持包或合并主分支；当前不能将 Task 7 或全部目标标记完成。
 具体构件版本、摘要与验证范围见 [支持包验收](../research/native-pack-integration.md)、
 [真实图验收](../research/native-helper-conformance.md) 和
 [跨平台入口](../research/native-crossplatform-validation.md)。
