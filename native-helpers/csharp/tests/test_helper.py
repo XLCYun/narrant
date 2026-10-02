@@ -14,7 +14,9 @@ REFS = os.environ.get(
     "NARRANT_TEST_REFS",
     "/tmp/narrant-dotnet-10.0.100/packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0",
 )
-HELPER = Path(__file__).resolve().parents[1] / "bin/Release/net10.0/Narrant.CSharp.Helper.dll"
+REFS8 = os.environ.get("NARRANT_TEST_REFS8", "/private/tmp/narrant-dotnet-ref8-8.0.0/ref/net8.0")
+HELPER = Path(os.environ.get("NARRANT_TEST_HELPER", str(
+    Path(__file__).resolve().parents[1] / "bin/Release/net10.0/Narrant.CSharp.Helper.dll")))
 
 
 class HelperTests(unittest.TestCase):
@@ -39,9 +41,9 @@ class HelperTests(unittest.TestCase):
         """写入确定性 source-set 声明。"""
         self.write("narrant.csharp.json", json.dumps({"version": "csharp-static-v1", "configurations": configs}))
 
-    def config(self, name, files, defines=()):
-        """生成 C# 14 / net10.0 的独立静态上下文。"""
-        return {"id": name, "files": files, "tfm": "net10.0", "language_version": "14.0",
+    def config(self, name, files, defines=(), tfm="net10.0", language_version="14.0"):
+        """生成明确 TFM、语言版本的独立静态上下文。"""
+        return {"id": name, "files": files, "tfm": tfm, "language_version": language_version,
                 "define_constants": list(defines), "implicit_usings": False}
 
     def request(self, files, platforms=None, timeout=120000, include_tests=False):
@@ -190,6 +192,205 @@ public static class E { extension(string s) { public int Size() => s.Length; } }
         self.source_set([self.config("main", ["A.cs"])])
         result = self.run_helper(self.request(["A.cs"], platforms=[]))
         self.assertEqual(result["error"]["code"], "target_unavailable")
+
+    def test_host_roslyn_api_does_not_leak_into_target_binding(self):
+        """宿主运行时可见的 Roslyn API 不在目标引用内时必须保持未解析。"""
+        host_api = HELPER.parent / "Microsoft.CodeAnalysis.CSharp.dll"
+        target_api = Path(REFS) / host_api.name
+        self.assertTrue(host_api.is_file(), "helper runtime must contain its Roslyn dependency")
+        self.assertFalse(target_api.exists(), "the official net10 target references must not contain Roslyn")
+        self.write("A.cs", '''class C { void F() {
+            Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("host-only");
+            System.Console.WriteLine("target-api");
+        } }''')
+        self.source_set([self.config("main", ["A.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        method = next(node for node in result["graph"]["nodes"] if node["name"] == "F")
+        calls = [ref["target"] for ref in method["references"] if ref["semantic"] == "code.calls"]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any(target["kind"] == "unresolved" and target["name"] ==
+                            "Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create" for target in calls))
+        self.assertTrue(any(target["kind"] == "external" for target in calls))
+
+    def test_real_net8_and_net10_target_isolation_and_union(self):
+        """同一 .NET 10 宿主以真实 8/10 引用分别绑定并合并目标事实。"""
+        self.assertTrue(Path(REFS8).is_dir(), "official net8.0/8.0.0 reference pack is required")
+        self.assertGreater(len(list(Path(REFS8).glob("*.dll"))), 10)
+        self.assertFalse((Path(REFS8) / "System.Threading.Lock.dll").exists())
+        source = '''class C { void F() {
+            var gate = new System.Threading.Lock();
+            System.Console.WriteLine("shared");
+        } }
+#if NET8_0
+class OnlyNet8 {}
+#endif
+#if NET10_0
+class OnlyNet10 {}
+#endif'''
+        self.write("A.cs", source)
+        net8 = self.config("net8", ["A.cs"], defines=["NET8_0"], tfm="net8.0", language_version="12.0")
+        net10 = self.config("net10", ["A.cs"], defines=["NET10_0"])
+        platform8 = {"id": "net8", "kind": "dotnet-reference-assemblies", "version": "8.0.0",
+                     "root": REFS8, "fingerprint": "fixture-ref-8.0.0",
+                     "metadata": {"tfm": "net8.0", "reference_pack": "Microsoft.NETCore.App.Ref",
+                                  "reference_pack_version": "8.0.0"}}
+        platform10 = self.request(["A.cs"])["environment"]["platforms"][0]
+
+        self.source_set([self.config("net10-no-defines", ["A.cs"])])
+        explicit_only = self.run_helper(self.request(["A.cs"], platforms=[platform10]))
+        self.assertEqual(explicit_only["outcome"], "ok", explicit_only.get("error"))
+        self.assertNotIn("OnlyNet8", [node["name"] for node in explicit_only["graph"]["nodes"]])
+        self.assertNotIn("OnlyNet10", [node["name"] for node in explicit_only["graph"]["nodes"]])
+
+        self.source_set([net8])
+        older = self.run_helper(self.request(["A.cs"], platforms=[platform8]))
+        self.assertEqual(older["outcome"], "ok", older.get("error"))
+        older_nodes = older["graph"]["nodes"]
+        self.assertIn("OnlyNet8", [node["name"] for node in older_nodes])
+        self.assertNotIn("OnlyNet10", [node["name"] for node in older_nodes])
+        older_f = next(node for node in older_nodes if node["name"] == "F")
+        older_calls = [ref["target"] for ref in older_f["references"] if ref["semantic"] == "code.calls"]
+        self.assertTrue(any(target["kind"] == "unresolved" and target["name"] == "System.Threading.Lock"
+                            for target in older_calls))
+        self.assertTrue(any(target["kind"] == "external" for target in older_calls))
+
+        self.source_set([net10])
+        newer = self.run_helper(self.request(["A.cs"], platforms=[platform10]))
+        self.assertEqual(newer["outcome"], "ok", newer.get("error"))
+        newer_nodes = newer["graph"]["nodes"]
+        self.assertIn("OnlyNet10", [node["name"] for node in newer_nodes])
+        self.assertNotIn("OnlyNet8", [node["name"] for node in newer_nodes])
+        newer_f = next(node for node in newer_nodes if node["name"] == "F")
+        newer_calls = [ref["target"] for ref in newer_f["references"] if ref["semantic"] == "code.calls"]
+        self.assertFalse(any(target["kind"] == "unresolved" and target["name"] == "System.Threading.Lock"
+                             for target in newer_calls))
+        self.assertEqual(len([target for target in newer_calls if target["kind"] == "external"]), 2)
+        self.assertEqual(older_f["id"], newer_f["id"])
+
+        self.source_set([net8, net10])
+        union = self.run_helper(self.request(["A.cs"], platforms=[platform8, platform10]))
+        self.assertEqual(union["outcome"], "ok", union.get("error"))
+        names = [node["name"] for node in union["graph"]["nodes"]]
+        self.assertIn("OnlyNet8", names)
+        self.assertIn("OnlyNet10", names)
+        combined_f = next(node for node in union["graph"]["nodes"] if node["name"] == "F")
+        self.assertEqual(combined_f["id"], older_f["id"])
+        combined_calls = [ref["target"] for ref in combined_f["references"] if ref["semantic"] == "code.calls"]
+        self.assertTrue(any(target["kind"] == "unresolved" and target["name"] == "System.Threading.Lock"
+                            for target in combined_calls))
+        self.assertEqual(len([target for target in combined_calls if target["kind"] == "external"]), 2)
+
+        self.source_set([net10, net8])
+        reverse = self.run_helper(self.request(["A.cs"], platforms=[platform8, platform10]))
+        self.assertEqual(reverse["outcome"], "ok", reverse.get("error"))
+        self.assertEqual(union["graph"], reverse["graph"])
+
+        wrong = dict(platform8, version="10.0.0")
+        rejected = self.run_helper(self.request(["A.cs"], platforms=[wrong, platform10]))
+        self.assertEqual(rejected["error"]["code"], "target_unavailable")
+
+    def test_sdk_net8_defaults_to_csharp12(self):
+        """普通 net8 SDK 项目默认 C# 12，只有明确语言覆盖才接受 C# 14 语法。"""
+        self.assertTrue(Path(REFS8).is_dir(), "official net8.0/8.0.0 reference pack is required")
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>')
+        self.write("App/E.cs", "public static class E { extension(string s) { public int Size() => s.Length; } }")
+        platform8 = {"id": "net8", "kind": "dotnet-reference-assemblies", "version": "8.0.0",
+                     "root": REFS8, "fingerprint": "fixture-ref-8.0.0",
+                     "metadata": {"tfm": "net8.0", "reference_pack": "Microsoft.NETCore.App.Ref",
+                                  "reference_pack_version": "8.0.0"}}
+        default = self.run_helper(self.request(["App/E.cs"], platforms=[platform8]))
+        self.assertEqual(default["outcome"], "error")
+        self.assertEqual(default["error"]["code"], "object_extraction_failed")
+        self.assertNotIn("graph", default)
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework><LangVersion>14.0</LangVersion></PropertyGroup></Project>')
+        explicit = self.run_helper(self.request(["App/E.cs"], platforms=[platform8]))
+        self.assertEqual(explicit["outcome"], "ok", explicit.get("error"))
+        self.assertIn("Size", [node["name"] for node in explicit["graph"]["nodes"]])
+
+    def test_malformed_syntax_fails_without_graph(self):
+        """Roslyn 恢复语法树不能让畸形声明变成成功的部分图。"""
+        self.write("A.cs", "class C { void F( { }")
+        self.source_set([self.config("main", ["A.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "error")
+        self.assertEqual(result["error"]["code"], "object_extraction_failed")
+        self.assertNotIn("graph", result)
+        self.assertNotIn("evidence", result)
+
+    def test_source_generator_sentinel_is_rejected_without_execution(self):
+        """真实能执行的源码生成器在静态项目边界被拒绝，不能写哨兵。"""
+        sdk_roslyn = Path(DOTNET).parent / "sdk" / "10.0.100" / "Roslyn" / "bincore"
+        compiler = sdk_roslyn / "csc.dll"
+        self.assertTrue(compiler.is_file())
+        marker = self.root / "App" / "generator-ran.marker"
+        analyzer_marker = self.root / "App" / "analyzer-ran.marker"
+        sentinel = self.root / "App" / "Sentinel.dll"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        generator_source = Path(self.temp.name) / "Sentinel.cs"
+        generator_source.write_text('''using System.IO;
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+[Generator]
+public sealed class SentinelGenerator : ISourceGenerator {
+    public SentinelGenerator() { File.WriteAllText(''' + json.dumps(str(marker)) + ''', "constructed"); }
+    public void Initialize(GeneratorInitializationContext context) {
+        File.WriteAllText(''' + json.dumps(str(marker)) + ''', "initialized");
+    }
+    public void Execute(GeneratorExecutionContext context) {
+        File.WriteAllText(''' + json.dumps(str(marker)) + ''', "executed");
+    }
+}
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class SentinelAnalyzer : DiagnosticAnalyzer {
+    private static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
+        "SENT001", "Sentinel", "Sentinel", "Testing", DiagnosticSeverity.Warning, true);
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+    public override void Initialize(AnalysisContext context) {
+        File.WriteAllText(''' + json.dumps(str(analyzer_marker)) + ''', "analyzer-initialized");
+    }
+}''', encoding="utf-8")
+        references = [f"/reference:{path}" for path in sorted(Path(REFS).glob("*.dll"))]
+        env = {**os.environ, "DOTNET_ROOT": str(Path(DOTNET).parent), "DOTNET_MULTILEVEL_LOOKUP": "0"}
+        compile_generator = subprocess.run(
+            [DOTNET, str(compiler), "/nologo", "/target:library", f"/out:{sentinel}",
+             f"/reference:{sdk_roslyn / 'Microsoft.CodeAnalysis.dll'}", *references, str(generator_source)],
+            capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(compile_generator.returncode, 0, compile_generator.stdout + compile_generator.stderr)
+        self.assertTrue(sentinel.is_file())
+
+        # 在仓库外单独运行同一生成器，确认它确实会执行并写入 marker。
+        validation_source = Path(self.temp.name) / "Validation.cs"
+        validation_source.write_text("class Validation {}", encoding="utf-8")
+        validate_generator = subprocess.run(
+            [DOTNET, str(compiler), "/nologo", "/target:library",
+             f"/out:{Path(self.temp.name) / 'Validation.dll'}", f"/analyzer:{sentinel}",
+             *references, str(validation_source)],
+            capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(validate_generator.returncode, 0, validate_generator.stdout + validate_generator.stderr)
+        self.assertTrue(marker.is_file(), "the real generator must have executed during control compilation")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "executed")
+        self.assertTrue(analyzer_marker.is_file(), "the real diagnostic analyzer must have initialized")
+        self.assertEqual(analyzer_marker.read_text(encoding="utf-8"), "analyzer-initialized")
+        marker.unlink()
+        analyzer_marker.unlink()
+
+        self.write("App/App.csproj", '''<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>
+<TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup>
+<Analyzer Include="Sentinel.dll" /></ItemGroup></Project>''')
+        self.write("App/Main.cs", "class MainClass {}")
+        before = {path.relative_to(self.root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in self.root.rglob("*") if path.is_file()}
+        result = self.run_helper(self.request(["App/Main.cs"]))
+        self.assertEqual(result["outcome"], "error")
+        self.assertEqual(result["error"]["code"], "unsupported_configuration")
+        self.assertNotIn("graph", result)
+        self.assertFalse(marker.exists())
+        self.assertFalse(analyzer_marker.exists())
+        after = {path.relative_to(self.root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual(before, after)
 
     def test_test_only_source_set(self):
         """有可靠 test_only 声明时保留覆盖证据并按开关提取。"""

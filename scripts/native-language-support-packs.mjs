@@ -37,6 +37,25 @@ async function findDirectory(candidates, label) {
   throw new Error(`${label} not installed; provide an isolated tool directory for local pack construction`);
 }
 
+/** 只装入两个固定 TFM 的标准引用与许可证，不复制 NuGet 的 targets 或分析器。 */
+export async function bundleCsharpReferences({ definition, sdk, reference8, payload }) {
+  const expected = [{ tfm: 'net10.0', version: '10.0.0' }, { tfm: 'net8.0', version: '8.0.0' }];
+  if (definition.referencePack !== 'Microsoft.NETCore.App.Ref' || JSON.stringify(definition.referenceTargets) !== JSON.stringify(expected)) throw new Error('Unsupported C# reference target catalog');
+  const identity = await fs.readFile(path.join(reference8, 'Microsoft.NETCore.App.Ref.nuspec'), 'utf8');
+  if (!/<id>Microsoft\.NETCore\.App\.Ref<\/id>/.test(identity) || !/<version>8\.0\.0<\/version>/.test(identity)) throw new Error('.NET 8 reference package identity mismatch');
+  const platforms = [];
+  for (const target of expected) {
+    const source = target.tfm === 'net8.0' ? path.join(reference8, 'ref', target.tfm) : path.join(sdk, 'packs', definition.referencePack, target.version, 'ref', target.tfm);
+    await fs.access(path.join(source, 'System.Runtime.dll'));
+    const root = `runtime/platform/${target.tfm}`;
+    await copyToolTree(source, path.join(payload, root));
+    platforms.push({ id: `${target.tfm}-reference-assemblies`, kind: 'dotnet-reference-assemblies', version: target.version, root, metadata: { tfm: target.tfm, reference_pack: definition.referencePack, reference_pack_version: target.version } });
+  }
+  await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
+  for (const name of ['LICENSE.TXT', 'THIRD-PARTY-NOTICES.TXT']) await fs.copyFile(path.join(reference8, name), path.join(payload, 'licenses', `dotnet-ref8-${name}`));
+  return platforms;
+}
+
 /** 以空业务环境启动自己的 helper，验证 ready 身份以及协议错误的受控终结。 */
 export async function smokeNativeHelper({ executable, args = [], id, projection, languages, profile, environment = {} }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-native-pack-smoke-'));
@@ -133,12 +152,11 @@ export async function buildNativePack({ id, target, output, definition, packageD
       await copyToolTree(path.join(sdk, 'host'), path.join(payload, 'bin/host'));
       await copyToolTree(path.join(sdk, 'shared/Microsoft.NETCore.App', definition.dotnetRuntime), path.join(payload, 'bin/shared/Microsoft.NETCore.App', definition.dotnetRuntime));
       await copyToolTree(publish, path.join(payload, 'runtime/helper'));
-      const refs = path.join(sdk, 'packs', definition.referencePack, definition.referencePackVersion, 'ref', definition.tfm);
-      await copyToolTree(refs, path.join(payload, 'runtime/platform/net10.0'));
+      const reference8 = await findDirectory([process.env.NARRANT_DOTNET_REF8_ROOT, '/private/tmp/narrant-dotnet-ref8-8.0.0'], '.NET 8.0.0 standard reference package');
+      platforms.push(...await bundleCsharpReferences({ definition, sdk, reference8, payload }));
       for (const name of ['LICENSE.txt', 'ThirdPartyNotices.txt']) await fs.copyFile(path.join(sdk, name), path.join(payload, 'licenses', name));
       executable = path.join(payload, `bin/dotnet${suffix}`);
       args = [path.join(payload, 'runtime/helper/Narrant.CSharp.Helper.dll')];
-      platforms.push({ id: 'net10.0-reference-assemblies', kind: 'dotnet-reference-assemblies', version: definition.referencePackVersion, root: 'runtime/platform/net10.0', metadata: { tfm: definition.tfm, reference_pack: definition.referencePack, reference_pack_version: definition.referencePackVersion } });
     } else if (id === 'java') {
       const runtime = await findDirectory([process.env.NARRANT_JAVA_RUNTIME, path.join(repository, '.tools/java-native/jdk-25.0.4.1+1/Contents/Home')], 'Pinned Java helper runtime');
       const targetJdk = await findDirectory([process.env.NARRANT_JAVA_TARGET_JDK, path.join(repository, '.tools/java-native/jdk-17.0.20.1+1/Contents/Home')], 'Exact Java 17 target JDK');

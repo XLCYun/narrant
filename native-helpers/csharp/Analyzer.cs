@@ -86,13 +86,15 @@ internal static class Analyzer
             if (!compiling.Add(config.Id))
                 throw new HelperException("unsupported_configuration", "ProjectReference cycle", config.SourcePaths);
             cancellation.ThrowIfCancellationRequested();
+            var targetProfile = Configuration.Target(config.Tfm);
             var matches = request.Environment.Platforms.Where(p => p.Kind == "dotnet-reference-assemblies" &&
                 p.Metadata.Tfm == config.Tfm && p.Metadata.ReferencePack == "Microsoft.NETCore.App.Ref" &&
-                p.Metadata.ReferencePackVersion == "10.0.0").ToArray();
+                p.Metadata.ReferencePackVersion == targetProfile.ReferencePackVersion &&
+                p.Version == targetProfile.ReferencePackVersion).ToArray();
             if (matches.Length != 1)
                 throw new HelperException("target_unavailable", $"Exactly one approved reference assembly profile is required for {config.Tfm}", config.SourcePaths);
             var platform = matches[0];
-            var references = References(platform).ToList();
+            var references = References(platform, targetProfile).ToList();
             foreach (var dependency in config.ProjectReferences)
             {
                 var target = configurations.SingleOrDefault(c => c.SourcePaths[0] == dependency && c.Tfm == config.Tfm &&
@@ -137,9 +139,9 @@ internal static class Analyzer
     }
 
     /// <summary>仅加载目标平台明确批准的 reference DLL，不读取宿主 runtime。</summary>
-    private static MetadataReference[] References(Platform platform)
+    private static MetadataReference[] References(Platform platform, TargetProfile target)
     {
-        if (platform.Version != "10.0.0" || !Path.IsPathFullyQualified(platform.Root) ||
+        if (platform.Version != target.ReferencePackVersion || !Path.IsPathFullyQualified(platform.Root) ||
             !Directory.Exists(platform.Root) || platform.Fingerprint.Length == 0)
             throw new HelperException("target_unavailable", "Invalid .NET reference platform");
         var files = Directory.GetFiles(platform.Root, "*.dll", SearchOption.TopDirectoryOnly);

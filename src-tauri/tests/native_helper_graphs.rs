@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tempfile::TempDir;
 
 /// 本地构件清单只提供受信可执行文件和目标声明，测试本身固定 profile 身份。
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HelperConfig {
     executable: PathBuf,
@@ -33,7 +33,7 @@ struct HelperConfig {
 }
 
 /// 与公开 Host Platform 字段一一对应的 JSON 输入。
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PlatformConfig {
     id: String,
@@ -807,6 +807,174 @@ fn mixed_repository_real_helper_graph_and_diff() {
         before.diff(relocated).unwrap().nodes.is_empty(),
         "同语义迁移仓库根后混合图产生差异"
     );
+}
+
+/// 为同一份 C# 源码指定一个或两个明确 TFM；配置顺序由传入列表决定。
+fn csharp_tfm_fixture(root: &Path, tfms: &[&str]) -> Vec<PathBuf> {
+    put(root, "TargetProbe.cs", "public static class TargetProbe { public static void CheckTargets() { var gate = new System.Threading.Lock(); System.Console.WriteLine(\"shared\"); } }\n");
+    let configurations = tfms.iter().map(|tfm| {
+        let language_version = if *tfm == "net8.0" { "12.0" } else { "14.0" };
+        serde_json::json!({
+            "id": format!("target-{tfm}"), "files": ["TargetProbe.cs"], "tfm": tfm,
+            "language_version": language_version, "define_constants": [], "implicit_usings": false
+        })
+    }).collect::<Vec<_>>();
+    put(
+        root,
+        "narrant.csharp.json",
+        &serde_json::json!({
+            "version": "csharp-static-v1", "configurations": configurations
+        })
+        .to_string(),
+    );
+    vec!["TargetProbe.cs".into()]
+}
+
+/// 从已构建的真实图取得目标方法的调用事实，身份由单图查找而非构造。
+fn csharp_tfm_calls(graph: &CodeGraph) -> (NodeId, BTreeSet<ReferenceTarget>) {
+    let (id, node) = find(graph, "CheckTargets", CodeCategory::Callable);
+    let calls = node
+        .data()
+        .references
+        .iter()
+        .filter(|reference| reference.semantic == "code.calls")
+        .map(|reference| reference.target.clone())
+        .collect::<BTreeSet<_>>();
+    (id.clone(), calls)
+}
+
+/// 按 Host 附带的来源描述识别绑定到目标 reference assemblies 的依赖方法。
+fn dependency_calls(
+    graph: &CodeGraph,
+    calls: &BTreeSet<ReferenceTarget>,
+    name: &str,
+) -> BTreeSet<String> {
+    calls
+        .iter()
+        .filter_map(|target| match target {
+            ReferenceTarget::External { symbol }
+                if graph
+                    .external_symbols()
+                    .get(symbol)
+                    .is_some_and(|external| {
+                        external.scope == SymbolScope::Dependency && external.name.contains(name)
+                    }) =>
+            {
+                Some(symbol.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// 同源码的 net8/net10 目标隔离与双配置并集须经真实支持包、Host 和 CodeGraph 验证。
+#[test]
+#[ignore = "require-real-tools: C# helper 须同时提供固定 net8.0/ref8.0.0 与 net10.0/ref10.0.0"]
+fn csharp_real_target_framework_isolation_and_union() {
+    let configs = config();
+    let csharp = configs.get("csharp").expect("缺少 C# 真实 helper 配置");
+    for (tfm, version) in [("net8.0", "8.0.0"), ("net10.0", "10.0.0")] {
+        assert!(
+            csharp.platforms.iter().any(|platform| {
+                platform.kind == "dotnet-reference-assemblies"
+                    && platform.version == version
+                    && platform.metadata["tfm"] == tfm
+                    && platform.metadata["reference_pack"] == "Microsoft.NETCore.App.Ref"
+                    && platform.metadata["reference_pack_version"] == version
+            }),
+            "C# 真实支持包缺少 {tfm} / {version} reference assemblies"
+        );
+    }
+    let sandbox = TempDir::new().expect("无法建立 C# 双目标临时根");
+    let mut sides = Vec::new();
+    for (directory, tfms) in [
+        ("net8", vec!["net8.0"]),
+        ("net10", vec!["net10.0"]),
+        ("dual-8-first", vec!["net8.0", "net10.0"]),
+        ("dual-10-first", vec!["net10.0", "net8.0"]),
+    ] {
+        let root = sandbox.path().join(directory);
+        fs::create_dir(&root).expect("无法建立 C# 目标仓库侧");
+        let files = csharp_tfm_fixture(&root, &tfms);
+        let graph = analyze(Mode::Csharp, &configs, &root, files.clone());
+        sides.push((root, files, graph));
+    }
+    let (id8, calls8) = csharp_tfm_calls(&sides[0].2);
+    let (id10, calls10) = csharp_tfm_calls(&sides[1].2);
+    let (id_both, calls_both) = csharp_tfm_calls(&sides[2].2);
+    let (id_reversed, calls_reversed) = csharp_tfm_calls(&sides[3].2);
+    assert_eq!(id8, id10, "TFM 改变了同一源码方法身份");
+    assert_eq!(id8, id_both, "双 TFM 复制了同一源码方法");
+    assert_eq!(id8, id_reversed, "配置顺序改变了源码方法身份");
+    let unknown = ReferenceTarget::Unresolved {
+        name: "System.Threading.Lock".into(),
+    };
+    assert!(
+        calls8.contains(&unknown),
+        "net8 必须保留 Lock 的具名未知调用：{calls8:?}"
+    );
+    assert!(
+        dependency_calls(&sides[0].2, &calls8, "System.Threading.Lock").is_empty(),
+        "net8 不得借用运行时或 net10 的 Lock API"
+    );
+    assert!(
+        !calls10.contains(&unknown),
+        "net10 已绑定 Lock 时不应伪造未知调用"
+    );
+    let lock10 = dependency_calls(&sides[1].2, &calls10, "System.Threading.Lock");
+    assert_eq!(lock10.len(), 1, "net10 须绑定一个 Lock 构造器：{calls10:?}");
+    let console8 = dependency_calls(&sides[0].2, &calls8, "System.Console.WriteLine");
+    let console10 = dependency_calls(&sides[1].2, &calls10, "System.Console.WriteLine");
+    assert_eq!(console8.len(), 1, "net8 普通标准 API 须绑定：{calls8:?}");
+    assert_eq!(console10.len(), 1, "net10 普通标准 API 须绑定：{calls10:?}");
+    assert!(
+        calls_both.contains(&unknown),
+        "双 TFM 并集丢失 net8 未知观测"
+    );
+    assert_eq!(
+        dependency_calls(&sides[2].2, &calls_both, "System.Threading.Lock"),
+        lock10,
+        "双 TFM 并集丢失 net10 确定的 Lock 调用"
+    );
+    assert_eq!(
+        dependency_calls(&sides[2].2, &calls_both, "System.Console.WriteLine").len(),
+        1,
+        "双 TFM 的普通标准 API 应归并为一个确定调用"
+    );
+    assert_eq!(calls_both, calls_reversed, "配置顺序改变了最终关系集合");
+    assert_eq!(
+        sides[2].2.external_symbols(),
+        sides[3].2.external_symbols(),
+        "配置顺序改变了图外符号元数据"
+    );
+    assert!(
+        sides[2].2.diff(&sides[3].2).unwrap().nodes.is_empty(),
+        "配置顺序制造了图差异"
+    );
+    for (index, tfm) in [(0, "net8.0"), (1, "net10.0")] {
+        let mut without_target = configs.clone();
+        without_target
+            .get_mut("csharp")
+            .unwrap()
+            .platforms
+            .retain(|platform| platform.metadata["tfm"] != tfm);
+        let (root, files, _) = &sides[index];
+        let before = snapshot(root);
+        let error = analyzer(Mode::Csharp, &without_target)
+            .analyze(&AnalysisInput {
+                repository_root: root.clone(),
+                files: files.clone(),
+                options: AnalysisOptions {
+                    include_tests: false,
+                },
+            })
+            .expect_err("缺少本侧目标 reference assemblies 必须硬失败");
+        assert!(
+            error.message.contains("target_unavailable") && error.message.contains(tfm),
+            "缺少 {tfm} 目标却未给出明确失败：{error}"
+        );
+        assert_eq!(before, snapshot(root), "目标缺失失败路径改写了仓库");
+    }
 }
 
 /// 完整验收调用必须同时提供四个固定 helper，Clang 覆盖 C 与 C++ 两种语言模式。

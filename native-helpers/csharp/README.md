@@ -28,11 +28,15 @@ DOTNET_ROOT=/absolute/dotnet-10.0.100 \
 The Host launches the pack's private `bin/dotnet` (`bin/dotnet.exe` on Windows)
 with `runtime/helper/Narrant.CSharp.Helper.dll` and no helper arguments. It sets
 `DOTNET_ROOT` to the pack's `bin` directory and disables multilevel lookup.
-Platform `kind` is `dotnet-reference-assemblies`; its `root` is the approved
-`Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0` directory. Required metadata:
+Platform `kind` is `dotnet-reference-assemblies`; its `root` is one approved
+`Microsoft.NETCore.App.Ref` reference directory. The only accepted target pairs are
+`net8.0` / `8.0.0` and `net10.0` / `10.0.0`. Required metadata for each is:
 
 ```json
-{"tfm":"net10.0","reference_pack":"Microsoft.NETCore.App.Ref","reference_pack_version":"10.0.0"}
+[
+  {"tfm":"net8.0","reference_pack":"Microsoft.NETCore.App.Ref","reference_pack_version":"8.0.0"},
+  {"tfm":"net10.0","reference_pack":"Microsoft.NETCore.App.Ref","reference_pack_version":"10.0.0"}
+]
 ```
 
 Only `.dll` files directly in that directory become `MetadataReference`s. No
@@ -59,7 +63,10 @@ When no `.csproj` exists, the repository root may contain `narrant.csharp.json`:
 }
 ```
 
-`test_only` may be omitted and defaults to false. Each configuration is compiled
+`language_version` accepts `12`/`12.0` or `14`/`14.0`; SDK-style projects default
+to C# 12 for net8.0 and C# 14 for net10.0. Source-set preprocessor symbols are
+exactly its explicit `define_constants`; SDK-style projects receive the target's
+predefined symbols. `test_only` may be omitted and defaults to false. Each configuration is compiled
 separately; the final graph unions compatible source objects and confirmed
 relationships. Source files remain in place. An explicit selected file outside
 all configurations fails instead of becoming an empty graph.
@@ -67,8 +74,8 @@ all configurations fails instead of becoming an empty graph.
 ## Static SDK project subset
 
 The helper also reads ordinary literal `Microsoft.NET.Sdk` `.csproj` files.
-Supported properties are `TargetFramework`/`TargetFrameworks` (`net10.0`),
-`LangVersion` (`14` or `14.0`), `DefineConstants`, `ImplicitUsings`,
+Supported properties are `TargetFramework`/`TargetFrameworks` (`net8.0` or `net10.0`),
+`LangVersion` (`12`/`12.0` or `14`/`14.0`), `DefineConstants`, `ImplicitUsings`,
 `EnableDefaultCompileItems`, `IsTestProject`, `Configuration` (`Debug` or
 `Release`), `Platform` (`AnyCPU`), `Nullable`, `OutputType`, `RootNamespace`,
 `AssemblyName`, and `TreatWarningsAsErrors`. Default `**/*.cs` discovery
@@ -79,7 +86,7 @@ literal equality/inequality condition on `TargetFramework`, `Configuration`, or
 literal Debug/Release equality or inequality branches are compiled separately and unioned.
 Referenced projects inherit the caller's static configuration, even if they have
 no configuration condition of their own. The matching
-`DEBUG`/`TRACE` and net10 preprocessor constants are provided. `ImplicitUsings`
+`DEBUG`/`TRACE` and target-specific preprocessor constants are provided. `ImplicitUsings`
 accepts `enable` or `true`. Explicitly conditionally omitted files receive `inactive`
 coverage. `IsTestProject=true` gives reliable `excluded_test` coverage when
 `include_tests=false`.
@@ -97,5 +104,6 @@ the repository.
 ```sh
 NARRANT_TEST_DOTNET=/absolute/dotnet-10.0.100/dotnet \
 NARRANT_TEST_REFS=/absolute/dotnet-10.0.100/packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0 \
+NARRANT_TEST_REFS8=/absolute/Microsoft.NETCore.App.Ref/8.0.0/ref/net8.0 \
 python3 -m unittest discover -s native-helpers/csharp/tests -v
 ```

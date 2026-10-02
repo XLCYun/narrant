@@ -21,6 +21,10 @@ SDK 自带 `Microsoft.CodeAnalysis` 与 `Microsoft.CodeAnalysis.CSharp` 程序�
 `b1b6c8b56c6902d7269056b419effc79da9460a95b7ab40fe1ee0e55bc250bc1` 和
 `c975b490fa73bb3ee493c4a16de622fb97329e8f362f0014e03bbd32726edd3f`。
 SDK 带 .NET runtime 10.0.0 与 `Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0`。
+另从微软官方 [Microsoft.NETCore.App.Ref 8.0.0 包](https://www.nuget.org/packages/Microsoft.NETCore.App.Ref/8.0.0)
+取得真实 `ref/net8.0`（163 个 DLL），NuGet 不可变 catalog 的 SHA-512
+`44a7904011578e0ea57d4a7e336987806037e6c74ae953808df2d50e700129dcac316acbb1eed7a2f3e50d3b7188f320673ddae9ed4e89c1b0e1fa8e5ed31e20`
+已由支持包集成任务核对。工具仍运行于 .NET 10；.NET 8 包仅作目标编译引用。
 helper 运行时的 runtime 和被分析项目的 target reference assemblies 是两个不同输入：
 运行时随支持包，目标引用目录由 Host 的 `dotnet-reference-assemblies` Platform 授权。
 Roslyn 使用 `CSharpCompilation.Create`、
@@ -32,14 +36,18 @@ generator、analyzer 或项目自定义 target。微软的
 
 ## 已实现的静态项目范围
 
-`narrant.csharp.json` 显式列举文件、C# 14、net10.0、常量与 implicit usings；多个明确
+`narrant.csharp.json` 显式列举文件、net8.0 或 net10.0、C# 12 或 14、常量与 implicit usings；多个明确
 配置分别建 Compilation，最后按源码身份合并对象及确认的关系。普通 SDK-style `.csproj`
 只接受字面 `Microsoft.NET.Sdk` 和 README 所列的有限属性、默认 `**/*.cs`、字面
 `Compile Include/Remove` 与 `ProjectReference`。仅对
 `TargetFramework`、`Configuration`、`Platform` 的字面 `==` 或 `!=` 求值；默认 Debug / AnyCPU，
 显式 Debug/Release 等值或不等值分支分别建 Compilation 后并集；仓内 ProjectReference
 沿用引用方配置重建被引用项目。默认源码发现排除隐藏目录，
-`ImplicitUsings=true` 与 `enable` 同样启用隐式导入，并按固定 SDK 补全 net10 预处理常量。
+`ImplicitUsings=true` 与 `enable` 同样启用隐式导入；SDK-style 项目按固定目标补全预处理常量，
+显式 source-set 只使用其声明的 `define_constants`，不会偷偷加入目标宏。
+普通 net8.0 项目默认 C# 12，net10.0 默认 C# 14；显式 `LangVersion` 仅接收 12/14。
+该有限表遵循微软的[目标框架默认 C# 版本](https://learn.microsoft.com/en-us/dotnet/csharp/misc/cs1617)
+和[目标预处理符号](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/preprocessor-directives)说明。
 条件中未纳入的显式文件报 `inactive`；可靠的 `test_only` 或 `IsTestProject=true` 可报
 `excluded_test`。不读取 NuGet cache 或已生成的 obj/assets。
 
@@ -80,7 +88,7 @@ helper 返回 `unsupported_configuration` 且 marker 不存在。宿主到真实
 
 ## 当前明确边界
 
-仅 C# 14 + net10.0 普通源码得到实测承诺。Razor、Unity `.asmdef`、脚本、旧式项目、
+仅 net8.0/8.0.0 与 net10.0/10.0.0 两套固定引用、C# 12/14 有实测承诺。Razor、Unity `.asmdef`、脚本、旧式项目、
 任意 import/target/package reference、条件 PropertyGroup、MSBuild 属性函数、显式 Compile
 glob、额外 TFM、source generator 和第三方业务依赖无法由静态子集证明，直接返回配置失败。
 只对固定 SDK 模式下的 Debug/Release、AnyCPU 和列出的等值条件做求值；不运行项目构建
@@ -90,6 +98,24 @@ glob、额外 TFM、source generator 和第三方业务依赖无法由静态子�
 当前测试尚未覆盖所有合法 C# 14 语法及引用边界组合，包括 file-based app 指令、所有
 LINQ/collection initializer 的隐式调用、通用运算符绑定、完整跨平台源码编码和大型项目
 性能。遇到未知声明或不能兼容归并的对象时 helper 失败；不能据此推断所有未测语法已支持。
+
+## 真实双目标隔离与静态执行哨兵（2026-10-03）
+
+使用已校验的官方 net8.0/8.0.0 与 net10.0/10.0.0 引用程序集，同一 .NET 10 helper
+分别分析相同源码：`new System.Threading.Lock()` 在 net8 保持 Unresolved，在 net10
+指向 External，两个配置合并后同时保留这两项事实和同一个方法 ID；倒序配置输出相同图。
+显式 source-set 分别声明的 `NET8_0` 与 `NET10_0` 各选出正确声明，未声明时两个分支均不激活；
+目标版本元数据不匹配则失败。
+微软的 [Lock API 页面](https://learn.microsoft.com/en-us/dotnet/api/system.threading.lock?view=net-10.0)
+列出的适用版本从 .NET 9 开始。普通 net8 SDK 项目的 C# 12 默认值也用 C# 14 扩展块语法
+失败、显式 `LangVersion=14.0` 成功的进程用例核实。这里仅承诺两个固定目标，不外推到任意 TFM。
+
+另用真实 `ISourceGenerator` 和 `DiagnosticAnalyzer` 同 DLL 哨兵验证禁止执行边界。
+隔离编译器的对照运行确实分别写出 `executed` 与 `analyzer-initialized`，而包含同一 DLL
+的 `<Analyzer Include>` 项目被 helper 静态拒绝，两个标记均未出现且夹具仓库字节未变。
+宿主自带的 Roslyn API 不在目标 ref 中时也保持 Unresolved；畸形语法完整失败且不返回图。
+使用重定向到 `/tmp` 的构建产物运行完整 29 项独立进程 NDJSON 测试，全部通过；
+支持包及公共 Host 全链路复验另由整合任务记录。
 
 ## 最终审查修复补充（2026-10-03）
 

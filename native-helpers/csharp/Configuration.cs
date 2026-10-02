@@ -11,9 +11,30 @@ internal sealed record StaticConfiguration(string Id, string[] Files, string Tfm
     string[] InactiveFiles, string AssemblyName, NullableContextOptions Nullable, OutputKind Output,
     string ConfigurationName);
 
+/// <summary>固定目标 TFM、引用包版本、默认语言与 SDK 预处理常量的闭合表。</summary>
+internal sealed record TargetProfile(string Tfm, string ReferencePackVersion, LanguageVersion DefaultLanguage,
+    string[] ImplicitDefines);
+
 /// <summary>从受限声明式文件或普通 SDK 项目静态建立编译配置。</summary>
 internal static class Configuration
 {
+    /// <summary>只接受实际固定并经引用程序集验证的两个目标。</summary>
+    public static TargetProfile Target(string tfm) => tfm switch
+    {
+        "net8.0" => new TargetProfile("net8.0", "8.0.0", LanguageVersion.CSharp12,
+            ["NET", "NETCOREAPP", "NET8_0", "NET8_0_OR_GREATER", "NET7_0_OR_GREATER",
+             "NET6_0_OR_GREATER", "NET5_0_OR_GREATER", "NETCOREAPP3_1_OR_GREATER",
+             "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP2_2_OR_GREATER", "NETCOREAPP2_1_OR_GREATER",
+             "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP1_1_OR_GREATER", "NETCOREAPP1_0_OR_GREATER"]),
+        "net10.0" => new TargetProfile("net10.0", "10.0.0", LanguageVersion.CSharp14,
+            ["NET", "NETCOREAPP", "NET10_0", "NET10_0_OR_GREATER", "NET9_0_OR_GREATER",
+             "NET8_0_OR_GREATER", "NET7_0_OR_GREATER", "NET6_0_OR_GREATER", "NET5_0_OR_GREATER",
+             "NETCOREAPP3_1_OR_GREATER", "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP2_2_OR_GREATER",
+             "NETCOREAPP2_1_OR_GREATER", "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP1_1_OR_GREATER",
+             "NETCOREAPP1_0_OR_GREATER"]),
+        _ => throw new HelperException("unsupported_configuration", $"Unsupported TFM {tfm}")
+    };
+
     /// <summary>发现配置，并确保每个文件的归属由静态规则证明。</summary>
     public static List<StaticConfiguration> Discover(string root, CancellationToken cancellation)
     {
@@ -77,6 +98,7 @@ internal static class Configuration
             var id = config.GetProperty("id").GetString();
             if (string.IsNullOrWhiteSpace(id))
                 throw new HelperException("unsupported_configuration", "Empty source-set id", "narrant.csharp.json");
+            Target(config.GetProperty("tfm").GetString()!);
             var lang = ParseLanguage(config.GetProperty("language_version").GetString()!);
             var defines = config.GetProperty("define_constants").EnumerateArray().Select(v => v.GetString()!).ToArray();
             if (defines.Any(value => string.IsNullOrWhiteSpace(value) ||
@@ -214,6 +236,7 @@ internal static class Configuration
         foreach (var tfm in tfms)
         foreach (var configuration in configurationVariants.Order(StringComparer.Ordinal))
         {
+            var target = Target(tfm);
             var conditionalCandidates = new HashSet<string>(StringComparer.Ordinal);
             var files = defaultItems
                 ? SafeFiles(projectDir, ".cs", excludeHiddenDirectories: true)
@@ -236,18 +259,15 @@ internal static class Configuration
                 }
             }
             foreach (var file in files) CheckFile(root, file);
-            var defines = new List<string> { "NET", "NETCOREAPP" };
+            var defines = target.ImplicitDefines.ToList();
             if (configuration == "Debug") defines.Add("DEBUG");
             defines.Add("TRACE");
-            if (tfm == "net10.0") defines.AddRange(["NET10_0", "NET10_0_OR_GREATER", "NETCOREAPP1_0_OR_GREATER",
-                "NETCOREAPP1_1_OR_GREATER", "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP2_1_OR_GREATER",
-                "NETCOREAPP2_2_OR_GREATER", "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP3_1_OR_GREATER", "NET5_0_OR_GREATER",
-                "NET6_0_OR_GREATER", "NET7_0_OR_GREATER", "NET8_0_OR_GREATER", "NET9_0_OR_GREATER"]);
-            else throw new HelperException("unsupported_configuration", $"Unsupported TFM {tfm}", relative);
             defines.AddRange(properties.GetValueOrDefault("DefineConstants", "").Split(';', StringSplitOptions.RemoveEmptyEntries));
             output.Add(new StaticConfiguration(relative + ":" + tfm + ":" + configuration,
                 files.Order(StringComparer.Ordinal).ToArray(), tfm,
-                ParseLanguage(properties.GetValueOrDefault("LangVersion", "14.0")), defines.ToArray(),
+                properties.TryGetValue("LangVersion", out var language)
+                    ? ParseLanguage(language) : target.DefaultLanguage,
+                defines.Distinct(StringComparer.Ordinal).ToArray(),
                 implicitUsings, [relative],
                 projectReferences.Where(item =>
                     ConditionMatches(item.groupCondition, tfm, configuration, targetPlatform, relative) &&
@@ -279,12 +299,15 @@ internal static class Configuration
         return (match.Groups[1].Value, match.Groups[2].Value, match.Groups[3].Value);
     }
 
-    /// <summary>将版本限制在已经固定验证的 C# 14 语法。</summary>
+    /// <summary>将显式语言版本限制在当前 Roslyn 已验证的 C# 12 与 14。</summary>
     private static LanguageVersion ParseLanguage(string version)
     {
-        if (version is not ("14" or "14.0"))
-            throw new HelperException("unsupported_configuration", $"Unsupported C# language version {version}");
-        return LanguageVersion.CSharp14;
+        return version switch
+        {
+            "12" or "12.0" => LanguageVersion.CSharp12,
+            "14" or "14.0" => LanguageVersion.CSharp14,
+            _ => throw new HelperException("unsupported_configuration", $"Unsupported C# language version {version}")
+        };
     }
 
     /// <summary>校验源码确实位于仓库中且不是越界符号链接。</summary>
