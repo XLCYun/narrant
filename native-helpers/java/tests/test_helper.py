@@ -7,7 +7,10 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from unittest import mock
 
 HELPER = pathlib.Path(__file__).resolve().parents[1]
 REPO = HELPER.parents[1]
@@ -18,6 +21,7 @@ CP = subprocess.check_output([sys.executable, str(HELPER / "tools/classpath.py")
 COMMAND = [str(RUNTIME / "bin" / ("java.exe" if sys.platform == "win32" else "java")),
            "-cp", str(HELPER / "build/classes") + os.pathsep + CP,
            "dev.narrant.java.Main"]
+RUN_TIMEOUT = 40
 
 
 def request(root, files, include_tests=False, target=TARGET, timeout=30000):
@@ -34,7 +38,7 @@ def request(root, files, include_tests=False, target=TARGET, timeout=30000):
 
 
 def run(message, cancel=False):
-    """Run one helper process and return its exact terminal frame."""
+    """在总会话期限内读取终结帧；超时杀死并回收进程，保留 stderr。"""
     payload = json.dumps(message, ensure_ascii=False) + "\n"
     if cancel:
         payload += json.dumps({"protocol": "narrant.native-analyzer/1", "type": "cancel", "id": "fixture"}) + "\n"
@@ -44,13 +48,47 @@ def run(message, cancel=False):
     # 真实 Host 在终结帧前保持输入管道打开；EOF 另设断连回归。
     with subprocess.Popen(COMMAND, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, env=environment) as proc:
-        proc.stdin.write(payload)
-        proc.stdin.flush()
-        rows = [json.loads(proc.stdout.readline()), json.loads(proc.stdout.readline())]
-        proc.stdin.close()
-        if proc.wait(timeout=40):
-            raise AssertionError((proc.returncode, proc.stderr.read(), rows))
-        assert proc.stdout.read() == ""
+        expired = threading.Event()
+        output = []
+        problem = None
+
+        def expire():
+            """统一计时覆盖写入、两次帧读取和退出等待，终止阻塞管道的生产者。"""
+            expired.set()
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+        deadline = threading.Timer(RUN_TIMEOUT, expire)
+        deadline.start()
+        try:
+            proc.stdin.write(payload)
+            proc.stdin.flush()
+            for _ in range(2):
+                output.append(proc.stdout.readline())
+            rows = [json.loads(line) for line in output]
+            proc.stdin.close()
+            proc.wait()
+            extra = proc.stdout.read()
+            output.append(extra)
+            assert extra == ""
+        except BaseException as error:
+            problem = error
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            diagnostics = proc.stderr.read()
+            deadline.cancel()
+            deadline.join()
+        if expired.is_set():
+            raise subprocess.TimeoutExpired(COMMAND, RUN_TIMEOUT, output="".join(output),
+                                            stderr=diagnostics)
+        if problem is not None:
+            raise problem
+        if proc.returncode:
+            raise AssertionError((proc.returncode, diagnostics, output))
     assert len(rows) == 2 and rows[0]["type"] == "ready" and rows[1]["type"] == "completed", rows
     return rows[1]
 
@@ -386,6 +424,56 @@ class Shapes {
             self.assertEqual(node(graphs[0], "/record:R")[field], node(graphs[1], "/record:R")[field])
         self.assertNotEqual(node(graphs[0], "/record-component:value")["signature"],
                             node(graphs[1], "/record-component:value")["signature"])
+
+class DriverDeadlineTests(unittest.TestCase):
+    """用短暂阻塞的假进程验证测试驱动自身的超时与回收。"""
+
+    def test_stalled_ready_and_completed_are_bounded_and_reaped(self):
+        """ready 与 completed 都受会话总期限约束，保留诊断且不遗留子进程。"""
+        for phase in ["ready", "completed"]:
+            with self.subTest(phase=phase):
+                command = [sys.executable, "-u", "-c",
+                           "import json,sys,threading; "
+                           f"sys.stderr.write('stall-{phase}\\n'); sys.stderr.flush(); "
+                           + ("print(json.dumps({'type':'ready'}), flush=True); " if phase == "completed" else "")
+                           + "threading.Event().wait()"]
+                children = []
+                popen = subprocess.Popen
+
+                def spawn(*args, **kwargs):
+                    """保留真实子进程句柄，用于独立断言回收及故障兜底。"""
+                    child = popen(*args, **kwargs)
+                    children.append(child)
+                    return child
+
+                def rescue():
+                    """旧驱动若丢失期限，测试仍在两秒后停止假进程而非挂死 CI。"""
+                    for child in children:
+                        if child.poll() is None:
+                            child.kill()
+
+                guard = threading.Timer(2, rescue)
+                guard.start()
+                started = time.monotonic()
+                try:
+                    with mock.patch.dict(run.__globals__, COMMAND=command, RUN_TIMEOUT=0.5), \
+                         mock.patch.object(subprocess, "Popen", side_effect=spawn):
+                        with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                            run({"test": "deadline"})
+                    self.assertLess(time.monotonic() - started, 1.5)
+                    self.assertIn(f"stall-{phase}", raised.exception.stderr)
+                    self.assertEqual(len(children), 1)
+                    self.assertIsNotNone(children[0].returncode)
+                    self.assertEqual(children[0].wait(timeout=0), children[0].returncode)
+                    self.assertTrue(children[0].stdout.closed)
+                    self.assertTrue(children[0].stderr.closed)
+                finally:
+                    guard.cancel()
+                    guard.join()
+                    rescue()
+                    for child in children:
+                        child.wait(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()
