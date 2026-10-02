@@ -43,10 +43,17 @@ NARRANT_NATIVE_HELPERS_CONFIG=/absolute/native-helpers-config.json \
   --test native_helper_graphs -- --ignored
 ```
 
-一轮完整执行包含配置完整性、Go、Java、C#、Clang C17、Clang C++20 五种模式，以及同一仓库的 mixed 图合并，共七个测试。
+一轮完整执行包含配置完整性、Go、Java、C#、Clang C17、Clang C++20 五种模式、同一仓库的
+mixed 图合并，以及 C# net8/net10 目标隔离与并集，共八个测试。
 `all_required_helpers_configured` 会使缺失任一 helper 配置的完整执行失败；
 单独调试 Go 时可用 `-- --ignored go_real_helper_graph_and_diff` 聚焦运行，
 这种聚焦结果不能当作完整验收。
+
+第八项要求实际 C# 支持包同时提供独立的 net8.0/8.0.0 与 net10.0/10.0.0 引用目录。
+同一源码的 `System.Threading.Lock` 在旧目标为 Unresolved、新目标为 Dependency External，
+普通 `Console.WriteLine` 在两侧均绑定；双目标图保留已确定和未知事实，倒序配置不改变图或
+源码 ID。移除任一必要引用目标必须报错，所有分析都比对仓库路径与字节。
+以下七测试记录属于加入此用例之前的历史快照，不能代替八测试执行结果。
 
 每种 fixture 都有已选调用者、已选跨文件目标和未选的仓内目标。断言从实际
 `CodeGraph` 根遍历节点，再核对 `code.calls` 的 Node 端点、Repository External
@@ -143,5 +150,35 @@ NARRANT_NATIVE_HELPERS_CONFIG=/private/tmp/narrant-native-packs/native-helpers-c
 构建日志为 `/private/tmp/narrant-task7-ea2f28b-build.log` 与
 `/private/tmp/narrant-task7-e1b1586-build.log`。
 
-本次只验证 macOS ARM64 与 SDK27.0。Windows x64 和 CI SDK15.5 尚未实际运行，不能由本机
-结果推断通过。没有重复全库 Rust 测试，没有手动 quality-gate、远端发布、push 或 PR。
+上述本地验收只覆盖 macOS ARM64 与 SDK27.0，没有重复全库 Rust 测试。
+随后经用户授权推送并创建草稿 PR，真实 CI 的 SDK15.5 全流程已通过；Windows x64 仍在验收。
+各平台的独立证据见[跨平台验证记录](native-crossplatform-validation.md)。没有手动 quality-gate 或远端发布。
+
+## 双目标增量的最终本机验收（2026-10-03）
+
+C# 生产源码与打包输入冻结在 `85318b74ecc3f6b6d5f6dd8e6e0113845704b46c`，
+增加 net8.0/8.0.0 精确标准引用。Go、Java、Clang 使用上表所列字节未变的构件。
+C# 新归档为 55,904,043 字节，SHA-256
+`846e79c54c826b22a00ed528306ff27bf2515ce8f77e99fb71338f0beba9bdd7`；
+manifest SHA-256 为 `f8efdf2adbf922081bd10912f161a05d547e0ba2b51722c889684a16585d1022`，
+768 个文件，解包共 196,000,748 字节。
+配置 SHA-256 为 `c6cb5d8ef84bc62876a45272e00c2f6f964065bf41f7570f20ce187711d653da`。
+
+生产四包安装用例在 `85318b7` 上通过，1 passed / 0 failed / 0 ignored，127.85 秒。
+首次八项图运行是 7 passed / 1 failed：新增测试误用全限定名称查找公开描述符，实际描述符名称
+为 `Lock` 和 `WriteLine`。`df628264b2d31119734b8d86bb173ec7be97473e` 仅修正此断言并
+加强关系数量及目标身份断言，同时给两处 C# 测试编译器调用加 30 秒期限；未改生产实现或构件。
+该测试提交的完整八项运行全部通过，0 failed / 0 ignored / 0 filtered，10.39 秒。
+新项还实际检查缺失目标目录报错、配置倒序图稳定及仓库路径和字节不变。
+
+执行命令沿用上面的 `scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml
+--test native_helper_graphs -- --ignored --nocapture --test-threads=1`。
+前后核验四归档、manifest、配置及生产源码摘要一致；仅允许记录中的两处测试文件变化。
+没有因测试修正重复构建支持包或重跑已通过的生产安装用例。
+
+本地原始证据分别位于 `/private/tmp/narrant-task7-85318b7-build.log`、
+`/private/tmp/narrant-task7-85318b7-install.log`、`/private/tmp/narrant-task7-85318b7-graphs.log`
+及 `/private/tmp/narrant-task7-dual-tfm-final-graphs.log`；
+`/private/tmp/narrant-native-packs/final-local-results.json` 记录生产提交、安装测试提交、最终测试提交
+和摘要，历史失败保留在 `final-local-results-85318b7.json`。本轮为 macOS ARM64 / SDK27.0
+本机验收；更新后的双平台 CI 结果须独立取得。

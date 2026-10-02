@@ -60,3 +60,15 @@ stdin 打开，单独的真实入口测试验证提前 EOF 返回 cancelled、�
 读取设置统一截止时间；超时杀死并回收进程，保留 stderr。新增阻塞回归后，本机完整
 Java 套件为 22 项通过，并以 ResourceWarning 为错误检查资源释放；此改动不影响生产构件。
 Windows 原生和 CI SDK 15.5 验收仍不由这次本机源码验证替代。
+
+## 完整性与注解处理器执行边界补验（2026-10-03）
+
+`81c2ba7` 仅补测试，不改变 JDT helper 构件。畸形方法语法必须整体失败且无图；完整声明
+缺少业务依赖则仍可成功并保留 Unresolved。真实合成 `lombok.Getter` 注解及
+`lombok.SentinelProcessor` JAR 包含有效 ServiceLoader 注册；隔离 `javac -proc:only`
+对照确实写出标记，helper 分析同一夹具时不执行处理器、不生成 getter，仓库字节保持不变。
+静态元数据路径允许源码分析，POM 的 annotationProcessorPaths 则直接拒绝且无图。
+这是 Lombok 风格处理器入口的执行边界验证，不代表实际 Lombok 分发包兼容。
+
+完整 Java 独立进程套件 25 项通过；三个准备/对照子进程设为 30 秒期限后，两项受影响
+哨兵测试再次通过。定点审查通过。双平台实际执行结果见[跨平台验证记录](native-crossplatform-validation.md)。

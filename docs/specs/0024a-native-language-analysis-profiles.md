@@ -56,7 +56,7 @@ Host 传入经校验的目标平台目录 catalog；helper 只能从中匹配 pr
 | --- | --- | --- |
 | `java-jdk` | 精确目标 JDK 根，包含 `release` 与 `lib/jrt-fs.jar`；version 为实际完整版本 | `{release: string}`；release 必须与目标 JDK feature version 相符 |
 | `go-sdk` | 固定 Go 标准库源码根，包含 `src` 与 `VERSION`；首轮 1.23.8 | `{goos: string, goarch: string, goamd64?: string}` |
-| `dotnet-reference-assemblies` | 精确 `ref/<tfm>` 目录；首轮 10.0.0 | `{tfm: string, reference_pack: string, reference_pack_version: string}` |
+| `dotnet-reference-assemblies` | 精确 `ref/<tfm>` 目录；固定 net8.0/8.0.0 与 net10.0/10.0.0 | `{tfm: string, reference_pack: string, reference_pack_version: string}` |
 | `clang-target` | 精确系统 SDK 根；version 为该 SDK 实际版本 | `{target_triple: string, c_standard: string, cpp_standard: string, system_include_directories: string[], resource_platform_id: string, additional_system_platform_ids?: string[]}` |
 | `clang-resource` | 固定 LLVM 的 `lib/clang/<major>` 目录；首轮 21.1.8 | `{}` |
 | `clang-system-headers` | 与系统 SDK 分开放置的精确标准库头文件根，例如 Windows MSVC 的 `include`；version 为其实际工具版本 | `{}` |
@@ -137,7 +137,10 @@ SDK profile 定义；缺这些规则时该 profile 尚不可用。内存生成�
 有限条件解释从已列举的 Configuration/Platform/TFM 等值匹配开始；不能执行属性函数，
 也不盲目对全部变量做笛卡尔积。所有明确且受支持的分支分别分析，再合并。
 
-沿用研究中的 C# 14 / net10.0 作为一个原型候选，Roslyn 与 runtime 的精确版本需锁定后实测。
+实际实现固定 .NET 10 runtime 与 Roslyn，并分别匹配 net8.0/8.0.0 和 net10.0/10.0.0 的
+官方 reference assemblies。SDK 项目分别默认 C# 12 与 C# 14；显式 source-set 保留其
+声明的语言版本及预处理常量，不额外注入 SDK 常量。两个目标用于实际验证旧目标 API
+隔离与配置并集，版本、打包和跨平台执行结果见验收记录。
 这不承诺 C# 7.3–14、.NET Framework、Unity、Razor、脚本或所有 TFM 同时可用。
 已提交 `.g.cs`/`.Designer.cs` 按普通源码规则处理；不开 generator/analyzer、restore 或 test discovery。
 
