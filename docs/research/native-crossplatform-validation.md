@@ -1,7 +1,7 @@
 # 原生 helper 的双平台验收入口
 
 状态：`802fadf` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
-[PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包阻塞，继续验证 SDK 与构建。
+[PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包及 CRT 目录识别，继续验证 Clang 构建。
 Windows 打包脚本的首跑失败已修复，
 尚不能把该步骤通过等同于 Windows helper、安装和图验收全部通过。
 后续 `85318b7` 增加 C# 两目标支持、负例和第八项真实图测试；本机安装及八项图验收已通过，
@@ -113,6 +113,20 @@ CRT；该标识与 Tools 版本独立。[Microsoft Xbox GDK 示例](https://gith
 配置 `14.44.35211`，同时记录完整四段版本。元数据缺失、越界、必需 DLL 缺失或版本不符均失败，
 诊断中的目录列表仅用于定位，不用于选择最新版本。本机专项 11 项通过；Windows 版本资源
 读取测试为 CI 必跑项，不能用 macOS 的该项跳过代替实际私有 CRT 验证。
+后续 `4fa0f0d` 的真实 Windows 任务已确认元数据为 `14.44.35112`，对应 CRT 目录中的十个
+DLL 均为 `14.44.35211.0`，目录与版本校验全部通过。LLVM 解包同轮耗时 34.4 秒。
+Go、Java、C# 包构建和 ready 烟测已通过；Clang 编译后链接失败，LLVM 导出依赖指向其构建
+机器上的 `VS2019/Professional/DIA SDK/lib/amd64/diaguids.lib`，本 runner 使用 VS2022。
+目前定点修正该开发库依赖映射；尚未执行后续 Windows 语言套件、Host、安装和公共图测试。
+见[真实 Windows 任务](https://github.com/XLCYun/narrant/actions/runs/37069139995/job/111044162856)，
+完整日志为 `/private/tmp/narrant-ci-native-windows-37069139995.log`。
+`bf8f9d1` 的修复只调整本次 CMake 配置中 `LLVMDebugInfoPDB` 的固定旧 DIA 依赖项，替换为
+已指定的 `CMAKE_GENERATOR_INSTANCE` 下对应库；要求库存在且旧项恰好出现一次，保留其他依赖
+及顺序，不改写 SDK 文件。真实 CMake 导入目标回归先复现失败，修复后替换、缺库、意外导出
+三个用例通过；既有 unittest discover 会在两平台运行它们。实际 Windows 链接仍需后续 CI。
+同轮 macOS 原生任务完整通过，生产安装 1 项（86.88秒）、公共图 8 项（13.79秒）均零跳过；
+Java25、C#29、Clang22通过加1项Windows专用跳过、Host16/factory2维持成功。
+Python Windows 的 Rust 20/3/4 项也全部通过（19.24/2.90/4.93秒），零失败、零跳过。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
