@@ -31,7 +31,8 @@
 ```
 
 上面的空 `platforms` 仅展示清单结构，不能通过完整验收。真实清单需为 Java 提供
-`java-jdk` 和 release 17，为 C# 提供 `dotnet-reference-assemblies` 和 net10.0，
+`java-jdk` 和 release 17，为 C# 同时提供两条独立的 `dotnet-reference-assemblies` 目标，
+分别为 net8.0/8.0.0 和 net10.0/10.0.0，
 为 Clang 提供 `clang-target` 与对应的 `clang-resource`；Go 目标须与运行宿主或
 fixture 约束匹配。字段须满足 Host 与各 helper 的严格验证。
 

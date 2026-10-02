@@ -15,7 +15,7 @@ Rust、TS/JS、Python 保留既有分析实现。
 | --- | --- | --- |
 | `go` | 固定 Go1.23.8 构建的原生 helper | 包内 Go1.23.8 完整 src、VERSION，运行阶段不启动 go 命令 |
 | `java` | 私有 JDK25 + 固定 JDT 依赖闭包 | 独立 JDK17 的 release、jrt-fs.jar、modules；已证明不能以较新 runtime 的标准库替代目标 |
-| `csharp` | 私有 .NET10 host/runtime + Roslyn | 独立 Microsoft.NETCore.App.Ref10.0.0/net10.0 reference assemblies |
+| `csharp` | 私有 .NET10 host/runtime + Roslyn | 两套独立标准引用目录：Microsoft.NETCore.App.Ref8.0.0/net8.0 与10.0.0/net10.0 |
 | `c-cpp` | 原生 LibTooling21.1.8 helper 与私有库 | 独立 Clang resource headers + 精确匹配的系统 SDK；Windows MSVC include 是另一个窄信任根 |
 
 所有新包开发版本为0.1.0，目录中 `published:false` 防止生产入口请求不存在的远端构件，

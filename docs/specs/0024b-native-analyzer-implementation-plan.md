@@ -33,6 +33,9 @@ Unicode 用例暴露测试驱动使用默认 cp1252 解码，当前改为协议�
 `360cd26` 已通过 Windows 全部四种语言原生套件，Clang25通过、1平台跳过；Rust Host首次执行
 6通过、9失败，Node夹具在初始化随机数时崩溃。修复让测试调用方显式提供生产入口已有的
 Windows SystemRoot，保持 Host 清洁环境；本机 Host17项通过。Windows factory、安装和公共图尚未执行。
+`d498548` 已确认 Windows Node 启动恢复，Host16项中15通过，剩一项后代进程测试的预期错误
+未出现。已修正夹具，使 Windows 后代绕过 Node 自身的随父退出清理并仍由 Rust Job 管理；
+本机 Host17项通过，等待 Windows 复验及后续验收。同轮 macOS Host17、安装1、公共图8全流程通过。
 尚无 Windows 四语言完整验收结论。
 完成证据审计另外发现原矩阵中的负例未齐：Java 畸形源码与处理器哨兵已补充并通过 25 项测试；
 C# 已补齐畸形源码、analyzer/generator 哨兵，并增加明确 net8.0 目标与 net10.0 的 API 隔离和并集对照，

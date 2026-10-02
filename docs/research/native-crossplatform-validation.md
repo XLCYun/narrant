@@ -1,8 +1,8 @@
 # 原生 helper 的双平台验收入口
 
-状态：`360cd26` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过
-四包构建、启动及四种语言的原生测试，Rust Host 测试中的 Node 夹具启动失败，后续生产安装
-和公共图尚未执行；正在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中修复验证。
+状态：`d498548` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过
+四包构建、启动及四种语言的原生测试，Rust Host 的 Node 启动问题已消除，剩一项后代进程
+测试失败，后续生产安装和公共图尚未执行；正在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中修复验证。
 本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
 
 ## 已取得的 CI 结果
@@ -154,6 +154,19 @@ Python Windows 的20/3/4项也通过（22.53/4.29/7.33秒），零失败、零�
 完整日志为 `/private/tmp/narrant-ci-native-windows-37073573624.log`。
 同轮 macOS 原生全流程成功，Host16、factory2、生产安装1（90.57秒）、公共图8（15.55秒）
 均零跳过；既有 Python 双平台也成功，Windows 的20/3/4项零失败、零跳过。
+`d498548` 的[Windows 任务 111066344312](https://github.com/XLCYun/narrant/actions/runs/37076131635/job/111066344312)
+再次通过全部四语言原生套件：Go（2.442秒）、Java25（56.780秒）、C#29（21.568秒）、
+Clang25通过及1项macOS平台跳过（10.053秒）。Node CSPRNG 启动故障已消除，新增最小环境
+回归通过；Host16项中15通过、1失败（3.60秒）：`subprocess_reaps_descendants_after_parent_exit`
+预期错误却得到成功。Node/libuv 在 Windows 上默认将普通子进程纳入随父退出清理的内部 Job，
+使夹具不能可靠制造遗留后代。修复仅在 Windows 设置 detached 来绕过 Node 的内部 Job，
+不请求从 Rust 的外层 Job breakaway；后代自行写入就绪 PID 后父进程才退出，保留两种管道模式
+的退出结果和立即回收断言。本机 Host17项通过，Windows 仍需实际复验。
+机制依据：[Node24/libuv 子进程实现](https://github.com/nodejs/node/blob/v24.18.0/deps/uv/src/win/process.c#L1052-L1102)。
+该轮未运行 factory、安装和公共图。
+完整日志为 `/private/tmp/narrant-ci-native-windows-37076131635.log`。
+同轮 macOS 全流程通过：Host17（3.82秒）、factory2、安装1（88.61秒）、公共图8（13.86秒）
+均零跳过；Python Windows 的20/3/4项也通过（21.67/5.28/9.76秒）。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
