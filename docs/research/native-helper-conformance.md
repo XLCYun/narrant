@@ -86,26 +86,36 @@ Clang C++20 均经过 `NativeLanguageAnalyzer → CodeGraph → CodeGraph::diff`
 
 ## 2026-10-03 最终修复快照的本机验收
 
-以下结果覆盖审查修复后重新编译的构件，替代前述中间包的验收状态。Go、Java、Clang
-在构建 HEAD `bd62783c8f6b8382b4e25e86e8bfd684f697b760` 刷新；C# 在 round2 提交
-`879c7bc13f5beabcb9df104a1d8707db6c9916cd` 后单独刷新。各包实际经过编译、归档摘要生成、
-解压和 helper ready 身份检查，没有复用旧 helper 二进制。
+历史快照 `5e743c85377614f2adc894d633374b143d5f77b5` 曾完成生产安装
+1 passed（122.34秒）和完整七测试 7 passed（8.83秒）。其 Go/Java/Clang/C# 构件源码分别为
+`228f340`、`beeb5f1`、`fcbf1de`、`879c7bc`，这些结果仅证明当时的快照。
+随后 `ea2f28b` 刷新 Go、Java、C#，在仅增加语言证据文档的 HEAD `feb0c38` 上通过一次
+四包安装（1 passed，120.90秒）；该轮尚未运行七测试，就发现 Go 排除测试文件的残留问题。
+两轮原始结果、构件摘要与源码摘要分别保留为 `/private/tmp/narrant-native-packs/` 下
+`final-local-{results,artifacts,source-snapshot}-5e743c8.json` 和同名 `-ea2f28b.json`。
+
+最终生产源码及实际测试 HEAD 均为 `e1b1586b15fa31d9139177dfa06837b63def45ed`，
+包含 `ea2f28b73a5eea03e8f00519d439930bb1e5fae1` 的 Host/进程修复，以及 Go 排除
+`_test.go` 的更正。最终只重新编译 Go；Java 和 C# 保留刚从 `ea2f28b` 构建的产物，
+Clang 保留源于 `fcbf1de`、在 HEAD `bd62783c8f6b8382b4e25e86e8bfd684f697b760`
+构建的已验证产物。新包经过实际归档、摘要生成、解压和 ready 身份检查；保留包的
+归档和 manifest SHA-256 均与上一轮一致。Go 解压后可执行文件 SHA-256 为
+`7c55e89ad0e3c89e55ca4fd15c571f9effd3da8f228ea677e08a808e11f6639d`。
 
 | 包 | helper 源码提交 | 归档字节数 | 实际归档 SHA-256 |
 | --- | --- | ---: | --- |
-| go | `228f340245bd63fec5ab20532916349617c0ff33` | 29,883,057 | `2be97f7142299ac67b8e9b062371e421cc405834334407530a8410f2cbc2b5e7` |
-| java | `beeb5f15e6c6d56bac78a1f56ee84d67495dd8cb` | 197,564,998 | `0219a26b3f7c49338ff35d808bb7af39e6b0e14e48cdf84dc0e1c58cca9374df` |
+| go | `e1b1586b15fa31d9139177dfa06837b63def45ed` | 29,887,107 | `1c3bafd740b337e5ccec75dd586d5260fd3183d410a3720dd5525f1be3761822` |
+| java | `ea2f28b73a5eea03e8f00519d439930bb1e5fae1` | 197,567,728 | `b9874524cef38a8886760fdbe0b27a416017e6168e458bbcc6e1b55fb80537a6` |
 | c-cpp | `fcbf1de9fdd282ceaddd7cb1d34747b3b34a0cbb` | 51,814,086 | `24e5882a6637af11d386e69962aa55f6f378adc19f1ff7a8541a8382ca7631d0` |
-| csharp | `879c7bc13f5beabcb9df104a1d8707db6c9916cd` | 51,218,547 | `ea8336deff66d539b2e95fe22b6397fe8c5450575b1d2941553ccec8b2a55ac6` |
+| csharp | `ea2f28b73a5eea03e8f00519d439930bb1e5fae1` | 51,218,557 | `ceee25ba5654a0b47699ee3b6aa9b72c4909cf283407cf483d616743031f6d57` |
 
 完整源码文件摘要保存在 `/private/tmp/narrant-native-packs/final-local-source-snapshot.json`，
-归档及 manifest 摘要保存在同目录 `final-local-artifacts.json`，最终结果汇总为
-`final-local-results.json`。测试前后核对四个归档及配置没有改变。
-运行配置 `/private/tmp/narrant-native-packs/native-helpers-config.json` 的 SHA-256 是
-`13e3217689cf849967954cf40e1acbe822d7b52b8b11ca498e1fc10508ad9b3a`。
-
-最终测试快照为 `5e743c85377614f2adc894d633374b143d5f77b5`，其中
-`src-tauri/tests/native_helper_graphs.rs` 的 SHA-256 是
+归档与 manifest 摘要保存在 `final-local-artifacts.json`，最终结果为 `final-local-results.json`。
+测试前后核对四个归档、manifest、运行配置及生产源码均未改变。并行修改仅涉及 Java
+Python 测试驱动的超时处理，不参与本轮包构建或 Rust 图验收；其前后摘要单独记录在结果 JSON。
+配置路径仍为 `/private/tmp/narrant-native-packs/native-helpers-config.json`，配置描述的路径和平台
+未变，SHA-256 为 `13e3217689cf849967954cf40e1acbe822d7b52b8b11ca498e1fc10508ad9b3a`。
+图测试文件 `src-tauri/tests/native_helper_graphs.rs` 的 SHA-256 为
 `129ca8693fb52b2c73c7e6dc31b8d89c3cecb66418670760f0ca3fe4b2263f5c`。
 
 ```sh
@@ -120,16 +130,18 @@ NARRANT_NATIVE_HELPERS_CONFIG=/private/tmp/narrant-native-packs/native-helpers-c
   --test native_helper_graphs -- --ignored --nocapture --test-threads=1
 ```
 
-生产安装测试：**1 passed、0 failed、0 ignored，122.34秒**。同一测试要求四个真实归档全部存在，
+生产安装测试：**1 passed、0 failed、0 ignored，127.63秒**。同一测试要求四个真实归档全部存在，
 逐包执行生产下载校验、安装、工厂非空图、租约删除保护和生产 origin 重启复用。
-日志为 `/private/tmp/narrant-task7-final-install.log`。
+日志为 `/private/tmp/narrant-task7-e1b1586-install.log`。
 
-完整增强套件：**7 passed、0 failed、0 ignored、0 filtered，8.83秒**，没有缺工具跳过。
-配置完整性、Go、Java、C#、C17、C++20 与新增 mixed 场景全部通过。
+完整增强套件：**7 passed、0 failed、0 ignored、0 filtered，8.96秒**，没有缺工具跳过。
+配置完整性、Go、Java、C#、C17、C++20 与 mixed 场景全部通过。
 五种单语言模式均运行 before/changed/formatted/relocated/relations/structure 六个独立快照，
 包括具名 Unresolved、关系增删与包含增删。mixed 场景让同一仓库根中的 Go、Java、C#、C++
 分别经真实 helper/Host 构图，再用生产 `CodeGraph::merge` 合为一张图；验证 before/changed/relocated
-的跨语言合并、身份和 diff。日志为 `/private/tmp/narrant-task7-final-graphs.log`。
+的跨语言合并、身份和 diff。日志为 `/private/tmp/narrant-task7-e1b1586-graphs.log`。
+构建日志为 `/private/tmp/narrant-task7-ea2f28b-build.log` 与
+`/private/tmp/narrant-task7-e1b1586-build.log`。
 
 本次只验证 macOS ARM64 与 SDK27.0。Windows x64 和 CI SDK15.5 尚未实际运行，不能由本机
 结果推断通过。没有重复全库 Rust 测试，没有手动 quality-gate、远端发布、push 或 PR。
