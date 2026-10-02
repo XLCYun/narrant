@@ -1,0 +1,140 @@
+# 原生语言分析器实施计划
+
+状态：进行中。目标是完成 Java、Go、C#、C/C++ 原生 helper 的实现验证与应用接入，
+不是仅完成公共适配器或探针。依据 [0024](0024-native-analyzer-helper-protocol.md)、
+[0024a](0024a-native-language-analysis-profiles.md) 与 ADR-0034。
+
+## Global Constraints
+
+- 新语言使用原生 helper 完成语法、语义、源码身份、内容投影及单图并集；Rust 不再做语言 AST 映射。
+- 现有 Rust、TypeScript/JavaScript、Python 实现不迁移；共享改动须回归验证。
+- 只分析固定侧仓库源码与明确目标标准库；不加载项目第三方缓存，不下载项目依赖，不运行项目构建逻辑。
+- 开发工具和 helper 的构建依赖可以下载到隔离工具目录；不修改用户全局工具链，不与项目依赖混淆。
+- 对象完整且关系未知可成功；对象不完整、不能正确归并或未知必要配置须失败，不返回部分图。
+- 原位读仓库，不复制源码/配置，不写后回滚；工作区释放前所有分析线程和子孙进程必须退出。
+- 所有新增方法、类、结构等有易读中文注释；Rust 测试在模块 tests/ 下单独文件。
+- Cargo 统一使用 scripts/cargo-agent.sh；开发中聚焦测试，一次最终全量测试，不手动触发 quality-gate。
+- 本轮不发布远端支持包、不合并主分支；真实发布需独立授权。可构建和验证本地发布产物。
+
+## 实施约定
+
+工作分为公共协议、四种语言实现、应用/支持包接入、整体验收。独立目录可并行实现，
+共享文件由协调者串行整合；所有 Git 暂存和提交由协调者串行执行，避免共享索引冲突。
+每个任务提交后做范围内规格与代码质量审查，再做全分支审查。
+
+协议使用 0024 定义的 NDJSON。开发默认值暂定：启动 15 秒、分析 120 秒、取消宽限 2 秒、
+退出 5 秒、结果上限 128 MiB、诊断上限 256 KiB；均由 Rust 配置持有，测试可缩短，
+不能靠收到日志无限延长。这些为可调整工程参数，不是发布性能承诺。
+
+helper_id / language / profile / projection_revision 首轮固定如下：
+
+| 实现 | helper_id | languages | profiles | projection_revision |
+| --- | --- | --- | --- | --- |
+| Go | narrant-go | go | go-static-v1 | go-source-v1 |
+| Java | narrant-java | java | java-static-v1 | java-source-v1 |
+| C# | narrant-csharp | csharp | csharp-static-v1 | csharp-source-v1 |
+| C/C++ | narrant-clang | c, cpp | clang-static-v1 | clang-source-v1 |
+
+helper_version 暂定 0.1.0，与首次开发产物一致；正式 pack 版本/目标矩阵由接入与验收冻结。
+平台 catalog 的 metadata 每种语言使用显式字段，先在实现中定义并更新 0024a；
+不得使用任意 shell 命令、编译器 flag 或项目插件接口代替元数据。
+
+### Task 1: Rust 公共 helper 协议、进程与构图适配
+
+实现 `src-tauri/src/structure_review/native_analyzer/`，并在 structure_review/mod.rs 注册。
+遵循 0024 的 ready/analyze/cancel/completed、严格消息校验、输入/来源交叉校验和构图规则。
+提供可被四门语言及应用接入复用的 `NativeLanguageAnalyzer`、可执行命令描述、Platform 描述、
+HelperIdentity/AnalysisLimits 与取消入口；返回既有 CodeGraph/AnalysisError。
+命令来自固定受信工具路径，不能由分析项目提供；env_clear 后仅传显式 runtime 所需环境。
+既有 Windows Job/process-group 的实现可抽成公共所有权工具，保持旧 LSP 行为与测试不变。
+对 stdout/stderr 有界读取、超时、错误优先、提前 EOF、非零退出、取消、遗留后代、panic/Drop
+实现确定清理；不得在成功后等双方 EOF 死锁，不得只杀父进程。
+图协议代码和进程代码分模块，避免单文件巨型实现。
+测试用独立假 helper 真实子进程覆盖 P1/P2/P3、G1、S1/S3，不能只 mock 解码。
+聚焦 Rust 测试经 cargo-agent；最终全量测试交给 Task 7。
+所有权：native_analyzer/、structure_review/mod.rs 及必要最小共享进程提取。
+不要修改 application、language_support、前端或 Cargo 依赖，必要新增依赖先向协调者说明。
+
+### Task 2: Go 原生 helper 与受限静态项目加载
+
+实现 `native-helpers/go/`，独立 Go module、构建说明、测试及 fixtures。
+使用 go/parser、go/ast、go/types 和只读源码 importer；不依赖默认 go list/go/packages driver。
+在已有探针基础上实现真实 go.mod/go.work 的有限静态模型：仓内 modules/use/replace、
+明确目标 SDK、平台文件/build tags 选择、仓内包映射、依赖拒绝和标准库加载。
+不能把探针手工包映射或两平台写死当生产发现；未知必要配置显式失败。
+自动发现明确平台文件/静态目标集合并分析，任意自定义 tag 无证据时报告不支持范围。
+实现六类高层对象、跨文件类型/调用关系、稳定 ID、own-content、tests 范围、并集和原子错误。
+覆盖函数/方法/类型/字段/全局值、init 顺序、多名初始化、泛型、匿名表达式归 owner；
+不因函数体错误就静默丢引用；interface 调用保留已确认静态接口目标与未知动态实现的区别。
+真实协议入口和取消读取线程；输出与公共 v1 一致，正常终结后自行退出。
+验证至少：真实 module/workspace、两配置关系并集、目标标准库、缺第三方、只读路径/字节、
+同名不同声明、重复/非法输入、source/child/body-only diff 所需投影，以及取消退出。
+可用固定 Go 1.23.x 作为首个本机验证版本，明确记录兼容边界；不能声称未测版本支持。
+所有权：native-helpers/go/，语言实现验收记录 `docs/research/go-native-implementation.md`。
+不修改共享协议、Cargo、应用和 pack 清单；接口冲突及时回报。
+
+### Task 3: Java 原生 helper 与目标隔离验证
+
+实现 `native-helpers/java/`，固定 JDT Core 构建依赖、可重复构建、fixtures 与测试。
+先获取隔离开发 JDK/JDT（可下载官方发布工具到 .tools 或 /tmp，不做全局安装），执行目标
+API 隔离与 recovered binding 探针，选择单一生产后端；如 JDT 无法满足允许范围，记录证据后
+改选 javac，不做运行时双后端自动回退。
+实现 java-static-v1：明确 source roots/release 与可证明的有限 POM 模型；不执行 Maven/Gradle。
+对于 Gradle/未知必要动态配置，返回明确不支持；允许本侧已有、schema 固定的静态分析元数据，
+但不能要求所有普通支持项目都先运行导出器。目标平台匹配，运行 JDK 不作为目标 API 默认值。
+实现类型、方法/构造器、字段/枚举/record组件、初始化块、局部/匿名类型、package/import
+映射与规范内容，隐式生成成员不伪造成源码节点；绑定有证据才 Node/External，recovered 为未知。
+实现 v1 协议、取消、配置并集、源码来源 evidence，与 Go/Rust 共用相同消息语义。
+验证基础项目、跨文件重载、旧目标API反例、缺第三方、body/child/格式变化、include_tests、
+无处理器执行、只读、超时及取消。JPMS 等无法可靠支持时显式拒绝，保留待扩展矩阵。
+所有权：native-helpers/java/、docs/research/java-native-implementation.md。
+不修改共享文件，不提交；构建依赖安装与项目依赖解析严格分开。
+
+### Task 4: C# Roslyn helper 与静态项目模型
+
+实现 `native-helpers/csharp/`，固定 Roslyn 与 .NET SDK/runtime 版本、可重复构建、测试。
+使用隔离工具目录，官方 SDK 可下载用于开发；不全局安装、不运行被分析项目构建。
+直接 CSharpCompilation 与目标 reference assemblies；不使用 MSBuildWorkspace。
+csharp-static-v1 支持明确 source-set 与有限普通 SDK-style csproj（字面 TFMs、Compile、
+ProjectReference、已验证等值条件）；默认 glob/隐式常量/usings 必须按固定规则重现，
+未知 imports/targets/属性函数等影响范围则失败。仓内项目引用可作上下文，排除 NuGet业务缓存。
+实现 0024a 对象、partial片段/成员身份、签名/own-content、accessor/record/顶层语句、
+调用/继承/实现/方法组关系，匿名表达式保持原文归 owner；不能挑 partial 第一个充当全部。
+v1 协议完整，多个明确配置各自分析后合并，无配置UI；无法表达冲突则完整失败。
+验证目标TFM隔离、跨文件/partial/重载、条件源码并集、缺依赖、无生成器执行、只读、
+格式/child/body-only内容与取消。未支持 Razor/Unity等须清楚拒绝，不声称广泛兼容。
+所有权：native-helpers/csharp/、docs/research/csharp-native-implementation.md。
+
+### Task 5: C/C++ LibTooling helper 与编译上下文
+
+实现 `native-helpers/clang/`，固定 LLVM/Clang 构建、CMake或明确构建脚本、fixtures与测试。
+采用真实 LibTooling API，不以 AST JSON dump 作为生产协议；开发可准备隔离官方LLVM工具。
+clang-static-v1 读取本侧 compilation database 的明确参数，保留不同TU配置；仅解释受控数据，
+不运行 command/wrapper/query-driver/CMake。校验response files、include/sysroot和参数来源，
+拒绝插件/模块自动构建等执行/写入入口。目标headers来自catalog，业务外部headers不载入。
+分别支持C/C++模式，初始C17/C++20验收。源码范围/宏/USR只作为证据，生产身份基于稳定源声明；
+原始源码投影避免推导类型伪冲突，冲突类别/父级按Q5失败。prototype/definition、模板声明与
+实例、匿名实体、包含和多header上下文需要明确映射，不按同名或链接名覆盖。
+真实v1协议与取消/限额。验证已有5种并集fixture、跨TU/header、重载、缺header完整性、
+动态调用未知、C/C++差异、参数拒绝、只读与退出。不能只通过探针便宣布实现完成。
+所有权：native-helpers/clang/、docs/research/clang-native-implementation.md。
+
+### Task 6: 应用分派、支持包和构建接入
+
+在Task1及各helper接口确定后接入四种新语言分组、支持包识别、目标环境发现和标准错误路径。
+扩展pack model/catalog/build脚本与固定manifest验证；现有语言包保持行为，缺新包不能被当成
+unsupported-language静默忽略。支持包包含helper执行runtime，项目目标SDK按验证范围发现。
+构建/烟测可用本地产物完成；不能伪造远端已存在版本、摘要或发布成功。
+UI只增加语言/包名称和必要错误信息，不增加配置切换；如改交互布局须真实浏览器验收。
+覆盖相应Rust、Node和前端测试；分派完整图、缺工具失败、两侧取消及旧语言回归。
+所有权：application、language_support、tauri装配、resources、scripts、package/i18n相关接入。
+
+### Task 7: 贯通验收与全分支审查
+
+将真实四helper通过Rust适配器运行合成多文件/多语言前后侧比较，验证完整CodeGraph与diff，
+不是仅逐后端CLI输出；固定源工作区、同语义两目录ID、内容/关系/结构差异、未解析关系、
+目标隔离、取消、进程树、只读、支持包入口均有证据。
+按已承诺macOS ARM64和Windows x64分别验证；本机不能覆盖的目标记录未完成，不伪称通过。
+聚焦检查通过后执行一次Rust全量测试、所需Node/前端类型/构建检查；不手动quality-gate。
+独立全分支审查并修复重要问题。更新实现规格、验收记录及GitHub实施Issue状态。
+完成审核时逐项检查本计划所有任务与0024验收，不以部分语言/协议或文档完成替代最终目标。

@@ -14,6 +14,12 @@ Python Structure Changes support is specified in
 [0023 — Python Code Graph](0023-python-language-analyzer.md) (accepted; Python 3.7–3.14,
 with dedicated compatibility acceptance for 3.7–3.9).
 
+Native helpers for Java, Go, C#, and C/C++ are specified in
+[0024 — Common helper protocol](0024-native-analyzer-helper-protocol.md) and
+[0024a — Language profiles and acceptance](0024a-native-language-analysis-profiles.md)
+(engineering drafts; common architecture and union semantics accepted, implementation
+and compatibility validation pending).
+
 ## Conventions
 
 - Name files `NNNN-short-feature-name.md`, using a zero-padded sequence number.
