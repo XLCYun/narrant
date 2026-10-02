@@ -113,7 +113,7 @@ func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (
 		}
 		var contextFiles []string
 		for _, entry := range entries {
-			if !strings.HasSuffix(entry.Name(), ".go") {
+			if !strings.HasSuffix(entry.Name(), ".go") || (!includeTests && strings.HasSuffix(entry.Name(), "_test.go")) {
 				continue
 			}
 			filename := filepath.Join(dir, entry.Name())

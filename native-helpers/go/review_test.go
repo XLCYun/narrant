@@ -67,6 +67,33 @@ func TestImportedContextFailures(t *testing.T) {
 	}
 }
 
+// TestImportedExcludedTests 验证依赖测试未参与时忽略其配置，但已启用的必要测试仍严格校验。
+func TestImportedExcludedTests(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "a.go", "package app\nimport \"example.test/app/lib\"\nfunc Run(){lib.Call()}\n")
+	writeFixture(t, root, "lib/a.go", "package lib\nfunc Call(){}\n")
+	writeFixture(t, root, "lib/optional_test.go", "//go:build integration\n\npackage lib\nfunc Optional(){}\n")
+	req := fixtureRequest(t, root, "a.go")
+	for _, includeTests := range []bool{false, true} {
+		req.Input.IncludeTests = includeTests
+		result := analyze(context.Background(), req)
+		if result.Outcome != "ok" {
+			t.Fatalf("unused dependency test rejected production: %+v", result.Error)
+		}
+		run := findNode(result.Graph, "go:a.go#func:Run")
+		if run == nil || len(run.References) != 1 || run.References[0].Semantic != "code.calls" ||
+			run.References[0].Target.Kind != "external" || run.References[0].Target.Symbol != "go:lib/a.go#func:Call" {
+			t.Fatalf("confirmed repository call lost: %+v", run)
+		}
+	}
+	req.Input.Files = []string{"lib/a.go"}
+	result := analyze(context.Background(), req)
+	if result.Graph != nil || result.Error == nil || result.Error.Code != "unsupported_configuration" {
+		t.Fatalf("required enabled test configuration ignored: %+v", result)
+	}
+}
+
 // TestImportedTargetDiscovery 验证传递仓内导入的目标条件决定配置并集与缺失目标报错。
 func TestImportedTargetDiscovery(t *testing.T) {
 	root := t.TempDir()
