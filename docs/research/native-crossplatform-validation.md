@@ -2,7 +2,7 @@
 
 状态：`802fadf` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程；Windows x64 在草稿
 [PR #200](https://github.com/XLCYun/narrant/pull/200) 中已解决 LLVM 解包、CRT 目录及 Clang 链接，
-四包构建和启动成功，继续验证原生测试与公共图。
+四包构建和启动、Go/Java/C# 套件成功，继续验证 Clang 测试与公共图。
 Windows 打包脚本的首跑失败已修复，
 尚不能把该步骤通过等同于 Windows helper、安装和图验收全部通过。
 后续 `85318b7` 增加 C# 两目标支持、负例和第八项真实图测试；本机安装及八项图验收已通过，
@@ -137,6 +137,14 @@ Host、安装及公共图测试尚未执行。完整日志为 `/private/tmp/narr
 同轮 macOS 全流程通过，Clang 加上 CMake 回归后共 25 项通过、1 项 Windows SDK 专用跳过；
 Java25、C#29、Host16/factory2、安装1（86.82秒）、图8（14.02秒）通过。Python Windows 20/3/4
 也通过（21.26/4.03/6.40秒），零失败、零跳过。
+`2e56a6e` 的[Windows 任务 111053944871](https://github.com/XLCYun/narrant/actions/runs/37072185184/job/111053944871)
+确认 Go 套件（2.498秒）、Java25（56.172秒）、C#29（20.774秒）全部通过。
+Clang26 项中 24 通过、1 项跳过、1 项错误：Unicode 路径测试的 Python stdout 管道默认使用
+Windows cp1252，无法解码 helper 的 UTF-8 输出。修复只将该测试驱动的三条管道显式设为严格
+UTF-8，不改变 helper 生产协议。Rust Host、factory、安装和八项图尚未执行；完整日志为
+`/private/tmp/narrant-ci-native-windows-37072185184.log`。
+同轮 macOS 原生任务完整通过（Clang25通过+1跳过、安装1/89.70秒、图8/16.19秒）；既有
+Python Windows 的20/3/4项也通过（22.53/4.29/7.33秒），零失败、零跳过。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、

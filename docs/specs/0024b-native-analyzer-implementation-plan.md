@@ -28,7 +28,9 @@ CI macOS SDK15.5 的完整验收已通过；Windows x64 已修复首跑打包脚
 后续因 VC runtime 分发目录映射错误失败。`4fa0f0d` 已验证目录元数据和全部十个 DLL 版本，
 Go/Java/C# 包构建与烟测通过，Clang 链接暴露 LLVM 导出的旧 DIA 绝对路径。
 `0e6f8e8` 已修正该路径，Windows 四包构建与烟测均通过；随后 Go 测试的宿主配置假设失败，
-`f749fbc` 已作测试数据修正，等待下一轮继续执行全部验收。
+`f749fbc` 已作测试数据修正。`2e56a6e` 已通过 Windows Go、Java25、C#29 套件；Clang
+Unicode 用例暴露测试驱动使用默认 cp1252 解码，当前改为协议规定的严格 UTF-8。
+Windows Rust Host、安装和公共图尚未执行。
 尚无 Windows 四语言完整验收结论。
 完成证据审计另外发现原矩阵中的负例未齐：Java 畸形源码与处理器哨兵已补充并通过 25 项测试；
 C# 已补齐畸形源码、analyzer/generator 哨兵，并增加明确 net8.0 目标与 net10.0 的 API 隔离和并集对照，
