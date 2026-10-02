@@ -37,6 +37,37 @@ func TestContextPlatformDiscovery(t *testing.T) {
 			t.Fatalf("wrong context target: %+v", ref)
 		}
 	}
+	req.Environment.Platforms = req.Environment.Platforms[:1]
+	missing := analyze(context.Background(), req)
+	if missing.Error == nil || missing.Error.Code != "target_unavailable" || missing.Graph != nil {
+		t.Fatalf("missing Windows context target was silently ignored: %+v", missing)
+	}
+}
+
+// TestOrdinaryUnderscoreFilename 验证非末尾的 linux 片段不扩大全部 catalog 目标。
+func TestOrdinaryUnderscoreFilename(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "foo_linux_helper.go", "package app\nfunc Helper(){}\n")
+	req := fixtureRequest(t, root, "foo_linux_helper.go")
+	response := analyze(context.Background(), req)
+	if response.Outcome != "ok" {
+		t.Fatalf("analysis: %+v", response.Error)
+	}
+	if len(response.Evidence.Configurations) == 0 {
+		t.Fatal("missing native baseline")
+	}
+	for _, config := range response.Evidence.Configurations {
+		found := false
+		for _, candidate := range req.Environment.Platforms {
+			if candidate.ID == config.PlatformIDs[0] && candidate.Metadata.GOOS == runtime.GOOS && candidate.Metadata.GOARCH == runtime.GOARCH {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("ordinary filename expanded target set: %+v", response.Evidence.Configurations)
+		}
+	}
 }
 
 // TestBooleanBuildSelection 验证布尔标签按目标整体求值，而非 OS/架构笛卡尔积。

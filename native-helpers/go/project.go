@@ -438,21 +438,37 @@ func validatePlatform(p platform) error {
 
 // discoverPlatforms 根据明确条件选择 catalog 候选；无条件时仅取宿主基线。
 func discoverPlatforms(project *project, selected []string, includeTests bool, candidates []platform) ([]platform, *analysisError) {
+	if len(candidates) == 0 {
+		return nil, fail("target_unavailable", "no approved Go SDK targets in catalog")
+	}
 	contextFiles, problem := projectContextFiles(project, selected, includeTests)
 	if problem != nil {
 		return nil, problem
 	}
 	explicit := []string{}
+	selectedSet := map[string]bool{}
+	for _, rel := range selected {
+		selectedSet[rel] = true
+	}
 	for _, rel := range contextFiles {
 		hasTarget, problem := hasTargetConstraint(project.Root, rel)
 		if problem != nil {
 			return nil, problem
 		}
 		if hasTarget {
-			explicit = append(explicit, rel)
+			supported, problem := matchesSupportedTarget(project.Root, rel, candidates[0].Root)
+			if problem != nil {
+				return nil, problem
+			}
+			if supported {
+				explicit = append(explicit, rel)
+			} else if selectedSet[rel] {
+				return nil, fail("target_unavailable", "selected file has no supported Go target", rel)
+			}
 		}
 	}
 	chosen := []platform{}
+	matched := map[string]bool{}
 	for _, candidate := range candidates {
 		if len(explicit) == 0 {
 			if candidate.Metadata.GOOS == runtime.GOOS && candidate.Metadata.GOARCH == runtime.GOARCH {
@@ -467,9 +483,16 @@ func discoverPlatforms(project *project, selected []string, includeTests bool, c
 				return nil, fail("unsupported_configuration", err.Error(), rel)
 			}
 			if matches {
-				chosen = append(chosen, candidate)
-				break
+				matched[rel] = true
+				if !containsPlatform(chosen, candidate.ID) {
+					chosen = append(chosen, candidate)
+				}
 			}
+		}
+	}
+	for _, rel := range explicit {
+		if !matched[rel] {
+			return nil, fail("target_unavailable", "missing approved Go SDK target for explicit source condition", rel)
 		}
 	}
 	if len(chosen) == 0 {
@@ -477,6 +500,37 @@ func discoverPlatforms(project *project, selected []string, includeTests bool, c
 	}
 	sort.Slice(chosen, func(i, j int) bool { return chosen[i].ID < chosen[j].ID })
 	return chosen, nil
+}
+
+// containsPlatform 避免一个目标匹配多个文件时重复分析同一配置。
+func containsPlatform(platforms []platform, id string) bool {
+	for _, candidate := range platforms {
+		if candidate.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesSupportedTarget 独立于 catalog 判断源码条件是否属于固定 profile 的目标矩阵。
+func matchesSupportedTarget(root, rel, sdkRoot string) (bool, *analysisError) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		for _, goarch := range []string{"arm64", "amd64"} {
+			meta := platformMetadata{GOOS: goos, GOARCH: goarch}
+			if goarch == "amd64" {
+				meta.GOAMD64 = "v1"
+			}
+			target := standardTarget(sdkRoot, meta)
+			matches, err := target.MatchFile(filepath.Join(root, filepath.Dir(rel)), filepath.Base(rel))
+			if err != nil {
+				return false, fail("unsupported_configuration", err.Error(), rel)
+			}
+			if matches {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // projectContextFiles 搜集选中包中的允许源码，包括未选中的平台实现文件。
@@ -521,12 +575,11 @@ func hasTargetConstraint(root, rel string) (bool, *analysisError) {
 		return false, fail("unsupported_configuration", err.Error(), rel)
 	}
 	base := strings.TrimSuffix(filepath.Base(rel), ".go")
+	base = strings.TrimSuffix(base, "_test")
 	pieces := strings.Split(base, "_")
 	explicit := false
-	for _, piece := range pieces {
-		if knownTargetTag(piece) {
-			explicit = true
-		}
+	if len(pieces) > 1 && knownTargetTag(pieces[len(pieces)-1]) {
+		explicit = true
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)

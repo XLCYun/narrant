@@ -6,7 +6,7 @@
 
 - 独立 Go module，只有 Go 标准库依赖。编译后以 stdin/stdout NDJSON 执行 v1 协议，`ready` 后只处理一个请求。严格 JSON 解码拒绝重复键、未知字段、缺字段和第二种消息；运行中独立读取匹配 ID 的取消。输出完成消息后直接返回。
 - 静态读取本侧 `go.mod`、`go.work`；`use` 与未带版本的本地 `replace` 必须留在仓库内。无 `go.work` 时只接受一个选中 module。只读 importer 仅允许仓内 module 与传入目标 SDK 的标准库源码；不调用 `go list`、`go/packages`、默认 importer、GOPATH、模块缓存、网络或项目构建逻辑。
-- catalog 元数据固定 `kind=go-sdk`、`version=1.23.8`、`root` 指向完整 Go SDK 源码，metadata 为 `goos`、`goarch`、amd64 时 `goamd64=v1`。候选 OS 为 darwin/linux/windows，架构为 arm64/amd64，cgo 关闭。检查选中包内所有允许源码（含未选中的平台文件），按 Go 的文件匹配规则逐目标求值受支持的 `//go:build` / legacy `+build` 布尔条件；没有明确约束时只取 helper 原生 GOOS/GOARCH 基线。选中文件在所有获准目标下都不活动则失败。
+- catalog 元数据固定 `kind=go-sdk`、`version=1.23.8`、`root` 指向完整 Go SDK 源码，metadata 为 `goos`、`goarch`、amd64 时 `goamd64=v1`。候选 OS 为 darwin/linux/windows，架构为 arm64/amd64，cgo 关闭。检查选中包内所有允许源码（含未选中的平台文件），只把真正的 Go 文件末尾平台后缀当作目标证据，并按 Go 的文件匹配规则逐目标求值受支持的 `//go:build` / legacy `+build` 布尔条件。每个落在固定 profile 目标矩阵中的明确上下文文件都须有 catalog 匹配；没有明确约束时只取 helper 原生 GOOS/GOARCH 基线。选中文件在所有获准目标下都不活动则失败。
 - 每配置分别使用 `go/parser`、`go/ast`、`go/types`。文件、类型、函数/方法、值/字段、import、共享多名初始化分别映射为 Container、Type、Callable、Value、Extension、ExecutionRegion。`init` 为 Callable；类型参数保留在声明，跨包泛型调用指向原始声明。接口调用同时保留静态接口方法槽位和未知动态实现观察。字段/嵌入类型位置有 `types.Info` 证据时输出 `code.type_use`，未知绑定保留 Unresolved。已确认调用最终按图成员分类为 Node 或 External，缺依赖/函数值调用保留 Unresolved。SDK 方法图外身份包含 receiver 类型，避免同包同名方法混淆。
 - ID 使用相对源文件、声明种类、名称与保守同名槽位，不含 checkout 绝对路径、行号或类型检查对象地址。方法 ID 只使用 receiver 类型，不使用 receiver 参数名。原始 `source` 作展示，signature/code 通过 Go token 序列规范化；普通注释与排版不改内容，字面量与必要分号保留。类型子字段/接口方法独立，文件记录初始化顺序，结构体记录字段顺序。
 - 输出完整 `root_contains`、`nodes`、`external_symbols`、`evidence`；跨配置同身份自身内容及父级不兼容返回 `union_conflict`。结果大小由 helper 再核对 `max_result_bytes`，Host 仍独立限额。
