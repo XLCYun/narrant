@@ -265,6 +265,8 @@ Host 仅在已记录取消原因时接受 outcome=cancelled；无取消请求却
 公共适配器和验收套件。公共适配器不引入另一份 Rust 语言映射。各语言必须补齐自己的目标矩阵、
 身份/内容规则和真实项目 fixtures 后，才能宣称该语言支持完成。
 
-目前未冻结的实施参数：Platform 的分语言 metadata、实际工具/目标版本组合、协议资源默认值。
-它们通过 [0024a](0024a-native-language-analysis-profiles.md) 的实验与固定包清单补全；
+Platform 的分语言 metadata 已在 [0024a](0024a-native-language-analysis-profiles.md) 固定，
+首轮工具构件及摘要保存在 `resources/native-toolchains.json`，可调整的资源默认值见
+[实施计划](0024b-native-analyzer-implementation-plan.md)。这些实施选择不等于发布兼容或性能承诺；
+每个系统和目标版本仍须有真实运行证据，资源参数仍需结合工程样本校准。
 若实验需要改变已批准的依赖/执行边界、图模型或完整性政策，必须重新提出具体取舍。

@@ -226,8 +226,14 @@ loader，尚未解决真实 go.mod/go.work 解释、完整标准库、跨版本�
 
 首批原生平台沿用支持包基线 macOS Apple Silicon、Windows x64，分别运行真实 helper 验收；
 “文档有 API”或单机成功不替代另一平台的启动、路径、只读与取消测试。
-Java JDT/javac 目标对照、C# compiler API 最小探针仍未在本轮完成；
-Go/Clang 的已有局部实验也不是完整发布验收。上述空项是工程实验任务，不重复要求用户确认。
+本轮已经实现四个原生 helper，并在 macOS ARM64 上分别运行语言测试及真实
+`Host → CodeGraph → diff` 验收。Java 已确认运行 JDK 与目标声明必须隔离，当前选择
+单一 JDT 后端与明确 Java 17 目标；反例使用 JDK 17 不提供的 `List.getFirst()`。
+这些本机结果不替代 Windows、最终修复构件或更广版本的验收。具体证据与限制见
+[Java](../research/java-native-implementation.md)、[Go](../research/go-native-implementation.md)、
+[C#](../research/csharp-native-implementation.md)、[C/C++](../research/clang-native-implementation.md)、
+[公共图验收](../research/native-helper-conformance.md)和
+[跨平台验证](../research/native-crossplatform-validation.md)。
 
 参考背景：[Java 调研](../research/java-language-support.md)、[C# 调研](../research/csharp-language-support.md)、
 [Code Object](0018a-code-object-kinds.md)、[Code Relationships](0018b-code-relationships.md)、
