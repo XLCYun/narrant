@@ -162,7 +162,7 @@ public:
 // 保存原始源码声明片段；偏移仅在当前快照内定位，不直接进入公开 ID。
 struct DeclInfo {
   std::string key,path,name,category,kind,parent,usr,role,params,id,code,signature,source,language,commonPrefix;
-  unsigned begin=0,end=0,body=0,nameOffset=0,typeEnd=0; bool selected=false;
+  unsigned begin=0,end=0,body=0,nameOffset=0,typeEnd=0,declaratorBegin=0; bool selected=false;
 };
 // 调用关系首先保留后端绑定证据，最终集合完成后再分类。
 struct Edge { std::string owner,target,usr,unknown,semantic="code.calls"; bool operator<(const Edge &o) const { return std::tie(owner,target,usr,unknown,semantic)<std::tie(o.owner,o.target,o.usr,o.unknown,o.semantic); } };
@@ -281,8 +281,15 @@ class Collector : public RecursiveASTVisitor<Collector> {
       for(auto &token:rawTokens(source.substr(n.begin,n.end-n.begin))) if(token.is(tok::l_brace)) { n.body=n.begin+token.getLocation().getRawEncoding(); break; }
     }
     if((isa<VarDecl>(d) || isa<FieldDecl>(d))) if(auto declarator=dyn_cast<DeclaratorDecl>(d)) if(auto info=declarator->getTypeSourceInfo()) {
-      TypeLoc type=info->getTypeLoc(); while(!type.getNextTypeLoc().isNull()) type=type.getNextTypeLoc();
-      auto typeRange=range(type.getSourceRange(),n.path); n.typeEnd=typeRange.second;
+      TypeLoc type=info->getTypeLoc(); std::vector<unsigned> declaratorStarts;
+      // 每层原生 TypeLoc 提供自身范围；MemberPointerTypeLoc 的范围包含完整 C:: 限定名。
+      while(!type.getNextTypeLoc().isNull()) {
+        auto local=location(type.getLocalSourceRange().getBegin());
+        if(local.first==n.path) declaratorStarts.push_back(local.second);
+        type=type.getNextTypeLoc();
+      }
+      auto typeRange=range(type.getSourceRange(),n.path); n.typeEnd=typeRange.second; n.declaratorBegin=n.nameOffset;
+      for(auto start:declaratorStarts) if(start>=n.typeEnd && start<n.declaratorBegin) n.declaratorBegin=start;
     }
     n.signature=normalize(source.substr(n.begin,n.body-n.begin));
     n.source=source.substr(n.begin,n.end-n.begin);
@@ -528,11 +535,8 @@ static void splitDeclarators(Graph &graph) {
     std::sort(items.begin(),items.end(),[](auto a,auto b){return a->nameOffset<b->nameOffset;});
     auto &first=*items.front(); auto &source=graph.files.at(first.path);
     require(first.typeEnd<=first.nameOffset,"unsupported shared declarator type range","object_extraction_failed");
-    unsigned declarator=first.nameOffset;
-    for(auto &token:rawTokens(source.substr(first.typeEnd,first.nameOffset-first.typeEnd))) {
-      if(token.is(tok::star) || token.is(tok::amp) || token.is(tok::ampamp) || token.is(tok::l_paren)) { declarator=first.typeEnd+token.getLocation().getRawEncoding(); break; }
-    }
-    std::string prefix=source.substr(first.begin,declarator-first.begin);
+    require(first.declaratorBegin>=first.typeEnd && first.declaratorBegin<=first.nameOffset,"invalid native declarator range","object_extraction_failed");
+    std::string prefix=source.substr(first.begin,first.declaratorBegin-first.begin);
     unsigned previousEnd=first.end;
     for(size_t i=1;i<items.size();++i) {
       auto &n=*items[i]; require(previousEnd<=n.nameOffset,"overlapping declarator initializer","object_extraction_failed");

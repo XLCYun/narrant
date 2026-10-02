@@ -129,3 +129,17 @@ Windows 官方 x64 dev archive 的 URL/hash 及 LLVM/Clang 精确许可证文件
 构建仍为 `native-helpers/clang/build.sh /tmp/narrant-clang-native/LLVM-21.1.8-macOS-ARM64`，exit0。
 Windows CMake 与 PowerShell 分支仅已编写，尚待实际原生 CI；没有把宏定义源码对象、静态调用和
 有限标准头测试扩大宣称为所有 C++ 关系或大型项目完整性证明。此轮未运行 Cargo/quality-gate。
+
+## 审查修复第二轮：成员指针声明前缀
+
+第一轮复审确认 token/优化参数/LinkageSpec 已修复，发现多 declarator 的残留：
+`int C::*a=nullptr,b=2;` 的 C:: 仍被误判为共享类型前缀。新增真实回归首先得到
+`Ran 1 test in 0.222s / FAILED`，b.signature 为 `int C :: b = 2 ;`。
+
+现逐层使用原生 `TypeLoc::getLocalSourceRange` 定位 declarator；`MemberPointerTypeLoc`
+包括完整限定名，不再从第一个星号猜起点。简单/嵌套限定名以及成员指针数组实际通过，
+改变 a 的 C/D 成员指针类型时，b 的 signature/code 仍为 `int b = 2 ;`，ID 不变。
+受影响聚焦套件包含新增回归、普通多声明、C/C++模式和两语言五种并集，输出
+`Ran 4 tests in 1.370s / OK`；普通多声明另补 C17 全局/字段数组样本。
+本轮二进制 SHA-256：`e8789931d8ed2b6d4782779b1ffa980dc75023eaeee180894af637ce7668b46f`。
+未重复全套或跨平台验收，未扩展复审 deferred 的匿名 typedef 范围。

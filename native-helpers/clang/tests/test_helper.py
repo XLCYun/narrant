@@ -376,11 +376,15 @@ class NativeHelperTests(unittest.TestCase):
 
     def test_review_multiple_declarators_are_independent(self):
         """审查回归：普通全局变量、字段、指针与数组 declarator 的自身内容相互独立。"""
-        for source in ['int a=1, b=2;', 'struct Box { int a=1, b=2; };',
-                       'const char *a="one", *b="two";', 'int a[2]={1,2}, b[2]={3,4};']:
+        for mode, source in [('cpp', 'int a=1, b=2;'), ('cpp', 'struct Box { int a=1, b=2; };'),
+                             ('cpp', 'const char *a="one", *b="two";'), ('cpp', 'int a[2]={1,2}, b[2]={3,4};'),
+                             ('c', 'int a=1, b=2;'), ('c', 'struct Box { int a[2], b[2]; };')]:
             changed = source.replace('a=1', 'a=3').replace('a="one"', 'a="new"').replace('a[2]={1,2}', 'a[2]={5,6}')
-            first = self.ok(self.prepare({'main.cpp': source}))
-            second = self.ok(self.prepare({'main.cpp': changed}))
+            if mode == 'c':
+                changed = changed.replace('a[2]', 'a[3]')
+            file = 'main.c' if mode == 'c' else 'main.cpp'
+            first = self.ok(self.prepare({file: source}, mode))
+            second = self.ok(self.prepare({file: changed}, mode))
             a = {n['name']: n for n in first['nodes']}
             b = {n['name']: n for n in second['nodes']}
             self.assertNotEqual(a['a']['code'], b['a']['code'], source)
@@ -389,6 +393,24 @@ class NativeHelperTests(unittest.TestCase):
             self.assertEqual(a['b']['id'], b['b']['id'], source)
             if 'Box' in a:
                 self.assertEqual(a['Box']['code'], b['Box']['code'])
+
+    def test_review_member_pointer_declarator_prefix(self):
+        """复审回归：成员指针的完整限定名属于 a，不能泄漏到共享声明中的 int b。"""
+        for declarations, left, right in [('struct C {}; struct D {};', 'C', 'D'),
+                                           ('namespace N { struct C {}; struct D {}; }', 'N::C', 'N::D')]:
+            for declarator in ('{owner}::*a=nullptr', '{owner}::*a[2]={{}}'):
+                first_source = declarations + ' int ' + declarator.format(owner=left) + ', b=2;'
+                second_source = declarations + ' int ' + declarator.format(owner=right) + ', b=2;'
+                first = self.ok(self.prepare({'main.cpp': first_source}))
+                second = self.ok(self.prepare({'main.cpp': second_source}))
+                a = {n['name']: n for n in first['nodes']}
+                b = {n['name']: n for n in second['nodes']}
+                self.assertEqual(a['b']['signature'], 'int b = 2 ;')
+                self.assertEqual(a['b']['code'], 'int b = 2 ;')
+                self.assertEqual(a['b']['signature'], b['b']['signature'])
+                self.assertEqual(a['b']['code'], b['b']['code'])
+                self.assertEqual(a['b']['id'], b['b']['id'])
+                self.assertNotEqual(a['a']['code'], b['a']['code'])
 
     def test_duplicate_protocol_keys(self):
         """协议拒绝重复键而不是悄悄覆盖。"""
