@@ -132,14 +132,29 @@ fn analyzer(mode: Mode, configs: &BTreeMap<String, HelperConfig>) -> NativeLangu
     let cfg = configs
         .get(key)
         .unwrap_or_else(|| panic!("缺少 {key} 真实 helper 配置"));
+    let environment: BTreeMap<OsString, OsString> = cfg
+        .environment
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect();
+    #[cfg(windows)]
+    let mut environment = environment;
+    #[cfg(windows)]
+    if !cfg
+        .environment
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("SystemRoot"))
+    {
+        // 与生产支持包入口一致，只补 Windows 运行时所需的系统根，不恢复父进程环境。
+        let system_root = std::env::var_os("SystemRoot")
+            .filter(|value| !value.is_empty())
+            .expect("Windows 真实 helper 验收需要非空 SystemRoot");
+        environment.insert("SystemRoot".into(), system_root);
+    }
     let command = HelperCommand {
         executable: cfg.executable.clone(),
         args: cfg.args.iter().map(OsString::from).collect(),
-        environment: cfg
-            .environment
-            .iter()
-            .map(|(k, v)| (OsString::from(k), OsString::from(v)))
-            .collect(),
+        environment,
         trusted_roots: cfg.trusted_roots.clone(),
     };
     let platforms = cfg

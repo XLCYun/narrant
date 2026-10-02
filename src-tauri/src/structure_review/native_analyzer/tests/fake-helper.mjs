@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 
 const [control, mode] = process.argv.slice(2);
 fs.writeFileSync(path.join(control, 'pid'), String(process.pid));
@@ -63,6 +64,17 @@ if (mode === 'startup_stderr_first') {
     }
     requested = true;
     fs.writeFileSync(path.join(control, 'request'), line);
+    if (mode === 'runtime_environment') {
+      const request = JSON.parse(line);
+      // 仅输出固定测试条件的布尔结果，不采集、转储任何宿主环境值。
+      fs.writeFileSync(path.join(control, 'runtime-environment-status'), JSON.stringify({
+        crypto_ready: randomBytes(32).length === 32,
+        explicit_marker_received: process.env.NARRANT_NATIVE_ENV_SENTINEL === 'explicit-fixture-value',
+        system_root_present: Boolean(process.env.SystemRoot || process.env.SYSTEMROOT),
+        runtime_injection_absent: ['PATH', 'NODE_OPTIONS', 'NODE_PATH', 'OPENSSL_CONF', 'OPENSSL_MODULES', 'JAVA_TOOL_OPTIONS', 'CLASSPATH', 'PYTHONPATH'].every(key => process.env[key] === undefined),
+        scratch_matches_request: ['TMPDIR', 'TMP', 'TEMP'].every(key => process.env[key] === request.environment.scratch_root),
+      }));
+    }
     if (mode === 'stall' || mode === 'cancel') return;
     if (mode === 'stderr' || mode === 'stderr_ok') fs.writeSync(2, Buffer.alloc(mode === 'stderr' ? 524288 : 131072));
     if (mode === 'eof') process.exit(0);

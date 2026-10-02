@@ -86,6 +86,18 @@ impl Fixture {
         fs::write(self.tools.join("result"), result).unwrap();
         let mut analyzer = self.analyzer();
         analyzer.command.executable = test_node();
+        // 与生产 from_pack 相同，Windows runtime 的必需变量由调用方明确提供；
+        // 宿主继续 env_clear，不为测试重新继承 PATH 或运行时注入参数。
+        #[cfg(windows)]
+        {
+            let system_root = std::env::var_os("SystemRoot")
+                .filter(|value| !value.is_empty())
+                .expect("Windows Node 夹具需要明确且非空的 SystemRoot");
+            analyzer
+                .command
+                .environment
+                .insert("SystemRoot".into(), system_root);
+        }
         analyzer
             .command
             .trusted_roots
@@ -386,6 +398,39 @@ fn subprocess_handles_unicode_fragments_and_drains_stderr() {
             "返回前 scratch 必须释放"
         );
     }
+}
+
+/// 同一真实 Session 验证 runtime 随机源可用、显式环境已传入且未恢复宿主注入环境。
+#[test]
+fn subprocess_initializes_crypto_with_explicit_minimal_runtime_environment() {
+    let fixture = Fixture::new();
+    let mut analyzer =
+        fixture.executable_analyzer("runtime_environment", &line(ready()), &line(result()));
+    assert_eq!(
+        analyzer.command.environment.len(),
+        usize::from(cfg!(windows))
+    );
+    analyzer.command.environment.insert(
+        "NARRANT_NATIVE_ENV_SENTINEL".into(),
+        "explicit-fixture-value".into(),
+    );
+    let graph = analyzer.analyze(&fixture.input()).unwrap();
+    assert_eq!(graph.root().contains, vec![NodeId("go:Run".into())]);
+    let observed: Value = serde_json::from_slice(
+        &fs::read(fixture.tools.join("runtime-environment-status")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        observed,
+        json!({
+            "crypto_ready": true,
+            "explicit_marker_received": true,
+            "system_root_present": cfg!(windows),
+            "runtime_injection_absent": true,
+            "scratch_matches_request": true,
+        })
+    );
+    assert_process_gone(&fixture.tools.join("pid"));
 }
 
 /// stdout 先关闭时仍保留随后到达的运行时启动诊断及原始协议错误。
