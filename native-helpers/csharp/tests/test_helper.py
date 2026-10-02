@@ -267,6 +267,43 @@ Missing.Call();
         self.assertIn("Release", [n["name"] for n in result["graph"]["nodes"]])
         self.assertEqual(next(f for f in result["evidence"]["files"] if f["path"] == "App/Release.cs")["disposition"], "analyzed")
 
+    def test_not_equal_debug_selects_release_branch(self):
+        """配置不等于 Debug 的条件必须枚举有限域中的 Release。"""
+        self.write("App/App.csproj", '''<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+<ItemGroup><Compile Include="Common.cs" /></ItemGroup>
+<ItemGroup Condition="'$(Configuration)' != 'Debug'"><Compile Include="Release.cs" /></ItemGroup></Project>''')
+        self.write("App/Common.cs", "class Common {}")
+        self.write("App/Release.cs", "class ReleaseOnly {}")
+        result = self.run_helper(self.request(["App/Common.cs", "App/Release.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        self.assertIn("ReleaseOnly", [node["name"] for node in result["graph"]["nodes"]])
+        self.assertEqual(next(file for file in result["evidence"]["files"] if file["path"] == "App/Release.cs")["disposition"], "analyzed")
+
+    def test_release_project_reference_uses_release_dependency(self):
+        """引用项目必须随调用方 Release 上下文重新静态编译，而非借用 Debug。"""
+        self.write("Lib/Lib.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
+        self.write("App/App.csproj", '''<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+<ItemGroup><Compile Include="Common.cs" /><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup>
+<ItemGroup Condition="'$(Configuration)' == 'Release'"><Compile Include="Release.cs" /></ItemGroup></Project>''')
+        self.write("Lib/Api.cs", "public class Api {\n#if DEBUG\npublic static void DebugOnly(){}\n#else\npublic static void ReleaseOnly(){}\n#endif\n}")
+        self.write("App/Common.cs", "class Common {}")
+        self.write("App/Release.cs", "class ReleaseCaller { void Run(){Api.ReleaseOnly();} }")
+        result = self.run_helper(self.request(["Lib/Api.cs", "App/Common.cs", "App/Release.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        run = next(node for node in result["graph"]["nodes"] if node["name"] == "Run")
+        self.assertTrue(any(ref["semantic"] == "code.calls" and ref["target"]["kind"] == "node" and
+                            "ReleaseOnly" in ref["target"]["id"] for ref in run["references"]))
+
+    def test_nested_generic_parameter_overload_identity(self):
+        """外层和内层同序号类型参数在重载槽位中仍须区分。"""
+        self.write("A.cs", "class Outer<T> { class Inner<U> { void F(T x){} void F(U x){} } }")
+        self.source_set([self.config("main", ["A.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "ok", result.get("error"))
+        overloads = [node for node in result["graph"]["nodes"] if node["name"] == "F"]
+        self.assertEqual(len(overloads), 2)
+        self.assertEqual(len({node["id"] for node in overloads}), 2)
+
     def test_field_and_event_shared_headers(self):
         """共享 field/event 类型、访问性与属性须进入每个变量声明内容。"""
         self.write("A.cs", "class C { public int X; public event System.Action E; }")

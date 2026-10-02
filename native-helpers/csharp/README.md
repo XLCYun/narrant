@@ -76,7 +76,9 @@ excludes `bin`, `obj`, and hidden directories. Literal `Compile Include`/`Remove
 `ProjectReference Include` work. `Compile` and `ProjectReference` may carry a
 literal equality/inequality condition on `TargetFramework`, `Configuration`, or
 `Platform`, directly or on their `ItemGroup`. `Debug` and `AnyCPU` are defaults;
-literal Debug/Release branches are compiled separately and unioned. The matching
+literal Debug/Release equality or inequality branches are compiled separately and unioned.
+Referenced projects inherit the caller's static configuration, even if they have
+no configuration condition of their own. The matching
 `DEBUG`/`TRACE` and net10 preprocessor constants are provided. `ImplicitUsings`
 accepts `enable` or `true`. Explicitly conditionally omitted files receive `inactive`
 coverage. `IsTestProject=true` gives reliable `excluded_test` coverage when

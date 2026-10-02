@@ -37,7 +37,8 @@ generator、analyzer 或项目自定义 target。微软的
 只接受字面 `Microsoft.NET.Sdk` 和 README 所列的有限属性、默认 `**/*.cs`、字面
 `Compile Include/Remove` 与 `ProjectReference`。仅对
 `TargetFramework`、`Configuration`、`Platform` 的字面 `==` 或 `!=` 求值；默认 Debug / AnyCPU，
-显式 Debug/Release 分支分别建 Compilation 后并集。默认源码发现排除隐藏目录，
+显式 Debug/Release 等值或不等值分支分别建 Compilation 后并集；仓内 ProjectReference
+沿用引用方配置重建被引用项目。默认源码发现排除隐藏目录，
 `ImplicitUsings=true` 与 `enable` 同样启用隐式导入，并按固定 SDK 补全 net10 预处理常量。
 条件中未纳入的显式文件报 `inactive`；可靠的 `test_only` 或 `IsTestProject=true` 可报
 `excluded_test`。不读取 NuGet cache 或已生成的 obj/assets。
@@ -65,7 +66,7 @@ dotnet build native-helpers/csharp/Narrant.CSharp.Helper.csproj -c Release --no-
 dotnet publish native-helpers/csharp/Narrant.CSharp.Helper.csproj -c Release --no-restore -p:UseAppHost=false -o /tmp/narrant-csharp-publish
   publish succeeded; ready message observed from published helper
 python3 -W error::ResourceWarning -m unittest discover -s native-helpers/csharp/tests -v
-  Ran 10 tests ... OK（首次提交；修复轮次扩展到 20 项，见 Task 4 报告）
+  Ran 10 tests ... OK（首次提交；修复轮次扩展到 23 项，见 Task 4 报告）
 ```
 
 测试是独立进程 NDJSON 会话，覆盖 partial/重载和精确调用、跨 ProjectReference Node、

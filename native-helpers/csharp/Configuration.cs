@@ -35,6 +35,24 @@ internal static class Configuration
             cancellation.ThrowIfCancellationRequested();
             output.AddRange(ReadProject(root, project));
         }
+        // 引用方的明确配置是被引用项目的静态输入，即使后者自身没有配置条件也必须重建。
+        for (var index = 0; index < output.Count; index++)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            var caller = output[index];
+            foreach (var dependency in caller.ProjectReferences)
+            {
+                if (output.Any(candidate => candidate.SourcePaths[0] == dependency &&
+                    candidate.Tfm == caller.Tfm && candidate.ConfigurationName == caller.ConfigurationName)) continue;
+                var propagated = ReadProject(root, Path.Combine(root, dependency), caller.ConfigurationName)
+                    .SingleOrDefault(candidate => candidate.Tfm == caller.Tfm &&
+                        candidate.ConfigurationName == caller.ConfigurationName);
+                if (propagated is null)
+                    throw new HelperException("unsupported_configuration",
+                        $"ProjectReference lacks matching TFM and Configuration: {dependency}", caller.SourcePaths);
+                output.Add(propagated);
+            }
+        }
         return output;
     }
 
@@ -78,7 +96,7 @@ internal static class Configuration
     }
 
     /// <summary>按固定子集读取普通 Microsoft.NET.Sdk 项目，不执行 MSBuild。</summary>
-    private static List<StaticConfiguration> ReadProject(string root, string path)
+    private static List<StaticConfiguration> ReadProject(string root, string path, string? requiredConfiguration = null)
     {
         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
         CheckRepositoryPath(root, path);
@@ -165,6 +183,7 @@ internal static class Configuration
         if (defaultConfiguration is not ("Debug" or "Release") || targetPlatform != "AnyCPU")
             throw new HelperException("unsupported_configuration", "Only Debug/Release and AnyCPU are supported", relative);
         var configurationVariants = new HashSet<string>(StringComparer.Ordinal) { defaultConfiguration };
+        if (requiredConfiguration is not null) configurationVariants.Add(requiredConfiguration);
         foreach (var condition in compile.SelectMany(item => new[] { item.groupCondition, item.condition })
             .Concat(projectReferences.SelectMany(item => new[] { item.groupCondition, item.condition })))
         {
@@ -173,7 +192,8 @@ internal static class Configuration
             if (match.variable != "Configuration") continue;
             if (match.literal is not ("Debug" or "Release"))
                 throw new HelperException("unsupported_configuration", "Unsupported Configuration literal", relative);
-            configurationVariants.Add(match.literal);
+            configurationVariants.Add(match.operation == "==" ? match.literal :
+                match.literal == "Debug" ? "Release" : "Debug");
         }
         var nullable = properties.GetValueOrDefault("Nullable", "disable") switch
         {

@@ -98,7 +98,7 @@ internal static class Analyzer
                 var target = configurations.SingleOrDefault(c => c.SourcePaths[0] == dependency && c.Tfm == config.Tfm &&
                     c.ConfigurationName == config.ConfigurationName);
                 if (target is null)
-                    throw new HelperException("unsupported_configuration", $"ProjectReference lacks matching TFM: {dependency}", config.SourcePaths);
+                    throw new HelperException("unsupported_configuration", $"ProjectReference lacks matching TFM and Configuration: {dependency}", config.SourcePaths);
                 if (target.TestOnly && !input.IncludeTests)
                     throw new HelperException("unsupported_configuration", "Production project references excluded test project", config.SourcePaths);
                 references.Add(Compile(target).Compilation.ToMetadataReference());
@@ -509,7 +509,14 @@ internal static class Extractor
         {
             if (token.Parent is IdentifierNameSyntax identifier && identifier.Identifier == token &&
                 model.GetSymbolInfo(identifier).Symbol is ITypeParameterSymbol typeParameter)
-                return (typeParameter.DeclaringMethod is null ? "type!" : "method!") + typeParameter.Ordinal;
+            {
+                if (typeParameter.DeclaringMethod is not null)
+                    return "method!" + typeParameter.Ordinal;
+                var depth = 0;
+                for (var owner = typeParameter.DeclaringType; owner?.ContainingType is not null; owner = owner.ContainingType)
+                    depth++;
+                return "type!" + depth + "!" + typeParameter.Ordinal;
+            }
             return token.Text;
         });
         return passing + ":" + string.Join(" ", typeTokens);
