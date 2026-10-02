@@ -29,7 +29,7 @@ use windows_sys::Win32::{
 };
 
 /// 非继承 Job 句柄持有整个会话；不允许 breakaway，后代自动保留在同一 Job 中。
-pub(super) struct WindowsJob(OwnedHandle);
+pub(crate) struct WindowsJob(OwnedHandle);
 
 /// 尚未交给共享传输的子进程守卫，覆盖分配 Job 或恢复执行失败的启动窗口。
 struct SuspendedChild(Option<Child>);
@@ -44,7 +44,7 @@ impl Drop for SuspendedChild {
 }
 impl WindowsJob {
     /// 使用稳定 Win32 接口建立所有权后才恢复主线程，不依赖 Rust nightly 扩展。
-    pub(super) fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
+    pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
         let (mut pending, job) = Self::spawn_suspended(command)?;
         resume_initial_thread(pending.0.as_ref().expect("挂起进程尚未转交").id())?;
         Ok((pending.0.take().expect("挂起进程只转交一次"), job))
@@ -107,7 +107,7 @@ impl WindowsJob {
     }
 
     /// 终止和有界等待全部 Job 成员；成功返回必须表示父子进程均已停止。
-    pub(super) fn terminate_and_wait(&self) -> io::Result<()> {
+    pub(crate) fn terminate_and_wait(&self) -> io::Result<()> {
         // SAFETY: Job 为当前会话专有，不会结束其他应用或其他 LSP 会话。
         if unsafe { TerminateJobObject(self.raw(), 1) } == 0 {
             return Err(io::Error::last_os_error());

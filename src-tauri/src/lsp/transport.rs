@@ -13,7 +13,7 @@ use super::{failure, CancellationCheck, Result};
 
 #[cfg(windows)]
 #[path = "windows_process.rs"]
-mod windows_process;
+pub(crate) mod windows_process;
 
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
@@ -275,7 +275,7 @@ fn read_message(reader: &mut impl BufRead) -> Result<Value> {
 
 /// macOS 原生进程枚举保留关闭前的组成员，避免启动 ps 辅助进程参与回收。
 #[cfg(target_os = "macos")]
-fn group_members(group: i32) -> Vec<i32> {
+pub(crate) fn group_members(group: i32) -> Vec<i32> {
     let mut capacity = 64usize;
     loop {
         let mut pids = vec![0i32; capacity];
@@ -303,7 +303,7 @@ fn group_members(group: i32) -> Vec<i32> {
 
 /// Linux 从 procfs 查询同组 PID，不读取任何被分析项目数据。
 #[cfg(target_os = "linux")]
-fn group_members(group: i32) -> Vec<i32> {
+pub(crate) fn group_members(group: i32) -> Vec<i32> {
     std::fs::read_dir("/proc")
         .into_iter()
         .flatten()
@@ -318,6 +318,6 @@ fn group_members(group: i32) -> Vec<i32> {
 
 /// 其他 Unix 平台仍以进程组信号检查作为回收依据。
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
-fn group_members(_group: i32) -> Vec<i32> {
+pub(crate) fn group_members(_group: i32) -> Vec<i32> {
     Vec::new()
 }

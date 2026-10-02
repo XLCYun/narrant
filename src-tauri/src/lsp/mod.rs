@@ -16,6 +16,10 @@ use serde_json::{json, Value};
 use url::Url;
 
 pub use protocol::{CallTarget, Location, OutgoingCall, Position, Range};
+#[cfg(unix)]
+pub(crate) use transport::group_members as native_group_members;
+#[cfg(windows)]
+pub(crate) use transport::windows_process::WindowsJob;
 use transport::Transport;
 
 /// 会话或协议失败；不依赖代码图的错误类型。

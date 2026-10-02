@@ -46,6 +46,32 @@ Host 传入经校验的目标平台目录 catalog；helper 只能从中匹配 pr
 多配置共享生产/测试的对象保留。缺框架引用时不按 `Test` 拼写删方法，未知和共享辅助代码保留。
 选项为 true 仅恢复原选集中的测试对象，不扩大用户选集，也不运行测试发现。
 
+## 首版 Platform catalog 字段
+
+以下是 `*-static-v1` 实现共同使用的工程接口。字段冻结不表示相应系统已通过验收；
+实际验证范围以语言实现记录和跨平台执行结果为准。所有 root 均为明确目标声明目录，
+不得通过扩大到磁盘、用户目录或 Program Files 根目录来包含多个不相干的来源。
+
+| kind | root 与版本 | metadata |
+| --- | --- | --- |
+| `java-jdk` | 精确目标 JDK 根，包含 `release` 与 `lib/jrt-fs.jar`；version 为实际完整版本 | `{release: string}`；release 必须与目标 JDK feature version 相符 |
+| `go-sdk` | 固定 Go 标准库源码根，包含 `src` 与 `VERSION`；首轮 1.23.8 | `{goos: string, goarch: string, goamd64?: string}` |
+| `dotnet-reference-assemblies` | 精确 `ref/<tfm>` 目录；首轮 10.0.0 | `{tfm: string, reference_pack: string, reference_pack_version: string}` |
+| `clang-target` | 精确系统 SDK 根；version 为该 SDK 实际版本 | `{target_triple: string, c_standard: string, cpp_standard: string, system_include_directories: string[], resource_platform_id: string, additional_system_platform_ids?: string[]}` |
+| `clang-resource` | 固定 LLVM 的 `lib/clang/<major>` 目录；首轮 21.1.8 | `{}` |
+| `clang-system-headers` | 与系统 SDK 分开放置的精确标准库头文件根，例如 Windows MSVC 的 `include`；version 为其实际工具版本 | `{}` |
+
+`system_include_directories` 只允许相对于本条 `clang-target.root` 的路径。
+`resource_platform_id` 必须引用 catalog 中的 `clang-resource`；可选
+`additional_system_platform_ids` 只能引用 catalog 中的 `clang-system-headers`，
+不接受重复、空 ID、自引用或未知 ID。缺省表示无额外系统头文件集合。
+这些条目只补充一个目标的标准声明，不单独创建分析配置，也不授权第三方 include、
+编译器命令、wrapper 或环境搜索路径。Host 与 helper 均校验关联。
+
+Windows 的系统 SDK 与 MSVC 标准头通常位于两个目录，因此分别建 catalog 条目；
+macOS 目标按支持包控制文件指定的精确 SDK 版本，从约定的 Xcode/CLT 安装位置匹配。
+CI 与本机可验证不同的明确 SDK 版本，但不能把单个版本通过写成所有版本通过。
+
 ## Java：JDT Core 候选
 
 JDT Core 是首个实验后端，javac 是研发对照及可能的替代选型；生产只选一个，

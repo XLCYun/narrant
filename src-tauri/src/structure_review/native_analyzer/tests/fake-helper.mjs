@@ -1,0 +1,68 @@
+// 独立 Node 假 helper，便于 macOS 与 Windows CI 使用同一套生命周期场景。
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+import { spawn } from 'node:child_process';
+
+const [control, mode] = process.argv.slice(2);
+fs.writeFileSync(path.join(control, 'pid'), String(process.pid));
+
+/** 按原字节输出夹具，可逐字节验证 UTF-8 极小分片。 */
+function output(name, fragmented = false) {
+  const bytes = fs.readFileSync(path.join(control, name));
+  if (fragmented) {
+    for (let offset = 0; offset < bytes.length; offset++) fs.writeSync(1, bytes.subarray(offset, offset + 1));
+  } else fs.writeSync(1, bytes);
+}
+
+/** helper 主动结束时关闭自身；遗留子进程由 Host 所有权测试回收。 */
+function complete() {
+  output('result', mode === 'fragment');
+  if (mode === 'double') output('result');
+  if (mode === 'nonzero') process.exit(7);
+  if (mode === 'exit_stall') return;
+  process.exit(0);
+}
+
+const keepAlive = setInterval(() => {}, 1000);
+process.stdin.on('end', () => {
+  if (mode === 'exit_stall') return;
+  fs.writeFileSync(path.join(control, 'host-eof'), 'stopped');
+  clearInterval(keepAlive);
+  process.exit(0);
+});
+if (mode === 'no_read') {
+  output('ready');
+} else if (mode === 'startup_stall') {
+  process.stdin.resume();
+} else if (mode === 'premature') {
+  output('result');
+  process.exit(0);
+} else {
+  output('ready', mode === 'fragment');
+  const lines = readline.createInterface({ input: process.stdin });
+  let requested = false;
+  lines.on('line', (line) => {
+    if (requested) {
+      if (mode === 'cancel') {
+        fs.writeFileSync(path.join(control, 'cancel'), line);
+        complete();
+      }
+      return;
+    }
+    requested = true;
+    fs.writeFileSync(path.join(control, 'request'), line);
+    if (mode === 'stall' || mode === 'cancel') return;
+    if (mode === 'stderr' || mode === 'stderr_ok') fs.writeSync(2, Buffer.alloc(mode === 'stderr' ? 524288 : 131072));
+    if (mode === 'eof') process.exit(0);
+    if (mode === 'half') { fs.writeSync(1, '{"protocol":'); process.exit(0); }
+    if (mode === 'duplicate_ready') output('ready');
+    if (mode === 'descendant' || mode === 'descendant_closed') {
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: mode === 'descendant' ? ['ignore', 'inherit', 'inherit'] : 'ignore',
+      });
+      fs.writeFileSync(path.join(control, 'descendant'), String(child.pid));
+    }
+    complete();
+  });
+}
