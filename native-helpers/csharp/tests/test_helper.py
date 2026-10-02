@@ -415,5 +415,18 @@ class C:I { public int P => 1; public event System.Action E { add {} remove {} }
         self.assertTrue(any(r["semantic"] == "code.implements" for r in getter["references"]))
 
 
+    def test_interface_inheritance_and_class_implementation(self):
+        """接口继承和类或结构体实现接口应具有不同语义及准确目标。"""
+        self.write("A.cs", "interface IBase {} interface IDerived : IBase {} class C : IDerived {} struct S : IBase {}")
+        self.source_set([self.config("main", ["A.cs"])])
+        result = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(result["outcome"], "ok", result)
+        nodes = {n["name"]: n for n in result["graph"]["nodes"]}
+        for source, semantic, target in [("IDerived", "code.extends", "IBase"),
+                                         ("C", "code.implements", "IDerived"),
+                                         ("S", "code.implements", "IBase")]:
+            bases = [r for r in nodes[source]["references"] if r["semantic"] in ("code.extends", "code.implements")]
+            self.assertEqual(bases, [{"semantic": semantic, "target": {"kind": "node", "id": nodes[target]["id"]}}])
+
 if __name__ == "__main__":
     unittest.main()

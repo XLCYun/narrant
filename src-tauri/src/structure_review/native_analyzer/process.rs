@@ -255,12 +255,28 @@ fn exchange(
             Ok(Event::StdoutEof) => {
                 stdout_eof = true;
                 if terminal.is_none() {
-                    return Err(failure("helper 在完整 completed 前关闭 stdout"));
+                    let mut error = failure("helper 在完整 completed 前关闭 stdout");
+                    if !diagnostics.is_empty() {
+                        error.message.push_str(&format!(
+                            "；stderr：{}",
+                            String::from_utf8_lossy(&diagnostics)
+                        ));
+                    }
+                    terminal = Some(Err(error));
+                    deadline = deadline.min(Instant::now() + analyzer.limits.exit_timeout);
                 }
             }
             Ok(Event::StderrEof(bytes)) => {
                 stderr_eof = true;
                 diagnostics = bytes;
+                if let Some(Err(error)) = terminal.as_mut() {
+                    if !diagnostics.is_empty() {
+                        error.message.push_str(&format!(
+                            "；stderr：{}",
+                            String::from_utf8_lossy(&diagnostics)
+                        ));
+                    }
+                }
             }
             Ok(Event::Error(error)) => return preserve(terminal, failure(error)),
             Ok(Event::Written) => analyze_written = true,
@@ -287,7 +303,10 @@ fn exchange(
                     )),
                 );
             }
-            if stdout_eof && stderr_eof && analyze_written {
+            if stdout_eof
+                && stderr_eof
+                && (analyze_written || terminal.as_ref().is_some_and(|value| value.is_err()))
+            {
                 return match terminal {
                     Some(Err(error)) => Err(error),
                     Some(Ok(_)) if cancellation_deadline.is_some() => Err(cancelled()),

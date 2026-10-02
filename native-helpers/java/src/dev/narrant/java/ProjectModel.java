@@ -282,8 +282,8 @@ final class ProjectModel {
                 // 聚合 POM 可把目标 release 留给每个子模块。
             } else if (release != null) validateRelease(release);
             String modulePath = repository.relativize(module).toString().replace('\\', '/');
-            String main = build == null ? null : text(build, "sourceDirectory");
-            String test = build == null ? null : text(build, "testSourceDirectory");
+            String main = resolved.mainSource;
+            String test = resolved.testSource;
             List<SourceRoot> roots = new ArrayList<>();
             addRoot(repository, modulePath, main == null ? "src/main/java" : main, false, roots);
             addRoot(repository, modulePath, test == null ? "src/test/java" : test, true, roots);
@@ -300,9 +300,9 @@ final class ProjectModel {
         catch (Exception e) { throw new Failure("unsupported_configuration", "cannot statically read POM"); }
     }
 
-    /** 有限 POM 父链的有效 release、坐标及实际读取来源。 */
+    /** 有限 POM 父链的有效 release、源码根、坐标及实际读取来源。 */
     private record PomResult(String release, String group, String artifact, String version,
-                             List<String> sourcePaths) {}
+                             List<String> sourcePaths, String mainSource, String testSource) {}
 
     /** 沿仓内 parent 真正求值，而不借用模块遍历时的聚合 POM。 */
     private static PomResult effectivePom(Path repository, Path file, Set<Path> chain) throws Failure {
@@ -354,11 +354,17 @@ final class ProjectModel {
             if (release == null && build != null) release = text(build, "release");
             if (release == null && parentResult != null) release = parentResult.release;
             if (release != null) validateRelease(release);
+            String mainSource = build == null ? null : text(build, "sourceDirectory");
+            String testSource = build == null ? null : text(build, "testSourceDirectory");
+            if (mainSource == null && parentResult != null) mainSource = parentResult.mainSource;
+            if (testSource == null && parentResult != null) testSource = parentResult.testSource;
+            if (mainSource != null) validateRelative(mainSource);
+            if (testSource != null) validateRelative(testSource);
             List<String> paths = new ArrayList<>();
             if (parentResult != null) paths.addAll(parentResult.sourcePaths);
             paths.add(repository.relativize(pom).toString().replace('\\', '/'));
             chain.remove(pom);
-            return new PomResult(release, group, artifact, version, List.copyOf(paths));
+            return new PomResult(release, group, artifact, version, List.copyOf(paths), mainSource, testSource);
         } catch (Failure e) { throw e; }
         catch (Exception e) { throw new Failure("unsupported_configuration", "cannot statically read Maven parent"); }
     }

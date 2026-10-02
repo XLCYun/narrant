@@ -292,7 +292,7 @@ internal static class Extractor
                 foreach (var baseSyntax in baseType.BaseList.Types)
                 {
                     var baseSymbol = model.GetTypeInfo(baseSyntax.Type, cancellation).Type;
-                    pending.Add(new PendingReference(baseSymbol?.TypeKind == TypeKind.Interface ? "code.implements" : "code.extends",
+                    pending.Add(new PendingReference(syntax is not InterfaceDeclarationSyntax && baseSymbol?.TypeKind == TypeKind.Interface ? "code.implements" : "code.extends",
                         baseSymbol, baseSymbol is null ? baseSyntax.Type.ToString() : null));
                 }
             output.Add(new ExtractedNode(node, path, selected, symbol, pending));

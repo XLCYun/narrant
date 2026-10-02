@@ -70,7 +70,7 @@ func (l *sourceLoader) Import(importPath string) (*types.Package, error) {
 }
 
 // load 读取一个可证明来源的包，并递归检查必要声明。
-func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (*packageUnit, error) {
+func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (loaded *packageUnit, loadErr error) {
 	if unit := l.Cache[importPath]; unit != nil {
 		if !checkBodies || unit.BodiesChecked {
 			return unit, nil
@@ -89,6 +89,12 @@ func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (
 		return nil, routeErr
 	}
 	allowed := l.Project.Root
+	// 仓内已准入源码的读取或解析失败不能退化成缺少第三方绑定。
+	defer func() {
+		if local && loadErr != nil && l.Fatal == nil {
+			l.Fatal = fail("object_extraction_failed", loadErr.Error())
+		}
+	}()
 	if !local {
 		first := strings.Split(importPath, "/")[0]
 		if strings.Contains(first, ".") || first == "cmd" {
@@ -119,6 +125,7 @@ func (l *sourceLoader) load(importPath string, checkBodies, includeTests bool) (
 		}
 		for _, rel := range contextFiles {
 			if _, problem := hasTargetConstraint(l.Project.Root, rel); problem != nil {
+				l.Fatal = problem
 				return nil, fmt.Errorf("package %s: %s", importPath, problem.Message)
 			}
 		}
@@ -700,6 +707,16 @@ func (l *sourceLoader) extractFile(b *graphBuilder, unit *packageUnit, f *fileUn
 					}
 					for i, name := range s.Names {
 						if name.Name == "_" {
+							if d.Tok == token.VAR && !shared && i < len(effective) {
+								key := "blank_initializer"
+								occurrence[key]++
+								id := sourceID(f.Rel, key, occurrence[key])
+								region := node{Category: "execution_region", ID: id, Language: "go", NativeKind: "blank_initializer", Code: stringPtr(normalizedNode(l.Fset, f.Bytes, effective[i])), Source: sourceNode(l.Fset, f.Bytes, effective[i]), Contains: []string{}, References: []reference{}, Extensions: map[string]any{}}
+								if problem := b.addNode(region, fileID, f.Rel); problem != nil {
+									return problem
+								}
+								l.callsIn(b, unit, id, effective[i])
+							}
 							continue
 						}
 						key := strings.ToLower(d.Tok.String()) + ":" + name.Name
@@ -799,17 +816,23 @@ func receiverTypeObject(unit *packageUnit, field *ast.FieldList) types.Object {
 	if field == nil || len(field.List) == 0 {
 		return nil
 	}
-	var found types.Object
-	ast.Inspect(field.List[0].Type, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok {
-			if obj := unit.Info.Uses[id]; obj != nil {
-				found = obj
-				return false
-			}
+	expression := field.List[0].Type
+	for {
+		switch value := expression.(type) {
+		case *ast.StarExpr:
+			expression = value.X
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.IndexExpr:
+			expression = value.X
+		case *ast.IndexListExpr:
+			expression = value.X
+		case *ast.Ident:
+			return unit.Info.Uses[value]
+		default:
+			return nil
 		}
-		return true
-	})
-	return found
+	}
 }
 
 // finish 对节点和关系做最终成员分类、排序与 evidence 汇总。

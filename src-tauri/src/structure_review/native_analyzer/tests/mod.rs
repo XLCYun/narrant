@@ -388,6 +388,26 @@ fn subprocess_handles_unicode_fragments_and_drains_stderr() {
     }
 }
 
+/// stdout 先关闭时仍保留随后到达的运行时启动诊断及原始协议错误。
+#[test]
+fn subprocess_preserves_early_eof_diagnostics() {
+    for mode in ["startup_diagnostic", "startup_stderr_first"] {
+        let fixture = Fixture::new();
+        let error = fixture
+            .executable_analyzer(mode, &line(ready()), &line(result()))
+            .analyze(&fixture.input())
+            .unwrap_err();
+        assert!(error.message.contains("完整 completed"), "{error}");
+        assert!(
+            error
+                .message
+                .contains("unique-runtime-initialization-failure"),
+            "{error}"
+        );
+        assert_process_gone(&fixture.tools.join("pid"));
+    }
+}
+
 /// P2 错误阶段、双终结、半行、异常退出和无取消的 cancelled 均是硬失败。
 #[test]
 fn subprocess_rejects_invalid_protocol_lifecycle() {

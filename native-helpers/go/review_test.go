@@ -12,6 +12,112 @@ import (
 	"time"
 )
 
+// TestBlankInitializerOwnership 验证空白变量的独立求值和共享求值只拥有一份内容及调用。
+func TestBlankInitializerOwnership(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	source := "package app\nfunc effect(x int)int{return x}\nfunc pair()(int,int){return 1,2}\nvar _ = effect(%s)\nvar _, A = effect(3), effect(4)\nvar _, B = pair()\n"
+	var first *graph
+	for _, argument := range []string{"1", "2"} {
+		writeFixture(t, root, "a.go", strings.ReplaceAll(source, "%s", argument))
+		result := analyze(context.Background(), fixtureRequest(t, root, "a.go"))
+		if result.Outcome != "ok" {
+			t.Fatal(result.Error)
+		}
+		calls := 0
+		var owner *node
+		for i := range result.Graph.Nodes {
+			n := &result.Graph.Nodes[i]
+			for _, r := range n.References {
+				if r.Semantic == "code.calls" {
+					calls++
+				}
+			}
+			if n.Code != nil && *n.Code == "effect ( "+argument+" )" {
+				owner = n
+			}
+		}
+		if calls != 4 || owner == nil {
+			t.Fatalf("initializer ownership missing: calls=%d owner=%+v", calls, owner)
+		}
+		if len(owner.References) != 1 || owner.References[0].Semantic != "code.calls" || owner.References[0].Target.ID != "go:a.go#func:effect" {
+			t.Fatalf("blank initializer call target lost: %+v", owner)
+		}
+		if first != nil {
+			before := findNode(first, owner.ID)
+			if before == nil || before.Code == nil || *before.Code == *owner.Code {
+				t.Fatal("blank edit lost stable owner/content")
+			}
+		}
+		first = result.Graph
+	}
+}
+
+// TestImportedContextFailures 验证仓内导入的未知配置及损坏源码都必须原子失败。
+func TestImportedContextFailures(t *testing.T) {
+	for _, source := range []string{"//go:build feature\n\npackage lib\nfunc Call(){}\n", "package lib\nfunc Call( {\n"} {
+		root := t.TempDir()
+		writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+		writeFixture(t, root, "a.go", "package app\nimport \"example.test/app/lib\"\nfunc Run(){lib.Call()}\n")
+		writeFixture(t, root, "lib/a.go", source)
+		result := analyze(context.Background(), fixtureRequest(t, root, "a.go"))
+		if result.Error == nil || result.Graph != nil {
+			t.Fatalf("admitted failure downgraded: %+v", result)
+		}
+	}
+}
+
+// TestImportedTargetDiscovery 验证传递仓内导入的目标条件决定配置并集与缺失目标报错。
+func TestImportedTargetDiscovery(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "a.go", "package app\nimport \"example.test/app/lib\"\nfunc Run(){lib.Call()}\n")
+	writeFixture(t, root, "lib/a.go", "package lib\nimport \"example.test/app/impl\"\nfunc Call(){impl.Call()}\n")
+	writeFixture(t, root, "impl/a_linux.go", "package impl\nfunc Call(){}\n")
+	writeFixture(t, root, "impl/a_windows.go", "package impl\nfunc Call(){}\n")
+	req := fixtureRequest(t, root, "a.go")
+	req.Environment.Platforms = req.Environment.Platforms[:2]
+	result := analyze(context.Background(), req)
+	if result.Outcome != "ok" || len(result.Evidence.Configurations) != 2 {
+		t.Fatalf("import targets lost: %+v", result)
+	}
+	req.Environment.Platforms = req.Environment.Platforms[:1]
+	result = analyze(context.Background(), req)
+	if result.Error == nil || result.Error.Code != "target_unavailable" {
+		t.Fatalf("missing import target ignored: %+v", result)
+	}
+}
+
+// TestGenericReceiverOwner 验证泛型值与指针 receiver 都指向基础类型而非类型参数。
+func TestGenericReceiverOwner(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "a.go", "package app\ntype Box[T any] struct{ V T }\nfunc(b Box[T]) Read()T{return b.V}\nfunc(b *Box[T]) Write(v T){b.V=v}\n")
+	result := analyze(context.Background(), fixtureRequest(t, root, "a.go"))
+	if result.Outcome != "ok" {
+		t.Fatal(result.Error)
+	}
+	count := 0
+	for _, n := range result.Graph.Nodes {
+		for _, r := range n.References {
+			if r.Semantic == "code.member_of" {
+				count++
+				if r.Target.Kind != "node" || r.Target.ID != "go:a.go#type:Box" {
+					t.Fatalf("wrong owner: %+v", r)
+				}
+			}
+		}
+	}
+	if count != 2 {
+		t.Fatalf("member count: %d", count)
+	}
+	for _, external := range result.Graph.ExternalSymbols {
+		if strings.HasSuffix(external.Symbol, "#T") {
+			t.Fatal("invented dependency T")
+		}
+	}
+}
+
 // TestContextPlatformDiscovery 验证未选同包平台文件仍决定分析配置及调用并集。
 func TestContextPlatformDiscovery(t *testing.T) {
 	root := t.TempDir()

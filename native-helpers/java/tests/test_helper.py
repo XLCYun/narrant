@@ -41,11 +41,16 @@ def run(message, cancel=False):
     environment = dict(os.environ)
     for key in ("CLASSPATH", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
         environment.pop(key, None)
-    result = subprocess.run(COMMAND, input=payload, text=True, capture_output=True, timeout=40,
-                            env=environment)
-    if result.returncode:
-        raise AssertionError((result.returncode, result.stderr, result.stdout))
-    rows = [json.loads(line) for line in result.stdout.splitlines()]
+    # 真实 Host 在终结帧前保持输入管道打开；EOF 另设断连回归。
+    with subprocess.Popen(COMMAND, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, env=environment) as proc:
+        proc.stdin.write(payload)
+        proc.stdin.flush()
+        rows = [json.loads(proc.stdout.readline()), json.loads(proc.stdout.readline())]
+        proc.stdin.close()
+        if proc.wait(timeout=40):
+            raise AssertionError((proc.returncode, proc.stderr.read(), rows))
+        assert proc.stdout.read() == ""
     assert len(rows) == 2 and rows[0]["type"] == "ready" and rows[1]["type"] == "completed", rows
     return rows[1]
 
@@ -319,6 +324,68 @@ class Shapes {
         self.assertIn("class Foo", node(result["graph"], "/class:Foo")["signature"])
         self.assertIn('"{"', node(result["graph"], "/method:run()")["signature"])
 
+
+    def test_host_eof_cancels_real_entrypoint(self):
+        """请求后提前 EOF 必须停止真实 Java 分析，不能发送普通成功。"""
+        metadata(self.root)
+        path = "src/main/java/A.java"
+        write(self.root, path, "class A { void run(){} }")
+        result = subprocess.run(COMMAND, input=json.dumps(request(self.root, [path])) + "\n",
+                                text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        terminal = json.loads(result.stdout.splitlines()[-1])
+        self.assertEqual(terminal["outcome"], "cancelled", terminal)
+        self.assertNotIn("graph", terminal)
+
+    def test_inherited_maven_source_roots(self):
+        """父 POM 的主测试目录在子模块继承，默认目录不再属于该模块。"""
+        write(self.root, "pom.xml", "<project><groupId>p</groupId><artifactId>parent</artifactId><version>1</version><modules><module>child</module></modules><properties><maven.compiler.release>17</maven.compiler.release></properties><build><sourceDirectory>sources</sourceDirectory><testSourceDirectory>checks</testSourceDirectory></build></project>")
+        write(self.root, "child/pom.xml", "<project><parent><groupId>p</groupId><artifactId>parent</artifactId><version>1</version></parent><artifactId>child</artifactId></project>")
+        main, test, default = "child/sources/B.java", "child/checks/Check.java", "child/src/main/java/A.java"
+        for path, name in [(main, "B"), (test, "Check"), (default, "A")]:
+            write(self.root, path, "class " + name + " {}")
+        rejected = run(request(self.root, [default]))
+        self.assertEqual(rejected["outcome"], "error", rejected)
+        excluded = run(request(self.root, [main, test]))
+        self.assertEqual(excluded["outcome"], "ok", excluded)
+        self.assertEqual({x["path"]: x["disposition"] for x in excluded["evidence"]["files"]},
+                         {main: "analyzed", test: "excluded_test"})
+        included = run(request(self.root, [main, test], include_tests=True))
+        self.assertEqual(included["outcome"], "ok", included)
+        node(included["graph"], "/class:Check")
+
+    def test_generic_parameter_rename_identity(self):
+        """词法类型参数按作用域及位置归一，重命名和遮蔽不改变方法身份。"""
+        metadata(self.root)
+        path = "src/main/java/C.java"
+        graphs = []
+        for outer, inner, method in [("T", "U", "V"), ("A", "B", "D")]:
+            write(self.root, path, f"class C<{outer}> {{ void f({outer} x){{}} class N<{inner}> {{ void g({outer} x,{inner} y){{}} <{method}> void h({method} x,{inner} y,{outer} z){{}} <{outer}> void shadow({outer} x){{}} }} }}")
+            completed = run(request(self.root, [path]))
+            self.assertEqual(completed["outcome"], "ok", completed)
+            graphs.append(completed["graph"])
+        identities = [{n["name"]: n["id"] for n in g["nodes"] if n["native_kind"] == "method"} for g in graphs]
+        self.assertEqual(identities[0], identities[1])
+        self.assertIn("@method0:0", identities[0]["shadow"])
+        self.assertIn("@type0:0", identities[0]["f"])
+        self.assertIn("@type1:0,@type0:0", identities[0]["g"])
+        self.assertNotEqual(identities[0]["g"].split("(", 1)[1].split(",")[0],
+                            identities[0]["g"].split("(", 1)[1].split(",")[1].rstrip(")"))
+
+    def test_record_component_owns_signature_content(self):
+        """组件类型编辑只改变组件，父 record 签名和代码均保留组件锚点。"""
+        metadata(self.root)
+        path = "src/main/java/R.java"
+        graphs = []
+        for type_name in ["int", "long"]:
+            write(self.root, path, f"record R({type_name} value, String other) {{}}")
+            result = run(request(self.root, [path]))
+            self.assertEqual(result["outcome"], "ok", result)
+            graphs.append(result["graph"])
+        for field in ["id", "signature", "code"]:
+            self.assertEqual(node(graphs[0], "/record:R")[field], node(graphs[1], "/record:R")[field])
+        self.assertNotEqual(node(graphs[0], "/record-component:value")["signature"],
+                            node(graphs[1], "/record-component:value")["signature"])
 
 if __name__ == "__main__":
     unittest.main()

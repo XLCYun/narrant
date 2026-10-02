@@ -401,7 +401,7 @@ final class Analyzer {
             } else if (ast instanceof MethodDeclaration node) {
                 String name = node.isConstructor() ? "<init>" : node.getName().getIdentifier();
                 String kind = node.isConstructor() ? "constructor" : "method";
-                String parameters = parameters(node.parameters());
+                String parameters = parameters(node, part.source);
                 open(ast, add("callable", id(kind, name, parameters), kind, name,
                     header(part.source, ast), ast, node.resolveBinding()));
             } else if (ast instanceof AnnotationTypeMemberDeclaration node) {
@@ -720,15 +720,58 @@ final class Analyzer {
             .replace("#", "%23").replace("(", "%28").replace(")", "%29");
     }
 
-    /** 用源码拼写建立重载槽，不使用外部类型绑定。 */
-    private static String parameters(List<?> values) {
+    /** 按词法作用域及序号归一泛型变量；内层同名声明遮蔽外层，不依赖绑定。 */
+    private static String parameters(MethodDeclaration method, String source) {
+        Map<String, String> variables = new HashMap<>();
+        int typeDepth = 0, methodDepth = 0;
+        for (ASTNode scope = method; scope != null; scope = scope.getParent()) {
+            List<?> parameters = List.of();
+            String prefix = "";
+            if (scope instanceof MethodDeclaration declaration) {
+                parameters = declaration.typeParameters();
+                prefix = "@method" + methodDepth++ + ":";
+            } else if (scope instanceof TypeDeclaration declaration) {
+                parameters = declaration.typeParameters();
+                prefix = "@type" + typeDepth++ + ":";
+            } else if (scope instanceof RecordDeclaration declaration) {
+                parameters = declaration.typeParameters();
+                prefix = "@type" + typeDepth++ + ":";
+            }
+            for (int index = 0; index < parameters.size(); index++) {
+                TypeParameter parameter = (TypeParameter) parameters.get(index);
+                variables.putIfAbsent(parameter.getName().getIdentifier(), prefix + index);
+            }
+        }
         List<String> parts = new ArrayList<>();
-        for (Object value : values) {
+        for (Object value : method.parameters()) {
             SingleVariableDeclaration parameter = (SingleVariableDeclaration) value;
-            parts.add(parameter.getType().toString().replaceAll("\\s+", "") +
+            parts.add(parameterType(parameter.getType(), source, variables) +
                 "[]".repeat(parameter.getExtraDimensions()) + (parameter.isVarargs() ? "..." : ""));
         }
         return String.join(",", parts);
+    }
+
+    /** 只替换类型位置的简单名称，保留限定类型及注解中的同名标识符。 */
+    private static String parameterType(Type type, String source, Map<String, String> variables) {
+        List<SimpleName> names = new ArrayList<>();
+        type.accept(new ASTVisitor() {
+            /** 收集词法类型变量的源码区间。 */
+            @Override public boolean visit(SimpleType simple) {
+                if (simple.getName() instanceof SimpleName name && variables.containsKey(name.getIdentifier()))
+                    names.add(name);
+                return true;
+            }
+        });
+        names.sort(Comparator.comparingInt(ASTNode::getStartPosition));
+        StringBuilder result = new StringBuilder();
+        int cursor = type.getStartPosition();
+        for (SimpleName name : names) {
+            result.append(canonical(source, cursor, name.getStartPosition()));
+            result.append(variables.get(name.getIdentifier()));
+            cursor = name.getStartPosition() + name.getLength();
+        }
+        result.append(canonical(source, cursor, type.getStartPosition() + type.getLength()));
+        return result.toString().replaceAll("\\s+", "");
     }
 
     /** 取得原始源码展示片段。 */
@@ -750,6 +793,17 @@ final class Analyzer {
         else {
             int nameEnd = typeNameEnd(node);
             if (nameEnd >= 0) end = typeBodyOpen(source, nameEnd, end);
+        }
+        if (node instanceof RecordDeclaration record) {
+            StringBuilder result = new StringBuilder();
+            int cursor = start;
+            for (Object value : record.recordComponents()) {
+                SingleVariableDeclaration component = (SingleVariableDeclaration) value;
+                result.append(canonical(source, cursor, component.getStartPosition()))
+                    .append(" @child(record-component:").append(component.getName().getIdentifier()).append(") ");
+                cursor = component.getStartPosition() + component.getLength();
+            }
+            return result.append(canonical(source, cursor, end)).toString().trim();
         }
         return canonical(source, start, end);
     }

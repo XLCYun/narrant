@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, ChildProcess } from 'node:child_process';
 import { packageDirectory } from '../build-language-support-packs.mjs';
 import { copyToolTree, smokeNativeHelper } from '../native-language-support-packs.mjs';
 
@@ -46,6 +46,28 @@ test('SDK tree copy materializes internal files and rejects escape', { skip: pro
 /** ready 中的语言身份是包启动校验的一部分，不能只要求子进程能退出。 */
 test('helper smoke rejects a mismatched implementation identity', async () => {
   await assert.rejects(smokeNativeHelper({ executable: process.execPath, args: ['-e', `console.log(JSON.stringify({protocol:'narrant.native-analyzer/1',type:'ready',helper_id:'other'})); process.stdin.resume()`], id: 'narrant-go', projection: 'go-source-v1', languages: ['go'], profile: 'go-static-v1' }), /identity mismatch/);
+});
+
+/** smoke 失败后必须等进程 close，才能删除它仍在使用的 scratch。 */
+test('smoke waits for killed child close before rejecting and removing cwd', async (t) => {
+  // 模拟异步终止延迟，让提前 reject 的旧实现稳定暴露清理竞态。
+  const originalKill = ChildProcess.prototype.kill;
+  const markerRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-smoke-close-test-'));
+  t.after(() => fs.rm(markerRoot, { recursive: true, force: true }));
+  const marker = path.join(markerRoot, 'cwd');
+  let child, closed = false;
+  t.mock.method(ChildProcess.prototype, 'kill', function (signal) {
+    child = this;
+    this.once('close', () => { closed = true; });
+    setTimeout(() => originalKill.call(this, signal), 150);
+    return true;
+  });
+  await assert.rejects(smokeNativeHelper({ executable: process.execPath,
+    args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, process.cwd()); console.log(JSON.stringify({protocol:'narrant.native-analyzer/1',type:'ready',helper_id:'other'})); process.stdin.resume()`],
+    id: 'narrant-go', projection: 'go-source-v1', languages: ['go'], profile: 'go-static-v1' }), /identity mismatch/);
+  try { assert.equal(closed, true, 'smoke rejected before child close'); }
+  finally { if (!closed && child) await new Promise(resolve => child.once('close', resolve)); }
+  await assert.rejects(fs.stat(await fs.readFile(marker, 'utf8')), { code: 'ENOENT' });
 });
 
 /** 本地开发产物没有通过真实双平台验收前不会被发布脚本纳入。 */

@@ -98,7 +98,7 @@ public final class Main {
                                AtomicBoolean invalidCancel) {
         try {
             String line = input.readLine();
-            if (line == null) return;
+            if (line == null) { cancelled.set(true); return; }
             JsonObject frame = parseObject(line);
             fields(frame, Set.of("protocol", "type", "id"));
             requireString(frame, "protocol", PROTOCOL);

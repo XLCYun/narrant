@@ -31,7 +31,18 @@ process.stdin.on('end', () => {
   clearInterval(keepAlive);
   process.exit(0);
 });
-if (mode === 'no_read') {
+if (mode === 'startup_stderr_first') {
+  // 反向 EOF 顺序也必须保留诊断，即使进程返回零。
+  process.stderr.end('unique-runtime-initialization-failure', () => setTimeout(() => {
+    process.stdout.end(() => process.exit(0));
+  }, 50));
+} else if (mode === 'startup_diagnostic') {
+  // 先关 stdout，再延迟写入启动错误，验证 Host 等待 stderr/exit。
+  process.stdout.end(() => setTimeout(() => {
+    fs.writeSync(2, 'unique-runtime-initialization-failure');
+    process.exit(7);
+  }, 50));
+} else if (mode === 'no_read') {
   output('ready');
 } else if (mode === 'startup_stall') {
   process.stdin.resume();

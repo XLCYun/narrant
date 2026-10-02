@@ -40,15 +40,32 @@ async function findDirectory(candidates, label) {
 /** 以空业务环境启动自己的 helper，验证 ready 身份以及协议错误的受控终结。 */
 export async function smokeNativeHelper({ executable, args = [], id, projection, languages, profile, environment = {} }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-native-pack-smoke-'));
+  let primaryError;
   try {
     await new Promise((resolve, reject) => {
       const child = spawn(executable, args, { cwd: root, env: { ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}), TMPDIR: root, TMP: root, TEMP: root, DOTNET_EnableDiagnostics: '0', ...environment }, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '', stderr = '', ready = false;
-      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Native helper startup smoke timeout')); }, 30_000);
-      child.on('error', error => { clearTimeout(timer); reject(error); });
+      let failure, closeTimer;
+      /** 保存首个失败，等待异步 close 后才允许调用方清理 cwd。 */
+      function stop(error) {
+        if (failure) return;
+        failure = error;
+        clearTimeout(timer);
+        closeTimer = setTimeout(() => {
+          failure.message += '; native helper close timeout';
+          child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+          child.unref();
+          reject(failure);
+        }, 3_000);
+        try { child.kill('SIGKILL'); } catch { /* 原始错误仍由 close 或有界兜底返回。 */ }
+      }
+      const timer = setTimeout(() => stop(new Error('Native helper startup smoke timeout')), 30_000);
+      child.on('error', stop);
+      child.stdin.on('error', stop);
       child.stdout.on('data', chunk => {
         stdout += chunk;
-        if (stdout.length > 262144) { child.kill('SIGKILL'); return; }
+        if (failure) return;
+        if (stdout.length > 262144) { stop(new Error('Native helper smoke output exceeds limit')); return; }
         if (!ready && stdout.includes('\n')) {
           try {
             const message = JSON.parse(stdout.slice(0, stdout.indexOf('\n')));
@@ -56,17 +73,26 @@ export async function smokeNativeHelper({ executable, args = [], id, projection,
             ready = true;
             // EOF 在请求前只允许终止，不应遗留自己的输入线程或子进程。
             child.stdin.end();
-          } catch (error) { child.kill('SIGKILL'); clearTimeout(timer); reject(error); }
+          } catch (error) { stop(error); }
         }
       });
       child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-262144); });
       child.on('close', (code, signal) => {
         clearTimeout(timer);
-        if (!ready || signal || ![0, 1, 2].includes(code)) reject(new Error(`Native helper smoke failed (${code}/${signal}): ${stderr}`));
+        clearTimeout(closeTimer);
+        if (failure) reject(failure);
+        else if (!ready || signal || ![0, 1, 2].includes(code)) reject(new Error(`Native helper smoke failed (${code}/${signal}): ${stderr}`));
         else resolve();
       });
     });
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    try { await fs.rm(root, { recursive: true, force: true }); }
+    catch (error) {
+      if (!primaryError) throw error;
+      primaryError.message += `; scratch cleanup failed: ${error.message}`;
+    }
+  }
 }
 
 /** 从固定语言源码和私有 SDK 组装本机开发包；不下载项目依赖、不调用项目构建。 */

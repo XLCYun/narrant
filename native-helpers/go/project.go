@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"go/build"
 	"go/build/constraint"
+	"go/parser"
+	"go/token"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -441,7 +444,7 @@ func discoverPlatforms(project *project, selected []string, includeTests bool, c
 	if len(candidates) == 0 {
 		return nil, fail("target_unavailable", "no approved Go SDK targets in catalog")
 	}
-	contextFiles, problem := projectContextFiles(project, selected, includeTests)
+	contextFiles, problem := projectContextFiles(project, selected, includeTests, candidates[0].Root)
 	if problem != nil {
 		return nil, problem
 	}
@@ -533,8 +536,8 @@ func matchesSupportedTarget(root, rel, sdkRoot string) (bool, *analysisError) {
 	return false, nil
 }
 
-// projectContextFiles 搜集选中包中的允许源码，包括未选中的平台实现文件。
-func projectContextFiles(p *project, selected []string, includeTests bool) ([]string, *analysisError) {
+// projectContextFiles 沿仓内显式导入闭包搜集允许源码及平台条件，绝不读取第三方依赖。
+func projectContextFiles(p *project, selected []string, includeTests bool, sdkRoot string) ([]string, *analysisError) {
 	dirs := map[string]bool{}
 	for _, rel := range selected {
 		if !includeTests && strings.HasSuffix(rel, "_test.go") {
@@ -547,21 +550,64 @@ func projectContextFiles(p *project, selected []string, includeTests bool) ([]st
 		dirs[filepath.Dir(filename)] = true
 	}
 	files := []string{}
+	queue := []string{}
 	for dir := range dirs {
+		queue = append(queue, dir)
+	}
+	sort.Strings(queue)
+	visited := map[string]bool{}
+	for len(queue) > 0 {
+		dir := queue[0]
+		queue = queue[1:]
+		if visited[dir] {
+			continue
+		}
+		visited[dir] = true
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, fail("object_extraction_failed", err.Error())
 		}
 		for _, entry := range entries {
-			if !strings.HasSuffix(entry.Name(), ".go") || (!includeTests && strings.HasSuffix(entry.Name(), "_test.go")) {
+			if !strings.HasSuffix(entry.Name(), ".go") || ((!includeTests || !dirs[dir]) && strings.HasSuffix(entry.Name(), "_test.go")) {
 				continue
 			}
 			filename := filepath.Join(dir, entry.Name())
-			if _, err := safeFile(p.Root, filename); err != nil {
+			data, err := safeFile(p.Root, filename)
+			if err != nil {
 				return nil, fail("unsupported_configuration", err.Error())
 			}
 			rel, _ := filepath.Rel(p.Root, filename)
 			files = append(files, filepath.ToSlash(rel))
+			if _, problem := hasTargetConstraint(p.Root, filepath.ToSlash(rel)); problem != nil {
+				return nil, problem
+			}
+			supported, problem := matchesSupportedTarget(p.Root, filepath.ToSlash(rel), sdkRoot)
+			if problem != nil {
+				return nil, problem
+			}
+			if !supported {
+				continue
+			}
+			parsed, err := parser.ParseFile(token.NewFileSet(), filename, data, parser.ImportsOnly)
+			if err != nil {
+				return nil, fail("object_extraction_failed", err.Error(), filepath.ToSlash(rel))
+			}
+			for _, imported := range parsed.Imports {
+				name, err := strconv.Unquote(imported.Path.Value)
+				if err != nil {
+					return nil, fail("object_extraction_failed", err.Error(), filepath.ToSlash(rel))
+				}
+				dependency, local, err := p.importDirectory(name)
+				if err != nil {
+					return nil, fail("unsupported_configuration", err.Error(), filepath.ToSlash(rel))
+				}
+				if local {
+					if err := within(p.Root, dependency); err != nil {
+						return nil, fail("unsupported_configuration", err.Error(), filepath.ToSlash(rel))
+					}
+					queue = append(queue, dependency)
+				}
+			}
 		}
 	}
 	sort.Strings(files)
