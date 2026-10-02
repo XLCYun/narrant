@@ -9,7 +9,7 @@
 绝对路径；`trusted_roots` 包含可执行文件所属目录，且这些目录不能与测试创建的临时仓库
 重叠。`platforms` 的每条记录直接对应公开 Host `Platform`，字段和值由支持包构建过程
 产生，不在测试中探测本机默认 SDK。Java 可执行文件通常是私有 JDK 的 `java`，其 `args`
-需包含固定 classpath 和主类；其他 helper 通常没有参数。
+需包含固定 classpath 和主类；C# 使用私有 dotnet host 加固定 helper DLL 参数，Go/Clang 不需启动参数。
 
 ```json
 {
@@ -43,7 +43,7 @@ NARRANT_NATIVE_HELPERS_CONFIG=/absolute/native-helpers-config.json \
   --test native_helper_graphs -- --ignored
 ```
 
-一轮完整执行包含 Go、Java、C#、Clang C17、Clang C++20 五种模式。
+一轮完整执行包含配置完整性、Go、Java、C#、Clang C17、Clang C++20 五种模式，以及同一仓库的 mixed 图合并，共七个测试。
 `all_required_helpers_configured` 会使缺失任一 helper 配置的完整执行失败；
 单独调试 Go 时可用 `-- --ignored go_real_helper_graph_and_diff` 聚焦运行，
 这种聚焦结果不能当作完整验收。
@@ -82,5 +82,54 @@ Clang C++20 均经过 `NativeLanguageAnalyzer → CodeGraph → CodeGraph::diff`
 ## Review fix round 1：六快照增强
 
 初始六测试通过记录对应四快照版本，不能直接用于证明新增关系/结构 diff 和未知调用。
-增强版本保持相同六个测试入口，每种模式现在分析六份独立仓库；实际命令与结果另记
-Task 7 crossplatform report。Windows x64 仍未执行，不将本机结果推广到 Windows。
+增强版本让每种模式分析六份独立仓库，并进一步加入第七个 mixed 测试。最终修复构件的完整运行结果如下；Windows x64 仍未执行，不将本机结果推广到 Windows。
+
+## 2026-10-03 最终修复快照的本机验收
+
+以下结果覆盖审查修复后重新编译的构件，替代前述中间包的验收状态。Go、Java、Clang
+在构建 HEAD `bd62783c8f6b8382b4e25e86e8bfd684f697b760` 刷新；C# 在 round2 提交
+`879c7bc13f5beabcb9df104a1d8707db6c9916cd` 后单独刷新。各包实际经过编译、归档摘要生成、
+解压和 helper ready 身份检查，没有复用旧 helper 二进制。
+
+| 包 | helper 源码提交 | 归档字节数 | 实际归档 SHA-256 |
+| --- | --- | ---: | --- |
+| go | `228f340245bd63fec5ab20532916349617c0ff33` | 29,883,057 | `2be97f7142299ac67b8e9b062371e421cc405834334407530a8410f2cbc2b5e7` |
+| java | `beeb5f15e6c6d56bac78a1f56ee84d67495dd8cb` | 197,564,998 | `0219a26b3f7c49338ff35d808bb7af39e6b0e14e48cdf84dc0e1c58cca9374df` |
+| c-cpp | `fcbf1de9fdd282ceaddd7cb1d34747b3b34a0cbb` | 51,814,086 | `24e5882a6637af11d386e69962aa55f6f378adc19f1ff7a8541a8382ca7631d0` |
+| csharp | `879c7bc13f5beabcb9df104a1d8707db6c9916cd` | 51,218,547 | `ea8336deff66d539b2e95fe22b6397fe8c5450575b1d2941553ccec8b2a55ac6` |
+
+完整源码文件摘要保存在 `/private/tmp/narrant-native-packs/final-local-source-snapshot.json`，
+归档及 manifest 摘要保存在同目录 `final-local-artifacts.json`，最终结果汇总为
+`final-local-results.json`。测试前后核对四个归档及配置没有改变。
+运行配置 `/private/tmp/narrant-native-packs/native-helpers-config.json` 的 SHA-256 是
+`13e3217689cf849967954cf40e1acbe822d7b52b8b11ca498e1fc10508ad9b3a`。
+
+最终测试快照为 `5e743c85377614f2adc894d633374b143d5f77b5`，其中
+`src-tauri/tests/native_helper_graphs.rs` 的 SHA-256 是
+`129ca8693fb52b2c73c7e6dc31b8d89c3cecb66418670760f0ca3fe4b2263f5c`。
+
+```sh
+# cwd 为仓库根；PATH 前置 Node24.18.0 与 Cargo。
+NARRANT_NATIVE_PACKS=/private/tmp/narrant-native-packs \
+  scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml \
+  --lib real_native_packs_install_and_analyze_through_production_factory \
+  -- --ignored --nocapture
+
+NARRANT_NATIVE_HELPERS_CONFIG=/private/tmp/narrant-native-packs/native-helpers-config.json \
+  scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml \
+  --test native_helper_graphs -- --ignored --nocapture --test-threads=1
+```
+
+生产安装测试：**1 passed、0 failed、0 ignored，122.34秒**。同一测试要求四个真实归档全部存在，
+逐包执行生产下载校验、安装、工厂非空图、租约删除保护和生产 origin 重启复用。
+日志为 `/private/tmp/narrant-task7-final-install.log`。
+
+完整增强套件：**7 passed、0 failed、0 ignored、0 filtered，8.83秒**，没有缺工具跳过。
+配置完整性、Go、Java、C#、C17、C++20 与新增 mixed 场景全部通过。
+五种单语言模式均运行 before/changed/formatted/relocated/relations/structure 六个独立快照，
+包括具名 Unresolved、关系增删与包含增删。mixed 场景让同一仓库根中的 Go、Java、C#、C++
+分别经真实 helper/Host 构图，再用生产 `CodeGraph::merge` 合为一张图；验证 before/changed/relocated
+的跨语言合并、身份和 diff。日志为 `/private/tmp/narrant-task7-final-graphs.log`。
+
+本次只验证 macOS ARM64 与 SDK27.0。Windows x64 和 CI SDK15.5 尚未实际运行，不能由本机
+结果推断通过。没有重复全库 Rust 测试，没有手动 quality-gate、远端发布、push 或 PR。

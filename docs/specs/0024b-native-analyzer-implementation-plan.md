@@ -12,6 +12,19 @@
 [应用与支持包 #198](https://github.com/XLCYun/narrant/issues/198)、
 [贯通验收 #199](https://github.com/XLCYun/narrant/issues/199)。
 
+## 当前实施状态（2026-10-03）
+
+公共 Host、四个原生 helper、应用分派与支持包接入已实现；各任务的独立审查修复完成。
+本机 macOS ARM64 的最终四包已通过生产安装与分析入口验证，同仓库四语言合并测试通过。
+Rust 全量测试 751 项、前端测试 425 项、Node 脚本测试 180 项通过，Lint、生产构建和真实
+浏览器验收通过。最终支持包的完整七项真实图验收通过（无跳过），整分支审查正在收尾。
+
+Windows x64 与 CI macOS SDK15.5 尚未实际运行；推送实现分支并创建草稿 PR 的授权待确认，
+未创建 PR，未发布支持包或合并主分支。当前不能将 Task 7 或全部目标标记完成。
+具体构件版本、摘要与验证范围见 [支持包验收](../research/native-pack-integration.md)、
+[真实图验收](../research/native-helper-conformance.md) 和
+[跨平台入口](../research/native-crossplatform-validation.md)。
+
 ## Global Constraints
 
 - 新语言使用原生 helper 完成语法、语义、源码身份、内容投影及单图并集；Rust 不再做语言 AST 映射。
