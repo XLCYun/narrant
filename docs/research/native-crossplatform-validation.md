@@ -2,12 +2,46 @@
 
 状态：macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过四包构建、
 四语言原生套件和新增 native helper 专用回收实现的产品探针，专用实现的定点审查也已完成。
-最新运行在未改动的旧共享 LSP Job 回归处失败，后续新 Host、生产安装和公共图未运行。
+最新运行的新 Host19项、factory2项及生产安装1项通过；公共八图在链接阶段因重复manifest资源未能执行。
+旧共享 LSP Job 回归仍失败，独立验收脚本保留并汇总两个失败，整个任务仍为红色。
 旧共享完成次序问题仍存在，不能把 native 专用修复视为整个 LSP/Python 路径的修复。
 工作在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中继续。
 本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
 
-## 2026-10-03 最新完整运行：6bc50d3
+## 2026-10-03 最新完整运行：7419870
+
+[运行 37109657139](https://github.com/XLCYun/narrant/actions/runs/37109657139) 已全部结束。
+本提交只让独立验收组串行跑完并汇总失败，产品源码未变。
+
+[原生 Windows 111164937810](https://github.com/XLCYun/narrant/actions/runs/37109657139/job/111164937810)
+的实际 native owner 产品探针通过：父退出保留管道4毫秒、关闭管道3毫秒、父仍存活16毫秒，
+返回后父子原句柄均立即为0，raw1816门禁通过。Node35项中34通过、1个POSIX专用跳过。
+四包构建和ready通过；Go2.276秒、Java25/56.256秒、C#29/21.676秒、Clang25通过加1个平台跳过/9.216秒。
+
+| Windows 独立验收组 | 实际结果 |
+| --- | --- |
+| 旧共享 Job | 1通过、1失败、0ignored，0.13秒；第85行同一后代句柄为258而非0 |
+| 新 native Host | 19通过、0失败、1ignored，4.24秒；ignored仅为由其他测试启动的子进程夹具 |
+| native factory | 2通过、0失败、0ignored |
+| 真实四包生产安装 | 1通过、0失败、0ignored，165.90秒 |
+| 公共 CodeGraph/diff 八图 | 构建失败，八项均未执行 |
+
+图验收命令同时链接 `narrant` 应用二进制，链接器报告
+`CVTRES fatal error CVT1100: duplicate resource. type:MANIFEST, name:1, language:0x0409`
+及 `LINK LNK1123`。显式测试环境的 `/MANIFEST:EMBED` 与 Tauri 的应用资源同时参与链接；
+当前修复这一测试构建边界，不删除图验收或改变应用默认manifest。
+最终 `AggregateError: 2 native validation group(s) failed` 准确保留共享回归与图构建两个失败。
+完整官方日志：`/private/tmp/narrant-ci-native-windows-7419870.log`。
+
+同轮[原生 macOS 111164937930](https://github.com/XLCYun/narrant/actions/runs/37109657139/job/111164937930)
+完整成功：Go0.590秒、Java25/19.302秒、C#29/12.324秒、Clang25通过加1个平台跳过/5.744秒；
+Host17/3.54秒、factory2、安装1/88.53秒、公共图8/14.95秒通过。
+[Python Windows 111164937942](https://github.com/XLCYun/narrant/actions/runs/37109657139/job/111164937942)
+三组20/21.67秒、3/3.87秒、4/4.71秒通过；
+[Python macOS 111164937956](https://github.com/XLCYun/narrant/actions/runs/37109657139/job/111164937956)
+三组35/8.68秒、3/10.84秒、4/4.01秒通过。以上成功Rust组均零失败、零ignored。
+
+## 2026-10-03 运行记录：6bc50d3
 
 [运行 37108089607](https://github.com/XLCYun/narrant/actions/runs/37108089607) 已全部结束。
 `6bc50d3` 仅修正验收脚本测试对 CRLF 的接受；专用 native owner 产品源码仍为 `d2b0245`。

@@ -18,6 +18,8 @@ fn configure_windows_native_tests() {
     {
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
         println!("cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
+        // 集成测试同时构建应用；它已有 Tauri 资源内的 manifest，不能再生成第二份资源 1。
+        println!("cargo:rustc-link-arg-bin=narrant=/MANIFEST:NO");
     }
 }
 

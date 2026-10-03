@@ -10,6 +10,23 @@ import { runVerificationCommands, validateNativeConfiguration, verificationComma
 const manifest = JSON.parse(await fs.readFile(new URL('../../resources/native-toolchains.json', import.meta.url), 'utf8'));
 const workflowSource = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
 
+// 显式测试标记保留库测试 manifest，但应用目标必须复用 Tauri 的资源，避免重复资源 1。
+test('Windows native test manifest keeps Common Controls and excludes duplicate app generation', async () => {
+  const build = (await fs.readFile(new URL('../../src-tauri/build.rs', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const configuration = build.split('fn configure_windows_native_tests() {')[1].split('\n}\n')[0];
+  assert.match(configuration, /var\("CARGO_CFG_TARGET_OS"\)\.as_deref\(\) == Ok\("windows"\)/);
+  assert.match(configuration, /var\("CARGO_CFG_TARGET_ENV"\)\.as_deref\(\) == Ok\("msvc"\)/);
+  assert.match(configuration, /var\(FLAG\)\.as_deref\(\) == Ok\("1"\)/);
+  assert.match(configuration, /cargo:rerun-if-env-changed=\{FLAG\}/);
+  const directives = [...configuration.matchAll(/println!\("(cargo:rustc-link-arg[^"\n]*)"\);/g)].map(match => match[1]);
+  assert.deepEqual(directives, [
+    'cargo:rustc-link-arg=/MANIFEST:EMBED',
+    "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'",
+    'cargo:rustc-link-arg-bin=narrant=/MANIFEST:NO',
+  ]);
+  assert.match(build, /configure_windows_native_tests\(\);\s+tauri_build::build\(\)/);
+});
+
 // 显式重放两种 checkout 换行，不能让本机 LF 掩盖 Windows CRLF 的路径断言失败。
 for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
   const workflow = workflowSource.replace(/\r?\n/g, newline);

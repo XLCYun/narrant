@@ -14,12 +14,14 @@
 
 ## 当前实施状态（2026-10-03）
 
-`6bc50d3` 的[完整运行 37108089607](https://github.com/XLCYun/narrant/actions/runs/37108089607)
+`7419870` 的[完整运行 37109657139](https://github.com/XLCYun/narrant/actions/runs/37109657139)
 已结束：原生 macOS、Python macOS/Windows 三项任务成功；原生 Windows 失败。
 Windows 的专用 native owner 产品探针、四包构建和全部四语言原生套件均通过，
-失败来自保持原实现的共享 LSP Job 回归：两项中一项通过，另一项返回后仍观察到后代句柄为258。
-该失败提前中断了新 native Host、factory、生产安装和八项公共图，不能将这些未运行项算作通过。
-当前先让独立验收组串行完成并汇总失败，保留共享回归及最终非零退出，以取得完整证据。
+新 native Host 的19项实际测试、factory2项、生产四包安装1项也已通过；
+另1个ignored函数是子进程夹具入口。八项公共图因链接应用二进制时重复manifest资源而未运行。
+保持原实现的共享 LSP Job 回归仍为1通过、1失败，后代原句柄返回后仍为258。
+独立验收组已串行完成并正确汇总两个失败，未弱化共享断言或将失败算作通过。
+当前修复显式测试manifest与Tauri应用manifest冲突，然后继续Windows八图验收。
 专用 owner 实现与定点审查已完成；旧共享完成次序问题尚未修复，Task 7 仍未完成。
 草稿 PR #200 保持开启，支持包未发布。精确结果见[跨平台记录](../research/native-crossplatform-validation.md)。
 
