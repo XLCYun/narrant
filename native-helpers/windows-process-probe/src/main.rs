@@ -7,6 +7,7 @@ mod windows_process;
 #[cfg(windows)]
 use std::{
     fs, io,
+    io::Read,
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -102,7 +103,7 @@ fn wait_file(path: &Path) -> io::Result<()> {
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "probe ready timeout",
+                format!("probe marker timeout: {}", path.display()),
             ));
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -143,6 +144,7 @@ fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) ->
     {
         return Err(io::Error::last_os_error());
     }
+    println!("[windows-process-probe] admission_gate SetInformationJobObject succeeded");
     // SAFETY: 从同一自有 Job 读回，证明零值及限制 flags 已被内核接受。
     if unsafe {
         QueryInformationJobObject(
@@ -157,6 +159,7 @@ fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) ->
         return Err(io::Error::last_os_error());
     }
     let flags = limits.BasicLimitInformation.LimitFlags;
+    println!("[windows-process-probe] admission_gate readback flags={flags:#x} active_limit={} active_now={:?}", limits.BasicLimitInformation.ActiveProcessLimit, job.active_processes());
     assert_eq!(limits.BasicLimitInformation.ActiveProcessLimit, 0);
     assert_ne!(flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS, 0);
     assert_ne!(flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, 0);
@@ -165,14 +168,30 @@ fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) ->
         0
     );
     fs::write(directory.join("attempt-spawn"), "attempt")?;
+    println!(
+        "[windows-process-probe] admission_gate attempt-spawn published; waiting attempt-result"
+    );
     wait_file(&directory.join("attempt-result"))?;
     let outcome = fs::read_to_string(directory.join("attempt-result"))?;
     println!("[windows-process-probe] admission_gate flags={flags:#x} active_limit=0 spawn_outcome={outcome}");
-    assert!(
-        outcome.starts_with("rejected:"),
-        "sealed Job admitted a new process"
-    );
+    if !outcome.starts_with("rejected:") {
+        return Err(io::Error::other(format!(
+            "admission gate result requires diagnosis: {outcome}"
+        )));
+    }
     Ok(())
+}
+
+/// 只读取本次夹具写出的有限诊断文件，不等可能被后代继承的管道 EOF。
+#[cfg(windows)]
+fn print_fixture_diagnostic(directory: &Path, name: &str) {
+    let mut bytes = Vec::new();
+    let result = fs::File::open(directory.join(name))
+        .and_then(|file| file.take(16 * 1024).read_to_end(&mut bytes));
+    println!(
+        "[windows-process-probe] {name} read={result:?} text={:?}",
+        String::from_utf8_lossy(&bytes)
+    );
 }
 
 /// 一个场景同时验证 Job 继承、已有清理函数和立即退出信号。
@@ -183,6 +202,11 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| io::Error::other("Windows probe requires SystemRoot"))?;
     let mut command = Command::new(node);
+    let stderr = if mode == "admission_gate" {
+        Stdio::from(fs::File::create(directory.join("fixture-stderr"))?)
+    } else {
+        Stdio::piped()
+    };
     command
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixture.mjs"))
         .arg(directory)
@@ -195,7 +219,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         .current_dir(directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(stderr);
     let (mut parent, job) = windows_process::WindowsJob::spawn(&mut command)?;
     wait_file(&directory.join("ready"))?;
     let pid: u32 = fs::read_to_string(directory.join("descendant"))?
@@ -206,7 +230,14 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
     println!("[windows-process-probe] mode={mode} parent={} descendant={pid} parent_in_exact_job={:?} descendant_in_exact_job={member} active_before={}", parent.id(), belongs(parent.as_raw_handle(), job.raw()), job.active_processes()?);
     state("before", pid, descendant.0.as_raw_handle());
     if mode == "admission_gate" {
-        verify_admission_gate(&job, directory)?;
+        if let Err(error) = verify_admission_gate(&job, directory) {
+            println!("[windows-process-probe] admission_gate failed={error} parent_exit={:?} active_at_failure={:?}", parent.try_wait(), job.active_processes());
+            state("gate_failure_parent", parent.id(), parent.as_raw_handle());
+            state("gate_failure_descendant", pid, descendant.0.as_raw_handle());
+            print_fixture_diagnostic(directory, "attempt-trace");
+            print_fixture_diagnostic(directory, "fixture-stderr");
+            return Err(error);
+        }
         // SAFETY: 两个进程仍由当前守卫持有；仅验证封闭入口没有终止既有成员。
         assert_eq!(
             unsafe { WaitForSingleObject(parent.as_raw_handle(), 0) },

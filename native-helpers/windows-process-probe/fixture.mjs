@@ -21,15 +21,31 @@ if (mode === 'admission_gate') {
   const attempt = setInterval(() => {
     if (!fs.existsSync(path.join(directory, 'attempt-spawn'))) return;
     clearInterval(attempt);
-    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { detached: true, stdio: 'ignore' });
+    /** 只记录固定阶段名，用于区分进入创建前、同步抛错与异步事件。 */
+    const stage = name => fs.appendFileSync(path.join(directory, 'attempt-trace'), `${name}\n`);
     /** 原子发布结果，防止观察方读取尚未完成的标记内容。 */
     const publish = result => {
       const marker = path.join(directory, 'attempt-result');
       fs.writeFileSync(marker + '.tmp', result);
       fs.renameSync(marker + '.tmp', marker);
     };
-    child.once('error', error => publish(`rejected:${error.code}`));
-    child.once('spawn', () => publish('accepted'));
+    stage('before-spawn');
+    try {
+      const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { detached: true, stdio: 'ignore' });
+      stage('spawn-returned');
+      child.once('error', error => {
+        stage('error-event');
+        publish(`rejected:${error.code}`);
+      });
+      child.once('spawn', () => {
+        stage('spawn-event');
+        publish('accepted');
+      });
+    } catch (error) {
+      stage('synchronous-throw');
+      // 同步异常单独报告，本轮不把未知异常当成 gate 通过。
+      publish(`thrown:${error.code}:${String(error.message).slice(0, 1024)}`);
+    }
   }, 5);
 }
 setInterval(() => {}, 1000);
