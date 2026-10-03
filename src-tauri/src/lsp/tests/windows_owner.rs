@@ -5,10 +5,11 @@ use crate::structure_review::native_analyzer::ValidationWindowsJob;
 use std::{
     cell::RefCell,
     io,
-    os::windows::io::{AsHandle, OwnedHandle},
+    os::windows::io::{AsHandle, AsRawHandle, OwnedHandle},
     process::{Child, Command},
     sync::{Arc, Mutex},
 };
+use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 
 /// 明确标识测试实际创建的 owner，不把旧共享路径的结果记到候选名下。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -214,6 +215,20 @@ impl TestWindowsOwner {
             Self::Baseline(job) => job.active_processes(),
             Self::NativeCandidate(job) => job.active_processes(),
         }
+    }
+
+    /// 借用当前 owner 和具查询权限的进程句柄，确认准确对象属于此会话的外层 Job。
+    pub(super) fn contains(&self, process: &OwnedHandle) -> io::Result<bool> {
+        let job = match self {
+            Self::Baseline(job) => job.raw(),
+            Self::NativeCandidate(job) => job.raw(),
+        };
+        let mut member = 0;
+        // SAFETY: owner 与进程句柄在整个调用期间均被借用，Job 句柄不复制、不跨线程传递。
+        if unsafe { IsProcessInJob(process.as_raw_handle(), job, &mut member) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(member != 0)
     }
 
     /// 仅由测试主动采样，不在清理返回后添加查询而掩盖立即 Wait(0) 的竞态。

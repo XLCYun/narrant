@@ -3,6 +3,8 @@
 #[cfg(windows)]
 mod admission_worker;
 #[cfg(windows)]
+mod nested_accounting;
+#[cfg(windows)]
 #[path = "../../../src-tauri/src/structure_review/native_analyzer/windows_process.rs"]
 mod windows_process;
 
@@ -394,8 +396,14 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
 /// 三个短场景直接使用真实 WindowsJob，不加载 Tauri 或下载语言工具链。
 #[cfg(windows)]
 fn main() -> io::Result<()> {
+    if let Some(result) = nested_accounting::dispatch() {
+        return result;
+    }
     if let Some(result) = admission_worker::dispatch() {
         return result;
+    }
+    if std::env::args().nth(1).as_deref() != Some("--admission-only") {
+        nested_accounting::run()?;
     }
     let node = PathBuf::from(std::env::var_os("NARRANT_TEST_NODE").ok_or_else(|| {
         io::Error::other("set NARRANT_TEST_NODE to the absolute Node 24 executable")

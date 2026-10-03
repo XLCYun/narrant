@@ -80,9 +80,13 @@ impl ServerProcess {
             libc::kill(-(self.child.id() as i32), libc::SIGKILL);
         }
         #[cfg(windows)]
-        self.job.terminate_and_wait().map_err(failure)?;
+        let job_result = self.job.terminate_and_wait().map_err(failure);
+        // Job 报错也必须先回收直接 Child；原错误随后返回，不能提前标记整组完成。
         let _ = self.child.kill();
-        self.child.wait().map_err(failure)?;
+        let child_result = self.child.wait().map_err(failure);
+        #[cfg(windows)]
+        job_result?;
+        child_result?;
         #[cfg(unix)]
         {
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -122,6 +126,15 @@ pub(super) struct Transport {
 }
 
 impl Transport {
+    /// 仅测试借用会话所有者，验证准确进程对象的外层 Job 归属。
+    #[cfg(all(test, windows))]
+    pub(super) fn windows_owner_contains(
+        &self,
+        process: &std::os::windows::io::OwnedHandle,
+    ) -> std::io::Result<bool> {
+        self._process.job.contains(process)
+    }
+
     /// 测试在批次之间主动读取 owner 统计，不改变清理返回的可观察时机。
     #[cfg(all(test, windows))]
     pub(super) fn windows_owner_snapshot(

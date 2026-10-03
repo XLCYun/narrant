@@ -21,7 +21,8 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::Threading::{
-        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     },
 };
 
@@ -36,8 +37,14 @@ struct ObservedProcess(OwnedHandle);
 impl ObservedProcess {
     /// PID 由原子发布的夹具标记提供，且服务器在保存句柄前不能退出。
     fn open(pid: u32) -> io::Result<Self> {
-        // SAFETY: 只打开本测试刚启动且尚未放行的进程；终止权限仅供失败兜底。
-        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+        // SAFETY: 只打开尚未放行的自有进程；查询权限仅检查 Job 归属，终止权限仅供兜底。
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            )
+        };
         if handle.is_null() {
             return Err(io::Error::last_os_error());
         }
@@ -162,6 +169,21 @@ impl SessionFixture {
         );
     }
 
+    /// 借用仍存活的真实 owner 验证准确归属，detached 叶进程不得逃出 Narrant Job。
+    fn assert_owner_membership(&self, client: &LspClient) {
+        let observed = self.observed.get().expect("初始化前已保存准确句柄");
+        assert!(
+            client.windows_owner_contains(&observed.root.0).unwrap(),
+            "根进程必须属于当前会话的准确 Job"
+        );
+        assert!(
+            client
+                .windows_owner_contains(&observed.descendant.0)
+                .unwrap(),
+            "detached 叶进程必须仍属于当前会话的准确 Job"
+        );
+    }
+
     /// 只在完成状态已被同步采样后等待观察者，不让线程调度延迟帮助退出断言。
     fn join_observer(&mut self) {
         self.observer
@@ -257,6 +279,7 @@ fn run_normal_shutdown(scenario: &'static str) {
     let mut fixture = SessionFixture::new(scenario, None);
     let mut client =
         LspClient::start(fixture.command(), fixture.directory.path(), options()).unwrap();
+    fixture.assert_owner_membership(&client);
     assert_eq!(client.capabilities(), &json!({}));
     assert_eq!(
         client
@@ -298,6 +321,7 @@ fn run_pending_request(scenario: &'static str, cancel: bool) {
     configured.cancelled = Arc::new(move || observed_cancel.load(Ordering::Acquire));
     let mut client =
         LspClient::start(fixture.command(), fixture.directory.path(), configured).unwrap();
+    fixture.assert_owner_membership(&client);
     // 当前模块是 LspClient 的子模块；只缩短已完成握手的测试会话等待预算。
     client.request_timeout = Duration::from_secs(2);
     let started = Instant::now();
@@ -305,7 +329,10 @@ fn run_pending_request(scenario: &'static str, cancel: bool) {
     assert!(fixture.directory.path().join("initialized").exists());
     assert!(fixture.directory.path().join("request-pending").exists());
     assert_eq!(error.is_cancelled(), cancel, "{error}");
-    assert!(error.message.contains(if cancel { "取消" } else { "超时" }));
+    assert!(
+        error.message.contains(if cancel { "取消" } else { "超时" }),
+        "{error}"
+    );
     if !cancel {
         assert!(error.message.contains("example/pending"));
     }
@@ -322,6 +349,7 @@ fn run_panic_drop() {
     let mut fixture = SessionFixture::new("pending-parent-lives", None);
     let mut client =
         LspClient::start(fixture.command(), fixture.directory.path(), options()).unwrap();
+    fixture.assert_owner_membership(&client);
     assert_eq!(
         client
             .request("example/echo", json!({"echo":"before panic"}))
@@ -361,10 +389,18 @@ fn run_short_lived_batches(concurrency: u32) {
     let mut client =
         LspClient::start(fixture.command(), fixture.directory.path(), options()).unwrap();
     let startup_elapsed = startup.elapsed();
+    fixture.assert_owner_membership(&client);
     client.request_timeout = Duration::from_secs(30);
     let initial = client.windows_owner_snapshot().unwrap();
     assert_eq!(initial.owner, OwnerKind::NativeCandidate);
     let mut retained = initial.retained.expect("候选必须报告保留对象数量");
+    let mut total = initial
+        .total_processes
+        .expect("候选必须报告真实 Job 累计数量");
+    eprintln!(
+        "Windows LSP batch initial: concurrency={concurrency}, retained={retained}, total={total}, active={}, known_live=2",
+        initial.active_processes
+    );
     let batches_started = Instant::now();
     for batch in 1..=8 {
         let response = client
@@ -384,15 +420,20 @@ fn run_short_lived_batches(concurrency: u32) {
             json!({"echo":batch})
         );
         let snapshot = client.windows_owner_snapshot().unwrap();
+        eprintln!(
+            "Windows LSP batch snapshot: concurrency={concurrency}, batch={batch}, successful_short_children={}, retained={:?}, total={:?}, active={}, known_live=2",
+            batch * 32, snapshot.retained, snapshot.total_processes, snapshot.active_processes
+        );
         assert_eq!(snapshot.owner, OwnerKind::NativeCandidate);
-        assert_eq!(snapshot.total_processes, Some(2 + 32 * batch));
-        assert_eq!(snapshot.active_processes, 2);
+        total = snapshot
+            .total_processes
+            .expect("候选必须报告真实 Job 累计数量");
+        // 只用实际成功创建的进程数作下界；不猜测额外累计项是否来自嵌套 Job 或其他进程。
+        assert!(total >= 2 + 32 * batch, "真实累计数不能少于已知创建数");
+        fixture.assert_before_cleanup(false);
         let current = snapshot.retained.expect("候选必须报告保留对象数量");
         assert!(current >= retained, "保留对象历史不应随批次结束而丢失");
-        assert!(
-            current <= (2 + 32 * batch) as usize,
-            "同一个对象不能重复计数"
-        );
+        assert!(current <= total as usize, "保留对象数不能超过 Job 累计数");
         retained = current;
     }
     let batches_elapsed = batches_started.elapsed();
@@ -403,7 +444,7 @@ fn run_short_lived_batches(concurrency: u32) {
     let cleanup_elapsed = cleanup_started.elapsed();
     fixture.join_observer();
     eprintln!(
-        "Windows LSP candidate batches: concurrency={concurrency}, batches=8, short_children=256, total_objects=258, sampled_retained_peak={retained}, startup={startup_elapsed:?}, workload={batches_elapsed:?}, shutdown={cleanup_elapsed:?}, result={result:?}"
+        "Windows LSP candidate batches: concurrency={concurrency}, batches=8, successful_short_children=256, known_created_objects=258, observed_total={total}, sampled_retained_peak={retained}, startup={startup_elapsed:?}, workload={batches_elapsed:?}, shutdown={cleanup_elapsed:?}, result={result:?}"
     );
     assert_completed(completion);
     result.unwrap();
@@ -527,6 +568,70 @@ fn candidate_short_lived_batches_serial() {
 #[test]
 fn candidate_short_lived_batches_parallel() {
     with_candidate(|| run_short_lived_batches(4));
+}
+
+/// 有限比较 libuv 普通和 detached 子进程的累计差异，不推测额外累计项的身份。
+#[test]
+fn candidate_bounded_spawn_accounting_diagnostic() {
+    with_candidate(|| {
+        let mut fixture = SessionFixture::new("diagnostic-parent-lives", None);
+        let mut client =
+            LspClient::start(fixture.command(), fixture.directory.path(), options()).unwrap();
+        fixture.assert_owner_membership(&client);
+        let initial = client.windows_owner_snapshot().unwrap();
+        let mut previous_total = initial.total_processes.unwrap();
+        let mut previous_retained = initial.retained.unwrap();
+        let mut successful = 0;
+        eprintln!("Windows LSP bounded diagnostic initial: {initial:?}");
+        for (index, (count, detached)) in [(2, false), (2, true), (4, false), (4, true)]
+            .into_iter()
+            .enumerate()
+        {
+            let response = client
+                .request(
+                    "example/diagnostic-batch",
+                    json!({"count":count,"detached":detached}),
+                )
+                .unwrap();
+            successful += count;
+            assert_eq!(response["batch"], index + 1);
+            assert_eq!(response["completed"], count);
+            assert_eq!(response["total"], successful);
+            assert_eq!(
+                client
+                    .request("example/echo", json!({"echo":index}))
+                    .unwrap(),
+                json!({"echo":index})
+            );
+            let snapshot = client.windows_owner_snapshot().unwrap();
+            let total = snapshot.total_processes.unwrap();
+            let retained = snapshot.retained.unwrap();
+            eprintln!(
+                "Windows LSP bounded diagnostic: count={count}, detached={detached}, successful_short_children={successful}, retained={retained}, total={total}, active={}, total_delta={}, retained_delta={}, known_live=2",
+                snapshot.active_processes,
+                i64::from(total) - i64::from(previous_total),
+                retained as i64 - previous_retained as i64
+            );
+            assert_eq!(snapshot.owner, OwnerKind::NativeCandidate);
+            assert!(total >= 2 + successful);
+            assert!(total >= previous_total);
+            assert!(retained >= previous_retained);
+            assert!(retained <= total as usize);
+            fixture.assert_before_cleanup(false);
+            previous_total = total;
+            previous_retained = retained;
+        }
+        let started = Instant::now();
+        let result = client.shutdown();
+        let completion = fixture.completion();
+        let elapsed = started.elapsed();
+        fixture.join_observer();
+        eprintln!(
+            "Windows LSP bounded diagnostic cleanup: total={previous_total}, sampled_retained_peak={previous_retained}, shutdown={elapsed:?}, result={result:?}"
+        );
+        assert_completed(completion);
+        result.unwrap();
+    });
 }
 
 /// 清理在终止前报错也必须先回收直接子进程，不能靠随后 Drop 的重试掩盖早退。

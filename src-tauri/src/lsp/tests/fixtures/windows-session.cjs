@@ -37,6 +37,9 @@ if (process.argv[2] === "--descendant") {
     // EOF 场景需要让父输出关闭可见；其他场景明确保留后代继承的管道。
     stdio: scenario === "initialize-eof" ? "ignore" : "inherit",
     windowsHide: true,
+    // Windows 非 detached child 会进入 libuv 自身的 KILL_ON_CLOSE Job，父退出会提前杀叶。
+    // detached 不设置 BREAKAWAY；Rust 侧还会验证叶进程仍属于准确的外层 Narrant Job。
+    detached: process.platform === "win32",
   });
   descendant.on("error", () => process.exit(125));
 
@@ -64,8 +67,8 @@ if (process.argv[2] === "--descendant") {
   let batches = 0;
   let totalChildren = 0;
   // 一个批次仅启动固定数量自有短命进程，等待每个实际进程结束才回报结果。
-  async function runBatch(count, concurrency) {
-    if (count !== 32 || ![1, 4].includes(concurrency)) {
+  async function runBatch(count, concurrency, detached = false) {
+    if (![2, 4, 32].includes(count) || ![1, 4].includes(concurrency)) {
       throw new Error("unexpected bounded batch configuration");
     }
     let next = 0;
@@ -78,6 +81,8 @@ if (process.argv[2] === "--descendant") {
           const child = spawn(process.execPath, [__filename, "--short-lived"], {
             stdio: "ignore",
             windowsHide: true,
+            // 32 个子进程的正式批次始终传 false；仅有限诊断比较 Windows detached。
+            detached: detached && process.platform === "win32",
           });
           active += 1;
           peakActive = Math.max(peakActive, active);
@@ -120,7 +125,14 @@ if (process.argv[2] === "--descendant") {
       if (scenario === "pending-parent-exits") process.exit(0);
     } else if (message.method === "example/batch") {
       if (!initialized) throw new Error("batch before initialized");
-      respond(message.id, await runBatch(message.params.count, message.params.concurrency));
+      if (message.params.count !== 32) throw new Error("unexpected batch size");
+      respond(message.id, await runBatch(32, message.params.concurrency));
+    } else if (message.method === "example/diagnostic-batch") {
+      if (!initialized) throw new Error("diagnostic batch before initialized");
+      if (![2, 4].includes(message.params.count) || typeof message.params.detached !== "boolean") {
+        throw new Error("unexpected diagnostic batch configuration");
+      }
+      respond(message.id, await runBatch(message.params.count, 1, message.params.detached));
     } else if (message.method === "shutdown") {
       if (!initialized) throw new Error("shutdown before initialized");
       shutdown = true;

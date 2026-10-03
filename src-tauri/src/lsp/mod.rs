@@ -105,6 +105,15 @@ pub struct LspClient {
 }
 
 impl LspClient {
+    /// 仅测试借用当前会话查询准确 HANDLE 的 Job 归属，不向调用方暴露 Job 句柄。
+    #[cfg(all(test, windows))]
+    pub(crate) fn windows_owner_contains(
+        &self,
+        process: &std::os::windows::io::OwnedHandle,
+    ) -> std::io::Result<bool> {
+        self.transport.windows_owner_contains(process)
+    }
+
     /// 仅测试读取当前会话的候选统计，正常请求与清理均不自动采样。
     #[cfg(all(test, windows))]
     pub(crate) fn windows_owner_snapshot(
