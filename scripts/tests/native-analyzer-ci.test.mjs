@@ -24,8 +24,8 @@ test('Windows process probe fails early with the setup Node executable and seria
   assert.match(probe, /if: runner\.os == 'Windows'/);
   assert.match(probe, /shell: pwsh/);
   assert.match(probe, /timeout-minutes: 5/);
-  assert.ok(probe.includes('$env:NARRANT_TEST_NODE = (Get-Command node -CommandType Application).Source'));
-  assert.ok(probe.includes('& bash scripts/cargo-agent.sh run --manifest-path native-helpers/windows-process-probe/Cargo.toml --locked'));
+  assert.ok(probe.includes('node scripts/run-windows-process-probe.mjs'));
+  assert.doesNotMatch(probe, /Get-Command|NARRANT_TEST_NODE/);
   assert.match(probe, /if \(\$LASTEXITCODE -ne 0\) \{ throw /);
   assert.doesNotMatch(probe, /continue-on-error/);
 });
@@ -34,6 +34,8 @@ test('Windows process probe fails early with the setup Node executable and seria
 test('early probe retains complete native acceptance and the separate Tauri cache', () => {
   const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
   assert.match(workflow.split('\njobs:')[0], /- native-helpers\/\*\*\n/);
+  assert.match(workflow.split('\njobs:')[0], /- scripts\/run-windows-process-probe\.mjs\n/);
+  assert.match(nativeJob, /node --test [^\n]*scripts\/tests\/run-windows-process-probe\.test\.mjs/);
   assert.match(nativeJob, /workspaces: src-tauri\n\s+key: all-native-\$\{\{ matrix\.target \}\}/);
   assert.doesNotMatch(nativeJob, /CARGO_TARGET_DIR/);
   const acceptance = nativeJob.split('      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance')[1].split('\n      - ')[0];

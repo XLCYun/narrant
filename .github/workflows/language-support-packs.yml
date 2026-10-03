@@ -12,6 +12,8 @@ on:
       - scripts/tests/native-xz-extraction.test.mjs
       - scripts/verify-native-analyzers.mjs
       - scripts/tests/native-analyzer-ci.test.mjs
+      - scripts/run-windows-process-probe.mjs
+      - scripts/tests/run-windows-process-probe.test.mjs
       - src-tauri/tests/native_helper_graphs.rs
       - scripts/*language-support-packs.mjs
       - scripts/tests/language-support-packs.test.mjs
@@ -113,12 +115,11 @@ jobs:
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:NARRANT_TEST_NODE = (Get-Command node -CommandType Application).Source
-          & bash scripts/cargo-agent.sh run --manifest-path native-helpers/windows-process-probe/Cargo.toml --locked
+          node scripts/run-windows-process-probe.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Windows process cleanup probe failed; see job membership and process handle evidence above' }
       - run: pnpm install --frozen-lockfile
       - name: Test native validation and pack scripts
-        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
+        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/run-windows-process-probe.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
       - name: Provision checksum-verified private developer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains"
       - name: Select exact macOS target declarations
