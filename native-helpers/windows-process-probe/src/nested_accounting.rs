@@ -29,9 +29,10 @@ use windows_sys::Win32::{
         },
         SystemServices::{JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, JOB_OBJECT_MSG_NEW_PROCESS},
         Threading::{
-            CreateProcessW, GetCurrentProcess, GetProcessId, ResumeThread, TerminateProcess,
-            WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_INFORMATION,
-            STARTUPINFOW,
+            CreateProcessW, GetCurrentProcess, GetProcessId, QueryFullProcessImageNameW,
+            ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED,
+            DETACHED_PROCESS, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE, STARTUPINFOW,
         },
         IO::{CreateIoCompletionPort, GetQueuedCompletionStatus},
     },
@@ -103,7 +104,7 @@ struct SuspendedProcess {
 }
 
 impl SuspendedProcess {
-    /// 只执行当前诊断程序，无 Node、shell、可继承句柄或额外控制台。
+    /// 仅诊断夹具脱离控制台且保持挂起；不改变产品启动 flags，也不脱离 Job。
     fn spawn(role: &str, directory: &Path) -> io::Result<Self> {
         let executable = std::env::current_exe()?;
         let application = executable
@@ -134,7 +135,7 @@ impl SuspendedProcess {
                 ptr::null(),
                 ptr::null(),
                 0,
-                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                CREATE_SUSPENDED | DETACHED_PROCESS,
                 ptr::null(),
                 ptr::null(),
                 &startup,
@@ -555,6 +556,44 @@ fn process_snapshot(
     Ok((in_outer, in_inner, wait))
 }
 
+/// 只读查询额外对象映像，不把它包装成会主动终止进程的夹具守卫。
+fn process_image(handle: HANDLE) -> io::Result<String> {
+    let mut buffer = vec![0u16; 32_768];
+    let mut length = buffer.len() as u32;
+    // SAFETY: 有效查询句柄和完整可写 UTF-16 缓冲区；0 表示 Win32 路径格式。
+    if unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
+/// 从准确 Job 的 PID 列表诊断额外成员；重开后再次验证归属，绝不按 PID 终止。
+fn diagnose_extra_members(
+    job_label: &str,
+    pids: &[u32],
+    expected: &[u32],
+    outer: &ProbeJob,
+    inner: &ProbeJob,
+) {
+    for &pid in pids.iter().filter(|pid| !expected.contains(pid)) {
+        match super::open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
+            Ok(handle) => {
+                let raw = handle.as_raw_handle();
+                let in_outer = super::belongs(raw, outer.raw());
+                let in_inner = super::belongs(raw, inner.raw());
+                // SAFETY: 此次只读重开的对象在日志采样期间一直持有，不参与清理。
+                let wait = unsafe { WaitForSingleObject(raw, 0) };
+                let wait_error = (wait == WAIT_FAILED).then(io::Error::last_os_error);
+                let image = process_image(raw);
+                println!("[windows-nested-accounting] extra_member source_job={job_label} listed_pid={pid} in_outer={in_outer:?} in_inner={in_inner:?} wait0={wait} wait_error={wait_error:?} image={image:?}; identity_reopened_from_listed_pid=true");
+            }
+            Err(error) => {
+                println!("[windows-nested-accounting] extra_member source_job={job_label} listed_pid={pid} open_error={error}; identity_not_retained=true");
+            }
+        }
+    }
+}
+
 /// 先固定accounting/PID列表和对象状态，再读取有界消息，避免混淆两个证据来源。
 fn phase(
     mode: &str,
@@ -590,11 +629,15 @@ fn assert_members(
     let child_state = process_snapshot("verify-child", child, outer, inner)?;
     let mut expected = vec![root.pid, child.pid];
     expected.sort_unstable();
+    let outer_pids = outer.pids()?;
+    let inner_pids = inner.pids()?;
     if root_state != (true, false, WAIT_TIMEOUT)
         || child_state != (true, nested, WAIT_TIMEOUT)
-        || outer.pids()? != expected
-        || inner.pids()? != if nested { vec![child.pid] } else { Vec::new() }
+        || outer_pids != expected
+        || inner_pids != if nested { vec![child.pid] } else { Vec::new() }
     {
+        diagnose_extra_members("outer", &outer_pids, &expected, outer, inner);
+        diagnose_extra_members("inner", &inner_pids, &expected, outer, inner);
         return Err(io::Error::other(
             "nested probe exact two-object membership invariant failed",
         ));
