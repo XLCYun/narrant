@@ -91,6 +91,8 @@ if (mode === 'startup_stderr_first') {
       // 后代原子发布完整 PID，证明运行时和继承管道已就绪，再让父进程退出。
       const ready = setInterval(() => {
         if (!fs.existsSync(marker)) return;
+        // Windows 先让测试固定进程 HANDLE，再允许父进程退出，排除 PID 重用。
+        if (process.platform === 'win32' && !fs.existsSync(path.join(control, 'observed'))) return;
         clearInterval(ready);
         complete();
       }, 10);

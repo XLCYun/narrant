@@ -550,9 +550,13 @@ fn subprocess_cooperative_and_forced_cancellation() {
 fn subprocess_reaps_descendants_after_parent_exit() {
     for mode in ["descendant", "descendant_closed"] {
         let fixture = Fixture::new();
+        #[cfg(windows)]
+        let observation = observe_fixture_processes(&fixture.tools);
         let result = fixture
             .executable_analyzer(mode, &line(ready()), &line(result()))
             .analyze(&fixture.input());
+        #[cfg(windows)]
+        let observed = observation.join().unwrap();
         if mode == "descendant" {
             let error = result.unwrap_err();
             assert!(error.message.contains("退出超时"), "{error}");
@@ -561,6 +565,8 @@ fn subprocess_reaps_descendants_after_parent_exit() {
         }
         assert_process_gone(&fixture.tools.join("pid"));
         assert_process_gone(&fixture.tools.join("descendant"));
+        #[cfg(windows)]
+        assert_observed_processes_gone(&observed);
     }
 }
 
@@ -602,10 +608,57 @@ fn assert_process_gone(marker: &Path) {
             assert_eq!(
                 WaitForSingleObject(process, 0),
                 WAIT_OBJECT_0,
-                "进程 {pid} 仍存活"
+                "进程 {pid} 仍存活：{}",
+                marker.display()
             );
             CloseHandle(process);
         }
+    }
+}
+
+/// 在退出之前固定父子进程对象并通知夹具继续；保留句柄期间 PID 不会重用。
+#[cfg(windows)]
+fn observe_fixture_processes(
+    directory: &Path,
+) -> std::thread::JoinHandle<Vec<(String, std::os::windows::io::OwnedHandle)>> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+    let directory = directory.to_owned();
+    std::thread::spawn(move || {
+        wait_file(&directory.join("descendant"));
+        let observed = ["pid", "descendant"]
+            .into_iter()
+            .map(|role| {
+                let pid = fs::read_to_string(directory.join(role))
+                    .unwrap()
+                    .parse::<u32>()
+                    .unwrap();
+                // SAFETY: 夹具仍等待 observed，两个进程尚未退出；只保留同步查询权限。
+                let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                assert!(!handle.is_null(), "无法观察 {role} PID {pid}");
+                // SAFETY: 上面的成功 OpenProcess 将唯一句柄所有权交给 OwnedHandle。
+                (role.to_owned(), unsafe {
+                    OwnedHandle::from_raw_handle(handle)
+                })
+            })
+            .collect();
+        fs::write(directory.join("observed"), "ready").unwrap();
+        observed
+    })
+}
+
+/// 保留原立即退出硬断言，并用回收前持有的准确进程句柄验证相同对象。
+#[cfg(windows)]
+fn assert_observed_processes_gone(observed: &[(String, std::os::windows::io::OwnedHandle)]) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::{Foundation::WAIT_OBJECT_0, System::Threading::WaitForSingleObject};
+    for (role, process) in observed {
+        // SAFETY: 句柄来自回收前的夹具且仍持有；超时 0 不引入测试侧等待。
+        assert_eq!(
+            unsafe { WaitForSingleObject(process.as_raw_handle(), 0) },
+            WAIT_OBJECT_0,
+            "原始 {role} 进程对象仍存活"
+        );
     }
 }
 
@@ -633,6 +686,8 @@ fn test_node() -> PathBuf {
 fn session_drop_and_panic_reap_all_children() {
     for panic in [false, true] {
         let fixture = Fixture::new();
+        #[cfg(windows)]
+        let observation = observe_fixture_processes(&fixture.tools);
         let analyzer = fixture.executable_analyzer("descendant", &line(ready()), &line(result()));
         let checked = input::validate(&analyzer, &fixture.input()).unwrap();
         let scratch = tempfile::tempdir().unwrap();
@@ -641,12 +696,18 @@ fn session_drop_and_panic_reap_all_children() {
             let session = process::Session::start(&analyzer, &checked, scratch.path()).unwrap();
             session.send(&request).unwrap();
             wait_file(&fixture.tools.join("descendant"));
+            #[cfg(windows)]
+            wait_file(&fixture.tools.join("observed"));
             assert!(!panic, "测试期望的宿主 panic");
             drop(session);
         }));
+        #[cfg(windows)]
+        let observed = observation.join().unwrap();
         assert_eq!(result.is_err(), panic);
         assert_process_gone(&fixture.tools.join("pid"));
         assert_process_gone(&fixture.tools.join("descendant"));
+        #[cfg(windows)]
+        assert_observed_processes_gone(&observed);
     }
 }
 

@@ -82,12 +82,12 @@ impl WindowsJob {
     }
 
     /// 返回当前 Job 句柄，不允许调用方接管或继承其生命周期。
-    fn raw(&self) -> HANDLE {
+    pub(crate) fn raw(&self) -> HANDLE {
         self.0.as_raw_handle()
     }
 
     /// ActiveProcesses 来自拥有的 Job，父 PID 是否仍存在不影响成员统计。
-    fn active_processes(&self) -> io::Result<u32> {
+    pub(crate) fn active_processes(&self) -> io::Result<u32> {
         // SAFETY: Windows POD 信息结构可清零，查询按确切结构宽度填写。
         let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: 输出缓冲区和类别匹配，当前对象仍持有 Job 句柄。
