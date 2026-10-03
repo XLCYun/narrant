@@ -1,9 +1,10 @@
 # 原生语言分析辅助进程：公共协议与验收
 
-状态：实现验收中，2026-10-03。架构、依赖范围、失败政策与单图并集语义已经用户确认；
-公共 Rust Host、四种原生 helper 及应用接入已经实现，并完成本机专项验证。
-整体验收与跨平台发布门槛仍按 [实施计划](0024b-native-analyzer-implementation-plan.md) 跟踪，
-本机成功不表示 Windows 或所有目标 SDK 已通过。
+状态：已实现并完成新增原生链路的限定双平台验收，2026-10-03。
+公共 Rust Host、四种 helper、应用接入、真实安装与 CodeGraph/diff 在 macOS ARM64 和 Windows x64 通过。
+总 CI 仍因未修改的旧共享 WindowsJob 回归失败；这不属于新增 helper 的成功结论。
+精确范围与旧缺陷见[跨平台记录](../research/native-crossplatform-validation.md)和
+[实施计划](0024b-native-analyzer-implementation-plan.md)，不承诺未测 SDK，也不表示支持包已发布。
 语言配置、映射和发布门槛见 [0024a](0024a-native-language-analysis-profiles.md)。
 
 ## 问题、范围与依赖
@@ -225,8 +226,9 @@ evidence 中才能解释的配置 ID。初始错误代码：
 Windows 实现使用新增 native helper 专用 Job 所有者，保持既有 LSP/Python 进程管理行为不变。
 新 helper 仍可创建后代；Host 在执行前建立 Job 与成员跟踪，清理时才禁止创建新成员。
 成功判据要求持续持有的唯一进程对象全部退出，并与最终累计成员数相符；无法证明完整性时明确失败，
-不能仅凭 Job 活跃数或当前成员列表为空宣称回收成功。候选机制已通过真实 Windows 探针，
-专用产品接入仍在验收；平台异常导致清理失败时不能将错误解释为全员已经退出。
+不能仅凭 Job 活跃数或当前成员列表为空宣称回收成功。专用产品接入已通过真实 Windows
+探针、Host、安装与图验收；平台异常导致清理失败时不能将错误解释为全员已经退出。
+旧 LSP/Python 共享 owner 的完成次序缺陷仍保留在跨平台记录，本轮未修改其行为。
 
 状态顺序为 `starting → ready → running → terminal → reaped`。helper 启动初始化失败时尚无请求
 ID，可以只输出 stderr 后非零退出；Host 将其映射为启动失败。ready 后必须等到一条有效 analyze

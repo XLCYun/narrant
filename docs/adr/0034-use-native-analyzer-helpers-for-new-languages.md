@@ -19,20 +19,29 @@ identity, graph membership, and reference-target classification. Rust owns the c
 process adapter, input/provenance boundaries, decoding, shared validation, final
 Code Graph construction, and lifecycle integration. A structurally valid graph does
 not itself prove language-semantic correctness; each helper still needs its own
-conformance fixtures. A wire contract is drafted in
-[specification 0024](../specs/0024-native-analyzer-helper-protocol.md); its engineering
-details are not yet implemented or validated.
+conformance fixtures. The wire contract in
+[specification 0024](../specs/0024-native-analyzer-helper-protocol.md) is implemented;
+the fixed profiles have passed the new native path's macOS ARM64 and Windows x64
+helper, Host, installation and public graph tests. The
+[cross-platform record](../research/native-crossplatform-validation.md) separates
+these results from the unchanged legacy WindowsJob failure that still makes the
+overall CI run fail. Support packs remain unpublished and the PR remains a draft.
 
 Using one native analysis model for declarations and symbol binding reduces the need
 to reconcile an independent syntax parser with language-server results. The trade-off
 is maintaining helper implementations in additional languages, a versioned process
-contract, and their runtime and lifecycle integration. Their practical advantages
-still need to be demonstrated through implementation and representative fixtures.
+contract, and their runtime and lifecycle integration. Representative fixtures now verify
+the fixed implementation scope; long-term maintenance advantages still require experience.
 
 Existing Rust, TypeScript/JavaScript, and Python analyzers remain unchanged. New
 adapters continue to satisfy the public `LanguageAnalyzer` / Code Graph contract.
 Migration of existing analyzers is a separate future decision, considered only after
 the new implementations demonstrate a clearer and more maintainable design.
+
+The new helpers use a dedicated Windows process owner with one handle tracker.
+Limited suspended-startup primitives are duplicated to avoid changing existing
+LSP/Python behavior; the legacy owner's known completion-ordering defect remains
+separately recorded and its failing test is retained.
 
 Helpers retain the workspace and child-process lifetime obligations of
 [ADR-0031](0031-reuse-review-head-for-structure-analysis.md) and the support-pack versus
@@ -91,9 +100,9 @@ is not a promise to enumerate every possible macro or build-flag combination. In
 configuration provenance may support validation and cache correctness without becoming
 configuration attribution in the public Code Graph.
 
-The [common protocol draft](../specs/0024-native-analyzer-helper-protocol.md) and
-[language profile draft](../specs/0024a-native-language-analysis-profiles.md) develop
-the implementation contract. Supported project configurations, target SDK profiles,
-and backend versions still require the stated validation gates. The
+The [common protocol](../specs/0024-native-analyzer-helper-protocol.md) and
+[language profiles](../specs/0024a-native-language-analysis-profiles.md) define
+the implementation contract. Project configurations, target SDK profiles and backend
+versions beyond the recorded matrix still require the stated validation gates. The
 [interface design discussion](../research/native-analyzer-contract-design.md)
-retains the decision history; a draft is not a claim of backend acceptance.
+retains the earlier decision history; it is not evidence for untested configurations.

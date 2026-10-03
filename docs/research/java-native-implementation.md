@@ -72,3 +72,10 @@ Windows 原生和 CI SDK 15.5 验收仍不由这次本机源码验证替代。
 
 完整 Java 独立进程套件 25 项通过；三个准备/对照子进程设为 30 秒期限后，两项受影响
 哨兵测试再次通过。定点审查通过。双平台实际执行结果见[跨平台验证记录](native-crossplatform-validation.md)。
+
+## 最终平台结果（2026-10-03）
+
+`4c65bb8` / [运行37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
+已完成该helper及公共新native链路的macOS ARM64/Windows x64验收，含真实安装和全部8项公共图测试。
+精确语言/SDK、计数、日志和未覆盖范围见[跨平台记录](native-crossplatform-validation.md)。
+总CI仍因旧共享WindowsJob回归失败；本轮未修改其行为，未发布支持包，也不扩大前文语言支持范围。

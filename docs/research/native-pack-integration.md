@@ -86,7 +86,7 @@ Windows 和 SDK15.5 的实际成功状态必须以该 workflow 的真实结果�
 构件字节数、SHA-256、源码快照、命令和日志统一记录在
 [最终图验收证据](native-helper-conformance.md#2026-10-03-最终修复快照的本机验收)，避免维护两份摘要清单。
 上述本地验收只覆盖 macOS ARM64 / SDK27.0。随后真实 CI 的 SDK15.5 全流程也已通过，
-Windows x64 仍在验收；独立结果见[跨平台验证记录](native-crossplatform-validation.md)。
+Windows x64在该阶段仍在验收；最终独立结果见下节及[跨平台验证记录](native-crossplatform-validation.md)。
 
 ## 双目标 C# 支持包增量（2026-10-03）
 
@@ -95,3 +95,14 @@ Windows x64 仍在验收；独立结果见[跨平台验证记录](native-crosspl
 其余三个包。最终测试提交 `df62826` 的公共 Host → CodeGraph → diff 八项全部通过
 （10.39 秒），包括旧目标 API 隔离和双 TFM 并集。Node 聚焦 14 项和既有打包脚本 5 项通过。
 构件摘要、测试修正与历史失败见[图验收记录](native-helper-conformance.md#双目标增量的最终本机验收2026-10-03)。
+
+## 最终双平台生产安装（2026-10-03）
+
+`4c65bb8` / [运行37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
+在两平台重新构建四个包并通过ready、helper和真实生产入口验收。
+macOS安装1项/91.22秒、Windows安装1项/207.19秒通过，均0失败、0ignored；
+factory各2项、公共CodeGraph/diff各8项也实际通过。Windows manifest链接冲突已修复。
+完整计数及工具/SDK范围见[跨平台记录](native-crossplatform-validation.md)。
+
+总CI仍有旧共享WindowsJob回收测试失败，未将它豁免。支持包仍为 `published:false`，
+PR保持草稿；真实安装验收不等于远端发布完成。

@@ -143,3 +143,10 @@ Windows CMake 与 PowerShell 分支仅已编写，尚待实际原生 CI；没有
 `Ran 4 tests in 1.370s / OK`；普通多声明另补 C17 全局/字段数组样本。
 本轮二进制 SHA-256：`e8789931d8ed2b6d4782779b1ffa980dc75023eaeee180894af637ce7668b46f`。
 未重复全套或跨平台验收，未扩展复审 deferred 的匿名 typedef 范围。
+
+## 最终平台结果（2026-10-03）
+
+`4c65bb8` / [运行37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
+已完成该helper及公共新native链路的macOS ARM64/Windows x64验收，含真实安装和全部8项公共图测试。
+精确语言/SDK、计数、日志和未覆盖范围见[跨平台记录](native-crossplatform-validation.md)。
+总CI仍因旧共享WindowsJob回归失败；本轮未修改其行为，未发布支持包，也不扩大前文语言支持范围。

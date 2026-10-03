@@ -1,14 +1,56 @@
 # 原生 helper 的双平台验收入口
 
-状态：macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过四包构建、
-四语言原生套件和新增 native helper 专用回收实现的产品探针，专用实现的定点审查也已完成。
-最新运行的新 Host19项、factory2项及生产安装1项通过；公共八图在链接阶段因重复manifest资源未能执行。
-旧共享 LSP Job 回归仍失败，独立验收脚本保留并汇总两个失败，整个任务仍为红色。
+状态：新增原生链路在 macOS ARM64 / SDK15.5 与 Windows x64 完整通过四包、四helper、Host、安装及八图验收。
+Windows测试manifest链接冲突已修复。旧共享LSP Job回归仍失败，最终仅汇总该1组失败，总CI保持红色。
 旧共享完成次序问题仍存在，不能把 native 专用修复视为整个 LSP/Python 路径的修复。
-工作在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中继续。
-本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
+交付位于[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，未合并或发布支持包。
+新增语言成功与旧共享缺陷分开记录，不声称全部应用回归全绿。
 
-## 2026-10-03 最新完整运行：7419870
+## 2026-10-03 最终新增原生链路验收：4c65bb8
+
+实际代码提交 `4c65bb871e9bfa2f7a8901bd60f8c37ed8dc3413`，
+[运行 37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)。
+Windows新native owner的产品探针与raw1816门禁通过，四包构建和ready、四语言套件及以下所有新链路组均执行通过。
+
+| 验收组 | Windows x64 | macOS ARM64 / SDK15.5 |
+| --- | --- | --- |
+| Go原生套件 | 通过，2.292秒 | 通过，0.561秒 |
+| Java | 25通过，42.024秒 | 25通过，17.000秒 |
+| C# | 29通过，16.600秒 | 29通过，11.588秒 |
+| Clang | 25通过、1个macOS专用跳过，7.823秒 | 25通过、1个Windows专用跳过，5.718秒 |
+| 新native Host | 19通过、1个子进程fixture ignored，3.53秒 | 17通过、0ignored，3.42秒 |
+| factory | 2通过 | 2通过 |
+| 真实四包生产安装 | 1通过、0ignored，207.19秒 | 1通过、0ignored，91.22秒 |
+| 公共CodeGraph/diff | 8通过、0ignored，22.48秒 | 8通过、0ignored，15.08秒 |
+
+Windows图测试通过显式 `--ignored` 真正执行全部8项，未因缺工具或链接失败跳过。
+`narrant`二进制在测试模式下复用Tauri已有manifest，库/集成测试保留CommonControls manifest；
+默认应用构建没有新增覆盖参数。此轮已验证真正MSVC链接成功，不只依赖本机参数路由实验。
+
+[原生Windows job 111168782156](https://github.com/XLCYun/narrant/actions/runs/37111018854/job/111168782156)
+的最终结论仍为failure：旧共享Job的两项为1通过、1失败/0.10秒，
+同一后代句柄立即等待仍为258而非0。最终 `AggregateError: 1 native validation group(s) failed`
+只包含旧共享组，没有将它隐藏、移除或用新native成功抵消。
+[原生macOS job 111168782287](https://github.com/XLCYun/narrant/actions/runs/37111018854/job/111168782287)为success。
+
+[Python Windows 111168782367](https://github.com/XLCYun/narrant/actions/runs/37111018854/job/111168782367)
+三组20/14.96秒、3/2.94秒、4/3.82秒通过；
+[Python macOS 111168782294](https://github.com/XLCYun/narrant/actions/runs/37111018854/job/111168782294)
+三组35/8.56秒、3/2.64秒、4/5.86秒通过，均零失败、零ignored。
+完整官方日志位于 `/private/tmp/narrant-ci-native-windows-4c65bb8.log`，同轮其余日志为
+`narrant-ci-macos-4c65bb8.log`、`narrant-ci-python-windows-4c65bb8.log`、`narrant-ci-python-macos-4c65bb8.log`。
+
+### 仍存在的旧共享缺陷
+
+起点 `6761aca6907a3fd2f1ca730fa6a180656f132e7f` 已包含相同回收算法和
+`lsp/tests/windows_process.rs` 的严格立即退出断言（来源提交 `fb76bd0`）。
+本分支对旧Windows路径只改过模块/方法可见性，未改变其算法；此前真实探针已分别复现
+活跃数归零及PID列表为空时原HANDLE仍为258的短暂窗口。未独立运行起点SHA的Windows任务，
+所以不声称完成该基线实测、不声称永久进程泄漏，也不声称本次总CI已绿。
+新增helper使用独立owner，旧LSP/Python行为保持原样；旧缺陷须在后续共享路径工作及合并门禁中处理。
+此前拒绝的共享接入补丁未应用。下文保留所有历史失败与范围决策。
+
+## 2026-10-03 运行记录：7419870
 
 [运行 37109657139](https://github.com/XLCYun/narrant/actions/runs/37109657139) 已全部结束。
 本提交只让独立验收组串行跑完并汇总失败，产品源码未变。

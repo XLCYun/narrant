@@ -133,3 +133,10 @@ code.implements。回归逐项断言 IBase/IDerived 的准确 Node 目标及唯�
 两处哨兵编译/对照调用各有 30 秒期限，受影响测试再次通过。生产源码 `85318b7` 的支持包
 及四包安装已通过；测试提交 `df62826` 的八项公共图套件全部通过，包括本节双 TFM 对照。
 详见[图验收记录](native-helper-conformance.md)。
+
+## 最终平台结果（2026-10-03）
+
+`4c65bb8` / [运行37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
+已完成该helper及公共新native链路的macOS ARM64/Windows x64验收，含真实安装和全部8项公共图测试。
+精确语言/SDK、计数、日志和未覆盖范围见[跨平台记录](native-crossplatform-validation.md)。
+总CI仍因旧共享WindowsJob回归失败；本轮未修改其行为，未发布支持包，也不扩大前文语言支持范围。

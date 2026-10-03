@@ -1,13 +1,13 @@
 ---
-status: proposed
+status: accepted
 ---
 
-# 原生语言分析配置与验收草案
+# 原生语言分析配置与验收
 
 本文细化 [0024 通用辅助进程协议](0024-native-analyzer-helper-protocol.md) 的语言配置、
 源码映射和验收输入。共同架构和单图并集语义已经由
 [ADR-0034](../adr/0034-use-native-analyzer-helpers-for-new-languages.md) 确认；
-以下 profile 是实施候选，**没有完成实验的版本、工程形态和平台不构成发布承诺**。
+以下记录已实现的固定 profile，**没有完成验收的版本、工程形态和平台不构成发布承诺**。
 Rust、TypeScript/JavaScript、Python 的既有实现不变。
 
 ## 共同输入与发布门槛
@@ -192,6 +192,8 @@ C/C++ 预处理续行均有独立夹具。范围转换绑定同一 source 摘要
 
 ## Go 与 Clang 的首轮配置概览
 
+本节保留设计阶段的候选与早期探针记录；最终实现和平台结果见后面的验收矩阵及其证据链接。
+
 | 后端 | 候选静态 profile | 源对象与关系约束 | 必须关闭的实验项 |
 | --- | --- | --- | --- |
 | Go parser/ast/types，受限源码 importer | 优先验证静态项目模型：仓库内 go.mod/go.work 的受支持子集、固定 SDK、明确平台/tags；先无 cgo | 按文件/包上下文提取显式 type/function/method/value；init 保持 Callable；共享初始化只有一个 owner；接口实现须有类型证据，函数变量不冒充直接调用 | 手工包映射扩展到真实项目、标准库源码闭包、离线缺依赖、workspace/module 边界、平台/tags 的有限发现；默认 packages driver 仍有只读阻断 |
@@ -229,10 +231,11 @@ loader，尚未解决真实 go.mod/go.work 解释、完整标准库、跨版本�
 
 首批原生平台沿用支持包基线 macOS Apple Silicon、Windows x64，分别运行真实 helper 验收；
 “文档有 API”或单机成功不替代另一平台的启动、路径、只读与取消测试。
-本轮已经实现四个原生 helper，并在 macOS ARM64 上分别运行语言测试及真实
-`Host → CodeGraph → diff` 验收。Java 已确认运行 JDK 与目标声明必须隔离，当前选择
-单一 JDT 后端与明确 Java 17 目标；反例使用 JDK 17 不提供的 `List.getFirst()`。
-这些本机结果不替代 Windows、最终修复构件或更广版本的验收。具体证据与限制见
+四个原生 helper 已完成 macOS ARM64 与 Windows x64 的语言测试、真实安装及
+`Host → CodeGraph → diff` 验收；Windows 的新 Host19项与公共图8项实际通过。
+目标边界为 Java17、Go1.23.8、C# net8.0/ref8.0.0 与 net10.0/ref10.0.0，以及 C17/C++20。
+Java 使用单一 JDT 后端，运行 JDK 与目标声明隔离；反例使用 Java17 不提供的 `List.getFirst()`。
+总 CI 仍有未修改的旧共享 WindowsJob 失败，不能据此声称全应用回归全绿或更广版本通过。具体证据与限制见
 [Java](../research/java-native-implementation.md)、[Go](../research/go-native-implementation.md)、
 [C#](../research/csharp-native-implementation.md)、[C/C++](../research/clang-native-implementation.md)、
 [公共图验收](../research/native-helper-conformance.md)和

@@ -152,7 +152,7 @@ NARRANT_NATIVE_HELPERS_CONFIG=/private/tmp/narrant-native-packs/native-helpers-c
 `/private/tmp/narrant-task7-e1b1586-build.log`。
 
 上述本地验收只覆盖 macOS ARM64 与 SDK27.0，没有重复全库 Rust 测试。
-随后经用户授权推送并创建草稿 PR，真实 CI 的 SDK15.5 全流程已通过；Windows x64 仍在验收。
+随后经用户授权推送并创建草稿 PR，真实 CI 的 SDK15.5 全流程已通过；该阶段Windows x64仍在验收。
 各平台的独立证据见[跨平台验证记录](native-crossplatform-validation.md)。没有手动 quality-gate 或远端发布。
 
 ## 双目标增量的最终本机验收（2026-10-03）
@@ -182,4 +182,16 @@ manifest SHA-256 为 `f8efdf2adbf922081bd10912f161a05d547e0ba2b51722c889684a1658
 及 `/private/tmp/narrant-task7-dual-tfm-final-graphs.log`；
 `/private/tmp/narrant-native-packs/final-local-results.json` 记录生产提交、安装测试提交、最终测试提交
 和摘要，历史失败保留在 `final-local-results-85318b7.json`。本轮为 macOS ARM64 / SDK27.0
-本机验收；更新后的双平台 CI 结果须独立取得。
+本机验收；更新后的双平台 CI 结果已在下节独立记录，不能由本机成功推断。
+
+## 最终新增原生链路的双平台验收（2026-10-03）
+
+`4c65bb8` / [运行37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
+实际执行全部8项公共图测试：macOS 8通过/15.08秒，Windows 8通过/22.48秒，均0失败、0ignored。
+同轮四包构建与ready、所有helper套件、factory2项及生产安装1项均通过；
+Windows Host19项通过，另1个ignored函数仅为其他测试启动的子进程夹具，macOS Host17项通过。
+完整链路覆盖只读、稳定身份、内容/关系/结构差异、多语言合并及C#双目标隔离与并集。
+
+总CI仍因旧共享WindowsJob的1项回收断言失败而为红色；该旧组1通过、1失败，
+新增native验收不抵消它。精确平台版本、日志、失败及历史证据见[跨平台记录](native-crossplatform-validation.md)。
+支持包未发布，PR保持草稿；以上通过不扩大到未测语言/SDK/项目配置。

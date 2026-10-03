@@ -1,7 +1,7 @@
 # 原生语言分析器实施计划
 
-状态：进行中。目标是完成 Java、Go、C#、C/C++ 原生 helper 的实现验证与应用接入，
-不是仅完成公共适配器或探针。依据 [0024](0024-native-analyzer-helper-protocol.md)、
+状态：新增四语言的实现、审查及限定双平台链路验收完成；总 CI 保留旧共享 WindowsJob 失败，PR 为草稿。
+交付包括 Java、Go、C#、C/C++ 原生 helper 及应用接入。依据 [0024](0024-native-analyzer-helper-protocol.md)、
 [0024a](0024a-native-language-analysis-profiles.md) 与 ADR-0034。
 
 实施票据：[公共适配器 #193](https://github.com/XLCYun/narrant/issues/193)、
@@ -14,16 +14,20 @@
 
 ## 当前实施状态（2026-10-03）
 
-`7419870` 的[完整运行 37109657139](https://github.com/XLCYun/narrant/actions/runs/37109657139)
-已结束：原生 macOS、Python macOS/Windows 三项任务成功；原生 Windows 失败。
-Windows 的专用 native owner 产品探针、四包构建和全部四语言原生套件均通过，
-新 native Host 的19项实际测试、factory2项、生产四包安装1项也已通过；
-另1个ignored函数是子进程夹具入口。八项公共图因链接应用二进制时重复manifest资源而未运行。
-保持原实现的共享 LSP Job 回归仍为1通过、1失败，后代原句柄返回后仍为258。
-独立验收组已串行完成并正确汇总两个失败，未弱化共享断言或将失败算作通过。
-当前修复显式测试manifest与Tauri应用manifest冲突，然后继续Windows八图验收。
-专用 owner 实现与定点审查已完成；旧共享完成次序问题尚未修复，Task 7 仍未完成。
-草稿 PR #200 保持开启，支持包未发布。精确结果见[跨平台记录](../research/native-crossplatform-validation.md)。
+`4c65bb8` 的[完整运行 37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
+已取得新增原生链路的双平台完整证据：四包构建/ready、Go、Java25、C#29、Clang25项均通过，
+Clang每个平台各有1项仅适用于另一平台的SDK测试跳过。
+Windows Host19项通过（另1个ignored函数仅为子进程夹具）、factory2、生产安装1/207.19秒、
+公共图8/22.48秒通过；macOS Host17、factory2、安装1/91.22秒、公共图8/15.08秒通过。
+Python Windows20/3/4及macOS35/3/4项通过。本地全量基线、前端/构建/浏览器验收与全分支及定点审查见历史记录。
+
+原生 Windows job及总CI仍为失败：保持原实现的旧共享 LSP Job 回归1通过、1失败，
+返回后同一后代句柄仍为258；最终汇总仅有该1组失败。新增native的成功不会抵消旧红灯。
+旧算法与严格断言在起点提交已存在，本分支只改过其可见性，未修改Windows运行行为；
+未另跑起点SHA的Windows对照，不声称完成独立基线实测或全部回归全绿。
+按既有语言不迁移与专用owner范围决定，旧缺陷单列跟踪，不扩展本次四语言交付，也不豁免合并门禁。
+Task1–6交付以及Task7的新语言双平台贯通、审查和记录已完成；草稿PR #200和实施票据保持开启等待后续合并处理。
+支持包保持 `published:false`，未合并或发布。精确结果和历史失败见[跨平台记录](../research/native-crossplatform-validation.md)。
 
 ### 历史实施快照
 
@@ -130,6 +134,9 @@ HelperIdentity/AnalysisLimits 与取消入口；返回既有 CodeGraph/AnalysisE
 聚焦 Rust 测试经 cargo-agent；最终全量测试交给 Task 7。
 所有权：native_analyzer/、structure_review/mod.rs 及必要最小共享进程提取。
 不要修改 application、language_support、前端或 Cargo 依赖，必要新增依赖先向协调者说明。
+
+实际交付说明：Windows使用native专用所有者，跟踪器只有一份；为限制影响范围，有限复制悬挂启动原语。
+旧LSP/Python所有者没有迁移，共享算法的已知次序缺陷另列于上述当前状态。
 
 ### Task 2: Go 原生 helper 与受限静态项目加载
 

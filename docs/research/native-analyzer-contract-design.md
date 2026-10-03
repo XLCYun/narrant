@@ -1,6 +1,7 @@
 # 原生语言分析辅助进程：接口设计讨论
 
-日期：2026-10-02。状态：共同架构与单图并集语义已确认；配置发现暂定。后续工程草案见 [0024 公共协议](../specs/0024-native-analyzer-helper-protocol.md) 和 [0024a 语言配置与验收](../specs/0024a-native-language-analysis-profiles.md)；后端实现和兼容矩阵尚未验收。
+日期：2026-10-02。本文保留当时的设计讨论：共同架构与单图并集语义已确认，配置发现暂定，后端实现和兼容矩阵当时尚未验收。
+现行契约见 [0024 公共协议](../specs/0024-native-analyzer-helper-protocol.md) 和 [0024a 语言配置与验收](../specs/0024a-native-language-analysis-profiles.md)；新增原生链路已完成限定双平台验收，总CI保留旧共享WindowsJob失败，详见[跨平台记录](native-crossplatform-validation.md)。
 
 ## 已确认方向
 
