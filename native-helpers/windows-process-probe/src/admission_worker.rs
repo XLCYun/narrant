@@ -2,18 +2,19 @@
 
 use std::{
     fs, io,
-    os::windows::io::AsRawHandle,
+    os::windows::io::{AsHandle, AsRawHandle},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
 use windows_sys::Win32::{
-    Foundation::{ERROR_NOT_ENOUGH_QUOTA, WAIT_TIMEOUT},
+    Foundation::{ERROR_NOT_ENOUGH_QUOTA, WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::Threading::WaitForSingleObject,
 };
 
 use super::{
-    belongs, observe, state, verify_admission_gate, wait_file, windows_process::WindowsJob,
+    belongs, observe, state, verify_admission_gate, wait_file,
+    windows_process::NativeWindowsJob as WindowsJob,
 };
 
 /// 子模式必须在主入口检查 Node 环境之前分派；所有子进程均来自当前探针可执行文件。
@@ -132,11 +133,36 @@ pub(crate) fn run(directory: &Path) -> io::Result<()> {
         ),
         WAIT_TIMEOUT
     );
-    println!("[windows-process-probe] PASS: Rust admission gate only; production cleanup correctness remains unverified");
-    job.terminate_and_wait()?;
-    parent.wait()?;
+    let retained_descendant = descendant.0.as_handle().try_clone_to_owned()?;
+    let cleanup = job.terminate_and_wait();
+    println!("[windows-process-probe] admission_rust fixture_cleanup={cleanup:?}; gate evidence does not prove complete historical cleanup");
+    // 门禁故意拒绝一个新进程，可能留下恰好 2 个保留对象 / 3 次累计关联的保守错误。
+    let expected_gap = cleanup.as_ref().err().is_some_and(|error| {
+        error.kind() == io::ErrorKind::Other
+            && error.to_string() == "Windows Job 完成覆盖不足：保留 2，累计 3，活跃 0"
+    });
+    // 无论完整清理是否成功，都对已持有的直接父进程执行兜底；只有真实句柄完成才调用 wait。
+    let parent_kill = parent.kill();
+    // SAFETY: Child 一直持有原父进程句柄，等待不依赖 PID 重查。
+    let parent_done = unsafe { WaitForSingleObject(parent.as_raw_handle(), 2000) };
     drop(descendant);
+    // SAFETY: 克隆句柄仍指向同一叶进程对象，guard 兜底后必须确认其完成。
+    let descendant_done = unsafe { WaitForSingleObject(retained_descendant.as_raw_handle(), 2000) };
+    println!("[windows-process-probe] admission_rust fixture_disposal parent_kill={parent_kill:?} parent_wait={parent_done} descendant_wait={descendant_done} expected_rejected_association_gap={expected_gap}");
+    assert_eq!(
+        parent_done, WAIT_OBJECT_0,
+        "admission parent disposal failed"
+    );
+    assert_eq!(
+        descendant_done, WAIT_OBJECT_0,
+        "admission descendant disposal failed"
+    );
+    parent.wait()?;
     drop(job);
     fs::remove_dir_all(directory)?;
+    if !expected_gap {
+        cleanup?;
+    }
+    println!("[windows-process-probe] PASS: Rust admission gate only; complete historical cleanup is not asserted in this deliberate rejection scenario");
     Ok(())
 }

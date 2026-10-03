@@ -3,16 +3,14 @@
 #[cfg(windows)]
 mod admission_worker;
 #[cfg(windows)]
-mod tracking;
-#[cfg(windows)]
-#[path = "../../../src-tauri/src/lsp/windows_process.rs"]
+#[path = "../../../src-tauri/src/structure_review/native_analyzer/windows_process.rs"]
 mod windows_process;
 
 #[cfg(windows)]
 use std::{
     fs, io,
     io::Read,
-    os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -22,12 +20,11 @@ use windows_sys::Win32::{
     Foundation::{ERROR_MORE_DATA, HANDLE, WAIT_OBJECT_0},
     System::{
         JobObjects::{
-            IsProcessInJob, JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
-            JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-            TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-            JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+            IsProcessInJob, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
         },
         Threading::{
             OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -39,16 +36,6 @@ use windows_sys::Win32::{
 /// 诊断失败也回收已确认来自自有夹具的叶进程，防止故障探针留下进程。
 #[cfg(windows)]
 struct ObservedProcess(OwnedHandle);
-
-/// 候选模块只接管成功返回的 Win32 句柄，不改变生产 Job 的所有权。
-#[cfg(windows)]
-fn owned(handle: HANDLE) -> io::Result<OwnedHandle> {
-    if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: 本函数只接收创建/打开 API 返回的唯一所有权句柄。
-    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
-}
 
 #[cfg(windows)]
 impl Drop for ObservedProcess {
@@ -113,7 +100,7 @@ fn state(label: &str, pid: u32, handle: HANDLE) -> u32 {
 
 /// 只读准确 Job 的完整 PID 列表；有界扩容，既不按父 PID 扫描也不修改成员。
 #[cfg(windows)]
-fn job_members(job: &windows_process::WindowsJob) -> io::Result<Vec<u32>> {
+fn job_members(job: &windows_process::NativeWindowsJob) -> io::Result<Vec<u32>> {
     const HEADER: usize = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
         / std::mem::size_of::<usize>();
     let mut buffer = vec![0usize; HEADER + 16];
@@ -155,7 +142,11 @@ fn job_members(job: &windows_process::WindowsJob) -> io::Result<Vec<u32>> {
 
 /// 固定原始失败判据之后采样退出窗口；诊断中的等待不能改变已记录的成功/失败。
 #[cfg(windows)]
-fn trace_membership_after_cleanup(job: &windows_process::WindowsJob, pid: u32, handle: HANDLE) {
+fn trace_membership_after_cleanup(
+    job: &windows_process::NativeWindowsJob,
+    pid: u32,
+    handle: HANDLE,
+) {
     let mut observations = Vec::new();
     for sample in 0..16 {
         // SAFETY: 同一个保留句柄贯穿采样；超时 0 只观察。
@@ -196,7 +187,10 @@ fn wait_file(path: &Path) -> io::Result<()> {
 
 /// 独立验证零上限能封闭新进程入口；不改变生产回收实现，也不宣称清理通过。
 #[cfg(windows)]
-fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) -> io::Result<()> {
+fn verify_admission_gate(
+    job: &windows_process::NativeWindowsJob,
+    directory: &Path,
+) -> io::Result<()> {
     seal_admission(job)?;
     fs::write(directory.join("attempt-spawn"), "attempt")?;
     println!(
@@ -215,7 +209,7 @@ fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) ->
 
 /// 只封闭当前隔离 probe 的新进程入口，供候选与拒绝诊断共用。
 #[cfg(windows)]
-fn seal_admission(job: &windows_process::WindowsJob) -> io::Result<()> {
+fn seal_admission(job: &windows_process::NativeWindowsJob) -> io::Result<()> {
     // SAFETY: Windows 信息结构为 POD，读写大小和信息类完全匹配。
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let bytes = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
@@ -272,62 +266,6 @@ fn seal_admission(job: &windows_process::WindowsJob) -> io::Result<()> {
     Ok(())
 }
 
-/// 独立候选清理：停止捕获后等待固定句柄集合，最后才读取累计总数对账。
-#[cfg(windows)]
-fn candidate_cleanup(
-    job: &windows_process::WindowsJob,
-    tracker: &mut tracking::JobTracker,
-) -> io::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    if let Err(error) = seal_admission(job) {
-        tracker.failure(error);
-    }
-    if let Err(error) = tracker.supplement(job.raw(), deadline) {
-        tracker.failure(error);
-    }
-    // SAFETY: 候选只终止自身准确 Job，后续所有完成等待共用已建立的截止时间。
-    let terminated = if unsafe { TerminateJobObject(job.raw(), 1) } == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    };
-    if let Err(error) = &terminated {
-        tracker.failure(error);
-    }
-    tracker.stop(deadline)?;
-    if let Err(error) = tracker.supplement(job.raw(), deadline) {
-        tracker.failure(error);
-    }
-    if let Err(error) = tracker.wait(deadline) {
-        tracker.failure(&error);
-        return Err(error);
-    }
-    terminated?;
-    // SAFETY: 准确 Job 的固定结构查询，发生在全部保留对象已完成之后。
-    let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
-    if unsafe {
-        QueryInformationJobObject(
-            job.raw(),
-            JobObjectBasicAccountingInformation,
-            (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
-            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-            std::ptr::null_mut(),
-        )
-    } == 0
-    {
-        let error = io::Error::last_os_error();
-        tracker.failure(&error);
-        return Err(error);
-    }
-    println!(
-        "[windows-process-probe] candidate retained={} final_total={} final_active={}",
-        tracker.recorded(),
-        info.TotalProcesses,
-        info.ActiveProcesses
-    );
-    tracker.verify(info.TotalProcesses, info.ActiveProcesses)
-}
-
 /// 只读取本次夹具写出的有限诊断文件，不等可能被后代继承的管道 EOF。
 #[cfg(windows)]
 fn print_fixture_diagnostic(directory: &Path, name: &str) {
@@ -366,25 +304,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(stderr);
-    let (mut parent, job) = windows_process::WindowsJob::spawn(&mut command)?;
-    let mut candidate = if mode.starts_with("tracking_") {
-        // SAFETY: 只借用仍由生产 guard 持有的 Job 句柄，再复制给独立观察器。
-        let job_handle = unsafe { BorrowedHandle::borrow_raw(job.raw()) }.try_clone_to_owned()?;
-        let mut tracker = tracking::JobTracker::start(&job_handle)?;
-        tracker.primary(
-            job.raw(),
-            parent.id(),
-            parent.as_handle().try_clone_to_owned()?,
-        )?;
-        if mode == "tracking_count_gap" {
-            // 故意漏掉随后短命进程的通知，验证累计缺口不能被空 PID 列表掩盖。
-            tracker.stop(Instant::now() + Duration::from_secs(2))?;
-        }
-        fs::write(directory.join("tracking-ready"), "ready")?;
-        Some(tracker)
-    } else {
-        None
-    };
+    let (mut parent, job) = windows_process::NativeWindowsJob::spawn(&mut command)?;
     wait_file(&directory.join("ready"))?;
     let pid: u32 = fs::read_to_string(directory.join("descendant"))?
         .parse()
@@ -420,7 +340,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         fs::remove_dir_all(directory)?;
         return Ok(());
     }
-    if mode != "parent_alive" && mode != "tracking_parent_alive" && mode != "tracking_count_gap" {
+    if mode != "parent_alive" {
         let deadline = Instant::now() + Duration::from_secs(10);
         while parent.try_wait()?.is_none() {
             if Instant::now() >= deadline {
@@ -437,11 +357,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         job_members(&job)
     );
     let started = Instant::now();
-    let cleanup = if let Some(tracker) = candidate.as_mut() {
-        candidate_cleanup(&job, tracker)
-    } else {
-        job.terminate_and_wait()
-    };
+    let cleanup = job.terminate_and_wait();
     // SAFETY: 清理返回后立刻固定准确句柄状态，后续诊断采样不能掩盖原失败。
     let signaled = unsafe { WaitForSingleObject(descendant.0.as_raw_handle(), 0) };
     let parent_signaled = unsafe { WaitForSingleObject(parent.as_raw_handle(), 0) };
@@ -458,20 +374,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         elapsed,
         job.active_processes()
     );
-    if mode == "tracking_count_gap" {
-        let error = cleanup.expect_err("missing historical process must fail coverage");
-        assert!(
-            error.to_string().contains("完成覆盖不足"),
-            "unexpected gap failure: {error}"
-        );
-        let retry = candidate_cleanup(&job, candidate.as_mut().unwrap());
-        assert!(retry.is_err(), "retry erased historical coverage failure");
-        println!(
-            "[windows-process-probe] PASS: cumulative count gap rejected and retry remained Err"
-        );
-    } else {
-        cleanup?;
-    }
+    cleanup?;
     parent.wait()?;
     assert!(member, "descendant escaped exact Host Job");
     assert_eq!(
@@ -513,21 +416,11 @@ fn main() -> io::Result<()> {
     fs::create_dir(&root)?;
     let modes: &[&str] = match std::env::args().nth(1).as_deref() {
         Some("--admission-only") => &["admission_gate"],
-        Some("--tracking-only") => &[
-            "tracking_parent_exited_open",
-            "tracking_parent_exited_closed",
-            "tracking_parent_alive",
-            "tracking_count_gap",
-        ],
         _ => &[
-            "tracking_parent_exited_open",
-            "tracking_parent_exited_closed",
-            "tracking_parent_alive",
-            "tracking_count_gap",
-            "admission_gate",
             "parent_exited_open",
             "parent_exited_closed",
             "parent_alive",
+            "admission_gate",
         ],
     };
     for mode in modes {

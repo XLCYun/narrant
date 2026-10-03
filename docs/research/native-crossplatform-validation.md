@@ -2,7 +2,7 @@
 
 状态：macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过四包构建及
 四语言原生套件，早期诊断已复现 Job 活跃计数归零但同一进程句柄仍未退出的同步缺口，
-正在修正共享回收实现；后续生产安装和公共图尚未完成。
+正在接入新增 native helper 专用回收实现，既有 LSP/Python 行为不变；后续生产安装和公共图尚未完成。
 工作在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中继续。
 本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
 
@@ -236,6 +236,22 @@ TotalProcesses 对账，通知丢失或无法捕获对象必须明确失败；�
 Clang25通过+1平台跳过、Host17/3.70秒、factory2、安装1/80.42秒、公共图8/15.85秒。
 Python Windows20/34.98秒、3/3.78秒、4/4.47秒通过；Python macOS35/3/4项通过，
 各 Rust 分组零失败、零跳过。该运行已全部结束，只有原生 Windows 早期探针失败。
+`6b18b68` 的[候选 Windows 任务 111156082562](https://github.com/XLCYun/narrant/actions/runs/37106542040/job/111156082562)
+已实际通过三种候选生命周期：每次保留3个对象、累计3、活跃0，父子句柄立即为0，耗时3/3/9毫秒。
+故意漏掉真实短命成员时保留3、累计4，返回覆盖错误且重试仍报错。Rust 门禁得到准确1816，
+已有父子仍为258，验证成功。随后原共享生产场景仍在立即258断言处失败，整个任务保持失败；
+候选通过没有覆盖生产红灯。完整日志 `/private/tmp/narrant-ci-native-windows-6b18b68.log`。
+在该实测之后，共享接入仍被自动审批拒绝，理由是对所有既有 LSP/Python 会话的影响未充分验证；
+被拒绝补丁未应用。当前采用实质更小的范围：只在 `native_analyzer` 内新增专用 Windows 所有者，
+迁入单份已验证跟踪器，保持首次 Assign 前附加端口、Resume 前固定根对象；旧 LSP/Python 行为不变。
+保留 helper 后代能力，清理时才封闭新成员。代价是有限重复悬挂启动原语；旧共享完成次序缺陷
+没有因此修复，既有回归不删除、不放松。专用实现已完成，本机库检查及17项 Host 聚焦测试通过，
+新 owner 的 Windows 目标编译通过，实际平台运行与最终差异审查仍待完成。
+原生探针已直引新的专用所有者并移除候选副本；生产只维护一份跟踪器。
+新增三个 Windows 测试覆盖执行前入组、真实短命成员缺口和终止前失败时的 direct Child 回收，
+另一个 ignored 函数仅用作子进程夹具，不能被计作跳过了实际验收用例。
+同轮 `6b18b68` macOS 完整通过（Host17、factory2、安装1/83.04秒、公共图8/14.62秒），
+Python Windows20/27.80秒、3/3.53秒、4/9.85秒及 macOS35/3/4项通过；所有任务已结束。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、

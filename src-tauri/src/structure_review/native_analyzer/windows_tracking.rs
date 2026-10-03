@@ -1,4 +1,4 @@
-//! 未接入生产的候选跟踪器：在独立 probe 验证累计覆盖与准确对象完成。
+//! Native helper 专属账本：结合准确对象完成与累计计数确认整棵进程树。
 
 use super::owned;
 use std::{
@@ -282,18 +282,19 @@ impl JobTracker {
     }
 
     /// 只读展示已持有的真实唯一对象数，绝不按收到的通知数量计数。
+    #[cfg(test)]
     pub fn recorded(&self) -> usize {
         lock(&self.ledger).processes.len()
     }
 }
 
 impl Drop for JobTracker {
-    /// 探针兜底必须收拢线程；超时不把仍持 Job 的线程静默 detach。
+    /// 错误路径也收拢线程，不把仍持自有 Job 的线程悄悄 detach。
     fn drop(&mut self) {
         let _ = self.stop(Instant::now() + Duration::from_secs(2));
         if let Some(worker) = self.worker.take() {
-            // 仅探针兜底：停止信号已发布，线程不排空队列，也不再开始下一次捕获。
-            // join 不参与候选成功或截止时间判据；生产接入前需另行审查该错误路径。
+            // 停止信号已发布，线程不排空队列，也不再开始下一次捕获。
+            // 极端调度或 API 停滞时兜底 join 不提供硬墙钟上限，超时仍是错误。
             let _ = worker.join();
         }
     }

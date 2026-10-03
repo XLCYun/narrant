@@ -1,20 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
-const [directory, requestedMode] = process.argv.slice(2);
-const mode = requestedMode === 'tracking_count_gap' ? 'parent_alive' : requestedMode.replace(/^tracking_/, '');
-// 独立候选先固定根身份并附加端口，再允许夹具创建后代。
-if (requestedMode.startsWith('tracking_')) {
-  while (!fs.existsSync(path.join(directory, 'tracking-ready'))) {
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-}
-// 候选故意停止通知捕获后创建并等待短命对象，真实历史只能由累计计数暴露。
-if (requestedMode === 'tracking_count_gap') {
-  const result = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
-  if (result.error || result.status !== 0) throw result.error ?? new Error('short-lived fixture failed');
-}
+const [directory, mode] = process.argv.slice(2);
 const marker = path.join(directory, 'descendant');
 // Windows detached 跳过 libuv 内部 Job；不请求 CREATE_BREAKAWAY_FROM_JOB。
 spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000); const fs = require("node:fs"); const marker = process.argv[1]; fs.writeFileSync(marker + ".tmp", String(process.pid)); fs.renameSync(marker + ".tmp", marker);', marker], {

@@ -2,6 +2,9 @@
 
 use super::{failure, Result};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(windows)]
+#[path = "windows_process.rs"]
+mod windows_process;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
@@ -10,7 +13,7 @@ pub(super) struct ProcessTree {
     pub child: Child,
     reaped: bool,
     #[cfg(windows)]
-    job: crate::lsp::WindowsJob,
+    job: windows_process::NativeWindowsJob,
 }
 
 impl ProcessTree {
@@ -26,7 +29,7 @@ impl ProcessTree {
             command.process_group(0);
         }
         #[cfg(windows)]
-        let (child, job) = crate::lsp::WindowsJob::spawn(command).map_err(failure)?;
+        let (child, job) = windows_process::NativeWindowsJob::spawn(command).map_err(failure)?;
         #[cfg(not(windows))]
         let child = command.spawn().map_err(failure)?;
         Ok(Self {
@@ -55,9 +58,12 @@ impl ProcessTree {
             libc::kill(-(self.child.id() as i32), libc::SIGKILL);
         }
         #[cfg(windows)]
-        self.job.terminate_and_wait().map_err(failure)?;
+        let job_result = self.job.terminate_and_wait().map_err(failure);
         let _ = self.child.kill();
-        self.child.wait().map_err(failure)?;
+        let child_result = self.child.wait().map_err(failure);
+        #[cfg(windows)]
+        job_result?;
+        child_result?;
         #[cfg(unix)]
         {
             let deadline = Instant::now() + Duration::from_secs(2);
