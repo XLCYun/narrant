@@ -15,6 +15,10 @@ use super::{failure, CancellationCheck, Result};
 #[path = "windows_process.rs"]
 pub(crate) mod windows_process;
 
+#[cfg(all(test, windows))]
+#[path = "tests/windows_owner.rs"]
+pub(crate) mod windows_validation;
+
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
@@ -25,8 +29,10 @@ type Outgoing = (Vec<u8>, mpsc::Sender<Result<()>>);
 struct ServerProcess {
     child: Child,
     reaped: bool,
-    #[cfg(windows)]
+    #[cfg(all(windows, not(test)))]
     job: windows_process::WindowsJob,
+    #[cfg(all(test, windows))]
+    job: windows_validation::TestWindowsOwner,
 }
 
 impl ServerProcess {
@@ -116,6 +122,14 @@ pub(super) struct Transport {
 }
 
 impl Transport {
+    /// 测试在批次之间主动读取 owner 统计，不改变清理返回的可观察时机。
+    #[cfg(all(test, windows))]
+    pub(super) fn windows_owner_snapshot(
+        &self,
+    ) -> std::io::Result<windows_validation::OwnerSnapshot> {
+        self._process.job.snapshot()
+    }
+
     /// 等待正常关闭并确认整个服务器组退出，关闭确认本身不能代替进程回收。
     pub fn finish(&mut self) -> Result<()> {
         self._process.finish()
@@ -133,8 +147,11 @@ impl Transport {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        #[cfg(windows)]
+        #[cfg(all(windows, not(test)))]
         let (child, job) = windows_process::WindowsJob::spawn(&mut command)
+            .map_err(|error| failure(format!("无法建立 Windows LSP Job 所有权：{error}")))?;
+        #[cfg(all(test, windows))]
+        let (child, job) = windows_validation::TestWindowsOwner::spawn(&mut command)
             .map_err(|error| failure(format!("无法建立 Windows LSP Job 所有权：{error}")))?;
         #[cfg(not(windows))]
         let child = command

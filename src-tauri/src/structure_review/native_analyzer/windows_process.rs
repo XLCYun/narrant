@@ -239,9 +239,21 @@ impl NativeWindowsJob {
 
     /// 仅测试一次性在终止前失败，区分 ProcessTree 是否实际执行 direct Child 兜底。
     #[cfg(test)]
-    fn fail_next_cleanup_before_termination(&self) {
+    pub(crate) fn fail_next_cleanup_before_termination(&self) {
         self.fail_before_termination
             .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// 只读采样当前保留数和 Job 累计计数，不刷新账本或改变清理状态。
+    #[cfg(test)]
+    pub(crate) fn validation_snapshot(&self) -> io::Result<(usize, u32, u32)> {
+        let tracker = self
+            .tracker
+            .try_lock()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let retained = tracker.recorded();
+        let info = self.accounting()?;
+        Ok((retained, info.TotalProcesses, info.ActiveProcesses))
     }
 }
 

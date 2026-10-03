@@ -5,6 +5,9 @@ mod input;
 mod process;
 mod protocol;
 
+#[cfg(all(test, windows))]
+pub(crate) use process::ValidationWindowsJob;
+
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 use super::code_graph::{AnalysisError, AnalysisInput, CodeGraph, LanguageAnalyzer};

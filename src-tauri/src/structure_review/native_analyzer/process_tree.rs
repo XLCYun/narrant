@@ -7,6 +7,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 mod windows_process;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
+#[cfg(all(test, windows))]
+pub(crate) use windows_process::NativeWindowsJob as ValidationWindowsJob;
 
 /// 持有 helper 及其后代直到显式回收；Drop 覆盖 panic 和早退。
 pub(super) struct ProcessTree {

@@ -18,6 +18,8 @@ use url::Url;
 pub use protocol::{CallTarget, Location, OutgoingCall, Position, Range};
 #[cfg(unix)]
 pub(crate) use transport::group_members as native_group_members;
+#[cfg(all(test, windows))]
+pub(crate) use transport::windows_validation;
 use transport::Transport;
 
 /// 会话或协议失败；不依赖代码图的错误类型。
@@ -103,6 +105,14 @@ pub struct LspClient {
 }
 
 impl LspClient {
+    /// 仅测试读取当前会话的候选统计，正常请求与清理均不自动采样。
+    #[cfg(all(test, windows))]
+    pub(crate) fn windows_owner_snapshot(
+        &self,
+    ) -> std::io::Result<windows_validation::OwnerSnapshot> {
+        self.transport.windows_owner_snapshot()
+    }
+
     /// 启动调用方提供的命令并完成 initialize/initialized；命令可携带语言所需参数和环境。
     pub fn start(mut command: Command, workspace: &Path, options: LspOptions) -> Result<Self> {
         let uri = file_uri(workspace)?;
@@ -166,6 +176,8 @@ impl LspClient {
             self.request_timeout,
             &self.cancelled,
         )?;
+        #[cfg(all(test, windows))]
+        windows_validation::post_send(method);
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())

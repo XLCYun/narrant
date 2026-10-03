@@ -36,6 +36,8 @@ export function verificationCommands(environment, platform = process.platform) {
     { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/clang/tests', '-v'], environment: { NARRANT_LLVM_ROOT: environment.NARRANT_LLVM_SDK, NARRANT_CLANG_HELPER: path.join(repository, `native-helpers/clang/build/narrant-clang${suffix}`) } },
     // 共享 Windows Job 清理契约也必须验收，复用当前测试二进制且不运行子进程 fixture。
     ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::transport::windows_process::tests::windows_job_', '--', '--nocapture', '--test-threads=1'] }] : []),
+    // 在真实协议链中分别记录旧路径与候选的生命周期结果，任一失败仍保留红灯。
+    ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::tests::windows_session::', '--', '--nocapture', '--test-threads=1'] }] : []),
     { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::', '--', '--test-threads=4'] },
     { executable: 'bash', args: [...cargo, '--lib', 'native_languages::', '--', '--test-threads=4'] },
     { executable: 'bash', args: [...cargo, '--lib', 'real_native_packs_install_and_analyze_through_production_factory', '--', '--ignored', '--nocapture'] },

@@ -115,7 +115,7 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 9);
+  assert.equal(commands.length, 10);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
@@ -133,6 +133,7 @@ test('verification uses every helper suite and serialized Cargo host and real gr
 test('Windows native acceptance includes focused shared Job regressions without expanding macOS tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const filter = 'lsp::transport::windows_process::tests::windows_job_';
+  const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');
   const regressions = windows.filter(command => command.args.includes(filter));
   assert.equal(regressions.length, 1);
@@ -142,8 +143,9 @@ test('Windows native acceptance includes focused shared Job regressions without 
   });
   const macOS = verificationCommands(environment, 'darwin');
   assert.equal(macOS.length, 8);
-  assert.ok(macOS.every(command => !command.args.includes(filter)));
-  assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(filter)), macOS.slice(4));
+  assert.ok(macOS.every(command => !command.args.includes(filter) && !command.args.includes(sessionFilter)));
+  assert.equal(windows.filter(command => command.args.includes(sessionFilter)).length, 1);
+  assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(filter) && !command.args.includes(sessionFilter)), macOS.slice(4));
 });
 
 // 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。
