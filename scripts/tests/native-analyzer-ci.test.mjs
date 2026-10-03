@@ -93,7 +93,7 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 8);
+  assert.equal(commands.length, 9);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
@@ -105,6 +105,23 @@ test('verification uses every helper suite and serialized Cargo host and real gr
   assert.ok(commands.at(-1).args.includes('--ignored'));
   assert.ok(commands.at(-1).args.includes('--test-threads=1'));
   assert.throws(() => verificationCommands({}), /Missing fixed toolchain/);
+});
+
+// 共享 Job 对象的两个生命周期回归只在 Windows 执行，且不启动忽略的子进程 fixture。
+test('Windows native acceptance includes focused shared Job regressions without expanding macOS tests', () => {
+  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const filter = 'lsp::transport::windows_process::tests::windows_job_';
+  const windows = verificationCommands(environment, 'win32');
+  const regressions = windows.filter(command => command.args.includes(filter));
+  assert.equal(regressions.length, 1);
+  assert.deepEqual(regressions[0], {
+    executable: 'bash',
+    args: ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', filter, '--', '--nocapture', '--test-threads=1'],
+  });
+  const macOS = verificationCommands(environment, 'darwin');
+  assert.equal(macOS.length, 8);
+  assert.ok(macOS.every(command => !command.args.includes(filter)));
+  assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(filter)), macOS.slice(4));
 });
 
 // 引用专用 NuGet 包跨架构使用同一来源摘要，不能偷换为浮动版本或任意 NuGet 工具。

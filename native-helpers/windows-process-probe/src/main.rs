@@ -16,7 +16,12 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{HANDLE, WAIT_OBJECT_0},
     System::{
-        JobObjects::IsProcessInJob,
+        JobObjects::{
+            IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+        },
         Threading::{
             OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
             PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
@@ -105,6 +110,71 @@ fn wait_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// 独立验证零上限能封闭新进程入口；不改变生产回收实现，也不宣称清理通过。
+#[cfg(windows)]
+fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) -> io::Result<()> {
+    // SAFETY: Windows 信息结构为 POD，读写大小和信息类完全匹配。
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    let bytes = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+    // SAFETY: 只读取当前 probe 独占的 Job。
+    if unsafe {
+        QueryInformationJobObject(
+            job.raw(),
+            JobObjectExtendedLimitInformation,
+            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            bytes,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+    limits.BasicLimitInformation.ActiveProcessLimit = 0;
+    // SAFETY: 仅修改本次隔离 probe 的 Job；保留现有限制，不允许后代 breakaway。
+    if unsafe {
+        SetInformationJobObject(
+            job.raw(),
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            bytes,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: 从同一自有 Job 读回，证明零值及限制 flags 已被内核接受。
+    if unsafe {
+        QueryInformationJobObject(
+            job.raw(),
+            JobObjectExtendedLimitInformation,
+            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            bytes,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let flags = limits.BasicLimitInformation.LimitFlags;
+    assert_eq!(limits.BasicLimitInformation.ActiveProcessLimit, 0);
+    assert_ne!(flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS, 0);
+    assert_ne!(flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, 0);
+    assert_eq!(
+        flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK),
+        0
+    );
+    fs::write(directory.join("attempt-spawn"), "attempt")?;
+    wait_file(&directory.join("attempt-result"))?;
+    let outcome = fs::read_to_string(directory.join("attempt-result"))?;
+    println!("[windows-process-probe] admission_gate flags={flags:#x} active_limit=0 spawn_outcome={outcome}");
+    assert!(
+        outcome.starts_with("rejected:"),
+        "sealed Job admitted a new process"
+    );
+    Ok(())
+}
+
 /// 一个场景同时验证 Job 继承、已有清理函数和立即退出信号。
 #[cfg(windows)]
 fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
@@ -135,6 +205,26 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
     let member = belongs(descendant.0.as_raw_handle(), job.raw())?;
     println!("[windows-process-probe] mode={mode} parent={} descendant={pid} parent_in_exact_job={:?} descendant_in_exact_job={member} active_before={}", parent.id(), belongs(parent.as_raw_handle(), job.raw()), job.active_processes()?);
     state("before", pid, descendant.0.as_raw_handle());
+    if mode == "admission_gate" {
+        verify_admission_gate(&job, directory)?;
+        // SAFETY: 两个进程仍由当前守卫持有；仅验证封闭入口没有终止既有成员。
+        assert_eq!(
+            unsafe { WaitForSingleObject(parent.as_raw_handle(), 0) },
+            windows_sys::Win32::Foundation::WAIT_TIMEOUT
+        );
+        assert_eq!(
+            unsafe { WaitForSingleObject(descendant.0.as_raw_handle(), 0) },
+            windows_sys::Win32::Foundation::WAIT_TIMEOUT
+        );
+        println!("[windows-process-probe] PASS: admission gate only; production cleanup correctness remains unverified");
+        // 该隔离场景只证明 gate。兜底显式终止夹具，原生产红灯场景未被替换。
+        job.terminate_and_wait()?;
+        parent.wait()?;
+        drop(descendant);
+        drop(job);
+        fs::remove_dir_all(directory)?;
+        return Ok(());
+    }
     if mode != "parent_alive" {
         let deadline = Instant::now() + Duration::from_secs(10);
         while parent.try_wait()?.is_none() {
@@ -193,11 +283,21 @@ fn main() -> io::Result<()> {
         std::process::id()
     ));
     fs::create_dir(&root)?;
-    for mode in ["parent_exited_open", "parent_exited_closed", "parent_alive"] {
+    let modes: &[&str] = if std::env::args().nth(1).as_deref() == Some("--admission-only") {
+        &["admission_gate"]
+    } else {
+        &[
+            "admission_gate",
+            "parent_exited_open",
+            "parent_exited_closed",
+            "parent_alive",
+        ]
+    };
+    for mode in modes {
         run_case(&node, &root.join(mode), mode)?;
     }
     fs::remove_dir(root)?;
-    println!("[windows-process-probe] PASS: all three real Windows Job scenarios");
+    println!("[windows-process-probe] PASS: requested scenarios {modes:?}");
     Ok(())
 }
 

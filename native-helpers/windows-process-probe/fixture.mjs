@@ -14,6 +14,22 @@ const ready = setInterval(() => {
   if (!fs.existsSync(marker)) return;
   clearInterval(ready);
   fs.writeFileSync(path.join(directory, 'ready'), 'ready');
-  if (mode !== 'parent_alive') process.exit(0);
+  if (mode !== 'parent_alive' && mode !== 'admission_gate') process.exit(0);
 }, 10);
+// 只有隔离 gate 场景在 Rust 明确封闭 Job 入口后尝试再创建一个进程。
+if (mode === 'admission_gate') {
+  const attempt = setInterval(() => {
+    if (!fs.existsSync(path.join(directory, 'attempt-spawn'))) return;
+    clearInterval(attempt);
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { detached: true, stdio: 'ignore' });
+    /** 原子发布结果，防止观察方读取尚未完成的标记内容。 */
+    const publish = result => {
+      const marker = path.join(directory, 'attempt-result');
+      fs.writeFileSync(marker + '.tmp', result);
+      fs.renameSync(marker + '.tmp', marker);
+    };
+    child.once('error', error => publish(`rejected:${error.code}`));
+    child.once('spawn', () => publish('accepted'));
+  }, 5);
+}
 setInterval(() => {}, 1000);
