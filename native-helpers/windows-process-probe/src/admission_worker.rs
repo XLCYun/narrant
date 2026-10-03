@@ -12,10 +12,7 @@ use windows_sys::Win32::{
     System::Threading::WaitForSingleObject,
 };
 
-use super::{
-    belongs, observe, state, verify_admission_gate, wait_file,
-    windows_process::NativeWindowsJob as WindowsJob,
-};
+use super::{belongs, observe, state, verify_admission_gate, wait_file, windows_job::WindowsJob};
 
 /// 子模式必须在主入口检查 Node 环境之前分派；所有子进程均来自当前探针可执行文件。
 pub(crate) fn dispatch() -> Option<io::Result<()>> {

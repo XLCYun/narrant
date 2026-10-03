@@ -2,7 +2,7 @@
 
 use crate::lsp::{
     transport::Transport,
-    windows_validation::{with_owner, CleanupFault, OwnerKind, ValidationOptions},
+    windows_validation::{with_validation, CleanupFault, ValidationOptions},
     LspClient, LspOptions,
 };
 use serde_json::json;
@@ -374,19 +374,12 @@ fn run_panic_drop() {
     assert!(result.is_err());
 }
 
-/// 仅在显式测试作用域选择冻结候选，复用相同协议场景和严格句柄断言。
-fn with_candidate(run: impl FnOnce()) {
-    with_owner(
-        ValidationOptions {
-            owner: OwnerKind::NativeCandidate,
-            ..ValidationOptions::default()
-        },
-        |observations| {
-            run();
-            assert_eq!(observations.spawn_count(), 1);
-            assert_eq!(observations.owners(), vec![OwnerKind::NativeCandidate]);
-        },
-    );
+/// 只观察默认生产所有者的实际启动次数，不选择或替换清理实现。
+fn with_session_observation(run: impl FnOnce()) {
+    with_validation(ValidationOptions::default(), |observations| {
+        run();
+        assert_eq!(observations.spawn_count(), 1);
+    });
 }
 
 /// 单个真实会话跨八批构建后代仍可继续查询，短命对象不由测试额外保留句柄。
@@ -399,14 +392,11 @@ fn run_short_lived_batches(concurrency: u32) {
     fixture.assert_owner_membership(&client);
     client.request_timeout = Duration::from_secs(30);
     let initial = client.windows_owner_snapshot().unwrap();
-    assert_eq!(initial.owner, OwnerKind::NativeCandidate);
-    let mut retained = initial.retained.expect("候选必须报告保留对象数量");
-    let mut total = initial
-        .total_processes
-        .expect("候选必须报告真实 Job 累计数量");
+    let mut retained = initial.retained;
+    let mut total = initial.total_processes;
     eprintln!(
         "Windows LSP batch initial: concurrency={concurrency}, retained={retained}, total={total}, active={}, known_live=2",
-        initial.active_processes
+        initial.active
     );
     let batches_started = Instant::now();
     for batch in 1..=8 {
@@ -429,16 +419,13 @@ fn run_short_lived_batches(concurrency: u32) {
         let snapshot = client.windows_owner_snapshot().unwrap();
         eprintln!(
             "Windows LSP batch snapshot: concurrency={concurrency}, batch={batch}, successful_short_children={}, retained={:?}, total={:?}, active={}, known_live=2",
-            batch * 32, snapshot.retained, snapshot.total_processes, snapshot.active_processes
+            batch * 32, snapshot.retained, snapshot.total_processes, snapshot.active
         );
-        assert_eq!(snapshot.owner, OwnerKind::NativeCandidate);
-        total = snapshot
-            .total_processes
-            .expect("候选必须报告真实 Job 累计数量");
+        total = snapshot.total_processes;
         // 只用实际成功创建的进程数作下界；不猜测额外累计项是否来自嵌套 Job 或其他进程。
         assert!(total >= 2 + 32 * batch, "真实累计数不能少于已知创建数");
         fixture.assert_before_cleanup(false);
-        let current = snapshot.retained.expect("候选必须报告保留对象数量");
+        let current = snapshot.retained;
         assert!(current >= retained, "保留对象历史不应随批次结束而丢失");
         assert!(current <= total as usize, "保留对象数不能超过 Job 累计数");
         retained = current;
@@ -451,7 +438,7 @@ fn run_short_lived_batches(concurrency: u32) {
     let cleanup_elapsed = cleanup_started.elapsed();
     fixture.join_observer();
     eprintln!(
-        "Windows LSP candidate batches: concurrency={concurrency}, batches=8, successful_short_children=256, known_created_objects=258, observed_total={total}, sampled_retained_peak={retained}, startup={startup_elapsed:?}, workload={batches_elapsed:?}, shutdown={cleanup_elapsed:?}, result={result:?}"
+        "Windows LSP batches: concurrency={concurrency}, batches=8, successful_short_children=256, known_created_objects=258, observed_total={total}, sampled_retained_peak={retained}, startup={startup_elapsed:?}, workload={batches_elapsed:?}, shutdown={cleanup_elapsed:?}, result={result:?}"
     );
     assert_completed(completion);
     result.unwrap();
@@ -511,83 +498,29 @@ fn panic_drop() {
     run_panic_drop();
 }
 
-/// 候选正常关闭覆盖父先退出和后代仍持有管道。
+/// 同一长期生产会话中连续处理八批串行短命后代。
 #[test]
-fn candidate_normal_shutdown_parent_exits() {
-    with_candidate(|| run_normal_shutdown("normal-parent-exits"));
+fn short_lived_batches_serial() {
+    with_session_observation(|| run_short_lived_batches(1));
 }
 
-/// 候选正常关闭覆盖根进程忽略 exit 的清理时序。
+/// 同一长期生产会话中连续处理八批四路并发短命后代。
 #[test]
-fn candidate_normal_shutdown_parent_lives() {
-    with_candidate(|| run_normal_shutdown("normal-parent-lives"));
-}
-
-/// 候选在真实 initialize EOF 的自动析构返回前完成回收。
-#[test]
-fn candidate_initialization_eof() {
-    with_candidate(|| run_initialization_failure("initialize-eof", "关闭了输出流"));
-}
-
-/// 候选在真实畸形帧初始化失败的返回前完成回收。
-#[test]
-fn candidate_initialization_malformed() {
-    with_candidate(|| run_initialization_failure("initialize-malformed", "initialize"));
-}
-
-/// 候选取消已初始化且根进程仍活着的在途请求。
-#[test]
-fn candidate_cancellation_parent_lives() {
-    with_candidate(|| run_pending_request("pending-parent-lives", true));
-}
-
-/// 候选取消时根已退出但后代继续持有协议管道。
-#[test]
-fn candidate_cancellation_parent_exits() {
-    with_candidate(|| run_pending_request("pending-parent-exits", true));
-}
-
-/// 候选超时分支仍要求根和后代的准确对象同步完成。
-#[test]
-fn candidate_timeout_parent_lives() {
-    with_candidate(|| run_pending_request("pending-parent-lives", false));
-}
-
-/// 候选覆盖根先结束、后代持有管道导致真正请求超时的情况。
-#[test]
-fn candidate_timeout_parent_exits() {
-    with_candidate(|| run_pending_request("pending-parent-exits", false));
-}
-
-/// 候选通过相同调用方 panic 展开验证 Drop 完成屏障。
-#[test]
-fn candidate_panic_drop() {
-    with_candidate(run_panic_drop);
-}
-
-/// 候选在同一长期会话中连续处理八批串行短命后代。
-#[test]
-fn candidate_short_lived_batches_serial() {
-    with_candidate(|| run_short_lived_batches(1));
-}
-
-/// 候选在同一长期会话中连续处理八批四路并发短命后代。
-#[test]
-fn candidate_short_lived_batches_parallel() {
-    with_candidate(|| run_short_lived_batches(4));
+fn short_lived_batches_parallel() {
+    with_session_observation(|| run_short_lived_batches(4));
 }
 
 /// 有限比较 libuv 普通和 detached 子进程的累计差异，不推测额外累计项的身份。
 #[test]
-fn candidate_bounded_spawn_accounting_diagnostic() {
-    with_candidate(|| {
+fn bounded_spawn_accounting_diagnostic() {
+    with_session_observation(|| {
         let mut fixture = SessionFixture::new("diagnostic-parent-lives", None);
         let mut client =
             LspClient::start(fixture.command(), fixture.directory.path(), options()).unwrap();
         fixture.assert_owner_membership(&client);
         let initial = client.windows_owner_snapshot().unwrap();
-        let mut previous_total = initial.total_processes.unwrap();
-        let mut previous_retained = initial.retained.unwrap();
+        let mut previous_total = initial.total_processes;
+        let mut previous_retained = initial.retained;
         let mut successful = 0;
         eprintln!("Windows LSP bounded diagnostic initial: {initial:?}");
         for (index, (count, detached)) in [(2, false), (2, true), (4, false), (4, true)]
@@ -611,15 +544,14 @@ fn candidate_bounded_spawn_accounting_diagnostic() {
                 json!({"echo":index})
             );
             let snapshot = client.windows_owner_snapshot().unwrap();
-            let total = snapshot.total_processes.unwrap();
-            let retained = snapshot.retained.unwrap();
+            let total = snapshot.total_processes;
+            let retained = snapshot.retained;
             eprintln!(
                 "Windows LSP bounded diagnostic: count={count}, detached={detached}, successful_short_children={successful}, retained={retained}, total={total}, active={}, total_delta={}, retained_delta={}, known_live=2",
-                snapshot.active_processes,
+                snapshot.active,
                 i64::from(total) - i64::from(previous_total),
                 retained as i64 - previous_retained as i64
             );
-            assert_eq!(snapshot.owner, OwnerKind::NativeCandidate);
             assert!(total >= 2 + successful);
             assert!(total >= previous_total);
             assert!(retained >= previous_retained);
@@ -643,10 +575,9 @@ fn candidate_bounded_spawn_accounting_diagnostic() {
 
 /// 清理在终止前报错也必须先回收直接子进程，不能靠随后 Drop 的重试掩盖早退。
 #[test]
-fn candidate_cleanup_error_reaps_direct_child() {
-    with_owner(
+fn cleanup_error_reaps_direct_child() {
+    with_validation(
         ValidationOptions {
-            owner: OwnerKind::NativeCandidate,
             fault: CleanupFault::BeforeTerminationOnce,
             ..ValidationOptions::default()
         },
@@ -676,7 +607,7 @@ fn candidate_cleanup_error_reaps_direct_child() {
             let retried_immediate = unsafe { WaitForSingleObject(roots[0].as_raw_handle(), 0) };
             assert_eq!(retried_immediate, WAIT_OBJECT_0);
             assert!(retried.is_err(), "后续重试不能清除先前的清理失败");
-            assert_eq!(observations.owners(), vec![OwnerKind::NativeCandidate]);
+            assert_eq!(observations.spawn_count(), 1);
         },
     );
 }

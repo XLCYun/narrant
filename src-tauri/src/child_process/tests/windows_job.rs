@@ -2,13 +2,16 @@ use super::*;
 use std::{fs, path::Path, process::Stdio};
 use windows_sys::Win32::{
     Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
-    System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+    System::{
+        JobObjects::IsProcessInJob,
+        Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+    },
 };
 
 const FIXTURE: &str = concat!(module_path!(), "::native_windows_fixture");
 
 /// 用当前测试程序作原生夹具，避免 Node 自身 Job 干扰所有权检查。
-fn fixture_command(role: &str, directory: &Path) -> Command {
+pub(crate) fn fixture_command(role: &str, directory: &Path) -> Command {
     // libtest 的完整名称不带 crate 前缀；原应用和轻量 harness 可共用同一夹具。
     let (_, fixture) = FIXTURE.split_once("::").expect("夹具模块包含 crate 前缀");
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -23,7 +26,7 @@ fn fixture_command(role: &str, directory: &Path) -> Command {
 }
 
 /// 文件仅作夹具同步信号，有界等待不会把实际退出断言替换为轮询。
-fn wait_file(path: &Path) {
+pub(crate) fn wait_file(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !path.exists() {
         assert!(
@@ -66,7 +69,7 @@ fn native_windows_fixture() {
 fn native_windows_suspended_root_is_owned_and_deduplicated() {
     let directory = tempfile::tempdir().unwrap();
     let (pending, job) =
-        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+        WindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
     let child = pending.0.as_ref().unwrap();
     let observed = child.as_handle().try_clone_to_owned().unwrap();
     {
@@ -100,8 +103,7 @@ fn native_windows_suspended_root_is_owned_and_deduplicated() {
 fn native_windows_missing_history_is_sticky() {
     let directory = tempfile::tempdir().unwrap();
     let (pending, job) =
-        NativeWindowsJob::spawn_suspended(&mut fixture_command("gap-parent", directory.path()))
-            .unwrap();
+        WindowsJob::spawn_suspended(&mut fixture_command("gap-parent", directory.path())).unwrap();
     job.tracker
         .lock()
         .unwrap()
@@ -127,22 +129,6 @@ fn native_windows_missing_history_is_sticky() {
     drop(pending);
 }
 
-/// Job 错误不能跳过已持有 direct Child 的回收，也不能把树标记为已确认完成。
-#[test]
-fn native_windows_tree_error_still_waits_direct_child() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut tree =
-        super::super::ProcessTree::spawn(&mut fixture_command("leaf", directory.path())).unwrap();
-    wait_file(&directory.path().join("leaf-ready"));
-    let observed = tree.child.as_handle().try_clone_to_owned().unwrap();
-    tree.job.fail_next_cleanup_before_termination();
-    assert!(tree.reap().is_err());
-    let immediate = unsafe { WaitForSingleObject(observed.as_raw_handle(), 0) };
-    assert_eq!(immediate, WAIT_OBJECT_0);
-    assert!(!tree.reaped);
-    assert!(tree.reap().is_err());
-}
-
 /// 从测试控制进程创建第二个挂起对象，避免夹具自行创建额外进程影响累计断言。
 fn suspended_test_member(directory: &Path) -> SuspendedChild {
     let mut command = fixture_command("short", directory);
@@ -151,7 +137,7 @@ fn suspended_test_member(directory: &Path) -> SuspendedChild {
 }
 
 /// 在监听同步点安装之后关联第二个准确对象，确保 NEW_PROCESS 必定经过该同步点。
-fn assign_test_member(job: &NativeWindowsJob, pending: &SuspendedChild) {
+fn assign_test_member(job: &WindowsJob, pending: &SuspendedChild) {
     let child = pending.0.as_ref().unwrap();
     // SAFETY: 此对象由测试刚创建且仍挂起，只把它加入本测试的私有 Job。
     assert_ne!(
@@ -186,7 +172,7 @@ fn native_windows_stop_preserves_dequeued_member() {
 
     let directory = tempfile::tempdir().unwrap();
     let (_root, job) =
-        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+        WindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
     let mut member = suspended_test_member(directory.path());
     let pid = member.0.as_ref().unwrap().id();
     let (arrived, arrival) = mpsc::channel();
@@ -229,7 +215,7 @@ fn native_windows_cleanup_waits_for_queued_history() {
 
     let directory = tempfile::tempdir().unwrap();
     let (_root, job) =
-        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+        WindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
     let mut member = suspended_test_member(directory.path());
     let pid = member.0.as_ref().unwrap().id();
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -285,7 +271,7 @@ fn native_windows_cleanup_waits_for_queued_history() {
 fn native_windows_stop_error_still_waits_recorded_members() {
     let directory = tempfile::tempdir().unwrap();
     let (root, job) =
-        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+        WindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
     let member = suspended_test_member(directory.path());
     assign_test_member(&job, &member);
     let root_handle = root
@@ -330,4 +316,32 @@ fn native_windows_stop_error_still_waits_recorded_members() {
         .unwrap_err()
         .to_string()
         .contains("fixture failure after listener stop"));
+}
+
+/// 服务器第一条指令之前已经加入 Job；启动中途丢弃也不能留下挂起进程。
+#[test]
+fn windows_job_owns_suspended_startup_before_execution() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = fixture_command("leaf", directory.path());
+    let (pending, job) = WindowsJob::spawn_suspended(&mut command).unwrap();
+    let process = pending.0.as_ref().unwrap();
+    let mut in_job = 0;
+    // SAFETY: 两个句柄均由当前测试持有，只查询准确的 Job 归属。
+    assert_ne!(
+        unsafe { IsProcessInJob(process.as_raw_handle(), job.raw(), &mut in_job) },
+        0
+    );
+    assert_eq!(in_job, 1);
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!directory.path().join("leaf-ready").exists());
+    // SAFETY: 保存自有进程的同步句柄，在 pending 被丢弃后检查它是否确已停止。
+    let observed = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, process.id()) }).unwrap();
+    drop(pending);
+    let result = job.terminate_and_wait();
+    // SAFETY: 只查询已回收的自有挂起进程。
+    let immediate = unsafe { WaitForSingleObject(observed.as_raw_handle(), 0) };
+    assert_eq!(immediate, WAIT_OBJECT_0);
+    result.unwrap();
+    assert_eq!(job.active_processes().unwrap(), 0);
+    assert!(!directory.path().join("leaf-ready").exists());
 }

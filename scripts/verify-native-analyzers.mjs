@@ -34,9 +34,10 @@ export function verificationCommands(environment, platform = process.platform) {
     { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/java/tests', '-v'], environment: { NARRANT_JAVA_TARGET: environment.NARRANT_JAVA_TARGET_JDK, NARRANT_JAVA_LIB: path.join(repository, '.tools/java-native/lib') } },
     { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/csharp/tests', '-v'], environment: { NARRANT_TEST_DOTNET: path.join(environment.NARRANT_DOTNET_SDK, `dotnet${suffix}`), NARRANT_TEST_REFS: path.join(environment.NARRANT_DOTNET_SDK, 'packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0'), NARRANT_TEST_REFS8: path.join(environment.NARRANT_DOTNET_REF8_ROOT, 'ref/net8.0') } },
     { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/clang/tests', '-v'], environment: { NARRANT_LLVM_ROOT: environment.NARRANT_LLVM_SDK, NARRANT_CLANG_HELPER: path.join(repository, `native-helpers/clang/build/narrant-clang${suffix}`) } },
-    // 共享 Windows Job 清理契约也必须验收，复用当前测试二进制且不运行子进程 fixture。
-    ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::transport::windows_process::tests::windows_job_', '--', '--nocapture', '--test-threads=1'] }] : []),
-    // 在真实协议链中分别记录旧路径与候选的生命周期结果，任一失败仍保留红灯。
+    // 共享 owner 与 Transport 都走生产默认路径，不运行 ignored 子进程 fixture。
+    ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'child_process::windows_job::tests::', '--', '--nocapture', '--test-threads=1'] }] : []),
+    ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::transport::windows_process_tests::windows_job_', '--', '--nocapture', '--test-threads=1'] }] : []),
+    // 完整协议链验证正常退出、取消、超时与短命后代，任一失败仍保留红灯。
     ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::tests::windows_session::', '--', '--nocapture', '--test-threads=1'] }] : []),
     { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::', '--', '--test-threads=4'] },
     { executable: 'bash', args: [...cargo, '--lib', 'native_languages::', '--', '--test-threads=4'] },

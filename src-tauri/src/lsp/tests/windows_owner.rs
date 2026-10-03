@@ -1,71 +1,54 @@
-//! 仅 Windows 单元测试使用的 owner seam；产品构建仍直接使用共享 WindowsJob。
+//! Windows 测试只观察真实共享 owner；不选择实现或替换生产清理路径。
 
-use super::windows_process::WindowsJob;
-use crate::structure_review::native_analyzer::ValidationWindowsJob;
+use crate::child_process::windows_job::WindowsJob;
 use std::{
     cell::RefCell,
     io,
     os::windows::io::{AsHandle, AsRawHandle, OwnedHandle},
-    process::{Child, Command},
+    process::Child,
     sync::{Arc, Mutex},
 };
 use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 
-/// 明确标识测试实际创建的 owner，不把旧共享路径的结果记到候选名下。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OwnerKind {
-    Baseline,
-    NativeCandidate,
-}
-
-/// 仅候选支持已有的一次性故障，用来暴露共享 Transport 的错误兜底行为。
+/// 复用共享 owner 的一次性故障，验证 Transport 错误路径仍等待直接 Child。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CleanupFault {
     None,
     BeforeTerminationOnce,
 }
 
-/// 批次之间读取候选累计覆盖；旧 owner 没有账本，因此对应字段明确留空。
+/// 批次之间只读采样真实共享 owner 的累计覆盖，不刷新账本或补等进程。
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OwnerSnapshot {
-    pub owner: OwnerKind,
-    pub retained: Option<usize>,
-    pub total_processes: Option<u32>,
-    pub active_processes: u32,
+    pub retained: usize,
+    pub total_processes: u32,
+    pub active: u32,
 }
 
 /// 请求已经写入并 flush 后观察方法名，不伪造服务器响应或改变协议结果。
 pub(crate) type RequestObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// 作用域配置仅存在当前测试线程，不通过环境变量或产品选项传播。
+/// 作用域仅配置当前测试线程的观测与故障，不改变实际 owner 类型。
 #[derive(Clone)]
 pub(crate) struct ValidationOptions {
-    pub owner: OwnerKind,
     pub fault: CleanupFault,
     pub after_request_sent: Option<RequestObserver>,
 }
 
 impl Default for ValidationOptions {
-    /// 未显式选择时所有 Windows 单元测试仍使用旧共享 owner。
+    /// 默认不注入故障、不安装请求观察器；产品与测试直接使用同一个 owner。
     fn default() -> Self {
         Self {
-            owner: OwnerKind::Baseline,
             fault: CleanupFault::None,
             after_request_sent: None,
         }
     }
 }
 
-/// 只保存直接 root 的准确对象句柄；观察者从不持有 Job 或历史后代句柄。
-struct ObservedRoot {
-    owner: OwnerKind,
-    handle: OwnedHandle,
-}
-
-/// 每个作用域独立收集真实启动对象，允许测试确认选择器确实生效。
+/// 每个作用域只保留直接 root 的准确句柄；从不持有 Job 或历史后代句柄。
 #[derive(Clone, Default)]
 pub(crate) struct SpawnObservations {
-    roots: Arc<Mutex<Vec<ObservedRoot>>>,
+    roots: Arc<Mutex<Vec<OwnedHandle>>>,
 }
 
 impl SpawnObservations {
@@ -75,21 +58,11 @@ impl SpawnObservations {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .map(|root| root.handle.try_clone().expect("测试 root 句柄克隆失败"))
+            .map(|root| root.try_clone().expect("测试 root 句柄克隆失败"))
             .collect()
     }
 
-    /// 按启动顺序报告实际 owner，便于拒绝作用域未生效的候选测试。
-    pub(crate) fn owners(&self) -> Vec<OwnerKind> {
-        self.roots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .map(|root| root.owner)
-            .collect()
-    }
-
-    /// 必须检查实际启动数，防止 preflight 提前返回被误认作进程生命周期验收。
+    /// 检查实际启动数，防止 preflight 提前返回被误认作进程生命周期验收。
     pub(crate) fn spawn_count(&self) -> usize {
         self.roots
             .lock()
@@ -97,18 +70,18 @@ impl SpawnObservations {
             .len()
     }
 
-    /// 在 Child 仍持有准确对象时记录它，不延长 Job 或后代的生命周期。
-    fn record(&self, owner: OwnerKind, child: &Child) -> io::Result<()> {
+    /// 在真实进程守卫已建立之后记录 root；失败仍由该守卫回收直接 Child。
+    fn record(&self, child: &Child) -> io::Result<()> {
         let handle = child.as_handle().try_clone_to_owned()?;
         self.roots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(ObservedRoot { owner, handle });
+            .push(handle);
         Ok(())
     }
 }
 
-/// 当前线程的选择和观察集合一起保存，嵌套作用域可按栈恢复。
+/// 当前线程的观察选项与对象集合一起保存，嵌套作用域可按栈恢复。
 #[derive(Clone)]
 struct ScopeState {
     options: ValidationOptions,
@@ -120,11 +93,11 @@ thread_local! {
     static CURRENT_SCOPE: RefCell<Option<ScopeState>> = const { RefCell::new(None) };
 }
 
-/// 普通返回和 panic 都恢复上层作用域，不影响其他并行测试线程。
+/// 普通返回和 panic 都恢复上层观察作用域，不影响其他并行测试线程。
 struct ScopeGuard(Option<ScopeState>);
 
 impl Drop for ScopeGuard {
-    /// 作用域结束只恢复选择器；已经创建的 owner 保持自己的确定类型。
+    /// 作用域结束只恢复观察配置，已创建的会话继续持有自己的真实 owner。
     fn drop(&mut self) {
         CURRENT_SCOPE.with(|scope| {
             *scope.borrow_mut() = self.0.take();
@@ -132,8 +105,8 @@ impl Drop for ScopeGuard {
     }
 }
 
-/// 在当前线程执行完整会话；测试应在闭包内显式结束或丢弃创建的 client。
-pub(crate) fn with_owner<R>(
+/// 在当前线程观察完整会话；测试应在闭包内显式结束或丢弃创建的 client。
+pub(crate) fn with_validation<R>(
     options: ValidationOptions,
     body: impl FnOnce(&SpawnObservations) -> R,
 ) -> R {
@@ -145,6 +118,18 @@ pub(crate) fn with_owner<R>(
     let previous = CURRENT_SCOPE.with(|scope| scope.replace(Some(state)));
     let _guard = ScopeGuard(previous);
     body(&observations)
+}
+
+/// 只在真实 spawn 和 ServerProcess 守卫建立后观察；不启动进程或提前执行清理。
+pub(super) fn observe_spawn(child: &Child, job: &WindowsJob) -> io::Result<()> {
+    let scope = CURRENT_SCOPE.with(|scope| scope.borrow().clone());
+    if let Some(scope) = scope {
+        scope.observations.record(child)?;
+        if scope.options.fault == CleanupFault::BeforeTerminationOnce {
+            job.fail_next_cleanup_before_termination();
+        }
+    }
+    Ok(())
 }
 
 /// 在真实 send 成功之后调用测试观察器；先释放线程局部借用再进入用户闭包。
@@ -160,95 +145,22 @@ pub(crate) fn post_send(method: &str) {
     }
 }
 
-/// 测试只替换 owner，Transport 的正常、错误与 Drop 清理代码保持原样。
-pub(super) enum TestWindowsOwner {
-    Baseline(WindowsJob),
-    NativeCandidate(ValidationWindowsJob),
+/// 借用准确 Job 和进程句柄，不复制 Job 或改变会话所有权。
+pub(super) fn contains(job: &WindowsJob, process: &OwnedHandle) -> io::Result<bool> {
+    let mut member = 0;
+    // SAFETY: 两个对象均在调用期间被借用，查询不转移句柄所有权。
+    if unsafe { IsProcessInJob(process.as_raw_handle(), job.raw(), &mut member) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(member != 0)
 }
 
-impl TestWindowsOwner {
-    /// 直接调用原实现；候选故障只 arm 已有测试钩子，不提前执行清理。
-    pub(super) fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
-        let scope = CURRENT_SCOPE.with(|scope| scope.borrow().clone());
-        let options = scope
-            .as_ref()
-            .map(|state| state.options.clone())
-            .unwrap_or_default();
-        if options.owner == OwnerKind::Baseline && options.fault != CleanupFault::None {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "清理前故障只允许用于 native 候选测试",
-            ));
-        }
-        let (child, owner) = match options.owner {
-            OwnerKind::Baseline => {
-                let (child, job) = WindowsJob::spawn(command)?;
-                (child, Self::Baseline(job))
-            }
-            OwnerKind::NativeCandidate => {
-                let (child, job) = ValidationWindowsJob::spawn(command)?;
-                (child, Self::NativeCandidate(job))
-            }
-        };
-        if let Some(scope) = scope {
-            scope.observations.record(options.owner, &child)?;
-        }
-        if options.fault == CleanupFault::BeforeTerminationOnce {
-            if let Self::NativeCandidate(job) = &owner {
-                job.fail_next_cleanup_before_termination();
-            }
-        }
-        Ok((child, owner))
-    }
-
-    /// 原样返回底层结果，不追加 Child 兜底，也不把累计缺口错误改成成功。
-    pub(super) fn terminate_and_wait(&self) -> io::Result<()> {
-        match self {
-            Self::Baseline(job) => job.terminate_and_wait(),
-            Self::NativeCandidate(job) => job.terminate_and_wait(),
-        }
-    }
-
-    /// 活跃计数仅供既有测试观察，绝不充当候选对象完成判定。
-    pub(super) fn active_processes(&self) -> io::Result<u32> {
-        match self {
-            Self::Baseline(job) => job.active_processes(),
-            Self::NativeCandidate(job) => job.active_processes(),
-        }
-    }
-
-    /// 借用当前 owner 和具查询权限的进程句柄，确认准确对象属于此会话的外层 Job。
-    pub(super) fn contains(&self, process: &OwnedHandle) -> io::Result<bool> {
-        let job = match self {
-            Self::Baseline(job) => job.raw(),
-            Self::NativeCandidate(job) => job.raw(),
-        };
-        let mut member = 0;
-        // SAFETY: owner 与进程句柄在整个调用期间均被借用，Job 句柄不复制、不跨线程传递。
-        if unsafe { IsProcessInJob(process.as_raw_handle(), job, &mut member) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(member != 0)
-    }
-
-    /// 仅由测试主动采样，不在清理返回后添加查询而掩盖立即 Wait(0) 的竞态。
-    pub(super) fn snapshot(&self) -> io::Result<OwnerSnapshot> {
-        match self {
-            Self::Baseline(job) => Ok(OwnerSnapshot {
-                owner: OwnerKind::Baseline,
-                retained: None,
-                total_processes: None,
-                active_processes: job.active_processes()?,
-            }),
-            Self::NativeCandidate(job) => {
-                let (retained, total_processes, active_processes) = job.validation_snapshot()?;
-                Ok(OwnerSnapshot {
-                    owner: OwnerKind::NativeCandidate,
-                    retained: Some(retained),
-                    total_processes: Some(total_processes),
-                    active_processes,
-                })
-            }
-        }
-    }
+/// 仅由测试主动采样，不在清理返回后自动查询而掩盖立即 Wait(0) 的竞态。
+pub(super) fn snapshot(job: &WindowsJob) -> io::Result<OwnerSnapshot> {
+    let (retained, total_processes, active) = job.validation_snapshot()?;
+    Ok(OwnerSnapshot {
+        retained,
+        total_processes,
+        active,
+    })
 }

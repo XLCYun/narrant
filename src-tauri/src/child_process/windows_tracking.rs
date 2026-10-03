@@ -1,4 +1,4 @@
-//! Native helper 专属账本：结合准确对象完成与累计计数确认整棵进程树。
+//! 共享 Job 账本：结合准确对象完成与累计计数确认整棵进程树。
 
 use super::owned;
 use std::{

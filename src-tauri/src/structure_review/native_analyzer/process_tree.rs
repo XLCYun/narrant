@@ -1,21 +1,18 @@
 //! 自有进程组或 Windows Job 的回收守卫，父进程退出不能释放后代所有权。
 
 use super::{failure, Result};
-use std::process::{Child, Command, ExitStatus, Stdio};
 #[cfg(windows)]
-#[path = "windows_process.rs"]
-mod windows_process;
+use crate::child_process::windows_job::WindowsJob;
+use std::process::{Child, Command, ExitStatus, Stdio};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
-#[cfg(all(test, windows))]
-pub(crate) use windows_process::NativeWindowsJob as ValidationWindowsJob;
 
 /// 持有 helper 及其后代直到显式回收；Drop 覆盖 panic 和早退。
 pub(super) struct ProcessTree {
     pub child: Child,
     reaped: bool,
     #[cfg(windows)]
-    job: windows_process::NativeWindowsJob,
+    job: WindowsJob,
 }
 
 impl ProcessTree {
@@ -31,7 +28,7 @@ impl ProcessTree {
             command.process_group(0);
         }
         #[cfg(windows)]
-        let (child, job) = windows_process::NativeWindowsJob::spawn(command).map_err(failure)?;
+        let (child, job) = WindowsJob::spawn(command).map_err(failure)?;
         #[cfg(not(windows))]
         let child = command.spawn().map_err(failure)?;
         Ok(Self {
@@ -95,3 +92,7 @@ impl Drop for ProcessTree {
         let _ = self.reap();
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "tests/process_tree.rs"]
+mod tests;

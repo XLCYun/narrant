@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     lsp::{
         file_uri,
-        windows_validation::{with_owner, OwnerKind, ValidationOptions},
+        windows_validation::{with_validation, ValidationOptions},
         Position,
     },
     structure_review::{
@@ -181,46 +181,39 @@ impl SessionDirectories {
     }
 }
 
-/// 相同真实请求分别走显式 owner，正常 shutdown 返回后第一项观测就是原根对象 Wait(0)。
-fn normal_shutdown(owner: OwnerKind) {
+/// 真实请求走默认生产路径，正常 shutdown 返回后第一项观测就是原根对象 Wait(0)。
+fn normal_shutdown() {
     let fixture = NativeSessionFixture::new();
-    with_owner(
-        ValidationOptions {
-            owner,
-            ..Default::default()
-        },
-        |observations| {
-            let mut session = fixture.start(Arc::new(AtomicBool::new(false)));
-            assert_eq!(observations.spawn_count(), 1);
-            assert_eq!(observations.owners(), [owner]);
-            let mut roots = observations.roots();
-            assert_eq!(roots.len(), 1);
-            let root = roots.pop().unwrap();
-            let root_raw = root.as_raw_handle();
-            // SAFETY: 句柄来自本次成功启动的准确根对象，只进行零超时状态查询。
-            assert_eq!(unsafe { WaitForSingleObject(root_raw, 0) }, WAIT_TIMEOUT);
-            let directories = SessionDirectories::capture(&session, &fixture.repository);
-            fixture.assert_definition(&mut session);
+    with_validation(ValidationOptions::default(), |observations| {
+        let mut session = fixture.start(Arc::new(AtomicBool::new(false)));
+        assert_eq!(observations.spawn_count(), 1);
+        let mut roots = observations.roots();
+        assert_eq!(roots.len(), 1);
+        let root = roots.pop().unwrap();
+        let root_raw = root.as_raw_handle();
+        // SAFETY: 句柄来自本次成功启动的准确根对象，只进行零超时状态查询。
+        assert_eq!(unsafe { WaitForSingleObject(root_raw, 0) }, WAIT_TIMEOUT);
+        let directories = SessionDirectories::capture(&session, &fixture.repository);
+        fixture.assert_definition(&mut session);
 
-            let started = Instant::now();
-            let shutdown = session.shutdown();
-            // SAFETY: 保留句柄跨越 shutdown；在任何断言、日志或目录 I/O 前立即取样。
-            let completed = unsafe { WaitForSingleObject(root_raw, 0) };
-            let elapsed = started.elapsed();
-            assert_eq!(
-                completed, WAIT_OBJECT_0,
-                "{owner:?}：Session shutdown 返回时根进程尚未完成；结果：{shutdown:?}"
-            );
-            shutdown.unwrap();
-            directories.assert_removed();
-            fixture.assert_repository_unchanged();
-            eprintln!("Python Windows {owner:?} 正常 Session 清理：{elapsed:?}");
-        },
-    );
+        let started = Instant::now();
+        let shutdown = session.shutdown();
+        // SAFETY: 保留句柄跨越 shutdown；在任何断言、日志或目录 I/O 前立即取样。
+        let completed = unsafe { WaitForSingleObject(root_raw, 0) };
+        let elapsed = started.elapsed();
+        assert_eq!(
+            completed, WAIT_OBJECT_0,
+            "Session shutdown 返回时根进程尚未完成；结果：{shutdown:?}"
+        );
+        shutdown.unwrap();
+        directories.assert_removed();
+        fixture.assert_repository_unchanged();
+        eprintln!("Python Windows 正常 Session 清理：{elapsed:?}");
+    });
 }
 
 /// 目标请求已真实写入并 flush 后才取消；Drop 完成前不把 request 错误当作生命周期结束。
-fn cancellation_after_request_sent(owner: OwnerKind) {
+fn cancellation_after_request_sent() {
     let fixture = NativeSessionFixture::new();
     let cancelled = Arc::new(AtomicBool::new(false));
     let sent = Arc::new(AtomicUsize::new(0));
@@ -232,16 +225,14 @@ fn cancellation_after_request_sent(owner: OwnerKind) {
             signal.store(true, Ordering::Release);
         }
     });
-    with_owner(
+    with_validation(
         ValidationOptions {
-            owner,
             after_request_sent: Some(after_request_sent),
             ..Default::default()
         },
         |observations| {
             let mut session = fixture.start(cancelled.clone());
             assert_eq!(observations.spawn_count(), 1);
-            assert_eq!(observations.owners(), [owner]);
             let mut roots = observations.roots();
             assert_eq!(roots.len(), 1);
             let root = roots.pop().unwrap();
@@ -263,74 +254,53 @@ fn cancellation_after_request_sent(owner: OwnerKind) {
             let elapsed = started.elapsed();
             assert_eq!(
                 completed, WAIT_OBJECT_0,
-                "{owner:?}：取消后 Session Drop 返回时根进程尚未完成；结果：{result:?}"
+                "取消后 Session Drop 返回时根进程尚未完成；结果：{result:?}"
             );
             assert_eq!(sent.load(Ordering::Acquire), 1);
             assert!(cancelled.load(Ordering::Acquire));
             let error = result.expect_err("实际请求发送后的取消必须返回错误");
-            assert!(error.is_cancelled(), "{owner:?}：{error:?}");
+            assert!(error.is_cancelled(), "{error:?}");
             directories.assert_removed();
             fixture.assert_repository_unchanged();
-            eprintln!("Python Windows {owner:?} 在途请求取消及清理：{elapsed:?}");
+            eprintln!("Python Windows 在途请求取消及清理：{elapsed:?}");
         },
     );
 }
 
-/// 旧共享路径的真实 ty 正常退出独立报告，避免其他 owner 的结果掩盖基线。
+/// 默认生产路径的真实 ty 正常退出必须同步完成进程与目录清理。
 #[test]
 #[ignore = "需要 Windows 固定 ty 0.0.84；显式 NARRANT_TY_PATH"]
-fn native_windows_session_baseline_shutdown() {
-    normal_shutdown(OwnerKind::Baseline);
+fn native_windows_session_shutdown() {
+    normal_shutdown();
 }
 
-/// 旧共享路径只在真实请求发送后取消，排除 preflight 的快速返回。
+/// 默认生产路径只在真实请求发送后取消，排除 preflight 的快速返回。
 #[test]
 #[ignore = "需要 Windows 固定 ty 0.0.84；显式 NARRANT_TY_PATH"]
-fn native_windows_session_baseline_cancellation_after_send() {
-    cancellation_after_request_sent(OwnerKind::Baseline);
+fn native_windows_session_cancellation_after_send() {
+    cancellation_after_request_sent();
 }
 
-/// 候选 owner 必须通过相同真实 ty 请求、返回即完成和目录删除合同。
+/// 公共分析入口经默认生产路径启动真实 Session，并产生正确调用图。
 #[test]
 #[ignore = "需要 Windows 固定 ty 0.0.84；显式 NARRANT_TY_PATH"]
-fn native_windows_session_candidate_shutdown() {
-    normal_shutdown(OwnerKind::NativeCandidate);
-}
-
-/// 候选 owner 的取消验证同时保留 Python 错误类别与真实 Session Drop 路径。
-#[test]
-#[ignore = "需要 Windows 固定 ty 0.0.84；显式 NARRANT_TY_PATH"]
-fn native_windows_session_candidate_cancellation_after_send() {
-    cancellation_after_request_sent(OwnerKind::NativeCandidate);
-}
-
-/// 公共分析入口仍产生正确调用图，且同一线程内启动的真实 Session 确实选择候选 owner。
-#[test]
-#[ignore = "需要 Windows 固定 ty 0.0.84；显式 NARRANT_TY_PATH"]
-fn native_windows_session_candidate_public_graph() {
+fn native_windows_session_public_graph() {
     let fixture = NativeSessionFixture::new();
-    with_owner(
-        ValidationOptions {
-            owner: OwnerKind::NativeCandidate,
-            ..Default::default()
-        },
-        |observations| {
-            let graph = PythonLanguageAnalyzer::new(&fixture.executable)
-                .analyze(&AnalysisInput {
-                    repository_root: fixture.repository.clone(),
-                    files: vec![PathBuf::from("main.py")],
-                    options: Default::default(),
-                })
-                .unwrap();
-            assert_eq!(observations.spawn_count(), 1);
-            assert_eq!(observations.owners(), [OwnerKind::NativeCandidate]);
-            let service = named(&graph, "service");
-            let run = named(&graph, "run");
-            assert!(run.data().references.iter().any(|reference| {
-                reference.semantic == "code.calls"
-                    && reference.target == ReferenceTarget::Node(service.data().id.clone())
-            }));
-            fixture.assert_repository_unchanged();
-        },
-    );
+    with_validation(ValidationOptions::default(), |observations| {
+        let graph = PythonLanguageAnalyzer::new(&fixture.executable)
+            .analyze(&AnalysisInput {
+                repository_root: fixture.repository.clone(),
+                files: vec![PathBuf::from("main.py")],
+                options: Default::default(),
+            })
+            .unwrap();
+        assert_eq!(observations.spawn_count(), 1);
+        let service = named(&graph, "service");
+        let run = named(&graph, "run");
+        assert!(run.data().references.iter().any(|reference| {
+            reference.semantic == "code.calls"
+                && reference.target == ReferenceTarget::Node(service.data().id.clone())
+        }));
+        fixture.assert_repository_unchanged();
+    });
 }

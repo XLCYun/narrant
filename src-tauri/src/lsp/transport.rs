@@ -12,8 +12,7 @@ use serde_json::Value;
 use super::{failure, CancellationCheck, Result};
 
 #[cfg(windows)]
-#[path = "windows_process.rs"]
-pub(crate) mod windows_process;
+use crate::child_process::windows_job::WindowsJob;
 
 #[cfg(all(test, windows))]
 #[path = "tests/windows_owner.rs"]
@@ -29,10 +28,8 @@ type Outgoing = (Vec<u8>, mpsc::Sender<Result<()>>);
 struct ServerProcess {
     child: Child,
     reaped: bool,
-    #[cfg(all(windows, not(test)))]
-    job: windows_process::WindowsJob,
-    #[cfg(all(test, windows))]
-    job: windows_validation::TestWindowsOwner,
+    #[cfg(windows)]
+    job: WindowsJob,
 }
 
 impl ServerProcess {
@@ -132,7 +129,7 @@ impl Transport {
         &self,
         process: &std::os::windows::io::OwnedHandle,
     ) -> std::io::Result<bool> {
-        self._process.job.contains(process)
+        windows_validation::contains(&self._process.job, process)
     }
 
     /// 测试在批次之间主动读取 owner 统计，不改变清理返回的可观察时机。
@@ -140,7 +137,7 @@ impl Transport {
     pub(super) fn windows_owner_snapshot(
         &self,
     ) -> std::io::Result<windows_validation::OwnerSnapshot> {
-        self._process.job.snapshot()
+        windows_validation::snapshot(&self._process.job)
     }
 
     /// 等待正常关闭并确认整个服务器组退出，关闭确认本身不能代替进程回收。
@@ -160,11 +157,8 @@ impl Transport {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        #[cfg(all(windows, not(test)))]
-        let (child, job) = windows_process::WindowsJob::spawn(&mut command)
-            .map_err(|error| failure(format!("无法建立 Windows LSP Job 所有权：{error}")))?;
-        #[cfg(all(test, windows))]
-        let (child, job) = windows_validation::TestWindowsOwner::spawn(&mut command)
+        #[cfg(windows)]
+        let (child, job) = WindowsJob::spawn(&mut command)
             .map_err(|error| failure(format!("无法建立 Windows LSP Job 所有权：{error}")))?;
         #[cfg(not(windows))]
         let child = command
@@ -176,6 +170,8 @@ impl Transport {
             #[cfg(windows)]
             job,
         };
+        #[cfg(all(test, windows))]
+        windows_validation::observe_spawn(&process.child, &process.job).map_err(failure)?;
         let mut stdin = process
             .child
             .stdin
@@ -351,3 +347,7 @@ pub(crate) fn group_members(group: i32) -> Vec<i32> {
 pub(crate) fn group_members(_group: i32) -> Vec<i32> {
     Vec::new()
 }
+
+#[cfg(all(test, windows))]
+#[path = "tests/windows_process.rs"]
+mod windows_process_tests;

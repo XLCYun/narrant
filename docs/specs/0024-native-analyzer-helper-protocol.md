@@ -2,7 +2,7 @@
 
 状态：已实现并完成新增原生链路的限定双平台验收，2026-10-03。
 公共 Rust Host、四种 helper、应用接入、真实安装与 CodeGraph/diff 在 macOS ARM64 和 Windows x64 通过。
-总 CI 仍因未修改的旧共享 WindowsJob 回归失败；这不属于新增 helper 的成功结论。
+旧共享 WindowsJob 的失败已复现；通过候选实测的统一 owner 已接入，仍待产品路径完整矩阵验收。
 精确范围与旧缺陷见[跨平台记录](../research/native-crossplatform-validation.md)和
 [实施计划](0024b-native-analyzer-implementation-plan.md)，不承诺未测 SDK，也不表示支持包已发布。
 语言配置、映射和发布门槛见 [0024a](0024a-native-language-analysis-profiles.md)。

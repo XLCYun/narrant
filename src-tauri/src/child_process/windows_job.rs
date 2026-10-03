@@ -1,4 +1,4 @@
-//! Native helper 专属 Windows 所有权，不改变既有 LSP/Python 的 Job 行为。
+//! 共享 Windows 进程树所有权：LSP、Python 和原生 helper 使用同一准确对象完成屏障。
 #[path = "windows_tracking.rs"]
 mod tracking;
 
@@ -34,8 +34,8 @@ use windows_sys::Win32::{
     },
 };
 
-/// 只服务四种原生 helper；准确对象一直保留到最终累计覆盖判定结束。
-pub(crate) struct NativeWindowsJob {
+/// 每个会话独占 Job；准确对象一直保留到最终累计覆盖判定结束。
+pub(crate) struct WindowsJob {
     handle: OwnedHandle,
     tracker: Mutex<tracking::JobTracker>,
     #[cfg(test)]
@@ -55,7 +55,7 @@ impl Drop for SuspendedChild {
     }
 }
 
-impl NativeWindowsJob {
+impl WindowsJob {
     /// 恢复 helper 之前完成 Job 归属、端口绑定和根身份保留。
     pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
         let (mut pending, job) = Self::spawn_suspended(command)?;
@@ -63,7 +63,7 @@ impl NativeWindowsJob {
         Ok((pending.0.take().expect("挂起进程只转交一次"), job))
     }
 
-    /// 最小悬挂启动原语有意独立，避免本次 native 修复改变共享 LSP/Python 行为。
+    /// 挂起阶段完成准确 Job 所有权，所有调用方共用同一启动原语。
     fn spawn_suspended(command: &mut Command) -> io::Result<(SuspendedChild, Self)> {
         // SAFETY: 私有未命名 Job 不继承，不关联其他会话。
         let handle = owned(unsafe { CreateJobObjectW(ptr::null(), ptr::null()) })?;
@@ -293,7 +293,7 @@ impl NativeWindowsJob {
     }
 }
 
-impl Drop for NativeWindowsJob {
+impl Drop for WindowsJob {
     /// 错误和 panic 同样尝试完成回收；最终关句柄仍有内核 KILL_ON_JOB_CLOSE 兜底。
     fn drop(&mut self) {
         let _ = self.terminate_and_wait();
@@ -335,5 +335,5 @@ fn resume_initial_thread(pid: u32) -> io::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "tests/windows_process.rs"]
-mod tests;
+#[path = "tests/windows_job.rs"]
+pub(crate) mod tests;

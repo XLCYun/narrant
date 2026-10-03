@@ -1,24 +1,26 @@
 use super::*;
 use crate::lsp::transport::Transport;
-use std::{fs, path::Path, process::Stdio};
+use std::{
+    fs,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    path::Path,
+    process::Stdio,
+};
 use windows_sys::Win32::{
     Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
-    System::{
-        JobObjects::IsProcessInJob,
-        Threading::{
-            OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-            PROCESS_TERMINATE,
-        },
+    System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     },
 };
 
-const FIXTURE: &str = "lsp::transport::windows_process::tests::windows_process_fixture";
+const FIXTURE: &str = concat!(module_path!(), "::windows_process_fixture");
 
 /// 使用当前测试程序作子进程夹具，不依赖 PowerShell、Node 或第三方工具安装。
 fn fixture_command(role: &str, directory: &Path) -> Command {
+    let (_, fixture) = FIXTURE.split_once("::").expect("夹具模块包含 crate 前缀");
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
-        .args(["--exact", FIXTURE, "--ignored", "--nocapture"])
+        .args(["--exact", fixture, "--ignored", "--nocapture"])
         .env("NARRANT_LSP_WINDOWS_TEST_ROLE", role)
         .env("NARRANT_LSP_WINDOWS_TEST_DIR", directory)
         .stdin(Stdio::null())
@@ -54,9 +56,14 @@ impl FixtureProcess {
     /// 根进程在 handles-ready 前不能退出，叶进程由本次根进程发布 PID。
     fn observe(pid: u32) -> Self {
         // SAFETY: PID 仅来自仍在握手等待中的本测试夹具，句柄只接管一次。
-        Self(
-            owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) }).unwrap(),
-        )
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+        assert!(
+            !handle.is_null(),
+            "打开夹具进程失败：{}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: 成功的 OpenProcess 返回唯一所有权；此守卫一直保留准确对象。
+        Self(unsafe { OwnedHandle::from_raw_handle(handle) })
     }
 
     /// 查询准确进程对象，超时 0 不通过补等放宽清理返回合同。
@@ -143,32 +150,4 @@ fn windows_job_drop_reclaims_child_after_parent_exit() {
     let root_status = root.status();
     assert_eq!(child_status, WAIT_OBJECT_0);
     assert_eq!(root_status, WAIT_OBJECT_0);
-}
-
-/// 服务器第一条指令之前已经加入 Job；启动中途丢弃也不能留下挂起进程。
-#[test]
-fn windows_job_owns_suspended_startup_before_execution() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut command = fixture_command("leaf", directory.path());
-    let (pending, job) = WindowsJob::spawn_suspended(&mut command).unwrap();
-    let process = pending.0.as_ref().unwrap();
-    let mut in_job = 0;
-    // SAFETY: 两个句柄均由当前测试持有，只查询准确的 Job 归属。
-    assert_ne!(
-        unsafe { IsProcessInJob(process.as_raw_handle(), job.raw(), &mut in_job) },
-        0
-    );
-    assert_eq!(in_job, 1);
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(!directory.path().join("leaf-ready").exists());
-    // SAFETY: 保存自有进程的同步句柄，在 pending 被丢弃后检查它是否确已停止。
-    let observed = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, process.id()) }).unwrap();
-    drop(pending);
-    let result = job.terminate_and_wait();
-    // SAFETY: 只查询已回收的自有挂起进程。
-    let immediate = unsafe { WaitForSingleObject(observed.as_raw_handle(), 0) };
-    assert_eq!(immediate, WAIT_OBJECT_0);
-    result.unwrap();
-    assert_eq!(job.active_processes().unwrap(), 0);
-    assert!(!directory.path().join("leaf-ready").exists());
 }

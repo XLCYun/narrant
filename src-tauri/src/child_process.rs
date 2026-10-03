@@ -1,4 +1,8 @@
-//! 桌面应用启动外部命令时共享的原生进程窗口策略。
+//! 桌面应用外部命令的共享窗口策略与 Windows 进程树所有权。
+
+#[cfg(windows)]
+#[path = "child_process/windows_job.rs"]
+pub(crate) mod windows_job;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;

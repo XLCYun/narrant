@@ -2,8 +2,6 @@
 
 #[path = "process_tree.rs"]
 mod process_tree;
-#[cfg(all(test, windows))]
-pub(crate) use process_tree::ValidationWindowsJob;
 
 use super::{
     cancelled, failure,

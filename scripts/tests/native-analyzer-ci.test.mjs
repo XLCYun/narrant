@@ -115,7 +115,7 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 10);
+  assert.equal(commands.length, 11);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
@@ -132,7 +132,8 @@ test('verification uses every helper suite and serialized Cargo host and real gr
 // 共享 Job 对象的两个生命周期回归只在 Windows 执行，且不启动忽略的子进程 fixture。
 test('Windows native acceptance includes focused shared Job regressions without expanding macOS tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
-  const filter = 'lsp::transport::windows_process::tests::windows_job_';
+  const filter = 'lsp::transport::windows_process_tests::windows_job_';
+  const ownerFilter = 'child_process::windows_job::tests::';
   const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');
   const regressions = windows.filter(command => command.args.includes(filter));
@@ -143,9 +144,15 @@ test('Windows native acceptance includes focused shared Job regressions without 
   });
   const macOS = verificationCommands(environment, 'darwin');
   assert.equal(macOS.length, 8);
-  assert.ok(macOS.every(command => !command.args.includes(filter) && !command.args.includes(sessionFilter)));
+  assert.ok(macOS.every(command => ![filter, ownerFilter, sessionFilter].some(item => command.args.includes(item))));
+  const owner = windows.filter(command => command.args.includes(ownerFilter));
+  assert.equal(owner.length, 1);
+  assert.deepEqual(owner[0], {
+    executable: 'bash',
+    args: ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', ownerFilter, '--', '--nocapture', '--test-threads=1'],
+  });
   assert.equal(windows.filter(command => command.args.includes(sessionFilter)).length, 1);
-  assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(filter) && !command.args.includes(sessionFilter)), macOS.slice(4));
+  assert.deepEqual(windows.slice(4).filter(command => ![filter, ownerFilter, sessionFilter].some(item => command.args.includes(item))), macOS.slice(4));
 });
 
 // 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。

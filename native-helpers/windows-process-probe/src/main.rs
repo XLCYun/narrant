@@ -5,8 +5,8 @@ mod admission_worker;
 #[cfg(windows)]
 mod nested_accounting;
 #[cfg(windows)]
-#[path = "../../../src-tauri/src/structure_review/native_analyzer/windows_process.rs"]
-mod windows_process;
+#[path = "../../../src-tauri/src/child_process/windows_job.rs"]
+mod windows_job;
 
 #[cfg(windows)]
 use std::{
@@ -102,7 +102,7 @@ fn state(label: &str, pid: u32, handle: HANDLE) -> u32 {
 
 /// 只读准确 Job 的完整 PID 列表；有界扩容，既不按父 PID 扫描也不修改成员。
 #[cfg(windows)]
-fn job_members(job: &windows_process::NativeWindowsJob) -> io::Result<Vec<u32>> {
+fn job_members(job: &windows_job::WindowsJob) -> io::Result<Vec<u32>> {
     const HEADER: usize = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
         / std::mem::size_of::<usize>();
     let mut buffer = vec![0usize; HEADER + 16];
@@ -144,11 +144,7 @@ fn job_members(job: &windows_process::NativeWindowsJob) -> io::Result<Vec<u32>> 
 
 /// 固定原始失败判据之后采样退出窗口；诊断中的等待不能改变已记录的成功/失败。
 #[cfg(windows)]
-fn trace_membership_after_cleanup(
-    job: &windows_process::NativeWindowsJob,
-    pid: u32,
-    handle: HANDLE,
-) {
+fn trace_membership_after_cleanup(job: &windows_job::WindowsJob, pid: u32, handle: HANDLE) {
     let mut observations = Vec::new();
     for sample in 0..16 {
         // SAFETY: 同一个保留句柄贯穿采样；超时 0 只观察。
@@ -189,10 +185,7 @@ fn wait_file(path: &Path) -> io::Result<()> {
 
 /// 独立验证零上限能封闭新进程入口；不改变生产回收实现，也不宣称清理通过。
 #[cfg(windows)]
-fn verify_admission_gate(
-    job: &windows_process::NativeWindowsJob,
-    directory: &Path,
-) -> io::Result<()> {
+fn verify_admission_gate(job: &windows_job::WindowsJob, directory: &Path) -> io::Result<()> {
     seal_admission(job)?;
     fs::write(directory.join("attempt-spawn"), "attempt")?;
     println!(
@@ -211,7 +204,7 @@ fn verify_admission_gate(
 
 /// 只封闭当前隔离 probe 的新进程入口，供候选与拒绝诊断共用。
 #[cfg(windows)]
-fn seal_admission(job: &windows_process::NativeWindowsJob) -> io::Result<()> {
+fn seal_admission(job: &windows_job::WindowsJob) -> io::Result<()> {
     // SAFETY: Windows 信息结构为 POD，读写大小和信息类完全匹配。
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let bytes = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
@@ -306,7 +299,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(stderr);
-    let (mut parent, job) = windows_process::NativeWindowsJob::spawn(&mut command)?;
+    let (mut parent, job) = windows_job::WindowsJob::spawn(&mut command)?;
     wait_file(&directory.join("ready"))?;
     let pid: u32 = fs::read_to_string(directory.join("descendant"))?
         .parse()

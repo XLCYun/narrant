@@ -21,11 +21,3 @@ type Result<T> = std::result::Result<T, analysis_error::AnalysisError>;
 fn failure(message: impl std::fmt::Display) -> analysis_error::AnalysisError {
     analysis_error::AnalysisError::new(format!("原生分析器：{message}"))
 }
-
-/// 现有 test-only owner seam 所需的命名空间，不加载应用或语言分析器。
-mod structure_review {
-    /// 将原 ProcessTree 的候选 owner 提供给原 LSP 测试选择器。
-    pub(crate) mod native_analyzer {
-        pub(crate) use crate::process_tree::ValidationWindowsJob;
-    }
-}

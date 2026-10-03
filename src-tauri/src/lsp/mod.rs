@@ -114,7 +114,7 @@ impl LspClient {
         self.transport.windows_owner_contains(process)
     }
 
-    /// 仅测试读取当前会话的候选统计，正常请求与清理均不自动采样。
+    /// 仅测试读取当前会话的共享 owner 统计，正常请求与清理均不自动采样。
     #[cfg(all(test, windows))]
     pub(crate) fn windows_owner_snapshot(
         &self,
