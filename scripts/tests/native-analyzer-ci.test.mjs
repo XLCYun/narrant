@@ -8,40 +8,45 @@ import { validateToolchainManifest, verifyArchive } from '../provision-native-to
 import { validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
 
 const manifest = JSON.parse(await fs.readFile(new URL('../../resources/native-toolchains.json', import.meta.url), 'utf8'));
-const workflow = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
+const workflowSource = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
 
-// Windows 清理探针必须在下载 SDK 前失败，避免每次诊断都等待完整 Tauri 编译。
-test('Windows process probe fails early with the setup Node executable and serialized Cargo', () => {
-  const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
-  const probeName = 'Probe Windows process cleanup before toolchain provisioning';
-  const probeIndex = nativeJob.indexOf(probeName);
-  assert.ok(probeIndex > nativeJob.indexOf('actions/setup-node@'));
-  assert.ok(probeIndex > nativeJob.indexOf('dtolnay/rust-toolchain@stable'));
-  assert.ok(probeIndex < nativeJob.indexOf('pnpm install --frozen-lockfile'));
-  assert.ok(probeIndex < nativeJob.indexOf('scripts/provision-native-toolchains.mjs'));
-  assert.equal(nativeJob.match(/dtolnay\/rust-toolchain@stable/g)?.length, 1);
-  const probe = nativeJob.slice(probeIndex).split('\n      - ')[0];
-  assert.match(probe, /if: runner\.os == 'Windows'/);
-  assert.match(probe, /shell: pwsh/);
-  assert.match(probe, /timeout-minutes: 5/);
-  assert.ok(probe.includes('node scripts/run-windows-process-probe.mjs'));
-  assert.doesNotMatch(probe, /Get-Command|NARRANT_TEST_NODE/);
-  assert.match(probe, /if \(\$LASTEXITCODE -ne 0\) \{ throw /);
-  assert.doesNotMatch(probe, /continue-on-error/);
-});
+// 显式重放两种 checkout 换行，不能让本机 LF 掩盖 Windows CRLF 的路径断言失败。
+for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  const workflow = workflowSource.replace(/\r?\n/g, newline);
 
-// 快速诊断不替代完整验收，也不能改变主程序缓存或让探针源码漏掉 PR 触发。
-test('early probe retains complete native acceptance and the separate Tauri cache', () => {
-  const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
-  assert.match(workflow.split('\njobs:')[0], /- native-helpers\/\*\*\n/);
-  assert.match(workflow.split('\njobs:')[0], /- scripts\/run-windows-process-probe\.mjs\n/);
-  assert.match(nativeJob, /node --test [^\n]*scripts\/tests\/run-windows-process-probe\.test\.mjs/);
-  assert.match(nativeJob, /workspaces: src-tauri\n\s+key: all-native-\$\{\{ matrix\.target \}\}/);
-  assert.doesNotMatch(nativeJob, /CARGO_TARGET_DIR/);
-  const acceptance = nativeJob.split('      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance')[1].split('\n      - ')[0];
-  assert.match(acceptance, /run: node scripts\/verify-native-analyzers\.mjs native-language-support-packs --build/);
-  assert.doesNotMatch(acceptance, /if:|continue-on-error/);
-});
+  // Windows 清理探针必须在下载 SDK 前失败，避免每次诊断都等待完整 Tauri 编译。
+  test(`Windows process probe fails early with the setup Node executable and serialized Cargo (${lineEnding})`, () => {
+    const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
+    const probeName = 'Probe Windows process cleanup before toolchain provisioning';
+    const probeIndex = nativeJob.indexOf(probeName);
+    assert.ok(probeIndex > nativeJob.indexOf('actions/setup-node@'));
+    assert.ok(probeIndex > nativeJob.indexOf('dtolnay/rust-toolchain@stable'));
+    assert.ok(probeIndex < nativeJob.indexOf('pnpm install --frozen-lockfile'));
+    assert.ok(probeIndex < nativeJob.indexOf('scripts/provision-native-toolchains.mjs'));
+    assert.equal(nativeJob.match(/dtolnay\/rust-toolchain@stable/g)?.length, 1);
+    const probe = nativeJob.slice(probeIndex).split('\n      - ')[0];
+    assert.match(probe, /if: runner\.os == 'Windows'/);
+    assert.match(probe, /shell: pwsh/);
+    assert.match(probe, /timeout-minutes: 5/);
+    assert.ok(probe.includes('node scripts/run-windows-process-probe.mjs'));
+    assert.doesNotMatch(probe, /Get-Command|NARRANT_TEST_NODE/);
+    assert.match(probe, /if \(\$LASTEXITCODE -ne 0\) \{ throw /);
+    assert.doesNotMatch(probe, /continue-on-error/);
+  });
+
+  // 快速诊断不替代完整验收，也不能改变主程序缓存或让探针源码漏掉 PR 触发。
+  test(`early probe retains complete native acceptance and the separate Tauri cache (${lineEnding})`, () => {
+    const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
+    assert.match(workflow.split('\njobs:')[0], /- native-helpers\/\*\*\r?\n/);
+    assert.match(workflow.split('\njobs:')[0], /- scripts\/run-windows-process-probe\.mjs\r?\n/);
+    assert.match(nativeJob, /node --test [^\n]*scripts\/tests\/run-windows-process-probe\.test\.mjs/);
+    assert.match(nativeJob, /workspaces: src-tauri\r?\n\s+key: all-native-\$\{\{ matrix\.target \}\}/);
+    assert.doesNotMatch(nativeJob, /CARGO_TARGET_DIR/);
+    const acceptance = nativeJob.split('      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance')[1].split('\n      - ')[0];
+    assert.match(acceptance, /run: node scripts\/verify-native-analyzers\.mjs native-language-support-packs --build/);
+    assert.doesNotMatch(acceptance, /if:|continue-on-error/);
+  });
+}
 
 // 两个平台必须拥有全部六个固定工具，清单不能遗漏语言运行时。
 test('official pinned manifest covers every required tool on both platforms', () => {

@@ -252,6 +252,13 @@ Python Windows20/34.98秒、3/3.78秒、4/4.47秒通过；Python macOS35/3/4项�
 另一个 ignored 函数仅用作子进程夹具，不能被计作跳过了实际验收用例。
 同轮 `6b18b68` macOS 完整通过（Host17、factory2、安装1/83.04秒、公共图8/14.62秒），
 Python Windows20/27.80秒、3/3.53秒、4/9.85秒及 macOS35/3/4项通过；所有任务已结束。
+`d2b0245` 的[实际专用 owner 任务 111159181765](https://github.com/XLCYun/narrant/actions/runs/37107634743/job/111159181765)
+已通过真正产品代码的早期探针：父退出保留管道、父退出关闭管道、父仍存活三场景均在返回后立即
+观察父子原 HANDLE 为0，cleanup耗时3/3/7毫秒；raw1816门禁也通过。日志为
+`/private/tmp/narrant-ci-native-windows-d2b0245.log`，不再是候选副本结果。
+后续 Node 脚本测试为28通过、1失败、1平台跳过；唯一失败是 CI 接线测试使用只匹配LF的正则，
+不接受 Windows 检出的 workflow CRLF。生产回收没有再次失败；SDK、共享LSP回归、Host、安装和图
+仍未执行，不能提前标记平台完成。当前只修正测试的换行兼容性，所有路径与验收断言保留。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
