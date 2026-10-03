@@ -1,10 +1,47 @@
 # 原生 helper 的双平台验收入口
 
-状态：新增原生链路在 macOS ARM64 / SDK15.5 与 Windows x64 完整通过四包、四helper、Host、安装及八图验收。
-Windows测试manifest链接冲突已修复。旧共享LSP Job回归仍失败，最终仅汇总该1组失败，总CI保持红色。
-旧共享完成次序问题仍存在，不能把 native 专用修复视为整个 LSP/Python 路径的修复。
+状态：新增原生链路已在 macOS ARM64 / SDK15.5 与 Windows x64 完整通过四包、四helper、Host、安装及八图验收。
+旧共享 LSP/Python 回收仍在修复：已修正 Job 报错时跳过直接 Child 回收的早退问题，
+但整棵进程树的完成验证尚未通过。最新 Windows 验证因 GitHub 账户计费限制未能启动；
+不能把 native 专用修复或本地测试视为整个共享路径已修复，总 CI 仍未通过。
 交付位于[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，未合并或发布支持包。
 新增语言成功与旧共享缺陷分开记录，不声称全部应用回归全绿。
+
+## 2026-10-03 共享路径后续修复：c89643e 至 ebabed5
+
+`c89643e` 增加仅 Windows 单元测试启用的 owner 对照入口，通过真实 `LspClient`、
+`Transport` 和固定 ty `Session` 验证既有共享 owner 与 native 候选 owner。
+产品构建继续使用既有共享 Job 算法；测试入口不构成产品接入。
+
+`5d66c8c` 修正一个已由 Windows 故障注入复现的错误顺序：
+`ServerProcess::reap_members` 保存 Job 清理错误，始终执行直接 `Child` 的 kill/wait，
+随后返回原错误，且不把清理失败标为已回收。它不替代整棵树的完成验证。
+这处修复尚未完成 Windows 故障注入回归：`5d66c8c` 的 native 任务在前置探针停止，
+后续 `ebabed5` 的任务则未能启动。
+
+| 提交与运行 | 实际结果与解释 |
+| --- | --- |
+| `c89643e`：[37118456774](https://github.com/XLCYun/narrant/actions/runs/37118456774) | Python 双平台与 native macOS 通过。Windows 新增5项真实Python会话全部通过；旧Job为1通过/2失败，LSP21为12通过/9失败。native Host、安装与8图均通过，整体仍失败。 |
+| `5d66c8c`：[37121221638](https://github.com/XLCYun/narrant/actions/runs/37121221638) | Python Windows 25/3/4三组通过，新增5项会话均实际执行；两个macOS任务通过。native Windows 在新前置诊断探针失败，LSP22、Host、安装与8图没有执行，不能拼接上一轮结果声称本轮通过。 |
+| `ebabed5`：[37121673745](https://github.com/XLCYun/narrant/actions/runs/37121673745) | 四个任务在任何步骤执行前均被 GitHub 计费检查拒绝，runner与steps为空；没有编译、探针或测试结果。官方错误指向付款失败或消费上限，需要账户侧处理。 |
+
+第一轮 LSP 会话测试还暴露了两项夹具假设：Node 普通子进程由 libuv 自己的
+kill-on-close Job 管理，父退出场景需要保留一个仍属于 Narrant 准确外层 Job 的叶进程；
+32个短命子进程的累计数也不能直接猜成34。夹具已修正并加入准确归属断言，
+普通短命子进程仍按原方式启动，最终严格清理结果没有放宽。
+来源：[libuv Windows 进程实现](https://github.com/libuv/libuv/blob/v1.51.0/src/win/process.c)。
+
+`5d66c8c` 的 raw Win32 探针在显式持有根/叶两个对象时，准确 Job 列表却包含三个真实 PID，
+并收到额外 PID 的独立 NEW_PROCESS 通知。因此它证明存在额外对象，尚未证明嵌套关联重复计数，
+也未识别额外对象的映像。`ebabed5` 仅将诊断夹具改为不创建控制台的 detached 启动，
+并增加额外 PID 的映像/归属/Wait0 诊断；产品 flags 与回收算法不变。
+该修正通过 Windows-target 编译检查，真实 Windows 运行因上述计费错误尚未执行。
+
+本次本地验证：库检查、LSP聚焦测试17通过、验收/探针脚本17通过，
+全量 Rust 753通过/0失败/81个既有固定工具测试 ignored，另8项真实helper集成测试默认ignored。
+固定工具的实际执行以各CI运行记录为准；本地结果不能替代 Windows 生命周期验证。
+剩余工作是恢复CI后验证诊断修正、22项LSP会话与批次、错误兜底，再决定并验证共享owner接入。
+草稿PR和原失败断言保留，尚未完成共享修复。
 
 ## 2026-10-03 最终新增原生链路验收：4c65bb8
 
@@ -44,10 +81,10 @@ Windows图测试通过显式 `--ignored` 真正执行全部8项，未因缺工�
 
 起点 `6761aca6907a3fd2f1ca730fa6a180656f132e7f` 已包含相同回收算法和
 `lsp/tests/windows_process.rs` 的严格立即退出断言（来源提交 `fb76bd0`）。
-本分支对旧Windows路径只改过模块/方法可见性，未改变其算法；此前真实探针已分别复现
+截至 `4c65bb8`，本分支对旧Windows路径只改过模块/方法可见性，未改变其算法；此前真实探针已分别复现
 活跃数归零及PID列表为空时原HANDLE仍为258的短暂窗口。未独立运行起点SHA的Windows任务，
 所以不声称完成该基线实测、不声称永久进程泄漏，也不声称本次总CI已绿。
-新增helper使用独立owner，旧LSP/Python行为保持原样；旧缺陷须在后续共享路径工作及合并门禁中处理。
+该轮新增helper使用独立owner，旧LSP/Python行为保持原样；旧缺陷须在后续共享路径工作及合并门禁中处理。
 此前拒绝的共享接入补丁未应用。下文保留所有历史失败与范围决策。
 
 ## 2026-10-03 运行记录：7419870

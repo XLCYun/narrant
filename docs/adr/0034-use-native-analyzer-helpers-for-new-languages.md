@@ -24,8 +24,8 @@ conformance fixtures. The wire contract in
 the fixed profiles have passed the new native path's macOS ARM64 and Windows x64
 helper, Host, installation and public graph tests. The
 [cross-platform record](../research/native-crossplatform-validation.md) separates
-these results from the unchanged legacy WindowsJob failure that still makes the
-overall CI run fail. Support packs remain unpublished and the PR remains a draft.
+these results from the unresolved shared WindowsJob completion validation.
+Overall CI has not passed. Support packs remain unpublished and the PR remains a draft.
 
 Using one native analysis model for declarations and symbol binding reduces the need
 to reconcile an independent syntax parser with language-server results. The trade-off
@@ -33,15 +33,16 @@ is maintaining helper implementations in additional languages, a versioned proce
 contract, and their runtime and lifecycle integration. Representative fixtures now verify
 the fixed implementation scope; long-term maintenance advantages still require experience.
 
-Existing Rust, TypeScript/JavaScript, and Python analyzers remain unchanged. New
+Existing Rust, TypeScript/JavaScript, and Python analysis implementations remain unchanged. New
 adapters continue to satisfy the public `LanguageAnalyzer` / Code Graph contract.
 Migration of existing analyzers is a separate future decision, considered only after
 the new implementations demonstrate a clearer and more maintainable design.
 
 The new helpers use a dedicated Windows process owner with one handle tracker.
-Limited suspended-startup primitives are duplicated to avoid changing existing
-LSP/Python behavior; the legacy owner's known completion-ordering defect remains
-separately recorded and its failing test is retained.
+Limited suspended-startup primitives are duplicated while shared LSP/Python
+compatibility is validated. A subsequent shared Transport fix ensures direct-child
+cleanup still runs after a Job error; the legacy Job algorithm has not been replaced.
+Its completion-ordering defect remains separately recorded and its failing tests are retained.
 
 Helpers retain the workspace and child-process lifetime obligations of
 [ADR-0031](0031-reuse-review-head-for-structure-analysis.md) and the support-pack versus
