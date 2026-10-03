@@ -1,13 +1,13 @@
 # 原生 helper 的双平台验收入口
 
 状态：新增原生链路已在 macOS ARM64 / SDK15.5 与 Windows x64 完整通过四包、四helper、Host、安装及八图验收。
-共享 LSP/Python 回收已接入同一个经过候选验证的 WindowsJob；正常与测试构建直接使用同一实现。
-候选13项LSP、原生6项和原始探针在真实Windows轻量验收通过，旧共享6项失败已明确复现。
-生产接入后仍待完整矩阵确认，不能用候选成功替代产品默认路径结果，总 CI 仍未通过。
+共享 LSP/Python 回收已接入统一 WindowsJob；正常与测试构建直接使用同一实现。
+生产代码 `83d5642` 的完整 Language support packs 矩阵四组全部成功，旧共享完成回归已通过。
+候选对照与产品默认路径都有独立真实 Windows 证据，详见下方记录。
 交付位于[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，未合并或发布支持包。
-新增语言成功与共享路径验收分别记录，不声称全部应用回归全绿。
+本记录覆盖指定语言支持与生命周期矩阵；未手动触发 quality-gate，不承诺更广 SDK 或版本。
 
-## 2026-10-03 共享生产 owner 接入，待完整验收
+## 2026-10-03 共享生产 owner 接入及完整验收：83d5642
 
 进程所有者移到 `child_process/windows_job.rs`，LSP Transport 与 native ProcessTree
 直接调用同一个 WindowsJob。迁移与 `b41e68a` 对照只有归属、类型和测试路径变化，清理算法保持一致。
@@ -15,9 +15,37 @@
 观察失败发生在真实ServerProcess守卫建立之后，错误路径仍由该守卫执行完整回收。
 
 所有原始场景继续覆盖：共享owner6项、Transport2项、LSP13项、ProcessTree1项、URI1项；
-轻量库合计23个实际测试，另2个ignored子进程夹具。Python保留3个真实固定ty测试，
+轻量库可执行23个测试，另2个ignored子进程夹具；本次生产接入采用下述完整验收，未重复运行轻量组。
+Python保留3个真实固定ty测试，
 从5项减少仅因删除两组重复owner对照。生产与测试不会再走不同的清理实现。
-本地Windows目标编译、脚本测试和独立审查通过，完整平台运行结果待补充。
+本地库检查、Windows目标编译、20项脚本测试和独立生产/测试迁移审查通过。
+本地Rust全量753通过、0失败、81项固定工具测试ignored，另8项helper集成测试默认ignored；
+实际固定工具验证以下方Actions结果为准。
+
+实际生产代码提交 `83d5642c171415398e0b19c2338a46f08c468e79`，
+[完整运行 37128777728](https://github.com/XLCYun/narrant/actions/runs/37128777728) 四组全部成功：
+
+| 验收组 | Windows x64 | macOS ARM64 / SDK15.5 |
+| --- | --- | --- |
+| 四包构建、ready与四语言原生套件 | Go通过；Java25、C#29、Clang25通过，1个macOS专用SDK测试跳过 | Go通过；Java25、C#29、Clang25通过，1个Windows专用SDK测试跳过 |
+| 共享WindowsJob | 6通过，1个ignored函数仅作子进程夹具 | 不适用 |
+| Transport finish / Drop | 2通过，原准确句柄Wait(0)断言保留 | 不适用 |
+| LSP生命周期、短命批次与错误兜底 | 13通过，0ignored | 不适用 |
+| 原生Host（含ProcessTree错误兜底） | 17通过，0ignored | 17通过，0ignored |
+| factory | 2通过 | 2通过 |
+| 真实四包生产安装 | 1通过，177.34秒 | 1通过，87.46秒 |
+| 公共CodeGraph/diff | 8通过，0ignored，27.89秒 | 8通过，0ignored，13.86秒 |
+| Python分析器/安装/Review生命周期 | 23/3/4通过，全部0ignored | 35/3/4通过，全部0ignored |
+
+Windows LSP串行与并发4各8批、共256个短命Node子进程，最终保留515个准确对象与Job累计一致，
+正常清理分别331.00ms和337.20ms。原先失败的正常退出、取消、超时、初始化EOF及Transport
+finish/Drop均通过；缺失历史负例继续报错，未删除完成断言或将覆盖不足改判成功。
+Windows Python的三个固定ty用例全部实际执行：正常关闭19.43ms、请求发送后取消与清理354.04ms、
+公共调用图成功；准确根句柄完成、目录释放和仓库源码不变均保持断言。
+
+本轮仅运行一次2分11秒的轻量候选对照和一次完整矩阵；后续验收文档提交使用`[skip ci]`避免重打支持包。
+完整运行验证的是上述生产代码SHA，后续纯文档提交不另记为代码实测。
+累计句柄账本有明确上限；无法确认覆盖仍保守失败。最终Drop监听线程join不承诺硬性两秒总时限。
 
 ## 2026-10-03 预算恢复后的轻量 Windows 验证
 

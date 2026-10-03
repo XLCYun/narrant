@@ -235,8 +235,9 @@ loader，尚未解决真实 go.mod/go.work 解释、完整标准库、跨版本�
 `Host → CodeGraph → diff` 验收；Windows 的新 Host19项与公共图8项实际通过。
 目标边界为 Java17、Go1.23.8、C# net8.0/ref8.0.0 与 net10.0/ref10.0.0，以及 C17/C++20。
 Java 使用单一 JDT 后端，运行 JDK 与目标声明隔离；反例使用 Java17 不提供的 `List.getFirst()`。
-统一 WindowsJob 已通过候选生命周期实测并接入共享路径；产品默认调用链仍待完整平台验收，
-不能据此声称全应用回归全绿或更广版本通过。具体证据与限制见
+统一 WindowsJob 已接入共享路径，`83d5642` 的产品默认调用链及完整双平台矩阵全部通过；
+其中Windows共享owner6项、Transport2项、LSP13项和真实Python会话3项均实际执行。
+不据此扩展到未测SDK、版本或未执行的quality-gate。具体证据与限制见
 [Java](../research/java-native-implementation.md)、[Go](../research/go-native-implementation.md)、
 [C#](../research/csharp-native-implementation.md)、[C/C++](../research/clang-native-implementation.md)、
 [公共图验收](../research/native-helper-conformance.md)和

@@ -1,6 +1,6 @@
 # 原生语言分析器实施计划
 
-状态：新增四语言的实现、审查及限定双平台链路验收完成；统一 WindowsJob 已接入，待生产路径完整矩阵验收，PR 为草稿。
+状态：新增四语言和共享Windows回收修复均完成，`83d5642`的完整双平台矩阵四组全部通过；PR为草稿，未合并或发布。
 交付包括 Java、Go、C#、C/C++ 原生 helper 及应用接入。依据 [0024](0024-native-analyzer-helper-protocol.md)、
 [0024a](0024a-native-language-analysis-profiles.md) 与 ADR-0034。
 
@@ -14,8 +14,13 @@
 
 ## 当前实施状态（2026-10-03）
 
-共享回收后续工作已取得候选真实Windows证据并接入公共owner，具体见[跨平台记录](../research/native-crossplatform-validation.md)。
-下面`4c65bb8`结果保留为新语言交付基线，不代表最新共享接入已经完成验收。
+共享回收后续工作已接入公共owner并通过完整生产路径验收：
+[运行37128777728](https://github.com/XLCYun/narrant/actions/runs/37128777728)四组全部成功。
+Windows共享owner6项、Transport2项、LSP13项、原生Host17项、安装及8图均通过，
+Python23/3/4也通过（含3项真实固定ty会话）。macOS两组通过；本地Rust753项与20项脚本测试通过。
+具体证据及边界见[跨平台记录](../research/native-crossplatform-validation.md)。
+
+### 新语言交付基线（4c65bb8，历史记录）
 
 `4c65bb8` 的[完整运行 37111018854](https://github.com/XLCYun/narrant/actions/runs/37111018854)
 已取得新增原生链路的双平台完整证据：四包构建/ready、Go、Java25、C#29、Clang25项均通过，
