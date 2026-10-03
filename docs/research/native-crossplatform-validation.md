@@ -182,6 +182,11 @@ Tauri 编译前运行。三个场景记录后代的准确 Job 归属、回收前
 Job 活跃计数；原 Host 测试同步保留父子句柄，原有立即回收断言仍然有效。生产回收算法未改。
 本机 Windows 目标编译检查、两项 macOS 生命周期测试和九项 CI 接线测试通过；真实 Windows
 行为仍待运行证据，短探针不替代完整安装和公共图验收。
+`76f0204` 的[Windows 早期诊断任务 111087221282](https://github.com/XLCYun/narrant/actions/runs/37082946157/job/111087221282)
+在探针编译成功后，于 Node 可执行路径检查退出：`NARRANT_TEST_NODE must be an existing absolute executable`。
+三个 Job 场景均未执行，不能据此判断进程回收根因；也未进入 SDK、helper、Host、安装及图验收。
+本轮日志未打印实际变量值，因此尚不能区分 PowerShell 命令解析与 MSYS 路径转换。
+后续诊断入口将沿用已有完整验收的 Node `process.execPath` 与直接子进程环境传递，并输出路径检查证据。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
