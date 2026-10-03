@@ -53,7 +53,23 @@ pub(super) struct JobTracker {
     ledger: Arc<Mutex<Ledger>>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    hooks: Arc<TestHooks>,
 }
+
+/// 仅测试用确定性同步点，冻结 dequeue 到捕获之间的时序，不改变生产监听协议。
+#[cfg(test)]
+#[derive(Default)]
+struct TestHooks {
+    before_capture: Mutex<Option<CaptureHook>>,
+    before_coverage_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    fail_stop_once: AtomicBool,
+    waits: std::sync::atomic::AtomicUsize,
+}
+
+/// 测试可读取停止信号后放行当前消息，证明 stop 不会丢弃已取出的通知。
+#[cfg(test)]
+type CaptureHook = Arc<dyn Fn(u32, &AtomicBool) + Send + Sync>;
 
 /// 锁中毒也是粘性错误，仍取回已有句柄完成尽可能多的回收。
 fn lock(ledger: &Mutex<Ledger>) -> MutexGuard<'_, Ledger> {
@@ -147,16 +163,29 @@ impl JobTracker {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_ledger = ledger.clone();
         let worker_stop = stop.clone();
+        #[cfg(test)]
+        let hooks = Arc::new(TestHooks::default());
+        #[cfg(test)]
+        let worker_hooks = hooks.clone();
         let job = job.try_clone()?;
         let worker = std::thread::Builder::new()
             .name("windows-job-members".into())
             .spawn(move || {
-                watch(job, port, &worker_ledger, &worker_stop);
+                watch(
+                    job,
+                    port,
+                    &worker_ledger,
+                    &worker_stop,
+                    #[cfg(test)]
+                    &worker_hooks,
+                );
             })?;
         Ok(Self {
             ledger,
             stop,
             worker: Some(worker),
+            #[cfg(test)]
+            hooks,
         })
     }
 
@@ -168,6 +197,33 @@ impl JobTracker {
     /// 主动登记错误后仍继续自有 Job 的终止流程。
     pub fn failure(&self, error: impl std::fmt::Display) {
         remember(&self.ledger, error);
+    }
+
+    /// 后续查询也失败时返回第一项清理错误，避免把原始原因覆盖成次生错误。
+    pub fn first_failure(&self) -> Option<io::Error> {
+        lock(&self.ledger)
+            .failure
+            .as_ref()
+            .map(|error| io::Error::other(error.clone()))
+    }
+
+    /// 已经停止或退出的监听器不能再补齐历史，调用方应立即做最终严格核对。
+    pub fn finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    /// 只查询真实唯一对象覆盖，不把 PID 列表或通知数充当已完成证明。
+    pub fn covers(&self, total: u32) -> bool {
+        lock(&self.ledger).processes.len() == total as usize
+    }
+
+    /// 仅测试在第一次等待累计覆盖前放行已冻结的真实消息。
+    #[cfg(test)]
+    pub fn coverage_wait_started(&self) {
+        let hook = self.hooks.before_coverage_wait.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     /// 精确 Job 列表补捕通知尚未覆盖的对象；查不到的历史成员仍由累计计数发现。
@@ -221,7 +277,7 @@ impl JobTracker {
         }
     }
 
-    /// 请求立即结束线程；未接收的通知由补捕与累计缺口检测处理。
+    /// 覆盖等待结束后才请求停止；已经取出的消息必须处理完才能退出。
     pub fn stop(&mut self, deadline: Instant) -> io::Result<()> {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = &self.worker {
@@ -240,15 +296,19 @@ impl JobTracker {
         {
             self.failure("Windows Job 跟踪线程 panic");
         }
+        #[cfg(test)]
+        if self.hooks.fail_stop_once.swap(false, Ordering::AcqRel) {
+            return Err(io::Error::other("fixture failure after listener stop"));
+        }
         Ok(())
     }
 
-    /// 线程已结束后等待固定集合；错误和计数都由外层最后核对。
+    /// 等待当前已持有的全部对象；stop 失败时仍尽力等待，外层保留该失败且禁止成功。
     pub fn wait(&self, deadline: Instant) -> io::Result<()> {
-        if self.worker.is_some() {
-            return Err(io::Error::other("Windows Job 跟踪线程尚未结束"));
-        }
+        #[cfg(test)]
+        self.hooks.waits.fetch_add(1, Ordering::AcqRel);
         let ledger = lock(&self.ledger);
+        let mut failure = None;
         for process in ledger.processes.values() {
             let millis = deadline
                 .saturating_duration_since(Instant::now())
@@ -257,11 +317,15 @@ impl JobTracker {
             // SAFETY: 同一个对象句柄持续持有，所有等待共用一个截止时间。
             match unsafe { WaitForSingleObject(process.as_raw_handle(), millis) } {
                 WAIT_OBJECT_0 => {}
-                WAIT_TIMEOUT => return Err(timeout()),
-                _ => return Err(io::Error::last_os_error()),
+                WAIT_TIMEOUT => {
+                    failure.get_or_insert_with(timeout);
+                }
+                _ => {
+                    failure.get_or_insert_with(io::Error::last_os_error);
+                }
             }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     /// 最终累计计数不匹配或曾经发生捕获异常，都不能宣称全部完成。
@@ -286,6 +350,30 @@ impl JobTracker {
     pub fn recorded(&self) -> usize {
         lock(&self.ledger).processes.len()
     }
+
+    /// 安装一次真实消息同步点，仅受控测试可以使用。
+    #[cfg(test)]
+    pub fn on_capture(&self, hook: CaptureHook) {
+        *self.hooks.before_capture.lock().unwrap() = Some(hook);
+    }
+
+    /// 安装累计覆盖等待同步点，不用定时 sleep 决定何时放行消息。
+    #[cfg(test)]
+    pub fn on_coverage_wait(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.hooks.before_coverage_wait.lock().unwrap() = Some(Box::new(hook));
+    }
+
+    /// 已实际停止监听之后注入错误，验证外层不能跳过准确对象等待。
+    #[cfg(test)]
+    pub fn fail_next_stop(&self) {
+        self.hooks.fail_stop_once.store(true, Ordering::Release);
+    }
+
+    /// 仅测试区分显式错误路径执行了等待，还是随后 Drop 才补做等待。
+    #[cfg(test)]
+    pub fn waits(&self) -> usize {
+        self.hooks.waits.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for JobTracker {
@@ -301,7 +389,13 @@ impl Drop for JobTracker {
 }
 
 /// 只处理自有端口的 NEW_PROCESS，退出消息从不删除已有身份。
-fn watch(job: OwnedHandle, port: OwnedHandle, ledger: &Mutex<Ledger>, stop: &AtomicBool) {
+fn watch(
+    job: OwnedHandle,
+    port: OwnedHandle,
+    ledger: &Mutex<Ledger>,
+    stop: &AtomicBool,
+    #[cfg(test)] hooks: &TestHooks,
+) {
     let mut events = 0usize;
     loop {
         if stop.load(Ordering::Acquire) {
@@ -325,8 +419,13 @@ fn watch(job: OwnedHandle, port: OwnedHandle, ledger: &Mutex<Ledger>, stop: &Ato
             remember(ledger, error);
             break;
         }
-        if stop.load(Ordering::Acquire) {
-            break;
+        // 同步点位于任何 dequeue 后停止判断之前，回归必须能冻结“已取出但尚未处理”。
+        #[cfg(test)]
+        if key == JOB_KEY && code == JOB_OBJECT_MSG_NEW_PROCESS {
+            let hook = hooks.before_capture.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook(value as usize as u32, stop);
+            }
         }
         events += 1;
         if events > MAX_EVENTS || key != JOB_KEY {

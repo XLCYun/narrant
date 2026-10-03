@@ -26,10 +26,14 @@ use windows_sys::Win32::{
     },
 };
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/src/lsp/tests/fixtures/windows-session.cjs"
-);
+const FIXTURE_SOURCE: &str = include_str!("fixtures/windows-session.cjs");
+
+/// 将同源夹具写入本测试目录，独立 harness 不依赖宿主 Cargo manifest 的位置。
+fn write_fixture(directory: &Path) -> PathBuf {
+    let fixture = directory.join("windows-session.cjs");
+    fs::write(&fixture, FIXTURE_SOURCE).expect("写入本测试的 Windows LSP 夹具");
+    fixture
+}
 
 /// 只持有本次夹具的准确内核对象；断言失败时同步清理，避免测试遗留进程。
 struct ObservedProcess(OwnedHandle);
@@ -90,6 +94,7 @@ struct SessionFixture {
     stop: Arc<AtomicBool>,
     observer: Option<JoinHandle<io::Result<()>>>,
     directory: tempfile::TempDir,
+    fixture: PathBuf,
     node: PathBuf,
     scenario: &'static str,
 }
@@ -99,6 +104,7 @@ impl SessionFixture {
     fn new(scenario: &'static str, cancelled: Option<Arc<AtomicBool>>) -> Self {
         let node = node_executable();
         let directory = tempfile::tempdir().unwrap();
+        let fixture = write_fixture(directory.path());
         let observed = Arc::new(OnceLock::new());
         let published = Arc::clone(&observed);
         let stop = Arc::new(AtomicBool::new(false));
@@ -131,6 +137,7 @@ impl SessionFixture {
             stop,
             observer: Some(observer),
             directory,
+            fixture,
             node,
             scenario,
         }
@@ -140,7 +147,7 @@ impl SessionFixture {
     fn command(&self) -> Command {
         let mut command = Command::new(&self.node);
         command
-            .arg(FIXTURE)
+            .arg(&self.fixture)
             .env("NARRANT_LSP_WINDOWS_SESSION_DIR", self.directory.path())
             .env("NARRANT_LSP_WINDOWS_SESSION_SCENARIO", self.scenario);
         command
@@ -645,9 +652,11 @@ fn candidate_cleanup_error_reaps_direct_child() {
         },
         |observations| {
             let directory = tempfile::tempdir().unwrap();
+            let fixture = write_fixture(directory.path());
             let mut command = Command::new(node_executable());
             command
-                .args([FIXTURE, "--root-only"])
+                .arg(fixture)
+                .arg("--root-only")
                 .env("NARRANT_LSP_WINDOWS_SESSION_DIR", directory.path())
                 .env("NARRANT_LSP_WINDOWS_SESSION_SCENARIO", "root-only");
             let mut transport = Transport::start(command).unwrap();

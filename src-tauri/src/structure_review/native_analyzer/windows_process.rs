@@ -191,6 +191,34 @@ impl NativeWindowsJob {
         Ok(())
     }
 
+    /// 终止后继续消费已排队的真实成员通知；累计缺口不能靠提前停止监听变成永久缺口。
+    fn wait_for_coverage(
+        &self,
+        tracker: &tracking::JobTracker,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        loop {
+            let info = self.accounting()?;
+            if info.ActiveProcesses == 0 && tracker.covers(info.TotalProcesses) {
+                return Ok(());
+            }
+            // 已停止的监听器没有新通知可处理；交给最终 verify 保留准确的覆盖错误。
+            if tracker.finished() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Windows Job 累计覆盖等待超时",
+                ));
+            }
+            #[cfg(test)]
+            tracker.coverage_wait_started();
+            tracker.supplement(self.raw(), deadline)?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// 共享截止时间等待固定真实对象集合；累计缺口或任何粘性错误均拒绝成功。
     pub(crate) fn terminate_and_wait(&self) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -223,17 +251,25 @@ impl NativeWindowsJob {
         if unsafe { TerminateJobObject(self.raw(), 1) } == 0 {
             tracker.failure(io::Error::last_os_error());
         }
-        tracker.stop(deadline)?;
+        if let Err(error) = self.wait_for_coverage(&tracker, deadline) {
+            tracker.failure(error);
+        }
+        if let Err(error) = tracker.stop(deadline) {
+            tracker.failure(error);
+        }
         if let Err(error) = tracker.supplement(self.raw(), deadline) {
             tracker.failure(error);
         }
         if let Err(error) = tracker.wait(deadline) {
-            tracker.failure(&error);
-            return Err(error);
+            tracker.failure(error);
         }
-        let info = self
-            .accounting()
-            .inspect_err(|error| tracker.failure(error))?;
+        let info = match self.accounting() {
+            Ok(info) => info,
+            Err(error) => {
+                tracker.failure(&error);
+                return Err(tracker.first_failure().unwrap_or(error));
+            }
+        };
         tracker.verify(info.TotalProcesses, info.ActiveProcesses)
     }
 

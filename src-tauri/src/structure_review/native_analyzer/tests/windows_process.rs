@@ -5,13 +5,15 @@ use windows_sys::Win32::{
     System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
 };
 
-const FIXTURE: &str = "structure_review::native_analyzer::process::process_tree::windows_process::tests::native_windows_fixture";
+const FIXTURE: &str = concat!(module_path!(), "::native_windows_fixture");
 
 /// 用当前测试程序作原生夹具，避免 Node 自身 Job 干扰所有权检查。
 fn fixture_command(role: &str, directory: &Path) -> Command {
+    // libtest 的完整名称不带 crate 前缀；原应用和轻量 harness 可共用同一夹具。
+    let (_, fixture) = FIXTURE.split_once("::").expect("夹具模块包含 crate 前缀");
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
-        .args(["--exact", FIXTURE, "--ignored", "--nocapture"])
+        .args(["--exact", fixture, "--ignored", "--nocapture"])
         .env("NARRANT_NATIVE_JOB_ROLE", role)
         .env("NARRANT_NATIVE_JOB_DIR", directory)
         .stdin(Stdio::null())
@@ -139,4 +141,193 @@ fn native_windows_tree_error_still_waits_direct_child() {
     assert_eq!(immediate, WAIT_OBJECT_0);
     assert!(!tree.reaped);
     assert!(tree.reap().is_err());
+}
+
+/// 从测试控制进程创建第二个挂起对象，避免夹具自行创建额外进程影响累计断言。
+fn suspended_test_member(directory: &Path) -> SuspendedChild {
+    let mut command = fixture_command("short", directory);
+    command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+    SuspendedChild(Some(command.spawn().unwrap()))
+}
+
+/// 在监听同步点安装之后关联第二个准确对象，确保 NEW_PROCESS 必定经过该同步点。
+fn assign_test_member(job: &NativeWindowsJob, pending: &SuspendedChild) {
+    let child = pending.0.as_ref().unwrap();
+    // SAFETY: 此对象由测试刚创建且仍挂起，只把它加入本测试的私有 Job。
+    assert_ne!(
+        unsafe { AssignProcessToJobObject(job.raw(), child.as_raw_handle()) },
+        0
+    );
+}
+
+/// 放行守卫保证断言失败时也释放监听线程；同步基于条件变量而不是退出速度。
+struct CaptureRelease(std::sync::Arc<(Mutex<bool>, std::sync::Condvar)>);
+
+impl CaptureRelease {
+    /// 唤醒已经停在 dequeue 之后、尚未捕获 HANDLE 的监听线程。
+    fn release(&self) {
+        let (ready, changed) = &*self.0;
+        *ready.lock().unwrap() = true;
+        changed.notify_all();
+    }
+}
+
+impl Drop for CaptureRelease {
+    /// 错误展开不得把测试监听线程永久留在同步闸门中。
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// 已 dequeue 的短命对象在 stop 发布后仍必须捕获，不能依赖 PID 列表事后补救。
+#[test]
+fn native_windows_stop_preserves_dequeued_member() {
+    use std::sync::{atomic::Ordering, mpsc, Arc};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (_root, job) =
+        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+    let mut member = suspended_test_member(directory.path());
+    let pid = member.0.as_ref().unwrap().id();
+    let (arrived, arrival) = mpsc::channel();
+    job.tracker
+        .lock()
+        .unwrap()
+        .on_capture(Arc::new(move |observed, stop| {
+            if observed != pid {
+                return;
+            }
+            arrived.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            // 等待具体 stop 信号建立先后关系；期限仅防止坏实现导致测试永久挂起。
+            while !stop.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline, "stop 未发布到已取出通知的监听器");
+                std::thread::yield_now();
+            }
+        }));
+    assign_test_member(&job, &member);
+    arrival.recv_timeout(Duration::from_secs(5)).unwrap();
+    // 保留 Child 内的准确 HANDLE，使对象退出后仍可被已排队通知捕获。
+    let child = member.0.as_mut().unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let mut tracker = job.tracker.lock().unwrap();
+    tracker
+        .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(tracker.recorded(), 1, "退出对象应已离开当前 Job PID 列表");
+    tracker
+        .stop(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(tracker.recorded(), 2, "stop 不得丢弃已 dequeue 的真实成员");
+}
+
+/// cleanup 等累计覆盖时仍保留监听，按明确同步点释放最后一个历史成员通知。
+#[test]
+fn native_windows_cleanup_waits_for_queued_history() {
+    use std::sync::{mpsc, Arc, Condvar};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (_root, job) =
+        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+    let mut member = suspended_test_member(directory.path());
+    let pid = member.0.as_ref().unwrap().id();
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let release = CaptureRelease(Arc::clone(&gate));
+    let (arrived, arrival) = mpsc::channel();
+    let waiting = Arc::clone(&gate);
+    job.tracker
+        .lock()
+        .unwrap()
+        .on_capture(Arc::new(move |observed, _| {
+            if observed != pid {
+                return;
+            }
+            arrived.send(()).unwrap();
+            let (ready, timeout) = waiting
+                .1
+                .wait_timeout_while(waiting.0.lock().unwrap(), Duration::from_secs(5), |ready| {
+                    !*ready
+                })
+                .unwrap();
+            assert!(
+                *ready && !timeout.timed_out(),
+                "累计覆盖阶段未放行真实成员通知"
+            );
+        }));
+    assign_test_member(&job, &member);
+    arrival.recv_timeout(Duration::from_secs(5)).unwrap();
+    let child = member.0.as_mut().unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    {
+        let tracker = job.tracker.lock().unwrap();
+        tracker
+            .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(tracker.recorded(), 1);
+        tracker.on_coverage_wait(move || {
+            *gate.0.lock().unwrap() = true;
+            gate.1.notify_all();
+        });
+    }
+    let result = job.terminate_and_wait();
+    // 清理返回后第一步观测准确对象，不让断言输出或后续 Drop 帮助完成。
+    let immediate = unsafe { WaitForSingleObject(child.as_raw_handle(), 0) };
+    assert_eq!(immediate, WAIT_OBJECT_0);
+    result.unwrap();
+    assert_eq!(job.tracker.lock().unwrap().recorded(), 2);
+    drop(release);
+}
+
+/// stop 报错之后仍进入真实 HANDLE 等待；断言在 Job 未 Drop 时完成，避免析构掩盖早退。
+#[test]
+fn native_windows_stop_error_still_waits_recorded_members() {
+    let directory = tempfile::tempdir().unwrap();
+    let (root, job) =
+        NativeWindowsJob::spawn_suspended(&mut fixture_command("leaf", directory.path())).unwrap();
+    let member = suspended_test_member(directory.path());
+    assign_test_member(&job, &member);
+    let root_handle = root
+        .0
+        .as_ref()
+        .unwrap()
+        .as_handle()
+        .try_clone_to_owned()
+        .unwrap();
+    let member_handle = member
+        .0
+        .as_ref()
+        .unwrap()
+        .as_handle()
+        .try_clone_to_owned()
+        .unwrap();
+    {
+        let tracker = job.tracker.lock().unwrap();
+        tracker
+            .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(tracker.recorded(), 2);
+        assert_eq!(tracker.waits(), 0);
+        tracker.fail_next_stop();
+    }
+    let error = job.terminate_and_wait().unwrap_err();
+    // SAFETY: 两个独立观察句柄从挂起阶段持续持有，0 超时不会补等。
+    let immediate_root = unsafe { WaitForSingleObject(root_handle.as_raw_handle(), 0) };
+    let immediate_member = unsafe { WaitForSingleObject(member_handle.as_raw_handle(), 0) };
+    assert_eq!(immediate_root, WAIT_OBJECT_0);
+    assert_eq!(immediate_member, WAIT_OBJECT_0);
+    assert!(error
+        .to_string()
+        .contains("fixture failure after listener stop"));
+    assert_eq!(
+        job.tracker.lock().unwrap().waits(),
+        1,
+        "错误分支也必须执行等待"
+    );
+    assert!(job
+        .terminate_and_wait()
+        .unwrap_err()
+        .to_string()
+        .contains("fixture failure after listener stop"));
 }
