@@ -1,6 +1,10 @@
 //! 直接调用生产 WindowsJob 的短诊断入口；不编译 Tauri，也不复制回收实现。
 
 #[cfg(windows)]
+mod admission_worker;
+#[cfg(windows)]
+mod tracking;
+#[cfg(windows)]
 #[path = "../../../src-tauri/src/lsp/windows_process.rs"]
 mod windows_process;
 
@@ -8,7 +12,7 @@ mod windows_process;
 use std::{
     fs, io,
     io::Read,
-    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -18,11 +22,12 @@ use windows_sys::Win32::{
     Foundation::{ERROR_MORE_DATA, HANDLE, WAIT_OBJECT_0},
     System::{
         JobObjects::{
-            IsProcessInJob, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
-            QueryInformationJobObject, SetInformationJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-            JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+            IsProcessInJob, JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
+            JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+            TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
         },
         Threading::{
             OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -34,6 +39,16 @@ use windows_sys::Win32::{
 /// 诊断失败也回收已确认来自自有夹具的叶进程，防止故障探针留下进程。
 #[cfg(windows)]
 struct ObservedProcess(OwnedHandle);
+
+/// 候选模块只接管成功返回的 Win32 句柄，不改变生产 Job 的所有权。
+#[cfg(windows)]
+fn owned(handle: HANDLE) -> io::Result<OwnedHandle> {
+    if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: 本函数只接收创建/打开 API 返回的唯一所有权句柄。
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
 
 #[cfg(windows)]
 impl Drop for ObservedProcess {
@@ -182,6 +197,25 @@ fn wait_file(path: &Path) -> io::Result<()> {
 /// 独立验证零上限能封闭新进程入口；不改变生产回收实现，也不宣称清理通过。
 #[cfg(windows)]
 fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) -> io::Result<()> {
+    seal_admission(job)?;
+    fs::write(directory.join("attempt-spawn"), "attempt")?;
+    println!(
+        "[windows-process-probe] admission_gate attempt-spawn published; waiting attempt-result"
+    );
+    wait_file(&directory.join("attempt-result"))?;
+    let outcome = fs::read_to_string(directory.join("attempt-result"))?;
+    println!("[windows-process-probe] admission_gate spawn_outcome={outcome}");
+    if !outcome.starts_with("rejected:") {
+        return Err(io::Error::other(format!(
+            "admission gate result requires diagnosis: {outcome}"
+        )));
+    }
+    Ok(())
+}
+
+/// 只封闭当前隔离 probe 的新进程入口，供候选与拒绝诊断共用。
+#[cfg(windows)]
+fn seal_admission(job: &windows_process::WindowsJob) -> io::Result<()> {
     // SAFETY: Windows 信息结构为 POD，读写大小和信息类完全匹配。
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let bytes = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
@@ -235,19 +269,63 @@ fn verify_admission_gate(job: &windows_process::WindowsJob, directory: &Path) ->
         flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK),
         0
     );
-    fs::write(directory.join("attempt-spawn"), "attempt")?;
-    println!(
-        "[windows-process-probe] admission_gate attempt-spawn published; waiting attempt-result"
-    );
-    wait_file(&directory.join("attempt-result"))?;
-    let outcome = fs::read_to_string(directory.join("attempt-result"))?;
-    println!("[windows-process-probe] admission_gate flags={flags:#x} active_limit=0 spawn_outcome={outcome}");
-    if !outcome.starts_with("rejected:") {
-        return Err(io::Error::other(format!(
-            "admission gate result requires diagnosis: {outcome}"
-        )));
-    }
     Ok(())
+}
+
+/// 独立候选清理：停止捕获后等待固定句柄集合，最后才读取累计总数对账。
+#[cfg(windows)]
+fn candidate_cleanup(
+    job: &windows_process::WindowsJob,
+    tracker: &mut tracking::JobTracker,
+) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    if let Err(error) = seal_admission(job) {
+        tracker.failure(error);
+    }
+    if let Err(error) = tracker.supplement(job.raw(), deadline) {
+        tracker.failure(error);
+    }
+    // SAFETY: 候选只终止自身准确 Job，后续所有完成等待共用已建立的截止时间。
+    let terminated = if unsafe { TerminateJobObject(job.raw(), 1) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    };
+    if let Err(error) = &terminated {
+        tracker.failure(error);
+    }
+    tracker.stop(deadline)?;
+    if let Err(error) = tracker.supplement(job.raw(), deadline) {
+        tracker.failure(error);
+    }
+    if let Err(error) = tracker.wait(deadline) {
+        tracker.failure(&error);
+        return Err(error);
+    }
+    terminated?;
+    // SAFETY: 准确 Job 的固定结构查询，发生在全部保留对象已完成之后。
+    let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe {
+        QueryInformationJobObject(
+            job.raw(),
+            JobObjectBasicAccountingInformation,
+            (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        let error = io::Error::last_os_error();
+        tracker.failure(&error);
+        return Err(error);
+    }
+    println!(
+        "[windows-process-probe] candidate retained={} final_total={} final_active={}",
+        tracker.recorded(),
+        info.TotalProcesses,
+        info.ActiveProcesses
+    );
+    tracker.verify(info.TotalProcesses, info.ActiveProcesses)
 }
 
 /// 只读取本次夹具写出的有限诊断文件，不等可能被后代继承的管道 EOF。
@@ -289,6 +367,24 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         .stdout(Stdio::piped())
         .stderr(stderr);
     let (mut parent, job) = windows_process::WindowsJob::spawn(&mut command)?;
+    let mut candidate = if mode.starts_with("tracking_") {
+        // SAFETY: 只借用仍由生产 guard 持有的 Job 句柄，再复制给独立观察器。
+        let job_handle = unsafe { BorrowedHandle::borrow_raw(job.raw()) }.try_clone_to_owned()?;
+        let mut tracker = tracking::JobTracker::start(&job_handle)?;
+        tracker.primary(
+            job.raw(),
+            parent.id(),
+            parent.as_handle().try_clone_to_owned()?,
+        )?;
+        if mode == "tracking_count_gap" {
+            // 故意漏掉随后短命进程的通知，验证累计缺口不能被空 PID 列表掩盖。
+            tracker.stop(Instant::now() + Duration::from_secs(2))?;
+        }
+        fs::write(directory.join("tracking-ready"), "ready")?;
+        Some(tracker)
+    } else {
+        None
+    };
     wait_file(&directory.join("ready"))?;
     let pid: u32 = fs::read_to_string(directory.join("descendant"))?
         .parse()
@@ -324,7 +420,7 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         fs::remove_dir_all(directory)?;
         return Ok(());
     }
-    if mode != "parent_alive" {
+    if mode != "parent_alive" && mode != "tracking_parent_alive" && mode != "tracking_count_gap" {
         let deadline = Instant::now() + Duration::from_secs(10);
         while parent.try_wait()?.is_none() {
             if Instant::now() >= deadline {
@@ -341,7 +437,11 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         job_members(&job)
     );
     let started = Instant::now();
-    let cleanup = job.terminate_and_wait();
+    let cleanup = if let Some(tracker) = candidate.as_mut() {
+        candidate_cleanup(&job, tracker)
+    } else {
+        job.terminate_and_wait()
+    };
     // SAFETY: 清理返回后立刻固定准确句柄状态，后续诊断采样不能掩盖原失败。
     let signaled = unsafe { WaitForSingleObject(descendant.0.as_raw_handle(), 0) };
     let parent_signaled = unsafe { WaitForSingleObject(parent.as_raw_handle(), 0) };
@@ -358,7 +458,20 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
         elapsed,
         job.active_processes()
     );
-    cleanup?;
+    if mode == "tracking_count_gap" {
+        let error = cleanup.expect_err("missing historical process must fail coverage");
+        assert!(
+            error.to_string().contains("完成覆盖不足"),
+            "unexpected gap failure: {error}"
+        );
+        let retry = candidate_cleanup(&job, candidate.as_mut().unwrap());
+        assert!(retry.is_err(), "retry erased historical coverage failure");
+        println!(
+            "[windows-process-probe] PASS: cumulative count gap rejected and retry remained Err"
+        );
+    } else {
+        cleanup?;
+    }
     parent.wait()?;
     assert!(member, "descendant escaped exact Host Job");
     assert_eq!(
@@ -378,6 +491,9 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
 /// 三个短场景直接使用真实 WindowsJob，不加载 Tauri 或下载语言工具链。
 #[cfg(windows)]
 fn main() -> io::Result<()> {
+    if let Some(result) = admission_worker::dispatch() {
+        return result;
+    }
     let node = PathBuf::from(std::env::var_os("NARRANT_TEST_NODE").ok_or_else(|| {
         io::Error::other("set NARRANT_TEST_NODE to the absolute Node 24 executable")
     })?);
@@ -395,18 +511,31 @@ fn main() -> io::Result<()> {
         std::process::id()
     ));
     fs::create_dir(&root)?;
-    let modes: &[&str] = if std::env::args().nth(1).as_deref() == Some("--admission-only") {
-        &["admission_gate"]
-    } else {
-        &[
+    let modes: &[&str] = match std::env::args().nth(1).as_deref() {
+        Some("--admission-only") => &["admission_gate"],
+        Some("--tracking-only") => &[
+            "tracking_parent_exited_open",
+            "tracking_parent_exited_closed",
+            "tracking_parent_alive",
+            "tracking_count_gap",
+        ],
+        _ => &[
+            "tracking_parent_exited_open",
+            "tracking_parent_exited_closed",
+            "tracking_parent_alive",
+            "tracking_count_gap",
+            "admission_gate",
             "parent_exited_open",
             "parent_exited_closed",
             "parent_alive",
-            "admission_gate",
-        ]
+        ],
     };
     for mode in modes {
-        run_case(&node, &root.join(mode), mode)?;
+        if *mode == "admission_gate" {
+            admission_worker::run(&root.join(mode))?;
+        } else {
+            run_case(&node, &root.join(mode), mode)?;
+        }
     }
     fs::remove_dir(root)?;
     println!("[windows-process-probe] PASS: requested scenarios {modes:?}");
