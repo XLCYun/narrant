@@ -199,6 +199,12 @@ Job 活跃计数；原 Host 测试同步保留父子句柄，原有立即回收�
 共享生产 `WindowsJob` 的候选修改尚未应用：自动审批要求先验证隔离机制并明确批准其对现有
 Windows LSP/Python 的影响。新增探针先独立测试零活跃进程上限的读回、拒绝新建及保留已有进程，
 再执行原有三项生产回收硬断言；机制验证通过不会替代回收验收。候选生产补丁另行审查。
+`e244845` 的[Windows 门禁诊断任务 111092472010](https://github.com/XLCYun/narrant/actions/runs/37084709435/job/111092472010)
+在首个准入门禁场景等待标记10秒后超时；已有日志只记录父子准确Job归属及清理前状态，
+没有取得零上限读回、拒绝新建的完整证据，原有三项清理场景尚未执行。
+后续仅在独立探针增加设置/读回阶段、同步异常、父子状态与有界错误输出，生产仍未修改。
+惰性候选补丁审查另有一项未闭合问题：清理时枚举可能遗漏已经进入退出流程的成员，
+因此候选尚不能作为满足完整回收合同的最终修复。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
