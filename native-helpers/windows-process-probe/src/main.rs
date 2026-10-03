@@ -15,13 +15,14 @@ use std::{
 };
 #[cfg(windows)]
 use windows_sys::Win32::{
-    Foundation::{HANDLE, WAIT_OBJECT_0},
+    Foundation::{ERROR_MORE_DATA, HANDLE, WAIT_OBJECT_0},
     System::{
         JobObjects::{
-            IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
-            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+            IsProcessInJob, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
         },
         Threading::{
             OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -93,6 +94,73 @@ fn state(label: &str, pid: u32, handle: HANDLE) -> u32 {
         .unwrap_or_else(|error| format!("open_error:{:?}", error.raw_os_error()));
     println!("[windows-process-probe] {label} pid={pid} retained_wait={retained} reopened_wait={reopened}");
     retained
+}
+
+/// 只读准确 Job 的完整 PID 列表；有界扩容，既不按父 PID 扫描也不修改成员。
+#[cfg(windows)]
+fn job_members(job: &windows_process::WindowsJob) -> io::Result<Vec<u32>> {
+    const HEADER: usize = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
+        / std::mem::size_of::<usize>();
+    let mut buffer = vec![0usize; HEADER + 16];
+    loop {
+        // SAFETY: usize 数组满足该结构的对齐，缓冲区长度包含完整头部和 PID 空间。
+        let success = unsafe {
+            QueryInformationJobObject(
+                job.raw(),
+                JobObjectBasicProcessIdList,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * std::mem::size_of::<usize>()) as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        let error = io::Error::last_os_error();
+        // SAFETY: 固定头部位于已分配且对齐的缓冲区内。
+        let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+        if success == 0 && error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+            return Err(error);
+        }
+        if success == 0 || info.NumberOfProcessIdsInList < info.NumberOfAssignedProcesses {
+            let capacity = (info.NumberOfAssignedProcesses as usize).max(buffer.len() * 2);
+            if capacity > 4096 {
+                return Err(io::Error::other("probe Job member limit exceeded"));
+            }
+            buffer.resize(HEADER + capacity, 0);
+            continue;
+        }
+        let count = info.NumberOfProcessIdsInList as usize;
+        if count > buffer.len() - HEADER {
+            return Err(io::Error::other("probe invalid Job member count"));
+        }
+        return buffer[HEADER..HEADER + count]
+            .iter()
+            .map(|pid| u32::try_from(*pid).map_err(io::Error::other))
+            .collect();
+    }
+}
+
+/// 固定原始失败判据之后采样退出窗口；诊断中的等待不能改变已记录的成功/失败。
+#[cfg(windows)]
+fn trace_membership_after_cleanup(job: &windows_process::WindowsJob, pid: u32, handle: HANDLE) {
+    let mut observations = Vec::new();
+    for sample in 0..16 {
+        // SAFETY: 同一个保留句柄贯穿采样；超时 0 只观察。
+        let before = unsafe { WaitForSingleObject(handle, 0) };
+        let members = job_members(job);
+        let after = unsafe { WaitForSingleObject(handle, 0) };
+        let member = belongs(handle, job.raw());
+        let active = job.active_processes();
+        observations.push((sample, before, members, after, member, active));
+        if after == WAIT_OBJECT_0 {
+            break;
+        }
+        // 仅诊断允许最多 16 次 1ms 采样；绝不拿这里的最终状态替代立即退出断言。
+        unsafe {
+            WaitForSingleObject(handle, 1);
+        }
+    }
+    for (sample, before, members, after, member, active) in observations {
+        println!("[windows-process-probe] completion_snapshot sample={sample} pid={pid} wait_before={before} members={members:?} wait_after={after} in_exact_job={member:?} active={active:?}");
+    }
 }
 
 /// 有界等待由夹具发布的文件；超时直接返回错误并触发已有 Job 守卫。
@@ -268,13 +336,26 @@ fn run_case(node: &Path, directory: &Path, mode: &str) -> io::Result<()> {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+    println!(
+        "[windows-process-probe] members_before_cleanup={:?}",
+        job_members(&job)
+    );
     let started = Instant::now();
     let cleanup = job.terminate_and_wait();
-    let signaled = state("after_cleanup", pid, descendant.0.as_raw_handle());
-    let parent_signaled = state("parent_after_cleanup", parent.id(), parent.as_raw_handle());
+    // SAFETY: 清理返回后立刻固定准确句柄状态，后续诊断采样不能掩盖原失败。
+    let signaled = unsafe { WaitForSingleObject(descendant.0.as_raw_handle(), 0) };
+    let parent_signaled = unsafe { WaitForSingleObject(parent.as_raw_handle(), 0) };
+    let elapsed = started.elapsed().as_millis();
+    trace_membership_after_cleanup(&job, pid, descendant.0.as_raw_handle());
+    println!("[windows-process-probe] immediate_after_cleanup descendant_wait={signaled} parent_wait={parent_signaled}");
+    state(
+        "after_diagnostic_samples",
+        pid,
+        descendant.0.as_raw_handle(),
+    );
     println!(
         "[windows-process-probe] mode={mode} cleanup={cleanup:?} elapsed_ms={} active_after={:?}",
-        started.elapsed().as_millis(),
+        elapsed,
         job.active_processes()
     );
     cleanup?;
@@ -318,10 +399,10 @@ fn main() -> io::Result<()> {
         &["admission_gate"]
     } else {
         &[
-            "admission_gate",
             "parent_exited_open",
             "parent_exited_closed",
             "parent_alive",
+            "admission_gate",
         ]
     };
     for mode in modes {

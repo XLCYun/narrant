@@ -205,6 +205,16 @@ Windows LSP/Python 的影响。新增探针先独立测试零活跃进程上限�
 后续仅在独立探针增加设置/读回阶段、同步异常、父子状态与有界错误输出，生产仍未修改。
 惰性候选补丁审查另有一项未闭合问题：清理时枚举可能遗漏已经进入退出流程的成员，
 因此候选尚不能作为满足完整回收合同的最终修复。
+`0671755` 的[Windows 诊断任务 111094268752](https://github.com/XLCYun/narrant/actions/runs/37085313601/job/111094268752)
+读回门禁 flags=0x2008、active_limit=0，已有父子句柄仍为258；Node 创建请求同步抛出 UNKNOWN。
+该错误尚未包含原始 Win32 错误码，保留为诊断失败，不能据此声称门禁或完整回收已经通过。
+同轮 macOS 全流程成功（Host17、factory2、安装1/83.03秒、公共图8/13.99秒，Rust零跳过），
+Python Windows 的20/3/4项也通过（22.78/3.41/4.76秒）。
+2026-10-03 用户已明确授权必要的共享 Windows LSP/Python 回收修复，保持原 helper 后代能力；
+此前审批阻断解除，没有采用单进程限制。新探针先固定原立即 Wait(0) 结果，再观察准确 Job PID列表
+与同一句柄的 wait/list/wait，诊断延迟不能掩盖原红灯。现有证据只证明活跃计数不足，尚未实测
+证明 PID列表会遗漏未退出对象。新的完整性方案在设计上使用全生命周期保留句柄和累计
+TotalProcesses 对账，通知丢失或无法捕获对象必须明确失败；实现与共享回归仍须验证。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
