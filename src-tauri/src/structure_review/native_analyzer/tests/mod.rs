@@ -551,12 +551,12 @@ fn subprocess_reaps_descendants_after_parent_exit() {
     for mode in ["descendant", "descendant_closed"] {
         let fixture = Fixture::new();
         #[cfg(windows)]
-        let observation = observe_fixture_processes(&fixture.tools);
+        let (observed, observation) = observe_fixture_processes(&fixture.tools);
         let result = fixture
             .executable_analyzer(mode, &line(ready()), &line(result()))
             .analyze(&fixture.input());
         #[cfg(windows)]
-        let observed = observation.join().unwrap();
+        assert_observed_processes_gone(observed.get().expect("句柄必须先于 observed 确认发布"));
         if mode == "descendant" {
             let error = result.unwrap_err();
             assert!(error.message.contains("退出超时"), "{error}");
@@ -566,7 +566,7 @@ fn subprocess_reaps_descendants_after_parent_exit() {
         assert_process_gone(&fixture.tools.join("pid"));
         assert_process_gone(&fixture.tools.join("descendant"));
         #[cfg(windows)]
-        assert_observed_processes_gone(&observed);
+        observation.join().unwrap();
     }
 }
 
@@ -616,15 +616,24 @@ fn assert_process_gone(marker: &Path) {
     }
 }
 
-/// 在退出之前固定父子进程对象并通知夹具继续；保留句柄期间 PID 不会重用。
+/// 父子进程的准确对象身份，持有句柄期间 PID 不会重用。
+#[cfg(windows)]
+type ObservedProcesses = Vec<(String, std::os::windows::io::OwnedHandle)>;
+
+/// 先非阻塞发布父子句柄，再通知夹具继续，避免清理后 join 延迟掩盖存活进程。
 #[cfg(windows)]
 fn observe_fixture_processes(
     directory: &Path,
-) -> std::thread::JoinHandle<Vec<(String, std::os::windows::io::OwnedHandle)>> {
+) -> (
+    Arc<std::sync::OnceLock<ObservedProcesses>>,
+    std::thread::JoinHandle<()>,
+) {
     use std::os::windows::io::{FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
     let directory = directory.to_owned();
-    std::thread::spawn(move || {
+    let published = Arc::new(std::sync::OnceLock::new());
+    let output = published.clone();
+    let observer = std::thread::spawn(move || {
         wait_file(&directory.join("descendant"));
         let observed = ["pid", "descendant"]
             .into_iter()
@@ -642,9 +651,10 @@ fn observe_fixture_processes(
                 })
             })
             .collect();
+        output.set(observed).expect("进程句柄只发布一次");
         fs::write(directory.join("observed"), "ready").unwrap();
-        observed
-    })
+    });
+    (published, observer)
 }
 
 /// 保留原立即退出硬断言，并用回收前持有的准确进程句柄验证相同对象。
@@ -687,7 +697,7 @@ fn session_drop_and_panic_reap_all_children() {
     for panic in [false, true] {
         let fixture = Fixture::new();
         #[cfg(windows)]
-        let observation = observe_fixture_processes(&fixture.tools);
+        let (observed, observation) = observe_fixture_processes(&fixture.tools);
         let analyzer = fixture.executable_analyzer("descendant", &line(ready()), &line(result()));
         let checked = input::validate(&analyzer, &fixture.input()).unwrap();
         let scratch = tempfile::tempdir().unwrap();
@@ -702,12 +712,12 @@ fn session_drop_and_panic_reap_all_children() {
             drop(session);
         }));
         #[cfg(windows)]
-        let observed = observation.join().unwrap();
+        assert_observed_processes_gone(observed.get().expect("句柄必须先于 observed 确认发布"));
         assert_eq!(result.is_err(), panic);
         assert_process_gone(&fixture.tools.join("pid"));
         assert_process_gone(&fixture.tools.join("descendant"));
         #[cfg(windows)]
-        assert_observed_processes_gone(&observed);
+        observation.join().unwrap();
     }
 }
 
