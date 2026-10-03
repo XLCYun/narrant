@@ -1,8 +1,8 @@
 # 原生 helper 的双平台验收入口
 
-状态：`d628bfd` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过
-四包构建、启动及四种语言的原生测试，修正夹具后 Host 两项进程存活断言失败，正在区分
-真实退出同步、Job 归属和 PID 复用；后续生产安装和公共图尚未执行。
+状态：macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过四包构建及
+四语言原生套件，早期诊断已复现 Job 活跃计数归零但同一进程句柄仍未退出的同步缺口，
+正在修正共享回收实现；后续生产安装和公共图尚未完成。
 工作在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中继续。
 本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
 
@@ -187,6 +187,18 @@ Job 活跃计数；原 Host 测试同步保留父子句柄，原有立即回收�
 三个 Job 场景均未执行，不能据此判断进程回收根因；也未进入 SDK、helper、Host、安装及图验收。
 本轮日志未打印实际变量值，因此尚不能区分 PowerShell 命令解析与 MSYS 路径转换。
 后续诊断入口将沿用已有完整验收的 Node `process.execPath` 与直接子进程环境传递，并输出路径检查证据。
+`e1f8985` 的[Windows 早期诊断任务 111089160997](https://github.com/XLCYun/narrant/actions/runs/37083593430/job/111089160997)
+已通过 Node 路径入口，并在首个父退出场景复现生产同步问题：父 PID4632、后代 PID7116
+均属于准确 Job，清理前活跃计数3。`terminate_and_wait` 返回成功且计数为0，
+但清理前固定的后代句柄立即 `WaitForSingleObject(..., 0)` 仍为258，父句柄为0。
+因此在此实际场景中，PID复用及Job逃逸均已排除，活跃计数归零不足以证明全部进程对象退出。
+完整日志 `/private/tmp/narrant-ci-native-windows-37083593430.log`；仅首场景执行，后续完整验收尚未运行。
+上一轮 `76f0204` 的 macOS 已完整通过：Host17（3.61秒）、factory2、安装1（84.14秒）、
+图8（14.47秒），Rust零跳过；在替代运行启动后，旧轮剩余 Python Windows 任务被手动取消，
+其取消结果不计为通过。
+共享生产 `WindowsJob` 的候选修改尚未应用：自动审批要求先验证隔离机制并明确批准其对现有
+Windows LSP/Python 的影响。新增探针先独立测试零活跃进程上限的读回、拒绝新建及保留已有进程，
+再执行原有三项生产回收硬断言；机制验证通过不会替代回收验收。候选生产补丁另行审查。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
