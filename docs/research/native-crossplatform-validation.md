@@ -1,8 +1,9 @@
 # 原生 helper 的双平台验收入口
 
-状态：`d498548` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过
-四包构建、启动及四种语言的原生测试，Rust Host 的 Node 启动问题已消除，剩一项后代进程
-测试失败，后续生产安装和公共图尚未执行；正在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中修复验证。
+状态：`d628bfd` 的 macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过
+四包构建、启动及四种语言的原生测试，修正夹具后 Host 两项进程存活断言失败，正在区分
+真实退出同步、Job 归属和 PID 复用；后续生产安装和公共图尚未执行。
+工作在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中继续。
 本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
 
 ## 已取得的 CI 结果
@@ -167,6 +168,20 @@ Clang25通过及1项macOS平台跳过（10.053秒）。Node CSPRNG 启动故障�
 完整日志为 `/private/tmp/narrant-ci-native-windows-37076131635.log`。
 同轮 macOS 全流程通过：Host17（3.82秒）、factory2、安装1（88.61秒）、公共图8（13.86秒）
 均零跳过；Python Windows 的20/3/4项也通过（21.67/5.28/9.76秒）。
+`d628bfd` 的[Windows 任务 111075220175](https://github.com/XLCYun/narrant/actions/runs/37079022600/job/111075220175)
+通过四语言原生套件：Go（1.882秒）、Java25（35.123秒）、C#29（13.003秒）、Clang25通过
+及1项macOS平台跳过（6.559秒）。Host16项中14通过、2失败（3.28秒），分别为正常返回及
+Drop/panic 后的进程存活断言：`WaitForSingleObject(..., 0)` 返回258而非0。
+现有断言只按PID重新打开进程，且错误没有区分父/后代，因此该日志尚不能单独证明后代逃逸
+或生产回收失败。后续将保留真实进程句柄、核实准确Job归属并观察退出信号，缩短诊断流程。
+该轮 factory、生产安装、公共图仍未执行；完整日志为 `/private/tmp/narrant-ci-native-windows-37079022600.log`。
+同轮 macOS 全流程通过（Host17、factory2、安装1/90.83秒、图8/13.61秒，Rust零跳过）；
+Python Windows 的20/3/4项通过（21.25/3.39/4.69秒），零失败、零跳过。
+诊断改动 `b0ed324` 新增独立 Windows 进程探针，直接引用生产 `WindowsJob`，在 SDK 下载和
+Tauri 编译前运行。三个场景记录后代的准确 Job 归属、回收前固定的进程句柄、立即退出信号和
+Job 活跃计数；原 Host 测试同步保留父子句柄，原有立即回收断言仍然有效。生产回收算法未改。
+本机 Windows 目标编译检查、两项 macOS 生命周期测试和九项 CI 接线测试通过；真实 Windows
+行为仍待运行证据，短探针不替代完整安装和公共图验收。
 当前 `windows-2025` 标签已指向 VS 2026 镜像，所以本工作流明确选择官方仍配备 VS 2022 的
 `windows-2022`，没有改写目录猜测或静默回退。映射见 [官方 runner 标签表](https://github.com/actions/runner-images#available-images)。
 来源：[macOS runner 镜像](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)、
