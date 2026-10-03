@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { validateToolchainManifest, verifyArchive } from '../provision-native-toolchains.mjs';
-import { validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
+import { runVerificationCommands, validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
 
 const manifest = JSON.parse(await fs.readFile(new URL('../../resources/native-toolchains.json', import.meta.url), 'utf8'));
 const workflowSource = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
@@ -127,6 +127,63 @@ test('Windows native acceptance includes focused shared Job regressions without 
   assert.equal(macOS.length, 8);
   assert.ok(macOS.every(command => !command.args.includes(filter)));
   assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(filter)), macOS.slice(4));
+});
+
+// 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。
+test('failed validation child does not prevent later child execution or make the result successful', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native validation groups '));
+  const marker = path.join(directory, 'executed');
+  const commands = [7, 0].map(code => ({
+    executable: process.execPath,
+    args: ['-e', `require('node:fs').appendFileSync(process.argv[1], '${code}\\n'); process.exit(${code})`, marker],
+  }));
+  try {
+    await assert.rejects(runVerificationCommands(commands, process.env), error => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors.length, 1);
+      assert.ok(error.errors[0].message.includes(commands[0].args[1]));
+      assert.match(error.errors[0].cause.message, /Native validation failed \(7\)/);
+      return true;
+    });
+    assert.equal(await fs.readFile(marker, 'utf8'), '7\n0\n');
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+// 多组失败保留各自命令和原始错误，异步执行始终串行且次序不变。
+test('validation collects multiple original failures in order without overlapping groups', async () => {
+  const commands = ['first', 'middle', 'last'].map(name => ({ executable: name, args: ['--fixture'] }));
+  const failures = [new Error('first original failure'), new Error('last original failure')];
+  const environment = { FIXTURE: 'same environment' };
+  const events = [];
+  let running = false;
+  await assert.rejects(runVerificationCommands(commands, environment, async (command, passedEnvironment) => {
+    assert.equal(running, false);
+    assert.equal(passedEnvironment, environment);
+    running = true;
+    events.push(`start:${command.executable}`);
+    await new Promise(resolve => setImmediate(resolve));
+    events.push(`end:${command.executable}`);
+    running = false;
+    if (command === commands[0]) throw failures[0];
+    if (command === commands[2]) throw failures[1];
+  }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 2);
+    assert.equal(error.errors[0].cause, failures[0]);
+    assert.equal(error.errors[1].cause, failures[1]);
+    assert.match(error.errors[0].message, /first --fixture/);
+    assert.match(error.errors[1].message, /last --fixture/);
+    return true;
+  });
+  assert.deepEqual(events, ['start:first', 'end:first', 'start:middle', 'end:middle', 'start:last', 'end:last']);
+});
+
+// 全部验收成功时正常完成，不能因汇总机制产生伪失败。
+test('successful validation groups all complete normally', async () => {
+  const commands = ['one', 'two'].map(executable => ({ executable, args: [] }));
+  const visited = [];
+  await runVerificationCommands(commands, {}, async command => { visited.push(command); });
+  assert.deepEqual(visited, commands);
 });
 
 // 引用专用 NuGet 包跨架构使用同一来源摘要，不能偷换为浮动版本或任意 NuGet 工具。

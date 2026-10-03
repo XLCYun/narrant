@@ -1,10 +1,36 @@
 # 原生 helper 的双平台验收入口
 
-状态：macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过四包构建及
-四语言原生套件，早期诊断已复现 Job 活跃计数归零但同一进程句柄仍未退出的同步缺口，
-正在接入新增 native helper 专用回收实现，既有 LSP/Python 行为不变；后续生产安装和公共图尚未完成。
+状态：macOS ARM64 / SDK15.5 已通过真实 CI 全流程。Windows x64 已通过四包构建、
+四语言原生套件和新增 native helper 专用回收实现的产品探针，专用实现的定点审查也已完成。
+最新运行在未改动的旧共享 LSP Job 回归处失败，后续新 Host、生产安装和公共图未运行。
+旧共享完成次序问题仍存在，不能把 native 专用修复视为整个 LSP/Python 路径的修复。
 工作在[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200) 中继续。
 本机四包生产安装及八项公共图已通过，含 C# net8/net10 目标隔离；尚不能代替 Windows 结果。
+
+## 2026-10-03 最新完整运行：6bc50d3
+
+[运行 37108089607](https://github.com/XLCYun/narrant/actions/runs/37108089607) 已全部结束。
+`6bc50d3` 仅修正验收脚本测试对 CRLF 的接受；专用 native owner 产品源码仍为 `d2b0245`。
+
+- [原生 Windows 111160449171](https://github.com/XLCYun/narrant/actions/runs/37108089607/job/111160449171)
+  失败。实际产品 owner 的三个生命周期探针均立即观察父子原句柄为0，耗时3/2/4毫秒，
+  raw1816门禁通过；Node32项中31通过、1个平台跳过。四包构建和ready通过，Go1.788秒、
+  Java25/42.867秒、C#29/16.649秒、Clang25通过加1个平台跳过/7.803秒。
+  随后旧共享 Job 两项回归为1通过、1失败/0.12秒；
+  `windows_job_reclaims_child_after_parent_exit` 在第85行观察到258而非0。
+  新 native Host、factory、生产安装与八项公共图均未执行，不能拼接旧结果宣称本轮通过。
+- [原生 macOS 111160449150](https://github.com/XLCYun/narrant/actions/runs/37108089607/job/111160449150)
+  成功。四包与ready通过，Go0.556秒、Java25/16.928秒、C#29/11.181秒、Clang25通过加1个平台跳过/5.039秒；
+  Host17/3.33秒、factory2、生产安装1/82.39秒、公共图8/13.23秒通过。
+- [Python Windows 111160449124](https://github.com/XLCYun/narrant/actions/runs/37108089607/job/111160449124)
+  成功，Rust三组20/21.52秒、3/4.29秒、4/6.26秒通过；
+  [Python macOS 111160448968](https://github.com/XLCYun/narrant/actions/runs/37108089607/job/111160448968)
+  成功，三组35/8.51秒、3/2.93秒、4/5.70秒通过。上述成功Rust组均零失败、零ignored。
+
+完整官方日志位于 `/private/tmp/narrant-ci-native-windows-6bc50d3.log`，同轮其余日志分别为
+`narrant-ci-macos-6bc50d3.log`、`narrant-ci-python-windows-6bc50d3.log`、
+`narrant-ci-python-macos-6bc50d3.log`。下一步只改验收组的失败汇总，让独立组继续串行执行，
+任何失败仍使整体非零退出；不删除、放松或忽略旧共享回归，也不将其已知缺陷归为通过。
 
 ## 已取得的 CI 结果
 

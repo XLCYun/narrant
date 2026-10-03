@@ -53,6 +53,21 @@ async function execute(command, environment) {
   });
 }
 
+/** 串行完成全部独立验收组，再汇总命令身份及原始失败；先决构建和配置不走此入口。 */
+export async function runVerificationCommands(commands, environment, run = execute) {
+  const failures = [];
+  for (const command of commands) {
+    try {
+      await run(command, environment);
+    } catch (cause) {
+      const failure = new Error(`Native validation group failed: ${command.executable} ${command.args.join(' ')}`, { cause });
+      failures.push(failure);
+      console.error(failure);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, `${failures.length} native validation group(s) failed`);
+}
+
 /** 先构建固定本地支持包，再以真实 helper 和公共 Rust 入口完成五种语言模式验收。 */
 export async function verifyNativeAnalyzers(artifacts, build = false) {
   const target = nativeTargets[`${process.platform}-${process.arch}`];
@@ -65,7 +80,7 @@ export async function verifyNativeAnalyzers(artifacts, build = false) {
     for (const id of ['go', 'java', 'csharp', 'c-cpp']) await execute({ executable: process.execPath, args: ['scripts/build-language-support-packs.mjs', '--id', id, '--target', target, '--output', artifacts] }, environment);
   }
   validateNativeConfiguration(JSON.parse(await fs.readFile(environment.NARRANT_NATIVE_HELPERS_CONFIG, 'utf8')));
-  for (const command of commands) await execute(command, environment);
+  await runVerificationCommands(commands, environment);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await verifyNativeAnalyzers(process.argv[2] ?? 'native-language-support-packs', process.argv.includes('--build'));
