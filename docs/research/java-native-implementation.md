@@ -1,5 +1,8 @@
 # Java 原生 helper 实施与隔离验证
 
+本文保留各次实施快照。2026-10-04 已移除早期固定项目版本门禁；当前选择规则与验收见
+[目标版本发现记录](native-target-version-discovery.md)，下文旧版本限制不代表当前产品范围。
+
 2026-10-03，Task 3。实现位于 `native-helpers/java/`，生产分析后端只有 [Eclipse JDT Core 3.47.0](https://central.sonatype.com/artifact/org.eclipse.jdt/org.eclipse.jdt.core/3.47.0)。`tools/Probe.java` 是开发探针，不进入生产入口。运行时使用 Temurin JDK 25.0.4.1+1；被分析代码的目标 API 来自**单独、精确匹配 release 的** JDK 17.0.20.1+1。目标平台 root 必须是 JDK Home，含 `release` 与 `lib/jrt-fs.jar`；JDT 实际解析需要 `lib/modules`。启动 JDK 不充当目标平台默认值。
 
 ## 固定依赖与构建

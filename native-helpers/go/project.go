@@ -7,6 +7,7 @@ import (
 	"go/build/constraint"
 	"go/parser"
 	"go/token"
+	"go/version"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,18 +22,21 @@ type module struct {
 	Path      string
 	Dir       string
 	GoVersion string
+	Toolchain string
 	Source    string
 	Replaces  map[string]string
 }
 
 // project 持有只读仓库模块索引和配置文件来源。
 type project struct {
-	Root        string
-	Modules     []*module
-	WorkSource  string
-	WorkGo      string
-	Replace     map[string]string
-	WorkReplace map[string]string
+	Root           string
+	Modules        []*module
+	WorkSource     string
+	WorkGo         string
+	WorkToolchain  string
+	Replace        map[string]string
+	WorkReplace    map[string]string
+	ContextModules map[string]*module
 }
 
 // within 拒绝词法及符号链接层面的仓外路径。
@@ -159,14 +163,15 @@ func parseMod(root, filename string) (*module, error) {
 			}
 			m.Path = strings.Trim(p[1], "\"")
 		case "go":
-			if len(p) != 2 {
+			if len(p) != 2 || m.GoVersion != "" || !validGoVersion(p[1]) {
 				return nil, fmt.Errorf("invalid go directive")
 			}
 			m.GoVersion = p[1]
 		case "toolchain":
-			if len(p) != 2 || p[1] != "go1.23.8" {
+			if len(p) != 2 || m.Toolchain != "" || !validToolchain(p[1]) {
 				return nil, fmt.Errorf("unsupported toolchain %v", p)
 			}
+			m.Toolchain = p[1]
 		case "require", "exclude", "retract": // 版本求解不触发依赖读取；缺失依赖在 importer 中保留未知。
 		case "replace":
 			arrow := -1
@@ -195,9 +200,6 @@ func parseMod(root, filename string) (*module, error) {
 	if m.Path == "" || m.GoVersion == "" {
 		return nil, fmt.Errorf("module and go version required")
 	}
-	if m.GoVersion != "1.23" && !strings.HasPrefix(m.GoVersion, "1.23.") {
-		return nil, fmt.Errorf("Go version %s is outside verified 1.23 profile", m.GoVersion)
-	}
 	rel, _ := filepath.Rel(root, filename)
 	m.Source = filepath.ToSlash(rel)
 	return m, nil
@@ -205,7 +207,7 @@ func parseMod(root, filename string) (*module, error) {
 
 // loadProject 静态发现仓内 module/workspace，不查询 go 命令或用户缓存。
 func loadProject(root string, selected []string) (*project, *analysisError) {
-	p := &project{Root: root, Replace: map[string]string{}, WorkReplace: map[string]string{}}
+	p := &project{Root: root, Replace: map[string]string{}, WorkReplace: map[string]string{}, ContextModules: map[string]*module{}}
 	work := filepath.Join(root, "go.work")
 	var useDirs []string
 	if _, err := os.Lstat(work); err == nil {
@@ -221,14 +223,15 @@ func loadProject(root string, selected []string) (*project, *analysisError) {
 		for _, parts := range directives {
 			switch parts[0] {
 			case "go":
-				if len(parts) != 2 {
+				if len(parts) != 2 || p.WorkGo != "" || !validGoVersion(parts[1]) {
 					return nil, fail("unsupported_configuration", "invalid go.work go directive", "go.work")
 				}
 				p.WorkGo = parts[1]
 			case "toolchain":
-				if len(parts) != 2 || parts[1] != "go1.23.8" {
+				if len(parts) != 2 || p.WorkToolchain != "" || !validToolchain(parts[1]) {
 					return nil, fail("unsupported_configuration", "unsupported go.work toolchain", "go.work")
 				}
+				p.WorkToolchain = parts[1]
 			case "use":
 				if len(parts) != 2 {
 					return nil, fail("unsupported_configuration", "invalid use directive", "go.work")
@@ -261,8 +264,8 @@ func loadProject(root string, selected []string) (*project, *analysisError) {
 				return nil, fail("unsupported_configuration", "unsupported go.work directive: "+parts[0], "go.work")
 			}
 		}
-		if (p.WorkGo != "1.23" && !strings.HasPrefix(p.WorkGo, "1.23.")) || len(useDirs) == 0 {
-			return nil, fail("unsupported_configuration", "go.work requires Go 1.23 and at least one use", "go.work")
+		if p.WorkGo == "" || len(useDirs) == 0 {
+			return nil, fail("unsupported_configuration", "go.work requires a go version and at least one use", "go.work")
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fail("unsupported_configuration", err.Error(), "go.work")
@@ -308,6 +311,12 @@ func loadProject(root string, selected []string) (*project, *analysisError) {
 		}
 		paths[m.Path] = true
 		p.Modules = append(p.Modules, m)
+		if p.WorkSource != "" && version.Compare("go"+p.WorkGo, "go"+m.GoVersion) < 0 {
+			return nil, fail("unsupported_configuration", "go.work go version is older than module go version "+m.GoVersion, p.WorkSource, m.Source)
+		}
+		if problem := requireCompilerLanguage(m.GoVersion, m.Source); problem != nil {
+			return nil, problem
+		}
 	}
 	for _, m := range p.Modules {
 		for old, dir := range m.Replaces {
@@ -334,6 +343,31 @@ func (p *project) moduleForFile(filename string) *module {
 		}
 	}
 	return best
+}
+
+// moduleForPackage 为已准入的仓内包读取自身 module 的语言声明，包括本地 replace。
+func (p *project) moduleForPackage(dir string) (*module, error) {
+	if m := p.moduleForFile(dir); m != nil {
+		return m, nil
+	}
+	base := ""
+	for _, replacement := range p.Replace {
+		if within(replacement, dir) == nil && !crossedModuleBoundary(replacement, dir) && len(replacement) > len(base) {
+			base = replacement
+		}
+	}
+	if base == "" {
+		return nil, fmt.Errorf("package is outside admitted module: %s", dir)
+	}
+	if m := p.ContextModules[base]; m != nil {
+		return m, nil
+	}
+	m, err := parseMod(p.Root, filepath.Join(base, "go.mod"))
+	if err != nil {
+		return nil, fmt.Errorf("local replacement go.mod: %w", err)
+	}
+	p.ContextModules[base] = m
+	return m, nil
 }
 
 // crossedModuleBoundary 拒绝把未显式 use 的嵌套 go.mod 当作外层包。
@@ -390,25 +424,33 @@ func (p *project) importDirectory(importPath string) (string, bool, error) {
 	return "", false, nil
 }
 
-// standardTarget 从固定目录选择 Go 源码且关闭 cgo 与自定义 tag。
-func standardTarget(sdk string, meta platformMetadata) build.Context {
+// standardTarget 使用实际 SDK 的发布标签选择源码，关闭 cgo 与自定义 tag。
+func standardTarget(sdk platform) build.Context {
+	meta := sdk.Metadata
 	bc := build.Default
-	bc.GOROOT = sdk
+	bc.GOROOT = sdk.Root
 	bc.GOPATH = ""
 	bc.GOOS = meta.GOOS
 	bc.GOARCH = meta.GOARCH
 	bc.CgoEnabled = false
+	bc.Compiler = "gc"
 	bc.BuildTags = nil
-	bc.ToolTags = []string{"goexperiment.regabiwrappers", "goexperiment.regabiargs", "goexperiment.coverageredesign"}
+	bc.ReleaseTags = nil
+	for minor := 1; version.Compare(fmt.Sprintf("go1.%d", minor), version.Lang("go"+sdk.Version)) <= 0; minor++ {
+		bc.ReleaseTags = append(bc.ReleaseTags, fmt.Sprintf("go1.%d", minor))
+	}
+	bc.ToolTags = append([]string{}, sdk.ToolTags...)
 	if meta.GOARCH == "amd64" {
 		bc.ToolTags = append(bc.ToolTags, "amd64.v1")
+	} else if meta.GOARCH == "arm64" {
+		bc.ToolTags = append(bc.ToolTags, "arm64.v8.0")
 	}
 	return bc
 }
 
 // validatePlatform 核对 SDK 版本与受支持的目标组合。
 func validatePlatform(p platform) error {
-	if p.ID == "" || p.Kind != "go-sdk" || p.Version != "1.23.8" || !filepath.IsAbs(p.Root) {
+	if p.ID == "" || p.Kind != "go-sdk" || !validSDKVersion(p.Version) || !filepath.IsAbs(p.Root) {
 		return fmt.Errorf("invalid Go SDK catalog entry")
 	}
 	if p.Metadata.GOOS == "" || p.Metadata.GOARCH == "" {
@@ -430,8 +472,9 @@ func validatePlatform(p platform) error {
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(strings.TrimSpace(string(data)), "go1.23.8") {
-		return fmt.Errorf("SDK VERSION is not go1.23.8")
+	firstLine, _, _ := strings.Cut(string(data), "\n")
+	if strings.TrimSpace(firstLine) != "go"+p.Version {
+		return fmt.Errorf("SDK VERSION does not match catalog Go %s", p.Version)
 	}
 	if _, err := os.Stat(filepath.Join(p.Root, "src", "builtin", "builtin.go")); err != nil {
 		return err
@@ -441,10 +484,11 @@ func validatePlatform(p platform) error {
 
 // discoverPlatforms 根据明确条件选择 catalog 候选；无条件时仅取宿主基线。
 func discoverPlatforms(project *project, selected []string, includeTests bool, candidates []platform) ([]platform, *analysisError) {
-	if len(candidates) == 0 {
-		return nil, fail("target_unavailable", "no approved Go SDK targets in catalog")
+	candidates, problem := selectSDKVersions(project, candidates)
+	if problem != nil {
+		return nil, problem
 	}
-	contextFiles, problem := projectContextFiles(project, selected, includeTests, candidates[0].Root)
+	contextFiles, problem := projectContextFiles(project, selected, includeTests, candidates[0])
 	if problem != nil {
 		return nil, problem
 	}
@@ -459,7 +503,7 @@ func discoverPlatforms(project *project, selected []string, includeTests bool, c
 			return nil, problem
 		}
 		if hasTarget {
-			supported, problem := matchesSupportedTarget(project.Root, rel, candidates[0].Root)
+			supported, problem := matchesSupportedTarget(project.Root, rel, candidates[0])
 			if problem != nil {
 				return nil, problem
 			}
@@ -479,7 +523,7 @@ func discoverPlatforms(project *project, selected []string, includeTests bool, c
 			}
 			continue
 		}
-		buildContext := standardTarget(candidate.Root, candidate.Metadata)
+		buildContext := standardTarget(candidate)
 		for _, rel := range explicit {
 			matches, err := buildContext.MatchFile(filepath.Join(project.Root, filepath.Dir(rel)), filepath.Base(rel))
 			if err != nil {
@@ -516,14 +560,15 @@ func containsPlatform(platforms []platform, id string) bool {
 }
 
 // matchesSupportedTarget 独立于 catalog 判断源码条件是否属于固定 profile 的目标矩阵。
-func matchesSupportedTarget(root, rel, sdkRoot string) (bool, *analysisError) {
+func matchesSupportedTarget(root, rel string, sdk platform) (bool, *analysisError) {
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		for _, goarch := range []string{"arm64", "amd64"} {
 			meta := platformMetadata{GOOS: goos, GOARCH: goarch}
 			if goarch == "amd64" {
 				meta.GOAMD64 = "v1"
 			}
-			target := standardTarget(sdkRoot, meta)
+			sdk.Metadata = meta
+			target := standardTarget(sdk)
 			matches, err := target.MatchFile(filepath.Join(root, filepath.Dir(rel)), filepath.Base(rel))
 			if err != nil {
 				return false, fail("unsupported_configuration", err.Error(), rel)
@@ -537,7 +582,7 @@ func matchesSupportedTarget(root, rel, sdkRoot string) (bool, *analysisError) {
 }
 
 // projectContextFiles 沿仓内显式导入闭包搜集允许源码及平台条件，绝不读取第三方依赖。
-func projectContextFiles(p *project, selected []string, includeTests bool, sdkRoot string) ([]string, *analysisError) {
+func projectContextFiles(p *project, selected []string, includeTests bool, sdk platform) ([]string, *analysisError) {
 	dirs := map[string]bool{}
 	for _, rel := range selected {
 		if !includeTests && strings.HasSuffix(rel, "_test.go") {
@@ -563,6 +608,13 @@ func projectContextFiles(p *project, selected []string, includeTests bool, sdkRo
 			continue
 		}
 		visited[dir] = true
+		m, err := p.moduleForPackage(dir)
+		if err != nil {
+			return nil, fail("unsupported_configuration", err.Error())
+		}
+		if problem := m.validateSDKVersion(sdk); problem != nil {
+			return nil, problem
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, fail("object_extraction_failed", err.Error())
@@ -581,7 +633,7 @@ func projectContextFiles(p *project, selected []string, includeTests bool, sdkRo
 			if _, problem := hasTargetConstraint(p.Root, filepath.ToSlash(rel)); problem != nil {
 				return nil, problem
 			}
-			supported, problem := matchesSupportedTarget(p.Root, filepath.ToSlash(rel), sdkRoot)
+			supported, problem := matchesSupportedTarget(p.Root, filepath.ToSlash(rel), sdk)
 			if problem != nil {
 				return nil, problem
 			}
@@ -678,17 +730,12 @@ func knownTargetTag(tag string) bool {
 	return false
 }
 
-// supportedBuildTag 限定静态可解释的目标、编译器与 Go 1.23 发布标签。
+// supportedBuildTag 接受已知目标及所有合法 release 标签；真假由所选 SDK 决定。
 func supportedBuildTag(tag string) bool {
 	if knownTargetTag(tag) || tag == "unix" || tag == "cgo" || tag == "gc" {
 		return true
 	}
-	for minor := 1; minor <= 23; minor++ {
-		if tag == fmt.Sprintf("go1.%d", minor) {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(tag, "go1.") && validGoVersion(strings.TrimPrefix(tag, "go")) && version.Lang(tag) == tag
 }
 
 // projectSourcePaths 返回实际读取并影响配置的仓内配置文件。
@@ -698,6 +745,9 @@ func (p *project) projectSourcePaths() []string {
 		paths = append(paths, p.WorkSource)
 	}
 	for _, m := range p.Modules {
+		paths = append(paths, m.Source)
+	}
+	for _, m := range p.ContextModules {
 		paths = append(paths, m.Source)
 	}
 	sort.Strings(paths)

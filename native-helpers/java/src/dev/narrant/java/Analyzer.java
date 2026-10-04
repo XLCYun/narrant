@@ -193,7 +193,7 @@ final class Analyzer {
             ConfigState state = new ConfigState(config);
             ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
             Map<String, String> options = new HashMap<>();
-            JavaCore.setComplianceOptions(config.release, options);
+            JavaCore.setComplianceOptions(ProjectModel.compilerVersion(config.release), options);
             options.put(JavaCore.COMPILER_RELEASE, JavaCore.ENABLED);
             options.put(JavaCore.COMPILER_PB_ENABLE_PREVIEW_FEATURES, JavaCore.DISABLED);
             parser.setCompilerOptions(options);
@@ -205,7 +205,7 @@ final class Analyzer {
                 if (!root.test || model.includeTests) roots.add(model.repository.resolve(root.path).toString());
             String[] encodings = new String[roots.size()];
             java.util.Arrays.fill(encodings, "UTF-8");
-            parser.setEnvironment(new String[]{model.targetJdk.resolve("lib/jrt-fs.jar").toString()},
+            parser.setEnvironment(config.target.systemLibraries().toArray(String[]::new),
                                   roots.toArray(String[]::new), encodings, false);
             String[] sourcePaths = context.stream().map(file -> model.repository.resolve(file).toString()).toArray(String[]::new);
             String[] sourceEncodings = new String[sourcePaths.length];
@@ -271,8 +271,14 @@ final class Analyzer {
             IProblem.DuplicateTypes, IProblem.DuplicateNestedType, IProblem.DuplicateMethodErasure,
             IProblem.DuplicateParameterizedMethods, IProblem.DuplicateAnnotationMember,
             IProblem.RecordDuplicateComponent);
-        for (IProblem problem : part.unit.getProblems()) if (problem.isError() && duplicates.contains(problem.getID()))
-            throw new Failure("object_extraction_failed", "duplicate Java declaration", List.of(part.path));
+        for (IProblem problem : part.unit.getProblems()) {
+            if (!problem.isError()) continue;
+            if ((problem.getID() & (IProblem.Syntax | IProblem.Compliance | IProblem.PreviewRelated)) != 0)
+                throw new Failure("object_extraction_failed", "invalid Java syntax or disabled language feature: " +
+                    problem.getMessage(), List.of(part.path));
+            if (duplicates.contains(problem.getID()))
+                throw new Failure("object_extraction_failed", "duplicate Java declaration", List.of(part.path));
+        }
     }
 
     /** 源码包名须与明确源码根下的真实目录一致。 */
@@ -639,7 +645,7 @@ final class Analyzer {
             JsonObject item = new JsonObject();
             item.addProperty("id", config.id);
             item.add("source_paths", Main.strings(config.sourcePaths));
-            item.add("platform_ids", Main.strings(List.of(model.targetPlatformId)));
+            item.add("platform_ids", Main.strings(List.of(config.target.id())));
             configs.add(item);
         }
         evidence.add("configurations", configs);

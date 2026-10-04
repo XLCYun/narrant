@@ -25,7 +25,7 @@ endif()
 if(TARGET clang-cpp)
   target_link_libraries(narrant-clang PRIVATE clang-cpp)
 else()
-  target_link_libraries(narrant-clang PRIVATE clangTooling clangFrontend clangIndex clangAST clangLex clangBasic)
+  target_link_libraries(narrant-clang PRIVATE clangTooling clangDriver clangFrontend clangIndex clangAST clangLex clangBasic)
 endif()
 # 所有生成器都产生 build/narrant-clang[.exe]，避免 CI 猜测 Debug/Release 子目录。
 set_target_properties(narrant-clang PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

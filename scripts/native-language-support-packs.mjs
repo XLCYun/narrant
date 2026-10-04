@@ -52,6 +52,31 @@ export async function csharpFixturePlatforms(sdk) {
   return [...targets.values()];
 }
 
+/** 验收只描述明确准备的真实 JDK；产品的安装发现由 Rust Host 负责。 */
+export async function javaFixturePlatforms(roots) {
+  const platforms = [];
+  for (const root of [...new Set(roots.filter(Boolean))]) {
+    const release = await fs.readFile(path.join(root, 'release'), 'utf8');
+    const version = release.match(/^JAVA_VERSION="([^"]+)"/m)?.[1];
+    const major = version?.startsWith('1.') ? version.split('.')[1] : version?.split('.')[0];
+    if (!/^\d+$/.test(major ?? '')) throw new Error('Java fixture has no stable version');
+    platforms.push({ id: `java${major}`, kind: 'java-jdk', version, root, metadata: { release: major } });
+  }
+  return platforms;
+}
+
+/** 新旧 Go SDK 作为真实版本样本传入，不随支持包复制标准源码。 */
+export async function goFixturePlatforms(roots) {
+  const platforms = [];
+  for (const root of [...new Set(roots.filter(Boolean))]) {
+    const version = (await fs.readFile(path.join(root, 'VERSION'), 'utf8')).split(/\r?\n/)[0].match(/^go(\d+\.\d+(?:\.\d+)?)$/)?.[1];
+    if (!version) throw new Error('Go fixture has no stable version');
+    platforms.push({ id: `go-sdk-${version}`, kind: 'go-sdk', version, root,
+      metadata: { goos: process.platform === 'win32' ? 'windows' : 'darwin', goarch: process.arch === 'x64' ? 'amd64' : 'arm64', ...(process.arch === 'x64' ? { goamd64: 'v1' } : {}) } });
+  }
+  return platforms;
+}
+
 /** 以空业务环境启动自己的 helper，验证 ready 身份以及协议错误的受控终结。 */
 export async function smokeNativeHelper({ executable, args = [], id, projection, languages, profile, environment = {} }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-native-pack-smoke-'));
@@ -127,15 +152,12 @@ export async function buildNativePack({ id, target, output, definition, packageD
   try {
     for (const part of ['bin', 'runtime', 'licenses', 'control']) await fs.mkdir(path.join(payload, part), { recursive: true });
     if (id === 'go') {
-      const sdk = await findDirectory([process.env.NARRANT_GO_SDK, windows ? 'C:\\Program Files\\Go' : '/usr/local/go'], 'Go 1.23.8 SDK');
+      const sdk = await findDirectory([process.env.NARRANT_GO_SDK, windows ? 'C:\\Program Files\\Go' : '/usr/local/go'], `Go ${definition.go} helper build SDK`);
       if (!(await fs.readFile(path.join(sdk, 'VERSION'), 'utf8')).startsWith(`go${definition.go}\n`)) throw new Error('Go SDK version mismatch');
       executable = path.join(payload, `bin/narrant-go${suffix}`);
-      execFileSync(path.join(sdk, `bin/go${suffix}`), ['build', '-trimpath', '-o', executable, '.'], { cwd: path.join(repository, 'native-helpers/go'), stdio: 'inherit', env: { ...process.env, GOTOOLCHAIN: 'local', GOWORK: 'off', GOPROXY: 'off', GOSUMDB: 'off' } });
-      const standard = path.join(payload, 'runtime/platform/go');
-      await copyToolTree(path.join(sdk, 'src'), path.join(standard, 'src'));
-      await fs.copyFile(path.join(sdk, 'VERSION'), path.join(standard, 'VERSION'));
+      execFileSync(path.join(sdk, `bin/go${suffix}`), ['build', '-trimpath', '-o', executable, '.'], { cwd: path.join(repository, 'native-helpers/go'), stdio: 'inherit', env: { ...process.env, GOROOT: sdk, GOTOOLCHAIN: 'local', GOWORK: 'off', GOPROXY: 'off', GOSUMDB: 'off' } });
       await fs.copyFile(path.join(sdk, 'LICENSE'), path.join(payload, 'licenses/Go-LICENSE'));
-      platforms.push({ id: 'go-sdk-1.23.8', kind: 'go-sdk', version: definition.go, root: 'runtime/platform/go', metadata: { goos: windows ? 'windows' : 'darwin', goarch: windows ? 'amd64' : 'arm64', ...(windows ? { goamd64: 'v1' } : {}) } });
+      externalPlatforms.push(...await goFixturePlatforms([process.env.NARRANT_GO_TARGET_SDK, sdk]));
     } else if (id === 'csharp') {
       const sdk = await findDirectory([process.env.NARRANT_DOTNET_SDK, '/private/tmp/narrant-dotnet-10.0.100', '/usr/local/share/dotnet', windows && 'C:\\Program Files\\dotnet'], '.NET 10.0.100 SDK');
       const tool = path.join(sdk, `dotnet${suffix}`);
@@ -155,21 +177,17 @@ export async function buildNativePack({ id, target, output, definition, packageD
       args = [path.join(payload, 'runtime/helper/Narrant.CSharp.Helper.dll')];
     } else if (id === 'java') {
       const runtime = await findDirectory([process.env.NARRANT_JAVA_RUNTIME, path.join(repository, '.tools/java-native/jdk-25.0.4.1+1/Contents/Home')], 'Pinned Java helper runtime');
-      const targetJdk = await findDirectory([process.env.NARRANT_JAVA_TARGET_JDK, path.join(repository, '.tools/java-native/jdk-17.0.20.1+1/Contents/Home')], 'Exact Java 17 target JDK');
       const runtimeRelease = await fs.readFile(path.join(runtime, 'release'), 'utf8');
-      const targetRelease = await fs.readFile(path.join(targetJdk, 'release'), 'utf8');
       if (!runtimeRelease.includes(`IMPLEMENTOR_VERSION="Temurin-${definition.runtimeJava}"`)) throw new Error('Java helper runtime version mismatch');
-      if (!targetRelease.includes(`JAVA_RUNTIME_VERSION="${definition.targetJdk}"`)) throw new Error('Java target JDK version mismatch');
       execFileSync(process.env.NARRANT_PYTHON ?? process.env.PYTHON ?? (windows ? 'python' : 'python3'), [path.join(repository, 'native-helpers/java/build.py'), runtime, path.join(repository, '.tools/java-native/lib')], { stdio: 'inherit', env: { ...process.env, NARRANT_JAVA_RUNTIME: runtime } });
       await copyToolTree(runtime, path.join(payload, 'runtime/jdk'));
       await copyToolTree(path.join(repository, 'native-helpers/java/build/classes'), path.join(payload, 'runtime/helper/classes'));
       await copyToolTree(path.join(repository, '.tools/java-native/lib'), path.join(payload, 'runtime/helper/lib'));
       await copyToolTree(path.join(repository, 'native-helpers/java/dependencies.lock.json'), path.join(payload, 'licenses/Java-dependencies.json'));
       await copyToolTree(path.join(runtime, 'NOTICE'), path.join(payload, 'licenses/Java-runtime-NOTICE'));
-      for (const entry of ['release', 'lib/jrt-fs.jar', 'lib/modules', 'legal']) await copyToolTree(path.join(targetJdk, entry), path.join(payload, 'runtime/platform/java17', entry));
       executable = path.join(payload, `runtime/jdk/bin/java${suffix}`);
       args = ['-cp', `${path.join(payload, 'runtime/helper/classes')}${path.delimiter}${path.join(payload, 'runtime/helper/lib/*')}`, 'dev.narrant.java.Main'];
-      platforms.push({ id: 'java17', kind: 'java-jdk', version: definition.targetJdk, root: 'runtime/platform/java17', metadata: { release: '17' } });
+      externalPlatforms.push(...await javaFixturePlatforms([process.env.NARRANT_JAVA_TARGET_8, process.env.NARRANT_JAVA_TARGET_JDK, runtime]));
     } else {
       const sdk = await findDirectory([process.env.NARRANT_LLVM_SDK, '/private/tmp/narrant-clang-native/LLVM-21.1.8-macOS-ARM64'], 'LLVM 21.1.8 SDK');
       if (windows) {
@@ -194,6 +212,8 @@ export async function buildNativePack({ id, target, output, definition, packageD
       platforms.push({ id: 'clang-resource-21', kind: 'clang-resource', version: definition.llvm, root: 'runtime/platform/clang-resource', metadata: {} });
     }
     const control = { schema_version: 1, helper_version: definition.helperVersion, platforms };
+    if (id === 'java') control.target_sdk = { kind: 'java' };
+    if (id === 'go') control.target_sdk = { kind: 'go' };
     if (id === 'csharp') control.target_sdk = { kind: 'dotnet' };
     if (id === 'c-cpp') control.target_sdk = { kind: windows ? 'windows-msvc' : 'macos' };
     await fs.writeFile(path.join(payload, 'control/native.json'), `${JSON.stringify(control, null, 2)}\n`);
@@ -216,14 +236,14 @@ export async function buildNativePack({ id, target, output, definition, packageD
         const sdkRoot = await findDirectory([process.env.NARRANT_WINDOWS_SDK], 'Windows SDK 10.0.26100.0 Include directory');
         const standard = await findDirectory([process.env.NARRANT_MSVC_ROOT && path.join(process.env.NARRANT_MSVC_ROOT, 'include')], 'Exact MSVC standard headers');
         sdkPlatforms.push({ id: 'msvc-standard-headers', kind: 'clang-system-headers', version: path.basename(path.dirname(standard)), root: standard, metadata: {} });
-        sdkPlatforms.push({ id: `windows-sdk-${path.basename(sdkRoot)}`, kind: 'clang-target', version: path.basename(sdkRoot), root: sdkRoot, metadata: { target_triple: 'x86_64-pc-windows-msvc', c_standard: 'c17', cpp_standard: 'c++20', system_include_directories: ['ucrt', 'shared', 'um', 'winrt', 'cppwinrt'], resource_platform_id: 'clang-resource-21', additional_system_platform_ids: ['msvc-standard-headers'] } });
+        sdkPlatforms.push({ id: `windows-sdk-${path.basename(sdkRoot)}`, kind: 'clang-target', version: path.basename(sdkRoot), root: sdkRoot, metadata: { target_triple: 'x86_64-pc-windows-msvc', system_include_directories: ['ucrt', 'shared', 'um', 'winrt', 'cppwinrt'], resource_platform_id: 'clang-resource-21', additional_system_platform_ids: ['msvc-standard-headers'] } });
       } else {
         const sdkRoot = await findDirectory([process.env.NARRANT_MACOS_SDK, '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk', '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'], 'macOS target SDK');
         const settings = JSON.parse(await fs.readFile(path.join(sdkRoot, 'SDKSettings.json'), 'utf8'));
         const version = settings.Version;
         if (typeof version !== 'string' || !/^\d+(\.\d+)+$/.test(version)) throw new Error('macOS SDK has no version metadata');
         const deploymentTarget = settings.DefaultProperties?.MACOSX_DEPLOYMENT_TARGET ?? version;
-        sdkPlatforms.push({ id: `macos-${version}`, kind: 'clang-target', version, root: sdkRoot, metadata: { target_triple: `arm64-apple-macosx${deploymentTarget}`, c_standard: 'c17', cpp_standard: 'c++20', system_include_directories: ['usr/include/c++/v1', 'usr/include'], resource_platform_id: 'clang-resource-21' } });
+        sdkPlatforms.push({ id: `macos-${version}`, kind: 'clang-target', version, root: sdkRoot, metadata: { target_triple: `arm64-apple-macosx${deploymentTarget}`, system_include_directories: ['usr/include/c++/v1', 'usr/include'], resource_platform_id: 'clang-resource-21' } });
       }
     }
     config[helper] = { executable: relocate(executable), args: args.map(relocate), environment: id === 'csharp' ? { DOTNET_ROOT: path.join(extracted, 'bin'), DOTNET_MULTILEVEL_LOOKUP: '0', DOTNET_EnableDiagnostics: '0' } : {}, trusted_roots: [extracted], platforms: sdkPlatforms };

@@ -68,7 +68,7 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
 // 两个平台必须拥有全部固定构建工具和引用夹具，清单不能遗漏语言运行时。
 test('official pinned manifest covers every required tool on both platforms', () => {
   assert.equal(validateToolchainManifest(manifest), manifest);
-  for (const entries of Object.values(manifest.targets)) assert.deepEqual(entries.map(entry => entry.name).sort(), ['dotnet', 'dotnet-ref8', 'dotnet-ref9', 'go', 'jdk17', 'jdk25', 'llvm']);
+  for (const entries of Object.values(manifest.targets)) assert.deepEqual(entries.map(entry => entry.name).sort(), ['dotnet', 'dotnet-ref8', 'dotnet-ref9', 'go', 'go-target', 'jdk17', 'jdk25', 'jdk8', 'llvm']);
 });
 
 // 恶意或不完整清单必须在任何下载和解包发生前被拒绝。
@@ -113,7 +113,7 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 
 // 验收命令覆盖所有 helper，且 Cargo 统一串行经过仓库入口。
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
-  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
   assert.equal(commands.length, 10);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
@@ -131,7 +131,7 @@ test('verification uses every helper suite and serialized Cargo host and real gr
 
 // 公共进程场景在两个平台运行；Windows 再验证完整 LSP 协议调用链。
 test('shared process acceptance runs on both platforms with Windows LSP integration', () => {
-  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const ownerFilter = 'child_process::';
   const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');

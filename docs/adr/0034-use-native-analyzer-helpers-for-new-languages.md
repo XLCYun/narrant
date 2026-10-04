@@ -74,8 +74,17 @@ C# support pack. macOS and Windows C/C++ discover installed system-header SDKs
 without a product version whitelist. The Host records actual versions and exact
 approved roots once for the comparison. Missing target declarations fail explicitly;
 discovery never runs project commands or installs SDKs. A fixed private helper runtime
-and compiler remain separate from these project targets. Java and Go retain their
-bundled target declarations.
+and compiler remain separate from these project targets. Java likewise discovers
+installed JDKs, choosing the highest stable patch per major and matching each
+configuration's release; the private runtime is a candidate only for its own major.
+Go discovers installed SDK source trees and chooses the highest stable patch in the
+effective declared minor, never substituting a newer minor. Neither pack bundles an
+additional project-target SDK. Capability comes from the actual JDT / Go compiler,
+not a product target-version allowlist. C/C++ takes each TU's explicit language mode
+and standard from the compilation database, using LLVM's native standard table;
+missing configuration and preview modes fail explicitly. See the
+[target-version record](../research/native-target-version-discovery.md) for selection
+rules and representative acceptance results.
 
 Rust's existing opt-in all-dependencies mode remains unchanged; it is not the default
 for the new implementations. Missing third-party context cannot be used to invent

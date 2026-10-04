@@ -205,8 +205,6 @@ fn validate_metadata(platform: &Platform, kinds: &BTreeMap<&str, &str>) -> Resul
         "clang-target" => (
             &[
                 "target_triple",
-                "c_standard",
-                "cpp_standard",
                 "system_include_directories",
                 "resource_platform_id",
             ],
@@ -274,9 +272,6 @@ fn validate_metadata(platform: &Platform, kinds: &BTreeMap<&str, &str>) -> Resul
         return Err(failure("goamd64 只允许 amd64 的 v1–v4"));
     }
     if platform.kind == "clang-target" {
-        if object["c_standard"] != "c17" || object["cpp_standard"] != "c++20" {
-            return Err(failure("Clang 平台标准不在首轮明确 profile 内"));
-        }
         if kinds.get(object["resource_platform_id"].as_str().unwrap_or_default())
             != Some(&"clang-resource")
         {

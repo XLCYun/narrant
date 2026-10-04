@@ -324,7 +324,7 @@ fn clang_catalog_requires_exact_approved_additional_header_ids() {
             kind: "clang-target".into(),
             version: "21.1.8".into(),
             root: root.clone(),
-            metadata: json!({"target_triple":"x86_64-pc-windows-msvc","c_standard":"c17","cpp_standard":"c++20","system_include_directories":[],"resource_platform_id":"resource","additional_system_platform_ids":["msvc","sdk"]}),
+            metadata: json!({"target_triple":"x86_64-pc-windows-msvc","system_include_directories":[],"resource_platform_id":"resource","additional_system_platform_ids":["msvc","sdk"]}),
         },
         Platform {
             id: "resource".into(),

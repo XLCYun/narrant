@@ -141,6 +141,8 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
     }
     if let Some(sdk) = control.target_sdk {
         platforms.extend(match (id, sdk.kind.as_str()) {
+            (PackId::Java, "java") => platforms::java(&root.join("runtime/jdk"))?,
+            (PackId::Go, "go") => platforms::go()?,
             (PackId::Csharp, "dotnet") => platforms::dotnet()?,
             (PackId::CCpp, "macos") if cfg!(target_os = "macos") => platforms::macos()?,
             (PackId::CCpp, "windows-msvc") if cfg!(windows) => platforms::windows()?,

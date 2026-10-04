@@ -1,5 +1,8 @@
 # Go 原生 helper 实施与本机验证
 
+本文保留各次实施快照。2026-10-04 已移除早期固定项目版本门禁；当前选择规则与验收见
+[目标版本发现记录](native-target-version-discovery.md)，下文旧版本限制不代表当前产品范围。
+
 日期：2026-10-03。源码在 `native-helpers/go/`。此记录覆盖 Go helper 自身；公共 Host、支持包、Windows 原生运行和完整产品验收分别由对应任务负责。固定本机实验工具为 `/usr/local/go/bin/go` 1.23.8，宿主为 macOS arm64。
 
 ## 已实现边界

@@ -46,6 +46,7 @@ type platform struct {
 	Version  string           `json:"version"`
 	Root     string           `json:"root"`
 	Metadata platformMetadata `json:"metadata"`
+	ToolTags []string         `json:"-"`
 }
 
 // platformMetadata 明确列出受支持的目标维度。

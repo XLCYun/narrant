@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, ChildProcess } from 'node:child_process';
 import { packageDirectory } from '../build-language-support-packs.mjs';
-import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms } from '../native-language-support-packs.mjs';
+import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms, javaFixturePlatforms, goFixturePlatforms } from '../native-language-support-packs.mjs';
 import { prepareDotnetFixtureReferences } from '../provision-native-toolchains.mjs';
 
 /** 私有 runtime 的执行入口必须穿过打包与解压，两个平台都真实启动解包后的文件。 */
@@ -121,5 +121,23 @@ test('C# fixture discovery uses installed SDK layout without bundling target ref
     const catalog = JSON.parse(await fs.readFile(new URL('../../resources/language-support-packs.json', import.meta.url)));
     assert.equal(catalog.packs.csharp.referenceTargets, undefined);
     assert.equal(catalog.packs.csharp.targetStandardLibrary, 'local-dotnet-reference-packs');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** Java 与 Go 的目标版本来自准备好的 SDK 元数据，产品支持包只保留发现策略。 */
+test('Java and Go fixtures describe actual SDKs without a bundled target list', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-java-go-targets-'));
+  try {
+    const java = path.join(root, 'jdk'), go = path.join(root, 'go');
+    await fs.mkdir(java); await fs.mkdir(go);
+    await fs.writeFile(path.join(java, 'release'), 'JAVA_VERSION="21.0.12"\n');
+    await fs.writeFile(path.join(go, 'VERSION'), 'go1.26.7\ntime fixture\n');
+    assert.equal((await javaFixturePlatforms([java]))[0].metadata.release, '21');
+    assert.equal((await goFixturePlatforms([go]))[0].version, '1.26.7');
+    const catalog = JSON.parse(await fs.readFile(new URL('../../resources/language-support-packs.json', import.meta.url)));
+    assert.equal(catalog.packs.java.targetStandardLibrary, 'local-java-jdks');
+    assert.equal(catalog.packs.java.targetJava, undefined);
+    assert.equal(catalog.packs.java.targetJdk, undefined);
+    assert.equal(catalog.packs.go.targetStandardLibrary, 'local-go-sdks');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

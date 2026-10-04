@@ -1,5 +1,11 @@
 //! 只读发现本机 SDK 声明；运行 helper 的私有工具链与被分析项目目标相互独立。
 
+mod go;
+mod java;
+
+pub(super) use go::discover as go;
+pub(super) use java::discover as java;
+
 use super::{failure, inside, AnalysisError, Platform};
 use std::{
     collections::BTreeMap,
@@ -165,7 +171,7 @@ fn macos_at(path: &Path) -> Result<Platform, AnalysisError> {
         kind: "clang-target".into(),
         version: version.into(),
         root,
-        metadata: serde_json::json!({"target_triple":format!("arm64-apple-macosx{target}"),"c_standard":"c17","cpp_standard":"c++20",
+        metadata: serde_json::json!({"target_triple":format!("arm64-apple-macosx{target}"),
             "system_include_directories":["usr/include/c++/v1","usr/include"],"resource_platform_id":"clang-resource-21"}),
     })
 }
@@ -246,7 +252,7 @@ fn windows_at(sdk: &Path, standard: &Path) -> Result<Vec<Platform>, AnalysisErro
             kind: "clang-target".into(),
             version,
             root,
-            metadata: serde_json::json!({"target_triple":"x86_64-pc-windows-msvc","c_standard":"c17","cpp_standard":"c++20",
+            metadata: serde_json::json!({"target_triple":"x86_64-pc-windows-msvc",
                 "system_include_directories":["ucrt","shared","um","winrt","cppwinrt"],"resource_platform_id":"clang-resource-21","additional_system_platform_ids":["msvc-standard-headers"]}),
         },
     ])

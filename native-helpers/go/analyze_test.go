@@ -53,7 +53,7 @@ func writeFixture(t *testing.T, root, relative, content string) {
 	}
 }
 
-// fixtureRequest 为已安装的固定 Go SDK 构造协议请求。
+// fixtureRequest 使用测试编译器所在的真实 SDK 构造协议请求。
 func fixtureRequest(t *testing.T, root string, files ...string) request {
 	t.Helper()
 	sdk := runtime.GOROOT()
@@ -65,9 +65,9 @@ func fixtureRequest(t *testing.T, root string, files ...string) request {
 		t.Logf("SDK: %s", sdk)
 	}
 	return request{Protocol: protocol, Type: "analyze", ID: "test", Input: input{RepositoryRoot: root, Files: files, Profile: "go-static-v1"}, Environment: environment{ScratchRoot: t.TempDir(), Platforms: []platform{
-		{ID: "linux", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "linux", GOARCH: "amd64", GOAMD64: "v1"}},
-		{ID: "windows", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "windows", GOARCH: "amd64", GOAMD64: "v1"}},
-		{ID: "host", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: hostMeta},
+		{ID: "linux", Kind: "go-sdk", Version: fixtureSDKVersion(t, sdk), Root: sdk, Metadata: platformMetadata{GOOS: "linux", GOARCH: "amd64", GOAMD64: "v1"}},
+		{ID: "windows", Kind: "go-sdk", Version: fixtureSDKVersion(t, sdk), Root: sdk, Metadata: platformMetadata{GOOS: "windows", GOARCH: "amd64", GOAMD64: "v1"}},
+		{ID: "host", Kind: "go-sdk", Version: fixtureSDKVersion(t, sdk), Root: sdk, Metadata: hostMeta},
 	}}, Limits: limits{AnalysisTimeoutMS: 120000, MaxResultBytes: 134217728, MaxDiagnosticBytes: 262144}}
 }
 
@@ -87,9 +87,9 @@ func findNode(g *graph, id string) *node {
 // TestWorkspaceUnion 验证真实 workspace、两目标并集与仓内/标准库/缺依赖关系。
 func TestWorkspaceUnion(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.work", "go 1.23.0\nuse (\n ./app\n ./lib\n)\n")
-	writeFixture(t, root, "app/go.mod", "module example.test/app\ngo 1.23.0\nrequire example.test/lib v0.0.0\n")
-	writeFixture(t, root, "lib/go.mod", "module example.test/lib\ngo 1.23.0\n")
+	writeFixture(t, root, "go.work", "go "+fixtureLanguage(t)+"\nuse (\n ./app\n ./lib\n)\n")
+	writeFixture(t, root, "app/go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\nrequire example.test/lib v0.0.0\n")
+	writeFixture(t, root, "lib/go.mod", "module example.test/lib\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "lib/lib.go", "package lib\nfunc Local() { Hidden() }\nfunc Hidden(){}\n")
 	writeFixture(t, root, "app/common.go", "package app\nimport (\"example.test/lib\";\"strings\";\"example.test/missing\")\nfunc Run() { platform(); lib.Local(); _ = strings.Contains(\"x\",\"y\"); missing.Remote() }\n")
 	writeFixture(t, root, "app/platform_linux.go", "//go:build linux\n\npackage app\nfunc platform(){ LinuxTarget() }\nfunc LinuxTarget(){}\n")
@@ -143,7 +143,7 @@ func TestWorkspaceUnion(t *testing.T) {
 // TestBodyProjection 验证代码正文归属、子声明隔离和注释排版不产生自身变更。
 func TestBodyProjection(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "unit.go", "package app\ntype T struct { Field int }\nfunc F() int { return 1 }\n")
 	req := fixtureRequest(t, root, "unit.go")
 	req.Environment.Platforms = req.Environment.Platforms[2:]
@@ -190,7 +190,7 @@ func TestBodyProjection(t *testing.T) {
 // TestInvalidSelection 验证重复选集和未知标签以明确错误终结。
 func TestInvalidSelection(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "unit.go", "package app\n")
 	req := fixtureRequest(t, root, "unit.go", "unit.go")
 	if got := analyze(context.Background(), req); got.Error == nil || got.Error.Code != "invalid_input" {
@@ -206,7 +206,7 @@ func TestInvalidSelection(t *testing.T) {
 // TestProtocolCompletion 验证进程协议在一次终结后不等待 stdin EOF。
 func TestProtocolCompletion(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "unit.go", "package app\nfunc F(){}\n")
 	req := fixtureRequest(t, root, "unit.go")
 	req.Environment.Platforms = req.Environment.Platforms[2:]
@@ -260,7 +260,7 @@ func TestStrictProtocol(t *testing.T) {
 // TestCancellation 验证取消上下文不会发布已完成图。
 func TestCancellation(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "unit.go", "package app\nfunc F(){}\n")
 	req := fixtureRequest(t, root, "unit.go")
 	req.Environment.Platforms = req.Environment.Platforms[2:]
@@ -275,7 +275,7 @@ func TestCancellation(t *testing.T) {
 // TestInterfaceAndInitializer 验证接口静态槽位、未知动态实现及共享初始化归属。
 func TestInterfaceAndInitializer(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "unit.go", "package app\ntype I interface { M() }\nfunc Call(x I){ x.M() }\nfunc Build() (int,int) { return 1,2 }\nvar A,B = Build()\nfunc Id[T any](x T) T { return x }\nfunc Use(){ _ = Id[int](A) }\n")
 	req := fixtureRequest(t, root, "unit.go")
 	req.Environment.Platforms = req.Environment.Platforms[2:]
@@ -320,7 +320,7 @@ func TestInterfaceAndInitializer(t *testing.T) {
 // TestTestFileScope 验证默认测试排除和显式恢复都保留准确覆盖。
 func TestTestFileScope(t *testing.T) {
 	root := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, root, "unit.go", "package app\nfunc Prod(){}\n")
 	writeFixture(t, root, "unit_test.go", "package app\nfunc TestProd(){ Prod() }\n")
 	req := fixtureRequest(t, root, "unit.go", "unit_test.go")
@@ -346,7 +346,7 @@ func TestTestFileScope(t *testing.T) {
 func TestOutsideSymlink(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	writeFixture(t, root, "go.mod", "module example.test/app\ngo 1.23.0\n")
+	writeFixture(t, root, "go.mod", "module example.test/app\ngo "+fixtureLanguage(t)+"\n")
 	writeFixture(t, outside, "escape.go", "package app\nfunc Escape(){}\n")
 	if err := os.Symlink(filepath.Join(outside, "escape.go"), filepath.Join(root, "escape.go")); err != nil {
 		t.Fatal(err)

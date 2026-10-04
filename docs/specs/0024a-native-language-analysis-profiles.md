@@ -55,10 +55,10 @@ Host 传入经校验的目标平台目录 catalog；helper 只能从中匹配 pr
 
 | kind | root 与版本 | metadata |
 | --- | --- | --- |
-| `java-jdk` | 精确目标 JDK 根，包含 `release` 与 `lib/jrt-fs.jar`；version 为实际完整版本 | `{release: string}`；release 必须与目标 JDK feature version 相符 |
-| `go-sdk` | 固定 Go 标准库源码根，包含 `src` 与 `VERSION`；首轮 1.23.8 | `{goos: string, goarch: string, goamd64?: string}` |
+| `java-jdk` | 本机目标 JDK 根，包含 `release`；Java 8 为经典标准 JAR，现代 JDK 为 `lib/jrt-fs.jar` 与 `lib/modules`；version 等于真实 `JAVA_VERSION` | `{release: string}`；release 必须与目标 JDK feature version 相符 |
+| `go-sdk` | 本机完整 Go SDK 根，包含 `src` 与 `VERSION`；version 为实际稳定版本 | `{goos: string, goarch: string, goamd64?: string}` |
 | `dotnet-reference-assemblies` | 本机安装的精确 `ref/<tfm>` 目录；按现代 .NET TFM 匹配最高稳定补丁 | `{tfm: string, reference_pack: string, reference_pack_version: string}` |
-| `clang-target` | 精确系统 SDK 根；version 为该 SDK 实际版本 | `{target_triple: string, c_standard: string, cpp_standard: string, system_include_directories: string[], resource_platform_id: string, additional_system_platform_ids?: string[]}` |
+| `clang-target` | 精确系统 SDK 根；version 为该 SDK 实际版本 | `{target_triple: string, system_include_directories: string[], resource_platform_id: string, additional_system_platform_ids?: string[]}` |
 | `clang-resource` | 固定 LLVM 的 `lib/clang/<major>` 目录；首轮 21.1.8 | `{}` |
 | `clang-system-headers` | 与系统 SDK 分开放置的精确标准库头文件根，例如 Windows MSVC 的 `include`；version 为其实际工具版本 | `{}` |
 
@@ -89,9 +89,12 @@ JDT Core 是首个实验后端，javac 是研发对照及可能的替代选型�
 | `java-maven-static` | 仓库内 POM 的字面值、有限属性替换、仓库内 parent/modules、明确 main/test roots；解释规则与默认值固定并有夹具 | 外部 parent/BOM、未知 profile 激活、影响源码/编译规则的插件或未知属性；不运行 Maven effective-model |
 | `java-gradle-metadata` | 仅消费已在本侧固定、来源与 schema 已验证的声明式分析元数据 | 不执行 Gradle/Tooling API；首版不靠匹配 build.gradle 文本复现工程模型 |
 
-先用一个非 preview 的明确 Java SE 目标验证基础闭环；Java 17 可作首个实验目标，
-再用 Java 8 的 `List.of` 反例验证工具 runtime 与目标 API 隔离。这是实验选择，
-不是承诺完整 Java 8/17 支持。JPMS、Android/Jakarta、preview、compact compilation units、
+实现按每份配置的整数 release 匹配本机 JDK，同一 major 取最高稳定补丁。release 能力直接询问
+固定 JDT，不维护 Java 17 等产品白名单；不支持的语言版本明确失败。Java 8 使用经典 JDK 的
+`rt.jar` 及固定标准 JAR 名称集合，不扫描 `ext` 或其他业务 JAR；现代 JDK 使用自己的模块镜像。
+私有运行 JDK 只可作为其真实 major 的目标，不能替代缺失的旧 JDK。Java 8/17/25 是真实验收样本，
+`List.of` / `List.getFirst` 反例验证 API 隔离；样本不等于所有版本及工程形态均已验收。
+JPMS、Android/Jakarta、preview、compact compilation units、
 module import 均独立验收；相关源文件被选中时不能跳过后返回普通成功。
 不导入 JDT LS/m2e/Buildship，不运行 APT、Lombok agent 或 delombok。
 
@@ -210,6 +213,20 @@ Go 版本先锁定单一实验 SDK；Clang 可从 C17/C++20 两个独立模式�
 C 不由“C++ parser 接受了代码”自动覆盖；两者的类型规则、预处理与标准库必须分别验收。
 详细背景见 [Go 调研](../research/go-language-support.md)、[C/C++ 调研](../research/c-cpp-language-support.md)。
 
+当前实现已移除 Go 1.23 和 C17/C++20 项目门禁。Go helper 的构建编译器固定为 1.27.1，
+语言能力来自实际 `runtime.Version()`；标准库来自本机 SDK，不再随包附带。每个独立 module
+按自己的 `go` 与非 `default` 的 `toolchain` 声明确定目标；workspace 以 `go.work` 为准，
+且其 `go` 不得低于成员 module。选择有效声明同一 minor 内满足最低 patch 的最高稳定 SDK，
+缺失时不借用更新 minor。每包仍保留所属 module 的语言版本；本地 replace 也须提供自己的 go.mod。
+release tags 和默认实验开关来自所选 SDK；有限 AST 读取器只解释标准 SDK 的静态默认值，
+未知形式明确失败，不执行 go 命令。Go 1.23.8/1.27.1 是跨版本验收样本。
+
+Clang 每个 TU 必须在 CDB 中明确提供 `-std`。稳定标准、GNU 方言与历史别名由固定 LLVM 的
+`LangStandard` 表识别，语言模式由 driver、文件类型与生效的 `-x` 确定；两者必须匹配。
+不再在平台 catalog 重复指定语言标准。LLVM 标记为预览的标准仍拒绝；GNU 扩展保留，
+超出所选 ISO 版本的标准语法不能靠警告静默通过。没有 CDB 或显式标准时仍明确失败。
+详细当前规则、实际版本和测试证据见[目标版本发现记录](../research/native-target-version-discovery.md)。
+
 2026-10-02 的 [Go 原生探针](../research/probes/go-native-helper/README.md) 已在手工指定包映射和
 两个平台的 fixture 中验证源码 importer 能取得仓库包、部分标准库绑定，并拒绝磁盘上已有的
 第三方源码；分析阶段未调用 go list，fixture 前后路径和字节不变。这支持优先验证受限静态
@@ -239,7 +256,8 @@ loader，尚未解决真实 go.mod/go.work 解释、完整标准库、跨版本�
 “文档有 API”或单机成功不替代另一平台的启动、路径、只读与取消测试。
 四个原生 helper 已完成 macOS ARM64 与 Windows x64 的语言测试、真实安装及
 `Host → CodeGraph → diff` 验收；Windows 的新 Host19项与公共图8项实际通过。
-目标边界为 Java17、Go1.23.8、C# net8.0/ref8.0.0 与 net10.0/ref10.0.0，以及 C17/C++20。
+上述早期矩阵的目标样本为 Java17、Go1.23.8、C# net8.0/ref8.0.0 与 net10.0/ref10.0.0，以及 C17/C++20；
+不再作为产品版本白名单。后续动态目标与跨版本验证以[目标版本发现记录](../research/native-target-version-discovery.md)为准。
 Java 使用单一 JDT 后端，运行 JDK 与目标声明隔离；反例使用 Java17 不提供的 `List.getFirst()`。
 统一 WindowsJob 已接入共享路径，`83d5642` 的产品默认调用链及完整双平台矩阵全部通过；
 其中Windows共享owner6项、Transport2项、LSP13项和真实Python会话3项均实际执行。

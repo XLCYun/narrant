@@ -1,6 +1,9 @@
 // 固定版本 LibTooling helper；所有项目输入只作为受限数据解释。
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/AST/TypeLoc.h>
+#include <clang/Basic/DiagnosticIDs.h>
+#include <clang/Basic/LangStandard.h>
+#include <clang/Driver/Types.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Index/USRGeneration.h>
@@ -425,10 +428,9 @@ static void platforms(Request &r,const j::Array &catalog) {
     if(kind=="clang-system-headers") { keys(*meta,{}); require(fs::u8path(str(o,"root")).is_absolute() && fs::is_directory(real(fs::u8path(str(o,"root")))),"invalid system header root"); continue; }
     if(kind=="clang-resource") { keys(*meta,{}); require(str(o,"version")=="21.1.8","incompatible resource headers","target_unavailable"); continue; }
     auto required=j::Object(*meta); required.erase("additional_system_platform_ids");
-    keys(required,{"target_triple","c_standard","cpp_standard","system_include_directories","resource_platform_id"});
+    keys(required,{"target_triple","system_include_directories","resource_platform_id"});
     Platform p; p.id=entry.first; p.root=real(fs::u8path(str(o,"root"))); require(fs::u8path(str(o,"root")).is_absolute(),"platform root must be absolute");
     p.triple=str(*meta,"target_triple"); require(!p.triple.empty() && p.triple.find_first_of(" \t\r\n") == std::string::npos,"invalid target triple");
-    require(str(*meta,"c_standard")=="c17" && str(*meta,"cpp_standard")=="c++20","unsupported language standard","target_unavailable");
     p.resourceId=str(*meta,"resource_platform_id"); auto resource=entries.find(p.resourceId); require(resource!=entries.end() && str(*resource->second,"kind")=="clang-resource","missing resource platform","target_unavailable");
     require(str(*resource->second,"version")=="21.1.8","incompatible resource headers","target_unavailable");
     p.resource=real(fs::u8path(str(*resource->second,"root"))); require(fs::u8path(str(*resource->second,"root")).is_absolute(),"resource root must be absolute");
@@ -446,6 +448,36 @@ static void platforms(Request &r,const j::Array &catalog) {
   }
   require(!r.platforms.empty(),"no approved Clang target platform","target_unavailable");
 }
+// 使用固定 LLVM 的语言表解析标准及其别名，只排除该版本仍标记为草案的方言。
+static const LangStandard &languageStandard(const std::string &name) {
+  auto standard=LangStandard::getLangStandardForName(name);
+  require(standard && (standard->getLanguage()==Language::C || standard->getLanguage()==Language::CXX),
+          "unsupported C/C++ language standard: "+name,"unsupported_configuration");
+  require(!standard->isC2y() && !standard->isCPlusPlus26(),
+          "preview language standard is unsupported: "+name,"unsupported_configuration");
+  return *standard;
+}
+// GNU 方言保留原生扩展；后续 ISO 标准的语法仍通过 LLVM 自己的诊断分组严格检查。
+static std::vector<std::string> standardDiagnostics(const LangStandard &standard) {
+  if(!standard.isGNUMode()) return {"-pedantic-errors"};
+  std::vector<std::string> flags;
+  for(const auto &flag:DiagnosticIDs::getDiagnosticFlags()) {
+    llvm::StringRef name(flag);
+    if(!name.consume_front("-W") || !name.consume_back("-extensions")) continue;
+    auto extension=LangStandard::getLangStandardForName(name);
+    if(extension && extension->getLanguage()==standard.getLanguage()) flags.push_back("-Werror="+flag.substr(2));
+  }
+  return flags;
+}
+// 按 Clang 的文件类型表和 C++ driver 规则推断未被 -x 覆盖的输入语言。
+static std::string sourceLanguage(const fs::path &file,const std::string &driverName) {
+  auto extension=file.extension().u8string();
+  auto type=driver::types::lookupTypeForExtension(llvm::StringRef(extension).drop_front(extension.empty()?0:1));
+  if(driverName=="clang++" || driverName=="clang++.exe" || driverName=="c++" || driverName=="g++") type=driver::types::lookupCXXTypeForCType(type);
+  if(type==driver::types::TY_C || type==driver::types::TY_CHeader) return "c";
+  if(type==driver::types::TY_CXX || type==driver::types::TY_CXXHeader) return "cpp";
+  throw Failure("unsupported_configuration","unsupported C/C++ source language: "+file.filename().u8string());
+}
 // 编译数据库参数是数据；只重建经过白名单校验的编译上下文。
 static Config configuration(Request &r,const j::Object &o,size_t index) {
   for(auto &kv:o) require(kv.first=="directory" || kv.first=="file" || kv.first=="arguments" || kv.first=="output","unsupported compilation database field","unsupported_configuration");
@@ -454,8 +486,7 @@ static Config configuration(Request &r,const j::Object &o,size_t index) {
   auto args=o.getArray("arguments"); require(args && !args->empty(),"CDB requires arguments array, command strings are not executable input","unsupported_configuration");
   std::vector<std::string> input; for(auto &v:*args) { auto s=v.getAsString(); require(s.has_value() && s->find('\0')==llvm::StringRef::npos,"invalid CDB argument"); input.push_back(s->str()); }
   auto driver=fs::u8path(input.front()).filename().u8string(); require(driver=="clang" || driver=="clang++" || driver=="clang.exe" || driver=="clang++.exe" || driver=="cc" || driver=="c++" || driver=="gcc" || driver=="g++","compiler wrappers are unsupported","unsupported_configuration");
-  std::string triple,standard; std::vector<fs::path> roots; bool sourceSeen=false;
-  c.language=c.file.extension()==".c"?"c":"cpp";
+  std::string triple,standard,explicitLanguage; std::vector<fs::path> roots; bool sourceSeen=false;
   // 参数值必须存在，禁止忽略截断的命令。
   auto next=[&](size_t &i)->std::string { require(i+1<input.size(),"missing CDB argument value","unsupported_configuration"); return input[++i]; };
   // 仓内 include 目录也必须排除安装缓存和符号链接越界。
@@ -470,8 +501,14 @@ static Config configuration(Request &r,const j::Object &o,size_t index) {
     if(a=="-c" || a=="-fsyntax-only" || a=="-g") continue;
     if(a=="-O0" || a=="-O1" || a=="-O2" || a=="-O3" || a=="-Os" || a=="-Oz" || a=="-Og") { c.args.push_back(a); continue; }
     if(a=="-o") { next(i); continue; }
-    if(a=="-x") { auto mode=next(i); require(mode=="c" || mode=="c++","unsupported language mode","unsupported_configuration"); c.language=mode=="c"?"c":"cpp"; continue; }
-    if(a.rfind("-std=",0)==0) { standard=a.substr(5); continue; }
+    if(a.rfind("-x",0)==0) {
+      auto mode=a=="-x"?next(i):a.substr(2);
+      require(mode=="c" || mode=="c++" || mode=="none","unsupported language mode: "+mode,"unsupported_configuration");
+      explicitLanguage=mode=="none"?"":mode=="c"?"c":"cpp"; continue;
+    }
+    if(a.rfind("-std=",0)==0 || a.rfind("--std=",0)==0 || a=="--std") {
+      standard=a=="--std"?next(i):a.substr(a.find('=')+1); languageStandard(standard); continue;
+    }
     if(a=="-target" || a=="--target") { triple=next(i); continue; }
     if(a.rfind("--target=",0)==0) { triple=a.substr(9); continue; }
     if(a=="-isysroot" || a=="--sysroot") { roots.push_back(real(fs::u8path(next(i)))); continue; }
@@ -482,19 +519,24 @@ static Config configuration(Request &r,const j::Object &o,size_t index) {
     if((a.rfind("-D",0)==0 || a.rfind("-U",0)==0) && a.size()>2) { c.args.push_back(a); continue; }
     if(!a.empty() && a[0]!='-' && a[0]!='@') {
       fs::path f=fs::u8path(a); std::error_code ec; auto resolved=fs::canonical(f.is_absolute()?f:c.directory/f,ec);
-      require(!ec && resolved==c.file && !sourceSeen,"unexpected compilation input","unsupported_configuration"); sourceSeen=true; continue;
+      require(!ec && resolved==c.file && !sourceSeen,"unexpected compilation input","unsupported_configuration");
+      c.language=explicitLanguage.empty()?sourceLanguage(f,driver):explicitLanguage; sourceSeen=true; continue;
     }
     throw Failure("unsupported_configuration","unapproved compiler argument: "+a);
   }
   require(sourceSeen,"CDB arguments omit source file","unsupported_configuration");
-  require(standard==(c.language=="c"?"c17":"c++20"),"explicit C17/C++20 standard required","unsupported_configuration");
+  require(!standard.empty(),"explicit -std language standard required","unsupported_configuration");
+  const auto &dialect=languageStandard(standard);
+  require(dialect.getLanguage()==(c.language=="c"?Language::C:Language::CXX),
+          "language standard "+standard+" does not match input language "+c.language,"unsupported_configuration");
   std::vector<size_t> matches;
   for(size_t i=0;i<r.platforms.size();++i) {
     auto &p=r.platforms[i]; if(!triple.empty() && triple!=p.triple) continue;
     if(std::any_of(roots.begin(),roots.end(),[&](auto &root){return root!=p.root;})) continue; matches.push_back(i);
   }
   require(matches.size()==1,"target platform missing or ambiguous","target_unavailable"); c.platform=matches[0]; auto &p=r.platforms[c.platform];
-  std::vector<std::string> fixed={"-x",c.language=="c"?"c":"c++","-std="+standard,"--target="+p.triple,"-fsyntax-only","-nostdinc","-nostdinc++","-fno-modules","-fno-implicit-modules","-fno-implicit-module-maps","-fno-delayed-template-parsing","-pedantic-errors","-resource-dir",p.resource.u8string(),"-isysroot",p.root.u8string()};
+  std::vector<std::string> fixed={"-x",c.language=="c"?"c":"c++","-std="+standard,"--target="+p.triple,"-fsyntax-only","-nostdinc","-nostdinc++","-fno-modules","-fno-implicit-modules","-fno-implicit-module-maps","-fno-delayed-template-parsing","-resource-dir",p.resource.u8string(),"-isysroot",p.root.u8string()};
+  auto diagnostics=standardDiagnostics(dialect); fixed.insert(fixed.end(),diagnostics.begin(),diagnostics.end());
   // 标准搜索次序为 C++ 包装头、编译器内建头、目标 C 头；否则 include_next 会选错 stddef。
   auto isCxx=[](const fs::path &dir) { return std::any_of(dir.begin(),dir.end(),[](const fs::path &part){return part=="c++";}); };
   for(auto &dir:p.includes) if(isCxx(dir) || std::find(p.additionalIncludes.begin(),p.additionalIncludes.end(),dir)!=p.additionalIncludes.end()) { fixed.push_back("-isystem"); fixed.push_back(dir.u8string()); }

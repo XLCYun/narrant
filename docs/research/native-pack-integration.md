@@ -13,9 +13,9 @@ Rust、TS/JS、Python 保留既有分析实现。
 
 | 包 | 执行工具 | 目标上下文 |
 | --- | --- | --- |
-| `go` | 固定 Go1.23.8 构建的原生 helper | 包内 Go1.23.8 完整 src、VERSION，运行阶段不启动 go 命令 |
-| `java` | 私有 JDK25 + 固定 JDT 依赖闭包 | 独立 JDK17 的 release、jrt-fs.jar、modules；已证明不能以较新 runtime 的标准库替代目标 |
-| `csharp` | 私有 .NET10 host/runtime + Roslyn | 两套独立标准引用目录：Microsoft.NETCore.App.Ref8.0.0/net8.0 与10.0.0/net10.0 |
+| `go` | 固定 Go1.27.1 构建的原生 helper | 本机 SDK 的完整 src、VERSION；按声明 minor 选择最高兼容补丁，运行阶段不启动 go 命令 |
+| `java` | 私有 JDK25 + 固定 JDT 依赖闭包 | 本机匹配 release 的 JDK；私有运行 JDK 仅可作为真实 Java25 目标，不再附带另一套 JDK17 |
+| `csharp` | 私有 .NET10 host/runtime + Roslyn | 本机匹配 TFM 的 Microsoft.NETCore.App.Ref，支持包不附带目标引用 |
 | `c-cpp` | 原生 LibTooling21.1.8 helper 与私有库 | 独立 Clang resource headers + 精确匹配的系统 SDK；Windows MSVC include 是另一个窄信任根 |
 
 所有新包开发版本为0.1.0，目录中 `published:false` 防止生产入口请求不存在的远端构件，
@@ -25,9 +25,13 @@ Rust、TS/JS、Python 保留既有分析实现。
 `build-language-support-packs.mjs --id <包> --target <目标> --output <目录>` 会构建自己的 helper，
 组装允许的 runtime/目标声明，生成实际文件和归档摘要，并在归档解压后重新检查 helper ready。
 产物配置 `native-helpers-config.json` 可直接交给真实 Host 图/diff 集成测试。
-Java runtime 的执行权限跨打包/安装保留；Go 标准库清单采用紧凑 JSON，遵守原有2MiB清单上限。
+Java runtime 的执行权限跨打包/安装保留；包清单仍遵守原有2MiB上限。Java/Go/C# 的目标发现
+由生产 Host 完成，`native-helpers-config.json` 只记录验收夹具，不是产品目标白名单。
+2026-10-04 版本限制清理及当前证据见[目标版本发现记录](native-target-version-discovery.md)。
 
 ## 本机后端验证
+
+以下保留 2026-10-03 的历史执行记录，构件版本与数量不代表当前最新结果。
 
 macOS ARM64 上四种真实包均完成构建和解压启动。真实安装测试经过本地 HTTP 服务传输这些归档，
 完整执行生产摘要校验、安装、工厂、真实 helper 非空图、租约删除保护，以及使用生产分发源配置

@@ -16,6 +16,11 @@ PR 为草稿，未合并或发布。
 
 ## 本轮简化（2026-10-04）
 
+后续目标版本清理正在验收：Java/Go 只读发现本机目标，删除 Java17、Go1.23 的产品门禁与额外
+打包目标库；C/C++ 逐 TU 使用 LLVM 支持的明确标准，删除 C17/C++20 门禁与冗余平台字段。
+工具构件仍固定。当前规则、范围及本轮证据见[目标版本发现记录](../research/native-target-version-discovery.md)；
+下述 `1679e22` 结果是这项扩展之前的已通过基线，不能替代新增跨版本验收。
+
 - helper 默认启动期限调为 60 秒、单次分析 30 分钟；取消宽限 2 秒、终结后退出 5 秒保持。
 - Host 与四个 helper 同步删除没有实际比对用途的平台 `fingerprint`，支持包下载和安装校验保留。
 - C# 支持包只携带固定 helper/runtime；Host 只读发现本机 `Microsoft.NETCore.App.Ref`，按 TFM

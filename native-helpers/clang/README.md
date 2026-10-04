@@ -23,8 +23,8 @@ Windows 增量由专门原生 CI 验收，不能把本机构建成功当作 Wind
 ## 目标 catalog
 
 - `clang-target`：`root` 为批准的目标 SDK，`version` 为 SDK 版本；metadata 精确包含
-  `target_triple`、`c_standard: "c17"`、`cpp_standard: "c++20"`、
-  `system_include_directories`（root 相对目录数组）、`resource_platform_id`。
+  `target_triple`、`system_include_directories`（root 相对目录数组）、`resource_platform_id`。
+  语言标准属于每个 TU 的编译参数，catalog 不再携带 `c_standard` / `cpp_standard`。
 - `clang-resource`：`root` 为固定 LLVM 的 `lib/clang/21`，`version: "21.1.8"`，metadata 为 `{}`。
 - 两个来源分别入 evidence，禁止为了共同根目录而批准 `/` 或复制目标头文件到 scratch。
 - C++ `c++` 路径组件下的包装头优先，然后 resource/include，再目标 C headers；其它读取被
@@ -37,11 +37,27 @@ CI 的固定 SDK 是复现测试样本；用户不必安装相同版本，也不
 ## 明确的配置边界
 
 本侧根目录必须有 `compile_commands.json`；仅接受 `arguments` 数组，拒绝 `command`、wrapper、
-response file、插件、modules、自动配置、未知参数与非批准 include/sysroot。每个 TU 的 C17 或
-C++20、宏、include、target 都分别解析；绝不执行 CDB 中的程序、CMake、query-driver 或构建脚本。
+response file、插件、modules、自动配置、未知参数与非批准 include/sysroot。每个 TU 的语言标准、
+宏、include、target 都分别解析；绝不执行 CDB 中的程序、CMake、query-driver 或构建脚本。
+
+每条编译命令必须明确提供 `-std=`（也支持 Clang 的 `--std=` / `--std` 写法）。标准及别名
+直接由固定 LLVM 21.1.8 的 `LangStandard` 识别，包括 C89–C23、C++98–C++23 和对应 GNU 方言；
+例如 `c18`、`iso9899:2011`、`gnu++17` 都保留其真实解析模式。LLVM 已归入稳定标准的历史别名
+（如 `c2x` 对应 C23、`c++2b` 对应 C++23）也遵从原生映射。LLVM 的 C2y / C++26 特性标记用于
+拒绝仍在预览阶段的模式及其别名，不另维护一份很窄的标准名称白名单。
+
+语言模式按 Clang 的源文件类型表、C++ driver 规则与输入之前生效的 `-x c` / `-x c++` 判定；
+`-x none` 恢复推断，`-xc` / `-xc++` 同样有效。标准必须与该 TU 的 C / C++ 模式匹配，最后一个
+受支持的标准选项原样传入 Clang。缺 CDB、缺标准、非法标准、预览标准或语言错配都会明确失败，
+不会补入 C17 / C++20。固定 LLVM 不保证实现每个已发布标准的全部特性；具体语法仍由真实 Clang
+验证，错误终结不会携带部分图，也不会被成功解析的其它 TU 掩盖。
+ISO 模式保留严格标准诊断；GNU 模式允许 Clang 原生的 `typeof`、statement expression 等 GNU
+扩展，并从 LLVM 诊断表发现当前语言的标准扩展分组，将超出所选 ISO 版本的语法诊断提升为错误。
+这既保留 GNU 语义，也防止 GNU 低版本通过警告悄悄接受后续标准语法。
 
 同一请求可以含 C 与 C++ TU。成功解析为 C 的共同 header 声明统一标为 `c`；只在 C++ 上下文
-出现的声明标为 `cpp`。归并仍校验原始声明、类别、native kind 和父级；不因语言模式生成重复
+出现的声明标为 `cpp`。同一 header 的多个语言标准上下文分别分析，再合并条件分支和关系；
+归并仍校验原始声明、类别、native kind 和父级；不因语言模式或标准生成重复
 header。普通 C record/C++ record 的同一源 struct 使用 `StructDecl`，不能把 AST 实现类名差异
 误当成源码对象冲突。真正不能归并的源码映射返回 `union_conflict`。
 
@@ -52,6 +68,9 @@ header。普通 C record/C++ record 的同一源 struct 使用 `StructDecl`，�
 
 测试脚本创建自身临时源码并核对分析前后完整文件摘要；helper 从原位置读取。取消在分析线程
 之外读取，VFS/AST 检查取消和总期限；Host 仍负责在宽限过后强制回收无法协作中止的原生解析。
+标准验收同时检查 `__STDC_VERSION__` / `__cplusplus`、GNU 模式和版本专属语法：C99 循环声明、
+C11 `_Generic`、C23 `constexpr`，以及 C++11–C++23 的已实现特性。相同语法在较旧标准下必须失败；
+共享 header 还覆盖 C99、C23、C++11、C++23 四种上下文的并集及顺序稳定性。
 
 ## Windows 增量与附加标准头
 

@@ -65,7 +65,7 @@ class NativeHelperTests(unittest.TestCase):
         """清理本测试创建的临时材料。"""
         self.temp.cleanup()
 
-    def prepare(self, sources, mode='cpp', order=(0, 1), selected=None, extra=()):
+    def prepare(self, sources, mode='cpp', order=(0, 1), selected=None, extra=(), standard=None):
         """为每个 TU 生成显式标准和宏配置的 CDB 数据。"""
         commands = []
         for name, source in sources.items():
@@ -76,7 +76,7 @@ class NativeHelperTests(unittest.TestCase):
                 for fast in order:
                     commands.append({'directory': str(self.root), 'file': name,
                                      'arguments': ['clang', '-x', 'c' if mode == 'c' else 'c++',
-                                                   '-std=c17' if mode == 'c' else '-std=c++20',
+                                                   '-std=' + (standard or ('c17' if mode == 'c' else 'c++20')),
                                                    '-DFAST=' + str(fast), *extra, '-c', name]})
         (self.root / 'compile_commands.json').write_text(json.dumps(commands))
         return {'protocol': PROTOCOL, 'type': 'analyze', 'id': 'test',
@@ -85,8 +85,7 @@ class NativeHelperTests(unittest.TestCase):
                 'environment': {'scratch_root': str(self.scratch), 'platforms': [
                     {'id': 'freestanding', 'kind': 'clang-target', 'version': '1',
                      'root': str(self.scratch),
-                     'metadata': {'target_triple': 'arm64-apple-macosx14.0', 'c_standard': 'c17',
-                                  'cpp_standard': 'c++20', 'system_include_directories': [],
+                     'metadata': {'target_triple': 'arm64-apple-macosx14.0', 'system_include_directories': [],
                                   'resource_platform_id': 'resource'}},
                     {'id': 'resource', 'kind': 'clang-resource', 'version': '21.1.8',
                      'root': str(LLVM / 'lib/clang/21'), 'metadata': {}}]},
@@ -167,6 +166,177 @@ class NativeHelperTests(unittest.TestCase):
         result = self.run_request(self.prepare({'main.cpp': source}, 'cpp'))
         self.assertEqual(result['error']['code'], 'object_extraction_failed')
 
+    def test_stable_language_standards_and_native_aliases(self):
+        """逐 TU 的原生标准宏与 GNU 模式证明标准和 LLVM 别名没有被强制升级。"""
+        dialects = [
+            ('c', None, ('c89', 'c90', 'iso9899:1990', 'gnu89', 'gnu90')),
+            ('c', 199409, ('iso9899:199409',)),
+            ('c', 199901, ('c99', 'iso9899:1999', 'c9x', 'gnu99', 'gnu9x')),
+            ('c', 201112, ('c11', 'iso9899:2011', 'c1x', 'gnu11', 'gnu1x')),
+            ('c', 201710, ('c17', 'c18', 'iso9899:2017', 'iso9899:2018', 'gnu17', 'gnu18')),
+            ('c', 202311, ('c23', 'iso9899:2024', 'c2x', 'gnu23', 'gnu2x')),
+            ('cpp', 199711, ('c++98', 'c++03', 'gnu++98', 'gnu++03')),
+            ('cpp', 201103, ('c++11', 'c++0x', 'gnu++11')),
+            ('cpp', 201402, ('c++14', 'c++1y', 'gnu++14')),
+            ('cpp', 201703, ('c++17', 'c++1z', 'gnu++17')),
+            ('cpp', 202002, ('c++20', 'c++2a', 'gnu++20')),
+            ('cpp', 202302, ('c++23', 'c++2b', 'gnu++23')),
+        ]
+        for mode, version, standards in dialects:
+            macro = '__STDC_VERSION__' if mode == 'c' else '__cplusplus'
+            version_check = '#ifdef ' + macro if version is None else f'#if {macro} != {version}L'
+            for standard in standards:
+                with self.subTest(standard=standard):
+                    strict_check = '#ifdef' if standard.startswith('gnu') else '#ifndef'
+                    source = (version_check + '\n#error incorrect language version\n#endif\n'
+                              + strict_check + ' __STRICT_ANSI__\n#error incorrect GNU mode\n#endif\n'
+                              + 'int dialect(void){return 1;}\n')
+                    name = 'main.c' if mode == 'c' else 'main.cpp'
+                    graph = self.ok(self.prepare({name: source}, mode, (0,), standard=standard))
+                    self.assertEqual([(node['name'], node['language']) for node in graph['nodes']],
+                                     [('dialect', mode)])
+
+    def test_language_features_require_the_selected_standard(self):
+        """固定 LLVM 已实现的稳定语法仅在项目选定的版本合法，旧标准必须报告错误。"""
+        cases = [
+            ('c', 'c99', 'c89', 'int feature(void){int sum=0;for(int i=0;i<3;++i)sum+=i;return sum;}'),
+            ('c', 'c11', 'c99', 'int feature(void){return _Generic(1,int:11,default:0);}'),
+            ('c', 'c23', 'c17', 'constexpr int answer=23; int feature(void){return answer;}'),
+            ('cpp', 'c++11', 'c++98', 'constexpr int feature(){return 11;}'),
+            ('cpp', 'c++14', 'c++11', 'constexpr int feature(){int value=14;return value;}'),
+            ('cpp', 'c++17', 'c++14', 'int feature(){if constexpr(true)return 17;else return 0;}'),
+            ('cpp', 'c++20', 'c++17', 'consteval int feature(){return 20;}'),
+            ('cpp', 'c++23', 'c++20', 'constexpr int feature(){if consteval{return 23;}else{return 0;}}'),
+        ]
+        cases += [(mode, supported.replace('c', 'gnu', 1), older.replace('c', 'gnu', 1), source)
+                  for mode, supported, older, source in cases]
+        for mode, supported, older, source in cases:
+            with self.subTest(supported=supported, rejected=older):
+                name = 'main.c' if mode == 'c' else 'main.cpp'
+                graph = self.ok(self.prepare({name: source}, mode, (0,), standard=supported))
+                self.assertTrue(any(node['name'] == 'feature' for node in graph['nodes']))
+                result = self.run_request(self.prepare({name: source}, mode, (0,), standard=older))
+                self.assertEqual(result['error']['code'], 'object_extraction_failed', result)
+                self.assertNotIn('graph', result)
+
+    def test_gnu_dialect_preserves_gnu_syntax(self):
+        """GNU 模式真实接受 typeof 和 statement expression，ISO 模式继续拒绝相同扩展。"""
+        source = 'typeof(1) value; int feature(void){return ({typeof(value) local=1;local;});}\n'
+        for mode, standard, strict in [('c', 'gnu99', 'c99'), ('c', 'gnu23', 'c23'),
+                                       ('cpp', 'gnu++11', 'c++11'), ('cpp', 'gnu++23', 'c++23')]:
+            with self.subTest(standard=standard):
+                name = 'main.c' if mode == 'c' else 'main.cpp'
+                graph = self.ok(self.prepare({name: source}, mode, (0,), standard=standard))
+                self.assertEqual({node['name'] for node in graph['nodes']}, {'value', 'feature'})
+                result = self.run_request(self.prepare({name: source}, mode, (0,), standard=strict))
+                self.assertEqual(result['error']['code'], 'object_extraction_failed', result)
+
+    def test_unknown_preview_and_mismatched_standards_fail(self):
+        """未知标准、LLVM 中仍为草案的标准及语言错配都不会转为默认标准。"""
+        cases = [('c', 'c1000'), ('cpp', 'c++999'), ('cpp', 'c++latest'),
+                 ('c', 'c2y'), ('c', 'gnu2y'), ('cpp', 'c++2c'), ('cpp', 'c++26'),
+                 ('cpp', 'gnu++2c'), ('cpp', 'gnu++26'), ('c', 'cl1.2'), ('cpp', 'hlsl2021'),
+                 ('c', 'c++11'), ('cpp', 'c11')]
+        for mode, standard in cases:
+            with self.subTest(mode=mode, standard=standard):
+                name = 'main.c' if mode == 'c' else 'main.cpp'
+                result = self.run_request(self.prepare({name: 'int value;'}, mode, (0,), standard=standard))
+                self.assertEqual(result['error']['code'], 'unsupported_configuration', result)
+                self.assertIn(standard, result['error']['message'])
+                self.assertNotIn('graph', result)
+
+    def test_standard_option_order_and_aliases(self):
+        """标准参数按 driver 的最后一次有效选择生效，但未知或空值不能被后项掩盖。"""
+        source = '#if __cplusplus != 201703L\n#error incorrect final standard\n#endif\nint chosen;\n'
+        for extra in (['-std=c++17'], ['--std=c++17'], ['--std', 'c++17']):
+            with self.subTest(extra=extra):
+                self.ok(self.prepare({'main.cpp': source}, order=(0,), standard='c++11', extra=extra))
+        for extra in (['-std='], ['-std=invalid', '-std=c++17'], ['--std']):
+            with self.subTest(rejected=extra):
+                result = self.run_request(self.prepare({'main.cpp': 'int value;'}, order=(0,), extra=extra))
+                self.assertEqual(result['error']['code'], 'unsupported_configuration', result)
+
+    def test_cdb_language_inference_and_positional_override(self):
+        """原生后缀、C++ driver 和输入之前的 -x 决定 TU 语言，输入之后的 -x 不追溯改变。"""
+        cases = [
+            ('main.c', 'c99', ['clang'], [], 'c'),
+            ('main.c', 'c++11', ['clang++'], [], 'cpp'),
+            ('main.c', 'c++11', ['g++'], [], 'cpp'),
+            ('capital.C', 'c++17', ['clang'], [], 'cpp'),
+            ('main.cc', 'c++14', ['clang'], [], 'cpp'),
+            ('main.cxx', 'c++23', ['clang'], [], 'cpp'),
+            ('main.cpp', 'c99', ['clang', '-x', 'c'], [], 'c'),
+            ('main.c', 'c++17', ['clang', '-xc++'], [], 'cpp'),
+            ('main.c', 'c11', ['clang', '-xc++', '-x', 'none'], [], 'c'),
+            ('main.c', 'c99', ['clang'], ['-x', 'c++'], 'c'),
+        ]
+        for name, standard, prefix, suffix, language in cases:
+            with self.subTest(name=name, standard=standard, prefix=prefix, suffix=suffix):
+                request = self.prepare({name: 'int value;'}, order=(0,))
+                command = {'directory': str(self.root), 'file': name,
+                           'arguments': [*prefix, name, '-std=' + standard, *suffix]}
+                (self.root / 'compile_commands.json').write_text(json.dumps([command]))
+                graph = self.ok(request)
+                self.assertEqual(graph['nodes'][0]['language'], language)
+        for arguments in (['clang++', '-std=c17', 'main.c'],
+                          ['clang', '-std=c++11', 'main.c', '-x', 'c++']):
+            request = self.prepare({'main.c': 'int value;'}, 'c', (0,))
+            (self.root / 'compile_commands.json').write_text(json.dumps([
+                {'directory': str(self.root), 'file': 'main.c', 'arguments': arguments}]))
+            self.assertEqual(self.run_request(request)['error']['code'], 'unsupported_configuration')
+
+    def test_source_argument_suffix_determines_language(self):
+        """语言推断使用命令中的源路径后缀，文件安全边界仍以链接解析后的真实路径检查。"""
+        request = self.prepare({'implementation.cpp': 'void convert(void *p){int *n=p;(void)n;}\n'}, order=(0,))
+        (self.root / 'entry.c').symlink_to(self.root / 'implementation.cpp')
+        (self.root / 'compile_commands.json').write_text(json.dumps([
+            {'directory': str(self.root), 'file': 'entry.c',
+             'arguments': ['clang', '-std=c99', 'entry.c']}]))
+        graph = self.ok(request)
+        self.assertEqual(graph['nodes'][0]['language'], 'c')
+
+    def test_shared_header_union_across_language_standards(self):
+        """同一头文件的四种稳定 C/C++ 上下文分别解析，条件分支和共同声明保留现有并集规则。"""
+        sources = {'api.h': '#if __cplusplus >= 202302L || __STDC_VERSION__ >= 202311L\n'
+                           'int modern(void);\n#else\nint legacy(void);\n#endif\nint common(void);\n'}
+        modes = [('a.c', 'c', 'c99'), ('b.c', 'c', 'c23'),
+                 ('first.cpp', 'c++', 'c++11'), ('second.cpp', 'c++', 'c++23')]
+        commands = []
+        for name, mode, standard in modes:
+            sources[name] = '#include "api.h"\n'
+            commands.append({'directory': str(self.root), 'file': name,
+                             'arguments': ['clang', '-x', mode, '-std=' + standard, name]})
+        request = self.prepare(sources, order=(0,))
+        path = self.root / 'compile_commands.json'
+        path.write_text(json.dumps(commands))
+        result = self.run_request(request)
+        self.assertEqual(result['outcome'], 'ok', result)
+        graph = result['graph']
+        self.assertEqual({node['name'] for node in graph['nodes']}, {'legacy', 'modern', 'common'})
+        self.assertEqual(len(graph['nodes']), 3)
+        coverage = next(item for item in result['evidence']['files'] if item['path'] == 'api.h')
+        self.assertEqual(len(coverage['configuration_ids']), 4)
+        path.write_text(json.dumps(list(reversed(commands))))
+        self.assertEqual(graph, self.ok(request))
+
+    def test_cdb_and_explicit_standard_remain_required(self):
+        """缺少 CDB 或 -std 必须明确失败，目标 SDK 不再提供会覆盖项目标准的重复字段。"""
+        request = self.prepare({'main.cpp': 'int value;'}, order=(0,))
+        path = self.root / 'compile_commands.json'
+        path.unlink()
+        self.assertEqual(self.run_request(request)['error']['code'], 'unsupported_configuration')
+        request = self.prepare({'main.cpp': 'int value;'}, order=(0,))
+        commands = json.loads(path.read_text())
+        commands[0]['arguments'] = [argument for argument in commands[0]['arguments']
+                                   if not argument.startswith('-std=')]
+        path.write_text(json.dumps(commands))
+        result = self.run_request(request)
+        self.assertEqual(result['error']['code'], 'unsupported_configuration')
+        self.assertIn('explicit -std', result['error']['message'])
+        request = self.prepare({'main.cpp': 'int value;'}, order=(0,))
+        request['environment']['platforms'][0]['metadata']['cpp_standard'] = 'c++20'
+        self.assertEqual(self.run_request(request)['error']['code'], 'invalid_input')
+
     def test_missing_header_and_orphan_selected(self):
         """缺头文件与无 TU 上下文的选中头文件必须失败。"""
         for sources in ({'main.cpp': '#include "missing.h"\nint run(){return 1;}\n'},
@@ -176,7 +346,8 @@ class NativeHelperTests(unittest.TestCase):
 
     def test_argument_and_response_rejections(self):
         """插件、模块构建、工具查询和响应文件不会被执行。"""
-        for arg in ('-fplugin=evil.so', '-Xclang', '@evil.rsp', '-fmodules', '--config=evil.cfg', '--query-driver=evil'):
+        for arg in ('-fplugin=evil.so', '-Xclang', '@evil.rsp', '-fmodules', '--config=evil.cfg',
+                    '--query-driver=evil', '-funknown-option'):
             result = self.run_request(self.prepare({'main.cpp': 'int f(){return 1;}'}, extra=[arg]))
             self.assertEqual(result['error']['code'], 'unsupported_configuration', result)
 

@@ -19,6 +19,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
+import org.eclipse.jdt.core.JavaCore;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -28,8 +29,6 @@ import static dev.narrant.java.Main.Failure;
 /** 仓库内有限静态配置及显式目标 JDK 模型。 */
 final class ProjectModel {
     final Path repository;
-    final Path targetJdk;
-    final String targetPlatformId;
     final List<Configuration> configurations;
     final Map<String, List<Configuration>> selected;
     final List<String> files;
@@ -41,13 +40,20 @@ final class ProjectModel {
         final String release;
         final List<String> sourcePaths;
         final List<SourceRoot> roots;
+        final Target target;
 
         /** 保存已验证的单一配置。 */
         Configuration(String id, String release, List<String> sourcePaths, List<SourceRoot> roots) {
+            this(id, release, sourcePaths, roots, null);
+        }
+
+        /** 为配置绑定其 release 对应的唯一真实 JDK。 */
+        Configuration(String id, String release, List<String> sourcePaths, List<SourceRoot> roots, Target target) {
             this.id = id;
             this.release = release;
             this.sourcePaths = sourcePaths;
             this.roots = roots;
+            this.target = target;
         }
     }
 
@@ -61,11 +67,9 @@ final class ProjectModel {
     }
 
     /** 完成路径及静态来源检查后保存请求模型。 */
-    private ProjectModel(Path repository, Path targetJdk, String targetPlatformId, List<Configuration> configurations,
+    private ProjectModel(Path repository, List<Configuration> configurations,
                          Map<String, List<Configuration>> selected, List<String> files, boolean includeTests) {
         this.repository = repository;
-        this.targetJdk = targetJdk;
-        this.targetPlatformId = targetPlatformId;
         this.configurations = configurations;
         this.selected = selected;
         this.files = files;
@@ -112,11 +116,17 @@ final class ProjectModel {
             throw new Failure("unsupported_configuration", "Gradle needs narrant-java.json static metadata");
         else throw new Failure("unsupported_configuration", "no explicit Java source roots or target release");
         if (configs.isEmpty()) throw new Failure("unsupported_configuration", "no Java configurations");
-        Set<String> releases = new HashSet<>();
-        for (Configuration config : configs) releases.add(config.release);
-        if (releases.size() != 1) throw new Failure("unsupported_configuration", "mixed target releases are unsupported");
-        String release = releases.iterator().next();
-        Target target = chooseTarget(environment, release);
+        Map<String, Target> targets = new HashMap<>();
+        List<Configuration> bound = new ArrayList<>();
+        for (Configuration config : configs) {
+            Target target = targets.get(config.release);
+            if (target == null) {
+                target = chooseTarget(environment, config.release);
+                targets.put(config.release, target);
+            }
+            bound.add(new Configuration(config.id, config.release, config.sourcePaths, config.roots, target));
+        }
+        configs = List.copyOf(bound);
         Map<String, List<Configuration>> selected = new HashMap<>();
         for (String file : files) {
             List<Configuration> matches = new ArrayList<>();
@@ -128,7 +138,7 @@ final class ProjectModel {
             if (matches.isEmpty()) throw new Failure("unsupported_configuration", "selected file outside declared source roots", List.of(file));
             selected.put(file, List.copyOf(matches));
         }
-        return new ProjectModel(root, target.path, target.id, configs, selected, files, includeTests);
+        return new ProjectModel(root, configs, selected, files, includeTests);
     }
 
     /** 仅接受规范仓内相对路径。 */
@@ -160,7 +170,8 @@ final class ProjectModel {
             Main.fields(platform, Set.of("id", "kind", "version", "root", "metadata"));
             String id = Main.string(platform, "id");
             if (id.isEmpty() || !ids.add(id)) throw new Failure("invalid_input", "duplicate platform id");
-            if (Main.string(platform, "version").isEmpty())
+            String version = Main.string(platform, "version");
+            if (version.isEmpty())
                 throw new Failure("invalid_input", "empty platform version");
             if (!"java-jdk".equals(Main.string(platform, "kind"))) continue;
             JsonObject metadata = Main.object(platform, "metadata");
@@ -171,20 +182,50 @@ final class ProjectModel {
             try {
                 path = path.toRealPath();
                 String data = Files.readString(path.resolve("release"), StandardCharsets.UTF_8);
-                Matcher match = Pattern.compile("(?m)^JAVA_VERSION=\"([0-9]+)(?:[.\"])").matcher(data);
-                if (!match.find() || !release.equals(match.group(1)) || !Files.isRegularFile(path.resolve("lib/jrt-fs.jar")))
+                Matcher match = Pattern.compile("(?m)^JAVA_VERSION=\"([^\"\\r\\n]+)\"\\s*$").matcher(data);
+                if (!match.find() || !version.equals(match.group(1)) || !release.equals(jdkRelease(version)))
                     throw new Failure("target_unavailable", "catalog JDK does not match target release");
             } catch (Failure e) { throw e; }
             catch (Exception e) { throw new Failure("target_unavailable", "target JDK unavailable"); }
             if (chosen != null) throw new Failure("invalid_input", "ambiguous target JDK platforms");
-            chosen = new Target(id, path);
+            chosen = new Target(id, path, systemLibraries(path, release));
         }
         if (chosen == null) throw new Failure("target_unavailable", "no exact target JDK for Java " + release);
         return chosen;
     }
 
-    /** 匹配后的显式平台标识及真实 JDK 路径。 */
-    private record Target(String id, Path path) {}
+    /** 从 release 文件的真实版本读取稳定 major，兼容 1.8.0_XXX 格式。 */
+    private static String jdkRelease(String version) throws Failure {
+        if (version.matches("1\\.[1-8]\\.0(?:_[0-9]+)?")) return version.substring(2, 3);
+        try {
+            Runtime.Version parsed = Runtime.Version.parse(version);
+            if (parsed.pre().isEmpty()) return Integer.toString(parsed.feature());
+        } catch (IllegalArgumentException ignored) { /* 无法确认稳定版本时不使用该目标。 */ }
+        throw new Failure("target_unavailable", "target JDK has no stable Java version");
+    }
+
+    /** 仅从目标 JDK 读取系统库，不纳入扩展目录、项目 JAR 或运行时系统库。 */
+    private static List<String> systemLibraries(Path target, String release) throws Failure {
+        List<String> libraries = new ArrayList<>();
+        if (Integer.parseInt(release) < 9) {
+            Path directory = target.resolve("jre/lib");
+            if (!Files.isRegularFile(directory.resolve("rt.jar")))
+                throw new Failure("target_unavailable", "target JDK lacks classic jre/lib/rt.jar");
+            for (String name : List.of("resources.jar", "rt.jar", "jsse.jar", "jce.jar", "charsets.jar")) {
+                Path archive = directory.resolve(name);
+                if (Files.isRegularFile(archive)) libraries.add(archive.toString());
+            }
+        } else {
+            Path archive = target.resolve("lib/jrt-fs.jar");
+            if (!Files.isRegularFile(archive) || !Files.isRegularFile(target.resolve("lib/modules")))
+                throw new Failure("target_unavailable", "target JDK lacks lib/jrt-fs.jar or lib/modules");
+            libraries.add(archive.toString());
+        }
+        return List.copyOf(libraries);
+    }
+
+    /** 匹配后的显式平台标识、真实 JDK 路径及该版本的标准库。 */
+    record Target(String id, Path path, List<String> systemLibraries) {}
 
     /** 读取版本化的声明式源码根。 */
     private static List<Configuration> readMetadata(Path repository, Path file) throws Failure {
@@ -377,10 +418,15 @@ final class ProjectModel {
         if (Files.isDirectory(repo.resolve(relative))) roots.add(new SourceRoot(relative, test));
     }
 
-    /** 限定首版经过验证的 release。 */
+    /** 按固定 JDT 编译器实际能力校验规范 release，不接受预览或别名。 */
     private static void validateRelease(String release) throws Failure {
-        if (!"17".equals(release))
+        if (!release.matches("[1-9][0-9]*") || !JavaCore.isJavaSourceVersionSupportedByCompiler(compilerVersion(release)))
             throw new Failure("unsupported_configuration", "unsupported Java release: " + release);
+    }
+
+    /** 将用户使用的整数 release 转换为 JDT 历史版本命名。 */
+    static String compilerVersion(String release) {
+        return release.length() == 1 && release.charAt(0) < '9' ? "1." + release : release;
     }
 
     /** 查找直接 XML 子元素，避免误读嵌套插件字段。 */

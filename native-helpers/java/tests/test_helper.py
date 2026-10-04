@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,15 +25,21 @@ COMMAND = [str(RUNTIME / "bin" / ("java.exe" if sys.platform == "win32" else "ja
 RUN_TIMEOUT = 40
 
 
-def request(root, files, include_tests=False, target=TARGET, timeout=30000):
-    """Create a closed v1 request with explicit exact target JDK metadata."""
+def platform(target, release=None):
+    """以 JDK 的 release 文件构造真实版本的平台声明。"""
+    version = re.search(r'^JAVA_VERSION="([^"\r\n]+)"$', (target / "release").read_text(), re.MULTILINE).group(1)
+    feature = version.split(".")[1] if version.startswith("1.") else re.split(r"[.+-]", version)[0]
+    return {"id": "jdk" + (release or feature), "kind": "java-jdk", "version": version,
+            "root": str(target), "metadata": {"release": release or feature}}
+
+
+def request(root, files, include_tests=False, target=TARGET, timeout=30000, platforms=None):
+    """创建版本封闭的协议请求，默认只提供当前测试的真实目标 JDK。"""
     return {"protocol": "narrant.native-analyzer/1", "type": "analyze", "id": "fixture",
             "input": {"repository_root": str(root), "files": files, "include_tests": include_tests,
                       "profile": "java-static-v1"},
             "environment": {"scratch_root": str(root.parent / "scratch"),
-                            "platforms": [{"id": "jdk17", "kind": "java-jdk", "version": "17.0.20.1+1",
-                                           "root": str(target),
-                                           "metadata": {"release": "17"}}]},
+                            "platforms": platforms if platforms is not None else [platform(target)]},
             "limits": {"analysis_timeout_ms": timeout, "max_result_bytes": 134217728,
                        "max_diagnostic_bytes": 262144}}
 
@@ -100,12 +107,12 @@ def write(root, path, source):
     target.write_text(source, encoding="utf-8")
 
 
-def metadata(root, tests=False):
-    """Declare an exact Java 17 standalone source-root model."""
+def metadata(root, tests=False, release="17"):
+    """声明指定整数 release 与显式生产、测试源码根。"""
     roots = [{"path": "src/main/java", "role": "main"}]
     if tests:
         roots.append({"path": "src/test/java", "role": "test"})
-    write(root, "narrant-java.json", json.dumps({"schema": "java-static-v1", "release": "17",
+    write(root, "narrant-java.json", json.dumps({"schema": "java-static-v1", "release": release,
                                                    "source_roots": roots}))
 
 
@@ -420,7 +427,7 @@ class Shapes {
         path = "child/src/main/java/p/Child.java"
         write(self.root, path, "package p; class Child {}")
         result = run(request(self.root, [path]))
-        self.assertEqual(result["error"]["code"], "unsupported_configuration")
+        self.assertEqual(result["error"]["code"], "target_unavailable")
 
     def test_same_source_configuration_union(self):
         """同一声明汇合多个隔离配置的确定与未知关系。"""

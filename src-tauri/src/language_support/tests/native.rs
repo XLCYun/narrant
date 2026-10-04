@@ -5,6 +5,25 @@ use crate::structure_review::{
 };
 use httpmock::prelude::*;
 
+/// 每个目标都经过安装工厂和真实 helper，确保本机发现与打包入口共同生效。
+async fn assert_installed_target(id: PackId, installed: &Path, repository: &Path, file: &str) {
+    let analyzer = native_languages::from_pack(id, installed).unwrap();
+    let input = AnalysisInput {
+        repository_root: repository.into(),
+        files: vec![file.into()],
+        options: AnalysisOptions::default(),
+    };
+    let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !graph.root().contains.is_empty(),
+        "{} 返回了空图",
+        id.slug()
+    );
+}
+
 /// 未发布能力的请求保留包身份与明确原因，不能尝试访问虚构远端版本。
 #[tokio::test]
 async fn unpublished_native_pack_reports_explicit_error() {
@@ -62,7 +81,6 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             .ensure(&[id], &CancellationToken::new(), None)
             .await
             .unwrap();
-        let analyzer = native_languages::from_pack(id, lease.path(id).unwrap()).unwrap();
         let fixture = tempfile::tempdir().unwrap();
         let file = match id {
             PackId::Go => {
@@ -89,14 +107,6 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 "src/Main.java"
             }
             PackId::Csharp => {
-                // 产物只携带 helper 运行环境；目标引用通过本机 SDK 发现。
-                let control: serde_json::Value = serde_json::from_slice(
-                    &fs::read(lease.path(id).unwrap().join("control/native.json")).unwrap(),
-                )
-                .unwrap();
-                assert_eq!(control["target_sdk"]["kind"], "dotnet");
-                assert!(control["platforms"].as_array().unwrap().is_empty());
-                assert!(!lease.path(id).unwrap().join("runtime/platform").exists());
                 fs::write(fixture.path().join("narrant.csharp.json"), r#"{"version":"csharp-static-v1","configurations":[{"id":"main","files":["Main.cs"],"tfm":"net10.0","language_version":"14.0","define_constants":[],"implicit_usings":false}]}"#).unwrap();
                 fs::write(
                     fixture.path().join("Main.cs"),
@@ -112,20 +122,22 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             }
             _ => unreachable!(),
         };
-        let input = AnalysisInput {
-            repository_root: fixture.path().into(),
-            files: vec![file.into()],
-            options: AnalysisOptions::default(),
-        };
-        let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            !graph.root().contains.is_empty(),
-            "{} 返回了空图",
-            id.slug()
-        );
+        if let Some(kind) = match id {
+            PackId::Go => Some("go"),
+            PackId::Java => Some("java"),
+            PackId::Csharp => Some("dotnet"),
+            _ => None,
+        } {
+            // 目标声明由本机发现；Java 运行 JDK 可作为自身真实 major 的候选，不再复制另一套17。
+            let installed = lease.path(id).unwrap();
+            let control: serde_json::Value =
+                serde_json::from_slice(&fs::read(installed.join("control/native.json")).unwrap())
+                    .unwrap();
+            assert_eq!(control["target_sdk"]["kind"], kind);
+            assert!(control["platforms"].as_array().unwrap().is_empty());
+            assert!(!installed.join("runtime/platform").exists());
+        }
+        assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
         if id == PackId::Csharp {
             // 同一私有运行时切换本机发现的目标；新增 net9 样本不能依赖产品内置目标表。
             for (tfm, language) in [("net8.0", "12.0"), ("net9.0", "13.0")] {
@@ -134,20 +146,45 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                     "tfm":tfm,"language_version":language,"define_constants":[],"implicit_usings":false}]
                 })).unwrap()).unwrap();
                 fs::write(fixture.path().join("Main.cs"), "public static class Main { public static int Value() { return System.Math.Abs(-1); } }").unwrap();
-                let analyzer = native_languages::from_pack(id, lease.path(id).unwrap()).unwrap();
-                let input = AnalysisInput {
-                    repository_root: fixture.path().into(),
-                    files: vec![file.into()],
-                    options: AnalysisOptions::default(),
-                };
-                let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert!(
-                    !graph.root().contains.is_empty(),
-                    "{tfm} 生产工厂返回了空图"
-                );
+                assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+            }
+        }
+        if id == PackId::Java {
+            for (release, expression) in [
+                ("8", "java.util.Collections.emptyList().size()"),
+                ("25", "java.util.List.of(1).getFirst()"),
+            ] {
+                fs::write(fixture.path().join("narrant-java.json"), serde_json::to_vec(&serde_json::json!({"schema":"java-static-v1","release":release,"source_roots":[{"path":"src","role":"main"}]})).unwrap()).unwrap();
+                fs::write(fixture.path().join(file), format!("public class Main {{ public static int value() {{ return {expression}; }} }}")).unwrap();
+                assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+            }
+        }
+        if id == PackId::Go {
+            fs::write(
+                fixture.path().join("go.mod"),
+                "module example.test/native\ngo 1.27.0\n",
+            )
+            .unwrap();
+            fs::write(fixture.path().join(file), "package native\nimport \"strings\"\nfunc Value() { for range strings.SplitSeq(\"a,b\", \",\") {} }\n").unwrap();
+            assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+        }
+        if id == PackId::CCpp {
+            // 产品目录不再指定统一语言标准，C 和 C++ 各自采用编译数据库的 -std。
+            for (standard, file, source) in [
+                (
+                    "c11",
+                    "other.c",
+                    "_Static_assert(sizeof(int) > 0, \"int\"); int Value(void) { return 1; }",
+                ),
+                (
+                    "c++17",
+                    "other.cpp",
+                    "int Value() { if constexpr (true) { return 1; } else { return 2; } }",
+                ),
+            ] {
+                fs::write(fixture.path().join(file), source).unwrap();
+                fs::write(fixture.path().join("compile_commands.json"), serde_json::to_vec(&serde_json::json!([{"directory":fixture.path(),"file":file,"arguments":["clang",format!("-std={standard}"),file]}])).unwrap()).unwrap();
+                assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
             }
         }
         assert!(packs.remove(id, "0.1.0").is_err());

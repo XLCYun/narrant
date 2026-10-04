@@ -50,8 +50,6 @@ impl PackId {
             ],
             Self::Go => vec![
                 "control/native.json",
-                "runtime/platform/go/VERSION",
-                "runtime/platform/go/src/builtin/builtin.go",
                 if windows {
                     "bin/narrant-go.exe"
                 } else {
