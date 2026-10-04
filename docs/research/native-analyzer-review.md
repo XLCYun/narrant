@@ -35,7 +35,8 @@ Clang 逐 TU 标准、对应打包和验收；既有 TS/Python 策略不在本�
 - 实际安装另发现 Go 安装器仍要求包内SDK，两条旧入口要求已删除；Java发现也与helper支持的经典JDK目录布局对齐。四包生产安装与最新八图均通过。
 
 本地 Rust764项、脚本24项及真实 helper 结果见[目标版本记录](native-target-version-discovery.md)。
-Actions结果单独记录，不用静态审查或本地成功代替另一操作系统的验证。
+代码 `1f035bf` 的[完整Actions37187603144](https://github.com/XLCYun/narrant/actions/runs/37187603144)
+四组全部成功；Actions结果单独记录，不用静态审查或本地成功代替另一操作系统的验证。
 
 ## 2026-10-04 简化修改的独立审查
 

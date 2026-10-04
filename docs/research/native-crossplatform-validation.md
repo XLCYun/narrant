@@ -1,12 +1,26 @@
 # 原生 helper 的双平台验收入口
 
-状态：2026-10-04 简化修改已通过本地验收、独立审查与完整 Actions。代码提交 `1679e22`
+状态：2026-10-04 目标版本清理已通过本地验收、独立审查与完整 Actions。代码提交 `1f035bf`
 在 macOS ARM64 / SDK15.5 与 Windows x64 的四组 Language support packs 验收全部成功。
 共享 LSP/Python 与 native 已统一使用 `child_process::ProcessTree`，测试直接覆盖生产模块；
 四包、四helper、Host、本机目标发现、实际安装及八图验收均通过。下方保留 `83d5642` 等历史基线。
 交付位于[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，未合并或发布支持包。
 本记录覆盖指定语言支持与生命周期矩阵；未手动触发 quality-gate，不承诺更广 SDK 或版本。
 审查覆盖、主要发现及关闭情况见[原生语言分析器审查记录](native-analyzer-review.md)。
+
+## 2026-10-04 Java/Go目标发现与Clang逐TU标准
+
+在上一轮本机SDK和共享进程接口的基础上，删除Java17、Go1.23及C17/C++20的产品门禁；
+Java/Go从本机匹配项目目标，支持包不再附带额外目标库。Clang按CDB的显式标准分析稳定模式与GNU方言。
+固定工具与CI样本保留。Go语言诊断降级及测试缓存漏选均在独立审查中复现、修复并完成复核。
+
+代码 `1f035bf083d9192b218a1c1643eba988e0e59cbb` 的
+[完整运行37187603144](https://github.com/XLCYun/narrant/actions/runs/37187603144)四组全部成功：
+两平台Go套件、Java35、C#38、Clang35（各1项对端SDK不适用）、目标发现10、真实安装1和公共图8通过；
+Windows共享进程11、LSP13、Host16与Python23/3/4通过，macOS共享3项/12场景、Host17和Python35/3/4通过。
+本地Rust全量764、脚本24及Go36项通过，最新真实八图另显式执行。
+详见[目标版本选择规则和完整矩阵](native-target-version-discovery.md)；下节保留此前提交的独立证据。
+本轮通过PR更新自动触发，未手动触发quality-gate；最终仅文档提交使用 `[skip ci]`。
 
 ## 2026-10-04 共享进程接口与本机目标发现
 

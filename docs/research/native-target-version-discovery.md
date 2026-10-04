@@ -2,7 +2,7 @@
 
 2026-10-04，相对 `c379e0c9fbb47e4551e2e21b7d90a25379d93f24` 清理 Java、Go、C/C++ 的项目版本门禁。
 这是本轮用户请求的实现记录。既有 Rust、TypeScript/JavaScript、Python 分析策略不变；C# 与系统 SDK
-发现已在上一轮完成，见[跨平台记录](native-crossplatform-validation.md)。本轮最终跨平台验收待补记。
+发现已在上一轮完成，见[跨平台记录](native-crossplatform-validation.md)。本轮已通过独立审查与完整双平台验收。
 
 ## 选择规则
 
@@ -47,6 +47,30 @@ CI 运行这些样本不要求用户安装全部样本；用户只需提供项�
 - Clang：固定LLVM21.1.8，32项中31项通过，1项Windows SDK测试按平台跳过；涵盖C89–C23、C++98–C++23、GNU、driver/-x及共享header多标准并集。
 - 打包脚本测试24项通过；Rust聚焦32项及全量764项通过，0失败，82项固定工具或进程夹具默认ignored。
 - 四包真实安装1项通过，73.70秒，覆盖多目标切换与无包内目标库；随后Go诊断与缓存修复重新打包，8项公共图/diff全部通过，0ignored，10.47秒。
-- 最终代码与双平台Actions结果将在本轮完成后补记；本地成功不替代Windows原生运行。
+- 双平台Actions结果见下节；本地成功不替代Windows原生运行。
 
 历史实施记录中的 Java17、Go1.23.8、C17/C++20 均为当时的有限实现或样本，不再是当前产品版本政策。
+
+## 双平台 Actions
+
+实际代码为 `1f035bf083d9192b218a1c1643eba988e0e59cbb`，
+[Language support packs 37187603144](https://github.com/XLCYun/narrant/actions/runs/37187603144)
+由草稿PR更新自动触发，macOS/Windows四组全部成功；未手动触发quality-gate，未发布支持包。
+最终证据提交仅修改文档并使用 `[skip ci]`，不会把文档SHA冒充另一次代码验收。
+
+| 验收 | macOS ARM64 / SDK15.5 | Windows x64 |
+| --- | --- | --- |
+| 四包构建、归档后ready、Go套件 | 通过 | 通过 |
+| Java8/17/25 | 35项通过 | 35项通过 |
+| C# net8/net9/net10 | 38项通过 | 38项通过 |
+| Clang全部发现测试 | 35项中34项通过、1项Windows SDK不适用 | 35项中34项通过、1项macOS SDK不适用 |
+| 共享进程 | 3项覆盖12场景；1个ignored是子进程夹具 | 11项通过；1个ignored是子进程夹具 |
+| LSP完整Windows生命周期 | 不适用 | 13项通过 |
+| Host / 目标发现 | 17 / 10项通过 | 16 / 10项通过 |
+| 四包生产安装与多目标切换 | 1项通过，49.42秒 | 1项通过，76.70秒 |
+| 公共CodeGraph/diff | 8项通过，13.68秒，0ignored | 8项通过，27.86秒，0ignored |
+| 既有Python分析/安装/Review生命周期 | 35 / 3 / 4项通过 | 23 / 3 / 4项通过，0ignored |
+
+Clang CI使用unittest discovery，除 `test_helper.py` 的32项外还含3项DIA构建配置测试，
+因此数量与上方本地helper直接执行记录不同。所有版本都是实际测试样本，不构成新的产品白名单。
+Windows前置轻量检查另执行同一共享模块11项，不与完整应用中的11项重复相加。
