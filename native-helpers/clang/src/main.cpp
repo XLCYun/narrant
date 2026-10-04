@@ -415,9 +415,9 @@ public:
 static void platforms(Request &r,const j::Array &catalog) {
   std::map<std::string,const j::Object *> entries;
   for(auto &v:catalog) {
-    auto o=v.getAsObject(); require(o,"platform must be an object"); keys(*o,{"id","kind","version","root","fingerprint","metadata"});
+    auto o=v.getAsObject(); require(o,"platform must be an object"); keys(*o,{"id","kind","version","root","metadata"});
     auto id=str(*o,"id"); require(!id.empty() && entries.emplace(id,o).second,"duplicate/empty platform id");
-    require(!str(*o,"version").empty() && !str(*o,"fingerprint").empty(),"empty platform provenance");
+    require(!str(*o,"version").empty(),"empty platform version");
   }
   for(auto &entry:entries) {
     auto &o=*entry.second; auto kind=str(o,"kind"); require(kind=="clang-target" || kind=="clang-resource" || kind=="clang-system-headers","unsupported platform kind");

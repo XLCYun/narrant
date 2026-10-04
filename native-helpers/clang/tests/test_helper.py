@@ -84,12 +84,12 @@ class NativeHelperTests(unittest.TestCase):
                           'include_tests': True, 'profile': 'clang-static-v1'},
                 'environment': {'scratch_root': str(self.scratch), 'platforms': [
                     {'id': 'freestanding', 'kind': 'clang-target', 'version': '1',
-                     'root': str(self.scratch), 'fingerprint': 'test-fixture-target',
+                     'root': str(self.scratch),
                      'metadata': {'target_triple': 'arm64-apple-macosx14.0', 'c_standard': 'c17',
                                   'cpp_standard': 'c++20', 'system_include_directories': [],
                                   'resource_platform_id': 'resource'}},
                     {'id': 'resource', 'kind': 'clang-resource', 'version': '21.1.8',
-                     'root': str(LLVM / 'lib/clang/21'), 'fingerprint': 'pinned-official-resource', 'metadata': {}}]},
+                     'root': str(LLVM / 'lib/clang/21'), 'metadata': {}}]},
                 'limits': {'analysis_timeout_ms': 15000, 'max_result_bytes': 8 * 1024 * 1024,
                            'max_diagnostic_bytes': 256 * 1024}}
 
@@ -259,17 +259,21 @@ class NativeHelperTests(unittest.TestCase):
 
     def test_target_sdk_standard_headers(self):
         """明确 catalog 的本机 SDK 提供 C/C++ 标准头，不隐式使用宿主搜索路径。"""
-        sdk = Path(os.environ.get('NARRANT_MACOS_SDK', '/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk'))
-        version = os.environ.get('NARRANT_MACOS_SDK_VERSION', '27.0')
+        sdk = Path(os.environ.get('NARRANT_MACOS_SDK', '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk'))
         if not sdk.exists():
-            self.skipTest('MacOSX27.0 SDK not available; other tests remain freestanding')
+            if os.name == 'nt':
+                self.skipTest('macOS SDK case is not applicable on Windows')
+            self.fail('macOS SDK required for standard-header acceptance')
+        settings = json.loads((sdk / 'SDKSettings.json').read_text())
+        version = settings['Version']
+        deployment = settings.get('DefaultProperties', {}).get('MACOSX_DEPLOYMENT_TARGET', version)
         for mode, source in [('c', '#include <stdint.h>\n#include <stdio.h>\nint f(void){uint32_t n=1;return puts("hello")+(int)n;}\n'),
                              ('cpp', '#include <vector>\nint f(){std::vector<int> v; v.push_back(1);return (int)v.size();}\n')]:
             request = self.prepare({'main.c' if mode == 'c' else 'main.cpp': source}, mode, (0,))
             target = request['environment']['platforms'][0]
             target['root'] = str(sdk)
             target['version'] = version
-            target['metadata']['target_triple'] = 'arm64-apple-macosx' + version
+            target['metadata']['target_triple'] = 'arm64-apple-macosx' + deployment
             target['metadata']['system_include_directories'] = ['usr/include/c++/v1', 'usr/include']
             graph = self.ok(request)
             self.assertTrue(graph['nodes'])
@@ -307,7 +311,7 @@ class NativeHelperTests(unittest.TestCase):
         target = request['environment']['platforms'][0]
         target['metadata']['additional_system_platform_ids'] = ['msvc-headers']
         request['environment']['platforms'].append({'id': 'msvc-headers', 'kind': 'clang-system-headers',
-            'root': str(headers), 'version': 'fixture-1', 'fingerprint': 'fixture-headers', 'metadata': {}})
+            'root': str(headers), 'version': 'fixture-1', 'metadata': {}})
         result = self.run_request(request)
         self.assertEqual(result['outcome'], 'ok', result)
         self.assertEqual(result['graph']['external_symbols'][0]['scope'], 'dependency')
@@ -338,7 +342,7 @@ class NativeHelperTests(unittest.TestCase):
             target['metadata']['system_include_directories'] = ['ucrt', 'shared', 'um', 'winrt']
             target['metadata']['additional_system_platform_ids'] = ['msvc']
             request['environment']['platforms'].append({'id': 'msvc', 'kind': 'clang-system-headers',
-                'root': str(Path(msvc) / 'include'), 'version': Path(msvc).name, 'fingerprint': 'ci-msvc', 'metadata': {}})
+                'root': str(Path(msvc) / 'include'), 'version': Path(msvc).name, 'metadata': {}})
             graph = self.ok(request)
             self.assertTrue(graph['nodes'])
             self.assertTrue(graph['external_symbols'])

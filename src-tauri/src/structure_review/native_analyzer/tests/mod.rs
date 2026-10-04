@@ -1,6 +1,9 @@
 //! 公共图校验及真实 Node helper 生命周期夹具在支持平台共用。
 
 use super::*;
+#[cfg(windows)]
+use crate::child_process::test_support::{assert_completed, FixtureObservation, ObservedProcess};
+use crate::child_process::test_support::{node_executable as test_node, wait_file};
 use crate::structure_review::code_graph::{AnalysisOptions, NodeId, ReferenceTarget, SymbolScope};
 use serde_json::{json, Value};
 use std::{fs, path::Path, time::Instant};
@@ -74,7 +77,6 @@ impl Fixture {
                 kind: "go-sdk".into(),
                 version: "1.23.8".into(),
                 root: self.platform.clone(),
-                fingerprint: "fixture-sha256".into(),
                 metadata: json!({"goos":"linux","goarch":"amd64","goamd64":"v1"}),
             }],
         )
@@ -151,12 +153,22 @@ fn line(value: Value) -> String {
     format!("{value}\n")
 }
 
-/// 等待夹具到达 analyze，取消测试不依赖猜测启动速度。
-fn wait_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "夹具未进入请求阶段");
-        std::thread::sleep(Duration::from_millis(5));
+/// 同步协议入口返回后立即检查原始根 HANDLE，不用 PID 重查或观察线程 join 补等。
+fn analyze(analyzer: &NativeLanguageAnalyzer, input: &AnalysisInput) -> Result<CodeGraph> {
+    #[cfg(windows)]
+    {
+        use crate::child_process::windows_validation::{with_validation, ValidationOptions};
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        with_validation(ValidationOptions::default(), |observations| {
+            let result = analyzer.analyze(input);
+            let statuses = observations.root_statuses();
+            assert_eq!(statuses, [WAIT_OBJECT_0], "实际启动的根进程必须同步完成");
+            result
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        analyzer.analyze(input)
     }
 }
 
@@ -312,7 +324,6 @@ fn clang_catalog_requires_exact_approved_additional_header_ids() {
             kind: "clang-target".into(),
             version: "21.1.8".into(),
             root: root.clone(),
-            fingerprint: "fixture".into(),
             metadata: json!({"target_triple":"x86_64-pc-windows-msvc","c_standard":"c17","cpp_standard":"c++20","system_include_directories":[],"resource_platform_id":"resource","additional_system_platform_ids":["msvc","sdk"]}),
         },
         Platform {
@@ -320,7 +331,6 @@ fn clang_catalog_requires_exact_approved_additional_header_ids() {
             kind: "clang-resource".into(),
             version: "21.1.8".into(),
             root: root.clone(),
-            fingerprint: "fixture".into(),
             metadata: json!({}),
         },
         Platform {
@@ -328,7 +338,6 @@ fn clang_catalog_requires_exact_approved_additional_header_ids() {
             kind: "clang-system-headers".into(),
             version: "14".into(),
             root: root.clone(),
-            fingerprint: "fixture".into(),
             metadata: json!({}),
         },
         Platform {
@@ -336,7 +345,6 @@ fn clang_catalog_requires_exact_approved_additional_header_ids() {
             kind: "clang-system-headers".into(),
             version: "10".into(),
             root,
-            fingerprint: "fixture".into(),
             metadata: json!({}),
         },
     ];
@@ -388,7 +396,7 @@ fn subprocess_handles_unicode_fragments_and_drains_stderr() {
     for mode in ["fragment", "stderr_ok", "ok"] {
         let fixture = Fixture::new();
         let analyzer = fixture.executable_analyzer(mode, &line(ready()), &line(result()));
-        let graph = analyzer.analyze(&fixture.input()).unwrap();
+        let graph = analyze(&analyzer, &fixture.input()).unwrap();
         assert_eq!(graph.root().contains, vec![NodeId("go:Run".into())]);
         let request: Value =
             serde_json::from_slice(&fs::read(fixture.tools.join("request")).unwrap()).unwrap();
@@ -414,7 +422,7 @@ fn subprocess_initializes_crypto_with_explicit_minimal_runtime_environment() {
         "NARRANT_NATIVE_ENV_SENTINEL".into(),
         "explicit-fixture-value".into(),
     );
-    let graph = analyzer.analyze(&fixture.input()).unwrap();
+    let graph = analyze(&analyzer, &fixture.input()).unwrap();
     assert_eq!(graph.root().contains, vec![NodeId("go:Run".into())]);
     let observed: Value = serde_json::from_slice(
         &fs::read(fixture.tools.join("runtime-environment-status")).unwrap(),
@@ -430,6 +438,7 @@ fn subprocess_initializes_crypto_with_explicit_minimal_runtime_environment() {
             "scratch_matches_request": true,
         })
     );
+    #[cfg(unix)]
     assert_process_gone(&fixture.tools.join("pid"));
 }
 
@@ -438,10 +447,11 @@ fn subprocess_initializes_crypto_with_explicit_minimal_runtime_environment() {
 fn subprocess_preserves_early_eof_diagnostics() {
     for mode in ["startup_diagnostic", "startup_stderr_first"] {
         let fixture = Fixture::new();
-        let error = fixture
-            .executable_analyzer(mode, &line(ready()), &line(result()))
-            .analyze(&fixture.input())
-            .unwrap_err();
+        let error = analyze(
+            &fixture.executable_analyzer(mode, &line(ready()), &line(result())),
+            &fixture.input(),
+        )
+        .unwrap_err();
         assert!(error.message.contains("完整 completed"), "{error}");
         assert!(
             error
@@ -449,6 +459,7 @@ fn subprocess_preserves_early_eof_diagnostics() {
                 .contains("unique-runtime-initialization-failure"),
             "{error}"
         );
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("pid"));
     }
 }
@@ -465,10 +476,11 @@ fn subprocess_rejects_invalid_protocol_lifecycle() {
         "nonzero",
     ] {
         let fixture = Fixture::new();
-        let error = fixture
-            .executable_analyzer(mode, &line(ready()), &line(result()))
-            .analyze(&fixture.input())
-            .unwrap_err();
+        let error = analyze(
+            &fixture.executable_analyzer(mode, &line(ready()), &line(result())),
+            &fixture.input(),
+        )
+        .unwrap_err();
         assert!(!error.is_cancelled(), "{mode}: {error}");
     }
     for mutation in 0..5 {
@@ -486,10 +498,11 @@ fn subprocess_rejects_invalid_protocol_lifecycle() {
             }
             _ => unreachable!(),
         }
-        assert!(fixture
-            .executable_analyzer("ok", &line(ready()), &line(value))
-            .analyze(&fixture.input())
-            .is_err());
+        assert!(analyze(
+            &fixture.executable_analyzer("ok", &line(ready()), &line(value)),
+            &fixture.input()
+        )
+        .is_err());
     }
 }
 
@@ -509,8 +522,9 @@ fn subprocess_bounds_resources_and_all_timeout_stages() {
             analyzer.limits.max_result_bytes = 256;
         }
         let started = Instant::now();
-        assert!(analyzer.analyze(&fixture.input()).is_err(), "{mode}");
+        assert!(analyze(&analyzer, &fixture.input()).is_err(), "{mode}");
         assert!(started.elapsed() < Duration::from_secs(5), "{mode}");
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("pid"));
     }
 }
@@ -532,7 +546,7 @@ fn subprocess_cooperative_and_forced_cancellation() {
             wait_file(&marker);
             cancellation.store(true, Ordering::Release);
         });
-        let error = analyzer.analyze(&fixture.input()).unwrap_err();
+        let error = analyze(&analyzer, &fixture.input()).unwrap_err();
         cancelling.join().unwrap();
         assert!(error.is_cancelled(), "{mode}: {error}");
         if mode == "cancel" {
@@ -541,6 +555,7 @@ fn subprocess_cooperative_and_forced_cancellation() {
             assert_eq!(cancel["type"], "cancel");
             assert_eq!(cancel["id"], protocol::REQUEST_ID);
         }
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("pid"));
     }
 }
@@ -551,22 +566,29 @@ fn subprocess_reaps_descendants_after_parent_exit() {
     for mode in ["descendant", "descendant_closed"] {
         let fixture = Fixture::new();
         #[cfg(windows)]
-        let (observed, observation) = observe_fixture_processes(&fixture.tools);
+        let mut observation =
+            FixtureObservation::start(&fixture.tools, ["pid", "descendant", "observed"], |_, _| {
+                Ok(())
+            });
         let result = fixture
             .executable_analyzer(mode, &line(ready()), &line(result()))
             .analyze(&fixture.input());
         #[cfg(windows)]
-        assert_observed_processes_gone(observed.get().expect("句柄必须先于 observed 确认发布"));
+        let completion = observation.completion();
+        #[cfg(windows)]
+        assert_completed(completion);
         if mode == "descendant" {
             let error = result.unwrap_err();
             assert!(error.message.contains("退出超时"), "{error}");
         } else {
             result.unwrap();
         }
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("pid"));
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("descendant"));
         #[cfg(windows)]
-        observation.join().unwrap();
+        observation.join();
     }
 }
 
@@ -576,10 +598,11 @@ fn subprocess_preserves_backend_failure_over_exit_failure() {
     for mode in ["nonzero", "exit_stall"] {
         let fixture = Fixture::new();
         let value = json!({"protocol":protocol::PROTOCOL,"type":"completed","id":protocol::REQUEST_ID,"outcome":"error","error":{"code":"union_conflict","message":"真实归并冲突","paths":["中文.go"]}});
-        let error = fixture
-            .executable_analyzer(mode, &line(ready()), &line(value))
-            .analyze(&fixture.input())
-            .unwrap_err();
+        let error = analyze(
+            &fixture.executable_analyzer(mode, &line(ready()), &line(value)),
+            &fixture.input(),
+        )
+        .unwrap_err();
         assert!(error.message.contains("真实归并冲突"), "{error}");
         assert!(!error.is_cancelled());
     }
@@ -593,111 +616,16 @@ fn assert_process_gone(marker: &Path) {
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "进程 {pid} 仍存活");
 }
 
-/// Windows 直接查询夹具 PID；不用额外等待掩盖回收不完整。
-#[cfg(windows)]
-fn assert_process_gone(marker: &Path) {
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, WAIT_OBJECT_0},
-        System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
-    };
-    let pid = fs::read_to_string(marker).unwrap().parse::<u32>().unwrap();
-    // SAFETY: 仅为本测试的 PID 打开查询句柄，句柄使用后立即关闭。
-    unsafe {
-        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-        if !process.is_null() {
-            assert_eq!(
-                WaitForSingleObject(process, 0),
-                WAIT_OBJECT_0,
-                "进程 {pid} 仍存活：{}",
-                marker.display()
-            );
-            CloseHandle(process);
-        }
-    }
-}
-
-/// 父子进程的准确对象身份，持有句柄期间 PID 不会重用。
-#[cfg(windows)]
-type ObservedProcesses = Vec<(String, std::os::windows::io::OwnedHandle)>;
-
-/// 先非阻塞发布父子句柄，再通知夹具继续，避免清理后 join 延迟掩盖存活进程。
-#[cfg(windows)]
-fn observe_fixture_processes(
-    directory: &Path,
-) -> (
-    Arc<std::sync::OnceLock<ObservedProcesses>>,
-    std::thread::JoinHandle<()>,
-) {
-    use std::os::windows::io::{FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
-    let directory = directory.to_owned();
-    let published = Arc::new(std::sync::OnceLock::new());
-    let output = published.clone();
-    let observer = std::thread::spawn(move || {
-        wait_file(&directory.join("descendant"));
-        let observed = ["pid", "descendant"]
-            .into_iter()
-            .map(|role| {
-                let pid = fs::read_to_string(directory.join(role))
-                    .unwrap()
-                    .parse::<u32>()
-                    .unwrap();
-                // SAFETY: 夹具仍等待 observed，两个进程尚未退出；只保留同步查询权限。
-                let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-                assert!(!handle.is_null(), "无法观察 {role} PID {pid}");
-                // SAFETY: 上面的成功 OpenProcess 将唯一句柄所有权交给 OwnedHandle。
-                (role.to_owned(), unsafe {
-                    OwnedHandle::from_raw_handle(handle)
-                })
-            })
-            .collect();
-        output.set(observed).expect("进程句柄只发布一次");
-        fs::write(directory.join("observed"), "ready").unwrap();
-    });
-    (published, observer)
-}
-
-/// 保留原立即退出硬断言，并用回收前持有的准确进程句柄验证相同对象。
-#[cfg(windows)]
-fn assert_observed_processes_gone(observed: &[(String, std::os::windows::io::OwnedHandle)]) {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::{Foundation::WAIT_OBJECT_0, System::Threading::WaitForSingleObject};
-    for (role, process) in observed {
-        // SAFETY: 句柄来自回收前的夹具且仍持有；超时 0 不引入测试侧等待。
-        assert_eq!(
-            unsafe { WaitForSingleObject(process.as_raw_handle(), 0) },
-            WAIT_OBJECT_0,
-            "原始 {role} 进程对象仍存活"
-        );
-    }
-}
-
-/// 测试工具由开发/CI 的 Node 提供，发现一次后只使用其固定绝对路径。
-fn test_node() -> PathBuf {
-    static NODE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    NODE.get_or_init(|| {
-        if let Some(path) = std::env::var_os("NARRANT_TEST_NODE") {
-            return PathBuf::from(path).canonicalize().unwrap();
-        }
-        let output = std::process::Command::new("node")
-            .args(["-p", "process.execPath"])
-            .output()
-            .expect("原生宿主协议测试需要 CI/开发 Node，或 NARRANT_TEST_NODE 绝对路径");
-        assert!(output.status.success());
-        PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
-            .canonicalize()
-            .unwrap()
-    })
-    .clone()
-}
-
 /// panic 展开和显式 Drop 都先杀死并回收真实后代，再归还同步调用。
 #[test]
 fn session_drop_and_panic_reap_all_children() {
     for panic in [false, true] {
         let fixture = Fixture::new();
         #[cfg(windows)]
-        let (observed, observation) = observe_fixture_processes(&fixture.tools);
+        let mut observation =
+            FixtureObservation::start(&fixture.tools, ["pid", "descendant", "observed"], |_, _| {
+                Ok(())
+            });
         let analyzer = fixture.executable_analyzer("descendant", &line(ready()), &line(result()));
         let checked = input::validate(&analyzer, &fixture.input()).unwrap();
         let scratch = tempfile::tempdir().unwrap();
@@ -712,12 +640,16 @@ fn session_drop_and_panic_reap_all_children() {
             drop(session);
         }));
         #[cfg(windows)]
-        assert_observed_processes_gone(observed.get().expect("句柄必须先于 observed 确认发布"));
+        let completion = observation.completion();
+        #[cfg(windows)]
+        assert_completed(completion);
         assert_eq!(result.is_err(), panic);
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("pid"));
+        #[cfg(unix)]
         assert_process_gone(&fixture.tools.join("descendant"));
         #[cfg(windows)]
-        observation.join().unwrap();
+        observation.join();
     }
 }
 
@@ -733,9 +665,20 @@ fn helper_observes_host_stdin_eof_before_terminal() {
         .send(&checked.request(&analyzer, scratch.path()).unwrap())
         .unwrap();
     wait_file(&fixture.tools.join("request"));
+    #[cfg(windows)]
+    let root = ObservedProcess::marker(
+        &fixture.tools.join("pid"),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
     session.close_input();
     wait_file(&fixture.tools.join("host-eof"));
     drop(session);
+    #[cfg(windows)]
+    let immediate = root.status();
+    #[cfg(windows)]
+    assert_eq!(immediate, windows_sys::Win32::Foundation::WAIT_OBJECT_0);
+    #[cfg(unix)]
     assert_process_gone(&fixture.tools.join("pid"));
 }
 
@@ -751,8 +694,9 @@ fn subprocess_bounds_blocked_stdin_writer() {
         input.files.push(name.into());
     }
     let started = Instant::now();
-    let error = analyzer.analyze(&input).unwrap_err();
+    let error = analyze(&analyzer, &input).unwrap_err();
     assert!(error.message.contains("分析超时"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(5));
+    #[cfg(unix)]
     assert_process_gone(&fixture.tools.join("pid"));
 }

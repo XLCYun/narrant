@@ -37,23 +37,19 @@ async function findDirectory(candidates, label) {
   throw new Error(`${label} not installed; provide an isolated tool directory for local pack construction`);
 }
 
-/** 只装入两个固定 TFM 的标准引用与许可证，不复制 NuGet 的 targets 或分析器。 */
-export async function bundleCsharpReferences({ definition, sdk, reference8, payload }) {
-  const expected = [{ tfm: 'net10.0', version: '10.0.0' }, { tfm: 'net8.0', version: '8.0.0' }];
-  if (definition.referencePack !== 'Microsoft.NETCore.App.Ref' || JSON.stringify(definition.referenceTargets) !== JSON.stringify(expected)) throw new Error('Unsupported C# reference target catalog');
-  const identity = await fs.readFile(path.join(reference8, 'Microsoft.NETCore.App.Ref.nuspec'), 'utf8');
-  if (!/<id>Microsoft\.NETCore\.App\.Ref<\/id>/.test(identity) || !/<version>8\.0\.0<\/version>/.test(identity)) throw new Error('.NET 8 reference package identity mismatch');
-  const platforms = [];
-  for (const target of expected) {
-    const source = target.tfm === 'net8.0' ? path.join(reference8, 'ref', target.tfm) : path.join(sdk, 'packs', definition.referencePack, target.version, 'ref', target.tfm);
-    await fs.access(path.join(source, 'System.Runtime.dll'));
-    const root = `runtime/platform/${target.tfm}`;
-    await copyToolTree(source, path.join(payload, root));
-    platforms.push({ id: `${target.tfm}-reference-assemblies`, kind: 'dotnet-reference-assemblies', version: target.version, root, metadata: { tfm: target.tfm, reference_pack: definition.referencePack, reference_pack_version: target.version } });
+/** 为真实 helper 验收读取私有测试 SDK 的引用目录；目标声明不再复制进支持包。 */
+export async function csharpFixturePlatforms(sdk) {
+  const base = path.join(sdk, 'packs/Microsoft.NETCore.App.Ref');
+  const targets = new Map();
+  for (const version of (await fs.readdir(base)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))) {
+    if (!/^[1-9]\d*\.0\.(0|[1-9]\d*)$/.test(version)) continue;
+    const tfm = `net${version.split('.')[0]}.0`;
+    const root = path.join(base, version, 'ref', tfm);
+    try { await fs.access(path.join(root, 'System.Runtime.dll')); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    targets.set(tfm, { id: `${tfm}-reference-assemblies`, kind: 'dotnet-reference-assemblies', version, root,
+      metadata: { tfm, reference_pack: 'Microsoft.NETCore.App.Ref', reference_pack_version: version } });
   }
-  await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
-  for (const name of ['LICENSE.TXT', 'THIRD-PARTY-NOTICES.TXT']) await fs.copyFile(path.join(reference8, name), path.join(payload, 'licenses', `dotnet-ref8-${name}`));
-  return platforms;
+  return [...targets.values()];
 }
 
 /** 以空业务环境启动自己的 helper，验证 ready 身份以及协议错误的受控终结。 */
@@ -126,6 +122,7 @@ export async function buildNativePack({ id, target, output, definition, packageD
   const windows = process.platform === 'win32';
   const suffix = windows ? '.exe' : '';
   const platforms = [];
+  const externalPlatforms = [];
   let executable, args = [];
   try {
     for (const part of ['bin', 'runtime', 'licenses', 'control']) await fs.mkdir(path.join(payload, part), { recursive: true });
@@ -152,8 +149,7 @@ export async function buildNativePack({ id, target, output, definition, packageD
       await copyToolTree(path.join(sdk, 'host'), path.join(payload, 'bin/host'));
       await copyToolTree(path.join(sdk, 'shared/Microsoft.NETCore.App', definition.dotnetRuntime), path.join(payload, 'bin/shared/Microsoft.NETCore.App', definition.dotnetRuntime));
       await copyToolTree(publish, path.join(payload, 'runtime/helper'));
-      const reference8 = await findDirectory([process.env.NARRANT_DOTNET_REF8_ROOT, '/private/tmp/narrant-dotnet-ref8-8.0.0'], '.NET 8.0.0 standard reference package');
-      platforms.push(...await bundleCsharpReferences({ definition, sdk, reference8, payload }));
+      externalPlatforms.push(...await csharpFixturePlatforms(sdk));
       for (const name of ['LICENSE.txt', 'ThirdPartyNotices.txt']) await fs.copyFile(path.join(sdk, name), path.join(payload, 'licenses', name));
       executable = path.join(payload, `bin/dotnet${suffix}`);
       args = [path.join(payload, 'runtime/helper/Narrant.CSharp.Helper.dll')];
@@ -198,7 +194,8 @@ export async function buildNativePack({ id, target, output, definition, packageD
       platforms.push({ id: 'clang-resource-21', kind: 'clang-resource', version: definition.llvm, root: 'runtime/platform/clang-resource', metadata: {} });
     }
     const control = { schema_version: 1, helper_version: definition.helperVersion, platforms };
-    if (id === 'c-cpp') control.target_sdk = windows ? { kind: 'windows-msvc', version: '10.0.26100.0', msvc_version: path.basename(process.env.NARRANT_MSVC_ROOT ?? '') } : { kind: 'macos', version: process.env.NARRANT_MACOS_SDK_VERSION ?? '27.0' };
+    if (id === 'csharp') control.target_sdk = { kind: 'dotnet' };
+    if (id === 'c-cpp') control.target_sdk = { kind: windows ? 'windows-msvc' : 'macos' };
     await fs.writeFile(path.join(payload, 'control/native.json'), `${JSON.stringify(control, null, 2)}\n`);
     const helper = id === 'c-cpp' ? 'clang' : id;
     await smokeNativeHelper({ executable, args, id: definition.helperId, projection: definition.projectionRevision, languages: id === 'c-cpp' ? ['c', 'cpp'] : [id], profile: definition.profile });
@@ -213,19 +210,20 @@ export async function buildNativePack({ id, target, output, definition, packageD
     const configPath = path.join(output, 'native-helpers-config.json');
     let config = {};
     try { config = JSON.parse(await fs.readFile(configPath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const sdkPlatforms = platforms.map(platform => ({ ...platform, root: path.join(extracted, platform.root), fingerprint: `pack-${id}-${definition.version}` }));
+    const sdkPlatforms = [...platforms.map(platform => ({ ...platform, root: path.join(extracted, platform.root) })), ...externalPlatforms];
     if (id === 'c-cpp') {
       if (windows) {
         const sdkRoot = await findDirectory([process.env.NARRANT_WINDOWS_SDK], 'Windows SDK 10.0.26100.0 Include directory');
         const standard = await findDirectory([process.env.NARRANT_MSVC_ROOT && path.join(process.env.NARRANT_MSVC_ROOT, 'include')], 'Exact MSVC standard headers');
-        sdkPlatforms.push({ id: 'msvc-standard-headers', kind: 'clang-system-headers', version: control.target_sdk.msvc_version, root: standard, fingerprint: `msvc-${control.target_sdk.msvc_version}`, metadata: {} });
-        sdkPlatforms.push({ id: 'windows-sdk-10.0.26100.0', kind: 'clang-target', version: '10.0.26100.0', root: sdkRoot, fingerprint: 'windows-sdk-10.0.26100.0', metadata: { target_triple: 'x86_64-pc-windows-msvc', c_standard: 'c17', cpp_standard: 'c++20', system_include_directories: ['ucrt', 'shared', 'um', 'winrt', 'cppwinrt'], resource_platform_id: 'clang-resource-21', additional_system_platform_ids: ['msvc-standard-headers'] } });
+        sdkPlatforms.push({ id: 'msvc-standard-headers', kind: 'clang-system-headers', version: path.basename(path.dirname(standard)), root: standard, metadata: {} });
+        sdkPlatforms.push({ id: `windows-sdk-${path.basename(sdkRoot)}`, kind: 'clang-target', version: path.basename(sdkRoot), root: sdkRoot, metadata: { target_triple: 'x86_64-pc-windows-msvc', c_standard: 'c17', cpp_standard: 'c++20', system_include_directories: ['ucrt', 'shared', 'um', 'winrt', 'cppwinrt'], resource_platform_id: 'clang-resource-21', additional_system_platform_ids: ['msvc-standard-headers'] } });
       } else {
-        const version = control.target_sdk.version;
-        const sdkRoot = await findDirectory([process.env.NARRANT_MACOS_SDK, `/Library/Developer/CommandLineTools/SDKs/MacOSX${version}.sdk`, `/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX${version}.sdk`, `/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX${version}.sdk`], `macOS ${version} target SDK`);
+        const sdkRoot = await findDirectory([process.env.NARRANT_MACOS_SDK, '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk', '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'], 'macOS target SDK');
         const settings = JSON.parse(await fs.readFile(path.join(sdkRoot, 'SDKSettings.json'), 'utf8'));
-        if (settings.CanonicalName !== `macosx${version}`) throw new Error('Target SDK version mismatch');
-        sdkPlatforms.push({ id: `macos-${version}`, kind: 'clang-target', version, root: sdkRoot, fingerprint: `macos-sdk-${version}`, metadata: { target_triple: `arm64-apple-macosx${version}`, c_standard: 'c17', cpp_standard: 'c++20', system_include_directories: ['usr/include/c++/v1', 'usr/include'], resource_platform_id: 'clang-resource-21' } });
+        const version = settings.Version;
+        if (typeof version !== 'string' || !/^\d+(\.\d+)+$/.test(version)) throw new Error('macOS SDK has no version metadata');
+        const deploymentTarget = settings.DefaultProperties?.MACOSX_DEPLOYMENT_TARGET ?? version;
+        sdkPlatforms.push({ id: `macos-${version}`, kind: 'clang-target', version, root: sdkRoot, metadata: { target_triple: `arm64-apple-macosx${deploymentTarget}`, c_standard: 'c17', cpp_standard: 'c++20', system_include_directories: ['usr/include/c++/v1', 'usr/include'], resource_platform_id: 'clang-resource-21' } });
       }
     }
     config[helper] = { executable: relocate(executable), args: args.map(relocate), environment: id === 'csharp' ? { DOTNET_ROOT: path.join(extracted, 'bin'), DOTNET_MULTILEVEL_LOOKUP: '0', DOTNET_EnableDiagnostics: '0' } : {}, trusted_roots: [extracted], platforms: sdkPlatforms };

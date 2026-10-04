@@ -40,7 +40,6 @@ pub struct Platform {
     pub kind: String,
     pub version: String,
     pub root: PathBuf,
-    pub fingerprint: String,
     pub metadata: serde_json::Value,
 }
 
@@ -56,11 +55,11 @@ pub struct AnalysisLimits {
 }
 
 impl Default for AnalysisLimits {
-    /// 使用首轮开发参数，调用方可为实测和测试显式缩短。
+    /// 启动与分析容纳慢机器和大项目；取消与退出仍使用短期限。
     fn default() -> Self {
         Self {
-            startup_timeout: Duration::from_secs(15),
-            analysis_timeout: Duration::from_secs(120),
+            startup_timeout: Duration::from_secs(60),
+            analysis_timeout: Duration::from_secs(30 * 60),
             cancellation_grace: Duration::from_secs(2),
             exit_timeout: Duration::from_secs(5),
             max_result_bytes: 128 * 1024 * 1024,

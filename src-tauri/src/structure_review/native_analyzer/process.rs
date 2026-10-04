@@ -1,21 +1,18 @@
 //! 有界 stdio 与阶段状态机；不等待无限 EOF，也不把 completed 提前交付。
 
-#[path = "process_tree.rs"]
-mod process_tree;
-
 use super::{
     cancelled, failure,
     input::{self, CheckedInput},
     protocol::{self, Completed, Message},
     NativeLanguageAnalyzer, Result,
 };
+use crate::child_process::ProcessTree;
 use crate::structure_review::code_graph::CodeGraph;
-use process_tree::ProcessTree;
 use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
     path::Path,
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
@@ -61,8 +58,11 @@ impl Session {
             .current_dir(scratch)
             .env("TMPDIR", scratch)
             .env("TMP", scratch)
-            .env("TEMP", scratch);
-        let process = ProcessTree::spawn(&mut command)?;
+            .env("TEMP", scratch)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let process = ProcessTree::spawn(&mut command).map_err(failure)?;
         let (events, incoming) = mpsc::sync_channel(4);
         let (outgoing, writes) = mpsc::sync_channel::<Vec<u8>>(2);
         let mut session = Self {
@@ -74,21 +74,15 @@ impl Session {
         };
         let stdout = session
             .process
-            .child
-            .stdout
-            .take()
+            .take_stdout()
             .ok_or_else(|| failure("helper 缺少 stdout"))?;
         let stderr = session
             .process
-            .child
-            .stderr
-            .take()
+            .take_stderr()
             .ok_or_else(|| failure("helper 缺少 stderr"))?;
         let stdin = session
             .process
-            .child
-            .stdin
-            .take()
+            .take_stdin()
             .ok_or_else(|| failure("helper 缺少 stdin"))?;
         nonblocking(&stdout)?;
         nonblocking(&stderr)?;
@@ -140,7 +134,7 @@ impl Session {
     /// 回收过程不观察取消；退出或失败后关闭队列并等待每个线程。
     fn finish(&mut self) -> Result<()> {
         self.close_input();
-        let cleanup = self.process.reap();
+        let cleanup = self.process.reap().map_err(failure);
         self.stop.store(true, Ordering::Release);
         self.incoming.take();
         let mut panicked = false;
@@ -293,7 +287,7 @@ fn exchange(
                 let _ = session.send(&json!({"protocol": protocol::PROTOCOL, "type": "cancel", "id": protocol::REQUEST_ID}));
             }
         }
-        if let Some(status) = session.process.status()? {
+        if let Some(status) = session.process.status().map_err(failure)? {
             if !status.success() && stdout_eof && stderr_eof {
                 return preserve(
                     terminal,

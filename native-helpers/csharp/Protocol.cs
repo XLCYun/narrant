@@ -19,7 +19,7 @@ internal sealed record Input(string RepositoryRoot, string[] Files, bool Include
 internal sealed record EnvironmentInput(string ScratchRoot, Platform[] Platforms);
 
 /// <summary>描述一个单独批准的目标引用程序集目录。</summary>
-internal sealed record Platform(string Id, string Kind, string Version, string Root, string Fingerprint, PlatformMetadata Metadata);
+internal sealed record Platform(string Id, string Kind, string Version, string Root, PlatformMetadata Metadata);
 
 /// <summary>定义 C# 平台的有限 metadata 字段。</summary>
 internal sealed record PlatformMetadata(string Tfm, string ReferencePack, string ReferencePackVersion);
@@ -56,11 +56,11 @@ internal static class Protocol
         var platforms = new List<Platform>();
         foreach (var value in environment.GetProperty("platforms").EnumerateArray())
         {
-            Fields(value, "id", "kind", "version", "root", "fingerprint", "metadata");
+            Fields(value, "id", "kind", "version", "root", "metadata");
             var metadata = value.GetProperty("metadata");
             Fields(metadata, "tfm", "reference_pack", "reference_pack_version");
             platforms.Add(new Platform(String(value, "id"), String(value, "kind"), String(value, "version"),
-                String(value, "root"), String(value, "fingerprint"),
+                String(value, "root"),
                 new PlatformMetadata(String(metadata, "tfm"), String(metadata, "reference_pack"),
                     String(metadata, "reference_pack_version"))));
         }

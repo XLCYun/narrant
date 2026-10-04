@@ -65,9 +65,9 @@ func fixtureRequest(t *testing.T, root string, files ...string) request {
 		t.Logf("SDK: %s", sdk)
 	}
 	return request{Protocol: protocol, Type: "analyze", ID: "test", Input: input{RepositoryRoot: root, Files: files, Profile: "go-static-v1"}, Environment: environment{ScratchRoot: t.TempDir(), Platforms: []platform{
-		{ID: "linux", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "test-sdk", Metadata: platformMetadata{GOOS: "linux", GOARCH: "amd64", GOAMD64: "v1"}},
-		{ID: "windows", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "test-sdk", Metadata: platformMetadata{GOOS: "windows", GOARCH: "amd64", GOAMD64: "v1"}},
-		{ID: "host", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "test-sdk", Metadata: hostMeta},
+		{ID: "linux", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "linux", GOARCH: "amd64", GOAMD64: "v1"}},
+		{ID: "windows", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "windows", GOARCH: "amd64", GOAMD64: "v1"}},
+		{ID: "host", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: hostMeta},
 	}}, Limits: limits{AnalysisTimeoutMS: 120000, MaxResultBytes: 134217728, MaxDiagnosticBytes: 262144}}
 }
 

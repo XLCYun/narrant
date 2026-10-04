@@ -65,10 +65,10 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
   });
 }
 
-// 两个平台必须拥有全部六个固定工具，清单不能遗漏语言运行时。
+// 两个平台必须拥有全部固定构建工具和引用夹具，清单不能遗漏语言运行时。
 test('official pinned manifest covers every required tool on both platforms', () => {
   assert.equal(validateToolchainManifest(manifest), manifest);
-  for (const entries of Object.values(manifest.targets)) assert.deepEqual(entries.map(entry => entry.name).sort(), ['dotnet', 'dotnet-ref8', 'go', 'jdk17', 'jdk25', 'llvm']);
+  for (const entries of Object.values(manifest.targets)) assert.deepEqual(entries.map(entry => entry.name).sort(), ['dotnet', 'dotnet-ref8', 'dotnet-ref9', 'go', 'jdk17', 'jdk25', 'llvm']);
 });
 
 // 恶意或不完整清单必须在任何下载和解包发生前被拒绝。
@@ -95,8 +95,8 @@ test('download verification rejects a modified archive with a fixed SHA256', asy
 
 // Windows 空格路径可用，缺任意 helper 或相对 SDK 根都要失败。
 test('all four helpers and narrow absolute platform roots are mandatory', () => {
-  const config = Object.fromEntries(['go', 'java', 'csharp', 'clang'].map(id => [id, { executable: `C:\\Native Tools\\${id}.exe`, args: [], trusted_roots: ['C:\\Native Tools'], platforms: [{ id: 'fixed', kind: 'sdk', version: '1', root: 'C:\\SDK\\1', fingerprint: 'fixed' }] }]));
-  config.csharp.platforms = [['net8.0', '8.0.0'], ['net10.0', '10.0.0']].map(([tfm, version]) => ({ id: tfm, kind: 'dotnet-reference-assemblies', version, root: `C:\\SDK\\${tfm}`, fingerprint: 'fixed', metadata: { tfm, reference_pack: 'Microsoft.NETCore.App.Ref', reference_pack_version: version } }));
+  const config = Object.fromEntries(['go', 'java', 'csharp', 'clang'].map(id => [id, { executable: `C:\\Native Tools\\${id}.exe`, args: [], trusted_roots: ['C:\\Native Tools'], platforms: [{ id: 'fixed', kind: 'sdk', version: '1', root: 'C:\\SDK\\1' }] }]));
+  config.csharp.platforms = [['net8.0', '8.0.0'], ['net9.0', '9.0.20'], ['net10.0', '10.0.0']].map(([tfm, version]) => ({ id: tfm, kind: 'dotnet-reference-assemblies', version, root: `C:\\SDK\\${tfm}`, metadata: { tfm, reference_pack: 'Microsoft.NETCore.App.Ref', reference_pack_version: version } }));
   assert.equal(validateNativeConfiguration(config, 'win32'), config);
   const singleTarget = structuredClone(config);
   singleTarget.csharp.platforms.shift();
@@ -113,9 +113,9 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 
 // 验收命令覆盖所有 helper，且 Cargo 统一串行经过仓库入口。
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
-  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 11);
+  assert.equal(commands.length, 10);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
@@ -129,30 +129,22 @@ test('verification uses every helper suite and serialized Cargo host and real gr
   assert.throws(() => verificationCommands({}), /Missing fixed toolchain/);
 });
 
-// 共享 Job 对象的两个生命周期回归只在 Windows 执行，且不启动忽略的子进程 fixture。
-test('Windows native acceptance includes focused shared Job regressions without expanding macOS tests', () => {
-  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
-  const filter = 'lsp::transport::windows_process_tests::windows_job_';
-  const ownerFilter = 'child_process::windows_job::tests::';
+// 公共进程场景在两个平台运行；Windows 再验证完整 LSP 协议调用链。
+test('shared process acceptance runs on both platforms with Windows LSP integration', () => {
+  const environment = Object.fromEntries(['GO_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const ownerFilter = 'child_process::';
   const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');
-  const regressions = windows.filter(command => command.args.includes(filter));
-  assert.equal(regressions.length, 1);
-  assert.deepEqual(regressions[0], {
-    executable: 'bash',
-    args: ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', filter, '--', '--nocapture', '--test-threads=1'],
-  });
   const macOS = verificationCommands(environment, 'darwin');
-  assert.equal(macOS.length, 8);
-  assert.ok(macOS.every(command => ![filter, ownerFilter, sessionFilter].some(item => command.args.includes(item))));
-  const owner = windows.filter(command => command.args.includes(ownerFilter));
-  assert.equal(owner.length, 1);
-  assert.deepEqual(owner[0], {
-    executable: 'bash',
-    args: ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', ownerFilter, '--', '--nocapture', '--test-threads=1'],
-  });
+  assert.equal(macOS.length, 9);
+  for (const commands of [windows, macOS]) {
+    const owners = commands.filter(command => command.args.includes(ownerFilter));
+    assert.equal(owners.length, 1);
+    assert.deepEqual(owners[0].args, ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', ownerFilter, '--', '--nocapture', '--test-threads=1']);
+  }
   assert.equal(windows.filter(command => command.args.includes(sessionFilter)).length, 1);
-  assert.deepEqual(windows.slice(4).filter(command => ![filter, ownerFilter, sessionFilter].some(item => command.args.includes(item))), macOS.slice(4));
+  assert.ok(macOS.every(command => !command.args.includes(sessionFilter)));
+  assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(sessionFilter)), macOS.slice(4));
 });
 
 // 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。
@@ -221,7 +213,7 @@ test('net8 standard references have one official architecture-independent SHA512
   for (const mutation of [{ version: '8.0.1' }, { url: references[0].url.replace('8.0.0.nupkg', '8.0.1.nupkg') }, { algorithm: 'sha256', digest: 'a'.repeat(64) }]) {
     const invalid = structuredClone(manifest);
     Object.assign(invalid.targets['aarch64-apple-darwin'].find(entry => entry.name === 'dotnet-ref8'), mutation);
-    assert.throws(() => validateToolchainManifest(invalid), /reference pack/);
+    assert.throws(() => validateToolchainManifest(invalid), /reference fixture/);
   }
 });
 

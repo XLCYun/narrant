@@ -15,6 +15,8 @@ REFS = os.environ.get(
     "/tmp/narrant-dotnet-10.0.100/packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0",
 )
 REFS8 = os.environ.get("NARRANT_TEST_REFS8", "/private/tmp/narrant-dotnet-ref8-8.0.0/ref/net8.0")
+REFS9 = os.environ.get("NARRANT_TEST_REFS9")
+REFS9_VERSION = os.environ.get("NARRANT_TEST_REFS9_VERSION", "9.0.20")
 HELPER = Path(os.environ.get("NARRANT_TEST_HELPER", str(
     Path(__file__).resolve().parents[1] / "bin/Release/net10.0/Narrant.CSharp.Helper.dll")))
 
@@ -46,13 +48,16 @@ class HelperTests(unittest.TestCase):
         return {"id": name, "files": files, "tfm": tfm, "language_version": language_version,
                 "define_constants": list(defines), "implicit_usings": False}
 
+    def platform(self, tfm="net10.0", version="10.0.0", root=REFS):
+        """生成宿主已选定的引用目录，补丁版本只属于测试夹具。"""
+        return {"id": tfm, "kind": "dotnet-reference-assemblies", "version": version, "root": root,
+                "metadata": {"tfm": tfm, "reference_pack": "Microsoft.NETCore.App.Ref",
+                             "reference_pack_version": version}}
+
     def request(self, files, platforms=None, timeout=120000, include_tests=False):
         """生成宿主侧 v1 请求，平台由案例显式提供。"""
         if platforms is None:
-            platforms = [{"id": "net10", "kind": "dotnet-reference-assemblies", "version": "10.0.0",
-                          "root": REFS, "fingerprint": "fixture-ref-10.0.0",
-                          "metadata": {"tfm": "net10.0", "reference_pack": "Microsoft.NETCore.App.Ref",
-                                       "reference_pack_version": "10.0.0"}}]
+            platforms = [self.platform()]
         return {"protocol": "narrant.native-analyzer/1", "type": "analyze", "id": "fixture",
                 "input": {"repository_root": str(self.root), "files": files,
                           "include_tests": include_tests, "profile": "csharp-static-v1"},
@@ -231,10 +236,7 @@ class OnlyNet10 {}
         self.write("A.cs", source)
         net8 = self.config("net8", ["A.cs"], defines=["NET8_0"], tfm="net8.0", language_version="12.0")
         net10 = self.config("net10", ["A.cs"], defines=["NET10_0"])
-        platform8 = {"id": "net8", "kind": "dotnet-reference-assemblies", "version": "8.0.0",
-                     "root": REFS8, "fingerprint": "fixture-ref-8.0.0",
-                     "metadata": {"tfm": "net8.0", "reference_pack": "Microsoft.NETCore.App.Ref",
-                                  "reference_pack_version": "8.0.0"}}
+        platform8 = self.platform("net8.0", "8.0.0", REFS8)
         platform10 = self.request(["A.cs"])["environment"]["platforms"][0]
 
         self.source_set([self.config("net10-no-defines", ["A.cs"])])
@@ -295,10 +297,7 @@ class OnlyNet10 {}
         self.assertTrue(Path(REFS8).is_dir(), "official net8.0/8.0.0 reference pack is required")
         self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>')
         self.write("App/E.cs", "public static class E { extension(string s) { public int Size() => s.Length; } }")
-        platform8 = {"id": "net8", "kind": "dotnet-reference-assemblies", "version": "8.0.0",
-                     "root": REFS8, "fingerprint": "fixture-ref-8.0.0",
-                     "metadata": {"tfm": "net8.0", "reference_pack": "Microsoft.NETCore.App.Ref",
-                                  "reference_pack_version": "8.0.0"}}
+        platform8 = self.platform("net8.0", "8.0.0", REFS8)
         default = self.run_helper(self.request(["App/E.cs"], platforms=[platform8]))
         self.assertEqual(default["outcome"], "error")
         self.assertEqual(default["error"]["code"], "object_extraction_failed")
@@ -307,6 +306,158 @@ class OnlyNet10 {}
         explicit = self.run_helper(self.request(["App/E.cs"], platforms=[platform8]))
         self.assertEqual(explicit["outcome"], "ok", explicit.get("error"))
         self.assertIn("Size", [node["name"] for node in explicit["graph"]["nodes"]])
+
+    def test_platform_protocol_rejects_legacy_and_unknown_fields(self):
+        """平台协议不再接受 fingerprint，且仍严格拒绝缺失或未知字段。"""
+        for change in ("fingerprint", "unknown", "missing_root"):
+            with self.subTest(change=change):
+                request = self.request([])
+                platform = request["environment"]["platforms"][0]
+                if change == "missing_root":
+                    del platform["root"]
+                else:
+                    platform[change] = "unexpected"
+                env = {**os.environ, "DOTNET_ROOT": str(Path(DOTNET).parent), "DOTNET_MULTILEVEL_LOOKUP": "0"}
+                result = subprocess.run([DOTNET, str(HELPER)], input=json.dumps(request) + "\n",
+                                        capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual([json.loads(line)["type"] for line in result.stdout.splitlines()], ["ready"])
+                self.assertIn("Invalid analyze message", result.stderr)
+
+    def test_modern_targets_are_not_a_fixed_allowlist(self):
+        """未预置的现代 TFM 和其默认语言可解析，缺本地引用时统一报告 target_unavailable。"""
+        self.write("App/A.cs", "class C {}")
+        for major in (5, 6, 7, 9):
+            with self.subTest(tfm=f"net{major}.0"):
+                self.write("App/App.csproj", f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net{major}.0</TargetFramework></PropertyGroup></Project>')
+                result = self.run_helper(self.request(["App/A.cs"], platforms=[]))
+                self.assertEqual(result["error"]["code"], "target_unavailable", result)
+
+    def test_unsupported_target_shapes_fail_explicitly(self):
+        """基础现代 .NET 以外的框架、平台后缀和非标准拼写不能静默套用基础目标。"""
+        self.write("A.cs", "class C {}")
+        for tfm in ("net48", "netstandard2.1", "netcoreapp3.1", "net10.0-windows", "net9.1", "net09.0", "net4.0"):
+            with self.subTest(tfm=tfm):
+                self.source_set([self.config("main", ["A.cs"], tfm=tfm)])
+                result = self.run_helper(self.request(["A.cs"], platforms=[]))
+                self.assertEqual(result["error"]["code"], "unsupported_configuration", result)
+
+    def test_future_default_language_does_not_silently_downgrade(self):
+        """固定 Roslyn 无法解释未来默认语言时必须失败；显式已有语言仍须匹配本地目标。"""
+        self.write("App/A.cs", "class C {}")
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>')
+        default = self.run_helper(self.request(["App/A.cs"], platforms=[]))
+        self.assertEqual(default["error"]["code"], "unsupported_configuration", default)
+        self.assertIn("default C# 15.0 for net11.0", default["error"]["message"])
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework><LangVersion>14.0</LangVersion></PropertyGroup></Project>')
+        explicit = self.run_helper(self.request(["App/A.cs"], platforms=[]))
+        self.assertEqual(explicit["error"]["code"], "target_unavailable", explicit)
+
+    def test_implicit_usings_respect_explicit_language_version(self):
+        """SDK 项目和显式 source-set 都不能在 C# 9 中偷偷启用 global using。"""
+        self.write("A.cs", "public class A { public int M() { return Math.Abs(-1); } }")
+        for source_set in (False, True):
+            if source_set:
+                (self.root / "App.csproj").unlink()
+            for version, outcome in (("9.0", "error"), ("10.0", "ok")):
+                with self.subTest(source_set=source_set, language_version=version):
+                    if source_set:
+                        config = self.config("main", ["A.cs"], language_version=version)
+                        config["implicit_usings"] = True
+                        self.source_set([config])
+                    else:
+                        self.write("App.csproj", f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><LangVersion>{version}</LangVersion><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>')
+                    result = self.run_helper(self.request(["A.cs"]))
+                    self.assertEqual(result["outcome"], outcome, result)
+                    if outcome == "error":
+                        self.assertEqual(result["error"]["code"], "unsupported_configuration", result)
+                        self.assertIn("ImplicitUsings", result["error"]["message"])
+                        self.assertNotIn("graph", result)
+
+    def test_explicit_language_versions_follow_roslyn_capabilities(self):
+        """接受当前 Roslyn 支持的数字版本，拒绝未来语言和随工具版本变化的别名。"""
+        self.write("A.cs", "class C {}")
+        self.source_set([self.config("main", ["A.cs"], language_version="13.0")])
+        accepted = self.run_helper(self.request(["A.cs"]))
+        self.assertEqual(accepted["outcome"], "ok", accepted)
+        for version in ("15.0", "latest", "latestMajor", "preview", "default", "014.0", "7.4"):
+            with self.subTest(language_version=version):
+                self.source_set([self.config("main", ["A.cs"], language_version=version)])
+                result = self.run_helper(self.request(["A.cs"]))
+                self.assertEqual(result["error"]["code"], "unsupported_configuration", result)
+
+    def test_pathological_targets_fail_before_implicit_symbol_expansion(self):
+        """超大 TFM 必须先经过数值、语言或目标引用校验，不能提前展开数十亿个常量。"""
+        self.write("App/A.cs", "class C {}")
+        for tfm, language, code in (
+            ("net2147483647.0", "14.0", "unsupported_configuration"),
+            ("net999999999999999999999999999999.0", "14.0", "unsupported_configuration"),
+            ("net1000000000.0", None, "unsupported_configuration"),
+            ("net1000000000.0", "14.0", "target_unavailable"),
+        ):
+            with self.subTest(tfm=tfm, language=language):
+                override = f"<LangVersion>{language}</LangVersion>" if language else ""
+                self.write("App/App.csproj", f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>{tfm}</TargetFramework>{override}</PropertyGroup></Project>')
+                result = self.run_helper(self.request(["App/A.cs"], platforms=[], timeout=1000))
+                self.assertEqual(result["error"]["code"], code, result)
+
+    def test_reference_platform_requires_exact_target_and_stable_patch(self):
+        """错误 TFM、引用包、主次版本和不一致或预发行版本都不能借用有效的目标引用。"""
+        self.write("A.cs", "class C {}")
+        self.source_set([self.config("main", ["A.cs"])])
+        mismatched = self.platform()
+        mismatched["metadata"]["reference_pack_version"] = "10.0.1"
+        wrong_tfm = self.platform()
+        wrong_tfm["metadata"]["tfm"] = "net8.0"
+        wrong_pack = self.platform()
+        wrong_pack["metadata"]["reference_pack"] = "Microsoft.AspNetCore.App.Ref"
+        invalid = [mismatched, wrong_tfm, wrong_pack, self.platform(root=str(self.scratch / "missing"))]
+        invalid.extend(self.platform(version=version) for version in
+                       ("8.0.31", "10.1.0", "10.0.1-preview.1", "10.0", "10.0.0.0", "010.0.0"))
+        for platform in invalid:
+            with self.subTest(platform=platform):
+                result = self.run_helper(self.request(["A.cs"], platforms=[platform]))
+                self.assertEqual(result["error"]["code"], "target_unavailable", result)
+        duplicate = dict(self.platform(), id="second-copy")
+        ambiguous = self.run_helper(self.request(["A.cs"], platforms=[self.platform(), duplicate]))
+        self.assertEqual(ambiguous["error"]["code"], "target_unavailable", ambiguous)
+
+    @unittest.skipUnless(REFS9, "set NARRANT_TEST_REFS9 to exercise a real nonzero .NET 9 patch fixture")
+    def test_real_net9_patch_defaults_and_implicit_symbols(self):
+        """真实 net9 补丁引用证明目标无白名单，并验证 C# 13 默认值与 SDK 常量。"""
+        self.assertTrue(Path(REFS9).is_dir(), "configured .NET 9 reference fixture is required")
+        self.assertTrue(REFS9_VERSION.startswith("9.0."))
+        self.assertNotEqual(REFS9_VERSION, "9.0.0", "the fixture must prove nonzero patch support")
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>')
+        self.write("App/A.cs", r'''class C {
+    public string Escape() => "\e";
+    public void F() { var gate = new System.Threading.Lock(); }
+}
+#if NET && NETCOREAPP && NET9_0 && NET9_0_OR_GREATER && NET8_0_OR_GREATER && NET7_0_OR_GREATER && NET6_0_OR_GREATER && NET5_0_OR_GREATER && NETCOREAPP3_1_OR_GREATER && NETCOREAPP1_0_OR_GREATER
+class CorrectTargetSymbols {}
+#endif
+#if NET10_0_OR_GREATER || NET8_0 || NETCOREAPP3_1 || NETSTANDARD2_1_OR_GREATER
+class WrongTargetSymbols {}
+#endif''')
+        platform = self.platform("net9.0", REFS9_VERSION, REFS9)
+        result = self.run_helper(self.request(["App/A.cs"], platforms=[platform]))
+        self.assertEqual(result["outcome"], "ok", result)
+        nodes = result["graph"]["nodes"]
+        self.assertIn("CorrectTargetSymbols", [node["name"] for node in nodes])
+        self.assertNotIn("WrongTargetSymbols", [node["name"] for node in nodes])
+        method = next(node for node in nodes if node["name"] == "F")
+        self.assertEqual([ref["target"]["kind"] for ref in method["references"] if ref["semantic"] == "code.calls"], ["external"])
+        self.assertEqual(result["evidence"]["configurations"][0]["platform_ids"], ["net9.0"])
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework><LangVersion>12.0</LangVersion></PropertyGroup></Project>')
+        older_language = self.run_helper(self.request(["App/A.cs"], platforms=[platform]))
+        self.assertEqual(older_language["error"]["code"], "object_extraction_failed", older_language)
+        self.write("App/A.cs", "public static class E { extension(string s) { public int Size() => s.Length; } }")
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>')
+        default = self.run_helper(self.request(["App/A.cs"], platforms=[platform]))
+        self.assertEqual(default["error"]["code"], "object_extraction_failed", default)
+        self.write("App/App.csproj", '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework><LangVersion>14.0</LangVersion></PropertyGroup></Project>')
+        explicit = self.run_helper(self.request(["App/A.cs"], platforms=[platform]))
+        self.assertEqual(explicit["outcome"], "ok", explicit)
 
     def test_malformed_syntax_fails_without_graph(self):
         """Roslyn 恢复语法树不能让畸形声明变成成功的部分图。"""

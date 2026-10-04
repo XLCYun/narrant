@@ -92,12 +92,13 @@ sequenceDiagram
 | `scratch_root` | string | 本次分析专有的仓库外临时目录，只放缓存、日志、受控工具产物及控制元数据 |
 | `platforms` | Platform[] | Host 预先校验的候选目标环境；helper 只能从中匹配本侧明确目标 |
 
-Platform 字段固定为 `id`、`kind`、`version`、`root`、`fingerprint`、`metadata`。
+Platform 字段固定为 `id`、`kind`、`version`、`root`、`metadata`。
 `kind` 区分 JDK 平台声明、Go SDK、.NET 引用程序集或 Clang 目标环境；`root` 是经过来源校验的目录。
 `metadata` 是按 kind/profile 明确定义、逐字段校验的描述对象，不是任意编译参数或执行命令入口。
 同一目录不因进入 catalog 就自动授权读取其第三方插件、业务依赖和工具配置。
 缺少匹配平台返回 `target_unavailable`，不偷偷使用 helper 自带运行时的标准库代替项目目标。
-平台来源、具体 metadata 和支持版本由语言规格及固定包清单补全；此草案不授权自动安装项目 SDK。
+平台来源和具体 metadata 由语言规格补全。固定 helper 与本机目标 SDK 分开管理；Host 可只读发现已安装的标准声明，
+不执行项目命令、不下载缺失目标。Platform 不再携带没有实际比对用途的 fingerprint；支持包安装时的完整性校验保留。
 
 `limits` 固定为正整数 `analysis_timeout_ms`、`max_result_bytes` 和 `max_diagnostic_bytes`。
 Host 同时独立执行这些限制，不依赖 helper 自觉报告；启动和强制退出期限由 Host 管理。
@@ -223,12 +224,14 @@ evidence 中才能解释的配置 ID。初始错误代码：
   在没有通过替代方案验收前不得发布；缺目标工具时明确失败。
 - 不执行项目逻辑也不等于操作系统沙箱。实际隔离机制按平台验证，本规格不声称已有通用沙箱。
 
-Windows 实现使用新增 native helper 专用 Job 所有者，保持既有 LSP/Python 进程管理行为不变。
-新 helper 仍可创建后代；Host 在执行前建立 Job 与成员跟踪，清理时才禁止创建新成员。
+LSP/Python 与原生 helper 共用 `child_process::ProcessTree`，统一启动、管道转交、退出与回收；
+调用方仍负责自己的协议、超时和取消策略。Windows 内部使用 Job，Unix 内部使用独立进程组。
+helper 仍可创建后代；Windows 在执行前建立 Job 与成员跟踪，清理时才禁止创建新成员。
 成功判据要求持续持有的唯一进程对象全部退出，并与最终累计成员数相符；无法证明完整性时明确失败，
-不能仅凭 Job 活跃数或当前成员列表为空宣称回收成功。专用产品接入已通过真实 Windows
-探针、Host、安装与图验收；平台异常导致清理失败时不能将错误解释为全员已经退出。
-旧 LSP/Python 共享 owner 的完成次序缺陷仍保留在跨平台记录，本轮未修改其行为。
+不能仅凭 Job 活跃数或当前成员列表为空宣称回收成功。平台异常导致清理失败时仍须回收直接 Child，
+并保留清理错误，不能将其解释为全员已经退出。Unix 在退出宽限前保存组成员快照，终止后等待组与
+已保存成员退出。平台回归集中在共享模块；LSP 与 helper 保留各自协议和接入验证。
+共享 Windows 完成次序缺陷已在此前修复，本轮只整合平台所有权接口与重复测试夹具；证据见跨平台记录。
 
 状态顺序为 `starting → ready → running → terminal → reaped`。helper 启动初始化失败时尚无请求
 ID，可以只输出 stderr 后非零退出；Host 将其映射为启动失败。ready 后必须等到一条有效 analyze

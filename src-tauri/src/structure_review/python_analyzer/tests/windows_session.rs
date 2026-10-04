@@ -1,29 +1,25 @@
 //! 固定 Windows ty 的真实 Session 生命周期；准确进程对象与目录清理分别验收。
 
 use super::*;
+use crate::child_process::{
+    test_support::retained_status,
+    windows_validation::{with_validation, ValidationOptions},
+};
 use crate::{
-    lsp::{
-        file_uri,
-        windows_validation::{with_validation, ValidationOptions},
-        Position,
-    },
+    lsp::{file_uri, Position},
     structure_review::{
         code_graph::{AnalysisInput, CodeGraph, CodeNode, LanguageAnalyzer, ReferenceTarget},
         python_analyzer::PythonLanguageAnalyzer,
     },
 };
 use std::{
-    os::windows::io::AsRawHandle,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Instant,
 };
-use windows_sys::Win32::{
-    Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
-    System::Threading::WaitForSingleObject,
-};
+use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
 
 const SOURCE: &str = "def service():\n    return 1\n\ndef run():\n    return service()\n";
 
@@ -190,16 +186,15 @@ fn normal_shutdown() {
         let mut roots = observations.roots();
         assert_eq!(roots.len(), 1);
         let root = roots.pop().unwrap();
-        let root_raw = root.as_raw_handle();
         // SAFETY: 句柄来自本次成功启动的准确根对象，只进行零超时状态查询。
-        assert_eq!(unsafe { WaitForSingleObject(root_raw, 0) }, WAIT_TIMEOUT);
+        assert_eq!(retained_status(&root), WAIT_TIMEOUT);
         let directories = SessionDirectories::capture(&session, &fixture.repository);
         fixture.assert_definition(&mut session);
 
         let started = Instant::now();
         let shutdown = session.shutdown();
         // SAFETY: 保留句柄跨越 shutdown；在任何断言、日志或目录 I/O 前立即取样。
-        let completed = unsafe { WaitForSingleObject(root_raw, 0) };
+        let completed = retained_status(&root);
         let elapsed = started.elapsed();
         assert_eq!(
             completed, WAIT_OBJECT_0,
@@ -236,9 +231,8 @@ fn cancellation_after_request_sent() {
             let mut roots = observations.roots();
             assert_eq!(roots.len(), 1);
             let root = roots.pop().unwrap();
-            let root_raw = root.as_raw_handle();
             // SAFETY: 握手和 didOpen 已完成，原根 HANDLE 必须仍未 signaled。
-            assert_eq!(unsafe { WaitForSingleObject(root_raw, 0) }, WAIT_TIMEOUT);
+            assert_eq!(retained_status(&root), WAIT_TIMEOUT);
             let directories = SessionDirectories::capture(&session, &fixture.repository);
             assert_eq!(sent.load(Ordering::Acquire), 0);
             assert!(!cancelled.load(Ordering::Acquire));
@@ -250,7 +244,7 @@ fn cancellation_after_request_sent() {
                 .map_err(lsp_failure);
             drop(session);
             // SAFETY: Drop 后第一项观测检查同一根对象，不经日志、轮询或目录查询延迟。
-            let completed = unsafe { WaitForSingleObject(root_raw, 0) };
+            let completed = retained_status(&root);
             let elapsed = started.elapsed();
             assert_eq!(
                 completed, WAIT_OBJECT_0,

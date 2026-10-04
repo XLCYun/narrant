@@ -210,7 +210,7 @@ func TestBooleanBuildSelection(t *testing.T) {
 	writeFixture(t, root, "common.go", "package app\n")
 	writeFixture(t, root, "choice.go", "//go:build linux || amd64\n\npackage app\n")
 	sdk := runtime.GOROOT()
-	catalog := []platform{{ID: "la", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "x", Metadata: platformMetadata{GOOS: "linux", GOARCH: "amd64", GOAMD64: "v1"}}, {ID: "ll", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "x", Metadata: platformMetadata{GOOS: "linux", GOARCH: "arm64"}}, {ID: "wa", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "x", Metadata: platformMetadata{GOOS: "windows", GOARCH: "amd64", GOAMD64: "v1"}}, {ID: "wl", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Fingerprint: "x", Metadata: platformMetadata{GOOS: "windows", GOARCH: "arm64"}}}
+	catalog := []platform{{ID: "la", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "linux", GOARCH: "amd64", GOAMD64: "v1"}}, {ID: "ll", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "linux", GOARCH: "arm64"}}, {ID: "wa", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "windows", GOARCH: "amd64", GOAMD64: "v1"}}, {ID: "wl", Kind: "go-sdk", Version: "1.23.8", Root: sdk, Metadata: platformMetadata{GOOS: "windows", GOARCH: "arm64"}}}
 	p, problem := loadProject(root, []string{"common.go"})
 	if problem != nil {
 		t.Fatal(problem)

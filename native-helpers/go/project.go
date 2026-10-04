@@ -408,7 +408,7 @@ func standardTarget(sdk string, meta platformMetadata) build.Context {
 
 // validatePlatform 核对 SDK 版本与受支持的目标组合。
 func validatePlatform(p platform) error {
-	if p.ID == "" || p.Kind != "go-sdk" || p.Version != "1.23.8" || p.Fingerprint == "" || !filepath.IsAbs(p.Root) {
+	if p.ID == "" || p.Kind != "go-sdk" || p.Version != "1.23.8" || !filepath.IsAbs(p.Root) {
 		return fmt.Errorf("invalid Go SDK catalog entry")
 	}
 	if p.Metadata.GOOS == "" || p.Metadata.GOARCH == "" {

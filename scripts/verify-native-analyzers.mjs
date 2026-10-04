@@ -12,11 +12,11 @@ export function validateNativeConfiguration(config, platform = process.platform)
   for (const id of ['go', 'java', 'csharp', 'clang']) {
     const item = config[id];
     if (!item || !paths.isAbsolute(item.executable ?? '') || !Array.isArray(item.args) || !item.args.every(arg => typeof arg === 'string') || !Array.isArray(item.trusted_roots) || !item.trusted_roots.length || !item.trusted_roots.every(root => paths.isAbsolute(root)) || !Array.isArray(item.platforms) || !item.platforms.length) throw new Error(`Missing or incomplete native helper configuration: ${id}`);
-    for (const sdk of item.platforms) if (!paths.isAbsolute(sdk.root ?? '') || !sdk.fingerprint || !sdk.id || !sdk.kind || !sdk.version) throw new Error(`Incomplete platform catalog: ${id}`);
+    for (const sdk of item.platforms) if (!paths.isAbsolute(sdk.root ?? '') || !sdk.id || !sdk.kind || !sdk.version) throw new Error(`Incomplete platform catalog: ${id}`);
   }
-  // 完整验收必须携带两个已固定目标，避免旧的单 TFM 构件被误认为覆盖目标隔离。
+  // 完整验收使用三个明确样本验证目标隔离和动态发现，不构成产品支持列表。
   const references = config.csharp.platforms.filter(platform => platform.kind === 'dotnet-reference-assemblies');
-  for (const [tfm, version] of [['net8.0', '8.0.0'], ['net10.0', '10.0.0']]) {
+  for (const [tfm, version] of [['net8.0', '8.0.0'], ['net9.0', '9.0.20'], ['net10.0', '10.0.0']]) {
     if (references.filter(platform => platform.version === version && platform.metadata?.tfm === tfm && platform.metadata?.reference_pack === 'Microsoft.NETCore.App.Ref' && platform.metadata?.reference_pack_version === version).length !== 1) throw new Error(`Missing fixed C# target reference: ${tfm}`);
   }
   if (new Set(references.map(platform => paths.normalize(platform.root))).size !== references.length) throw new Error('C# target references must have distinct roots');
@@ -27,16 +27,15 @@ export function validateNativeConfiguration(config, platform = process.platform)
 export function verificationCommands(environment, platform = process.platform) {
   const suffix = platform === 'win32' ? '.exe' : '';
   const python = environment.NARRANT_PYTHON ?? (platform === 'win32' ? 'python' : 'python3');
-  for (const name of ['NARRANT_GO_SDK', 'NARRANT_DOTNET_SDK', 'NARRANT_DOTNET_REF8_ROOT', 'NARRANT_JAVA_RUNTIME', 'NARRANT_JAVA_TARGET_JDK', 'NARRANT_LLVM_SDK']) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
+  for (const name of ['NARRANT_GO_SDK', 'NARRANT_DOTNET_SDK', 'NARRANT_DOTNET_REF8_ROOT', 'NARRANT_DOTNET_REF9_ROOT', 'NARRANT_JAVA_RUNTIME', 'NARRANT_JAVA_TARGET_JDK', 'NARRANT_LLVM_SDK']) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
   const cargo = ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml'];
   return [
     { executable: path.join(environment.NARRANT_GO_SDK, `bin/go${suffix}`), args: ['test', './...'], cwd: 'native-helpers/go', environment: { GOTOOLCHAIN: 'local', GOWORK: 'off', GOPROXY: 'off', GOSUMDB: 'off' } },
     { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/java/tests', '-v'], environment: { NARRANT_JAVA_TARGET: environment.NARRANT_JAVA_TARGET_JDK, NARRANT_JAVA_LIB: path.join(repository, '.tools/java-native/lib') } },
-    { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/csharp/tests', '-v'], environment: { NARRANT_TEST_DOTNET: path.join(environment.NARRANT_DOTNET_SDK, `dotnet${suffix}`), NARRANT_TEST_REFS: path.join(environment.NARRANT_DOTNET_SDK, 'packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0'), NARRANT_TEST_REFS8: path.join(environment.NARRANT_DOTNET_REF8_ROOT, 'ref/net8.0') } },
+    { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/csharp/tests', '-v'], environment: { NARRANT_TEST_DOTNET: path.join(environment.NARRANT_DOTNET_SDK, `dotnet${suffix}`), NARRANT_TEST_REFS: path.join(environment.NARRANT_DOTNET_SDK, 'packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0'), NARRANT_TEST_REFS8: path.join(environment.NARRANT_DOTNET_REF8_ROOT, 'ref/net8.0'), NARRANT_TEST_REFS9: path.join(environment.NARRANT_DOTNET_REF9_ROOT, 'ref/net9.0'), NARRANT_TEST_REFS9_VERSION: '9.0.20' } },
     { executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/clang/tests', '-v'], environment: { NARRANT_LLVM_ROOT: environment.NARRANT_LLVM_SDK, NARRANT_CLANG_HELPER: path.join(repository, `native-helpers/clang/build/narrant-clang${suffix}`) } },
-    // 共享 owner 与 Transport 都走生产默认路径，不运行 ignored 子进程 fixture。
-    ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'child_process::windows_job::tests::', '--', '--nocapture', '--test-threads=1'] }] : []),
-    ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::transport::windows_process_tests::windows_job_', '--', '--nocapture', '--test-threads=1'] }] : []),
+    // 所有平台复用同一进程所有者矩阵；Windows 同组还包含准确句柄与 Job 回归。
+    { executable: 'bash', args: [...cargo, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'] },
     // 完整协议链验证正常退出、取消、超时与短命后代，任一失败仍保留红灯。
     ...(platform === 'win32' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::tests::windows_session::', '--', '--nocapture', '--test-threads=1'] }] : []),
     { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::', '--', '--test-threads=4'] },

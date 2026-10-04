@@ -23,9 +23,9 @@ conformance fixtures. The wire contract in
 [specification 0024](../specs/0024-native-analyzer-helper-protocol.md) is implemented;
 the fixed profiles have passed the new native path's macOS ARM64 and Windows x64
 helper, Host, installation and public graph tests. The
-[cross-platform record](../research/native-crossplatform-validation.md) separates
-these results from the unresolved shared WindowsJob completion validation.
-Overall CI has not passed. Support packs remain unpublished and the PR remains a draft.
+[cross-platform record](../research/native-crossplatform-validation.md) records the
+passing shared WindowsJob fix at `83d5642` and subsequent verification separately.
+Support packs remain unpublished and the PR remains a draft.
 
 Using one native analysis model for declarations and symbol binding reduces the need
 to reconcile an independent syntax parser with language-server results. The trade-off
@@ -38,11 +38,13 @@ adapters continue to satisfy the public `LanguageAnalyzer` / Code Graph contract
 Migration of existing analyzers is a separate future decision, considered only after
 the new implementations demonstrate a clearer and more maintainable design.
 
-The new helpers use a dedicated Windows process owner with one handle tracker.
-Limited suspended-startup primitives are duplicated while shared LSP/Python
-compatibility is validated. A subsequent shared Transport fix ensures direct-child
-cleanup still runs after a Job error; the legacy Job algorithm has not been replaced.
-Its completion-ordering defect remains separately recorded and its failing tests are retained.
+LSP/Python and native helpers share one `child_process::ProcessTree`. Windows uses
+the verified Job owner and handle tracker; Unix uses an independent process group
+with a member snapshot and exit barrier. Callers retain their protocol and timeout
+policy. Shared lifecycle fixtures cover both call paths without duplicating platform
+ownership or test coordination. Direct-child cleanup still runs after a platform
+error, and the original failure remains visible. The Windows completion-ordering
+regression and admission-limit counterexample remain tests of the production owner.
 
 Helpers retain the workspace and child-process lifetime obligations of
 [ADR-0031](0031-reuse-review-head-for-structure-analysis.md) and the support-pack versus
@@ -65,7 +67,15 @@ default analysis scope rather than adding the previously proposed existing-libra
 exception. Identification of repository sources and necessary static metadata remains
 language-specific; an installation directory is not automatically repository source.
 Installing a validated Language Support Pack remains distinct from installing project
-dependencies. Target SDK provisioning is not settled by this decision.
+dependencies. Following the 2026-10-04 refinement, C# discovers locally installed
+`Microsoft.NETCore.App.Ref` packs matching each modern `netN.0` target, selecting the
+highest stable patch per target; reference declarations are not bundled in the
+C# support pack. macOS and Windows C/C++ discover installed system-header SDKs
+without a product version whitelist. The Host records actual versions and exact
+approved roots once for the comparison. Missing target declarations fail explicitly;
+discovery never runs project commands or installs SDKs. A fixed private helper runtime
+and compiler remain separate from these project targets. Java and Go retain their
+bundled target declarations.
 
 Rust's existing opt-in all-dependencies mode remains unchanged; it is not the default
 for the new implementations. Missing third-party context cannot be used to invent
@@ -103,7 +113,9 @@ configuration attribution in the public Code Graph.
 
 The [common protocol](../specs/0024-native-analyzer-helper-protocol.md) and
 [language profiles](../specs/0024a-native-language-analysis-profiles.md) define
-the implementation contract. Project configurations, target SDK profiles and backend
-versions beyond the recorded matrix still require the stated validation gates. The
+the implementation contract. Dynamic target discovery is bounded by compiler capability
+and required declarations; unsupported target shapes fail explicitly. The recorded
+matrix supplies representative validation, not a product version allowlist or a claim
+that every SDK and project shape has passed. The
 [interface design discussion](../research/native-analyzer-contract-design.md)
 retains the earlier decision history; it is not evidence for untested configurations.

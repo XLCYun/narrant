@@ -157,11 +157,11 @@ final class ProjectModel {
         for (JsonElement element : Main.array(environment, "platforms")) {
             if (!element.isJsonObject()) throw new Failure("invalid_input", "platform must be object");
             JsonObject platform = element.getAsJsonObject();
-            Main.fields(platform, Set.of("id", "kind", "version", "root", "fingerprint", "metadata"));
+            Main.fields(platform, Set.of("id", "kind", "version", "root", "metadata"));
             String id = Main.string(platform, "id");
             if (id.isEmpty() || !ids.add(id)) throw new Failure("invalid_input", "duplicate platform id");
-            if (Main.string(platform, "version").isEmpty() || Main.string(platform, "fingerprint").isEmpty())
-                throw new Failure("invalid_input", "empty platform version or fingerprint");
+            if (Main.string(platform, "version").isEmpty())
+                throw new Failure("invalid_input", "empty platform version");
             if (!"java-jdk".equals(Main.string(platform, "kind"))) continue;
             JsonObject metadata = Main.object(platform, "metadata");
             Main.fields(metadata, Set.of("release"));

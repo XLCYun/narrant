@@ -1,68 +1,15 @@
 use super::*;
-use std::{fs, path::Path, process::Stdio};
+use crate::child_process::test_support::{
+    fixture_command, publish, retained_status, wait_file, ObservedProcess,
+};
+use std::{fs, path::Path};
 use windows_sys::Win32::{
     Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::{
         JobObjects::IsProcessInJob,
-        Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+        Threading::{OpenProcess, PROCESS_SYNCHRONIZE},
     },
 };
-
-const FIXTURE: &str = concat!(module_path!(), "::native_windows_fixture");
-
-/// 用当前测试程序作原生夹具，避免 Node 自身 Job 干扰所有权检查。
-pub(crate) fn fixture_command(role: &str, directory: &Path) -> Command {
-    // libtest 的完整名称不带 crate 前缀；原应用和轻量 harness 可共用同一夹具。
-    let (_, fixture) = FIXTURE.split_once("::").expect("夹具模块包含 crate 前缀");
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", fixture, "--ignored", "--nocapture"])
-        .env("NARRANT_NATIVE_JOB_ROLE", role)
-        .env("NARRANT_NATIVE_JOB_DIR", directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command
-}
-
-/// 文件仅作夹具同步信号，有界等待不会把实际退出断言替换为轮询。
-pub(crate) fn wait_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "fixture marker timeout: {}",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// 根/叶/短命三角色用于真实生命周期覆盖，不接触其他进程。
-#[test]
-#[ignore = "仅由 Native Job 所有权测试启动"]
-fn native_windows_fixture() {
-    let Ok(role) = std::env::var("NARRANT_NATIVE_JOB_ROLE") else {
-        return;
-    };
-    let directory = std::path::PathBuf::from(std::env::var_os("NARRANT_NATIVE_JOB_DIR").unwrap());
-    if role == "short" {
-        return;
-    }
-    if role == "gap-parent" {
-        assert!(fixture_command("short", &directory)
-            .status()
-            .unwrap()
-            .success());
-        let child = fixture_command("leaf", &directory).spawn().unwrap();
-        fs::write(directory.join("child-pid"), child.id().to_string()).unwrap();
-        wait_file(&directory.join("leaf-ready"));
-        fs::write(directory.join("ready"), "ready").unwrap();
-    } else {
-        fs::write(directory.join("leaf-ready"), "ready").unwrap();
-    }
-    std::thread::sleep(Duration::from_secs(60));
-}
 
 /// Resume 之前根对象已登记；通知或重复登记不能把一个对象记作两个。
 #[test]
@@ -85,16 +32,10 @@ fn native_windows_suspended_root_is_owned_and_deduplicated() {
     }
     assert!(!directory.path().join("leaf-ready").exists());
     // SAFETY: 真实根 HANDLE 从挂起阶段持续保留；0 超时只观察。
-    assert_eq!(
-        unsafe { WaitForSingleObject(observed.as_raw_handle(), 0) },
-        WAIT_TIMEOUT
-    );
+    assert_eq!(retained_status(&observed), WAIT_TIMEOUT);
     drop(pending);
     job.terminate_and_wait().unwrap();
-    assert_eq!(
-        unsafe { WaitForSingleObject(observed.as_raw_handle(), 0) },
-        WAIT_OBJECT_0
-    );
+    assert_eq!(retained_status(&observed), WAIT_OBJECT_0);
     assert!(!directory.path().join("leaf-ready").exists());
 }
 
@@ -120,8 +61,8 @@ fn native_windows_missing_history_is_sticky() {
     // SAFETY: 本次夹具仍活着时保留句柄，不在清理后依赖裸 PID 身份。
     let observed_child = owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) }).unwrap();
     let error = job.terminate_and_wait().unwrap_err();
-    let immediate_parent = unsafe { WaitForSingleObject(observed_parent.as_raw_handle(), 0) };
-    let immediate_child = unsafe { WaitForSingleObject(observed_child.as_raw_handle(), 0) };
+    let immediate_parent = retained_status(&observed_parent);
+    let immediate_child = retained_status(&observed_child);
     assert!(error.to_string().contains("完成覆盖不足"), "{error}");
     assert_eq!(immediate_parent, WAIT_OBJECT_0);
     assert_eq!(immediate_child, WAIT_OBJECT_0);
@@ -259,7 +200,7 @@ fn native_windows_cleanup_waits_for_queued_history() {
     }
     let result = job.terminate_and_wait();
     // 清理返回后第一步观测准确对象，不让断言输出或后续 Drop 帮助完成。
-    let immediate = unsafe { WaitForSingleObject(child.as_raw_handle(), 0) };
+    let immediate = retained_status(child);
     assert_eq!(immediate, WAIT_OBJECT_0);
     result.unwrap();
     assert_eq!(job.tracker.lock().unwrap().recorded(), 2);
@@ -299,8 +240,8 @@ fn native_windows_stop_error_still_waits_recorded_members() {
     }
     let error = job.terminate_and_wait().unwrap_err();
     // SAFETY: 两个独立观察句柄从挂起阶段持续持有，0 超时不会补等。
-    let immediate_root = unsafe { WaitForSingleObject(root_handle.as_raw_handle(), 0) };
-    let immediate_member = unsafe { WaitForSingleObject(member_handle.as_raw_handle(), 0) };
+    let immediate_root = retained_status(&root_handle);
+    let immediate_member = retained_status(&member_handle);
     assert_eq!(immediate_root, WAIT_OBJECT_0);
     assert_eq!(immediate_member, WAIT_OBJECT_0);
     assert!(error
@@ -339,9 +280,57 @@ fn windows_job_owns_suspended_startup_before_execution() {
     drop(pending);
     let result = job.terminate_and_wait();
     // SAFETY: 只查询已回收的自有挂起进程。
-    let immediate = unsafe { WaitForSingleObject(observed.as_raw_handle(), 0) };
+    let immediate = retained_status(&observed);
     assert_eq!(immediate, WAIT_OBJECT_0);
     result.unwrap();
     assert_eq!(job.active_processes().unwrap(), 0);
     assert!(!directory.path().join("leaf-ready").exists());
+}
+
+/// 零进程上限必须以原始 1816 拒绝新成员，同时保留现有对象；直接验收生产门禁。
+#[test]
+fn admission_gate_rejects_new_process_with_exact_quota_error() {
+    use windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_QUOTA;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (mut root, job) =
+        WindowsJob::spawn(&mut fixture_command("admission", directory.path())).unwrap();
+    let observed_root = ObservedProcess::child(&root);
+    wait_file(&directory.path().join("ready"));
+    let descendant = ObservedProcess::marker(
+        &directory.path().join("child-pid"),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    job.tracker
+        .lock()
+        .unwrap()
+        .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(job.tracker.lock().unwrap().recorded(), 2);
+    job.seal_admission().unwrap();
+    publish(&directory.path().join("attempt-spawn"), "attempt").unwrap();
+    wait_file(&directory.path().join("attempt-result"));
+    assert_eq!(
+        fs::read_to_string(directory.path().join("attempt-result")).unwrap(),
+        format!("rejected:Some({ERROR_NOT_ENOUGH_QUOTA})"),
+        "其他创建错误不能冒充门禁生效",
+    );
+    assert_eq!(observed_root.status(), WAIT_TIMEOUT);
+    assert_eq!(descendant.status(), WAIT_TIMEOUT);
+    let result = job.terminate_and_wait();
+    let immediate = [observed_root.status(), descendant.status()];
+    assert_eq!(immediate, [WAIT_OBJECT_0; 2]);
+    root.wait().unwrap();
+    let info = job.accounting().unwrap();
+    assert_eq!(info.ActiveProcesses, 0);
+    if info.TotalProcesses as usize > job.tracker.lock().unwrap().recorded() {
+        assert!(result.is_err(), "拒绝关联造成的累计缺口不能宣称清理成功");
+        assert!(
+            job.terminate_and_wait().is_err(),
+            "累计缺口在重试时仍须保留"
+        );
+    } else {
+        result.unwrap();
+    }
 }

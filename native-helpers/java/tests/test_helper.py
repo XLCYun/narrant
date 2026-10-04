@@ -31,7 +31,7 @@ def request(root, files, include_tests=False, target=TARGET, timeout=30000):
                       "profile": "java-static-v1"},
             "environment": {"scratch_root": str(root.parent / "scratch"),
                             "platforms": [{"id": "jdk17", "kind": "java-jdk", "version": "17.0.20.1+1",
-                                           "root": str(target), "fingerprint": "fixture-jdk17",
+                                           "root": str(target),
                                            "metadata": {"release": "17"}}]},
             "limits": {"analysis_timeout_ms": timeout, "max_result_bytes": 134217728,
                        "max_diagnostic_bytes": 262144}}

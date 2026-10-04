@@ -21,12 +21,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 assert.equal(process.env.NARRANT_TEST_NODE, process.execPath);
 const args = process.argv.slice(2);
-const common = ['--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked'];
-assert.deepEqual(args, args[0] === 'run' ? ['run', ...common] : ['test', ...common, '--lib', '--', '--nocapture', '--test-threads=1']);
+const common = ['test', '--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked', '--lib'];
+const filter = args[5];
+assert.ok(['child_process::', 'lsp::'].includes(filter));
+assert.deepEqual(args, [...common, filter, '--', '--nocapture', '--test-threads=1']);
 const previous = fs.existsSync('executed') ? fs.readFileSync('executed', 'utf8') : '';
-assert.equal(previous, args[0] === 'run' ? '' : 'run');
-fs.appendFileSync('executed', args[0]);
-process.exit(args[0] === 'run' ? 7 : 0);
+assert.equal(previous, filter === 'child_process::' ? '' : 'child_process::');
+fs.appendFileSync('executed', filter);
+process.exit(filter === 'child_process::' ? 7 : 0);
 `);
     await assert.rejects(runWindowsLifecycleTests({ cwd: directory, platform: 'win32' }), error => {
       assert.ok(error instanceof AggregateError);
@@ -34,7 +36,7 @@ process.exit(args[0] === 'run' ? 7 : 0);
       assert.match(error.errors[0].cause.message, /failed \(7\)/);
       return true;
     });
-    assert.equal(await fs.readFile(path.join(directory, 'executed'), 'utf8'), 'runtest');
+    assert.equal(await fs.readFile(path.join(directory, 'executed'), 'utf8'), 'child_process::lsp::');
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

@@ -52,6 +52,16 @@ pub(crate) struct SpawnObservations {
 }
 
 impl SpawnObservations {
+    /// 同步入口返回后先采样全部原始对象，调用方再断言或检查目录。
+    pub(crate) fn root_statuses(&self) -> Vec<u32> {
+        self.roots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(super::test_support::retained_status)
+            .collect()
+    }
+
     /// 克隆同一组 root 对象句柄，避免按裸 PID 重新打开时发生身份复用。
     pub(crate) fn roots(&self) -> Vec<OwnedHandle> {
         self.roots
@@ -120,7 +130,7 @@ pub(crate) fn with_validation<R>(
     body(&observations)
 }
 
-/// 只在真实 spawn 和 ServerProcess 守卫建立后观察；不启动进程或提前执行清理。
+/// 只在真实 spawn 和 ProcessTree 守卫建立后观察；不启动进程或提前执行清理。
 pub(super) fn observe_spawn(child: &Child, job: &WindowsJob) -> io::Result<()> {
     let scope = CURRENT_SCOPE.with(|scope| scope.borrow().clone());
     if let Some(scope) = scope {

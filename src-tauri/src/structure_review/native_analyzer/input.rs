@@ -159,10 +159,8 @@ pub(super) fn validate(
         .map(|p| (p.id.as_str(), p.kind.as_str()))
         .collect();
     for platform in &platforms {
-        for value in [&platform.version, &platform.fingerprint] {
-            if value.is_empty() || value.contains('\0') {
-                return Err(failure("平台版本或来源摘要为空"));
-            }
+        if platform.version.is_empty() || platform.version.contains('\0') {
+            return Err(failure("平台版本为空或无效"));
         }
         validate_metadata(platform, &kinds)?;
     }

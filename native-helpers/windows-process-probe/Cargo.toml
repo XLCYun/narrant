@@ -4,12 +4,6 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[[bin]]
-name = "narrant-windows-process-probe"
-path = "src/main.rs"
-test = false
-bench = false
-
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_SystemServices"] }
 

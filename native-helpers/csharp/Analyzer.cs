@@ -87,14 +87,16 @@ internal static class Analyzer
                 throw new HelperException("unsupported_configuration", "ProjectReference cycle", config.SourcePaths);
             cancellation.ThrowIfCancellationRequested();
             var targetProfile = Configuration.Target(config.Tfm);
-            var matches = request.Environment.Platforms.Where(p => p.Kind == "dotnet-reference-assemblies" &&
-                p.Metadata.Tfm == config.Tfm && p.Metadata.ReferencePack == "Microsoft.NETCore.App.Ref" &&
-                p.Metadata.ReferencePackVersion == targetProfile.ReferencePackVersion &&
-                p.Version == targetProfile.ReferencePackVersion).ToArray();
+            var matches = request.Environment.Platforms.Where(p => MatchesTarget(p, targetProfile)).ToArray();
             if (matches.Length != 1)
                 throw new HelperException("target_unavailable", $"Exactly one approved reference assembly profile is required for {config.Tfm}", config.SourcePaths);
             var platform = matches[0];
             var references = References(platform, targetProfile).ToList();
+            // 显式 source-set 保持原常量；SDK 常量只在匹配引用验证成功后展开。
+            var defines = config.SourcePaths[0] == "narrant.csharp.json"
+                ? config.Defines
+                : Configuration.ImplicitDefines(targetProfile, cancellation).Concat(config.Defines)
+                    .Distinct(StringComparer.Ordinal).ToArray();
             foreach (var dependency in config.ProjectReferences)
             {
                 var target = configurations.SingleOrDefault(c => c.SourcePaths[0] == dependency && c.Tfm == config.Tfm &&
@@ -113,7 +115,7 @@ internal static class Analyzer
                 try { text = File.ReadAllText(Configuration.CheckFile(root, file), new UTF8Encoding(false, true)); }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or DecoderFallbackException)
                 { throw new HelperException("object_extraction_failed", $"Cannot read UTF-8 source: {error.Message}", file); }
-                var options = new CSharpParseOptions(config.LanguageVersion, preprocessorSymbols: config.Defines);
+                var options = new CSharpParseOptions(config.LanguageVersion, preprocessorSymbols: defines);
                 var tree = CSharpSyntaxTree.ParseText(text, options, path: file, cancellationToken: cancellation);
                 var syntaxError = tree.GetDiagnostics(cancellation).FirstOrDefault(d => d.Severity == DiagnosticSeverity.Error);
                 if (syntaxError is not null)
@@ -122,11 +124,16 @@ internal static class Analyzer
             }
             var allTrees = trees.Values.ToList();
             if (config.ImplicitUsings)
+            {
+                // SDK 隐式 using 依赖 C# 10 的 global using，不能用未验证的合成树绕过语言版本。
+                if (config.LanguageVersion < LanguageVersion.CSharp10)
+                    throw new HelperException("unsupported_configuration", "ImplicitUsings requires C# 10 or later", config.SourcePaths);
                 allTrees.Add(CSharpSyntaxTree.ParseText(
                     "global using System; global using System.Collections.Generic; global using System.IO; " +
                     "global using System.Linq; global using System.Net.Http; global using System.Threading; " +
                     "global using System.Threading.Tasks;",
                     new CSharpParseOptions(config.LanguageVersion), path: "<narrant-implicit-usings>"));
+            }
             var output = config.SourcePaths[0] == "narrant.csharp.json" &&
                 trees.Values.Any(tree => tree.GetRoot(cancellation) is CompilationUnitSyntax unit &&
                     unit.Members.OfType<GlobalStatementSyntax>().Any())
@@ -141,8 +148,8 @@ internal static class Analyzer
     /// <summary>仅加载目标平台明确批准的 reference DLL，不读取宿主 runtime。</summary>
     private static MetadataReference[] References(Platform platform, TargetProfile target)
     {
-        if (platform.Version != target.ReferencePackVersion || !Path.IsPathFullyQualified(platform.Root) ||
-            !Directory.Exists(platform.Root) || platform.Fingerprint.Length == 0)
+        if (!MatchesTarget(platform, target) || !Path.IsPathFullyQualified(platform.Root) ||
+            !Directory.Exists(platform.Root))
             throw new HelperException("target_unavailable", "Invalid .NET reference platform");
         var files = Directory.GetFiles(platform.Root, "*.dll", SearchOption.TopDirectoryOnly);
         if (files.Length < 10 || !files.Any(f => Path.GetFileName(f) == "System.Runtime.dll"))
@@ -151,6 +158,14 @@ internal static class Analyzer
             throw new HelperException("target_unavailable", "Reference assemblies must not be symbolic links");
         return files.Order(StringComparer.Ordinal).Select(file => MetadataReference.CreateFromFile(file)).ToArray();
     }
+
+    /// <summary>要求精确 TFM 和引用包，接受同一主次版本的稳定补丁，并验证两处版本声明一致。</summary>
+    private static bool MatchesTarget(Platform platform, TargetProfile target) =>
+        platform.Kind == "dotnet-reference-assemblies" && platform.Metadata.Tfm == target.Tfm &&
+        platform.Metadata.ReferencePack == "Microsoft.NETCore.App.Ref" &&
+        platform.Version == platform.Metadata.ReferencePackVersion &&
+        Version.TryParse(platform.Version, out var version) && version.ToString() == platform.Version &&
+        version.Major == target.Major && version.Minor == 0 && version.Build >= 0 && version.Revision == -1;
 }
 
 /// <summary>保留提取时的语义符号、来源以及选集标记。</summary>

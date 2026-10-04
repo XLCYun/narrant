@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, ChildProcess } from 'node:child_process';
 import { packageDirectory } from '../build-language-support-packs.mjs';
-import { copyToolTree, smokeNativeHelper, bundleCsharpReferences } from '../native-language-support-packs.mjs';
+import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms } from '../native-language-support-packs.mjs';
+import { prepareDotnetFixtureReferences } from '../provision-native-toolchains.mjs';
 
 /** 私有 runtime 的执行入口必须穿过打包与解压，两个平台都真实启动解包后的文件。 */
 test('native runtime executable survives archive extraction', async () => {
@@ -99,29 +100,26 @@ test('native catalog remains explicitly unpublished', async () => {
   for (const id of ['java', 'go', 'csharp', 'c-cpp']) assert.equal(catalog.packs[id].published, false);
 });
 
-/** 两个 TFM 只获得各自引用目录，NuGet 构建脚本不会随包执行或进入产物。 */
-test('C# bundle keeps net8 and net10 declarations isolated and excludes NuGet build assets', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-reference-catalog-'));
+/** 标准引用只出现在本机测试 SDK，生成的目录描述允许新 TFM/补丁且不复制构建资产。 */
+test('C# fixture discovery uses installed SDK layout without bundling target references', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-reference-discovery-'));
   try {
-    const sdk = path.join(root, 'sdk'), reference8 = path.join(root, 'reference8'), payload = path.join(root, 'payload');
+    const sdk = path.join(root, 'sdk'), source = path.join(root, 'reference9');
+    await fs.mkdir(path.join(source, 'ref/net9.0'), { recursive: true });
+    await fs.writeFile(path.join(source, 'ref/net9.0/System.Runtime.dll'), 'net9 reference');
+    await fs.writeFile(path.join(source, 'Microsoft.NETCore.App.Ref.nuspec'), '<id>Microsoft.NETCore.App.Ref</id><version>9.0.20</version>');
+    await fs.mkdir(path.join(source, 'build'));
+    await fs.writeFile(path.join(source, 'build/untrusted.targets'), 'must not copy');
+    await prepareDotnetFixtureReferences({ NARRANT_DOTNET_SDK: sdk, NARRANT_DOTNET_REF9_ROOT: source });
+    const platforms = await csharpFixturePlatforms(sdk);
+    assert.equal(platforms.length, 1);
+    assert.equal(platforms[0].version, '9.0.20');
+    assert.equal(platforms[0].metadata.tfm, 'net9.0');
+    assert.equal(await fs.readFile(path.join(platforms[0].root, 'System.Runtime.dll'), 'utf8'), 'net9 reference');
+    assert.equal(platforms[0].root, path.join(sdk, 'packs/Microsoft.NETCore.App.Ref/9.0.20/ref/net9.0'));
+    await assert.rejects(fs.stat(path.join(sdk, 'packs/Microsoft.NETCore.App.Ref/9.0.20/build')), { code: 'ENOENT' });
     const catalog = JSON.parse(await fs.readFile(new URL('../../resources/language-support-packs.json', import.meta.url)));
-    const definition = catalog.packs.csharp;
-    for (const [directory, value] of [[path.join(sdk, 'packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0'), 'net10'], [path.join(reference8, 'ref/net8.0'), 'net8']]) {
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(path.join(directory, 'System.Runtime.dll'), value);
-    }
-    await fs.writeFile(path.join(reference8, 'Microsoft.NETCore.App.Ref.nuspec'), '<package><metadata><id>Microsoft.NETCore.App.Ref</id><version>8.0.0</version></metadata></package>');
-    for (const name of ['LICENSE.TXT', 'THIRD-PARTY-NOTICES.TXT']) await fs.writeFile(path.join(reference8, name), 'license');
-    await fs.mkdir(path.join(reference8, 'build'));
-    await fs.writeFile(path.join(reference8, 'build/untrusted.targets'), 'must not copy');
-    const platforms = await bundleCsharpReferences({ definition, sdk, reference8, payload });
-    assert.deepEqual(platforms.map(platform => [platform.metadata.tfm, platform.version]), [['net10.0', '10.0.0'], ['net8.0', '8.0.0']]);
-    for (const target of ['net8', 'net10']) assert.equal(await fs.readFile(path.join(payload, `runtime/platform/${target}.0/System.Runtime.dll`), 'utf8'), target);
-    assert.deepEqual((await fs.readdir(payload)).sort(), ['licenses', 'runtime']);
-    await assert.rejects(fs.stat(path.join(payload, 'build')), { code: 'ENOENT' });
-    assert.equal(await fs.readFile(path.join(payload, 'licenses/dotnet-ref8-LICENSE.TXT'), 'utf8'), 'license');
-    await assert.rejects(bundleCsharpReferences({ definition: { ...definition, referenceTargets: [{ tfm: 'net9.0', version: '9.0.0' }] }, sdk, reference8, payload }), /Unsupported C# reference/);
-    await fs.writeFile(path.join(reference8, 'Microsoft.NETCore.App.Ref.nuspec'), '<id>Microsoft.NETCore.App.Ref</id><version>8.0.1</version>');
-    await assert.rejects(bundleCsharpReferences({ definition, sdk, reference8, payload }), /identity mismatch/);
+    assert.equal(catalog.packs.csharp.referenceTargets, undefined);
+    assert.equal(catalog.packs.csharp.targetStandardLibrary, 'local-dotnet-reference-packs');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

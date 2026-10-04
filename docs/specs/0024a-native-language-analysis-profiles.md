@@ -14,7 +14,8 @@ Rust、TypeScript/JavaScript、Python 的既有实现不变。
 
 一个分析 profile 固定后端与投影版本、源码归属规则、语言规则、目标平台声明、
 静态配置解释规则及测试识别规则。profile 标识描述能力，不直接编码支持包补丁版本；
-具体运行构件和目标声明均另记精确版本、摘要及允许来源。
+具体运行构件记录精确版本、安装摘要及允许来源；目标声明记录实际版本与批准目录，
+不要求没有比对用途的平台指纹。
 
 | 必须分开的输入 | Java | C# | Go | C/C++ |
 | --- | --- | --- | --- | --- |
@@ -56,7 +57,7 @@ Host 传入经校验的目标平台目录 catalog；helper 只能从中匹配 pr
 | --- | --- | --- |
 | `java-jdk` | 精确目标 JDK 根，包含 `release` 与 `lib/jrt-fs.jar`；version 为实际完整版本 | `{release: string}`；release 必须与目标 JDK feature version 相符 |
 | `go-sdk` | 固定 Go 标准库源码根，包含 `src` 与 `VERSION`；首轮 1.23.8 | `{goos: string, goarch: string, goamd64?: string}` |
-| `dotnet-reference-assemblies` | 精确 `ref/<tfm>` 目录；固定 net8.0/8.0.0 与 net10.0/10.0.0 | `{tfm: string, reference_pack: string, reference_pack_version: string}` |
+| `dotnet-reference-assemblies` | 本机安装的精确 `ref/<tfm>` 目录；按现代 .NET TFM 匹配最高稳定补丁 | `{tfm: string, reference_pack: string, reference_pack_version: string}` |
 | `clang-target` | 精确系统 SDK 根；version 为该 SDK 实际版本 | `{target_triple: string, c_standard: string, cpp_standard: string, system_include_directories: string[], resource_platform_id: string, additional_system_platform_ids?: string[]}` |
 | `clang-resource` | 固定 LLVM 的 `lib/clang/<major>` 目录；首轮 21.1.8 | `{}` |
 | `clang-system-headers` | 与系统 SDK 分开放置的精确标准库头文件根，例如 Windows MSVC 的 `include`；version 为其实际工具版本 | `{}` |
@@ -69,7 +70,9 @@ Host 传入经校验的目标平台目录 catalog；helper 只能从中匹配 pr
 编译器命令、wrapper 或环境搜索路径。Host 与 helper 均校验关联。
 
 Windows 的系统 SDK 与 MSVC 标准头通常位于两个目录，因此分别建 catalog 条目；
-macOS 目标按支持包控制文件指定的精确 SDK 版本，从约定的 Xcode/CLT 安装位置匹配。
+支持包只指定本机目标环境种类，不携带 SDK 版本白名单。macOS 优先采用显式 SDK 或当前开发工具默认 SDK，
+再从 Xcode/CLT 的常规安装位置发现；Windows 从已安装的 Windows SDK 与 MSVC 头文件目录发现。
+实际版本来自安装元数据，路径与必要头文件须存在；不校验额外平台指纹。项目显式 target/sysroot 仍须匹配已发现的目标，不能静默忽略。
 CI 与本机可验证不同的明确 SDK 版本，但不能把单个版本通过写成所有版本通过。
 
 ## Java：JDT Core 候选
@@ -137,9 +140,12 @@ SDK profile 定义；缺这些规则时该 profile 尚不可用。内存生成�
 有限条件解释从已列举的 Configuration/Platform/TFM 等值匹配开始；不能执行属性函数，
 也不盲目对全部变量做笛卡尔积。所有明确且受支持的分支分别分析，再合并。
 
-实际实现固定 .NET 10 runtime 与 Roslyn，并分别匹配 net8.0/8.0.0 和 net10.0/10.0.0 的
-官方 reference assemblies。SDK 项目分别默认 C# 12 与 C# 14；显式 source-set 保留其
-声明的语言版本及预处理常量，不额外注入 SDK 常量。两个目标用于实际验证旧目标 API
+实际实现固定 .NET 10 runtime 与 Roslyn；支持包不再携带目标 reference assemblies。Host 从
+`DOTNET_ROOT*`、用户和系统常规 .NET SDK 安装目录发现 `Microsoft.NETCore.App.Ref/<version>/ref/<tfm>`，
+每个现代 `netN.0`（N≥5）选择最高稳定补丁，版本必须与 TFM 匹配。只有 runtime 时明确报告缺少目标引用；
+不读取项目 NuGet 缓存、不 restore、不执行 MSBuild。不存在产品 TFM 版本白名单，但语言能力受内置 Roslyn 限制。
+SDK 默认 C# 版本按现代 .NET 的 N+4 规则计算；无法支持的默认语法明确失败。显式 source-set 保留其
+声明的语言版本及预处理常量，不额外注入 SDK 常量。CI 使用 net8/net9/net10 实际验证旧目标 API
 隔离与配置并集，版本、打包和跨平台执行结果见验收记录。
 这不承诺 C# 7.3–14、.NET Framework、Unity、Razor、脚本或所有 TFM 同时可用。
 已提交 `.g.cs`/`.Designer.cs` 按普通源码规则处理；不开 generator/analyzer、restore 或 test discovery。

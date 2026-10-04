@@ -33,6 +33,16 @@
         "metadata_source": "https://api.nuget.org/v3/catalog0/data/2023.11.14.13.48.02/microsoft.netcore.app.ref.8.0.0.json"
       },
       {
+        "name": "dotnet-ref9",
+        "version": "9.0.20",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/9.0.20/microsoft.netcore.app.ref.9.0.20.nupkg",
+        "algorithm": "sha512",
+        "digest": "f132afd8cf3933f81b18dbe540083bed6da41641c9efdae38e9913d1bf76ffcaf3e51c5f9a8b29b1001e4e9102aae20fddc875ca0e1df81dc17668c71729aaa9",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_REF9_ROOT",
+        "metadata_source": "https://api.nuget.org/v3/catalog0/data/2026.09.08.19.59.10/microsoft.netcore.app.ref.9.0.20.json"
+      },
+      {
         "name": "jdk25",
         "version": "25.0.4.1+1",
         "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz",
@@ -93,6 +103,16 @@
         "home": ".",
         "environment": "NARRANT_DOTNET_REF8_ROOT",
         "metadata_source": "https://api.nuget.org/v3/catalog0/data/2023.11.14.13.48.02/microsoft.netcore.app.ref.8.0.0.json"
+      },
+      {
+        "name": "dotnet-ref9",
+        "version": "9.0.20",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/9.0.20/microsoft.netcore.app.ref.9.0.20.nupkg",
+        "algorithm": "sha512",
+        "digest": "f132afd8cf3933f81b18dbe540083bed6da41641c9efdae38e9913d1bf76ffcaf3e51c5f9a8b29b1001e4e9102aae20fddc875ca0e1df81dc17668c71729aaa9",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_REF9_ROOT",
+        "metadata_source": "https://api.nuget.org/v3/catalog0/data/2026.09.08.19.59.10/microsoft.netcore.app.ref.9.0.20.json"
       },
       {
         "name": "jdk25",

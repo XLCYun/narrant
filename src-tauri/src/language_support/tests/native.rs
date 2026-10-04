@@ -89,38 +89,14 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 "src/Main.java"
             }
             PackId::Csharp => {
-                // 安装后的 catalog 必须保存两个独立的固定标准引用根。
+                // 产物只携带 helper 运行环境；目标引用通过本机 SDK 发现。
                 let control: serde_json::Value = serde_json::from_slice(
                     &fs::read(lease.path(id).unwrap().join("control/native.json")).unwrap(),
                 )
                 .unwrap();
-                let platforms = control["platforms"].as_array().unwrap();
-                let mut roots = std::collections::BTreeSet::new();
-                for (tfm, version) in [("net8.0", "8.0.0"), ("net10.0", "10.0.0")] {
-                    let matches: Vec<_> = platforms
-                        .iter()
-                        .filter(|platform| {
-                            platform["kind"] == "dotnet-reference-assemblies"
-                                && platform["version"] == version
-                                && platform["metadata"]["tfm"] == tfm
-                                && platform["metadata"]["reference_pack"]
-                                    == "Microsoft.NETCore.App.Ref"
-                                && platform["metadata"]["reference_pack_version"] == version
-                        })
-                        .collect();
-                    assert_eq!(matches.len(), 1, "缺少精确标准引用目标 {tfm}");
-                    let relative = matches[0]["root"].as_str().unwrap();
-                    assert!(
-                        roots.insert(relative.to_owned()),
-                        "标准引用目标不能共用目录"
-                    );
-                    assert!(lease
-                        .path(id)
-                        .unwrap()
-                        .join(relative)
-                        .join("System.Runtime.dll")
-                        .is_file());
-                }
+                assert_eq!(control["target_sdk"]["kind"], "dotnet");
+                assert!(control["platforms"].as_array().unwrap().is_empty());
+                assert!(!lease.path(id).unwrap().join("runtime/platform").exists());
                 fs::write(fixture.path().join("narrant.csharp.json"), r#"{"version":"csharp-static-v1","configurations":[{"id":"main","files":["Main.cs"],"tfm":"net10.0","language_version":"14.0","define_constants":[],"implicit_usings":false}]}"#).unwrap();
                 fs::write(
                     fixture.path().join("Main.cs"),
@@ -130,20 +106,8 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 "Main.cs"
             }
             PackId::CCpp => {
-                let control: serde_json::Value = serde_json::from_slice(
-                    &fs::read(lease.path(id).unwrap().join("control/native.json")).unwrap(),
-                )
-                .unwrap();
-                let triple = if cfg!(windows) {
-                    "x86_64-pc-windows-msvc".to_owned()
-                } else {
-                    format!(
-                        "arm64-apple-macosx{}",
-                        control["target_sdk"]["version"].as_str().unwrap()
-                    )
-                };
                 fs::write(fixture.path().join("main.cpp"), "int Value() { return 1; }").unwrap();
-                fs::write(fixture.path().join("compile_commands.json"), serde_json::to_vec(&serde_json::json!([{"directory":fixture.path(),"file":"main.cpp","arguments":["clang++","-std=c++20","-target",triple,"main.cpp"]}])).unwrap()).unwrap();
+                fs::write(fixture.path().join("compile_commands.json"), serde_json::to_vec(&serde_json::json!([{"directory":fixture.path(),"file":"main.cpp","arguments":["clang++","-std=c++20","main.cpp"]}])).unwrap()).unwrap();
                 "main.cpp"
             }
             _ => unreachable!(),
@@ -163,20 +127,28 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             id.slug()
         );
         if id == PackId::Csharp {
-            // 同一私有运行时经生产工厂切换到 net8，不能只验证 catalog 中存在声明。
-            fs::write(fixture.path().join("narrant.csharp.json"), r#"{"version":"csharp-static-v1","configurations":[{"id":"main","files":["Main.cs"],"tfm":"net8.0","language_version":"12.0","define_constants":[],"implicit_usings":false}]}"#).unwrap();
-            fs::write(fixture.path().join("Main.cs"), "public static class Main { public static int Value() { return System.Math.Abs(-1); } }").unwrap();
-            let analyzer = native_languages::from_pack(id, lease.path(id).unwrap()).unwrap();
-            let input = AnalysisInput {
-                repository_root: fixture.path().into(),
-                files: vec![file.into()],
-                options: AnalysisOptions::default(),
-            };
-            let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(!graph.root().contains.is_empty(), "net8 生产工厂返回了空图");
+            // 同一私有运行时切换本机发现的目标；新增 net9 样本不能依赖产品内置目标表。
+            for (tfm, language) in [("net8.0", "12.0"), ("net9.0", "13.0")] {
+                fs::write(fixture.path().join("narrant.csharp.json"), serde_json::to_vec(&serde_json::json!({
+                    "version":"csharp-static-v1","configurations":[{"id":"main","files":["Main.cs"],
+                    "tfm":tfm,"language_version":language,"define_constants":[],"implicit_usings":false}]
+                })).unwrap()).unwrap();
+                fs::write(fixture.path().join("Main.cs"), "public static class Main { public static int Value() { return System.Math.Abs(-1); } }").unwrap();
+                let analyzer = native_languages::from_pack(id, lease.path(id).unwrap()).unwrap();
+                let input = AnalysisInput {
+                    repository_root: fixture.path().into(),
+                    files: vec![file.into()],
+                    options: AnalysisOptions::default(),
+                };
+                let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    !graph.root().contains.is_empty(),
+                    "{tfm} 生产工厂返回了空图"
+                );
+            }
         }
         assert!(packs.remove(id, "0.1.0").is_err());
         drop(lease);

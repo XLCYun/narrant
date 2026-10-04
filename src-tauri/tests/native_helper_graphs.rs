@@ -40,7 +40,6 @@ struct PlatformConfig {
     kind: String,
     version: String,
     root: PathBuf,
-    fingerprint: String,
     metadata: serde_json::Value,
 }
 
@@ -165,7 +164,6 @@ fn analyzer(mode: Mode, configs: &BTreeMap<String, HelperConfig>) -> NativeLangu
             kind: p.kind.clone(),
             version: p.version.clone(),
             root: p.root.clone(),
-            fingerprint: p.fingerprint.clone(),
             metadata: p.metadata.clone(),
         })
         .collect();

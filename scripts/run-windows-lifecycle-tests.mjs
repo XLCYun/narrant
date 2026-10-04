@@ -9,10 +9,10 @@ export async function runWindowsLifecycleTests({ cwd = repository, platform = pr
   if (platform !== 'win32') throw new Error('Windows lifecycle validation requires a Windows runner');
   const manifest = ['--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked'];
   const commands = [
-    { executable: 'bash', args: ['scripts/cargo-agent.sh', 'run', ...manifest], cwd },
-    { executable: 'bash', args: ['scripts/cargo-agent.sh', 'test', ...manifest, '--lib', '--', '--nocapture', '--test-threads=1'], cwd },
+    { executable: 'bash', args: ['scripts/cargo-agent.sh', 'test', ...manifest, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'], cwd },
+    { executable: 'bash', args: ['scripts/cargo-agent.sh', 'test', ...manifest, '--lib', 'lsp::', '--', '--nocapture', '--test-threads=1'], cwd },
   ];
-  // 两组串行执行，原始探针失败也继续收集会话结果；最终汇总仍然失败。
+  // 共享所有者与协议两组串行执行，首组失败仍收集会话结果，最终汇总仍然失败。
   await runVerificationCommands(commands, { ...process.env, NARRANT_TEST_NODE: process.execPath });
 }
 

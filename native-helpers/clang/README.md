@@ -30,6 +30,10 @@ Windows 增量由专门原生 CI 验收，不能把本机构建成功当作 Wind
 - C++ `c++` 路径组件下的包装头优先，然后 resource/include，再目标 C headers；其它读取被
   VFS 拒绝。实际验收包含 MacOSX27.0 SDK 的 C `<stdint.h>/<stdio.h>` 和 C++ `<vector>`。
 
+产品 Host 从本机开发工具发现目标 SDK，并读取其实际版本及头文件目录；不再限定 macOS SDK
+版本白名单，也不要求平台指纹。缺少标准头仍明确失败，helper 只读取 Host 传入的具体根。
+CI 的固定 SDK 是复现测试样本；用户不必安装相同版本，也不会随支持包下载系统 SDK。
+
 ## 明确的配置边界
 
 本侧根目录必须有 `compile_commands.json`；仅接受 `arguments` 数组，拒绝 `command`、wrapper、
@@ -72,7 +76,7 @@ CMake 将声明的运行 DLL 放在程序旁边，发布包必须保留这种加
 空/重复/错误种类/缺失引用会拒绝；每个 TU 只读取自身目标引用的这些根。MSVC 标准头先于 resource
 与 SDK C 头。直接调用和标准宏的上下文都通过同一 VFS。
 
-macOS CI 可设置 `NARRANT_MACOS_SDK` 与 `NARRANT_MACOS_SDK_VERSION` 指向固定 Xcode SDK。
+macOS CI 可设置 `NARRANT_MACOS_SDK` 指向固定 Xcode SDK，测试读取 SDK 自己的版本元数据。
 不设置 Windows SDK 环境时，该测试会明确 skip；这不是 Windows 验收通过。
 
 ## 审查修复第一轮

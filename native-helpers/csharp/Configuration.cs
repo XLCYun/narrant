@@ -11,29 +11,47 @@ internal sealed record StaticConfiguration(string Id, string[] Files, string Tfm
     string[] InactiveFiles, string AssemblyName, NullableContextOptions Nullable, OutputKind Output,
     string ConfigurationName);
 
-/// <summary>固定目标 TFM、引用包版本、默认语言与 SDK 预处理常量的闭合表。</summary>
-internal sealed record TargetProfile(string Tfm, string ReferencePackVersion, LanguageVersion DefaultLanguage,
-    string[] ImplicitDefines);
+/// <summary>保存已验证的现代 .NET 基础 TFM，不固定目标引用包的补丁版本。</summary>
+internal sealed record TargetProfile(string Tfm, int Major);
 
 /// <summary>从受限声明式文件或普通 SDK 项目静态建立编译配置。</summary>
 internal static class Configuration
 {
-    /// <summary>只接受实际固定并经引用程序集验证的两个目标。</summary>
-    public static TargetProfile Target(string tfm) => tfm switch
+    /// <summary>只解释 netN.0（N 至少为 5）；其他框架及平台后缀需要各自的配置模型。</summary>
+    public static TargetProfile Target(string tfm)
     {
-        "net8.0" => new TargetProfile("net8.0", "8.0.0", LanguageVersion.CSharp12,
-            ["NET", "NETCOREAPP", "NET8_0", "NET8_0_OR_GREATER", "NET7_0_OR_GREATER",
-             "NET6_0_OR_GREATER", "NET5_0_OR_GREATER", "NETCOREAPP3_1_OR_GREATER",
-             "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP2_2_OR_GREATER", "NETCOREAPP2_1_OR_GREATER",
-             "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP1_1_OR_GREATER", "NETCOREAPP1_0_OR_GREATER"]),
-        "net10.0" => new TargetProfile("net10.0", "10.0.0", LanguageVersion.CSharp14,
-            ["NET", "NETCOREAPP", "NET10_0", "NET10_0_OR_GREATER", "NET9_0_OR_GREATER",
-             "NET8_0_OR_GREATER", "NET7_0_OR_GREATER", "NET6_0_OR_GREATER", "NET5_0_OR_GREATER",
-             "NETCOREAPP3_1_OR_GREATER", "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP2_2_OR_GREATER",
-             "NETCOREAPP2_1_OR_GREATER", "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP1_1_OR_GREATER",
-             "NETCOREAPP1_0_OR_GREATER"]),
-        _ => throw new HelperException("unsupported_configuration", $"Unsupported TFM {tfm}")
-    };
+        var match = System.Text.RegularExpressions.Regex.Match(tfm, @"\Anet([1-9][0-9]*)\.0\z",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!match.Success || !int.TryParse(match.Groups[1].Value,
+                System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var major) ||
+            major < 5 || major > int.MaxValue - 4)
+            throw new HelperException("unsupported_configuration", $"Unsupported TFM {tfm}; expected netN.0 with N >= 5");
+        return new TargetProfile(tfm, major);
+    }
+
+    /// <summary>沿用 SDK 的 .NET 主版本加四规则；超出当前 Roslyn 能力时明确失败而不降级。</summary>
+    private static LanguageVersion DefaultLanguage(TargetProfile target)
+    {
+        var version = (target.Major + 4).ToString(System.Globalization.CultureInfo.InvariantCulture) + ".0";
+        if (!TryLanguage(version, out var language))
+            throw new HelperException("unsupported_configuration",
+                $"Bundled Roslyn does not support the default C# {version} for {target.Tfm}; set an explicit supported numeric LangVersion");
+        return language;
+    }
+
+    /// <summary>仅在本地目标引用已验证后生成 SDK 常量，避免声明任意大 TFM 时提前展开。</summary>
+    public static List<string> ImplicitDefines(TargetProfile target, CancellationToken cancellation)
+    {
+        var defines = new List<string> { "NET", "NETCOREAPP", $"NET{target.Major}_0" };
+        for (var major = target.Major; major >= 5; major--)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            defines.Add($"NET{major}_0_OR_GREATER");
+        }
+        defines.AddRange(["NETCOREAPP3_1_OR_GREATER", "NETCOREAPP3_0_OR_GREATER", "NETCOREAPP2_2_OR_GREATER",
+            "NETCOREAPP2_1_OR_GREATER", "NETCOREAPP2_0_OR_GREATER", "NETCOREAPP1_1_OR_GREATER", "NETCOREAPP1_0_OR_GREATER"]);
+        return defines;
+    }
 
     /// <summary>发现配置，并确保每个文件的归属由静态规则证明。</summary>
     public static List<StaticConfiguration> Discover(string root, CancellationToken cancellation)
@@ -237,6 +255,8 @@ internal static class Configuration
         foreach (var configuration in configurationVariants.Order(StringComparer.Ordinal))
         {
             var target = Target(tfm);
+            var languageVersion = properties.TryGetValue("LangVersion", out var language)
+                ? ParseLanguage(language) : DefaultLanguage(target);
             var conditionalCandidates = new HashSet<string>(StringComparer.Ordinal);
             var files = defaultItems
                 ? SafeFiles(projectDir, ".cs", excludeHiddenDirectories: true)
@@ -259,14 +279,13 @@ internal static class Configuration
                 }
             }
             foreach (var file in files) CheckFile(root, file);
-            var defines = target.ImplicitDefines.ToList();
+            var defines = new List<string>();
             if (configuration == "Debug") defines.Add("DEBUG");
             defines.Add("TRACE");
             defines.AddRange(properties.GetValueOrDefault("DefineConstants", "").Split(';', StringSplitOptions.RemoveEmptyEntries));
             output.Add(new StaticConfiguration(relative + ":" + tfm + ":" + configuration,
                 files.Order(StringComparer.Ordinal).ToArray(), tfm,
-                properties.TryGetValue("LangVersion", out var language)
-                    ? ParseLanguage(language) : target.DefaultLanguage,
+                languageVersion,
                 defines.Distinct(StringComparer.Ordinal).ToArray(),
                 implicitUsings, [relative],
                 projectReferences.Where(item =>
@@ -299,15 +318,22 @@ internal static class Configuration
         return (match.Groups[1].Value, match.Groups[2].Value, match.Groups[3].Value);
     }
 
-    /// <summary>将显式语言版本限制在当前 Roslyn 已验证的 C# 12 与 14。</summary>
+    /// <summary>使用当前 Roslyn 能力验证显式数字语言版本，拒绝随编译器变化的别名。</summary>
     private static LanguageVersion ParseLanguage(string version)
     {
-        return version switch
-        {
-            "12" or "12.0" => LanguageVersion.CSharp12,
-            "14" or "14.0" => LanguageVersion.CSharp14,
-            _ => throw new HelperException("unsupported_configuration", $"Unsupported C# language version {version}")
-        };
+        if (!TryLanguage(version, out var language))
+            throw new HelperException("unsupported_configuration", $"Unsupported C# language version {version}");
+        return language;
+    }
+
+    /// <summary>只有 Roslyn 能识别且具有明确数值的稳定语言版本才可作为静态输入。</summary>
+    private static bool TryLanguage(string version, out LanguageVersion language)
+    {
+        language = default;
+        return System.Text.RegularExpressions.Regex.IsMatch(version, @"\A[1-9][0-9]*(?:\.[0-9]+)?\z",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant) &&
+            LanguageVersionFacts.TryParse(version, out language) &&
+            new CSharpParseOptions(language).Errors.All(error => error.Severity != DiagnosticSeverity.Error);
     }
 
     /// <summary>校验源码确实位于仓库中且不是越界符号链接。</summary>

@@ -41,12 +41,11 @@ type environment struct {
 
 // platform 指定目标 Go SDK 与一个目标系统架构。
 type platform struct {
-	ID          string           `json:"id"`
-	Kind        string           `json:"kind"`
-	Version     string           `json:"version"`
-	Root        string           `json:"root"`
-	Fingerprint string           `json:"fingerprint"`
-	Metadata    platformMetadata `json:"metadata"`
+	ID       string           `json:"id"`
+	Kind     string           `json:"kind"`
+	Version  string           `json:"version"`
+	Root     string           `json:"root"`
+	Metadata platformMetadata `json:"metadata"`
 }
 
 // platformMetadata 明确列出受支持的目标维度。
@@ -339,7 +338,7 @@ func checkRequiredNested(data []byte) error {
 	var platforms []json.RawMessage
 	_ = json.Unmarshal(env["platforms"], &platforms)
 	for _, p := range platforms {
-		if err := requiredFields(p, "id", "kind", "version", "root", "fingerprint", "metadata"); err != nil {
+		if err := requiredFields(p, "id", "kind", "version", "root", "metadata"); err != nil {
 			return err
 		}
 	}

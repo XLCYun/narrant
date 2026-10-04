@@ -17,13 +17,15 @@ export function validateToolchainManifest(manifest) {
   if (manifest.schema_version !== 1) throw new Error('Unsupported native toolchain manifest');
   for (const target of Object.values(nativeTargets)) {
     const entries = manifest.targets?.[target];
-    if (!Array.isArray(entries) || entries.length !== 6 || new Set(entries.map(item => item.name)).size !== 6) throw new Error(`Incomplete toolchains: ${target}`);
+    if (!Array.isArray(entries) || entries.length !== 7 || new Set(entries.map(item => item.name)).size !== 7) throw new Error(`Incomplete toolchains: ${target}`);
     for (const item of entries) {
-      if (!['go', 'dotnet', 'dotnet-ref8', 'jdk25', 'jdk17', 'llvm'].includes(item.name) || !/^[\w.+-]+$/.test(item.version)) throw new Error('Invalid tool identity');
+      if (!['go', 'dotnet', 'dotnet-ref8', 'dotnet-ref9', 'jdk25', 'jdk17', 'llvm'].includes(item.name) || !/^[\w.+-]+$/.test(item.version)) throw new Error('Invalid tool identity');
       const url = new URL(item.url);
       if (url.protocol !== 'https:' || !['go.dev', 'builds.dotnet.microsoft.com', 'github.com', 'api.nuget.org'].includes(url.hostname) || /latest/i.test(item.url)) throw new Error('Unpinned download source');
-      if (item.name === 'dotnet-ref8' && (item.version !== '8.0.0' || item.url !== 'https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/8.0.0/microsoft.netcore.app.ref.8.0.0.nupkg' || item.algorithm !== 'sha512' || item.environment !== 'NARRANT_DOTNET_REF8_ROOT' || item.home !== '.')) throw new Error('Unpinned .NET reference pack');
-      if (url.hostname === 'api.nuget.org' && item.name !== 'dotnet-ref8') throw new Error('Unapproved NuGet toolchain');
+      // 这些是 CI 的标准库夹具版本，不是产品允许分析的 TFM 列表。
+      const referenceVersion = { 'dotnet-ref8': '8.0.0', 'dotnet-ref9': '9.0.20' }[item.name];
+      if (referenceVersion && (item.version !== referenceVersion || item.url !== `https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/${referenceVersion}/microsoft.netcore.app.ref.${referenceVersion}.nupkg` || item.algorithm !== 'sha512' || item.environment !== `NARRANT_DOTNET_REF${referenceVersion.split('.')[0]}_ROOT` || item.home !== '.')) throw new Error('Unpinned .NET reference fixture');
+      if (url.hostname === 'api.nuget.org' && !referenceVersion) throw new Error('Unapproved NuGet toolchain');
       const size = { sha256: 64, sha512: 128 }[item.algorithm];
       if (!size || !new RegExp(`^[0-9a-f]{${size}}$`).test(item.digest)) throw new Error('Missing fixed digest');
       if (typeof item.home !== 'string' || item.home.startsWith('/') || item.home.includes('\\') || item.home.split('/').includes('..') || item.home.includes(':')) throw new Error('Tool home escapes isolated directory');
@@ -49,6 +51,21 @@ async function download(entry, archive) {
   console.log(`Downloaded ${entry.name} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
   await verifyArchive(archive, entry);
   console.log(`Verified ${entry.name} ${entry.algorithm}`);
+}
+
+/** 在私有测试 SDK 中构造真实安装布局，只复制标准引用，不导入 NuGet 构建逻辑。 */
+export async function prepareDotnetFixtureReferences(environment) {
+  for (const name of ['NARRANT_DOTNET_REF8_ROOT', 'NARRANT_DOTNET_REF9_ROOT']) {
+    const source = environment[name];
+    if (!source) continue;
+    const identity = await fs.readFile(path.join(source, 'Microsoft.NETCore.App.Ref.nuspec'), 'utf8');
+    const version = identity.match(/<version>(\d+\.\d+\.\d+)<\/version>/)?.[1];
+    if (!version) throw new Error('Reference fixture has no stable version');
+    const tfm = `net${version.split('.')[0]}.0`;
+    const destination = path.join(environment.NARRANT_DOTNET_SDK, 'packs/Microsoft.NETCore.App.Ref', version, 'ref', tfm);
+    await fs.mkdir(destination, { recursive: true });
+    await fs.cp(path.join(source, 'ref', tfm), destination, { recursive: true });
+  }
 }
 
 /** 安装到调用者指定的私有目录，失败时清理临时解包结果，绝不运行系统安装器。 */
@@ -96,6 +113,7 @@ export async function provisionToolchains(output, target = nativeTargets[`${proc
       throw error;
     } finally { if (!preserveTemporary) await fs.rm(temporary, { recursive: true, force: true }); }
   }
+  await prepareDotnetFixtureReferences(environment);
   environment.DOTNET_ROOT = environment.NARRANT_DOTNET_SDK;
   environment.DOTNET_CLI_HOME = path.join(output, 'dotnet-home');
   environment.DOTNET_CLI_TELEMETRY_OPTOUT = '1';
