@@ -9,10 +9,7 @@ use windows_sys::Win32::{
         JobObjects::{
             IsProcessInJob, JobObjectBasicProcessIdList, JOBOBJECT_BASIC_PROCESS_ID_LIST,
         },
-        Threading::{
-            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_SYNCHRONIZE,
-        },
+        Threading::{OpenProcess, PROCESS_SYNCHRONIZE},
     },
 };
 
@@ -43,45 +40,6 @@ fn current_members(job: &WindowsJob) -> io::Result<Vec<u32>> {
     buffer[HEADER..HEADER + count]
         .iter()
         .map(|pid| u32::try_from(*pid).map_err(io::Error::other))
-        .collect()
-}
-
-/// 仅在前置条件失败时读取当前成员映像；重开身份只供诊断，不作为完成证明。
-fn member_images(job: &WindowsJob) -> Vec<(u32, io::Result<String>)> {
-    current_members(job)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|pid| {
-            let image = (|| {
-                // SAFETY: PID 来自本测试准确 Job，仅请求查询权限，不终止或等待。
-                let process =
-                    owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
-                let mut member = 0;
-                // SAFETY: 两个句柄由当前作用域持有，确认重开对象仍属于准确 Job。
-                if unsafe { IsProcessInJob(process.as_raw_handle(), job.raw(), &mut member) } == 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                if member == 0 {
-                    return Err(io::Error::other("诊断重开对象已不属于当前 Job"));
-                }
-                let mut image = [0u16; 32768];
-                let mut length = image.len() as u32;
-                // SAFETY: 只读查询自有对象，长度和输出缓冲区一致。
-                if unsafe {
-                    QueryFullProcessImageNameW(
-                        process.as_raw_handle(),
-                        0,
-                        image.as_mut_ptr(),
-                        &mut length,
-                    )
-                } == 0
-                {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(String::from_utf16_lossy(&image[..length as usize]))
-            })();
-            (pid, image)
-        })
         .collect()
 }
 
@@ -386,17 +344,39 @@ fn admission_gate_rejects_new_process_with_exact_quota_error() {
         .parse::<u32>()
         .unwrap();
     let descendant = ObservedProcess::open(descendant_pid).unwrap();
+    // 系统可能创建隐藏 conhost；先封闭入口，再核对全部真实对象，而非猜测成员数。
+    job.seal_admission().unwrap();
     job.tracker
         .lock()
         .unwrap()
         .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
         .unwrap();
-    let retained = job.tracker.lock().unwrap().recorded();
     let info = job.accounting().unwrap();
-    assert_eq!(retained, 2,
-        "门禁前只应有根与叶：root={}, leaf={descendant_pid}, total={}, active={}, current={:?}, reopened_images={:?}",
-        root.id(), info.TotalProcesses, info.ActiveProcesses, current_members(&job), member_images(&job));
-    job.seal_admission().unwrap();
+    let retained = job.tracker.lock().unwrap().recorded();
+    assert_eq!(
+        retained, info.TotalProcesses as usize,
+        "尝试新建之前必须完整覆盖历史成员"
+    );
+    let members = current_members(&job).unwrap();
+    assert!(members.contains(&root.id()));
+    assert!(members.contains(&descendant_pid));
+    let mut observed = vec![(root.id(), observed_root), (descendant_pid, descendant)];
+    for pid in members {
+        if pid != root.id() && pid != descendant_pid {
+            observed.push((pid, ObservedProcess::open(pid).unwrap()));
+        }
+    }
+    for (pid, process) in &observed {
+        let mut member = 0;
+        // SAFETY: 根、叶和系统额外成员均持续持有准确 HANDLE，只查询本测试 Job 的归属。
+        assert_ne!(
+            unsafe { IsProcessInJob(process.0.as_raw_handle(), job.raw(), &mut member) },
+            0
+        );
+        assert_eq!(member, 1, "观察对象 {pid} 必须属于准确 Job");
+    }
+    assert_eq!(observed[0].1.status(), WAIT_TIMEOUT);
+    assert_eq!(observed[1].1.status(), WAIT_TIMEOUT);
     publish(&directory.path().join("attempt-spawn"), "attempt").unwrap();
     wait_file(&directory.path().join("attempt-result"));
     assert_eq!(
@@ -404,11 +384,18 @@ fn admission_gate_rejects_new_process_with_exact_quota_error() {
         format!("rejected:Some({ERROR_NOT_ENOUGH_QUOTA})"),
         "其他创建错误不能冒充门禁生效",
     );
-    assert_eq!(observed_root.status(), WAIT_TIMEOUT);
-    assert_eq!(descendant.status(), WAIT_TIMEOUT);
+    assert_eq!(observed[0].1.status(), WAIT_TIMEOUT);
+    assert_eq!(observed[1].1.status(), WAIT_TIMEOUT);
+    let mut immediate = vec![WAIT_TIMEOUT; observed.len()];
     let result = job.terminate_and_wait();
-    let immediate = [observed_root.status(), descendant.status()];
-    assert_eq!(immediate, [WAIT_OBJECT_0; 2]);
+    // 返回后先对全部原始 HANDLE 零等待采样，再做断言、日志或 fixture 兜底。
+    for (state, (_, process)) in immediate.iter_mut().zip(&observed) {
+        *state = process.status();
+    }
+    assert!(
+        immediate.iter().all(|state| *state == WAIT_OBJECT_0),
+        "准确成员未同步完成：{immediate:?}"
+    );
     root.wait().unwrap();
     let info = job.accounting().unwrap();
     assert_eq!(info.ActiveProcesses, 0);
