@@ -1,10 +1,9 @@
 # 原生 helper 的双平台验收入口
 
-状态：2026-10-04 简化修改已通过本地验收与审查，等待本轮完整 Actions；下方保留已通过的 `83d5642` 基线。
-该基线的新增原生链路已在 macOS ARM64 / SDK15.5 与 Windows x64 完整通过四包、四helper、Host、安装及八图验收。
-共享 LSP/Python 回收已接入统一 WindowsJob；正常与测试构建直接使用同一实现。
-生产代码 `83d5642` 的完整 Language support packs 矩阵四组全部成功，旧共享完成回归已通过。
-候选对照与产品默认路径都有独立真实 Windows 证据，详见下方记录。
+状态：2026-10-04 简化修改已通过本地验收、独立审查与完整 Actions。代码提交 `1679e22`
+在 macOS ARM64 / SDK15.5 与 Windows x64 的四组 Language support packs 验收全部成功。
+共享 LSP/Python 与 native 已统一使用 `child_process::ProcessTree`，测试直接覆盖生产模块；
+四包、四helper、Host、本机目标发现、实际安装及八图验收均通过。下方保留 `83d5642` 等历史基线。
 交付位于[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，未合并或发布支持包。
 本记录覆盖指定语言支持与生命周期矩阵；未手动触发 quality-gate，不承诺更广 SDK 或版本。
 审查覆盖、主要发现及关闭情况见[原生语言分析器审查记录](native-analyzer-review.md)。
@@ -12,8 +11,8 @@
 ## 2026-10-04 共享进程接口与本机目标发现
 
 相对 `21aed5b`，LSP/native 两套守卫合为 `child_process::ProcessTree`，Windows Job 生产算法
-保持不变；Unix 平台快照/终止/等待与测试夹具集中维护。进程管理、测试及其入口净减1,447行，
-其中删除1,503行一次性调查程序，1816限制与准确句柄退出断言保留在生产模块回归中。
+保持不变；Unix 平台快照/终止/等待与测试夹具集中维护。本轮代码、测试和配置净减902行
+（不含文档），一次性调查程序已删除，1816限制与准确句柄退出断言保留在生产模块回归中。
 三个清理入口各覆盖父存活/已退出及后代管道继承与否，共12场景；Windows另保留平台错误回归。
 
 平台协议删除未实际比对的 fingerprint；支持包完整性校验不变。C# 从本机标准引用目录匹配
@@ -28,7 +27,39 @@
 - 43项脚本测试通过，2项仅适用于Windows的脚本用例跳过；Windows同源测试库跨目标check通过。
 - 首次整组Clang测试因本机未设置已有CMake路径失败；补充`NARRANT_CMAKE`后完整组25通过/1不适用，没有代码豁免。
 
-新的完整矩阵尚待运行；跨目标编译与旧基线不能代替本轮真实 Windows 验收。
+Windows 夹具复验修正了两项测试前提，未改动生产 WindowsJob 算法：
+
+- Job 的当前 PID 列表可能暂时包含刚退出的对象；测试先建立所需状态，再验证已取出或排队中的通知不会丢失，不通过补采样账本绕过被测路径。
+- 真实 runner 的父子进程还可能带有系统 `conhost.exe` 成员；准入测试不再假定总数恰为2，而是保存实际成员的准确句柄，核对累计覆盖和 Job 归属，严格要求新建失败1816，清理返回后立即检查每个句柄。
+
+`2d2be17` 的[首轮完整运行37174259492](https://github.com/XLCYun/narrant/actions/runs/37174259492)
+有三组成功，Windows原生组上述两项夹具失败。`fb7afd2` 的
+[轻量运行37174825822](https://github.com/XLCYun/narrant/actions/runs/37174825822)确认实际多出的成员为系统控制台进程，
+其余共享10项及LSP14项通过。`1679e22` 的
+[轻量复验37175287661](https://github.com/XLCYun/narrant/actions/runs/37175287661)全部通过：共享11项、LSP14项，
+另1个ignored函数仅用于子进程夹具；两类短命批次各创建256个Node子进程，累计账本与准确句柄断言保留。
+
+最终[完整矩阵37175433090](https://github.com/XLCYun/narrant/actions/runs/37175433090)
+验证代码提交`1679e220f4d6f64a72ec0cab396eef205ee83056`，四组全部成功：
+
+| 验收组 | Windows x64 | macOS ARM64 / SDK15.5 |
+| --- | --- | --- |
+| 四包构建、ready与四语言原生套件 | Go通过；Java25、C#38、Clang25通过，1个macOS专用SDK测试不适用 | Go通过；Java25、C#38、Clang25通过，1个Windows专用SDK测试不适用 |
+| 共享进程模块 | 11通过，含12场景矩阵、准入及通知回归；1个ignored函数仅作子进程夹具 | 3通过，覆盖12场景；1个ignored函数仅作子进程夹具 |
+| LSP生命周期、短命批次与错误兜底 | 13通过，0ignored | 本矩阵未单独选择LSP测试组 |
+| 原生Host | 16通过 | 17通过，包含Unix专用符号链接测试 |
+| 目标发现与factory | 6通过 | 6通过 |
+| 真实四包生产安装 | 1通过，133.54秒 | 1通过，83.96秒 |
+| 公共CodeGraph/diff | 8通过，0ignored，28.52秒 | 8通过，0ignored，15.86秒 |
+| Python分析器/安装/Review生命周期 | 23/3/4通过，全部0ignored | 35/3/4通过，全部0ignored |
+
+Windows完整应用库与前置轻量库都执行了共享模块的11项回归；两次不是不同用例数量。
+LSP串行和并发4两组各创建256个短命Node子进程，账本最终各保留515个准确对象，与Job累计一致；
+清理约333.57ms和338.97ms。安装路径在同一个私有C#运行时下切换本机net8/net9/net10引用，
+并验证旧目标不会误用新API。平台SDK样本仍为CI工具数据，不再是产品版本白名单。
+
+本轮完整验证使用`validation_scope=full`、`publish=false`，独立轻量任务及发布任务按配置跳过；
+没有手动触发quality-gate。后续纯文档提交使用`[skip ci]`，不把文档SHA记为新的代码实测。
 
 ## 2026-10-03 共享生产 owner 接入及完整验收：83d5642
 

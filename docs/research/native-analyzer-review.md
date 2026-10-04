@@ -32,9 +32,15 @@
 - Spec：Java与Clang在删除fingerprint时残留缺少key参数的调用，造成编译失败；移除残余条件，保留版本校验，四包重新构建通过。
 - Spec：协议中仍写旧LSP/Python未共享的段落已同步为`ProcessTree`，并保留清理失败语义。
 - C#疑点通过真实helper复现：C#9+ImplicitUsings曾成功返回；现在在生成global using之前明确拒绝，SDK项目/source-set各测9/10边界，具体错误与成功路径均通过。
+- 后续Windows夹具修正经过定点复核：明确已退出PID离开当前列表的前提，准入测试计入系统控制台成员；累计覆盖、准确Job归属、1816错误及清理返回时的全部句柄退出断言均保留，未发现新问题。
 
-修复复核无新发现，以上项均关闭。完整本地结果与待补的本轮Actions证据见跨平台记录；
+修复复核无新发现，以上项均关闭。完整本地结果与本轮Actions证据见跨平台记录；
 审查通过不替代实际平台运行。
+
+本轮代码提交`1679e22`的[完整Actions37175433090](https://github.com/XLCYun/narrant/actions/runs/37175433090)
+四组全部成功：macOS/Windows四语言原生链路与既有Python链路均通过，Windows共享进程11项及
+LSP13项通过。独立轻量复验另有11项共享与14项LSP/URI测试通过，不与完整矩阵重复相加。
+没有剩余审查发现；自动发现本机目标仍受编译器、标准声明及静态项目模型的既有能力边界约束。
 
 ## 全分支审查发现及关闭
 
@@ -61,13 +67,13 @@
 `scripts/tests/native-language-support-packs.test.mjs` 中。审查复核与运行测试是不同证据：
 部分复核直接检查修复 diff 和既有测试日志，没有重复运行相同套件。
 
-## 后续共享回收修复与最终验收
+## 2026-10-03 共享回收修复与历史验收
 
 后续 Windows 平台验收实际复现了旧共享 owner 提前返回的缺陷。生产修复将 LSP/Python 与
 原生 helper 统一接入 `child_process/windows_job.rs`，保留准确句柄及完整性失败判据；
 生产迁移和测试迁移均经过独立审查。早期“Windows 待验证”的报告不能作为最新状态。
 
-最终生产提交为 [`83d5642`](https://github.com/XLCYun/narrant/commit/83d5642c171415398e0b19c2338a46f08c468e79)。
+该轮生产提交为 [`83d5642`](https://github.com/XLCYun/narrant/commit/83d5642c171415398e0b19c2338a46f08c468e79)。
 [Actions 37128777728](https://github.com/XLCYun/narrant/actions/runs/37128777728) 的四组矩阵全部成功：
 
 - macOS ARM64 / SDK 15.5 与 Windows x64：四包构建、ready、四语言原生套件、Host、factory、实际安装和八项公共图验收通过。

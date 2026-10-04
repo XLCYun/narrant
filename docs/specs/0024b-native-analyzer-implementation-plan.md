@@ -1,7 +1,7 @@
 # 原生语言分析器实施计划
 
-状态：新增四语言和共享 Windows 回收修复的 `83d5642` 基线通过双平台矩阵；2026-10-04
-继续整合进程接口、测试夹具和本机 SDK 发现。本轮本地验证及独立审查通过，尚待新的 Actions 结果；
+状态：新增四语言、共享跨平台进程接口、测试夹具及本机 SDK 发现均已完成；2026-10-04
+代码提交 `1679e22` 通过本地验证、独立审查和[完整双平台矩阵](https://github.com/XLCYun/narrant/actions/runs/37175433090)。
 PR 为草稿，未合并或发布。
 交付包括 Java、Go、C#、C/C++ 原生 helper 及应用接入。依据 [0024](0024-native-analyzer-helper-protocol.md)、
 [0024a](0024a-native-language-analysis-profiles.md) 与 ADR-0034。
@@ -33,7 +33,10 @@ ImplicitUsings 的非法组合，回归覆盖 SDK 项目和 source-set 的 C# 9/
 最终构建和平台结果另记入跨平台记录，不沿用旧运行作为本轮成功证据。
 本地四包构建、Go 套件、Java25、C#38、Clang25（1项平台不适用）、Host17、目标发现6、
 真实安装1与公共图8通过；共享 Unix 矩阵12场景通过。Rust 全量760通过，43项脚本测试通过，
-Windows 同源测试库跨目标检查通过；实际 Windows 运行仍等待本轮 Actions。
+Windows 同源测试库跨目标检查通过。最终完整Actions四组全部成功：双平台四包及各语言套件、
+目标发现6、实际安装1、公共图8均通过；Host为Windows16/macOS17，Python为23/3/4与35/3/4。
+Windows共享进程11项、LSP13项通过；夹具已按真实系统成员和通知时序修正前提并完成复核。
+精确结果和历史失败见[跨平台记录](../research/native-crossplatform-validation.md)；后续文档提交不重跑矩阵。
 
 ## 已通过的共享回收基线（2026-10-03）
 
