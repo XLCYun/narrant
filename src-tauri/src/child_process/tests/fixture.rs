@@ -20,6 +20,8 @@ pub(crate) fn fixture_command(role: &str, directory: &Path) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // 根由 ProcessTree 配置，夹具自行启动的后代也使用相同无窗口策略。
+    crate::child_process::configure_std_command(&mut command);
     command
 }
 

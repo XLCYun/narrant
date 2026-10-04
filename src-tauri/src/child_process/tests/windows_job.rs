@@ -6,10 +6,84 @@ use std::{fs, path::Path};
 use windows_sys::Win32::{
     Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::{
-        JobObjects::IsProcessInJob,
-        Threading::{OpenProcess, PROCESS_SYNCHRONIZE},
+        JobObjects::{
+            IsProcessInJob, JobObjectBasicProcessIdList, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+        },
+        Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE,
+        },
     },
 };
+
+/// 小型夹具只读查询当前准确 Job 的成员，绝不补捕或修改生产账本。
+fn current_members(job: &WindowsJob) -> io::Result<Vec<u32>> {
+    const HEADER: usize =
+        std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+    let mut buffer = [0usize; HEADER + 16];
+    // SAFETY: usize 缓冲区满足对齐，包含完整头部与 16 个 PID 的空间。
+    if unsafe {
+        QueryInformationJobObject(
+            job.raw(),
+            JobObjectBasicProcessIdList,
+            buffer.as_mut_ptr().cast(),
+            std::mem::size_of_val(&buffer) as u32,
+            ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: 固定头部完全落在上面的对齐缓冲区内。
+    let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+    let count = info.NumberOfProcessIdsInList as usize;
+    if count > 16 || info.NumberOfAssignedProcesses != info.NumberOfProcessIdsInList {
+        return Err(io::Error::other("小型 Job 夹具的成员列表不完整"));
+    }
+    buffer[HEADER..HEADER + count]
+        .iter()
+        .map(|pid| u32::try_from(*pid).map_err(io::Error::other))
+        .collect()
+}
+
+/// 仅在前置条件失败时读取当前成员映像；重开身份只供诊断，不作为完成证明。
+fn member_images(job: &WindowsJob) -> Vec<(u32, io::Result<String>)> {
+    current_members(job)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pid| {
+            let image = (|| {
+                // SAFETY: PID 来自本测试准确 Job，仅请求查询权限，不终止或等待。
+                let process =
+                    owned(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
+                let mut member = 0;
+                // SAFETY: 两个句柄由当前作用域持有，确认重开对象仍属于准确 Job。
+                if unsafe { IsProcessInJob(process.as_raw_handle(), job.raw(), &mut member) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if member == 0 {
+                    return Err(io::Error::other("诊断重开对象已不属于当前 Job"));
+                }
+                let mut image = [0u16; 32768];
+                let mut length = image.len() as u32;
+                // SAFETY: 只读查询自有对象，长度和输出缓冲区一致。
+                if unsafe {
+                    QueryFullProcessImageNameW(
+                        process.as_raw_handle(),
+                        0,
+                        image.as_mut_ptr(),
+                        &mut length,
+                    )
+                } == 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(String::from_utf16_lossy(&image[..length as usize]))
+            })();
+            (pid, image)
+        })
+        .collect()
+}
 
 /// Resume 之前根对象已登记；通知或重复登记不能把一个对象记作两个。
 #[test]
@@ -139,13 +213,13 @@ fn native_windows_stop_preserves_dequeued_member() {
     child.kill().unwrap();
     child.wait().unwrap();
     let mut tracker = job.tracker.lock().unwrap();
-    tracker
-        .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
-        .unwrap();
-    assert_eq!(tracker.recorded(), 1, "退出对象应已离开当前 Job PID 列表");
+    // stop 没有 supplement 路径，冻结的真实通知是登记第二个对象的唯一来源。
+    assert_eq!(tracker.recorded(), 1, "冻结通知尚未登记真实成员");
     tracker
         .stop(Instant::now() + Duration::from_secs(2))
         .unwrap();
+    let immediate = retained_status(child);
+    assert_eq!(immediate, WAIT_OBJECT_0);
     assert_eq!(tracker.recorded(), 2, "stop 不得丢弃已 dequeue 的真实成员");
 }
 
@@ -187,12 +261,22 @@ fn native_windows_cleanup_waits_for_queued_history() {
     let child = member.0.as_mut().unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
+    // Child signaled 不保证 Job 列表同时更新；清理前先建立不能被 supplement 补捕的前提。
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let members = current_members(&job).unwrap();
+        if !members.contains(&pid) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "已退出夹具仍在 Job 当前列表：{members:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     {
         let tracker = job.tracker.lock().unwrap();
-        tracker
-            .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
-            .unwrap();
-        assert_eq!(tracker.recorded(), 1);
+        assert_eq!(tracker.recorded(), 1, "只读前置等待不能补捕冻结成员");
         tracker.on_coverage_wait(move || {
             *gate.0.lock().unwrap() = true;
             gate.1.notify_all();
@@ -297,17 +381,21 @@ fn admission_gate_rejects_new_process_with_exact_quota_error() {
         WindowsJob::spawn(&mut fixture_command("admission", directory.path())).unwrap();
     let observed_root = ObservedProcess::child(&root);
     wait_file(&directory.path().join("ready"));
-    let descendant = ObservedProcess::marker(
-        &directory.path().join("child-pid"),
-        &std::sync::atomic::AtomicBool::new(false),
-    )
-    .unwrap();
+    let descendant_pid = fs::read_to_string(directory.path().join("child-pid"))
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    let descendant = ObservedProcess::open(descendant_pid).unwrap();
     job.tracker
         .lock()
         .unwrap()
         .supplement(job.raw(), Instant::now() + Duration::from_secs(2))
         .unwrap();
-    assert_eq!(job.tracker.lock().unwrap().recorded(), 2);
+    let retained = job.tracker.lock().unwrap().recorded();
+    let info = job.accounting().unwrap();
+    assert_eq!(retained, 2,
+        "门禁前只应有根与叶：root={}, leaf={descendant_pid}, total={}, active={}, current={:?}, reopened_images={:?}",
+        root.id(), info.TotalProcesses, info.ActiveProcesses, current_members(&job), member_images(&job));
     job.seal_admission().unwrap();
     publish(&directory.path().join("attempt-spawn"), "attempt").unwrap();
     wait_file(&directory.path().join("attempt-result"));
