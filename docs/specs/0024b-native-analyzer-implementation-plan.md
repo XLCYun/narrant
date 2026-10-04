@@ -19,6 +19,7 @@
 Windows共享owner6项、Transport2项、LSP13项、原生Host17项、安装及8图均通过，
 Python23/3/4也通过（含3项真实固定ty会话）。macOS两组通过；本地Rust753项与20项脚本测试通过。
 具体证据及边界见[跨平台记录](../research/native-crossplatform-validation.md)。
+分项与全分支审查的范围、修复及关闭情况见[审查记录](../research/native-analyzer-review.md)。
 
 ### 新语言交付基线（4c65bb8，历史记录）
 

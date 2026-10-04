@@ -102,7 +102,7 @@ Windows 构建、Windows 进程/路径原生验收由后续独立增量负责，
 
 ## 275313e 之后的 Windows 增量与审查修复第一轮
 
-此节覆盖独立审查 `.superpowers/.../task-5-review.md` 的全部 4 个 Important，保留前文快照事实。
+此节覆盖独立审查的全部 4 个 Important，保留前文快照事实；审查结论见[公共审查记录](native-analyzer-review.md)。
 新增 CMakeLists.txt/build.ps1、Windows PeekNamedPipe/ReadFile 取消读取、跨平台环境清理、显式
 UTF-8 filesystem 路径；新增 `clang-system-headers` 与可选 additional_system_platform_ids，
 附加根分别校验、按目标限定读取并写入 evidence。MacOS 标准头测试也接受固定 SDK 环境变量。

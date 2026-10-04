@@ -6,6 +6,7 @@
 候选对照与产品默认路径都有独立真实 Windows 证据，详见下方记录。
 交付位于[草稿 PR #200](https://github.com/XLCYun/narrant/pull/200)，未合并或发布支持包。
 本记录覆盖指定语言支持与生命周期矩阵；未手动触发 quality-gate，不承诺更广 SDK 或版本。
+审查覆盖、主要发现及关闭情况见[原生语言分析器审查记录](native-analyzer-review.md)。
 
 ## 2026-10-03 共享生产 owner 接入及完整验收：83d5642
 
