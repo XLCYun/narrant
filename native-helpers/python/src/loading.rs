@@ -35,7 +35,7 @@ pub(crate) fn system_path(path: &Path) -> Result<SystemPathBuf> {
     Ok(output)
 }
 
-/// 仅在真实文件读取前解析链接；快照与后续导航仍使用原来的词法相对路径。
+/// 读取前解析链接并校验真实安装环境；快照与导航仍使用原来的词法相对路径。
 fn check_path(repository: &Path, path: &Path) -> Result<()> {
     let actual = path
         .canonicalize()
@@ -45,7 +45,7 @@ fn check_path(repository: &Path, path: &Path) -> Result<()> {
         "Python 路径逃逸仓库：{}",
         path.display()
     );
-    Ok(())
+    check_environment(repository, &actual)
 }
 
 /// 安装环境不能作为仓库源码进入语义上下文。

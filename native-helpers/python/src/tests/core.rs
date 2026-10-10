@@ -462,3 +462,63 @@ fn tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
         })
         .collect()
 }
+
+#[cfg(unix)]
+/// 链接不能把被排除的安装环境或带 pyvenv.cfg 的隐藏 prefix 伪装为普通源码。
+#[test]
+fn internal_links_to_installation_environments_are_rejected() {
+    use std::os::unix::fs::symlink;
+    for (target, prefix, directory_link) in [
+        (
+            ".venv/lib/python3.14/site-packages/poison.py",
+            ".venv",
+            false,
+        ),
+        ("runtime/lib/poison.py", "runtime", false),
+        ("runtime/lib/poison.py", "runtime", true),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("src")).unwrap();
+        fs::create_dir_all(directory.path().join(target).parent().unwrap()).unwrap();
+        fs::write(
+            directory.path().join(prefix).join("pyvenv.cfg"),
+            "home = /usr/bin\n",
+        )
+        .unwrap();
+        fs::write(directory.path().join(target), "def fetch(): pass\n").unwrap();
+        fs::write(
+            directory.path().join("src/main.py"),
+            "import poison\npoison.fetch()\nlen([])\n",
+        )
+        .unwrap();
+        let (link_target, link) = if directory_link {
+            (
+                "../runtime/lib".into(),
+                directory.path().join("src/environment"),
+            )
+        } else {
+            (
+                format!("../{target}"),
+                directory.path().join("src/poison.py"),
+            )
+        };
+        symlink(link_target, link).unwrap();
+        let before = tree(directory.path());
+        let result = PythonProject::load(ProjectInput {
+            repository: directory.path().into(),
+            project_root: "src".into(),
+            source_roots: vec![
+                if directory_link {
+                    "src/environment"
+                } else {
+                    "src"
+                }
+                .into(),
+            ],
+            python_minor: 14,
+        });
+        let error = result.err().expect("安装环境链接必须在原生加载前拒绝");
+        assert!(error.to_string().contains("安装环境"), "{error:#}");
+        assert_eq!(tree(directory.path()), before);
+    }
+}

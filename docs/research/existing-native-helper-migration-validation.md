@@ -297,3 +297,27 @@ registry Ruff 0.0.15，它只参与 dev 测试。
 原始命令、聚焦阶段、日志与自审记录保留在 ignored Task 2 report / scratch/python；
 没有运行宿主全量、触发 quality-gate、改全局工具链或 push。Windows junction、取消与
 协议错误分类、完整对象/内容/图/配置兼容性、双平台 helper/支持包/Review 仍须后续验收。
+
+### Python 核心安装环境链接隔离修复（第 1 轮）
+
+独立审查发现初版只对词法路径检查安装环境：普通仓库 `poison.py` 链接到
+`.venv/lib/python3.14/site-packages/poison.py` 时，真实目标仍在仓库，能够绕过 `.venv`
+遍历排除并进入语义上下文。审查经污染 fixture 的真实查询复现了 `poison.fetch` 被解析。
+本轮新增直接加载回归，修复前同样返回了成功项目，测试为 exit 101、1 failed、14 filtered。
+
+`check_path` 现在在 canonical 仓库边界通过后，继续对真实路径执行现有安装环境目录名
+与祖先 `pyvenv.cfg` 检查。源码根和遍历项共用这个读取前检查；原有词法环境检查继续保留。
+成功后仍按原词法相对路径冻结文件，没有修改合法链接的模块身份，没有增加回退或过滤结果。
+
+新增回归覆盖指向 `.venv/site-packages` 的源码文件链接、目录名普通但祖先带
+`pyvenv.cfg` 的文件链接，以及作为显式源码根传入的安装目录链接；三者均在数据库加载前
+返回明确安装环境错误，磁盘 fixture 字节不变。合法 alias/impl 身份和逃逸链接、真实污染
+子进程、直接可达安装环境拒绝、明确源码根顺序/只读共 5 个相关用例通过，0 failed/ignored。
+只运行这些受影响用例，没有重跑 helper 或宿主全集。
+
+命令前缀沿用上述 Cargo wrapper，各日志保留在 Task 2 report 的 scratch/python。
+`tests::internal_links` 为 2 passed / 13 filtered（0.06 秒）；新增回归在补齐显式源码根
+变体后精确复跑为 1 passed / 14 filtered（0.01 秒）。另外 3 个精确筛选用例分别为污染
+环境 0.42 秒、直接安装环境 0.00 秒、源码根/只读 0.07 秒，均 exit 0。
+Clippy `--all-targets --locked -- -D warnings` 为 exit 0（1.95 秒），fmt 检查为 exit 0。
+审查的候选数量断言 Minor 按任务安排留待 Task 6/最终审查，不作为本轮修复范围。
