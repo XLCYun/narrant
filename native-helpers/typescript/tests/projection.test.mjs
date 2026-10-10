@@ -30,6 +30,8 @@ test('meaningful_javascript_text_survives_normalization', () => {
     ['class C { x = `a b`; }', 'class C { x = `a  b`; }'],
     ['class C { x = /a b/; }', 'class C { x = /a  b/; }'],
     ['const x = <div>a b</div>;', 'const x = <div>a  b</div>;'],
+    ['function f(){return <div>a</div>}', 'function f(){return <div> a</div>}'],
+    ['function f(){return <div></div>}', 'function f(){return <div> </div>}'],
     ['const x = tag`a\\nb`;', 'const x = tag`a\nb`;'],
   ]) assert.notDeepEqual(contents(parse(a)), contents(parse(b)), a);
 });

@@ -177,7 +177,11 @@ export function normalize(ts, sf, node, omit = null) {
   function collect(current) {
     const children = current.getChildren(parsed);
     if (children.length) children.forEach(collect);
-    else if (current.kind !== ts.SyntaxKind.EndOfFileToken && current.end > current.getStart(parsed) && current.getStart(parsed) >= prefix.length && current.end <= prefix.length + printed.length) tokens.push(text.slice(current.getStart(parsed), current.end));
+    else {
+      // JSX 文本的前导/纯空白属于渲染内容；getStart 会把它当 trivia 跳过，必须保留完整原生 span。
+      const start = ts.isJsxText(current) ? current.pos : current.getStart(parsed);
+      if (current.kind !== ts.SyntaxKind.EndOfFileToken && current.end > start && start >= prefix.length && current.end <= prefix.length + printed.length) tokens.push(text.slice(start, current.end));
+    }
   }
   collect(parsed);
   return tokens.join(' ');

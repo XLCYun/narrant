@@ -1220,3 +1220,31 @@ fn link_directory(target: &Path, link: &Path) {
         .unwrap()
         .success());
 }
+
+/// JSX 前导空格和纯空白文本会改变渲染结果，真实图差异不能只保留 source 而漏掉内容修改。
+#[test]
+#[ignore = "需要真实 TypeScript 原生支持包"]
+fn typescript_jsx_leading_and_space_only_text_changes_graph_content() {
+    for (before, after) in [
+        ("<div>a</div>", "<div> a</div>"),
+        ("<div></div>", "<div> </div>"),
+    ] {
+        let one = fixture(&[(
+            "main.tsx",
+            &format!("export function render() {{ return {before}; }}"),
+        )]);
+        let two = fixture(&[(
+            "main.tsx",
+            &format!("export function render() {{ return {after}; }}"),
+        )]);
+        let a = analyze(one.path(), &["main.tsx"]);
+        let b = analyze(two.path(), &["main.tsx"]);
+        let diff = a.diff(&b).unwrap();
+        assert_eq!(diff.nodes.len(), 1, "{before} -> {after}");
+        assert_eq!(diff.nodes[0].id, named(&a, "render").data().id);
+        assert_eq!(
+            diff.nodes[0].content,
+            Some(crate::structure_review::code_graph::ChangeKind::Modified)
+        );
+    }
+}

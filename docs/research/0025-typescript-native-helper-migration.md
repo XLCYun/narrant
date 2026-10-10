@@ -167,3 +167,11 @@ NARRANT_TYPESCRIPT_PACK=/absolute/extracted/pack node native-helpers/typescript/
 lifecycle 独占、聚焦语言跳过旧 build、完整发布依赖/显式开关/main 分支；生产 workflow 不变。
 同一六文件 Node 测试组本机 44 passed、0 failed、2 Windows-only skipped；预期负例日志改为捕获并验证。
 该修复不代替双平台重跑，旧链继续保留。
+
+## 审查修复：JSX 语义空白（T4-I1）
+
+固定 TypeScript 的 `JsxText.getStart()` 会跳过前导空白，不能用作 JSX 文本的语义起点。
+规范化继续使用原生 printer 和叶节点，只对 `JsxText` 使用完整 `pos..end` span。
+新增 `<div>a</div>` → `<div> a</div>`、`<div></div>` → `<div> </div>` 两组回归：
+投影测试保留不同内容，真实 Native helper/Host 图差异均仅产生 `render` 节点的 `content=Modified`。
+20 个投影测试通过；macOS ARM64 本地候选支持包的真实图回归通过。双平台 Actions 验收仍未完成。
