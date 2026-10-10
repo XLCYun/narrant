@@ -107,6 +107,10 @@ Cargo 一律经过仓库脚本，若需安装 helper 构建工具链，应与被
 基于 Task 1 核心完成统一协议与全部 Rust 图投影，不恢复 LSP。依赖 Task 3 的公共接口。
 语法、test_code、symbols 和引用投影规则从旧实现迁入 helper，并改用同源数据库节点/位置。
 
+若 TS/JS 的双平台验收受外部运行资源阻塞，可以先实现本任务独立的 helper 图投影、协议和聚焦验证。
+该阶段不启用 Rust 生产工厂、不发布支持包、不删除旧链路；应用接入与正式验收仍按 TS/JS、Rust、Python 的顺序推进。
+此阶段完成只代表内部实现就绪，不代表 Task 5 完成。
+
 - 保留稳定身份、词法包含、crate 根、外部声明、宏/闭包、字段类型与既有关系范围。
 - 三档依赖、单/多 Cargo 项目、sysroot 冲突、测试过滤、未激活 cfg 声明与加载失败行为保持兼容。
 - 复用旧 syntax、test_code、test_scope、toolchain、repository_scope、integration 用例的语言断言；
