@@ -703,3 +703,5 @@ fn subprocess_bounds_blocked_stdin_writer() {
 
 #[path = "migration.rs"]
 mod migration;
+
+mod rust_graph;

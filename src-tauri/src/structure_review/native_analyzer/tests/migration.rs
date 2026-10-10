@@ -320,3 +320,56 @@ fn rust_constructor_keeps_factory_resolution_and_forces_safety_policy() {
         );
     }
 }
+
+/// Rust 三档允许 canonical 别名交给 helper 合并；重复词法路径仍由 Host 拒绝。
+#[test]
+fn rust_profiles_admit_physical_aliases_without_loosening_other_languages() {
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.repository.join("src")).unwrap();
+    fs::write(fixture.repository.join("src/lib.rs"), "pub fn run() {}").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        fixture.repository.join("src"),
+        fixture.repository.join("alias"),
+    )
+    .unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(fixture.repository.join("alias"))
+        .arg(fixture.repository.join("src"))
+        .status()
+        .unwrap()
+        .success());
+    let mut input = fixture.input();
+    input.files = vec!["src/lib.rs".into(), "alias/lib.rs".into()];
+    for profile in [
+        NativeProfile::RustRepository,
+        NativeProfile::RustStandardLibrary,
+        NativeProfile::RustAllDependencies,
+    ] {
+        let mut analyzer = migrating(&fixture, profile);
+        if profile != NativeProfile::RustRepository {
+            for name in ["core/src/lib.rs", "std/src/lib.rs"] {
+                let file = fixture
+                    .platform
+                    .join("lib/rustlib/src/rust/library")
+                    .join(name);
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(file, "").unwrap();
+            }
+            analyzer.platforms.push(Platform {
+                id: "project-rust".into(),
+                kind: "rust-standard-library".into(),
+                version: "test".into(),
+                root: fixture.platform.clone(),
+                metadata: json!({"rust_src":"lib/rustlib/src/rust/library"}),
+            });
+        }
+        assert_eq!(input::validate(&analyzer, &input).unwrap().files.len(), 2);
+        let mut duplicate = input.clone();
+        duplicate.files.push("src/lib.rs".into());
+        assert!(input::validate(&analyzer, &duplicate).is_err());
+    }
+    assert!(input::validate(&fixture.analyzer(), &input).is_err());
+}

@@ -98,13 +98,19 @@ pub(super) fn validate(
         #[cfg(not(windows))]
         let normalized = path.to_string();
         let resolved = repository_file(&repository, &normalized)?;
-        // Python 保留词法身份；TS 在 helper 中按真实路径去重并聚合来源。其余语言继续拒绝物理别名。
+        // Python 保留词法身份；TS/Rust 在 helper 中按真实路径去重并聚合来源。原有四语言仍拒绝别名。
         let distinct_physical = resolved_files.insert(resolved);
         if !files.insert(normalized)
             || (!distinct_physical
                 && !matches!(
                     NativeProfile::parse(&analyzer.identity.profile),
-                    Some(NativeProfile::Python | NativeProfile::TypeScriptJavascript)
+                    Some(
+                        NativeProfile::Python
+                            | NativeProfile::TypeScriptJavascript
+                            | NativeProfile::RustRepository
+                            | NativeProfile::RustStandardLibrary
+                            | NativeProfile::RustAllDependencies
+                    )
                 ))
         {
             return Err(failure("选集包含重复路径或同一文件的别名"));

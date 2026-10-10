@@ -1,6 +1,10 @@
-//! 内嵌固定 rust-analyzer 的只读语义核心；此阶段尚不提供协议或公共图适配。
+//! 内嵌固定 rust-analyzer 的只读语义核心与统一协议图投影。
 
+mod discovery;
 mod loading;
+pub mod projection;
+pub mod protocol;
+mod readonly_metadata;
 
 use anyhow::{Context, Result, bail, ensure};
 use ide::{
@@ -29,6 +33,7 @@ pub struct RustProject {
     _host: AnalysisHost,
     analysis: Analysis,
     vfs: Vfs,
+    cargo_parents: bool,
 }
 
 impl RustProject {
@@ -41,6 +46,28 @@ impl RustProject {
             _host: host,
             analysis,
             vfs,
+            cargo_parents: manifest
+                .file_name()
+                .is_some_and(|name| name == "Cargo.toml"),
+        })
+    }
+
+    /// 多项目共用一次数据库装载，所有查询失败均由调用方终止整次请求。
+    pub(crate) fn load_projects(
+        manifests: &[PathBuf],
+        policies: &[LoadPolicy],
+        selected: &[PathBuf],
+    ) -> Result<Self> {
+        let (database, vfs) = loading::load_projects(manifests, policies, selected)?;
+        let host = AnalysisHost::with_database(database);
+        let analysis = host.analysis();
+        Ok(Self {
+            _host: host,
+            analysis,
+            vfs,
+            cargo_parents: manifests
+                .iter()
+                .any(|path| path.file_name().is_some_and(|name| name == "Cargo.toml")),
         })
     }
 
@@ -75,7 +102,26 @@ impl RustProject {
     pub fn parse(&self, file_id: FileId) -> Result<syntax::ast::SourceFile> {
         native_transaction("Rust AST 查询失败", || {
             self.ensure_file(file_id)?;
-            self.analysis.parse(file_id).context("Rust AST 查询已取消")
+            let db = self._host.raw_database();
+            let mut first_errors = Vec::new();
+            // 保留旧语法投影的版本兼容顺序，但每个候选仍由同一 DB 的原生 parse 查询提供。
+            for edition in [
+                syntax::Edition::Edition2024,
+                syntax::Edition::Edition2021,
+                syntax::Edition::Edition2018,
+                syntax::Edition::Edition2015,
+            ] {
+                let file = base_db::EditionedFileId::new(db, file_id, edition);
+                let parsed = file.parse(db);
+                let errors = parsed.errors();
+                if errors.is_empty() {
+                    return Ok(parsed.tree());
+                }
+                if first_errors.is_empty() {
+                    first_errors = errors;
+                }
+            }
+            bail!("Rust 源文件无法解析：{first_errors:?}")
         })
     }
 
@@ -120,6 +166,9 @@ impl RustProject {
     pub fn parent_modules(&self, file_id: FileId) -> Result<Vec<ModuleParent>> {
         native_transaction("Rust 父模块查询失败", || {
             self.ensure_file(file_id)?;
+            if !self.cargo_parents {
+                return Ok(Vec::new());
+            }
             for krate in self
                 .analysis
                 .crates_for(file_id)
@@ -217,3 +266,7 @@ mod test_support;
 #[cfg(test)]
 #[path = "tests/core.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/projection.rs"]
+mod projection_tests;

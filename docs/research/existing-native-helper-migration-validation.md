@@ -321,3 +321,49 @@ registry Ruff 0.0.15，它只参与 dev 测试。
 环境 0.42 秒、直接安装环境 0.00 秒、源码根/只读 0.07 秒，均 exit 0。
 Clippy `--all-targets --locked -- -D warnings` 为 exit 0（1.95 秒），fmt 检查为 exit 0。
 审查的候选数量断言 Minor 按任务安排留待 Task 6/最终审查，不作为本轮修复范围。
+
+## Rust Task 5 独立 helper 阶段（未生产切换）
+
+基线 `332d7d3` 后完成 `narrant-rust` 单请求协议与完整图投影，继续使用固定
+rust-analyzer revision `9074e9b4c6bc31d7986ccf4e22d18af70e5508da`。旧 syntax、test_code、
+symbols、引用规则迁入 helper；原文、AST、位置和导航均来自同一数据库。公共 Host
+完成最终图校验；helper 不实现第二图验证器或 LSP。生产工厂、迁移注册、支持包、
+旧 Rust 链路和宿主 syntax 依赖未改动，本记录不代表完整 Task 5 或双平台验收。
+
+多个独立项目使用固定上游公开 `to_crate_graph` / `CrateGraphBuilder::extend`、
+`ProjectFolders` 与 VFS 原语合入一次数据库；关闭 watcher、build scripts 和宏服务，
+沿用 Task 1 crate/block DefMap 完整性检查。显式 JSON 项目不生成 Cargo 容器，缺失
+crate 根会终止整图。非空 standalone 保留旧实际入口的加载失败；空选集仍成功。
+旧包实测独立 Cargo 与 JSON 的 health/parentModule 导航响应、standalone warning
+保存在 ignored scratch；这些导航记录只证明装载边界，不能等同完整图 parity。
+另外，旧实际分析器与新 helper 经公共 Host 对双别名 fixture 比较了完整图、diff、
+根节点、外部符号和 source，确认 canonical 合并与各词法 origin/coverage。
+共享输入层的修改仅增加三档 Rust profile 的物理别名准入，原四档语言策略保留。
+
+真实 Cargo 验证使用 ignored scratch 中独立安装的 1.81.0、1.94.0、1.96.0 minimal
+工具链；未改全局默认版本。每版覆盖有效/缺失/过期锁及 workspace 根/成员入口共
+18 组，逐项比较分析前后目录字节；解析成功时还断言实际依赖边和 workspace 根。
+1.81 有效锁成功，缺失或过期锁明确拒绝写回；1.94/1.96 全部成功，项目锁不变。
+分析使用 offline；开发安装工具链与产品禁止自动下载分别处理。
+
+1.94 实测暴露固定上游自动复制已有锁并追加 `--lockfile-path`，与显式临时锁冲突。
+仅在 1.82..1.94 用公开 `MetadataCommand` → `CargoWorkspace::new` 补齐完整依赖，
+保留原生发现的 manifest/workspace 根、Cargo executable/env、cfg/sysroot、features、
+有效 target 和配置；原始 workspace 锁复制失败直接失败，metadata 失败不回退 no-deps。
+其余版本分支不扩大改写。真实 1.94 的 optional feature、平台依赖过滤和自定义 JSON
+目标来源测试通过。Cargo 仍自行合并配置；小型补偿只读取 `cargo config get --format
+ toml --show-origin` 的 build.target。升级上游须复核这些公开组装 API 与 Cargo origin
+格式；未复制 Cargo 解析器或完整 loader。
+
+公共 Host 实测涵盖旧语言集成断言、三档依赖完整图、多项目工具链/sysroot 冲突、JSON、
+standalone、别名、逃逸上下文链接，以及忙碌 helper 和实际活动 Cargo 探针子进程的取消。
+运行时工具链测试使用会转发真实 Cargo/rustc 的日志代理，明确比较实际 stable sysroot
+与版本，并验证用户覆盖优先于目录 1.98、无覆盖时目录 stable 生效；允许 Rustup 自身
+将 stable 规范化成完整 triple。构建使用 1.98，未在 loader 中抹除运行时覆盖。
+
+本机 macOS ARM64 的小型完整图 debug 单样本，standard-library 约 46.6 秒、
+all-dependencies 约 45.1 秒。完整性检查会遍历标准库 crate/block DefMap 与 body store；
+该成本继承 Task 1 的漏载故障边界，当前没有为耗时放松检查或增加缓存。
+这些是 debug 单样本，不是优化支持包性能，也不可与旧 release 对比；后续 Rust 集成
+必须在同样本记录真实优化支持包耗时与峰值内存，完成 Windows、安装、Review 图/diff、
+生产取消和无下载/构建验收。详细聚焦测试命令、日志和自审见 ignored `task-5-report.md`。

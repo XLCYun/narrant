@@ -1039,13 +1039,22 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base-db",
+ "cargo_metadata",
+ "crossbeam-channel",
  "hir-def",
  "ide",
+ "ide-db",
  "load-cargo",
  "project-model",
+ "serde",
+ "serde_json",
  "syntax",
  "tempfile",
+ "toml",
+ "toolchain",
+ "url",
  "vfs",
+ "vfs-notify",
 ]
 
 [[package]]

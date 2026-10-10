@@ -7,7 +7,6 @@ use hir_def::{
     nameres::{DefMap, crate_def_map, diagnostics::DefDiagnosticKind},
 };
 use ide::RootDatabase;
-use load_cargo::{LoadCargoConfig, ProcMacroServerChoice};
 use project_model::{
     CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind, RustLibSource,
 };
@@ -16,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
+use vfs::loader::{Handle, LoadingProgress};
 use vfs::{AbsPathBuf, Vfs};
 
 /// 与现有 Rust 设置对应的三档语义依赖范围。
@@ -67,6 +67,14 @@ impl LoadPolicy {
             no_deps: self.dependency_scope == DependencyScope::RepositoryOnly,
             ..CargoConfig::default()
         };
+        config.extra_env.insert(
+            "PATH".into(),
+            Some(
+                crate::discovery::runtime_path()?
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("项目 PATH 必须为 UTF-8"))?,
+            ),
+        );
         config
             .extra_env
             .insert("RUSTUP_AUTO_INSTALL".into(), Some("0".into()));
@@ -74,8 +82,7 @@ impl LoadPolicy {
         config
             .extra_env
             .insert("CARGO_CACHE_RUSTC_INFO".into(), Some("0".into()));
-        // Cargo +toolchain 会把构建版本传播给测试/子进程，不能据此覆盖被分析项目。
-        config.extra_env.insert("RUSTUP_TOOLCHAIN".into(), None);
+        // 用户/工厂提供的 RUSTUP_TOOLCHAIN 继续影响 metadata 与 rustc；构建隔离由测试入口负责。
         if self.dependency_scope != DependencyScope::AllDependencies
             || self.network == NetworkPolicy::Offline
         {
@@ -105,7 +112,7 @@ impl LoadPolicy {
             );
             let sysroot = absolute_utf8(&toolchain.sysroot)?;
             let sources = absolute_utf8(&toolchain.rust_src)?;
-            // 显式覆盖由 helper 构建进程继承的版本，Cargo/rustc 均使用已发现的项目 sysroot。
+            // Cargo/rustc 共同使用已按用户覆盖发现并验证的项目 sysroot。
             config
                 .extra_env
                 .insert("RUSTUP_TOOLCHAIN".into(), Some(sysroot.to_string()));
@@ -118,58 +125,144 @@ impl LoadPolicy {
 
 /// 一次加载事务隔离原生内部异常；失败即丢弃数据库，不探测输入、不重试或返回部分结果。
 pub(super) fn load(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase, Vfs)> {
-    crate::native_transaction("Rust 工作区未完整加载", || {
-        load_native(manifest, policy)
-    })
+    load_projects(&[manifest.to_owned()], std::slice::from_ref(policy), &[])
 }
 
-/// 先检查 ProjectWorkspace 的可降级错误，再交给原生 loader 建立数据库并检查模块。
-fn load_native(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase, Vfs)> {
-    let mut config = policy.cargo_config()?;
-    ensure!(
-        manifest
-            .file_name()
-            .is_some_and(|name| name == "Cargo.toml"),
-        "此核心阶段只接受 Cargo.toml"
-    );
-    let manifest = ProjectManifest::from_manifest_file(absolute_utf8(manifest)?)?;
-    // tempfile 必须存活到原生 metadata 完成，路径永远不在分析工作区中。
-    let lockfile_directory = tempfile::tempdir().context("无法准备只读 metadata 锁文件目录")?;
-    let workspace = if policy.dependency_scope == DependencyScope::AllDependencies {
-        // no-deps 只读发现真实 workspace 根和项目版本，同时完整加载标准库。
-        let mut discovery = config.clone();
-        discovery.metadata_extra_args.push("--no-deps".into());
-        let standard_policy = LoadPolicy {
-            dependency_scope: DependencyScope::StandardLibrary,
-            ..policy.clone()
-        };
-        let standard = load_complete(manifest.clone(), &discovery, &standard_policy)?;
-        redirect_project_lockfile(&mut config, &standard, lockfile_directory.path())?;
-        // sysroot 的 metadata 使用自己的 Cargo.lock，不能继承项目锁文件重定向。
-        // 后续只替换 Cargo 项目模型；sysroot、cfg 和工具链仍来自同一真实项目配置。
-        config.sysroot = None;
-        config.sysroot_src = None;
-        let repository_policy = LoadPolicy {
-            dependency_scope: DependencyScope::RepositoryOnly,
-            ..policy.clone()
-        };
-        let mut complete = load_complete(manifest, &config, &repository_policy)?;
-        complete.sysroot = standard.sysroot;
-        complete
-    } else {
-        load_complete(manifest, &config, policy)?
-    };
-    let load_config = LoadCargoConfig {
-        load_out_dirs_from_check: false,
-        with_proc_macro_server: ProcMacroServerChoice::None,
-        prefill_caches: false,
-        num_worker_threads: 1,
-        proc_macro_processes: 1,
-    };
-    let (database, vfs, macro_client) =
-        load_cargo::load_workspace(workspace, &config.extra_env, &load_config)?;
-    ensure!(macro_client.is_none(), "禁止启动过程宏服务");
-    ensure!(vfs.iter().next().is_some(), "Cargo 工作区未加载任何文件");
+/// 将多个真实项目一次装入同一 VFS/数据库；仅组合固定上游公开的 crate 图与文件加载原语。
+pub(super) fn load_projects(
+    manifests: &[PathBuf],
+    policies: &[LoadPolicy],
+    selected: &[PathBuf],
+) -> Result<(RootDatabase, Vfs)> {
+    crate::native_transaction("Rust 多项目工作区未完整加载", || {
+        let mut workspaces = Vec::new();
+        let mut locks = Vec::new();
+        for (manifest, policy) in manifests.iter().zip(policies) {
+            let mut config = policy.cargo_config()?;
+            let manifest = ProjectManifest::from_manifest_file(absolute_utf8(manifest)?)?;
+            let workspace = if policy.dependency_scope == DependencyScope::AllDependencies
+                && matches!(manifest, ProjectManifest::CargoToml(_))
+            {
+                let directory = tempfile::tempdir()?;
+                let mut discovery = config.clone();
+                discovery.metadata_extra_args.push("--no-deps".into());
+                let standard = load_complete(
+                    manifest.clone(),
+                    &discovery,
+                    &LoadPolicy {
+                        dependency_scope: DependencyScope::StandardLibrary,
+                        ..policy.clone()
+                    },
+                )?;
+                redirect_project_lockfile(&mut config, &standard, directory.path())?;
+                let complete =
+                    if standard.toolchain.as_ref().is_some_and(|version| {
+                        version.major == 1 && (82..95).contains(&version.minor)
+                    }) {
+                        let complete = crate::readonly_metadata::complete(standard, &config)?;
+                        ensure_complete(&complete, &[], policy)?;
+                        complete
+                    } else {
+                        config.sysroot = None;
+                        config.sysroot_src = None;
+                        let mut complete = load_complete(
+                            manifest,
+                            &config,
+                            &LoadPolicy {
+                                dependency_scope: DependencyScope::RepositoryOnly,
+                                ..policy.clone()
+                            },
+                        )?;
+                        complete.sysroot = standard.sysroot;
+                        complete
+                    };
+                locks.push(directory);
+                complete
+            } else {
+                load_complete(manifest, &config, policy)?
+            };
+            workspaces.push(workspace);
+        }
+        ensure!(
+            !workspaces.is_empty(),
+            "未发现 Rust workspace，无法完整加载 standalone 源码"
+        );
+        assemble(workspaces, &policies[0].cargo_config()?, selected)
+    })
+    .context("Rust 工作区未完整加载")
+}
+
+/// 对齐上游 reload::ws_to_crate_graph 与 load-cargo 的固定侧装载，不启用监听、宏服务或构建。
+fn assemble(
+    workspaces: Vec<ProjectWorkspace>,
+    config: &CargoConfig,
+    selected: &[PathBuf],
+) -> Result<(RootDatabase, Vfs)> {
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    let mut loader = vfs_notify::NotifyHandle::spawn(sender);
+    let mut vfs = Vfs::default();
+    let mut graph = base_db::CrateGraphBuilder::default();
+    let mut disabled_macros = Vec::new();
+    for workspace in &workspaces {
+        let (other, mut macros) = workspace.to_crate_graph(
+            &mut |path| {
+                let contents = loader.load_sync(path);
+                let path = vfs::VfsPath::from(path.to_path_buf());
+                vfs.set_file_contents(path.clone(), contents);
+                vfs.file_id(&path)
+                    .and_then(|(id, excluded)| (excluded == vfs::FileExcluded::No).then_some(id))
+            },
+            &config.extra_env,
+        );
+        graph.extend(other, &mut macros);
+        disabled_macros.extend(
+            macros
+                .into_keys()
+                .map(|id| (id, Err(base_db::ProcMacroLoadingError::Disabled))),
+        );
+    }
+    let folders = load_cargo::ProjectFolders::new(&workspaces, &[], None);
+    loader.set_config(vfs::loader::Config {
+        load: folders.load,
+        watch: vec![],
+        version: 0,
+    });
+    for message in receiver {
+        match message {
+            vfs::loader::Message::Progress {
+                n_done: LoadingProgress::Finished,
+                ..
+            } => break,
+            vfs::loader::Message::Loaded { files } | vfs::loader::Message::Changed { files } => {
+                for (path, contents) in files {
+                    vfs.set_file_contents(path.into(), contents);
+                }
+            }
+            _ => {}
+        }
+    }
+    // 选集决定输出，未激活 cfg 的选中文件也必须从同一 VFS 获得源码和 AST。
+    for path in selected {
+        let absolute = absolute_utf8(path)?;
+        let contents =
+            std::fs::read(&absolute).with_context(|| format!("选中源码无法读取：{absolute}"))?;
+        vfs.set_file_contents(absolute.into(), Some(contents));
+    }
+    let mut change = ide_db::ChangeWithProcMacros::default();
+    for (_, file) in vfs.take_changes() {
+        if let vfs::Change::Create(bytes, _) | vfs::Change::Modify(bytes, _) = file.change
+            && let Ok(text) = String::from_utf8(bytes)
+        {
+            change.change_file(file.file_id, Some(text));
+        }
+    }
+    change.set_roots(folders.source_root_config.partition(&vfs));
+    change.set_crate_graph(graph);
+    change.set_proc_macros(disabled_macros.into_iter().collect());
+    let mut database = RootDatabase::new(None);
+    database.enable_proc_attr_macros();
+    database.apply_change(change);
+    ensure!(vfs.iter().next().is_some(), "Rust 工作区未加载任何文件");
     ensure_sources_complete(&database, &vfs)?;
     Ok((database, vfs))
 }
@@ -433,6 +526,12 @@ fn ensure_complete(
             }
         }
     }
+    if let ProjectWorkspaceKind::Json(project) = &workspace.kind {
+        for (_, krate) in project.crates() {
+            std::fs::read_to_string(&krate.root_module)
+                .with_context(|| format!("JSON crate 根源码未完整加载：{}", krate.root_module))?;
+        }
+    }
     if let Some(error) = workspace
         .sysroot
         .error()
@@ -453,7 +552,9 @@ fn ensure_complete(
     {
         bail!("Rust metadata 发生降级：{error}");
     }
-    if policy.dependency_scope != DependencyScope::RepositoryOnly {
+    if policy.dependency_scope != DependencyScope::RepositoryOnly
+        && matches!(workspace.kind, ProjectWorkspaceKind::Cargo { .. })
+    {
         ensure!(
             workspace.sysroot.num_packages() > 0,
             "Rust 标准库未完整加载"

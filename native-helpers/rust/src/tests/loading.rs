@@ -453,3 +453,149 @@ fn lockfile_redirection_copies_real_workspace_constraints() {
     );
     assert!(!root.path().join("macros/Cargo.lock").exists());
 }
+
+/// 用实际旧 Cargo 覆盖三条只读锁分支；准备的锁只属于临时夹具，不改写真实项目。
+#[test]
+#[ignore = "需要 NARRANT_TEST_CARGO_TOOLCHAINS 指定已安装的 1.81/1.94/1.96 工具链目录"]
+fn real_old_cargo_versions_preserve_valid_locks_and_reject_only_required_writes() {
+    let toolchains = std::env::var_os("NARRANT_TEST_CARGO_TOOLCHAINS").expect("实际旧工具链路径");
+    for toolchain in std::env::split_paths(&toolchains) {
+        for (mode, member) in [
+            ("valid", false),
+            ("missing", false),
+            ("stale", false),
+            ("valid", true),
+            ("missing", true),
+            ("stale", true),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("dep")).unwrap();
+            std::fs::write(root.path().join("Cargo.toml"),"[package]\nname=\"lock_probe\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n[dependencies]\ndep={path=\"dep\"}\n[workspace]\nmembers=[\"dep\"]\n").unwrap();
+            std::fs::write(
+                root.path().join("lib.rs"),
+                "pub fn run() { dep::target(); }",
+            )
+            .unwrap();
+            std::fs::write(root.path().join("dep/lib.rs"), "pub fn target() {}").unwrap();
+            std::fs::write(root.path().join("dep/Cargo.toml"),format!("[package]\nname=\"dep\"\nversion=\"{}\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n",if mode=="stale" {"0.2.0"} else {"0.1.0"})).unwrap();
+            if mode != "missing" {
+                std::fs::write(root.path().join("Cargo.lock"),"version = 3\n[[package]]\nname = \"dep\"\nversion = \"0.1.0\"\n[[package]]\nname = \"lock_probe\"\nversion = \"0.1.0\"\ndependencies = [\"dep\"]\n").unwrap();
+            }
+            let before = support::snapshot(root.path());
+            let policy = LoadPolicy::repository_only();
+            let mut config = policy.cargo_config().unwrap();
+            config.extra_env.insert(
+                "RUSTUP_TOOLCHAIN".into(),
+                Some(toolchain.to_str().unwrap().into()),
+            );
+            let manifest = project_model::ProjectManifest::from_manifest_file(
+                super::absolute_utf8(&root.path().join(if member {
+                    "dep/Cargo.toml"
+                } else {
+                    "Cargo.toml"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let discovery = super::load_complete(manifest.clone(), &config, &policy).unwrap();
+            let version = discovery.toolchain.as_ref().unwrap().clone();
+            let locks = tempfile::tempdir().unwrap();
+            super::redirect_project_lockfile(&mut config, &discovery, locks.path()).unwrap();
+            config.no_deps = false;
+            let result = if (82..95).contains(&version.minor) {
+                crate::readonly_metadata::complete(discovery, &config)
+            } else {
+                super::load_complete(manifest, &config, &policy)
+            };
+            eprintln!(
+                "真实 Cargo {version} / {mode} / member={member}: {}",
+                if result.is_ok() { "ok" } else { "error" }
+            );
+            if version.minor < 82 && mode != "valid" {
+                assert!(format!("{:#}", result.unwrap_err()).contains("只读分析不能更新"));
+            } else {
+                let workspace = result.unwrap();
+                let ProjectWorkspaceKind::Cargo { cargo, .. } = workspace.kind else {
+                    panic!("Cargo 模型丢失")
+                };
+                let package = cargo
+                    .packages()
+                    .find(|&package| cargo[package].name == "lock_probe")
+                    .unwrap();
+                assert_eq!(
+                    cargo[package].dependencies.len(),
+                    1,
+                    "必须保留真实解析的依赖边"
+                );
+                assert_eq!(
+                    cargo.workspace_root().as_str(),
+                    root.path().canonicalize().unwrap().to_str().unwrap()
+                );
+            }
+            support::assert_unchanged(root.path(), &before);
+        }
+    }
+}
+
+/// 旧版补偿 metadata 保留显式 features 与 Cargo 合并 target 配置，包括 JSON target 的来源目录。
+#[test]
+#[ignore = "需要 NARRANT_TEST_CARGO_194 指定实际 1.94.0 工具链目录"]
+fn old_cargo_metadata_preserves_features_and_effective_targets() {
+    let toolchain = std::env::var("NARRANT_TEST_CARGO_194").expect("实际1.94工具链");
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".cargo")).unwrap();
+    std::fs::write(
+        root.path().join(".cargo/config.toml"),
+        "[build]\ntarget=\"x86_64-unknown-linux-gnu\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("Cargo.toml"),"[package]\nname=\"target_probe\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n[dependencies]\noptional_dep={path=\"optional_dep\",optional=true}\n[features]\nselected=[\"dep:optional_dep\"]\n[target.'cfg(target_os = \"windows\")'.dependencies]\nwindows_dep={path=\"windows_dep\"}\n[workspace]\nmembers=[\"optional_dep\",\"windows_dep\"]\n").unwrap();
+    std::fs::write(root.path().join("lib.rs"), "pub fn root() {}").unwrap();
+    for name in ["optional_dep", "windows_dep"] {
+        std::fs::create_dir(root.path().join(name)).unwrap();
+        std::fs::write(root.path().join(name).join("Cargo.toml"),format!("[package]\nname=\"{name}\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n")).unwrap();
+        std::fs::write(root.path().join(name).join("lib.rs"), "pub fn target() {}").unwrap();
+    }
+    for selected in [false, true] {
+        let before = support::snapshot(root.path());
+        let policy = LoadPolicy::repository_only();
+        let mut config = policy.cargo_config().unwrap();
+        config
+            .extra_env
+            .insert("RUSTUP_TOOLCHAIN".into(), Some(toolchain.clone()));
+        config.features = project_model::CargoFeatures::Selected {
+            features: if selected {
+                vec!["selected".into()]
+            } else {
+                vec![]
+            },
+            no_default_features: true,
+        };
+        let manifest = ProjectManifest::from_manifest_file(
+            absolute_utf8(&root.path().join("Cargo.toml")).unwrap(),
+        )
+        .unwrap();
+        let workspace = load_complete(manifest, &config, &policy).unwrap();
+        let locks = tempfile::tempdir().unwrap();
+        redirect_project_lockfile(&mut config, &workspace, locks.path()).unwrap();
+        config.no_deps = false;
+        let workspace = crate::readonly_metadata::complete(workspace, &config).unwrap();
+        let ProjectWorkspaceKind::Cargo { cargo, .. } = workspace.kind else {
+            panic!("Cargo 模型丢失")
+        };
+        let package = cargo
+            .packages()
+            .find(|&package| cargo[package].name == "target_probe")
+            .unwrap();
+        let dependencies = &cargo[package].dependencies;
+        assert_eq!(
+            dependencies.len(),
+            usize::from(selected),
+            "feature/target 过滤不能丢失"
+        );
+        if selected {
+            assert_eq!(cargo[dependencies[0].pkg].name, "optional_dep");
+        }
+        support::assert_unchanged(root.path(), &before);
+    }
+}
