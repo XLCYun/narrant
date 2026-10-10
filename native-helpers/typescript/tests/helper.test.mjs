@@ -42,7 +42,15 @@ test('fixed_service_rejects_external_source_and_configuration_paths', t => {
 });
 test('invalid syntax and early errors cannot become empty successful graphs', t => {
   const root=fixture(t,{'main.ts':''});
-  for(const source of ['function {','const x;','let x; let x;','function f(){break;}','const regex = /[/;']) {
+  for(const source of ['function {','const x;','let x; let x;','function f(){break;}','const regex = /[/;',
+    'return 1;', 'function f(){"use strict"; with(x){}}', 'function f(a,a){"use strict"; return a}',
+    '// @ts-nocheck\nreturn 1;', '// @ts-ignore\nreturn 1;', 'function f(){await x;}',
+    'function f(eval){"use strict";return eval}', 'function f(a=1){"use strict"}',
+    'function f(){const [a];}', 'function f(...a,b){}', 'const o={get x(a){return a}}',
+    'function f(){a?.x=1}', 'class C{constructor(){} constructor(){}}',
+    'class C{static{return 1}}', 'class C{#x=1;m(){delete this.#x}}',
+    'class C{m(){return this.#missing}}',
+  ]) {
     fs.writeFileSync(path.join(root,'main.ts'),source);
     assert.throws(()=>analyze(ts,request(root,['main.ts'])),/无法解析/,source);
   }
@@ -161,4 +169,20 @@ test('empty and fully excluded lexical selection do not load unrelated invalid c
   const outside = fixture(t, { 'a.test.ts': 'export function outside() {}' });
   fs.symlinkSync(outside, path.join(root, '__tests__'), 'junction');
   assert.throws(() => analyze(ts, request(root, ['__tests__/a.test.ts'])), /越界/);
+});
+
+
+test('redirected no-dist context still rejects suppressed early errors without replacing its native snapshot', t => {
+  const root = fixture(t, {
+    'app/tsconfig.json': '{"compilerOptions":{"composite":true,"noCheck":true},"files":["main.ts"],"references":[{"path":"../lib"}]}',
+    'app/main.ts': "import {target} from '../lib/src/main'; export function caller(){return target()}",
+    'lib/tsconfig.json': '{"compilerOptions":{"composite":true,"outDir":"dist","rootDir":"src"},"include":["src"]}',
+    'lib/src/main.ts': '// @ts-nocheck\nreturn 1; export function target(){return 1}',
+  });
+  assert.throws(() => analyze(ts, request(root, ['app/main.ts'])), /无法解析/);
+  fs.writeFileSync(path.join(root, 'lib/src/main.ts'), '// @ts-nocheck\nexport function target(){missing(); return 1}');
+  const { graph } = analyze(ts, request(root, ['app/main.ts']));
+  const target = graph.external_symbols.find(s => s.name === 'target');
+  assert.ok(target);
+  assert.ok(graph.nodes.find(n => n.name === 'caller').references.some(r => r.target.id === target.id));
 });

@@ -175,3 +175,18 @@ lifecycle 独占、聚焦语言跳过旧 build、完整发布依赖/显式开关
 新增 `<div>a</div>` → `<div> a</div>`、`<div></div>` → `<div> </div>` 两组回归：
 投影测试保留不同内容，真实 Native helper/Host 图差异均仅产生 `render` 节点的 `content=Modified`。
 20 个投影测试通过；macOS ARM64 本地候选支持包的真实图回归通过。双平台 Actions 验收仍未完成。
+
+## 审查修复：原生早期诊断（T4-I2）
+
+TS 6.0.3 的 `getSyntacticDiagnostics` 对 TS 文件只返回 parse diagnostics。`return`、严格模式 `with`、重复参数等错误分别来自 checker 或 binder；`Diagnostic` 没有“grammar/early error”分类字段。
+固定引擎源码 `typescript.js` 的 `plainJSErrors`（127388 起）提供 91 个原生诊断名称，但包含普通类型限制；`checkSourceFileWorker`（91638 起）还会因 `noCheck`、`@ts-nocheck`、checkJs 和项目引用重定向跳过检查。因此不能直接接受全部 semantic diagnostics，也不能只取常见的三个错误码。
+
+`syntax.mjs` 集中列出 99 个原生诊断名称，按严格模式/模块、控制流/异步、绑定模式/赋值、类/访问器、其余原生语法组织；来源是上述 native plainJSErrors 的 binder/grammar 分组和同一 checker 的 early-error 入口。另有两项只接收本文件 bindDiagnostics 的重复绑定诊断（2300/2451），避免把跨文件 script 冲突升级成解析失败。未纳入一般类型、目标版本、重复普通对象属性、私有方法赋值等诊断。旧 Oxc 接受重复默认导出、重复导出声明和导出别名冲突；这是既有宽松行为，迁移保留它，包括排除位于原生 ExportSpecifier 的重复导出 2300。
+
+读取诊断的事务完全同步，复用同一 LanguageService 的 Program、SourceFile 和 checker，不创建第二份语法树。它暂时解除检查抑制，并仅对当前文件解除项目引用检查跳过条件，调用固定引擎的 `checker.getDiagnostics`；finally 按原属性描述符恢复 options、SourceFile.checkJsDirective、Program.isSourceOfProjectReferenceRedirect，区分“不存在”和“值为 undefined”。原始文本、节点身份和 ordinary semantic diagnostics 的缓存/过滤政策保持不变。该事务中没有异步或导航调用。
+
+2339/2304/18013 的私有名诊断会与普通接收者类型错误共码。只有诊断定位到原生 PrivateIdentifier 时，才沿原生 class 祖先查询原生实例/静态类型和私有成员符号：没有词法声明才失败。这里没有自建 scope/binding 索引，也没有通用 AST 语法校验。回归覆盖未声明私有名、错误接收者类型、外层/嵌套、静态及遮蔽。
+
+验证包括原审查的三个反例；各早期错误家族与普通类型/目标错误的拒绝/允许对照；noCheck、checkJs、nocheck/ignore/expect-error 指令的冷/暖缓存；异常时的属性恢复；无 dist 项目引用。代表性测试还与保留的旧 Document::parse 对照，明确发现并保留上述重复导出的宽松政策。既有真实图组继续覆盖 union、JSDoc、跨配置、无 dist 引用和回调导航。
+
+维护成本限定在固定 TS 引擎升级：重新核对这份命名分类、plainJSErrors 与 checker 发出位置，以及 `checker.getDiagnostics`、SourceFile.checkJsDirective、Program.isSourceOfProjectReferenceRedirect、原生私有符号查询这些内部 API；重跑已保留的拒绝/允许、事务和真实图组。它们不是跨版本稳定 API，升级不可只修改版本号或动态猜测能力。当前继续固定 TS 6.0.3，双平台验收和旧链删除仍待完成。

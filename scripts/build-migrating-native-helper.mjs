@@ -21,7 +21,7 @@ export async function buildMigratingNativeHelper(id, output) {
     // Node 与固定 TypeScript 声明仍由现有归档构建器提供，本入口只暂存协议实现。
     await fs.access(path.join(source, 'main.mjs')).catch(() => { throw new Error('TypeScript protocol helper is not implemented'); });
     await fs.mkdir(path.dirname(path.join(payload, definition.entry)), { recursive: true });
-    for (const name of ['main.mjs', 'analyze.mjs', 'projection.mjs', 'workspace.mjs', 'config.mjs']) await fs.copyFile(path.join(source, name), path.join(payload, 'runtime/helper', name));
+    for (const name of ['main.mjs', 'analyze.mjs', 'projection.mjs', 'workspace.mjs', 'config.mjs', 'syntax.mjs']) await fs.copyFile(path.join(source, name), path.join(payload, 'runtime/helper', name));
   } else {
     const manifest = await fs.readFile(path.join(source, 'Cargo.toml'), 'utf8');
     if (!manifest.includes(`name = "${definition.binary}"`)) throw new Error(`${id} has only a core proof; protocol binary ${definition.binary} is not implemented`);

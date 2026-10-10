@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createWorkspace, within, checkedWorkspacePath } from './workspace.mjs';
 import { prepareConfigurations, inferredOptions } from './config.mjs';
 import { project, normalize, unwrap, isTest } from './projection.mjs';
+import { hasSyntaxErrors } from './syntax.mjs';
 
 /** 一侧一次固定请求：同一个 LanguageService 同时提供语法树、类型诊断和定义导航。 */
 export function analyze(ts, request) {
@@ -72,11 +73,7 @@ export function analyze(ts, request) {
     if (documents.has(file)) return documents.get(file);
     const sf = svc.program.getSourceFile(file) ?? svc.program.getSourceFiles().find(f => host.realpath(f.fileName) === file);
     if (!sf) throw new Error(`导航目标不在已加载项目中：${file}`);
-    if (sf.parseDiagnostics.length || svc.program.getSyntacticDiagnostics(sf).length) throw new Error(`源码无法解析：${path.relative(context.root, file)}`);
-    // 固定 TS 6.0.3 的语义诊断入口先完成绑定，再读取本文件 bindDiagnostics。
-    // 仅保留旧早期语法错误；跨文件 2451 和其他一般类型错误不能阻止图提取。
-    const diagnostics = svc.program.getSemanticDiagnostics(sf);
-    if (diagnostics.some(d => [1155, 1107].includes(d.code)) || sf.bindDiagnostics.some(d => d.code === 2451)) throw new Error(`源码无法解析：${path.relative(context.root, file)}`);
+    if (hasSyntaxErrors(ts, svc.program, sf)) throw new Error(`源码无法解析：${path.relative(context.root, file)}`);
     const runtime = !within(context.root, file);
     if (!runtime) new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(file));
     const doc = project(ts, sf, runtime ? context.runtime : context.root, runtime);
