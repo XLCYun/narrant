@@ -101,6 +101,7 @@ impl PackId {
                 "runtime/helper/projection.mjs",
                 "runtime/helper/config.mjs",
                 "runtime/helper/workspace.mjs",
+                "runtime/helper/syntax.mjs",
                 "runtime/typescript/lib/lib.d.ts",
                 "runtime/typescript/lib/typescript.js",
                 "runtime/@types/node/index.d.ts",

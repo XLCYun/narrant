@@ -52,6 +52,49 @@ async fn unpublished_native_pack_reports_explicit_error() {
     packs.shutdown().await;
 }
 
+/// 新增的无条件导入模块必须在下载前通过清单入口校验，不能等 Node 启动后才失败。
+#[test]
+fn typescript_manifest_requires_syntax_module_on_both_targets() {
+    let id = PackId::TypeScriptJavascript;
+    let key = PackKey {
+        id,
+        version: versions()[&id].clone(),
+    };
+    let syntax = "runtime/helper/syntax.mjs";
+    for target in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
+        let mut manifest = Manifest {
+            schema_version: 1,
+            id,
+            version: key.version.clone(),
+            target: target.into(),
+            archive_size: 1,
+            archive_sha256: "0".repeat(64),
+            files: id
+                .required(target)
+                .into_iter()
+                .filter(|path| *path != syntax)
+                .chain(std::iter::once(syntax))
+                .map(|path| model::ManifestFile {
+                    path: path.into(),
+                    size: 1,
+                    sha256: "0".repeat(64),
+                    executable: path.starts_with("bin/"),
+                })
+                .collect(),
+        };
+        assert!(
+            validate_manifest(&manifest, &key, target).is_ok(),
+            "{target}"
+        );
+        assert_eq!(manifest.files.pop().unwrap().path, syntax);
+        assert_eq!(
+            validate_manifest(&manifest, &key, target),
+            Err("语言支持包缺少必需入口".into()),
+            "{target}"
+        );
+    }
+}
+
 /// 所选已迁移归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
 #[tokio::test]
 #[ignore = "需要 NARRANT_NATIVE_PACKS 指向真实构建产物；显式执行且不得静默跳过缺包"]
