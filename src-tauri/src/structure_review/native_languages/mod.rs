@@ -52,6 +52,12 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
         return Err(failure("原生支持包控制文件版本不匹配"));
     }
     let (helper, projection, languages, profile) = match id {
+        PackId::TypeScriptJavascript => (
+            "typescript",
+            "typescript-source-v1",
+            vec!["typescript", "javascript"],
+            "typescript-static-v1",
+        ),
         PackId::Java => ("java", "java-source-v1", vec!["java"], "java-static-v1"),
         PackId::Go => ("go", "go-source-v1", vec!["go"], "go-static-v1"),
         PackId::Csharp => (
@@ -75,6 +81,15 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
                 "runtime/jdk/bin/java.exe"
             } else {
                 "runtime/jdk/bin/java"
+            },
+        )?
+    } else if id == PackId::TypeScriptJavascript {
+        inside(
+            &root,
+            if cfg!(windows) {
+                "bin/node.exe"
+            } else {
+                "bin/node"
             },
         )?
     } else if id == PackId::Csharp {
@@ -106,6 +121,11 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             std::env::join_paths([classes, libraries]).map_err(failure)?,
             "dev.narrant.java.Main".into(),
         ]
+    } else if id == PackId::TypeScriptJavascript {
+        vec![
+            "--disable-proto=throw".into(),
+            inside(&root, "runtime/helper/main.mjs")?.into_os_string(),
+        ]
     } else if id == PackId::Csharp {
         vec![inside(&root, "runtime/helper/Narrant.CSharp.Helper.dll")?.into_os_string()]
     } else {
@@ -114,6 +134,7 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
     let mut platforms = Vec::new();
     for platform in control.platforms {
         let allowed = match id {
+            PackId::TypeScriptJavascript => platform.kind == "typescript-declarations",
             PackId::Java => platform.kind == "java-jdk",
             PackId::Go => platform.kind == "go-sdk",
             PackId::Csharp => platform.kind == "dotnet-reference-assemblies",
@@ -210,3 +231,22 @@ fn failure(error: impl std::fmt::Display) -> AnalysisError {
 #[cfg(test)]
 #[path = "tests/factory.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/typescript_graph.rs"]
+mod typescript_graph;
+
+/// TS/JS 文件测试开关与 helper 保持一致；全被排除的语言组不启动或准备工具。
+pub(crate) fn typescript_needs_tools(
+    path: &Path,
+    options: super::code_graph::AnalysisOptions,
+) -> bool {
+    options.include_tests
+        || !(path
+            .components()
+            .any(|part| part.as_os_str() == "__tests__")
+            || path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.ends_with(".test") || stem.ends_with(".spec")))
+}

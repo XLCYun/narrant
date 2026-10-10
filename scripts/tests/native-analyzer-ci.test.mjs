@@ -94,8 +94,8 @@ test('download verification rejects a modified archive with a fixed SHA256', asy
 });
 
 // Windows 空格路径可用，缺任意 helper 或相对 SDK 根都要失败。
-test('all four helpers and narrow absolute platform roots are mandatory', () => {
-  const config = Object.fromEntries(['go', 'java', 'csharp', 'clang'].map(id => [id, { executable: `C:\\Native Tools\\${id}.exe`, args: [], trusted_roots: ['C:\\Native Tools'], platforms: [{ id: 'fixed', kind: 'sdk', version: '1', root: 'C:\\SDK\\1' }] }]));
+test('all enabled helpers and narrow absolute platform roots are mandatory', () => {
+  const config = Object.fromEntries(['typescript', 'go', 'java', 'csharp', 'clang'].map(id => [id, { executable: `C:\\Native Tools\\${id}.exe`, args: [], trusted_roots: ['C:\\Native Tools'], platforms: [{ id: 'fixed', kind: 'sdk', version: '1', root: 'C:\\SDK\\1' }] }]));
   config.csharp.platforms = [['net8.0', '8.0.0'], ['net9.0', '9.0.20'], ['net10.0', '10.0.0']].map(([tfm, version]) => ({ id: tfm, kind: 'dotnet-reference-assemblies', version, root: `C:\\SDK\\${tfm}`, metadata: { tfm, reference_pack: 'Microsoft.NETCore.App.Ref', reference_pack_version: version } }));
   assert.equal(validateNativeConfiguration(config, 'win32'), config);
   const singleTarget = structuredClone(config);
@@ -115,11 +115,11 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 11);
+  assert.equal(commands.length, 15);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
-  for (const command of commands.slice(4)) {
+  for (const command of commands.slice(4).filter(command => command.executable === 'bash')) {
     assert.equal(command.executable, 'bash');
     assert.equal(command.args[0], 'scripts/cargo-agent.sh');
   }
@@ -136,7 +136,7 @@ test('shared process acceptance runs on both platforms with Windows LSP integrat
   const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');
   const macOS = verificationCommands(environment, 'darwin');
-  assert.equal(macOS.length, 10);
+  assert.equal(macOS.length, 14);
   for (const commands of [windows, macOS]) {
     const owners = commands.filter(command => command.args.includes(ownerFilter));
     assert.equal(owners.length, 1);
@@ -241,7 +241,7 @@ test('focused acceptance requires only the selected tools and keeps shared integ
     for (const required of ['child_process::', 'native_analyzer::', 'native_languages::', 'application::tests::native::', 'real_native_packs_install_and_analyze_through_production_factory', 'native_helper_graphs', 'go_']) assert.ok(serialized.includes(required), required);
     assert.doesNotMatch(serialized, /lsp::|java\/tests|csharp\/tests|clang\/tests/);
     assert.throws(() => verificationCommands({}, platform, 'go'), /Missing fixed toolchain/);
-    for (const id of ['rust', 'python', 'typescript-javascript', 'typo']) assert.throws(() => verificationCommands(env, platform, id), /not enabled/);
+    for (const id of ['rust', 'python', 'typo']) assert.throws(() => verificationCommands(env, platform, id), /not enabled/);
   }
   const config = { go: { executable: '/go/helper', args: [], trusted_roots: ['/go'], platforms: [{ id: 'go', kind: 'go-sdk', version: '1', root: '/sdk' }] } };
   assert.equal(validateNativeConfiguration(config, 'darwin', 'go'), config);
@@ -250,11 +250,19 @@ test('focused acceptance requires only the selected tools and keeps shared integ
 
 // 工作流层必须跳过整个旧服务器构建矩阵，不只是过滤测试名称。
 test('focused workflow skips legacy builds and unrelated declaration provisioning', () => {
-  assert.match(workflowSource, /options: \[all, java, go, csharp, c-cpp\]/);
+  assert.match(workflowSource, /options: \[all, typescript-javascript, java, go, csharp, c-cpp\]/);
   const build = workflowSource.split('\n  build:')[1].split('\n  native-analyzers:')[0];
   assert.match(build, /inputs\.language == 'all'/);
   const native = workflowSource.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
   assert.equal((native.match(/--language "\$\{\{ inputs.language \|\| 'all' \}\}"/g) ?? []).length, 2);
   assert.equal((native.match(/inputs\.language == 'c-cpp'/g) ?? []).length, 2);
   assert.match(workflowSource.split('\n  publish:')[1], /inputs\.language == 'all'/);
+});
+
+/** TS 聚焦门禁必须运行真实安装和 Review，不使用旧服务或空筛选充当验收。 */
+test('TypeScript focused acceptance includes native projection, complete old graph assertions and Review', () => {
+  const commands = verificationCommands({}, 'darwin', 'typescript-javascript');
+  const serialized = JSON.stringify(commands);
+  for (const required of ['projection.test.mjs','config.test.mjs','workspace.test.mjs','helper.test.mjs','native_languages::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto','typescript_']) assert.ok(serialized.includes(required), required);
+  assert.ok(!serialized.includes('lsp::tests::'));
 });

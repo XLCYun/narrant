@@ -197,8 +197,11 @@ TS 平台 metadata 仅含 `package`，必须恰好各有一个 `typescript`、`@
 Python 平台 root 是受信 helper 安装根，metadata 仅含 40 位十六进制 `source_revision`，
 version 为内嵌声明所属引擎版本；平台版本与 Python 3.7–3.14 的项目目标不同。
 `stdlib/...` 是 core 的虚拟相对来源，不要求在 root 中存在对应文件，也不引入外部 typeshed SDK。
-只有 Python profile 允许不同词法选集路径指向同一仓内物理文件；重复词法路径和任何仓外链接
-仍失败。coverage 和 origin 继续使用词法路径，从而保留 `.py/.pyi` 和内部目录链接身份。
+Python 与 TS profile 允许不同词法选集路径指向同一仓内物理文件；重复词法路径和任何仓外链接
+仍失败，Java/Go/C#/C++ 仍拒绝物理别名。Python 的 coverage、origin 和图身份继续使用词法路径，
+保留 `.py/.pyi` 和内部目录链接身份。TS 沿用旧链的 canonical 去重：每个词法选集路径单独记录
+coverage，按真实文件只生成一份图节点，并把未被测试过滤的词法来源聚合到 `origin.selected_paths`。
+TS 测试过滤同时保留输入路径和真实仓库相对路径的既有规则。
 
 公共 Native 应用回调携带既有类型化 Rust 依赖 scope，空语言组仍不启动 helper，
 文件级 `include_tests` 仍传给同一次分析请求。生产工厂和支持包版本由各语言后续验收任务启用。

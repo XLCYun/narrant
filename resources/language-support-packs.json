@@ -11,18 +11,13 @@
       }
     },
     "typescript-javascript": {
-      "version": "1.0.0",
+      "version": "1.1.0",
       "node": "24.18.0",
       "upstreamSha256": {
         "aarch64-apple-darwin": "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1",
         "x86_64-pc-windows-msvc": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
       },
       "packages": [
-        {
-          "name": "typescript-language-server",
-          "version": "6.0.0",
-          "integrity": "sha512-LXtzY3UZGfghWA5eRU6/T5j1+YiGRgy14mR3GOKyTKlE1op1TYKQnLVxwBsmnXeDhGLuvzZyIHBAqvrekAITYQ=="
-        },
         {
           "name": "typescript",
           "version": "6.0.3",
@@ -38,7 +33,13 @@
           "version": "6.21.0",
           "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
         }
-      ]
+      ],
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-typescript",
+      "projectionRevision": "typescript-source-v1",
+      "profile": "typescript-static-v1",
+      "verifiedTargets": []
     },
     "python": {
       "version": "1.0.0",

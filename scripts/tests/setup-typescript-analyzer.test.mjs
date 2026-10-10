@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { supportedNode, validateArchive } from '../setup-typescript-analyzer.mjs';
+import { supportedNode } from '../setup-typescript-analyzer.mjs';
+import { validateArchive } from '../archive-validation.mjs';
 
 test('Node 最低版本是 TLS 的固定要求，不借用应用引擎', () => {
   for (const version of ['22.22.2', '24.18.0', '25.0.0']) assert.equal(supportedNode(version), true);

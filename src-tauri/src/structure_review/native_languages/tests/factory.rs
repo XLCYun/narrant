@@ -44,7 +44,7 @@ fn existing_factories_still_require_target_declarations() {
             error.to_string().contains("target_unavailable"),
             "{id:?}: {error}"
         );
-        for pending in [PackId::Rust, PackId::Python, PackId::TypeScriptJavascript] {
+        for pending in [PackId::Rust, PackId::Python] {
             assert!(from_pack(pending, root)
                 .err()
                 .unwrap()

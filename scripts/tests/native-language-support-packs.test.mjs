@@ -81,6 +81,7 @@ test('smoke waits for killed child close before rejecting and removing cwd', asy
   const marker = path.join(markerRoot, 'cwd');
   let child, closed = false;
   t.mock.method(ChildProcess.prototype, 'kill', function (signal) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- 保留真实进程以验证 close 屏障。
     child = this;
     this.once('close', () => { closed = true; });
     setTimeout(() => originalKill.call(this, signal), 150);
@@ -164,6 +165,7 @@ test('migration toolchain selection is explicit and complete', async () => {
   assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
   assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm']);
   assert.equal(selectedToolchainNames().length, 9);
-  assert.deepEqual(selectedNativePacks(), ['java', 'go', 'csharp', 'c-cpp']);
-  for (const id of ['rust', 'python', 'typescript-javascript', 'none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
+  assert.deepEqual(selectedNativePacks(), ['typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
+  assert.deepEqual(selectedToolchainNames('typescript-javascript'), []);
+  for (const id of ['rust', 'python', 'none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
 });

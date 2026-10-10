@@ -95,6 +95,14 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             .unwrap();
         let fixture = tempfile::tempdir().unwrap();
         let file = match id {
+            PackId::TypeScriptJavascript => {
+                fs::write(
+                    fixture.path().join("main.ts"),
+                    "export function value() { return 1; }",
+                )
+                .unwrap();
+                "main.ts"
+            }
             PackId::Go => {
                 fs::write(
                     fixture.path().join("go.mod"),

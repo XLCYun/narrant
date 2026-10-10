@@ -84,6 +84,7 @@ impl StructureReview {
     }
 
     /// 装配共享的 TypeScript/JavaScript 分析入口；非空语言组才会调用它。
+    #[cfg(test)]
     pub fn with_typescript(mut self, analyze_typescript: Arc<AnalyzeTypeScript>) -> Self {
         self.analyzers.typescript = analyze_typescript;
         self
@@ -163,7 +164,10 @@ impl StructureReview {
                             ids.insert(PackId::Rust);
                         }
                         Some(LanguageGroup::TypeScript)
-                            if super::typescript_analyzer::needs_tools(path, options) =>
+                            if super::native_languages::typescript_needs_tools(
+                                std::path::Path::new(path),
+                                options,
+                            ) =>
                         {
                             ids.insert(PackId::TypeScriptJavascript);
                         }
@@ -215,14 +219,9 @@ impl StructureReview {
                 });
             }
             if let Some(root) = lease.path(PackId::TypeScriptJavascript) {
-                let analyzer = super::typescript_analyzer::TypeScriptLanguageAnalyzer::new(
-                    root.join(if cfg!(windows) {
-                        "bin/node.exe"
-                    } else {
-                        "bin/node"
-                    }),
-                    root.join("runtime"),
-                );
+                let analyzer =
+                    super::native_languages::from_pack(PackId::TypeScriptJavascript, root)
+                        .map_err(analysis_error)?;
                 analyzers.typescript = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
@@ -239,7 +238,10 @@ impl StructureReview {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
-            for &id in PackId::NATIVE_MIGRATED {
+            for &id in PackId::NATIVE_MIGRATED
+                .iter()
+                .filter(|id| **id != PackId::TypeScriptJavascript)
+            {
                 if let Some(root) = lease.path(id) {
                     let analyzer =
                         super::native_languages::from_pack(id, root).map_err(analysis_error)?;
@@ -441,11 +443,15 @@ fn analyze_side(
         files: files.rust,
         options,
     });
-    let typescript_input = (!files.typescript.is_empty()).then(|| AnalysisInput {
-        repository_root: repository.to_owned(),
-        files: files.typescript,
-        options,
-    });
+    let typescript_input = files
+        .typescript
+        .iter()
+        .any(|path| super::native_languages::typescript_needs_tools(path, options))
+        .then(|| AnalysisInput {
+            repository_root: repository.to_owned(),
+            files: files.typescript,
+            options,
+        });
     let python_input = (!files.python.is_empty()).then(|| AnalysisInput {
         repository_root: repository.to_owned(),
         files: files.python,

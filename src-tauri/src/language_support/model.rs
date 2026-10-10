@@ -18,7 +18,13 @@ pub(crate) enum PackId {
 
 impl PackId {
     /// 只有已接通生产工厂的语言才能进入真实 Native 支持包验收。
-    pub const NATIVE_MIGRATED: &'static [Self] = &[Self::Java, Self::Go, Self::Csharp, Self::CCpp];
+    pub const NATIVE_MIGRATED: &'static [Self] = &[
+        Self::TypeScriptJavascript,
+        Self::Java,
+        Self::Go,
+        Self::Csharp,
+        Self::CCpp,
+    ];
 
     /// 稳定标识同时用于清单和应用拥有的相对目录。
     pub fn slug(self) -> &'static str {
@@ -89,9 +95,14 @@ impl PackId {
             ],
             Self::TypeScriptJavascript => vec![
                 if windows { "bin/node.exe" } else { "bin/node" },
-                "runtime/typescript/lib/tsserver.js",
+                "control/native.json",
+                "runtime/helper/main.mjs",
+                "runtime/helper/analyze.mjs",
+                "runtime/helper/projection.mjs",
+                "runtime/helper/config.mjs",
+                "runtime/helper/workspace.mjs",
+                "runtime/typescript/lib/lib.d.ts",
                 "runtime/typescript/lib/typescript.js",
-                "runtime/typescript-language-server/lib/cli.mjs",
                 "runtime/@types/node/index.d.ts",
                 "runtime/undici-types/index.d.ts",
             ],

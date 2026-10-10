@@ -1058,3 +1058,91 @@ fn clang_c_real_helper_graph_and_diff() {
 fn clang_cpp_real_helper_graph_and_diff() {
     exercise(Mode::Cpp);
 }
+
+/// TS/JS 共用一次真实原生请求，公共图保留选集、图外来源、原文和语义 diff。
+#[test]
+#[ignore = "需要真实 TypeScript 原生 helper 配置"]
+fn typescript_real_helper_graph_and_diff() {
+    let configs = config();
+    let configured = configs.get("typescript").expect("缺少 TypeScript helper");
+    let helper = NativeLanguageAnalyzer::new(
+        HelperCommand {
+            executable: configured.executable.clone(),
+            args: configured.args.iter().map(OsString::from).collect(),
+            environment: configured
+                .environment
+                .iter()
+                .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+                .collect(),
+            trusted_roots: configured.trusted_roots.clone(),
+        },
+        HelperIdentity {
+            helper_id: "narrant-typescript".into(),
+            helper_version: "0.1.0".into(),
+            projection_revision: "typescript-source-v1".into(),
+            languages: vec!["typescript".into(), "javascript".into()],
+            profile: "typescript-static-v1".into(),
+        },
+        configured
+            .platforms
+            .iter()
+            .map(|p| Platform {
+                id: p.id.clone(),
+                kind: p.kind.clone(),
+                version: p.version.clone(),
+                root: p.root.clone(),
+                metadata: p.metadata.clone(),
+            })
+            .collect(),
+    );
+    let root = tempfile::tempdir().unwrap();
+    put(root.path(), "main.ts", "import {target} from './target.js'; import {context} from './context'; export function caller(){ target(); context(); Promise.resolve(1); }");
+    put(
+        root.path(),
+        "target.js",
+        "export function target(){ return 1; }",
+    );
+    put(root.path(), "context.ts", "export function context(){}");
+    let input = AnalysisInput {
+        repository_root: root.path().into(),
+        files: vec!["main.ts".into(), "target.js".into()],
+        options: AnalysisOptions::default(),
+    };
+    let before = helper.analyze(&input).unwrap();
+    let (_, caller) = find(&before, "caller", CodeCategory::Callable);
+    assert!(caller
+        .data()
+        .source
+        .as_ref()
+        .unwrap()
+        .contains("Promise.resolve"));
+    assert!(caller.data().references.iter().any(
+        |r| matches!(&r.target, ReferenceTarget::Node(id) if id.0.starts_with("javascript:"))
+    ));
+    assert!(before
+        .external_symbols()
+        .values()
+        .any(|s| s.name == "context" && s.scope == SymbolScope::Repository));
+    assert!(before
+        .external_symbols()
+        .values()
+        .any(|s| s.name == "resolve" && s.scope == SymbolScope::Dependency));
+    put(
+        root.path(),
+        "target.js",
+        "// ordinary\nexport function target ( ) { return 1 ; }",
+    );
+    assert!(before
+        .diff(&helper.analyze(&input).unwrap())
+        .unwrap()
+        .nodes
+        .is_empty());
+    put(
+        root.path(),
+        "target.js",
+        "export function target(){ return 2; }",
+    );
+    let diff = before.diff(&helper.analyze(&input).unwrap()).unwrap();
+    assert_eq!(diff.nodes.len(), 1);
+    assert_eq!(diff.nodes[0].content, Some(ChangeKind::Modified));
+}

@@ -30,7 +30,7 @@ export function validateNativeConfiguration(config, platform = process.platform,
 /** 明确列出串行验收命令；所有 Cargo 入口统一经过仓库锁。 */
 export function verificationCommands(environment, platform = process.platform, language = 'all') {
   const ids = selectedNativePacks(language);
-  const required = { go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
+  const required = { 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
   const suffix = platform === 'win32' ? '.exe' : '';
   const python = environment.NARRANT_PYTHON ?? (platform === 'win32' ? 'python' : 'python3');
   for (const name of ids.flatMap(id => required[id].map(name => `NARRANT_${name}`))) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
@@ -40,6 +40,12 @@ export function verificationCommands(environment, platform = process.platform, l
     ...(ids.includes('java') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/java/tests', '-v'], environment: { NARRANT_JAVA_TARGET: environment.NARRANT_JAVA_TARGET_JDK, NARRANT_JAVA_LIB: path.join(repository, '.tools/java-native/lib') } }] : []),
     ...(ids.includes('csharp') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/csharp/tests', '-v'], environment: { NARRANT_TEST_DOTNET: path.join(environment.NARRANT_DOTNET_SDK, `dotnet${suffix}`), NARRANT_TEST_REFS: path.join(environment.NARRANT_DOTNET_SDK, 'packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0'), NARRANT_TEST_REFS8: path.join(environment.NARRANT_DOTNET_REF8_ROOT, 'ref/net8.0'), NARRANT_TEST_REFS9: path.join(environment.NARRANT_DOTNET_REF9_ROOT, 'ref/net9.0'), NARRANT_TEST_REFS9_VERSION: '9.0.20' } }] : []),
     ...(ids.includes('c-cpp') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/clang/tests', '-v'], environment: { NARRANT_LLVM_ROOT: environment.NARRANT_LLVM_SDK, NARRANT_CLANG_HELPER: path.join(repository, `native-helpers/clang/build/narrant-clang${suffix}`) } }] : []),
+    ...(ids.includes('typescript-javascript') ? [
+      { executable: process.execPath, args: ['--test', 'native-helpers/typescript/tests/projection.test.mjs', 'native-helpers/typescript/tests/occurrences.test.mjs', 'native-helpers/typescript/tests/config.test.mjs', 'native-helpers/typescript/tests/workspace.test.mjs', 'native-helpers/typescript/tests/helper.test.mjs'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'native_languages::typescript_graph::', '--', '--ignored', '--test-threads=4'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'real_installed_typescript_pack_analyzes_without_development_tools', '--', '--ignored'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto', '--', '--ignored'] },
+    ] : []),
     // 所有平台复用同一进程所有者矩阵；Windows 同组还包含准确句柄与 Job 回归。
     { executable: 'bash', args: [...cargo, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'] },
     // 完整协议链验证正常退出、取消、超时与短命后代，任一失败仍保留红灯。
@@ -84,6 +90,11 @@ export async function verifyNativeAnalyzers(artifacts, build = false, language =
   if (!target) throw new Error('Native validation requires macOS ARM64 or Windows x64');
   artifacts = path.resolve(artifacts);
   const environment = { ...process.env, NARRANT_TEST_NODE: process.execPath, NARRANT_NATIVE_LANGUAGE: language, NARRANT_NATIVE_PACKS: artifacts, NARRANT_NATIVE_HELPERS_CONFIG: path.join(artifacts, 'native-helpers-config.json'), ...(process.platform === 'win32' ? { NARRANT_WINDOWS_TEST_MANIFEST: '1' } : {}) };
+  if (ids.includes('typescript-javascript')) {
+    const catalog = JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'), 'utf8'));
+    environment.NARRANT_TYPESCRIPT_PACK = path.join(artifacts, 'smoke-installed/typescript-javascript', catalog.packs['typescript-javascript'].version, target);
+    environment.NARRANT_LANGUAGE_PACK_FIXTURE = artifacts;
+  }
   const commands = verificationCommands(environment, process.platform, language);
   if (build) {
     if (ids.includes('java')) await execute({ executable: environment.NARRANT_PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), args: ['native-helpers/java/tools/fetch-deps.py'] }, environment);

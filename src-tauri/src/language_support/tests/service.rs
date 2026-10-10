@@ -254,7 +254,7 @@ async fn invalid_manifest_cannot_escape_staging_or_request_another_archive() {
 async fn real_installed_typescript_pack_analyzes_without_development_tools() {
     use crate::structure_review::{
         code_graph::{AnalysisInput, AnalysisOptions, LanguageAnalyzer},
-        typescript_analyzer::TypeScriptLanguageAnalyzer,
+        native_languages,
     };
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
@@ -263,12 +263,16 @@ async fn real_installed_typescript_pack_analyzes_without_development_tools() {
     };
     let source =
         PathBuf::from(std::env::var_os("NARRANT_LANGUAGE_PACK_FIXTURE").expect("真实包目录"));
-    let package = source.join("typescript-javascript/1.0.0").join(target);
+    let version = &versions()[&PackId::TypeScriptJavascript];
+    let package = source
+        .join("typescript-javascript")
+        .join(version)
+        .join(target);
     let server = MockServer::start();
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/typescript-javascript/1.0.0/{target}/{name}"));
+            when.path(format!("/typescript-javascript/{version}/{target}/{name}"));
             then.body(bytes);
         });
     }
@@ -288,14 +292,7 @@ async fn real_installed_typescript_pack_analyzes_without_development_tools() {
         .await
         .unwrap();
     let installed = lease.path(PackId::TypeScriptJavascript).unwrap();
-    let analyzer = TypeScriptLanguageAnalyzer::new(
-        installed.join(if cfg!(windows) {
-            "bin/node.exe"
-        } else {
-            "bin/node"
-        }),
-        installed.join("runtime"),
-    );
+    let analyzer = native_languages::from_pack(PackId::TypeScriptJavascript, installed).unwrap();
     let repository = directory.path().join("project");
     std::fs::create_dir(&repository).unwrap();
     std::fs::write(

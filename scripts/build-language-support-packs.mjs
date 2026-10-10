@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { create as createTar } from 'tar';
 import { verifyPythonRuntime } from './python-language-support-smoke.mjs';
-import { validateArchive } from './setup-typescript-analyzer.mjs';
+import { validateArchive } from './archive-validation.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const targets = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'];
@@ -72,7 +72,7 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
   const definition = catalog.packs[id];
   const identity = { id, version: definition?.version, target };
   validateIdentity(identity);
-  if (Object.hasOwn(migratedNativePacks, id)) {
+  if (Object.hasOwn(migratedNativePacks, id) && id !== 'typescript-javascript') {
     const { buildNativePack } = await import('./native-language-support-packs.mjs');
     return buildNativePack({ id, target, output, definition, packageDirectory });
   }
@@ -136,6 +136,13 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
         if (metadata.name !== name || metadata.version !== version) throw new Error(`Package identity mismatch: ${name}`);
       }
     }
+    if (id === 'typescript-javascript') {
+      const { buildMigratingNativeHelper } = await import('./build-migrating-native-helper.mjs');
+      await buildMigratingNativeHelper(id, payload);
+      const platforms = definition.packages.filter(p => p.name !== 'typescript-language-server').map(({ name, version }) => ({ id: name.replaceAll('/', '-').replaceAll('@', ''), kind: 'typescript-declarations', version, root: `runtime/${name}${name === 'typescript' ? '/lib' : ''}`, metadata: { package: name } }));
+      await fs.mkdir(path.join(payload, 'control'));
+      await fs.writeFile(path.join(payload, 'control/native.json'), JSON.stringify({ schema_version: 1, helper_version: definition.helperVersion, platforms }));
+    }
     for (const name of await fs.readdir(path.join(payload, 'bin'))) await fs.chmod(path.join(payload, 'bin', name), 0o755);
     const destination = await packageDirectory(identity, payload, output);
     // 在目标宿主上执行实际工具入口；跨平台产物必须由对应 CI runner 再验证。
@@ -149,8 +156,18 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
         await verifyPythonRuntime(executable, path.join(payload, 'control/ty.toml'));
       }
       if (id === 'typescript-javascript') {
-        console.log(execFileSync(executable, [path.join(payload, 'runtime/typescript-language-server/lib/cli.mjs'), '--version'], runOptions).trim());
-        execFileSync(executable, ['-e', `const ts = require(process.argv[1]); if (!ts.transpileModule('const n: number = 1', {}).outputText.includes('1')) process.exit(1)`, path.join(payload, 'runtime/typescript/lib/typescript.js')], runOptions);
+        const { smokeTypeScript, typescriptConfiguration } = await import('./typescript-native-smoke.mjs');
+        await smokeTypeScript(payload);
+        const extracted = path.join(output, 'smoke-installed', id, identity.version, target);
+        await fs.rm(extracted, { recursive: true, force: true });
+        await fs.mkdir(extracted, { recursive: true });
+        execFileSync('tar', ['-xzf', path.join(destination, 'pack.tar.gz'), '-C', extracted]);
+        await smokeTypeScript(extracted);
+        const configPath = path.join(output, 'native-helpers-config.json');
+        let config = {};
+        try { config = JSON.parse(await fs.readFile(configPath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        config.typescript = await typescriptConfiguration(extracted);
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
       }
     }
     console.log(`Built ${id}@${identity.version} for ${target}: ${destination}`);

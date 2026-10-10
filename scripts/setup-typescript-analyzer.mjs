@@ -21,16 +21,8 @@ export function supportedNode(version) {
     && (parts[0] > 22 || (parts[0] === 22 && (parts[1] > 22 || (parts[1] === 22 && parts[2] >= 2))));
 }
 
-/** 校验可信归档路径和文件种类，拒绝链接、绝对路径与父目录跳转。 */
-export function validateArchive(names, listing) {
-  const entries = names.trim().split('\n');
-  const prefix = entries[0]?.split('/')[0];
-  if (!prefix || entries.some(name => name.includes('\\') || name.startsWith('/')
-    || name.split('/').includes('..') || name.split('/')[0] !== prefix)
-    || listing.trim().split('\n').some(line => !['-', 'd'].includes(line[0]))) {
-    throw new Error('分析工具归档含不安全的路径或文件类型');
-  }
-}
+export { validateArchive } from './archive-validation.mjs';
+import { validateArchive } from './archive-validation.mjs';
 
 /** 从固定 npm tarball 安装到新目录，验证 SHA-512，绝不调用 npm/pnpm 安装脚本。 */
 async function download(destination, [name, version, integrity]) {

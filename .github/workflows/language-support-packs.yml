@@ -21,6 +21,9 @@ on:
       - src-tauri/tests/native_helper_graphs.rs
       - scripts/*language-support-packs.mjs
       - scripts/tests/language-support-packs.test.mjs
+      - scripts/archive-validation.mjs
+      - scripts/typescript-native-smoke.mjs
+      - scripts/tests/setup-typescript-analyzer.test.mjs
       - scripts/python-language-support-smoke.mjs
       - scripts/verify-python-analyzer.mjs
       - native-helpers/**
@@ -49,7 +52,7 @@ on:
       language:
         description: Completed Native helper to validate on both platforms (all keeps final gate)
         type: choice
-        options: [all, java, go, csharp, c-cpp]
+        options: [all, typescript-javascript, java, go, csharp, c-cpp]
         default: all
       publish:
         description: Publish validated packs to the immutable OSS prefix
