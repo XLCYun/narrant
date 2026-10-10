@@ -1,7 +1,7 @@
 # Rust 原生分析核心
 
 此独立 crate 将 rust-analyzer `9074e9b4c6bc31d7986ccf4e22d18af70e5508da`
-的 `project-model`、`load-cargo`、`ide`、`syntax` 和 `vfs` 直接链接到同一个程序。
+的 `project-model`、`load-cargo`、`ide`、`syntax`、`vfs`、`base-db` 和 `hir-def` 直接链接到同一个程序。
 目前提供可复用的只读 Cargo workspace 核心和聚焦测试，尚未提供 helper 协议、完整
 CodeGraph、应用入口或支持包。
 
@@ -36,7 +36,8 @@ scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/rust/Cargo.to
 - 全部依赖：按显式网络政策解析项目和标准库依赖。
 
 标准库和全部依赖要求 `ProjectToolchain` 显式提供已有 sysroot 和 rust-src。每档均
-禁止 build scripts、过程宏服务和 rustup 自动安装。`test_cfg` 明确控制语义 cfg；
+禁止 build scripts、过程宏服务和 rustup 自动安装。分析子进程设置 `CARGO_CACHE_RUSTC_INFO=0`，
+避免在已有 target 内写入编译器版本缓存；开发编译脚本与缓存配置不变。`test_cfg` 明确控制语义 cfg；
 默认启用，对应旧入口的测试上下文，后续图的测试节点过滤应单独实现。
 
 全部依赖先只读发现真实 workspace 根和项目 Cargo 版本，再将项目锁文件解析移到
@@ -44,6 +45,10 @@ scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/rust/Cargo.to
 Cargo 1.82 以下使用 `--locked`，已有有效锁仍可解析；需要生成或更新锁文件时返回
 明确的只读错误。旧版本实际运行证据留待兼容验收，不能据此宣布已验收。
 
-原生项目 metadata、sysroot metadata、目标数据、目标 cfg 和 crate 根文件加载错误
-都向调用者返回。上游可能返回的 no-deps 回退不能当作成功。当前只有 macOS ARM64
+原生项目 metadata、sysroot metadata、目标数据、目标 cfg 和源码加载错误都向调用者
+返回。核心校验 VFS 已枚举的 `.rs` 可读且为 UTF-8，再检查原生模块解析的活动候选：
+实际读取失败或已有文件被漏载均返回错误，真正缺失的模块仍保留为项目诊断。
+固定上游在返回时已消费原始字节，所以校验会只读重读这些路径，不更新数据库。
+调用者必须在加载期间保持输入不变；此校验不提供对并发改写的原子保证。加载完成后
+查询始终使用原始不可变快照。上游可能返回的 no-deps 回退不能当作成功。当前只有 macOS ARM64
 聚焦证据，详见 [迁移验证](../../docs/research/existing-native-helper-migration-validation.md)。

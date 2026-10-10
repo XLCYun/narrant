@@ -28,7 +28,7 @@ pub struct RustProject {
 }
 
 impl RustProject {
-    /// 加载明确的 Cargo 清单；禁止构建脚本、过程宏服务及隐式安装。
+    /// 加载明确的 Cargo 清单；调用者须固定输入直到加载完成，禁止用户代码执行与隐式安装。
     pub fn load(manifest: &Path, policy: &LoadPolicy) -> Result<Self> {
         let (database, vfs) = loading::load(manifest, policy)?;
         let host = AnalysisHost::with_database(database);

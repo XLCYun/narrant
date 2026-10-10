@@ -8,7 +8,7 @@ Windows x64、支持包安装、Review 接入和全图兼容性仍未验收。
 
 ### 固定源码与构建
 
-直接依赖 `ide`、`load-cargo`、`project-model`、`syntax`、`vfs`，全部来自
+直接依赖 `ide`、`load-cargo`、`project-model`、`syntax`、`vfs`、`base-db`、`hir-def`，全部来自
 rust-analyzer [`9074e9b4c6bc31d7986ccf4e22d18af70e5508da`](https://github.com/rust-lang/rust-analyzer/tree/9074e9b4c6bc31d7986ccf4e22d18af70e5508da)
 （上游提交日期 2026-09-06）。AST 与语义数据库没有混用应用现存 parser 的 revision。
 helper 固定 Rust 1.98.0；本机被分析 fixture 使用已有 stable Rust 1.97.1 和已有 rust-src。
@@ -60,6 +60,25 @@ helper 固定 Rust 1.98.0；本机被分析 fixture 使用已有 stable Rust 1.9
 可能携带完整 metadata 失败后的 no-deps 回退；sysroot 也可能回退为 stitched 模型。
 核心检查项目与 sysroot metadata 错误、原生进度中的 metadata 失败、目标数据、目标 cfg、
 工具链信息及 Cargo target 根文件是否可读取。聚焦测试保留两种实际降级失败证据。
+
+独立审查后补齐非根源码检查：上游 `load-cargo` 静默丢弃无效 UTF-8，`vfs-notify`
+也会忽略遍历/读取失败。核心先校验原生 VFS 已枚举的 `.rs` 文件可读且可解码，再用同一
+revision 的 `crate_def_map` / `UnresolvedModule.candidates` 定位活动声明的漏载源码。
+不会自行遍历目录或重新实现 cfg、嵌套模块、`#[path]` 解析。真正 `NotFound` 的候选
+仍属于项目诊断；实际读取/解码失败、磁盘已有源码却不在 VFS 中均返回加载错误。
+新增用例覆盖 `mod bad;` 的无效 UTF-8、目录型 `bad.rs` 的实际读取失败，以及缺失模块、
+cfg 排除候选和 `.git` / `target` 排除目录仍不扩大加载范围。
+
+该范围测试预建 target 时还发现 Cargo 版本探测会写入 `target/.rustc_info.json`。只对
+分析子进程设置 [`CARGO_CACHE_RUSTC_INFO=0`](https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-reads)
+后，已有 target 的目录和字节也保持不变；没有更改开发编译 wrapper、incremental 或 sccache。
+修复后完整 helper 聚焦测试为 16 通过、0 失败、0 ignored（26.80 秒）。
+
+固定 API 的边界是：loader 返回前已消费 `Vfs::take_changes()` 中的原始字节，返回 VFS
+只保留内容 hash，数据库缺输入时的 `file_text` 会 panic，均无公开无 panic 的原始字节
+查询入口。因此检查只读重读已有 VFS 路径，不更新数据库或替换快照原文；调用者必须在
+加载期间固定输入。这不是对并发改写的原子保证。加载后原快照不受磁盘变化影响的测试
+继续保留并通过。没有复制/修改上游 loader，也没有用 `catch_unwind` 探测输入。
 
 首次全部依赖实测发现：上游
 [`make_lockfile_copy`](https://github.com/rust-lang/rust-analyzer/blob/9074e9b4c6bc31d7986ccf4e22d18af70e5508da/crates/project-model/src/cargo_config_file.rs)

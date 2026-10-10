@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 tempfile = "3.27"
+base-db = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }
+hir-def = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }
 ide = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }
 load-cargo = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }
 project-model = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }

@@ -13,6 +13,74 @@ use syntax::AstNode;
 
 use crate::test_support as support;
 
+/// 已声明的非根模块不能因无效 UTF-8 被 loader 静默丢弃后仍返回成功。
+#[test]
+fn invalid_utf8_in_declared_module_is_observable() {
+    let root = support::fixture();
+    std::fs::write(root.path().join("src/lib.rs"), "mod bad;\n").unwrap();
+    std::fs::write(root.path().join("src/bad.rs"), [0xff, 0xfe]).unwrap();
+    let before = support::snapshot(root.path());
+    let error = match RustProject::load(
+        &root.path().join("Cargo.toml"),
+        &LoadPolicy::repository_only(),
+    ) {
+        Ok(_) => panic!("非根模块源码解码失败不能变成部分加载成功"),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("bad.rs") && message.contains("未完整加载"),
+        "{message}"
+    );
+    support::assert_unchanged(root.path(), &before);
+}
+
+/// 不可读取的模块路径不在 VFS 中，也必须由原生模块候选定位并报告错误。
+#[test]
+fn unreadable_declared_module_is_observable() {
+    let root = support::fixture();
+    std::fs::write(root.path().join("src/lib.rs"), "mod bad;\n").unwrap();
+    // 目录能稳定触发 read 错误，不依赖测试进程的权限或操作系统 chmod 行为。
+    std::fs::create_dir(root.path().join("src/bad.rs")).unwrap();
+    let before = support::snapshot(root.path());
+    let error = match RustProject::load(
+        &root.path().join("Cargo.toml"),
+        &LoadPolicy::repository_only(),
+    ) {
+        Ok(_) => panic!("非根模块源码读取失败不能变成部分加载成功"),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("bad.rs") && message.contains("未完整加载"),
+        "{message}"
+    );
+    support::assert_unchanged(root.path(), &before);
+}
+
+/// 缺失或 cfg 排除的模块仍是项目诊断，Cargo 排除目录中的无效文件不扩大加载范围。
+#[test]
+fn source_validation_preserves_native_scope_and_missing_module_diagnostics() {
+    let root = support::fixture();
+    std::fs::write(
+        root.path().join("src/lib.rs"),
+        "mod missing;\n#[cfg(any())] mod inactive;\n",
+    )
+    .unwrap();
+    std::fs::create_dir(root.path().join("src/inactive.rs")).unwrap();
+    std::fs::create_dir(root.path().join(".git")).unwrap();
+    std::fs::write(root.path().join(".git/ignored.rs"), [0xff, 0xfe]).unwrap();
+    std::fs::create_dir(root.path().join("target")).unwrap();
+    std::fs::write(root.path().join("target/ignored.rs"), [0xff, 0xfe]).unwrap();
+    let before = support::snapshot(root.path());
+    RustProject::load(
+        &root.path().join("Cargo.toml"),
+        &LoadPolicy::repository_only(),
+    )
+    .unwrap();
+    support::assert_unchanged(root.path(), &before);
+}
+
 /// 本地 HTTP 计数器捕获 Cargo 的任何下载尝试，不依赖公网是否可用。
 struct NetworkTrap {
     url: String,

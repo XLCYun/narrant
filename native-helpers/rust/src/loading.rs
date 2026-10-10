@@ -1,6 +1,7 @@
 //! Cargo 与工具链政策是明确的类型，调用者不能注入命令或任意环境覆盖。
 
 use anyhow::{Context, Result, bail, ensure};
+use hir_def::nameres::{crate_def_map, diagnostics::DefDiagnosticKind};
 use ide::RootDatabase;
 use load_cargo::{LoadCargoConfig, ProcMacroServerChoice};
 use project_model::{
@@ -64,6 +65,10 @@ impl LoadPolicy {
         config
             .extra_env
             .insert("RUSTUP_AUTO_INSTALL".into(), Some("0".into()));
+        // 即使 target 已存在，Cargo 的版本探测也不能在其中写入 .rustc_info.json。
+        config
+            .extra_env
+            .insert("CARGO_CACHE_RUSTC_INFO".into(), Some("0".into()));
         // Cargo +toolchain 会把构建版本传播给测试/子进程，不能据此覆盖被分析项目。
         config.extra_env.insert("RUSTUP_TOOLCHAIN".into(), None);
         if self.dependency_scope != DependencyScope::AllDependencies
@@ -153,7 +158,51 @@ pub(super) fn load(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase
         load_cargo::load_workspace(workspace, &config.extra_env, &load_config)?;
     ensure!(macro_client.is_none(), "禁止启动过程宏服务");
     ensure!(vfs.iter().next().is_some(), "Cargo 工作区未加载任何文件");
+    ensure_sources_complete(&database, &vfs)?;
     Ok((database, vfs))
+}
+
+/// 上游会丢弃解码和读取错误；只校验原生 VFS 源码及原生模块解析给出的候选。
+fn ensure_sources_complete(database: &RootDatabase, vfs: &Vfs) -> Result<()> {
+    // 解码失败的文件仍在 VFS 中，却没有 FileText；求 DefMap 前必须先拒绝，避免 panic。
+    for (_, path) in vfs.iter() {
+        if let Some(path) = path.as_path()
+            && path.extension() == Some("rs")
+        {
+            std::fs::read_to_string(path)
+                .with_context(|| format!("Rust 上下文源码未完整加载：{path}"))?;
+        }
+    }
+    // 读取/遍历失败的文件不在 VFS 中，使用原生 cfg、#[path] 与嵌套目录解析结果定位。
+    for &krate in base_db::all_crates(database).iter() {
+        for diagnostic in crate_def_map(database, krate).diagnostics() {
+            let DefDiagnosticKind::UnresolvedModule { ast, candidates } = &diagnostic.kind else {
+                continue;
+            };
+            let anchor = ast
+                .file_id
+                .original_file_respecting_includes(database)
+                .file_id(database);
+            let directory = vfs
+                .file_path(anchor)
+                .parent()
+                .context("未解析模块的源码没有父目录")?;
+            for candidate in candidates {
+                let candidate = directory.join(candidate).context("模块候选路径不可用")?;
+                let path = candidate.as_path().context("模块候选没有真实源码路径")?;
+                match std::fs::read_to_string(path) {
+                    // 真正缺失的模块属于项目诊断；现有源码被 loader 漏掉才是加载错误。
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error)
+                            .with_context(|| format!("Rust 模块源码未完整加载：{path}"));
+                    }
+                    Ok(_) => bail!("Rust 模块源码未完整加载到 VFS：{path}"),
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 对单次原生加载收集进度错误，不能把上游的部分 workspace 当成完整结果。

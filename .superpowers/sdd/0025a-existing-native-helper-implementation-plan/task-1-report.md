@@ -131,3 +131,65 @@ Concerns：
 - native-helpers/rust/src/tests/fixtures/core/macros/Cargo.toml、src/lib.rs
 - docs/research/existing-native-helper-migration-validation.md
 - 此 Task 1 report（作为本次提交证据）
+
+## 独立审查修复第 1 轮（2026-10-11）
+
+FIX_BASE：`b04e52f992fcc7cec0b0bd45f693cfc7547e773b`。审查指出，原检查只读取
+Cargo target 根；上游 loader 对无效 UTF-8 和文件读取错误会静默忽略，因此 `mod bad;`
+的非根模块可被漏载而仍返回成功。用现有 fixture/harness 新增
+`loading::tests::invalid_utf8_in_declared_module_is_observable`，确实观察到 RED：
+`RustProject::load` 成功，测试因“非根模块源码解码失败不能变成部分加载成功”失败。
+
+修复在 `load_cargo::load_workspace` 返回后、数据库被接受之前加入 `ensure_sources_complete`：
+
+- 只读校验原生 VFS 已枚举 `.rs` 的可读性和 UTF-8 解码。原生 loader 对这些文件没有
+  初始化 FileText 时，直接求模块图会 panic，所以检查必须先于原生 DefMap 查询。
+- 使用同一固定 revision 的 `base-db::all_crates`、`hir-def::crate_def_map` 与
+  `DefDiagnosticKind::UnresolvedModule.candidates` 定位活动声明的漏载文件；候选路径
+  沿用原生包含文件锚点和 VFS 路径规范化，不自行重建 cfg、`#[path]` 或嵌套目录规则。
+- 原本不存在的候选（真实 NotFound）保留为项目诊断；实际读取/解码失败返回有路径的错误，
+  磁盘已有且可读取、却未进入 VFS 的活动候选也返回加载错误。
+- 没有新增文件遍历、复制/修改 loader 或 catch_unwind。两个新增直接依赖已在原传递图
+  中，revision 不变；Cargo.lock 只增加本 helper 的这两个直接依赖名，没有更换锁版本。
+
+新增实际读取失败回归以目录型 `src/bad.rs` 触发，避免 chmod 在 root/跨平台权限下失真。
+第三个回归验证缺失模块、cfg 排除候选、`.git` 和 target 排除目录不扩大加载范围；每个
+用例仍断言 fixture 目录与字节不变。原有加载后磁盘变化不影响查询快照的测试继续保留。
+
+首轮 16 个测试中，两个错误回归均通过，但范围用例预建 target 暴露 Cargo 新增
+`target/.rustc_info.json`（15 通过、1 失败，27.07 秒，scratch/task-1-fix-1-tests.log）。
+先换用 `.git` 的中间验证 16/16 通过（26.91 秒，scratch/task-1-fix-1-tests-final.log），
+控制者要求保留这个具体只读缺口并修复。按
+[Cargo 官方环境变量说明](https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-reads)，
+仅在分析配置 extra_env 设置 `CARGO_CACHE_RUSTC_INFO=0`，恢复已有 target 的目录字节断言。
+没有修改开发 Cargo wrapper、全局环境、incremental 或 sccache。
+
+API 限制与前提：固定 loader 已在返回前消费 `Vfs::take_changes()` 的原始 Vec<u8>，
+返回 VFS 的内容 hash 和 DB FileText map 均没有公开原始字节/无 panic 的缺输入查询。
+因此使用只读重读，不用新内容更新数据库或替换原文。调用者须在加载期间固定输入；
+本检查不保证并发改写的原子性。该前提已写入核心 load 注释、README 和迁移验证文档。
+后续查询仍使用原始快照。本轮没有改全图语义，也没有新增双平台或旧 Cargo 验收声明。
+
+本轮实际命令均在同一 worktree 仓库根执行，Cargo 前缀均为：
+`PATH=/Users/lizhanfa/.nvm/versions/node/v24.18.0/bin:$PATH scripts/cargo-agent.sh`。
+输出均重定向到 `.superpowers/sdd/0025a-existing-native-helper-implementation-plan/scratch/`。
+
+| 参数/命令 | 结果与日志 |
+|---|---|
+| `+1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked loading::tests::invalid_utf8_in_declared_module_is_observable -- --exact` | RED，exit 101，1 失败、13 filtered；task-1-fix-1-red.log |
+| 同上但去掉 `--locked`，解析新增直接依赖 | GREEN，exit 0，1 通过、15 filtered；task-1-fix-1-green.log；锁版本未变 |
+| `+1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked` 首轮 | 15 通过、1 失败；task-1-fix-1-tests.log；实际 target 写缓存已据此修复 |
+| 同上，中间 `.git` 范围用例 | exit 0，16 通过；task-1-fix-1-tests-final.log |
+| 同上，恢复已有 target 并关闭分析版本缓存后的最终完整 helper 验证 | exit 0，16 通过、0 失败、0 ignored，26.80 秒；task-1-fix-1-tests-with-target-final.log |
+| `+1.98.0 clippy --manifest-path native-helpers/rust/Cargo.toml --all-targets --locked -- -D warnings` | exit 0，1.60 秒；task-1-fix-1-clippy.log |
+| `+1.98.0 fmt --manifest-path native-helpers/rust/Cargo.toml` | exit 0；task-1-fix-1-fmt.log |
+| `+1.98.0 fmt --manifest-path native-helpers/rust/Cargo.toml -- --check` | exit 0；task-1-fix-1-fmt-check.log |
+| `git diff --check` | exit 0 |
+
+改动文件：native-helpers/rust/{Cargo.toml,Cargo.lock,README.md}、src/{lib.rs,loading.rs}、
+src/tests/loading.rs、docs/research/existing-native-helper-migration-validation.md 与此 report。
+自审确认修复使用原生解析结果，没有新遍历框架/上游改码/任意环境注入入口；相较旧行为，
+已加载源码解码失败和活动候选读取失败从部分成功变为显式错误，真正缺失模块仍不阻止
+保守分析。新发现的 target 缓存写回随本轮修复，其他兼容性 concerns 仍如上文。
+最终自审没有发现本轮新增的未处理正确性问题。未运行宿主全量套件、未触发 quality-gate，
+未 push；本轮没有重跑旧 LSP probe，因为未改查询语义或原生 revision。
