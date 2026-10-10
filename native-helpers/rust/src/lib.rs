@@ -2,12 +2,15 @@
 
 mod loading;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use ide::{
     Analysis, AnalysisHost, CallHierarchyConfig, CallItem, FilePosition, GotoDefinitionConfig,
     NavigationTarget, RaFixtureConfig,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::{Path, PathBuf},
+};
 use vfs::{AbsPathBuf, FileId, Vfs, VfsPath};
 
 pub use loading::{DependencyScope, LoadPolicy, NetworkPolicy, ProjectToolchain};
@@ -21,6 +24,7 @@ pub enum ModuleParent {
 }
 
 /// 一次加载获得同源数据库、VFS 和固定分析快照，不暴露可变数据库入口。
+/// 完整分析的调用方遇到任一查询错误须终止并丢弃项目，不能重试或继续拼接部分图。
 pub struct RustProject {
     _host: AnalysisHost,
     analysis: Analysis,
@@ -69,74 +73,87 @@ impl RustProject {
 
     /// 从语义快照读取同一 revision 的 AST，后续源码提取不能另用应用 parser。
     pub fn parse(&self, file_id: FileId) -> Result<syntax::ast::SourceFile> {
-        self.ensure_file(file_id)?;
-        self.analysis.parse(file_id).context("Rust AST 查询已取消")
+        native_transaction("Rust AST 查询失败", || {
+            self.ensure_file(file_id)?;
+            self.analysis.parse(file_id).context("Rust AST 查询已取消")
+        })
     }
 
     /// 返回数据库中实际参与语义分析的原文，范围使用 UTF-8 字节偏移。
     pub fn source(&self, file_id: FileId) -> Result<String> {
+        native_transaction("Rust 源码查询失败", || self.source_native(file_id))
+    }
+
+    /// 直接调用原生定义导航，保留所有目标及完整、焦点范围。
+    pub fn definitions(&self, file_id: FileId, offset: u32) -> Result<Vec<NavigationTarget>> {
+        native_transaction("Rust 定义查询失败", || {
+            let position = self.position(file_id, offset)?;
+            let config = GotoDefinitionConfig {
+                ra_fixture: fixture_config(),
+            };
+            Ok(self
+                .analysis
+                .goto_definition(position, &config)
+                .context("Rust 定义查询已取消")?
+                .map(|result| result.info)
+                .unwrap_or_default())
+        })
+    }
+
+    /// 直接读取函数的出向调用，保留宏和闭包的原生调用位置。
+    pub fn outgoing_calls(&self, file_id: FileId, offset: u32) -> Result<Vec<CallItem>> {
+        native_transaction("Rust 调用查询失败", || {
+            let position = self.position(file_id, offset)?;
+            let config = CallHierarchyConfig {
+                exclude_tests: false,
+                ra_fixture: fixture_config(),
+            };
+            Ok(self
+                .analysis
+                .outgoing_calls(&config, position)
+                .context("Rust 调用查询已取消")?
+                .unwrap_or_default())
+        })
+    }
+
+    /// 先用 crate 身份和根文件查询补齐 LSP handler 的 crate 根附加逻辑。
+    pub fn parent_modules(&self, file_id: FileId) -> Result<Vec<ModuleParent>> {
+        native_transaction("Rust 父模块查询失败", || {
+            self.ensure_file(file_id)?;
+            for krate in self
+                .analysis
+                .crates_for(file_id)
+                .context("Rust crate 查询已取消")?
+            {
+                if self
+                    .analysis
+                    .crate_root(krate)
+                    .context("Rust crate 根查询已取消")?
+                    == file_id
+                {
+                    return Ok(vec![ModuleParent::CrateRoot]);
+                }
+            }
+            Ok(self
+                .analysis
+                .parent_module(FilePosition {
+                    file_id,
+                    offset: 0.into(),
+                })
+                .context("Rust 父模块查询已取消")?
+                .into_iter()
+                .map(ModuleParent::Declaration)
+                .collect())
+        })
+    }
+
+    /// 只供当前原生事务读取快照原文，避免位置校验另启可用性探测或嵌套异常边界。
+    fn source_native(&self, file_id: FileId) -> Result<String> {
         self.ensure_file(file_id)?;
         self.analysis
             .file_text(file_id)
             .map(|text| text.to_string())
             .context("Rust 源码查询已取消")
-    }
-
-    /// 直接调用原生定义导航，保留所有目标及完整、焦点范围。
-    pub fn definitions(&self, file_id: FileId, offset: u32) -> Result<Vec<NavigationTarget>> {
-        let position = self.position(file_id, offset)?;
-        let config = GotoDefinitionConfig {
-            ra_fixture: fixture_config(),
-        };
-        Ok(self
-            .analysis
-            .goto_definition(position, &config)
-            .context("Rust 定义查询已取消")?
-            .map(|result| result.info)
-            .unwrap_or_default())
-    }
-
-    /// 直接读取函数的出向调用，保留宏和闭包的原生调用位置。
-    pub fn outgoing_calls(&self, file_id: FileId, offset: u32) -> Result<Vec<CallItem>> {
-        let position = self.position(file_id, offset)?;
-        let config = CallHierarchyConfig {
-            exclude_tests: false,
-            ra_fixture: fixture_config(),
-        };
-        Ok(self
-            .analysis
-            .outgoing_calls(&config, position)
-            .context("Rust 调用查询已取消")?
-            .unwrap_or_default())
-    }
-
-    /// 先用 crate 身份和根文件查询补齐 LSP handler 的 crate 根附加逻辑。
-    pub fn parent_modules(&self, file_id: FileId) -> Result<Vec<ModuleParent>> {
-        self.ensure_file(file_id)?;
-        for krate in self
-            .analysis
-            .crates_for(file_id)
-            .context("Rust crate 查询已取消")?
-        {
-            if self
-                .analysis
-                .crate_root(krate)
-                .context("Rust crate 根查询已取消")?
-                == file_id
-            {
-                return Ok(vec![ModuleParent::CrateRoot]);
-            }
-        }
-        Ok(self
-            .analysis
-            .parent_module(FilePosition {
-                file_id,
-                offset: 0.into(),
-            })
-            .context("Rust 父模块查询已取消")?
-            .into_iter()
-            .map(ModuleParent::Declaration)
-            .collect())
     }
 
     /// 在进入原生数据库前校验身份，避免不可信查询触发内部断言。
@@ -150,7 +167,7 @@ impl RustProject {
 
     /// 位置必须落在同一快照的合法字符边界上。
     fn position(&self, file_id: FileId, offset: u32) -> Result<FilePosition> {
-        let source = self.source(file_id)?;
+        let source = self.source_native(file_id)?;
         ensure!(
             source.is_char_boundary(offset as usize),
             "源码偏移超出范围或落在 UTF-8 字符内部"
@@ -159,6 +176,29 @@ impl RustProject {
             file_id,
             offset: offset.into(),
         })
+    }
+}
+
+/// 隔离一次真实原生事务的异常；保留取消类型与诊断，不探测文件、不重试或返回部分成功。
+fn native_transaction<T>(context: &str, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let payload = match payload.downcast::<base_db::salsa::Cancelled>() {
+                Ok(cancelled) => {
+                    return Err(
+                        anyhow::Error::new(*cancelled).context(format!("{context}（原生取消）"))
+                    );
+                }
+                Err(payload) => payload,
+            };
+            let diagnostic = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("原生事务发生非字符串 panic");
+            bail!("{context}（原生内部异常）：{diagnostic}");
+        }
     }
 }
 

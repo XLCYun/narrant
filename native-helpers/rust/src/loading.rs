@@ -13,7 +13,6 @@ use project_model::{
 };
 use std::{
     collections::HashSet,
-    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -119,24 +118,9 @@ impl LoadPolicy {
 
 /// 一次加载事务隔离原生内部异常；失败即丢弃数据库，不探测输入、不重试或返回部分结果。
 pub(super) fn load(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase, Vfs)> {
-    match catch_unwind(AssertUnwindSafe(|| load_native(manifest, policy))) {
-        Ok(result) => result,
-        Err(payload) => {
-            // 保留原生取消的错误类型，后续协议接入仍可区分取消与其他内部异常。
-            let payload = match payload.downcast::<base_db::salsa::Cancelled>() {
-                Ok(cancelled) => {
-                    return Err(anyhow::Error::new(*cancelled).context("Rust 原生加载已取消"));
-                }
-                Err(payload) => payload,
-            };
-            let diagnostic = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("原生加载发生非字符串 panic");
-            bail!("Rust 工作区未完整加载（原生内部异常）：{diagnostic}");
-        }
-    }
+    crate::native_transaction("Rust 工作区未完整加载", || {
+        load_native(manifest, policy)
+    })
 }
 
 /// 先检查 ProjectWorkspace 的可降级错误，再交给原生 loader 建立数据库并检查模块。

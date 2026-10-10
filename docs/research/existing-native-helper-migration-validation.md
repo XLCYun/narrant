@@ -149,6 +149,44 @@ crate 根的差异来自
 rust-analyzer 1.97.1 作为辅助对照，同样得到这些查询结果；它不作为固定旧入口的主证据。
 原始对照命令、JSON 和日志位置记录在 Task 1 report；临时 probe 没有进入正式交付。
 
+### 公共查询事务异常隔离（第 3 轮修复）
+
+固定 loader 可以将合法 `include_bytes!("bad.rs")` 的 `FF FE` 字节保留为 VFS 身份，
+但它没有对应的 FileText。第 3 轮直接公共 API 回归复现 `load` 成功后 `source(id)`
+向调用方泄漏 `Unable to fetch file text ... FileId(8)` panic：RED 为 exit 101，
+1 失败、19 filtered，0.64 秒。首次测试先遇到 macOS `/var` 与 `/private/var` 路径
+断言差异；改为对比 canonical 路径后才得到这份真实故障证据。
+
+加载事务的边界现提取为一个私有 `native_transaction`。`source`、`parse`、
+`definitions`、`outgoing_calls`、`parent_modules` 各包住整次实际原生查询；位置查询
+所需的快照原文读取处于同一事务内，不再调用嵌套公共 `source` 边界。VFS 路径映射
+仍允许资源身份，合法资源的加载能力没有改变。异常不变成空结果、不按诊断文本决定
+语义，不增加文件分类层、磁盘重读、逐文件 panic 探测或上游补丁。
+
+公共 API 回归实际请求二进制资源的五种语义查询，均取得带真实 FileText 诊断的 Err。
+资源加载后在磁盘改成有效 Rust 文本仍返回 Err；正常 lib.rs 被改写后，其原文与
+`target` 定义导航仍来自加载时快照。完整图调用方必须在任一查询 Err 后终止该次分析
+并丢弃项目，不能继续查询、重试或拼接部分图；此接入义务留待 Task 5 验证。
+取消测试保留 `Cancelled::{Local, PendingWrite, PropagatedPanic}` 的原始错误类型，
+也覆盖 IDE 正常返回 Cancellable 错误的传播；这是边界分类证据，尚非真实协议取消验收。
+
+第 3 轮命令前缀为 `PATH=/Users/lizhanfa/.nvm/versions/node/v24.18.0/bin:$PATH scripts/cargo-agent.sh`，
+以下聚焦验证均 exit 0：
+
+| 参数 | 实际结果 |
+|---|---|
+| `+1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked tests:: -- --skip loading::tests:: --nocapture` | 6 通过、15 filtered，0.79 秒；核心查询、快照和取消分类 |
+| `+1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked invalid_utf8 -- --nocapture` | 2 通过、19 filtered，0.63 秒；根与块内源码失败 |
+| `+1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked loading::tests::binary_resource_is_not_misclassified_as_module_source -- --exact --nocapture` | 1 通过、20 filtered，1.10 秒；md/rs/bin 合法资源 |
+| `+1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked unreadable -- --nocapture` | 2 通过、19 filtered，2.77 秒；根模块与 11 种块内声明 |
+| `+1.98.0 clippy --manifest-path native-helpers/rust/Cargo.toml --all-targets --locked -- -D warnings` | exit 0，2.89 秒 |
+| `+1.98.0 fmt --manifest-path native-helpers/rust/Cargo.toml -- --check` | exit 0 |
+
+合计 11 个受影响用例通过；实际故障输出在 `--nocapture` 日志中保留，未更改 panic hook。
+首次核心筛选的 `tests::` 误包含 loading 测试，已用 SIGINT 中止并收窄为上表命令；
+不把该中止运行计为通过，也未运行宿主全量测试或触发 quality-gate。原始命令、日志路径
+与此轮文件清单追加在 ignored Task 1 report，完整图、双平台及性能验收范围不变。
+
 ### 后续证据缺口
 
 完整 Rust 图、原文/规范化打印、跨提交身份、图外符号、测试过滤与全部旧回归仍需后续
