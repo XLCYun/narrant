@@ -62,12 +62,13 @@ helper 固定 Rust 1.98.0；本机被分析 fixture 使用已有 stable Rust 1.9
 工具链信息及 Cargo target 根文件是否可读取。聚焦测试保留两种实际降级失败证据。
 
 独立审查后补齐非根源码检查：上游 `load-cargo` 静默丢弃无效 UTF-8，`vfs-notify`
-也会忽略遍历/读取失败。核心先校验原生 VFS 已枚举的 `.rs` 文件可读且可解码，再用同一
-revision 的 `crate_def_map` / `UnresolvedModule.candidates` 定位活动声明的漏载源码。
-不会自行遍历目录或重新实现 cfg、嵌套模块、`#[path]` 解析。真正 `NotFound` 的候选
-仍属于项目诊断；实际读取/解码失败、磁盘已有源码却不在 VFS 中均返回加载错误。
-新增用例覆盖 `mod bad;` 的无效 UTF-8、目录型 `bad.rs` 的实际读取失败，以及缺失模块、
-cfg 排除候选和 `.git` / `target` 排除目录仍不扩大加载范围。
+也会忽略遍历/读取失败。核心用同一 revision 的 `crate_def_map` 与
+`UnresolvedModule.candidates` 定位活动声明的漏载源码；Block DefMap 通过原生
+`ExpressionStore::blocks` 递归取得，涵盖函数/关联项/常量的 body、签名和字段中的块，
+并继续检查块内声明和宏展开。没有运行类型推断或复制 cfg、嵌套目录、`#[path]` 规则。
+真正 `NotFound` 的候选仍属于项目诊断；实际读取/解码失败、磁盘已有模块源码却未进入
+VFS 均返回加载错误。测试覆盖 root/block 模块读取失败、函数/方法/闭包/常量/签名/
+宏展开作用域，以及缺失模块、cfg 排除候选和 `.git` / `target` 排除目录不扩大范围。
 
 该范围测试预建 target 时还发现 Cargo 版本探测会写入 `target/.rustc_info.json`。只对
 分析子进程设置 [`CARGO_CACHE_RUSTC_INFO=0`](https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-reads)
@@ -76,9 +77,33 @@ cfg 排除候选和 `.git` / `target` 排除目录仍不扩大加载范围。
 
 固定 API 的边界是：loader 返回前已消费 `Vfs::take_changes()` 中的原始字节，返回 VFS
 只保留内容 hash，数据库缺输入时的 `file_text` 会 panic，均无公开无 panic 的原始字节
-查询入口。因此检查只读重读已有 VFS 路径，不更新数据库或替换快照原文；调用者必须在
-加载期间固定输入。这不是对并发改写的原子保证。加载后原快照不受磁盘变化影响的测试
-继续保留并通过。没有复制/修改上游 loader，也没有用 `catch_unwind` 探测输入。
+查询入口。Block DefMap 也在返回模块身份之前解析引用文件，无法先用其身份预查字节。
+因此整次原生加载/诊断事务外设置一次 `catch_unwind` 异常隔离：保留实际 panic 诊断，
+结束本次加载并丢弃数据库。不会逐项用 panic 探测输入，不解析 panic 文本决定语义，也
+不继续查询、重试或返回部分结果；原生 Salsa Cancelled 类型继续保留在错误链中，真实
+取消/协议分类仍待 Task 5 验收。
+
+源码身份由原生实际解析决定，已经移除第 1 轮按 `.rs` 扩展名前置解码的假设。同一路径
+的非法 UTF-8 `.md` 被用作块内模块时返回明确错误，用作 `include_bytes!` 二进制资源时
+正常加载；二进制 `.rs` 和 `.bin` 资源也通过。异常隔离没有替换 AST/原文、删掉能力或
+修改上游源码。根和活动候选的 I/O 校验只读重读路径；调用者必须在加载期间固定输入，
+这不是对并发改写的原子保证。加载后原快照不受磁盘变化影响的测试继续保留。
+
+本机第 1 轮 16 个测试为 26.80 秒；新增原生 block/body 检查后、中间 17 个测试为
+52.30 秒；最终 19 个测试（含异常隔离与二进制资源对照）为 52.06 秒、0 失败、0 ignored。
+这包含测试与缓存差异，尚不是性能基准；标准库 body 遍历开销需要在后续
+性能验收中继续量化，不能从这两个耗时推导生产性能结论。
+
+第 2 轮最终验证命令（仓库根目录，均 exit 0）：
+
+```sh
+PATH=/Users/lizhanfa/.nvm/versions/node/v24.18.0/bin:$PATH scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/rust/Cargo.toml --lib --locked -- --nocapture
+PATH=/Users/lizhanfa/.nvm/versions/node/v24.18.0/bin:$PATH scripts/cargo-agent.sh +1.98.0 clippy --manifest-path native-helpers/rust/Cargo.toml --all-targets --locked -- -D warnings
+PATH=/Users/lizhanfa/.nvm/versions/node/v24.18.0/bin:$PATH scripts/cargo-agent.sh +1.98.0 fmt --manifest-path native-helpers/rust/Cargo.toml -- --check
+```
+
+测试日志保留实际缺 FileText panic 输出，测试验证调用者取得明确错误而非部分数据库。
+没有为此修改 panic hook，也没有运行宿主全量套件或触发 quality-gate。
 
 首次全部依赖实测发现：上游
 [`make_lockfile_copy`](https://github.com/rust-lang/rust-analyzer/blob/9074e9b4c6bc31d7986ccf4e22d18af70e5508da/crates/project-model/src/cargo_config_file.rs)

@@ -1,13 +1,19 @@
 //! Cargo 与工具链政策是明确的类型，调用者不能注入命令或任意环境覆盖。
 
 use anyhow::{Context, Result, bail, ensure};
-use hir_def::nameres::{crate_def_map, diagnostics::DefDiagnosticKind};
+use hir_def::{
+    AdtId, ExpressionStoreOwnerId, GenericDefId, ModuleDefId,
+    expr_store::ExpressionStore,
+    nameres::{DefMap, crate_def_map, diagnostics::DefDiagnosticKind},
+};
 use ide::RootDatabase;
 use load_cargo::{LoadCargoConfig, ProcMacroServerChoice};
 use project_model::{
     CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind, RustLibSource,
 };
 use std::{
+    collections::HashSet,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -111,8 +117,30 @@ impl LoadPolicy {
     }
 }
 
-/// 先检查 ProjectWorkspace 的可降级错误，再交给原生 loader 建立数据库。
+/// 一次加载事务隔离原生内部异常；失败即丢弃数据库，不探测输入、不重试或返回部分结果。
 pub(super) fn load(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase, Vfs)> {
+    match catch_unwind(AssertUnwindSafe(|| load_native(manifest, policy))) {
+        Ok(result) => result,
+        Err(payload) => {
+            // 保留原生取消的错误类型，后续协议接入仍可区分取消与其他内部异常。
+            let payload = match payload.downcast::<base_db::salsa::Cancelled>() {
+                Ok(cancelled) => {
+                    return Err(anyhow::Error::new(*cancelled).context("Rust 原生加载已取消"));
+                }
+                Err(payload) => payload,
+            };
+            let diagnostic = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("原生加载发生非字符串 panic");
+            bail!("Rust 工作区未完整加载（原生内部异常）：{diagnostic}");
+        }
+    }
+}
+
+/// 先检查 ProjectWorkspace 的可降级错误，再交给原生 loader 建立数据库并检查模块。
+fn load_native(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase, Vfs)> {
     let mut config = policy.cargo_config()?;
     ensure!(
         manifest
@@ -162,43 +190,146 @@ pub(super) fn load(manifest: &Path, policy: &LoadPolicy) -> Result<(RootDatabase
     Ok((database, vfs))
 }
 
-/// 上游会丢弃解码和读取错误；只校验原生 VFS 源码及原生模块解析给出的候选。
+/// 上游会丢弃读取错误；沿原生 crate 与 block 模块图检查活动声明的源码候选。
 fn ensure_sources_complete(database: &RootDatabase, vfs: &Vfs) -> Result<()> {
-    // 解码失败的文件仍在 VFS 中，却没有 FileText；求 DefMap 前必须先拒绝，避免 panic。
-    for (_, path) in vfs.iter() {
-        if let Some(path) = path.as_path()
-            && path.extension() == Some("rs")
-        {
-            std::fs::read_to_string(path)
-                .with_context(|| format!("Rust 上下文源码未完整加载：{path}"))?;
+    // 读取/遍历失败的文件不在 VFS 中，使用原生 cfg、#[path] 与嵌套目录解析结果定位。
+    let mut maps: Vec<_> = base_db::all_crates(database)
+        .iter()
+        .map(|&krate| crate_def_map(database, krate))
+        .collect();
+    let mut definitions = Vec::new();
+    let mut stores = Vec::new();
+    let mut checked_stores = HashSet::new();
+    let mut checked_blocks = HashSet::new();
+    loop {
+        if let Some(map) = maps.pop() {
+            ensure_module_candidates_complete(database, vfs, map)?;
+            for (_, module) in map.modules() {
+                definitions.extend(module.scope.declarations());
+                definitions.extend(module.scope.unnamed_consts().map(ModuleDefId::from));
+                for implementation in module.scope.impls() {
+                    stores.push(implementation.into());
+                    definitions.extend(
+                        implementation
+                            .impl_items(database)
+                            .items
+                            .iter()
+                            .map(|&(_, item)| ModuleDefId::from(item)),
+                    );
+                }
+            }
+        } else if let Some(definition) = definitions.pop() {
+            queue_definition_stores(database, definition, &mut definitions, &mut stores);
+        } else if let Some(owner) = stores.pop() {
+            if checked_stores.insert(owner) {
+                for (block, map) in ExpressionStore::of(database, owner).blocks(database) {
+                    if checked_blocks.insert(block) {
+                        maps.push(map);
+                    }
+                }
+            }
+        } else {
+            break;
         }
     }
-    // 读取/遍历失败的文件不在 VFS 中，使用原生 cfg、#[path] 与嵌套目录解析结果定位。
-    for &krate in base_db::all_crates(database).iter() {
-        for diagnostic in crate_def_map(database, krate).diagnostics() {
-            let DefDiagnosticKind::UnresolvedModule { ast, candidates } = &diagnostic.kind else {
-                continue;
-            };
-            let anchor = ast
-                .file_id
-                .original_file_respecting_includes(database)
-                .file_id(database);
-            let directory = vfs
-                .file_path(anchor)
-                .parent()
-                .context("未解析模块的源码没有父目录")?;
-            for candidate in candidates {
-                let candidate = directory.join(candidate).context("模块候选路径不可用")?;
-                let path = candidate.as_path().context("模块候选没有真实源码路径")?;
-                match std::fs::read_to_string(path) {
-                    // 真正缺失的模块属于项目诊断；现有源码被 loader 漏掉才是加载错误。
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(error)
-                            .with_context(|| format!("Rust 模块源码未完整加载：{path}"));
-                    }
-                    Ok(_) => bail!("Rust 模块源码未完整加载到 VFS：{path}"),
+    Ok(())
+}
+
+/// 沿原生声明取得 body、签名和字段中的块，关联项和块内嵌套声明都继续检查。
+fn queue_definition_stores(
+    database: &RootDatabase,
+    definition: ModuleDefId,
+    definitions: &mut Vec<ModuleDefId>,
+    stores: &mut Vec<ExpressionStoreOwnerId>,
+) {
+    match definition {
+        ModuleDefId::FunctionId(id) => {
+            stores.extend([
+                ExpressionStoreOwnerId::Signature(id.into()),
+                ExpressionStoreOwnerId::Body(id.into()),
+            ]);
+        }
+        ModuleDefId::ConstId(id) => {
+            stores.extend([
+                ExpressionStoreOwnerId::Signature(id.into()),
+                ExpressionStoreOwnerId::Body(id.into()),
+            ]);
+        }
+        ModuleDefId::StaticId(id) => {
+            stores.extend([
+                ExpressionStoreOwnerId::Signature(id.into()),
+                ExpressionStoreOwnerId::Body(id.into()),
+            ]);
+        }
+        ModuleDefId::EnumVariantId(id) => {
+            stores.extend([
+                ExpressionStoreOwnerId::VariantFields(id.into()),
+                ExpressionStoreOwnerId::Body(id.into()),
+            ]);
+        }
+        ModuleDefId::AdtId(AdtId::EnumId(id)) => {
+            stores.push(GenericDefId::from(id).into());
+            definitions.extend(
+                id.enum_variants(database)
+                    .variants
+                    .values()
+                    .map(|&(variant, _)| ModuleDefId::from(variant)),
+            );
+        }
+        ModuleDefId::AdtId(AdtId::StructId(id)) => {
+            stores.extend([
+                ExpressionStoreOwnerId::Signature(id.into()),
+                ExpressionStoreOwnerId::VariantFields(id.into()),
+            ]);
+        }
+        ModuleDefId::AdtId(AdtId::UnionId(id)) => {
+            stores.extend([
+                ExpressionStoreOwnerId::Signature(id.into()),
+                ExpressionStoreOwnerId::VariantFields(id.into()),
+            ]);
+        }
+        ModuleDefId::TraitId(id) => {
+            stores.push(GenericDefId::from(id).into());
+            definitions.extend(
+                id.trait_items(database)
+                    .items
+                    .iter()
+                    .map(|&(_, item)| ModuleDefId::from(item)),
+            );
+        }
+        ModuleDefId::TypeAliasId(id) => stores.push(GenericDefId::from(id).into()),
+        ModuleDefId::ModuleId(_) | ModuleDefId::MacroId(_) | ModuleDefId::BuiltinType(_) => {}
+    }
+}
+
+/// crate 与 block 的 DefMap 使用相同候选检查，真正缺失模块仍保留为项目诊断。
+fn ensure_module_candidates_complete(
+    database: &RootDatabase,
+    vfs: &Vfs,
+    map: &DefMap,
+) -> Result<()> {
+    for diagnostic in map.diagnostics() {
+        let DefDiagnosticKind::UnresolvedModule { ast, candidates } = &diagnostic.kind else {
+            continue;
+        };
+        let anchor = ast
+            .file_id
+            .original_file_respecting_includes(database)
+            .file_id(database);
+        let directory = vfs
+            .file_path(anchor)
+            .parent()
+            .context("未解析模块的源码没有父目录")?;
+        for candidate in candidates {
+            let candidate = directory.join(candidate).context("模块候选路径不可用")?;
+            let path = candidate.as_path().context("模块候选没有真实源码路径")?;
+            match std::fs::read_to_string(path) {
+                // 真正缺失的模块属于项目诊断；现有源码被 loader 漏掉才是加载错误。
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| format!("Rust 模块源码未完整加载：{path}"));
                 }
+                Ok(_) => bail!("Rust 模块源码未完整加载到 VFS：{path}"),
             }
         }
     }

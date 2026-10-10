@@ -29,10 +29,60 @@ fn invalid_utf8_in_declared_module_is_observable() {
     };
     let message = format!("{error:#}");
     assert!(
-        message.contains("bad.rs") && message.contains("未完整加载"),
+        message.contains("未完整加载") && message.contains("file text"),
         "{message}"
     );
     support::assert_unchanged(root.path(), &before);
+}
+
+/// #[path] 可以引用其他原生 VFS 文本扩展，块遍历不能因漏解码输入触发上游 panic。
+#[test]
+fn invalid_utf8_in_block_module_with_text_extension_is_observable() {
+    let root = support::fixture();
+    std::fs::write(
+        root.path().join("src/lib.rs"),
+        "pub fn run() { #[path=\"bad.md\"] mod bad; }",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("src/bad.md"), [0xff, 0xfe]).unwrap();
+    let before = support::snapshot(root.path());
+    let error = match RustProject::load(
+        &root.path().join("Cargo.toml"),
+        &LoadPolicy::repository_only(),
+    ) {
+        Ok(_) => panic!("块内模块源码解码失败不能变成部分加载成功"),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("未完整加载") && message.contains("file text"),
+        "{message}"
+    );
+    support::assert_unchanged(root.path(), &before);
+}
+
+/// 同一路径的二进制资源可用于 include_bytes!，不能因为扩展名被当作 Rust 文本拒绝。
+#[test]
+fn binary_resource_is_not_misclassified_as_module_source() {
+    for extension in ["md", "rs", "bin"] {
+        let root = support::fixture();
+        let source = format!("pub fn run() {{ let bytes = include_bytes!(\"bad.{extension}\"); }}");
+        std::fs::write(root.path().join("src/lib.rs"), &source).unwrap();
+        std::fs::write(
+            root.path().join(format!("src/bad.{extension}")),
+            [0xff, 0xfe],
+        )
+        .unwrap();
+        let before = support::snapshot(root.path());
+        let project = RustProject::load(
+            &root.path().join("Cargo.toml"),
+            &LoadPolicy::repository_only(),
+        )
+        .unwrap();
+        let file = project.file_id(&root.path().join("src/lib.rs")).unwrap();
+        assert_eq!(project.source(file).unwrap(), source);
+        support::assert_unchanged(root.path(), &before);
+    }
 }
 
 /// 不可读取的模块路径不在 VFS 中，也必须由原生模块候选定位并报告错误。
@@ -58,13 +108,53 @@ fn unreadable_declared_module_is_observable() {
     support::assert_unchanged(root.path(), &before);
 }
 
+/// 函数内模块拥有独立 Block DefMap，读取失败也必须在接受数据库前报告。
+#[test]
+fn unreadable_block_local_module_is_observable() {
+    // 不只函数：原生 ExpressionStore 也持有闭包、关联项、常量和签名中的块。
+    for source in [
+        "pub fn run() { #[path=\"bad.rs\"] mod bad; }",
+        "pub fn run() { fn nested() { #[path=\"bad.rs\"] mod bad; } }",
+        "pub fn run() { let closure = || { #[path=\"bad.rs\"] mod bad; }; }",
+        "struct S; impl S { fn run() { #[path=\"bad.rs\"] mod bad; } }",
+        "trait T { fn run() { #[path=\"bad.rs\"] mod bad; } }",
+        "struct S; impl S { const VALUE: () = { #[path=\"bad.rs\"] mod bad; }; }",
+        "static VALUE: () = { #[path=\"bad.rs\"] mod bad; };",
+        "enum E { A = { #[path=\"bad.rs\"] mod bad; 0 } }",
+        "type Alias = [u8; { #[path=\"bad.rs\"] mod bad; 0 }];",
+        "struct S { field: [u8; { #[path=\"bad.rs\"] mod bad; 0 }] }",
+        "macro_rules! declare { () => { #[path=\"bad.rs\"] mod bad; }; } fn run() { declare!(); }",
+    ] {
+        let root = support::fixture();
+        std::fs::write(root.path().join("src/lib.rs"), source).unwrap();
+        std::fs::create_dir(root.path().join("src/bad.rs")).unwrap();
+        let before = support::snapshot(root.path());
+        let error = match RustProject::load(
+            &root.path().join("Cargo.toml"),
+            &LoadPolicy::repository_only(),
+        ) {
+            Ok(_) => panic!("块内模块的读取失败不能变成部分加载成功：{source}"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("bad.rs") && message.contains("未完整加载"),
+            "{source}: {message}"
+        );
+        support::assert_unchanged(root.path(), &before);
+    }
+}
+
 /// 缺失或 cfg 排除的模块仍是项目诊断，Cargo 排除目录中的无效文件不扩大加载范围。
 #[test]
 fn source_validation_preserves_native_scope_and_missing_module_diagnostics() {
     let root = support::fixture();
     std::fs::write(
         root.path().join("src/lib.rs"),
-        "mod missing;\n#[cfg(any())] mod inactive;\n",
+        "mod missing;\n#[cfg(any())] mod inactive;\n\
+        fn run() { #[path=\"missing_block.rs\"] mod missing_block;\n\
+        #[cfg(any())] #[path=\"inactive.rs\"] mod inactive_block; }\n\
+        #[cfg(any())] fn inactive_body() { #[path=\"inactive.rs\"] mod inactive_block; }\n",
     )
     .unwrap();
     std::fs::create_dir(root.path().join("src/inactive.rs")).unwrap();
