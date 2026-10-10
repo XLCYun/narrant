@@ -15,3 +15,41 @@ fn relative_paths_cannot_escape_pack() {
         assert!(inside(root.path(), path).is_err(), "{path}");
     }
 }
+
+/// 仅仓库 Rust 的新政策不能顺带放松已迁移四语言的标准声明要求。
+#[test]
+fn existing_factories_still_require_target_declarations() {
+    for &id in PackId::NATIVE_MIGRATED {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for entry in id.required(if cfg!(windows) {
+            "x86_64-pc-windows-msvc"
+        } else {
+            "aarch64-apple-darwin"
+        }) {
+            let file = root.join(entry);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, "").unwrap();
+        }
+        if id == PackId::Java {
+            fs::create_dir_all(root.join("runtime/helper/lib")).unwrap();
+        }
+        fs::write(
+            root.join("control/native.json"),
+            r#"{"schema_version":1,"helper_version":"0.1.0","platforms":[]}"#,
+        )
+        .unwrap();
+        let error = from_pack(id, root).err().expect("不能缺少目标标准库");
+        assert!(
+            error.to_string().contains("target_unavailable"),
+            "{id:?}: {error}"
+        );
+        for pending in [PackId::Rust, PackId::Python, PackId::TypeScriptJavascript] {
+            assert!(from_pack(pending, root)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("不是原生语言支持包"));
+        }
+    }
+}

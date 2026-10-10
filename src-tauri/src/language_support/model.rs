@@ -17,6 +17,9 @@ pub(crate) enum PackId {
 }
 
 impl PackId {
+    /// 只有已接通生产工厂的语言才能进入真实 Native 支持包验收。
+    pub const NATIVE_MIGRATED: &'static [Self] = &[Self::Java, Self::Go, Self::Csharp, Self::CCpp];
+
     /// 稳定标识同时用于清单和应用拥有的相对目录。
     pub fn slug(self) -> &'static str {
         match self {

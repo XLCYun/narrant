@@ -1,3 +1,4 @@
+import { migratedNativePacks } from './native-migration.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -5,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const nativeIds = ['java', 'go', 'csharp', 'c-cpp'];
+const nativeIds = Object.keys(migratedNativePacks);
 
 /** 只复制自己构建的工具和批准的 SDK 声明，展开 SDK 内部链接，拒绝外向链接。 */
 export async function copyToolTree(source, destination) {

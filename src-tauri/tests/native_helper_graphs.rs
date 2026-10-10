@@ -1009,13 +1009,18 @@ fn csharp_real_target_framework_isolation_and_union() {
     }
 }
 
-/// 完整验收调用必须同时提供四个固定 helper，Clang 覆盖 C 与 C++ 两种语言模式。
+/// 完整验收调用必须提供目录中全部已迁移 helper，Clang 覆盖 C 与 C++ 两种模式。
 #[test]
-#[ignore = "require-real-tools: NARRANT_NATIVE_HELPERS_CONFIG 指向四个真实 helper 和固定目标平台"]
+#[ignore = "require-real-tools: NARRANT_NATIVE_HELPERS_CONFIG 指向全部已迁移真实 helper 和固定目标平台"]
 fn all_required_helpers_configured() {
     let configs = config();
-    for key in ["go", "java", "csharp", "clang"] {
-        assert!(configs.contains_key(key), "真实 helper 配置缺少 {key}");
+    let catalog: serde_json::Value =
+        serde_json::from_str(include_str!("../../resources/language-support-packs.json")).unwrap();
+    for definition in catalog["packs"].as_object().unwrap().values() {
+        if let Some(helper) = definition["helperId"].as_str() {
+            let key = helper.strip_prefix("narrant-").expect("固定 helper 名称");
+            assert!(configs.contains_key(key), "真实 helper 配置缺少 {key}");
+        }
     }
 }
 
@@ -1043,13 +1048,13 @@ fn csharp_real_helper_graph_and_diff() {
 /// 真实 Clang C17 后端经 Host 构图和 diff 的验收。
 #[test]
 #[ignore = "require-real-tools: 固定 Clang helper 和目标 resource/headers"]
-fn c_real_helper_graph_and_diff() {
+fn clang_c_real_helper_graph_and_diff() {
     exercise(Mode::C);
 }
 
 /// 真实 Clang C++20 后端经 Host 构图和 diff 的验收。
 #[test]
 #[ignore = "require-real-tools: 固定 Clang helper 和目标 resource/headers"]
-fn cpp_real_helper_graph_and_diff() {
+fn clang_cpp_real_helper_graph_and_diff() {
     exercise(Mode::Cpp);
 }

@@ -3,7 +3,10 @@
 mod graph;
 mod input;
 mod process;
+mod profiles;
 mod protocol;
+
+pub use profiles::NativeProfile;
 
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
@@ -33,7 +36,7 @@ pub struct HelperIdentity {
     pub profile: String,
 }
 
-/// 已由支持包入口验证来源的目标声明目录；不是自动发现宿主 SDK 的入口。
+/// 已验证的目标声明授权锚点；内嵌声明使用 helper 安装根，不代表磁盘源码目录。
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Platform {
     pub id: String,
@@ -79,8 +82,27 @@ pub struct NativeLanguageAnalyzer {
 }
 
 impl NativeLanguageAnalyzer {
-    /// 接受受信支持包命令和已批准目标 catalog，不进行环境探测或依赖安装。
-    pub fn new(command: HelperCommand, identity: HelperIdentity, platforms: Vec<Platform>) -> Self {
+    /// 接受受信命令与目标 catalog；Rust 只快照固定工具链/网络变量，不安装依赖。
+    pub fn new(
+        mut command: HelperCommand,
+        identity: HelperIdentity,
+        platforms: Vec<Platform>,
+    ) -> Self {
+        if let Some(
+            profile @ (NativeProfile::RustRepository
+            | NativeProfile::RustStandardLibrary
+            | NativeProfile::RustAllDependencies),
+        ) = NativeProfile::parse(&identity.profile)
+        {
+            command
+                .environment
+                .extend(profiles::rust_environment(profile, |key| {
+                    std::env::var_os(key)
+                }));
+            command
+                .environment
+                .remove(std::ffi::OsStr::new("RUSTUP_TOOLCHAIN"));
+        }
         Self {
             command,
             identity,

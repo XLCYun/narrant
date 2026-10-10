@@ -163,3 +163,47 @@ macOS ARM64 与 Windows x64 均需真实工具证据。公共进程模块承担�
 不凭 API 直连推断性能一定提升。遵守仓库 Cargo 全局锁和聚焦验证节奏，不手动触发 quality-gate。
 
 分步实施见 [0025a](0025a-existing-native-helper-implementation-plan.md)。
+
+## 公共接入契约（Task 3）
+
+本节定义迁移 helper 的接入接口，不代表 Rust、TS/JS 或 Python 已完成生产迁移。
+继续使用 `narrant.native-analyzer/1`，消息字段、严格重复键检查和 completed DTO 不变。
+新 profile 由新 helper 在 ready 中明确宣告；旧四套 helper 的请求与图校验保持原契约。
+
+| profile | 标准声明 catalog | 政策 |
+| --- | --- | --- |
+| `rust-repository-v1` | 空 | 仅仓库、离线；仍需现有 Cargo/rustc，不要求 rust-src |
+| `rust-standard-library-v1` | `rust-standard-library` | 仓库与项目工具链标准库、离线 |
+| `rust-all-dependencies-v1` | `rust-standard-library` | 全部依赖，沿用用户网络政策 |
+| `typescript-static-v1` | 三个 `typescript-declarations` | 仓库与既有 TypeScript、Node、undici 标准声明 |
+| `python-static-v1` | 一个 `python-embedded-stdlib` | 仓库与同源 ty_vendored 内嵌声明，无解释器或环境发现 |
+
+Rust 标准声明平台 root 为已发现的项目 sysroot，metadata 仅含 `rust_src`：
+相对该 root 的标准源码目录，并校验 `core/src/lib.rs` 与 `std/src/lib.rs` 存在且不逃逸。
+项目工具链发现仍需按本侧 manifest 目录和 rustup 覆盖规则运行；helper 构建版本不是项目目标版本。
+Host 为 Rust profile 固定快照 PATH、HOME/USERPROFILE、CARGO_HOME、RUSTUP_HOME 和明确的 Cargo
+网络、代理及证书变量；不继承 RUSTUP_TOOLCHAIN、编译器包装器或编译参数。
+前两档强制 `CARGO_NET_OFFLINE=true`，全部依赖保留用户已有值；始终
+`RUSTUP_AUTO_INSTALL=0`、`CARGO_CACHE_RUSTC_INFO=0`。原生 loader 仍负责禁用 build scripts
+和过程宏，环境白名单不能代替加载政策。
+
+TS 平台 metadata 仅含 `package`，必须恰好各有一个 `typescript`、`@types/node` 和
+`undici-types`；root 分别为实际声明目录，检查 `lib.d.ts` 或 `index.d.ts` 的真实出处。
+平台 version 表示声明包版本，目标 JS/TS 配置继续由 helper 从固定侧读取。
+
+Python 平台 root 是受信 helper 安装根，metadata 仅含 40 位十六进制 `source_revision`，
+version 为内嵌声明所属引擎版本；平台版本与 Python 3.7–3.14 的项目目标不同。
+`stdlib/...` 是 core 的虚拟相对来源，不要求在 root 中存在对应文件，也不引入外部 typeshed SDK。
+只有 Python profile 允许不同词法选集路径指向同一仓内物理文件；重复词法路径和任何仓外链接
+仍失败。coverage 和 origin 继续使用词法路径，从而保留 `.py/.pyi` 和内部目录链接身份。
+
+公共 Native 应用回调携带既有类型化 Rust 依赖 scope，空语言组仍不启动 helper，
+文件级 `include_tests` 仍传给同一次分析请求。生产工厂和支持包版本由各语言后续验收任务启用。
+`scripts/build-migrating-native-helper.mjs <language> <staging-directory>` 提供固定源码的暂存
+构建入口；Rust/Python 必须已有 `narrant-rust`/`narrant-python` 协议 binary，TS 必须已有
+`native-helpers/typescript/main.mjs`。只有 core 的 crate 会明确失败，不生成正式支持包。
+
+已迁移集合由 `scripts/native-migration.mjs` 和应用 `PackId::NATIVE_MIGRATED` 显式记录。
+双平台 workflow 的 language 选择仅接受该集合；聚焦运行跳过旧服务器构建矩阵和无关 SDK，
+保留所选 helper 自身、公共进程/Host、真实安装、应用接入及图/diff 验收。
+`all` 保留最终全语言门禁与 Windows 旧 LSP 生命周期边界；未完成语言不会以空跑取得绿灯。

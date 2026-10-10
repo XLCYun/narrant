@@ -1,3 +1,4 @@
+import { migratedNativePacks } from './native-migration.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -44,7 +45,7 @@ export async function packageDirectory(identity, payload, output) {
   }, files.map(file => file.path));
   const bytes = await fs.readFile(path.join(destination, 'pack.tar.gz'));
   const manifest = { schemaVersion: 1, ...identity, archiveSize: bytes.length, archiveSha256: createHash('sha256').update(bytes).digest('hex'), files };
-  await fs.writeFile(path.join(destination, 'manifest.json'), `${JSON.stringify(manifest, null, ['java', 'go', 'csharp', 'c-cpp'].includes(identity.id) ? undefined : 2)}\n`);
+  await fs.writeFile(path.join(destination, 'manifest.json'), `${JSON.stringify(manifest, null, Object.hasOwn(migratedNativePacks, identity.id) ? undefined : 2)}\n`);
   return destination;
 }
 
@@ -71,7 +72,7 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
   const definition = catalog.packs[id];
   const identity = { id, version: definition?.version, target };
   validateIdentity(identity);
-  if (['java', 'go', 'csharp', 'c-cpp'].includes(id)) {
+  if (Object.hasOwn(migratedNativePacks, id)) {
     const { buildNativePack } = await import('./native-language-support-packs.mjs');
     return buildNativePack({ id, target, output, definition, packageDirectory });
   }

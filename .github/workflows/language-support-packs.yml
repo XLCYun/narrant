@@ -11,6 +11,8 @@ on:
       - scripts/native-xz-extraction.mjs
       - scripts/tests/native-xz-extraction.test.mjs
       - scripts/verify-native-analyzers.mjs
+      - scripts/native-migration.mjs
+      - scripts/build-migrating-native-helper.mjs
       - scripts/tests/native-analyzer-ci.test.mjs
       - scripts/run-windows-process-probe.mjs
       - scripts/tests/run-windows-process-probe.test.mjs
@@ -44,6 +46,11 @@ on:
         type: choice
         options: [full, windows-lifecycle]
         default: full
+      language:
+        description: Completed Native helper to validate on both platforms (all keeps final gate)
+        type: choice
+        options: [all, java, go, csharp, c-cpp]
+        default: all
       publish:
         description: Publish validated packs to the immutable OSS prefix
         type: boolean
@@ -76,7 +83,7 @@ jobs:
         run: node scripts/run-windows-lifecycle-tests.mjs
 
   build:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation_scope != 'windows-lifecycle'
+    if: github.event_name != 'workflow_dispatch' || (inputs.validation_scope != 'windows-lifecycle' && inputs.language == 'all')
     strategy:
       fail-fast: false
       matrix:
@@ -154,9 +161,9 @@ jobs:
       - name: Test native validation and pack scripts
         run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/run-windows-process-probe.test.mjs scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
       - name: Provision checksum-verified private developer toolchains
-        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains"
+        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
       - name: Select exact macOS target declarations
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
         shell: bash
         run: |
           set -euo pipefail
@@ -166,7 +173,7 @@ jobs:
           echo 'NARRANT_MACOS_SDK_VERSION=15.5' >> "$GITHUB_ENV"
           echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
       - name: Select isolated Windows SDK and MSVC declaration roots
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -191,7 +198,7 @@ jobs:
           key: all-native-${{ matrix.target }}
           cache-on-failure: true
       - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
-        run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build
+        run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -203,7 +210,7 @@ jobs:
           if-no-files-found: warn
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.publish && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.language == 'all' && inputs.publish && github.ref == 'refs/heads/main'
     needs: [build, native-analyzers]
     runs-on: ubuntu-24.04
     timeout-minutes: 20

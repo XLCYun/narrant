@@ -700,3 +700,6 @@ fn subprocess_bounds_blocked_stdin_writer() {
     #[cfg(unix)]
     assert_process_gone(&fixture.tools.join("pid"));
 }
+
+#[path = "migration.rs"]
+mod migration;

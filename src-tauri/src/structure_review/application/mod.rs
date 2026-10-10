@@ -60,7 +60,7 @@ struct LanguageAnalyzers {
     rust: Arc<AnalyzeGraph>,
     typescript: Arc<AnalyzeTypeScript>,
     python: Arc<AnalyzePython>,
-    native: BTreeMap<PackId, Arc<AnalyzePython>>,
+    native: BTreeMap<PackId, Arc<AnalyzeGraph>>,
 }
 
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
@@ -239,13 +239,13 @@ impl StructureReview {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
-            for id in [PackId::Java, PackId::Go, PackId::Csharp, PackId::CCpp] {
+            for &id in PackId::NATIVE_MIGRATED {
                 if let Some(root) = lease.path(id) {
                     let analyzer =
                         super::native_languages::from_pack(id, root).map_err(analysis_error)?;
                     analyzers.native.insert(
                         id,
-                        Arc::new(move |input, cancelled| {
+                        Arc::new(move |input, cancelled, _scope| {
                             analyzer.clone().with_cancellation(cancelled).analyze(input)
                         }),
                     );
@@ -473,6 +473,7 @@ fn analyze_side(
                                 options,
                             },
                             cancelled.clone(),
+                            dependency_scope,
                         )
                         .map_err(analysis_error)
                     })

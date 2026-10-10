@@ -141,3 +141,29 @@ test('Java and Go fixtures describe actual SDKs without a bundled target list', 
     assert.equal(catalog.packs.go.targetStandardLibrary, 'local-go-sdks');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+/** 候选入口固定且核心探针不能被当成完成的协议可执行文件。 */
+test('migration build entry rejects unfinished cores before creating an artifact', async () => {
+  const { migratingHelperEntry, buildMigratingNativeHelper } = await import('../build-migrating-native-helper.mjs');
+  assert.equal(migratingHelperEntry('rust', true).entry, 'bin/narrant-rust.exe');
+  assert.equal(migratingHelperEntry('python', false).binary, 'narrant-python');
+  assert.equal(migratingHelperEntry('typescript-javascript', false).entry, 'runtime/helper/main.mjs');
+  assert.throws(() => migratingHelperEntry('../project'), /Unknown/);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-migration-build-'));
+  try {
+    for (const id of ['rust', 'python']) await assert.rejects(buildMigratingNativeHelper(id, path.join(root, id)), /only a core proof/);
+    assert.deepEqual(await fs.readdir(root), []);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** 语言筛选依据已迁移集合，不为不相关语言下载工具或接受未实现的核心。 */
+test('migration toolchain selection is explicit and complete', async () => {
+  const { selectedNativePacks, selectedToolchainNames } = await import('../native-migration.mjs');
+  assert.deepEqual(selectedToolchainNames('go'), ['go', 'go-target']);
+  assert.deepEqual(selectedToolchainNames('java'), ['jdk25', 'jdk17', 'jdk8']);
+  assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
+  assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm']);
+  assert.equal(selectedToolchainNames().length, 9);
+  assert.deepEqual(selectedNativePacks(), ['java', 'go', 'csharp', 'c-cpp']);
+  for (const id of ['rust', 'python', 'typescript-javascript', 'none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
+});

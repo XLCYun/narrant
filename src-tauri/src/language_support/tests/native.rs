@@ -52,7 +52,7 @@ async fn unpublished_native_pack_reports_explicit_error() {
     packs.shutdown().await;
 }
 
-/// 本地构建的四种归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
+/// 所选已迁移归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
 #[tokio::test]
 #[ignore = "需要 NARRANT_NATIVE_PACKS 指向真实构建产物；显式执行且不得静默跳过缺包"]
 async fn real_native_packs_install_and_analyze_through_production_factory() {
@@ -68,12 +68,24 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
     let packs =
         LanguageSupportPacks::with_origin(root.path().into(), server.base_url(), target.into())
             .unwrap();
-    for id in [PackId::Go, PackId::Java, PackId::Csharp, PackId::CCpp] {
-        let artifact = artifacts.join(id.slug()).join("0.1.0").join(target);
+    let language = std::env::var("NARRANT_NATIVE_LANGUAGE").unwrap_or_else(|_| "all".into());
+    assert!(
+        language == "all"
+            || PackId::NATIVE_MIGRATED
+                .iter()
+                .any(|id| id.slug() == language),
+        "未完成或未知的 Native 迁移：{language}"
+    );
+    for &id in PackId::NATIVE_MIGRATED
+        .iter()
+        .filter(|id| language == "all" || id.slug() == language)
+    {
+        let version = &versions()[&id];
+        let artifact = artifacts.join(id.slug()).join(version).join(target);
         for name in ["manifest.json", "pack.tar.gz"] {
-            let bytes = fs::read(artifact.join(name)).expect("验收必须具备四种真实包");
+            let bytes = fs::read(artifact.join(name)).expect("验收必须具备所选真实支持包");
             server.mock(|when, then| {
-                when.path(format!("/{}/0.1.0/{target}/{name}", id.slug()));
+                when.path(format!("/{}/{version}/{target}/{name}", id.slug()));
                 then.body(bytes);
             });
         }
@@ -187,7 +199,7 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
             }
         }
-        assert!(packs.remove(id, "0.1.0").is_err());
+        assert!(packs.remove(id, version).is_err());
         drop(lease);
         // 已验证安装在未发布状态下仍可经生产源重新打开，且不需要再次下载。
         let reopened =
@@ -199,7 +211,7 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             .unwrap();
         drop(installed);
         reopened.shutdown().await;
-        packs.remove(id, "0.1.0").unwrap();
+        packs.remove(id, version).unwrap();
     }
     packs.shutdown().await;
 }

@@ -115,7 +115,7 @@ test('all four helpers and narrow absolute platform roots are mandatory', () => 
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 10);
+  assert.equal(commands.length, 11);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
@@ -136,7 +136,7 @@ test('shared process acceptance runs on both platforms with Windows LSP integrat
   const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');
   const macOS = verificationCommands(environment, 'darwin');
-  assert.equal(macOS.length, 9);
+  assert.equal(macOS.length, 10);
   for (const commands of [windows, macOS]) {
     const owners = commands.filter(command => command.args.includes(ownerFilter));
     assert.equal(owners.length, 1);
@@ -228,4 +228,33 @@ test('reference package verification checks SHA512 content', async () => {
     await fs.appendFile(archive, 'changed');
     await assert.rejects(verifyArchive(archive, entry), /Checksum mismatch/);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+// 聚焦验收仅要求本语言工具，但始终运行公共 Host、真实安装和 Review 接入。
+test('focused acceptance requires only the selected tools and keeps shared integration', () => {
+  const env = { NARRANT_GO_SDK: '/go', NARRANT_GO_TARGET_SDK: '/go-target' };
+  for (const platform of ['darwin', 'win32']) {
+    const commands = verificationCommands(env, platform, 'go');
+    assert.equal(commands.length, 7);
+    assert.ok(commands[0].executable.endsWith(platform === 'win32' ? 'go.exe' : 'go'));
+    const serialized = JSON.stringify(commands);
+    for (const required of ['child_process::', 'native_analyzer::', 'native_languages::', 'application::tests::native::', 'real_native_packs_install_and_analyze_through_production_factory', 'native_helper_graphs', 'go_']) assert.ok(serialized.includes(required), required);
+    assert.doesNotMatch(serialized, /lsp::|java\/tests|csharp\/tests|clang\/tests/);
+    assert.throws(() => verificationCommands({}, platform, 'go'), /Missing fixed toolchain/);
+    for (const id of ['rust', 'python', 'typescript-javascript', 'typo']) assert.throws(() => verificationCommands(env, platform, id), /not enabled/);
+  }
+  const config = { go: { executable: '/go/helper', args: [], trusted_roots: ['/go'], platforms: [{ id: 'go', kind: 'go-sdk', version: '1', root: '/sdk' }] } };
+  assert.equal(validateNativeConfiguration(config, 'darwin', 'go'), config);
+  assert.throws(() => validateNativeConfiguration({}, 'darwin', 'go'), /go/);
+});
+
+// 工作流层必须跳过整个旧服务器构建矩阵，不只是过滤测试名称。
+test('focused workflow skips legacy builds and unrelated declaration provisioning', () => {
+  assert.match(workflowSource, /options: \[all, java, go, csharp, c-cpp\]/);
+  const build = workflowSource.split('\n  build:')[1].split('\n  native-analyzers:')[0];
+  assert.match(build, /inputs\.language == 'all'/);
+  const native = workflowSource.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
+  assert.equal((native.match(/--language "\$\{\{ inputs.language \|\| 'all' \}\}"/g) ?? []).length, 2);
+  assert.equal((native.match(/inputs\.language == 'c-cpp'/g) ?? []).length, 2);
+  assert.match(workflowSource.split('\n  publish:')[1], /inputs\.language == 'all'/);
 });
