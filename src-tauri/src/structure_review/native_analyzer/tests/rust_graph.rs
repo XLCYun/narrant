@@ -1322,3 +1322,170 @@ fn rust_helper_cancellation_reaps_active_toolchain_probe() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// 旧语法断言通过真实 helper 与公共 Host 构图，diff 不绕过统一 CodeGraph 校验。
+fn syntax_graph(source: &str, include_tests: bool) -> CodeGraph {
+    let root = repository(source);
+    analyzer()
+        .analyze(&AnalysisInput {
+            repository_root: root.path().into(),
+            files: vec!["src/lib.rs".into()],
+            options: crate::structure_review::code_graph::AnalysisOptions { include_tests },
+        })
+        .unwrap()
+}
+
+/// 类型表达式中的嵌套声明独立比较，不连带修改字段或类型内容。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_nested_items_in_type_expressions() {
+    let before = syntax_graph("struct S { data: [u8; { const N: usize = 1; N }] }", false);
+    let after = syntax_graph("struct S { data: [u8; { const N: usize = 2; N }] }", false);
+    let diff = before.diff(&after).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(
+        after
+            .node(&diff.nodes[0].id)
+            .unwrap()
+            .data()
+            .name
+            .as_deref(),
+        Some("N")
+    );
+}
+
+/// 注释与排版不改变结构，字符串内有意义空白保持可见。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_preserves_literal_contents() {
+    let old = syntax_graph("fn f() -> &'static str { r#\"a // b\"# }", false);
+    let formatted = syntax_graph(
+        "// 😀\nfn /* 中 */ f ( ) -> & 'static str {\n r#\"a // b\"#\n }",
+        false,
+    );
+    assert!(old.diff(&formatted).unwrap().nodes.is_empty());
+    let changed = syntax_graph("fn f() -> &'static str { r#\"a  // b\"# }", false);
+    assert_eq!(old.diff(&changed).unwrap().nodes.len(), 1);
+}
+
+/// 成员重排不修改父内容，但闭包使用顺序改变仍归属父函数。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_preserves_usage_but_ignores_item_order() {
+    let before = "fn f() { fn a() {} const N: u8 = 1; let x = || 1; let y = || 2; choose(x, y); }";
+    let reordered = before.replace("fn a() {} const N: u8 = 1;", "const N: u8 = 1; fn a() {}");
+    assert!(syntax_graph(before, false)
+        .diff(&syntax_graph(&reordered, false))
+        .unwrap()
+        .nodes
+        .is_empty());
+    let after = syntax_graph(&before.replace("choose(x, y)", "choose(y, x)"), false);
+    let diff = syntax_graph(before, false).diff(&after).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(
+        after
+            .node(&diff.nodes[0].id)
+            .unwrap()
+            .data()
+            .name
+            .as_deref(),
+        Some("f")
+    );
+}
+
+/// 顶层宏实参编辑只修改宏调用，原生加载不把展开生成项加入图。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_top_level_macro_arguments() {
+    let old = syntax_graph(
+        "macro_rules! declare { ($n:ident) => { fn $n() {} }; } declare!(A);",
+        false,
+    );
+    let after = syntax_graph(
+        "macro_rules! declare { ($n:ident) => { fn $n() {} }; } declare!(B);",
+        false,
+    );
+    let diff = old.diff(&after).unwrap();
+    assert_eq!(diff.nodes.len(), 1, "{diff:?}");
+    assert_eq!(
+        after.node(&diff.nodes[0].id).unwrap().data().native_kind,
+        "macro_invocation"
+    );
+    let after_nodes = nodes(&after);
+    let crate_node = after_nodes
+        .values()
+        .find(|node| node.data().native_kind == "crate")
+        .unwrap();
+    assert_eq!(crate_node.data().contains.len(), 2);
+}
+
+/// 宏标点粘连参与比较，其他 token tree 空白不产生伪差异。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_macro_punctuation_jointness() {
+    let before = syntax_graph("m!(a >= b);", false);
+    let after = syntax_graph("m!(a > = b);", false);
+    assert_eq!(before.diff(&after).unwrap().nodes.len(), 1);
+    assert!(syntax_graph("m!([1,], {a},);", false)
+        .diff(&syntax_graph("m!( [ 1, ], { a }, );", false))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 通配导入下新增嵌套测试整体排除，父图与包含关系不产生变化。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_excludes_nested_tests_under_glob_imports() {
+    let before = "use scope::*; fn live() {}";
+    let after = "use scope::*; fn live() { #[test] fn checks() { #[cfg(test)] struct Fixture; } }";
+    assert!(syntax_graph(before, false)
+        .diff(&syntax_graph(after, false))
+        .unwrap()
+        .nodes
+        .is_empty());
+    assert!(!syntax_graph(before, true)
+        .diff(&syntax_graph(after, true))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 新增和编辑嵌套测试均不得修改过滤后的业务父函数内容或包含关系。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_syntax_diff_excludes_nested_test_edits() {
+    let before = "fn run() { live(); }";
+    let after = "fn run() { #[test] fn nested() { check(); } live(); }";
+    assert!(syntax_graph(before, false)
+        .diff(&syntax_graph(after, false))
+        .unwrap()
+        .nodes
+        .is_empty());
+    assert!(!syntax_graph(before, true)
+        .diff(&syntax_graph(after, true))
+        .unwrap()
+        .nodes
+        .is_empty());
+    assert!(syntax_graph(after, false)
+        .diff(&syntax_graph(&after.replace("check", "changed"), false))
+        .unwrap()
+        .nodes
+        .is_empty());
+}
+
+/// 原生语法失败仍由真实 helper 输出 error，生命周期控制不能把失败误报为取消。
+#[test]
+#[ignore = "需要实际 Rust helper，单独串行运行"]
+fn rust_helper_lifecycle_native_failure_remains_error() {
+    let root = repository("fn broken( {");
+    let error = analyzer()
+        .analyze(&AnalysisInput {
+            repository_root: root.path().into(),
+            files: vec!["src/lib.rs".into()],
+            options: Default::default(),
+        })
+        .unwrap_err();
+    assert!(!error.is_cancelled(), "{error}");
+    assert!(error.message.contains("无法解析"), "{error}");
+}

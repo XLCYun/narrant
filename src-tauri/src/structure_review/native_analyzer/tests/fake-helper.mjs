@@ -56,8 +56,12 @@ if (mode === 'startup_stderr_first') {
   let requested = false;
   lines.on('line', (line) => {
     if (requested) {
-      if (mode === 'cancel') {
+      if (['cancel', 'cancel_exit', 'cancel_exit_zero', 'cancel_failure', 'cancel_invalid'].includes(mode)) {
         fs.writeFileSync(path.join(control, 'cancel'), line);
+        if (mode === 'cancel_exit') process.exit(9);
+        if (mode === 'cancel_exit_zero') process.exit(0);
+        if (mode === 'cancel_invalid') { fs.writeSync(1, 'invalid-json\n'); process.exit(9); }
+        if (mode === 'cancel_failure') { output('result'); process.exit(9); }
         complete();
       }
       return;
@@ -75,7 +79,7 @@ if (mode === 'startup_stderr_first') {
         scratch_matches_request: ['TMPDIR', 'TMP', 'TEMP'].every(key => process.env[key] === request.environment.scratch_root),
       }));
     }
-    if (mode === 'stall' || mode === 'cancel') return;
+    if (mode === 'stall' || mode.startsWith('cancel')) return;
     if (mode === 'stderr' || mode === 'stderr_ok') fs.writeSync(2, Buffer.alloc(mode === 'stderr' ? 524288 : 131072));
     if (mode === 'eof') process.exit(0);
     if (mode === 'half') { fs.writeSync(1, '{"protocol":'); process.exit(0); }
@@ -94,6 +98,10 @@ if (mode === 'startup_stderr_first') {
         // Windows 先让测试固定进程 HANDLE，再允许父进程退出，排除 PID 重用。
         if (process.platform === 'win32' && !fs.existsSync(path.join(control, 'observed'))) return;
         clearInterval(ready);
+        if (mode === 'cancel_exit') process.exit(9);
+        if (mode === 'cancel_exit_zero') process.exit(0);
+        if (mode === 'cancel_invalid') { fs.writeSync(1, 'invalid-json\n'); process.exit(9); }
+        if (mode === 'cancel_failure') { output('result'); process.exit(9); }
         complete();
       }, 10);
       return;

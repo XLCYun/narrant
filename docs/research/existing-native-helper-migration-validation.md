@@ -367,3 +367,28 @@ all-dependencies 约 45.1 秒。完整性检查会遍历标准库 crate/block De
 这些是 debug 单样本，不是优化支持包性能，也不可与旧 release 对比；后续 Rust 集成
 必须在同样本记录真实优化支持包耗时与峰值内存，完成 Windows、安装、Review 图/diff、
 生产取消和无下载/构建验收。详细聚焦测试命令、日志和自审见 ignored `task-5-report.md`。
+
+### Rust helper 阶段审查修复第 1 轮
+
+I1 修复终结前 stdin EOF 和运行中 cancel。helper 在 ready 前通过共享
+`CurrentProcessDomain` 确认/建立专属域，独立控制线程处理 cancel/EOF。原生 loader
+内部的阻塞命令无法协作取消时，直接终止自身域；不启动脱离外层 Host 的 worker。
+Unix 复用自有 ProcessGroup，直接启动也不会终止 shell/测试进程组；Windows 复用
+私有 Job 创建策略，将自身放入嵌套 Job，正常完成前解除 kill-on-close 以保留 exit 0。
+控制线程对 completed 写入锁的等待也有界，stdout 背压不能阻止 EOF 清理。
+
+公共 Host 对**已经记录取消**后的预期 EOF/退出映射为 cancelled；之前/随后已解码的
+真实 completed(error)、无效协议和真正读写错误仍优先，未取消时缺终结或异常退出仍为
+硬失败。未报告且恰与已发送 cancel 同时发生的原生崩溃无法仅从退出状态区分，此观察
+边界不被写成额外故障识别能力；没有新增私有退出码或协议标记。
+
+旧 executable 的真实运行中 EOF 测试先失败；修复后直接 executable 验证运行中
+cancel、stdin EOF 时 helper 与实际工具链探针后代自行结束，测试的失败后兜底清理
+不计为通过。正常 completed 不等 stdin EOF、stdout 背压 EOF 也有直接测试。
+公共 Host 实测两项 Rust 取消及实际原生错误分类；共享 subprocess 10 项和 Unix
+进程树三矩阵通过。Windows 当前域的真实嵌套/终止/正常退出仍属于后续平台 gate。
+
+I2 将旧语法/测试过滤的七项缺失断言接到真实 helper + 公共 CodeGraph.diff：字符串
+有意义空白、宏标点粘连、顶层宏实参、类型表达式中的独立嵌套声明、成员重排与闭包
+使用顺序、通配导入下新增嵌套测试、嵌套测试增改后的父内容/包含关系。七项全部通过，
+没有恢复旧 LSP 传输夹具。本轮未重跑无关的 18 个旧 Cargo 场景或 Host 全量。

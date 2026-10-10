@@ -84,8 +84,13 @@ helper 发送候选 DTO 与配置/选集/节点出处 evidence，最终校验由
 升级固定 rust-analyzer revision 时须复核多项目装载、`EditionedFileId` 解析和旧 Cargo
 metadata 补偿点，不复制上游 loader 或配置合并器。
 
-stdout 仅包含 ready 与唯一 completed 消息。分析忙碌时由公共 Host 的既有进程树所有权
-和有界终止处理取消；helper 不维持后台会话、watcher、构建脚本或宏进程。`scratch_root`
+stdout 正常终结仅包含 ready 与唯一 completed 消息。helper 在 ready 前复用共享
+进程设施建立自身专属域（Unix 保留/建立自己的进程组，Windows 使用自身嵌套 Job），
+独立控制线程持续等待严格 cancel 或 stdin EOF。阻塞的原生加载不能协作取消时，
+helper 主动终止自身及全部后代；不增加 worker 或脱离 Host 的隔离域。此分支不发送
+cancelled 帧，公共 Host 在已记录取消且没有已观察的真实失败时映射为取消，并保留
+既有整树退出屏障。正常 error/ok 仍发送唯一 completed 并 exit 0，不等待 stdin EOF。
+helper 不维持后台会话、watcher、构建脚本或宏进程。`scratch_root`
 仅为 Host 协议授权字段，临时锁使用系统 tempfile 生命周期并在正常退出时清理；强制终止
 与既有临时目录一样可能留下无项目副作用的系统临时文件。真实支持包优化构建的耗时、
 峰值内存、Windows 及安装/Review 验收仍由后续 Rust 集成阶段完成。

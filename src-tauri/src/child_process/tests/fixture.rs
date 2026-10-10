@@ -28,6 +28,7 @@ pub(crate) fn fixture_command(role: &str, directory: &Path) -> Command {
 /// 角色只协调创建与退出时序；实际回收全部由宿主的生产 ProcessTree/Job 执行。
 #[test]
 #[ignore = "仅由进程所有权测试作为子进程执行"]
+#[allow(clippy::zombie_processes)] // 故意不由夹具父进程等待；真实 ProcessTree 必须回收父退出后的后代。
 fn process_fixture() {
     let Ok(role) = std::env::var("NARRANT_PROCESS_ROLE") else {
         return;

@@ -116,3 +116,27 @@ impl Request {
         Ok(())
     }
 }
+
+/// 运行中仅接受严格的同请求 cancel；未知字段、重复字段和错误 ID 均为协议错误。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Cancel {
+    protocol: String,
+    #[serde(rename = "type")]
+    message_type: String,
+    id: String,
+}
+
+/// 控制读取独立于原生加载，不把错误 ID 或任意 JSON 当成有效取消。
+pub fn validate_cancel(line: &str, id: &str) -> Result<()> {
+    let cancel: Cancel = serde_json::from_str(line)?;
+    ensure!(
+        cancel.protocol == PROTOCOL && cancel.message_type == "cancel" && cancel.id == id,
+        "无效取消请求"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "tests/protocol.rs"]
+mod tests;

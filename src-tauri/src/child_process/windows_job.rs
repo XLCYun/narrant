@@ -29,7 +29,8 @@ use windows_sys::Win32::{
             JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
         },
         Threading::{
-            OpenThread, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED, THREAD_SUSPEND_RESUME,
+            GetCurrentProcess, OpenThread, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+            THREAD_SUSPEND_RESUME,
         },
     },
 };
@@ -66,7 +67,7 @@ impl WindowsJob {
     /// 挂起阶段完成准确 Job 所有权，所有调用方共用同一启动原语。
     fn spawn_suspended(command: &mut Command) -> io::Result<(SuspendedChild, Self)> {
         // SAFETY: 私有未命名 Job 不继承，不关联其他会话。
-        let handle = owned(unsafe { CreateJobObjectW(ptr::null(), ptr::null()) })?;
+        let handle = create_kill_on_close_job()?;
         let tracker = tracking::JobTracker::start(&handle)?;
         let job = Self {
             handle,
@@ -74,20 +75,6 @@ impl WindowsJob {
             #[cfg(test)]
             fail_before_termination: std::sync::atomic::AtomicBool::new(false),
         };
-        // SAFETY: Windows POD 可清零；只开启关闭时终止，不允许 breakaway。
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if unsafe {
-            SetInformationJobObject(
-                job.raw(),
-                JobObjectExtendedLimitInformation,
-                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
         command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
         let pending = SuspendedChild(Some(command.spawn()?));
         let child = pending.0.as_ref().expect("刚创建的挂起进程");
@@ -230,7 +217,7 @@ impl WindowsJob {
                 tracker
             }
             Err(TryLockError::WouldBlock) => {
-                return Err(io::Error::other("Native Job 清理已在执行"))
+                return Err(io::Error::other("Native Job 清理已在执行"));
             }
         };
         #[cfg(test)]
@@ -337,3 +324,82 @@ fn resume_initial_thread(pid: u32) -> io::Result<()> {
 #[cfg(test)]
 #[path = "tests/windows_job.rs"]
 pub(crate) mod tests;
+
+/// 共用私有 Job 创建与 kill-on-close 策略，不复制后代枚举或准确对象账本。
+fn create_kill_on_close_job() -> io::Result<OwnedHandle> {
+    // SAFETY: 私有未命名、不可继承的 Job，不允许后代 breakaway。
+    let handle = owned(unsafe { CreateJobObjectW(ptr::null(), ptr::null()) })?;
+    // SAFETY: Windows POD 可清零；只开启关闭时终止，不允许 breakaway。
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if unsafe {
+        SetInformationJobObject(
+            handle.as_raw_handle(),
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(handle)
+}
+
+/// 一次性 helper 自身的嵌套 Job；外层 Host 仍持有全部后代的准确退出屏障。
+#[allow(dead_code)]
+pub(crate) struct CurrentProcessJob(OwnedHandle);
+
+#[allow(dead_code)]
+impl CurrentProcessJob {
+    /// 在原生工作前把当前进程放入自身 Job，保留已有外层 Job 归属。
+    pub(crate) fn attach() -> io::Result<Self> {
+        let handle = create_kill_on_close_job()?;
+        // SAFETY: GetCurrentProcess 的伪句柄只借用；新 Job 没有 breakaway 标志。
+        if unsafe { AssignProcessToJobObject(handle.as_raw_handle(), GetCurrentProcess()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(handle))
+    }
+
+    /// 不等待自身退出；活着的外层 Host 负责原有准确对象完成屏障。
+    pub(crate) fn terminate(&self) -> io::Result<()> {
+        // SAFETY: 仅终止私有、已包含自身的 Job 及其后代。
+        if unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// 所有原生工作结束后解除关闭自杀策略，随后自然退出保留 exit 0。
+    pub(crate) fn completed(&self) -> io::Result<()> {
+        // SAFETY: POD 输出结构宽度匹配；只更改本 Job 的 kill-on-close 标志。
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        let bytes = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        if unsafe {
+            QueryInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                bytes,
+                ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        limits.BasicLimitInformation.LimitFlags &= !JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if unsafe {
+            SetInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                bytes,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
