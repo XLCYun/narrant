@@ -2,7 +2,7 @@
 
 日期：2026-09-14。本文只读核查当前 Rust 实现、公共图和应用接点，整理后续实现步骤与行为验收；没有实现 TS 适配器、编译、创建 Issue 或运行下列验收。
 
-产品范围采用 [设计草案的确认记录](typescript-code-graph-plan.md#本轮已确认的范围)，Q5–Q8 不再作为待选项。后端探针及其实际覆盖范围由 [LSP 验证报告](typescript-lsp-validation.md) 记录；本文的“待验证”指生产集成验收，不能把已通过的小样本扩展成通用实现已完成。术语沿用 [CONTEXT.md](../../CONTEXT.md)。
+产品范围采用 [设计草案的确认记录](typescript-code-graph-plan.md#本轮已确认的范围)，Q5–Q8 不再作为待选项。后端探针及其实际覆盖范围由 [LSP 验证报告](typescript-lsp-validation.md) 记录；本文的“待验证”指生产集成验收，不能把已通过的小样本扩展成通用实现已完成。术语沿用 [GLOSSARY.md](../../GLOSSARY.md)。
 
 ## 已接受的边界
 

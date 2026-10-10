@@ -199,7 +199,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 错误按范围反馈：短暂且无需立即处理的错误使用 shadcn Sonner；输入错误就地展示；阻断内容区域的错误在区域内展示；风险确认和用户选择使用 Dialog。导航失败若没有合适的就地承载区域，使用 Sonner 错误通知，且不改变当前主视图或选中态。
 - 加载按范围反馈：首页和首次列表使用 Skeleton；后台列表刷新保留内容并显示局部进度；Review Snapshot 导航在触发入口显示 Loading 图标；File Change 读取只占用 Diff 区域并同时显示 Loading 图标与 Skeleton；Snapshot 刷新保留旧 Diff。Loading 图标立即出现且不设置人为最短展示时长；可见文案或可访问名称表达正在执行的操作，图标本身不重复朗读。
 - 快速操作避免闪烁；只有持续约一秒的操作才增加文字说明。正常成功操作不普遍使用 Toast。
-- UI 以中文为主，保留 Pull Request、Diff、Base、Head 和 GitHub 等约定术语。代码和领域文档继续使用 `CONTEXT.md` 的规范英文术语。
+- UI 以中文为主，保留 Pull Request、Diff、Base、Head 和 GitHub 等约定术语。代码和领域文档继续使用 `GLOSSARY.md` 的规范英文术语。
 - 用户界面中的 Review、Repository、Workspace Trust 和 Review Snapshot 分别显示为“审核”“仓库”“仓库信任”和“审核版本”。
 - 引入 `i18next` 与 `react-i18next`。第一阶段支持 `zh-CN` 和 `en`，以 `zh-CN` 作为回退语言。
 - 语言优先级为已保存的显式偏好、Tauri 系统 locale、`zh-CN` 回退。第一阶段不提供手动语言切换入口，但基础设施允许后续增加。
@@ -272,5 +272,5 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - UI 重构应优先建立应用框架、i18n 与首页垂直切片，再迁移 Repository 概览和 Review 阅读器，避免在一个超大改动中同时替换所有界面。
 - 设计稿和实现不得把 Review Workspace 表现为用户可编辑的普通 checkout。
 - 用户生成的标题、分支名、路径、Pull Request 描述和 Git/Rust 技术详情保持原文，不属于翻译资源。
-- 本规格没有形成新的领域术语，也不修改根目录 `CONTEXT.md`。
+- 本规格没有形成新的领域术语，也不修改根目录 `GLOSSARY.md`。
 - `i18next` 是常规且可替换的前端基础设施选择，不满足“未来读者会对该决定感到意外”的 ADR 条件，因此不新增 ADR。

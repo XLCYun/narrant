@@ -14,7 +14,7 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
 
 - Q1：正式名称为“语言支持包”（Language Support Pack）。结构分析是首个使用方；
   后续 AI 分析等需要语言能力的功能也可以复用，因此产品概念不限定为结构分析专用包。
-  术语定义已写入 [`CONTEXT.md`](../../CONTEXT.md)。
+  术语定义已写入 [`GLOSSARY.md`](../../GLOSSARY.md)。
 - Q2：首版在用户进入“结构改动”、确实需要分析时检查并自动获取缺少的包，
   不在打开 Review 时提前下载。
 - Q3：首版提供 Rust 包和 TypeScript / JavaScript 共用包。TS/JS 包包含独立 Node、
@@ -211,7 +211,7 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
 Q1–Q11 的产品选择已经回答；本轮补充说明临时目录的收益，以及满足“尽量简单”
 要求的进度实现。没有新增产品选择。用户已确认完整约定，并通过 implement 流程授权开始实现。
 
-术语达成一致后即时更新根目录 `CONTEXT.md`。只有实际选定了有长期成本的架构取舍，
+术语达成一致后即时更新根目录 `GLOSSARY.md`。只有实际选定了有长期成本的架构取舍，
 才新增 ADR；其余行为与验收要求记录在本规格中。
 
 ## 需要协调的既有规格

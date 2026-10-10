@@ -66,7 +66,7 @@ pipeline.
 - Only one Review is open at a time in the first release.
 
 The canonical vocabulary and relationships remain defined in the repository root
-`CONTEXT.md`.
+`GLOSSARY.md`.
 
 ## Repository Persistence
 

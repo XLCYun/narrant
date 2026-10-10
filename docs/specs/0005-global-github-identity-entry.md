@@ -23,7 +23,7 @@ signed in.
 ## Domain
 
 The current authorized user is the **GitHub Identity** defined in
-[`CONTEXT.md`](../../CONTEXT.md). It is an external GitHub authorization identity, not a
+[`GLOSSARY.md`](../../GLOSSARY.md). It is an external GitHub authorization identity, not a
 Narrant-owned account or profile.
 
 Profile presentation and authorization state are separate concerns. Failure to refresh

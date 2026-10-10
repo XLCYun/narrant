@@ -651,4 +651,4 @@ Rust 验证遵循仓库 `scripts/cargo-agent.sh` 和每个 Issue 的全量测试
 具体失败样例重新讨论；不会用潜在问题继续扩大本轮确认清单。
 
 每一轮只问前提已确定的问题。研究发现已经写在这里；待术语或决策形成共识时再更新
-CONTEXT.md 或必要的 ADR。当前没有新术语达成共识，也没有把候选技术写成 accepted ADR。
+GLOSSARY.md 或必要的 ADR。当前没有新术语达成共识，也没有把候选技术写成 accepted ADR。
