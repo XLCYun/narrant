@@ -11,6 +11,7 @@ use std::{
 
 // 直接复用宿主的跨平台所有权实现；本 helper 不调用其中的 Tokio/LSP 接口。
 #[allow(dead_code)]
+#[rustfmt::skip] // 共享源码按宿主2021样式校验，避免helper的2024格式遍历反复改写同一文件。
 #[path = "../../../src-tauri/src/child_process.rs"]
 mod child_process;
 
