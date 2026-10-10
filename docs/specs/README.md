@@ -20,6 +20,11 @@ Native helpers for Java, Go, C#, and C/C++ are specified in
 (engineering drafts; common architecture and union semantics accepted, implementation
 and compatibility validation pending).
 
+Migration of the existing Rust, TypeScript/JavaScript, and Python analyzers is specified
+in [0025 — Migrate existing analyzers to Native Helpers](0025-migrate-existing-analyzers-to-native-helpers.md)
+(accepted; implementation pending). Existing capabilities and configuration behavior remain;
+helpers use direct native APIs without LSP and migrate one language implementation at a time.
+
 ## Conventions
 
 - Name files `NNNN-short-feature-name.md`, using a zero-padded sequence number.
