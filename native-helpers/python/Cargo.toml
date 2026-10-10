@@ -1,0 +1,32 @@
+[package]
+name = "narrant-python-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+walkdir = "2.5"
+ruff_notebook = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ty_project = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ty_ide = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ty_python_core = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ruff_db = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ruff_python_ast = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ruff_python_codegen = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ruff_source_file = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ruff_text_size = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+ruff_ranged_value = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
+
+toml = "1.0"
+
+[dev-dependencies]
+tempfile = "3.27"
+old_ast = { package = "ruff_python_ast", version = "=0.0.15" }
+old_parser = { package = "ruff_python_parser", version = "=0.0.15" }
+old_codegen = { package = "ruff_python_codegen", version = "=0.0.15" }
+old_text = { package = "ruff_text_size", version = "=0.0.15" }
+old_source = { package = "ruff_source_file", version = "=0.0.15" }
+
+[workspace]

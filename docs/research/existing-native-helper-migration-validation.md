@@ -193,3 +193,107 @@ rust-analyzer 1.97.1 作为辅助对照，同样得到这些查询结果；它�
 适配和验收。当前核心只接收单个 Cargo workspace；rust-project.json、多独立 workspace
 发现和公共 Host/ProcessTree/协议接入未在本任务实现。缺组件、依赖不完整或未知目标
 会明确失败；没有长期缓存池、LSP 嵌套或成功空图回退。
+
+## Task 2：直接内嵌 Python 核心（2026-10-11）
+
+本轮建立 `native-helpers/python/` 独立 Rust 库、锁文件与核心测试，不切换宿主入口、
+不生成完整 CodeGraph、不移植 ty LSP 生命周期，不删除旧实现或发布支持包。真实证据来自
+macOS ARM64 / Rust 1.98.0；Windows、完整语言回归、公共 Host / ProcessTree / 协议、
+支持包安装及 Review 接入仍未验收。
+
+### 固定源码与版本对齐
+
+生产核心的 `ty_project`、`ty_ide`、Ruff AST/codegen/db 等直接依赖全部固定到 ty `0.0.84`
+对应 Ruff [`11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`](https://github.com/astral-sh/ruff/tree/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a)。
+该 revision 的 Ruff crate 版本是 **0.0.14**，不是宿主正在使用的 registry **0.0.15**。
+helper 从上游 Cargo.lock 建立传递依赖基线（包括 salsa 0.28.5），再解析自己的包与
+测试依赖；没有修改上游源码或切换 revision。helper 的 rust-toolchain.toml 固定 1.98.0，
+没有改全局工具链或被分析项目环境。
+
+源码入口分别为原生
+[`ProjectDatabase::fallible`](https://github.com/astral-sh/ruff/blob/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/crates/ty_project/src/db.rs)、
+[`parsed_module`](https://github.com/astral-sh/ruff/blob/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/crates/ruff_db/src/parsed.rs) 和
+[`ty_ide::goto_definition`](https://github.com/astral-sh/ruff/blob/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/crates/ty_ide/src/goto_definition.rs)。
+AST 与导航使用同一个数据库、同一个显式项目 Program，未启动 ty server。
+上游原始导航会映射 stub 到可找到的实现，本核心保留这个实际结果。
+
+### 只读环境与来源
+
+调用方显式传入单个已归一化项目根、有序源码根与 minor。所有根都是仓库相对目录。
+加载先只读遍历项目根及明确源码根，校验物理位置留在仓库内，再把 `.py/.pyi` 和目录
+以**词法相对路径**冻结到 MemoryFileSystem。`.git` / `.venv` 排除；逃逸或损坏链接、
+可达 site-packages / dist-packages / pyvenv.cfg、I/O、非法 UTF-8 及非 UTF-8 编码声明
+明确失败。内部链接不合并物理路径，也不重写模块身份；语义查询不再读取磁盘。
+加载时要求调用方固定输入，复制过程不是应对并发改写的原子快照保证。
+
+自定义 System 只暴露该内存快照：无用户环境变量、用户配置目录、缓存目录、可写接口、
+命令执行器或可执行文件查找。ProjectMetadata 显式设 `UseUv::Off`、目标版本、
+`python-platform=all`、源码根、空 extra-paths 与内存空 Python prefix，不进入解释器或
+venv 发现分支。`ProjectMetadata::new` 不读取配置文件；本任务不重复实现宿主的配置、
+PEP 723、跨项目冲突规则，后续适配器仍须按既有规则归一化后传入。
+
+标准声明来自固定 revision 内嵌 typeshed；来源为 `stdlib/builtins.pyi` 等稳定路径。
+明确的函数/类声明另由同源 AST 精确焦点匹配得到模块/词法限定名，例如
+`builtins` / `len` 与 `builtins` / `str.upper`，不含 checkout、临时 URI 或行号。
+其他声明保留原始来源和范围；完整外部符号身份仍属后续图投影验收。
+
+### 真实查询通过
+
+14 项必要全集通过，0 失败、0 ignored、0 filtered（1.64 秒）；其中一个隔离用例
+另启动同一测试二进制的污染子进程，未启动 Python 或 ty server。
+
+| 验证 | 实际结果 |
+|---|---|
+| 每个 3.7–3.14 minor | AST 的目标版本等于输入；本地 helper、len、str.upper 均实际导航 |
+| 标准声明 | len 为 builtins/len；str.upper 两个原始 overload 候选均保留，映射到相同词法符号 |
+| 别名与重绑定 | 无重绑定 alias 导航 other.py；有未知 RHS 的模块重绑定保留 main.py 与 other.py 两候选 |
+| property / `.pyi` overload | property 导航 getter 原始声明；stub 两个 overload 范围保留，没有伪造实现 |
+| `.py/.pyi` 并存 | 两个文件都可解析；实际导航 dual.py，与旧验收记录的行为一致 |
+| 缺依赖 / 多平台 | absent.fetch 没有已知定义；Path.exists 保留多个原生标准声明候选 |
+| Unicode / 换行 | 中文、emoji、BOM、LF/CRLF/单独 CR 保留原文；位置使用 UTF-8 字节边界 |
+| 固定侧 | 加载后改写磁盘不改变原文或定义；未知文件、越界及字符内部位置返回错误 |
+| 根与只读 | 明确根优先级决定 worker 模块；未列出的其他目录不可查询；文件路径和字节无变化 |
+| 污染环境 | HOME/USERPROFILE/XDG/APPDATA、Python/Conda/TY_INSTALL_DIR/PATH 与仓库 ty.toml、.venv 未扩充上下文；len 正常 |
+| 边界 | System 无读磁盘、写入或执行能力；逃逸链接与可达安装环境在原生加载前拒绝 |
+| 内部链接 | alias/__init__.py、impl/__init__.py、api.pyi 各有词法路径；显式 import impl 仍导航 impl |
+| 明确失败 | 不合法 UTF-8 / cookie、目标超范围、3.7 下 match 语法均失败，不变成空 AST 成功 |
+
+`str.upper` 的两个焦点/完整字节范围为 `50727..50732` / `50709..50837` 和
+`50860..50865` / `50842..50883`，各 minor 均观察到两者。stub overload 范围为
+`42..47` / `28..67` 与 `82..87` / `68..107`。这些是固定 fixture 的导航证据，
+不是持久身份字段，也未按同名删除候选。
+
+重绑定 fixture 的赋值前后都返回 `main.py` 的 `114..119` / `114..129` 与
+`other.py` 的 `4..10` / `0..18`。初始测试错误地假设 str.upper 单目标，以及重绑定后
+不再包含原导入；真实结果暴露了测试假设问题。修正的是测试断言，生产核心始终保留
+原生全集。核心没有“已确定运行时目标”字段；即使只返回一个候选，也不能据此抹去
+缺依赖、装饰器或绑定反证。完整绑定/关系裁决必须由 Task 6 复用既有规则完成。
+
+### 旧 Ruff 与新同源 API 的独立对照
+
+测试依赖以独立别名引入 registry Ruff 0.0.15 的 parser/AST/codegen/source/text_size，
+将相同原文分别交给**旧真实 parser/codegen**和**新数据库的 parsed_module/codegen**。
+没有修改宿主实现，也没有以新引擎输出自证旧兼容。生产 normal dependency tree 中不含
+registry Ruff 0.0.15，它只参与 dev 测试。
+
+四项对照实际通过：类/字段/property/overload/显式 TypeAlias 的完整 AST 打印；
+3.7–3.14 每个版本的代表语法（async、walrus、泛型、match、except*、类型参数、默认类型
+参数、t-string）的声明头 clone/清空 body 投影及原文字节范围；字符串空白/docstring
+换行差异；由 AtomicNodeIndex、ExprName、ExprContext 构成的合成有序声明锚点。
+两版本在这些 fixture 的 `Mode::AstUnparse` 输出一致，字符串内双空格与文档字符串
+换行变化仍改变比较内容。没有把这个接口/fixture 对照扩大为全部 Python 图语义等价。
+
+最终命令（仓库根，前缀为
+`PATH=/Users/lizhanfa/.nvm/versions/node/v24.18.0/bin:$PATH scripts/cargo-agent.sh`）：
+
+| 参数 | 实际结果 |
+|---|---|
+| `+1.98.0 check --manifest-path native-helpers/python/Cargo.toml --lib --locked` | exit 0，1.55 秒；初步核心类型检查 |
+| `+1.98.0 test --manifest-path native-helpers/python/Cargo.toml --lib --locked -- --nocapture` | exit 0；14 通过、0 失败/ignored，1.64 秒；本 helper 必要全集只运行一次 |
+| `+1.98.0 clippy --manifest-path native-helpers/python/Cargo.toml --all-targets --locked -- -D warnings` | exit 0，27.45 秒 |
+| `+1.98.0 fmt --manifest-path native-helpers/python/Cargo.toml -- --check` | exit 0 |
+| `+1.98.0 tree --manifest-path native-helpers/python/Cargo.toml --locked --edges normal` | exit 0；生产依赖同源核对 |
+
+原始命令、聚焦阶段、日志与自审记录保留在 ignored Task 2 report / scratch/python；
+没有运行宿主全量、触发 quality-gate、改全局工具链或 push。Windows junction、取消与
+协议错误分类、完整对象/内容/图/配置兼容性、双平台 helper/支持包/Review 仍须后续验收。
