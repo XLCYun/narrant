@@ -184,5 +184,5 @@ test('redirected no-dist context still rejects suppressed early errors without r
   const { graph } = analyze(ts, request(root, ['app/main.ts']));
   const target = graph.external_symbols.find(s => s.name === 'target');
   assert.ok(target);
-  assert.ok(graph.nodes.find(n => n.name === 'caller').references.some(r => r.target.id === target.id));
+  assert.ok(graph.nodes.find(n => n.name === 'caller').references.some(r => r.semantic === 'code.calls' && r.target.kind === 'external' && r.target.symbol === target.symbol));
 });
