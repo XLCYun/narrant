@@ -22,7 +22,7 @@
 
 ## 术语与现有契约
 
-沿用 [CONTEXT.md](../../CONTEXT.md) 中的 Code Object、Code Object Content、Code Graph、Code Relationship 和 Language Support Pack，并记录已确认的 Configuration Union Code Graph（配置并集代码图）。Code Graph 是一个固定比较侧、选定文件范围内的代码对象与关系，并非编译器 AST；并集语义不表示每项事实在所有配置下成立，也不证明任意组合能在同一配置中同时成立。
+沿用 [GLOSSARY.md](../../GLOSSARY.md) 中的 Code Object、Code Object Content、Code Graph、Code Relationship 和 Language Support Pack，并记录已确认的 Configuration Union Code Graph（配置并集代码图）。Code Graph 是一个固定比较侧、选定文件范围内的代码对象与关系，并非编译器 AST；并集语义不表示每项事实在所有配置下成立，也不证明任意组合能在同一配置中同时成立。
 
 “辅助进程”“进程协议”“构图 DTO”属于实现概念，记录在设计文档，不加入领域词汇表。
 
@@ -119,7 +119,7 @@ C# MSBuildWorkspace 设计时导入会执行项目 targets，故不是批准的�
 
 **表述修正：** 当前静态 `code.calls` 并不表示运行时必然执行，出现两条调用边也不自动表示两次调用同时发生。上段的“同时调用”不能作为拒绝并集图的理由；准确的限制是不能把只在某配置中解析成立的事实，冒充在每一种配置下都成立。若明确约定每条边表示“至少一个已分析配置中观察并解析到的调用”，关系并集可以有明确含义。
 
-本项语义已批准，术语已记入 CONTEXT.md。配置来源与配对仍可作为内部分析和缓存证据，首版不做配置增减的专门展示；消息字段和具体编码仍待协议设计。
+本项语义已批准，术语已记入 GLOSSARY.md。配置来源与配对仍可作为内部分析和缓存证据，首版不做配置增减的专门展示；消息字段和具体编码仍待协议设计。
 
 ### Q6 追问：是否可以忽略配置，把所有情况合成一张图？
 

@@ -37,7 +37,7 @@
 | [应用编排](../../src-tauri/src/structure_review/application/mod.rs)、[before 生命周期](../../src-tauri/src/structure_review/application/workspace.rs) | 两侧固定 Snapshot、语言组并行、任何硬失败取消同组工作、全部 join 后返回 | Java 进程/线程不能脱离回调继续用工作区；一侧空选集才可直接空图；仅删除 .java 也要准备工具 |
 | [支持包模型](../../src-tauri/src/language_support/model.rs)、[服务](../../src-tauri/src/language_support/mod.rs)、[存储](../../src-tauri/src/language_support/storage.rs) | 精确版本、共享下载、原子安装、PackLease 与跨进程文件锁 | 下载应在借用工作区前完成；分析期间不能删包；分析器不能自行下载 JDK/JAR |
 
-已读取规格 [0018](../specs/0018-structure-review-code-graph.md)、[0019](../specs/0019-rust-language-analyzer.md)、[0021](../specs/0021-typescript-language-analyzer.md)、[0022](../specs/0022-language-support-packs.md)、[0023](../specs/0023-python-language-analyzer.md)；对照 [0018a](../specs/0018a-code-object-kinds.md)、[0018b](../specs/0018b-code-relationships.md)、根 [CONTEXT](../../CONTEXT.md) 和 [domain 指南](../agents/domain.md)。规格含历史段落：例如 0019 后文还保留早期默认 build-script 行为，不能覆盖现行入口和前文“关闭 build scripts/proc macros”的约定。
+已读取规格 [0018](../specs/0018-structure-review-code-graph.md)、[0019](../specs/0019-rust-language-analyzer.md)、[0021](../specs/0021-typescript-language-analyzer.md)、[0022](../specs/0022-language-support-packs.md)、[0023](../specs/0023-python-language-analyzer.md)；对照 [0018a](../specs/0018a-code-object-kinds.md)、[0018b](../specs/0018b-code-relationships.md)、根 [GLOSSARY](../../GLOSSARY.md) 和 [domain 指南](../agents/domain.md)。规格含历史段落：例如 0019 后文还保留早期默认 build-script 行为，不能覆盖现行入口和前文“关闭 build scripts/proc macros”的约定。
 
 ### ADR 一致性与潜在冲突
 

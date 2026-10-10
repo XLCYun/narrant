@@ -383,5 +383,5 @@ Ruff crates 是应用编译依赖，ty 才是外置支持包；需要各自锁�
 - 已写入规格：property/overload、执行投影、字段证据、动态关系/stub、项目配置与交付验收。
 - 设计 frontier 已清空；剩余工作为实现与工程验证，通过链接规格的 GitHub Issues 跟踪。
 
-术语目前均可使用现有 CONTEXT.md，不新增通用 Python 编程术语作为领域词汇。
+术语目前均可使用现有 GLOSSARY.md，不新增通用 Python 编程术语作为领域词汇。
 已确认的取舍已记入 ADR 和 `docs/specs/`；候选比较保留为研究依据，不等于同时采用多个实现。
