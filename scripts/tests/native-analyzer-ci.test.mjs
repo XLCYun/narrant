@@ -148,7 +148,8 @@ test('shared process acceptance runs on both platforms with Windows LSP integrat
 });
 
 // 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。
-test('failed validation child does not prevent later child execution or make the result successful', async () => {
+test('failed validation child does not prevent later child execution or make the result successful', async t => {
+  const diagnostics = t.mock.method(console, 'error', () => {});
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native validation groups '));
   const marker = path.join(directory, 'executed');
   const commands = [7, 0].map(code => ({
@@ -164,11 +165,14 @@ test('failed validation child does not prevent later child execution or make the
       return true;
     });
     assert.equal(await fs.readFile(marker, 'utf8'), '7\n0\n');
+    assert.equal(diagnostics.mock.callCount(), 1);
+    assert.match(diagnostics.mock.calls[0].arguments[0].cause.message, /failed \(7\)/);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
 
 // 多组失败保留各自命令和原始错误，异步执行始终串行且次序不变。
-test('validation collects multiple original failures in order without overlapping groups', async () => {
+test('validation collects multiple original failures in order without overlapping groups', async t => {
+  const diagnostics = t.mock.method(console, 'error', () => {});
   const commands = ['first', 'middle', 'last'].map(name => ({ executable: name, args: ['--fixture'] }));
   const failures = [new Error('first original failure'), new Error('last original failure')];
   const environment = { FIXTURE: 'same environment' };
@@ -194,6 +198,9 @@ test('validation collects multiple original failures in order without overlappin
     return true;
   });
   assert.deepEqual(events, ['start:first', 'end:first', 'start:middle', 'end:middle', 'start:last', 'end:last']);
+  assert.deepEqual(diagnostics.mock.calls.map(call => call.arguments[0].cause), failures);
+  assert.match(diagnostics.mock.calls[0].arguments[0].message, /first --fixture/);
+  assert.match(diagnostics.mock.calls[1].arguments[0].message, /last --fixture/);
 });
 
 // 全部验收成功时正常完成，不能因汇总机制产生伪失败。

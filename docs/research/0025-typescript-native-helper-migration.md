@@ -160,3 +160,10 @@ NARRANT_TYPESCRIPT_PACK=/absolute/extracted/pack node native-helpers/typescript/
 
 剩余验收：控制者以集成 commit 运行双平台 Actions，记录 URL/SHA；两平台均通过后再删除旧 TS 链与七个 Oxc 依赖，
 并迁走暂时复用的 configDir fixture、固定身份对照。此记录不代表 Task 4 已完成最终验收。
+
+
+首轮 Actions [38084193094](https://github.com/XLCYun/narrant/actions/runs/38084193094/job/114307126707)
+在 macOS 脚本测试阶段发现过时的 workflow guard 断言，尚未完成语言验收。修正测试以实际条件分别验证
+lifecycle 独占、聚焦语言跳过旧 build、完整发布依赖/显式开关/main 分支；生产 workflow 不变。
+同一六文件 Node 测试组本机 44 passed、0 failed、2 Windows-only skipped；预期负例日志改为捕获并验证。
+该修复不代替双平台重跑，旧链继续保留。
