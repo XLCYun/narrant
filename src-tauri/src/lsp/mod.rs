@@ -15,6 +15,8 @@ use std::{
 use serde_json::{json, Value};
 use url::Url;
 
+#[cfg(all(test, windows))]
+use crate::child_process::windows_validation;
 pub use protocol::{CallTarget, Location, OutgoingCall, Position, Range};
 use transport::Transport;
 
@@ -101,6 +103,23 @@ pub struct LspClient {
 }
 
 impl LspClient {
+    /// 仅测试借用当前会话查询准确 HANDLE 的 Job 归属，不向调用方暴露 Job 句柄。
+    #[cfg(all(test, windows))]
+    pub(crate) fn windows_owner_contains(
+        &self,
+        process: &std::os::windows::io::OwnedHandle,
+    ) -> std::io::Result<bool> {
+        self.transport.windows_owner_contains(process)
+    }
+
+    /// 仅测试读取当前会话的共享 owner 统计，正常请求与清理均不自动采样。
+    #[cfg(all(test, windows))]
+    pub(crate) fn windows_owner_snapshot(
+        &self,
+    ) -> std::io::Result<windows_validation::OwnerSnapshot> {
+        self.transport.windows_owner_snapshot()
+    }
+
     /// 启动调用方提供的命令并完成 initialize/initialized；命令可携带语言所需参数和环境。
     pub fn start(mut command: Command, workspace: &Path, options: LspOptions) -> Result<Self> {
         let uri = file_uri(workspace)?;
@@ -164,6 +183,8 @@ impl LspClient {
             self.request_timeout,
             &self.cancelled,
         )?;
+        #[cfg(all(test, windows))]
+        windows_validation::post_send(method);
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())

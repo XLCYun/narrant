@@ -1,0 +1,266 @@
+{
+  "tool_version": [
+    "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+    "Target: arm64-apple-darwin27.0.0",
+    "Thread model: posix",
+    "InstalledDir: /Library/Developer/CommandLineTools/usr/bin"
+  ],
+  "analysis_arguments": [
+    "-x <c|c++>",
+    "-std=<c17|c++20>",
+    "-pedantic-errors",
+    "-fsyntax-only",
+    "-nostdinc",
+    "-DFAST=<0|1>",
+    "-Xclang",
+    "-ast-dump=json"
+  ],
+  "mode_check": [
+    {
+      "language": "c",
+      "standard": "c17",
+      "exit_code": 0
+    },
+    {
+      "language": "c++",
+      "standard": "c++20",
+      "exit_code": 1
+    }
+  ],
+  "results": [
+    {
+      "language": "c",
+      "standard": "c17",
+      "compatible_call_union": {
+        "run_source": {
+          "begin": 215,
+          "end": 247,
+          "name_offset": 219,
+          "line": 12,
+          "raw_source": "int run(void) { return PICK(); }"
+        },
+        "resolved_targets": [
+          {
+            "name": "fast",
+            "source": {
+              "begin": 157,
+              "end": 185,
+              "name_offset": 161,
+              "line": 10,
+              "raw_source": "int fast(void) { return 1; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          },
+          {
+            "name": "safe",
+            "source": {
+              "begin": 186,
+              "end": 214,
+              "name_offset": 190,
+              "line": 11,
+              "raw_source": "int safe(void) { return 2; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          }
+        ]
+      },
+      "separate_same_name_fragments": {
+        "branch_source": {
+          "begin": 281,
+          "end": 316,
+          "name_offset": 285,
+          "line": 14,
+          "raw_source": "int branch(void) { return mode(); }"
+        },
+        "resolved_targets": [
+          {
+            "name": "mode",
+            "source": {
+              "begin": 46,
+              "end": 74,
+              "name_offset": 50,
+              "line": 4,
+              "raw_source": "int mode(void) { return 1; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          },
+          {
+            "name": "mode",
+            "source": {
+              "begin": 121,
+              "end": 149,
+              "name_offset": 125,
+              "line": 8,
+              "raw_source": "int mode(void) { return 2; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          }
+        ],
+        "conclusion": "两个 mode 源声明分别保留；不能按名字或链接名覆盖。"
+      },
+      "type_only_variation": {
+        "source": {
+          "begin": 248,
+          "end": 280,
+          "name_offset": 255,
+          "line": 13,
+          "raw_source": "RESULT value(void) { return 1; }"
+        },
+        "types": [
+          "double (void)",
+          "int (void)"
+        ],
+        "conclusion": "原始 RESULT 签名一致；不把展开类型强塞进源码内容。完整映射未验收。"
+      },
+      "category_conflict": {
+        "source": {
+          "begin": 64,
+          "end": 73,
+          "name_offset": 69,
+          "line": 6,
+          "raw_source": "DECL item"
+        },
+        "native_kinds": [
+          "TypedefDecl",
+          "VarDecl"
+        ],
+        "conclusion": "同一源码声明跨 Type/Value；按 Q5 整次失败，不能任选一个类别。"
+      },
+      "containment_conflict": {
+        "source": {
+          "begin": 55,
+          "end": 63,
+          "name_offset": 59,
+          "line": 6,
+          "raw_source": "int slot"
+        },
+        "parents": [
+          "Left",
+          "Right"
+        ],
+        "conclusion": "若字段独立建对象，同一 slot 有两个父对象；按 Q5 整次失败。"
+      }
+    },
+    {
+      "language": "c++",
+      "standard": "c++20",
+      "compatible_call_union": {
+        "run_source": {
+          "begin": 215,
+          "end": 247,
+          "name_offset": 219,
+          "line": 12,
+          "raw_source": "int run(void) { return PICK(); }"
+        },
+        "resolved_targets": [
+          {
+            "name": "fast",
+            "source": {
+              "begin": 157,
+              "end": 185,
+              "name_offset": 161,
+              "line": 10,
+              "raw_source": "int fast(void) { return 1; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          },
+          {
+            "name": "safe",
+            "source": {
+              "begin": 186,
+              "end": 214,
+              "name_offset": 190,
+              "line": 11,
+              "raw_source": "int safe(void) { return 2; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          }
+        ]
+      },
+      "separate_same_name_fragments": {
+        "branch_source": {
+          "begin": 281,
+          "end": 316,
+          "name_offset": 285,
+          "line": 14,
+          "raw_source": "int branch(void) { return mode(); }"
+        },
+        "resolved_targets": [
+          {
+            "name": "mode",
+            "source": {
+              "begin": 46,
+              "end": 74,
+              "name_offset": 50,
+              "line": 4,
+              "raw_source": "int mode(void) { return 1; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          },
+          {
+            "name": "mode",
+            "source": {
+              "begin": 121,
+              "end": 149,
+              "name_offset": 125,
+              "line": 8,
+              "raw_source": "int mode(void) { return 2; }"
+            },
+            "evidence": "CallExpr/DeclRefExpr.referencedDecl.id"
+          }
+        ],
+        "conclusion": "两个 mode 源声明分别保留；不能按名字或链接名覆盖。"
+      },
+      "type_only_variation": {
+        "source": {
+          "begin": 248,
+          "end": 280,
+          "name_offset": 255,
+          "line": 13,
+          "raw_source": "RESULT value(void) { return 1; }"
+        },
+        "types": [
+          "double ()",
+          "int ()"
+        ],
+        "conclusion": "原始 RESULT 签名一致；不把展开类型强塞进源码内容。完整映射未验收。"
+      },
+      "category_conflict": {
+        "source": {
+          "begin": 64,
+          "end": 73,
+          "name_offset": 69,
+          "line": 6,
+          "raw_source": "DECL item"
+        },
+        "native_kinds": [
+          "TypedefDecl",
+          "VarDecl"
+        ],
+        "conclusion": "同一源码声明跨 Type/Value；按 Q5 整次失败，不能任选一个类别。"
+      },
+      "containment_conflict": {
+        "source": {
+          "begin": 55,
+          "end": 63,
+          "name_offset": 59,
+          "line": 6,
+          "raw_source": "int slot"
+        },
+        "parents": [
+          "Left",
+          "Right"
+        ],
+        "conclusion": "若字段独立建对象，同一 slot 有两个父对象；按 Q5 整次失败。"
+      }
+    }
+  ],
+  "checks": {
+    "configuration_order_and_temporary_root_independent": true,
+    "ast_fixture_content_unchanged_and_no_new_fixture_files": true,
+    "analyzed_programs_linked_or_executed": false,
+    "libtooling_helper_built_or_tested": false,
+    "production_identity_and_full_code_graph_validated": false,
+    "automatic_configuration_discovery_validated": false
+  }
+}

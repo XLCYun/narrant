@@ -13,7 +13,7 @@ const targets = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'];
 
 /** 产物键只由受支持的包、版本和平台组成。 */
 function validateIdentity({ id, version, target }) {
-  if (!['rust', 'typescript-javascript', 'python'].includes(id) || !/^\d+\.\d+\.\d+$/.test(version) || !targets.includes(target)) throw new Error('Invalid language support pack identity');
+  if (!['rust', 'typescript-javascript', 'python', 'java', 'go', 'csharp', 'c-cpp'].includes(id) || !/^\d+\.\d+\.\d+$/.test(version) || !targets.includes(target)) throw new Error('Invalid language support pack identity');
 }
 
 /** 将准备完成的普通文件目录打包，清单只记录实际产物的完整身份和摘要。 */
@@ -31,18 +31,20 @@ export async function packageDirectory(identity, payload, output) {
       if (metadata.isDirectory()) await visit(file);
       else if (metadata.isFile()) {
         const bytes = await fs.readFile(path.join(payload, file));
-        files.push({ path: file, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), executable: file.startsWith('bin/') });
+        // Windows 运行入口由目标平台和 .exe 后缀确定；POSIX 仍保留真实执行权限。
+        const runtimeExecutable = file.startsWith('runtime/') && (identity.target === 'x86_64-pc-windows-msvc' ? file.toLowerCase().endsWith('.exe') : (metadata.mode & 0o111) !== 0);
+        files.push({ path: file, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), executable: file.startsWith('bin/') || runtimeExecutable });
       } else throw new Error('支持包只能包含普通文件和目录');
     }
   }
   await visit();
   // 只打包已登记文件；固定时间与权限，不携带宿主扩展属性或用户信息。
   await createTar({ file: path.join(destination, 'pack.tar.gz'), cwd: payload, gzip: true, portable: true, mtime: new Date(0),
-    onWriteEntry: entry => { entry.mode = entry.path.startsWith('bin/') ? 0o755 : 0o644; },
+    onWriteEntry: entry => { entry.mode = files.find(file => file.path === entry.path)?.executable ? 0o755 : 0o644; },
   }, files.map(file => file.path));
   const bytes = await fs.readFile(path.join(destination, 'pack.tar.gz'));
   const manifest = { schemaVersion: 1, ...identity, archiveSize: bytes.length, archiveSha256: createHash('sha256').update(bytes).digest('hex'), files };
-  await fs.writeFile(path.join(destination, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  await fs.writeFile(path.join(destination, 'manifest.json'), `${JSON.stringify(manifest, null, ['java', 'go', 'csharp', 'c-cpp'].includes(identity.id) ? undefined : 2)}\n`);
   return destination;
 }
 
@@ -69,6 +71,10 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
   const definition = catalog.packs[id];
   const identity = { id, version: definition?.version, target };
   validateIdentity(identity);
+  if (['java', 'go', 'csharp', 'c-cpp'].includes(id)) {
+    const { buildNativePack } = await import('./native-language-support-packs.mjs');
+    return buildNativePack({ id, target, output, definition, packageDirectory });
+  }
   output = path.resolve(output);
   await fs.mkdir(output, { recursive: true });
   const temporary = await fs.mkdtemp(path.join(output, '.build-'));

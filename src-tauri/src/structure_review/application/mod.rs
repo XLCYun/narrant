@@ -6,7 +6,7 @@ mod workspace;
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
 use super::rust_analyzer::RustDependencyScope;
 use crate::{
-    language_support::PackLease,
+    language_support::{PackId, PackLease},
     lsp::CancellationCheck,
     operation::OperationContext,
     review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
@@ -15,6 +15,7 @@ pub(crate) use projection::StructureComparison;
 use projection::{FileCoverage, Graph, GraphDifference};
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -59,6 +60,7 @@ struct LanguageAnalyzers {
     rust: Arc<AnalyzeGraph>,
     typescript: Arc<AnalyzeTypeScript>,
     python: Arc<AnalyzePython>,
+    native: BTreeMap<PackId, Arc<AnalyzePython>>,
 }
 
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
@@ -73,6 +75,7 @@ impl StructureReview {
         Self {
             support: None,
             analyzers: LanguageAnalyzers {
+                native: BTreeMap::new(),
                 rust: analyze_rust,
                 typescript: Arc::new(|_, _| Err(AnalysisError::new("TypeScript 分析器尚未装配"))),
                 python: Arc::new(|_, _| Err(AnalysisError::new("Python 分析器尚未装配"))),
@@ -169,6 +172,9 @@ impl StructureReview {
                         {
                             ids.insert(PackId::Python);
                         }
+                        Some(LanguageGroup::Native(id)) => {
+                            ids.insert(id);
+                        }
                         _ => {}
                     }
                 }
@@ -232,6 +238,18 @@ impl StructureReview {
                 analyzers.python = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
+            }
+            for id in [PackId::Java, PackId::Go, PackId::Csharp, PackId::CCpp] {
+                if let Some(root) = lease.path(id) {
+                    let analyzer =
+                        super::native_languages::from_pack(id, root).map_err(analysis_error)?;
+                    analyzers.native.insert(
+                        id,
+                        Arc::new(move |input, cancelled| {
+                            analyzer.clone().with_cancellation(cancelled).analyze(input)
+                        }),
+                    );
+                }
             }
             Some(lease)
         } else {
@@ -434,7 +452,33 @@ fn analyze_side(
         options,
     });
     let errors = Mutex::new(WorkerErrors::default());
-    let (rust, typescript, python) = std::thread::scope(|threads| {
+    let (rust, typescript, python, native) = std::thread::scope(|threads| {
+        let native = files
+            .native
+            .into_iter()
+            .map(|(id, files)| {
+                let errors = &errors;
+                threads.spawn(move || {
+                    run_worker(stop, errors, || {
+                        let analyzer = analyzers.native.get(&id).ok_or_else(|| {
+                            StructureReviewError::new(
+                                "language-pack-unavailable",
+                                format!("{} 语言支持包尚未装配", id.slug()),
+                            )
+                        })?;
+                        analyzer(
+                            &AnalysisInput {
+                                repository_root: repository.to_owned(),
+                                files,
+                                options,
+                            },
+                            cancelled.clone(),
+                        )
+                        .map_err(analysis_error)
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
         let rust = rust_input.map(|input| {
             let errors = &errors;
             threads.spawn(move || {
@@ -463,14 +507,24 @@ fn analyze_side(
         let typescript = typescript.and_then(|worker| {
             run_worker(stop, &errors, || worker.join().map_err(panic_error)).flatten()
         });
-        (rust, typescript, python)
+        let native = native
+            .into_iter()
+            .filter_map(|worker| {
+                run_worker(stop, &errors, || worker.join().map_err(panic_error)).flatten()
+            })
+            .collect::<Vec<_>>();
+        (rust, typescript, python, native)
     });
     errors
         .into_inner()
         .expect("语言 worker 不在错误锁内执行分析")
         .finish()?;
     let mut graph = empty_graph()?;
-    for next in [rust, typescript, python].into_iter().flatten() {
+    for next in [rust, typescript, python]
+        .into_iter()
+        .flatten()
+        .chain(native)
+    {
         graph = graph
             .merge(next)
             .map_err(|error| StructureReviewError::new("analysis-failed", error.message))?;
@@ -496,18 +550,22 @@ fn empty_graph() -> Result<CodeGraph, StructureReviewError> {
         .map_err(|error| StructureReviewError::new("analysis-failed", error.message))
 }
 
-/// 一侧文件按 Rust、共享 TS/JS 与 Python 分组，共用原始 Git 工作区。
+/// 一侧文件按语言实现分组；C/C++ 共用 helper，所有组共用原始 Git 工作区。
 #[derive(Default)]
 struct SideFiles {
     rust: Vec<PathBuf>,
     typescript: Vec<PathBuf>,
     python: Vec<PathBuf>,
+    native: BTreeMap<PackId, Vec<PathBuf>>,
 }
 
 impl SideFiles {
     /// 没有支持文件时跳过 checkout 与全部语言工具。
     fn is_empty(&self) -> bool {
-        self.rust.is_empty() && self.typescript.is_empty() && self.python.is_empty()
+        self.rust.is_empty()
+            && self.typescript.is_empty()
+            && self.python.is_empty()
+            && self.native.is_empty()
     }
 
     /// 按路径对应的语言组加入输入，未知扩展保持在 coverage 中。
@@ -516,6 +574,7 @@ impl SideFiles {
             Some(LanguageGroup::Rust) => self.rust.push(path),
             Some(LanguageGroup::TypeScript) => self.typescript.push(path),
             Some(LanguageGroup::Python) => self.python.push(path),
+            Some(LanguageGroup::Native(id)) => self.native.entry(id).or_default().push(path),
             None => {}
         }
     }
@@ -528,15 +587,20 @@ impl SideFiles {
         self.typescript.dedup();
         self.python.sort();
         self.python.dedup();
+        for files in self.native.values_mut() {
+            files.sort();
+            files.dedup();
+        }
     }
 }
 
-/// 应用层只需要三个明确语言组，不引入通用插件注册表。
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// 应用层保留固定语言组，原生组映射到对应支持包。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LanguageGroup {
     Rust,
     TypeScript,
     Python,
+    Native(PackId),
 }
 
 /// 分侧选择支持的源码文件，并保留所有改动文件的覆盖说明。
@@ -588,6 +652,12 @@ fn language_group(
         return None;
     }
     match std::path::Path::new(path).extension()?.to_str()? {
+        "java" => Some(LanguageGroup::Native(PackId::Java)),
+        "go" => Some(LanguageGroup::Native(PackId::Go)),
+        "cs" => Some(LanguageGroup::Native(PackId::Csharp)),
+        "c" | "h" | "cc" | "cpp" | "cxx" | "C" | "hh" | "hpp" | "hxx" | "H" => {
+            Some(LanguageGroup::Native(PackId::CCpp))
+        }
         "rs" => Some(LanguageGroup::Rust),
         "py" | "pyi" => Some(LanguageGroup::Python),
         "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => {

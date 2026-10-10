@@ -1,0 +1,23 @@
+{
+  "version": "21.1.8",
+  "platform": "macOS-ARM64",
+  "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-macOS-ARM64.tar.xz",
+  "sha256": "b95bdd32a33a81ee4d40363aaeb26728a26783fcef26a4d80f65457433ea4669",
+  "metadata_source": "https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8",
+  "windows_x64": {
+    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar.xz",
+    "sha256": "749d22f565fcd5718dbed06512572d0e5353b502c03fe1f7f17ee8b8aca21a47"
+  },
+  "licenses": [
+    {
+      "file": "LICENSE-LLVM.txt",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.8/llvm/LICENSE.TXT",
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"
+    },
+    {
+      "file": "LICENSE-Clang.txt",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.8/clang/LICENSE.TXT",
+      "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
+    }
+  ]
+}

@@ -216,6 +216,7 @@ fn python_failure_joins_both_language_peers() {
     let rust = completed.clone();
     let typescript = completed.clone();
     let analyzers = LanguageAnalyzers {
+        native: BTreeMap::new(),
         rust: Arc::new(move |_, cancelled, _| {
             wait_for_cancel(cancelled);
             rust.fetch_add(1, Ordering::SeqCst);
@@ -235,6 +236,7 @@ fn python_failure_joins_both_language_peers() {
             rust: vec!["lib.rs".into()],
             typescript: vec!["main.ts".into()],
             python: vec!["main.py".into()],
+            ..SideFiles::default()
         },
         AnalysisOptions::default(),
         &cancelled,

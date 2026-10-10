@@ -103,7 +103,7 @@ function RoutedRelationEdge(props: EdgeProps<StructureEdge>) {
   </g>;
 }
 const edgeTypes = { routedRelation: RoutedRelationEdge };
-const languageNames: Record<string, string> = { rust: "Rust", typescript: "TypeScript", javascript: "JavaScript", python: "Python" };
+const languageNames: Record<string, string> = { rust: "Rust", typescript: "TypeScript", javascript: "JavaScript", python: "Python", java: "Java", go: "Go", csharp: "C#", c: "C", cpp: "C++" };
 
 /** 分析范围开关在加载、失败和空图时同样可用，切换由应用层重新分析两侧。 */
 function TestCodeSwitch({ binding }: { binding: StructureBinding }) {

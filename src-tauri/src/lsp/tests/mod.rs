@@ -1,5 +1,7 @@
 #[cfg(unix)]
 mod session;
+#[cfg(windows)]
+mod windows_session;
 
 use super::file_uri;
 

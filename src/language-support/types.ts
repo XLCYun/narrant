@@ -1,5 +1,5 @@
-/** Rust、Python 独立成包，TypeScript 和 JavaScript 共用语言服务。 */
-export type PackId = "rust" | "typescript-javascript" | "python";
+/** 固定语言支持包；TS/JS 与 C/C++ 分别共享一套工具。 */
+export type PackId = "rust" | "typescript-javascript" | "python" | "java" | "go" | "csharp" | "c-cpp";
 /** 阶段进度保留稳定终态，不把下载完成误认为安装完成。 */
 export type PackPhase = "not-installed" | "downloading" | "verifying" | "installing" | "ready" | "failed";
 /** 界面所需的语言包信息，不接收可执行路径或任意远端地址。 */

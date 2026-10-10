@@ -169,3 +169,7 @@ fn preflight(repository: &Path, project: &Project, cancelled: &CancellationCheck
     }
     Ok(())
 }
+
+#[cfg(all(test, windows))]
+#[path = "tests/windows_session.rs"]
+mod windows_tests;

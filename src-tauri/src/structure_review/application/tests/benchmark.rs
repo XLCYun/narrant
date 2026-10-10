@@ -65,6 +65,7 @@ async fn sequential(
     dependency_scope: RustDependencyScope,
 ) -> StructureComparison {
     let analyzers = LanguageAnalyzers {
+        native: BTreeMap::new(),
         rust: analyze,
         typescript: analyze_typescript,
         python: Arc::new(|_, _| panic!("该测试不应启动 Python")),

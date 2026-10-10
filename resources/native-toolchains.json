@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "aarch64-apple-darwin": [
+      {
+        "name": "go",
+        "version": "1.27.1",
+        "url": "https://go.dev/dl/go1.27.1.darwin-arm64.tar.gz",
+        "algorithm": "sha256",
+        "digest": "ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12",
+        "home": "go",
+        "environment": "NARRANT_GO_SDK",
+        "metadata_source": "https://go.dev/dl/?mode=json&include=all"
+      },
+      {
+        "name": "go-target",
+        "version": "1.23.8",
+        "url": "https://go.dev/dl/go1.23.8.darwin-arm64.tar.gz",
+        "algorithm": "sha256",
+        "digest": "d4f53dcaecd67d9d2926eab7c3d674030111c2491e68025848f6839e04a4d3d1",
+        "home": "go",
+        "environment": "NARRANT_GO_TARGET_SDK",
+        "metadata_source": "https://go.dev/dl/?mode=json&include=all"
+      },
+      {
+        "name": "dotnet",
+        "version": "10.0.100",
+        "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.100/dotnet-sdk-10.0.100-osx-arm64.tar.gz",
+        "algorithm": "sha512",
+        "digest": "0ee9c774f9c63601844619b67d6ca829d70fa26b9949b808e801380c35edb12e4c9418baf8e2ef8ba1dc6dc7d307dbf5830fb0f4f97666032a391c5c097ee607",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_SDK",
+        "metadata_source": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json"
+      },
+      {
+        "name": "dotnet-ref8",
+        "version": "8.0.0",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/8.0.0/microsoft.netcore.app.ref.8.0.0.nupkg",
+        "algorithm": "sha512",
+        "digest": "44a7904011578e0ea57d4a7e336987806037e6c74ae953808df2d50e700129dcac316acbb1eed7a2f3e50d3b7188f320673ddae9ed4e89c1b0e1fa8e5ed31e20",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_REF8_ROOT",
+        "metadata_source": "https://api.nuget.org/v3/catalog0/data/2023.11.14.13.48.02/microsoft.netcore.app.ref.8.0.0.json"
+      },
+      {
+        "name": "dotnet-ref9",
+        "version": "9.0.20",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/9.0.20/microsoft.netcore.app.ref.9.0.20.nupkg",
+        "algorithm": "sha512",
+        "digest": "f132afd8cf3933f81b18dbe540083bed6da41641c9efdae38e9913d1bf76ffcaf3e51c5f9a8b29b1001e4e9102aae20fddc875ca0e1df81dc17668c71729aaa9",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_REF9_ROOT",
+        "metadata_source": "https://api.nuget.org/v3/catalog0/data/2026.09.08.19.59.10/microsoft.netcore.app.ref.9.0.20.json"
+      },
+      {
+        "name": "jdk25",
+        "version": "25.0.4.1+1",
+        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz",
+        "algorithm": "sha256",
+        "digest": "61979887f7506a24a57439ff99adb8b3a7fc89977d9cfe3b8984f58a981b7b9d",
+        "home": "jdk-25.0.4.1+1/Contents/Home",
+        "environment": "NARRANT_JAVA_RUNTIME",
+        "metadata_source": "https://api.github.com/repos/adoptium/temurin25-binaries/releases/tags/jdk-25.0.4.1%2B1"
+      },
+      {
+        "name": "jdk17",
+        "version": "17.0.20.1+1",
+        "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_aarch64_mac_hotspot_17.0.20.1_1.tar.gz",
+        "algorithm": "sha256",
+        "digest": "196d13ba5f10414bef7f6a05a9b3f00edacb18ebacef2b99485db9e2ee18f0e8",
+        "home": "jdk-17.0.20.1+1/Contents/Home",
+        "environment": "NARRANT_JAVA_TARGET_JDK",
+        "metadata_source": "https://api.github.com/repos/adoptium/temurin17-binaries/releases/tags/jdk-17.0.20.1%2B1"
+      },
+      {
+        "name": "jdk8",
+        "version": "8u504-b01",
+        "url": "https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u504-b01/OpenJDK8U-jdk_x64_mac_hotspot_8u504b01.tar.gz",
+        "algorithm": "sha256",
+        "digest": "4b4518a2060c98c0ed195947fa29c8f5aa7f1c608817e8ad1850719517f11ac0",
+        "home": "jdk8u504-b01/Contents/Home",
+        "environment": "NARRANT_JAVA_TARGET_8",
+        "metadata_source": "https://api.github.com/repos/adoptium/temurin8-binaries/releases/tags/jdk8u504-b01"
+      },
+      {
+        "name": "llvm",
+        "version": "21.1.8",
+        "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-macOS-ARM64.tar.xz",
+        "algorithm": "sha256",
+        "digest": "b95bdd32a33a81ee4d40363aaeb26728a26783fcef26a4d80f65457433ea4669",
+        "home": "LLVM-21.1.8-macOS-ARM64",
+        "environment": "NARRANT_LLVM_SDK",
+        "metadata_source": "https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8"
+      }
+    ],
+    "x86_64-pc-windows-msvc": [
+      {
+        "name": "go",
+        "version": "1.27.1",
+        "url": "https://go.dev/dl/go1.27.1.windows-amd64.zip",
+        "algorithm": "sha256",
+        "digest": "a3911b5e0e1b1053f25ed0675f4c1c6aad1e2bfcf253df2b9be4caabd2edd95d",
+        "home": "go",
+        "environment": "NARRANT_GO_SDK",
+        "metadata_source": "https://go.dev/dl/?mode=json&include=all"
+      },
+      {
+        "name": "go-target",
+        "version": "1.23.8",
+        "url": "https://go.dev/dl/go1.23.8.windows-amd64.zip",
+        "algorithm": "sha256",
+        "digest": "e0ad643f94875403830e84198dc9df6149647c924bfa91521f6eb29f4c013dc7",
+        "home": "go",
+        "environment": "NARRANT_GO_TARGET_SDK",
+        "metadata_source": "https://go.dev/dl/?mode=json&include=all"
+      },
+      {
+        "name": "dotnet",
+        "version": "10.0.100",
+        "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.100/dotnet-sdk-10.0.100-win-x64.zip",
+        "algorithm": "sha512",
+        "digest": "24b033418a3969effd49b4651ef7ebbffeb284773b99545d78dce61a82e57f38db7facdb013c609ba15573c072f0e093363ae470824a6847f3c6111078c1fb64",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_SDK",
+        "metadata_source": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json"
+      },
+      {
+        "name": "dotnet-ref8",
+        "version": "8.0.0",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/8.0.0/microsoft.netcore.app.ref.8.0.0.nupkg",
+        "algorithm": "sha512",
+        "digest": "44a7904011578e0ea57d4a7e336987806037e6c74ae953808df2d50e700129dcac316acbb1eed7a2f3e50d3b7188f320673ddae9ed4e89c1b0e1fa8e5ed31e20",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_REF8_ROOT",
+        "metadata_source": "https://api.nuget.org/v3/catalog0/data/2023.11.14.13.48.02/microsoft.netcore.app.ref.8.0.0.json"
+      },
+      {
+        "name": "dotnet-ref9",
+        "version": "9.0.20",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netcore.app.ref/9.0.20/microsoft.netcore.app.ref.9.0.20.nupkg",
+        "algorithm": "sha512",
+        "digest": "f132afd8cf3933f81b18dbe540083bed6da41641c9efdae38e9913d1bf76ffcaf3e51c5f9a8b29b1001e4e9102aae20fddc875ca0e1df81dc17668c71729aaa9",
+        "home": ".",
+        "environment": "NARRANT_DOTNET_REF9_ROOT",
+        "metadata_source": "https://api.nuget.org/v3/catalog0/data/2026.09.08.19.59.10/microsoft.netcore.app.ref.9.0.20.json"
+      },
+      {
+        "name": "jdk25",
+        "version": "25.0.4.1+1",
+        "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_x64_windows_hotspot_25.0.4.1_1.zip",
+        "algorithm": "sha256",
+        "digest": "00c847d804f4a78e9f04f2683faf14fed898535b177b7fc704486cb0284e9283",
+        "home": "jdk-25.0.4.1+1",
+        "environment": "NARRANT_JAVA_RUNTIME",
+        "metadata_source": "https://api.github.com/repos/adoptium/temurin25-binaries/releases/tags/jdk-25.0.4.1%2B1"
+      },
+      {
+        "name": "jdk17",
+        "version": "17.0.20.1+1",
+        "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_windows_hotspot_17.0.20.1_1.zip",
+        "algorithm": "sha256",
+        "digest": "e53a79c3c3d86865bd7e787903884331068e71321714ffd44f145785affc7cb0",
+        "home": "jdk-17.0.20.1+1",
+        "environment": "NARRANT_JAVA_TARGET_JDK",
+        "metadata_source": "https://api.github.com/repos/adoptium/temurin17-binaries/releases/tags/jdk-17.0.20.1%2B1"
+      },
+      {
+        "name": "jdk8",
+        "version": "8u504-b01",
+        "url": "https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u504-b01/OpenJDK8U-jdk_x64_windows_hotspot_8u504b01.zip",
+        "algorithm": "sha256",
+        "digest": "ea43d46ede95b51e44a12c66711706cddc762e0a766c54bccea18954e902b2aa",
+        "home": "jdk8u504-b01",
+        "environment": "NARRANT_JAVA_TARGET_8",
+        "metadata_source": "https://api.github.com/repos/adoptium/temurin8-binaries/releases/tags/jdk8u504-b01"
+      },
+      {
+        "name": "llvm",
+        "version": "21.1.8",
+        "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/clang%2Bllvm-21.1.8-x86_64-pc-windows-msvc.tar.xz",
+        "algorithm": "sha256",
+        "digest": "749d22f565fcd5718dbed06512572d0e5353b502c03fe1f7f17ee8b8aca21a47",
+        "home": "clang+llvm-21.1.8-x86_64-pc-windows-msvc",
+        "environment": "NARRANT_LLVM_SDK",
+        "metadata_source": "https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8"
+      }
+    ]
+  },
+  "runner_prerequisites": {
+    "aarch64-apple-darwin": {
+      "runner": "macos-15",
+      "xcode": "16.4",
+      "macos_sdk": "15.5"
+    },
+    "x86_64-pc-windows-msvc": {
+      "runner": "windows-2022",
+      "visual_studio": "2022/Enterprise",
+      "msvc_tools": "14.44.35207",
+      "msvc_runtime_version": "14.44.35211",
+      "windows_sdk": "10.0.26100.0"
+    }
+  }
+}

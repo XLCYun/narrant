@@ -1,0 +1,226 @@
+{
+  "sdk": {
+    "GOHOSTARCH": "arm64",
+    "GOHOSTOS": "darwin",
+    "GOVERSION": "go1.23.8"
+  },
+  "analysis_external_command_path": "none_by_implementation_review_not_process_trace",
+  "fixture_unchanged": true,
+  "fixture_paths_checked": 8,
+  "third_party_source_present_but_rejected": true,
+  "union_observations": [
+    {
+      "source": "repo:app/common.go#Run",
+      "spelling": "cmp.Compare",
+      "target": "stdlib:cmp#Compare",
+      "resolution": "Resolved"
+    },
+    {
+      "source": "repo:app/common.go#Run",
+      "spelling": "local.Local",
+      "target": "repo:app/local/local.go#Local",
+      "resolution": "Resolved"
+    },
+    {
+      "source": "repo:app/common.go#Run",
+      "spelling": "missing.Remote",
+      "target": "",
+      "resolution": "Unresolved"
+    },
+    {
+      "source": "repo:app/common.go#Run",
+      "spelling": "platform",
+      "target": "repo:app/platform_linux.go#platform",
+      "resolution": "Resolved"
+    },
+    {
+      "source": "repo:app/common.go#Run",
+      "spelling": "platform",
+      "target": "repo:app/platform_windows.go#platform",
+      "resolution": "Resolved"
+    },
+    {
+      "source": "repo:app/common.go#Run",
+      "spelling": "strings.Contains",
+      "target": "stdlib:strings#Contains",
+      "resolution": "Resolved"
+    },
+    {
+      "source": "repo:app/platform_linux.go#platform",
+      "spelling": "LinuxTarget",
+      "target": "repo:app/platform_linux.go#LinuxTarget",
+      "resolution": "Resolved"
+    },
+    {
+      "source": "repo:app/platform_windows.go#platform",
+      "spelling": "WindowsTarget",
+      "target": "repo:app/platform_windows.go#WindowsTarget",
+      "resolution": "Resolved"
+    }
+  ],
+  "profiles": [
+    {
+      "platform": "linux/amd64",
+      "files": [
+        "common.go",
+        "platform_linux.go"
+      ],
+      "calls": [
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "platform",
+          "target": "repo:app/platform_linux.go#platform",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "local.Local",
+          "target": "repo:app/local/local.go#Local",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "cmp.Compare",
+          "target": "stdlib:cmp#Compare",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "strings.Contains",
+          "target": "stdlib:strings#Contains",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "missing.Remote",
+          "target": "",
+          "resolution": "Unresolved"
+        },
+        {
+          "source": "repo:app/platform_linux.go#platform",
+          "spelling": "LinuxTarget",
+          "target": "repo:app/platform_linux.go#LinuxTarget",
+          "resolution": "Resolved"
+        }
+      ],
+      "diagnostics": [
+        "<fixture>/app/common.go:6:5: could not import example.test/missing (dependency outside repository/stdlib policy: example.test/missing)"
+      ],
+      "standard_packages": [
+        "cmp",
+        "errors",
+        "internal/abi",
+        "internal/bytealg",
+        "internal/byteorder",
+        "internal/chacha8rand",
+        "internal/coverage/rtcov",
+        "internal/cpu",
+        "internal/goarch",
+        "internal/godebugs",
+        "internal/goexperiment",
+        "internal/goos",
+        "internal/profilerecord",
+        "internal/race",
+        "internal/reflectlite",
+        "internal/runtime/atomic",
+        "internal/runtime/exithook",
+        "internal/runtime/syscall",
+        "internal/stringslite",
+        "internal/unsafeheader",
+        "io",
+        "runtime",
+        "runtime/internal/math",
+        "runtime/internal/sys",
+        "strings",
+        "sync",
+        "sync/atomic",
+        "unicode",
+        "unicode/utf8"
+      ],
+      "rejected_imports": [
+        "example.test/missing"
+      ]
+    },
+    {
+      "platform": "windows/amd64",
+      "files": [
+        "common.go",
+        "platform_windows.go"
+      ],
+      "calls": [
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "platform",
+          "target": "repo:app/platform_windows.go#platform",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "local.Local",
+          "target": "repo:app/local/local.go#Local",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "cmp.Compare",
+          "target": "stdlib:cmp#Compare",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "strings.Contains",
+          "target": "stdlib:strings#Contains",
+          "resolution": "Resolved"
+        },
+        {
+          "source": "repo:app/common.go#Run",
+          "spelling": "missing.Remote",
+          "target": "",
+          "resolution": "Unresolved"
+        },
+        {
+          "source": "repo:app/platform_windows.go#platform",
+          "spelling": "WindowsTarget",
+          "target": "repo:app/platform_windows.go#WindowsTarget",
+          "resolution": "Resolved"
+        }
+      ],
+      "diagnostics": [
+        "<fixture>/app/common.go:6:5: could not import example.test/missing (dependency outside repository/stdlib policy: example.test/missing)"
+      ],
+      "standard_packages": [
+        "cmp",
+        "errors",
+        "internal/abi",
+        "internal/bytealg",
+        "internal/byteorder",
+        "internal/chacha8rand",
+        "internal/coverage/rtcov",
+        "internal/cpu",
+        "internal/goarch",
+        "internal/godebugs",
+        "internal/goexperiment",
+        "internal/goos",
+        "internal/profilerecord",
+        "internal/race",
+        "internal/reflectlite",
+        "internal/runtime/atomic",
+        "internal/runtime/exithook",
+        "internal/stringslite",
+        "internal/unsafeheader",
+        "io",
+        "runtime",
+        "runtime/internal/math",
+        "runtime/internal/sys",
+        "strings",
+        "sync",
+        "sync/atomic",
+        "unicode",
+        "unicode/utf8"
+      ],
+      "rejected_imports": [
+        "example.test/missing"
+      ]
+    }
+  ]
+}

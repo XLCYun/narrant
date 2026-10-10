@@ -79,6 +79,12 @@ scope at one fixed side of a **Change Comparison**. Membership is independent of
 which objects a **Review View** currently displays.
 _Avoid_: Text diff, syntax tree
 
+**Configuration Union Code Graph（配置并集代码图）**:
+A **Code Graph** whose objects and relationships are present in at least one analyzed
+configuration, without retaining their configuration attribution. It does not imply
+that every fact applies to every configuration or that all facts can hold together.
+_Avoid_: All-configurations graph, simultaneously active graph
+
 **Code Object Kind**:
 The code-semantic classification of a **Code Object**, combining a common category
 with the language's specific construct.
