@@ -181,8 +181,11 @@ macOS ARM64 与 Windows x64 均需真实工具证据。公共进程模块承担�
 Rust 标准声明平台 root 为已发现的项目 sysroot，metadata 仅含 `rust_src`：
 相对该 root 的标准源码目录，并校验 `core/src/lib.rs` 与 `std/src/lib.rs` 存在且不逃逸。
 项目工具链发现仍需按本侧 manifest 目录和 rustup 覆盖规则运行；helper 构建版本不是项目目标版本。
-Host 为 Rust profile 固定快照 PATH、HOME/USERPROFILE、CARGO_HOME、RUSTUP_HOME 和明确的 Cargo
-网络、代理及证书变量；不继承 RUSTUP_TOOLCHAIN、编译器包装器或编译参数。
+Host 为 Rust profile 固定快照 PATH、HOME/USERPROFILE、CARGO_HOME、RUSTUP_HOME、
+RUSTUP_TOOLCHAIN 和明确的 Cargo 网络、代理及证书变量；工厂已经解析并批准的值优先于
+环境快照，确保项目探针与 helper 使用同一工具链及 PATH。helper 构建版本仅用于构建，
+运行时不注入该版本，也不猜测或删除用户/启动器提供的工具链覆盖。编译器包装器与编译参数
+不进入继承白名单。
 前两档强制 `CARGO_NET_OFFLINE=true`，全部依赖保留用户已有值；始终
 `RUSTUP_AUTO_INSTALL=0`、`CARGO_CACHE_RUSTC_INFO=0`。原生 loader 仍负责禁用 build scripts
 和过程宏，环境白名单不能代替加载政策。

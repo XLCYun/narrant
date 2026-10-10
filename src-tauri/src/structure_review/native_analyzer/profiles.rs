@@ -48,6 +48,7 @@ pub(super) fn rust_environment(
         "USERPROFILE",
         "CARGO_HOME",
         "RUSTUP_HOME",
+        "RUSTUP_TOOLCHAIN",
         "CARGO_NET_OFFLINE",
         "CARGO_NET_RETRY",
         "CARGO_NET_GIT_FETCH_WITH_CLI",

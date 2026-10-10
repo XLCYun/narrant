@@ -198,7 +198,7 @@ fn typescript_requires_approved_standard_declaration_packages() {
     assert!(input::validate(&analyzer, &input).is_err());
 }
 
-/// 工具链发现保留明确输入，只有全部依赖允许沿用联网政策，并剔除构建期 toolchain 覆盖。
+/// 工具链发现保留用户覆盖，只有全部依赖允许沿用联网政策，运行时不猜测覆盖来源。
 #[test]
 fn rust_environment_preserves_network_policy_and_blocks_automatic_installation() {
     for profile in [
@@ -218,6 +218,7 @@ fn rust_environment_preserves_network_policy_and_blocks_automatic_installation()
         });
         assert_eq!(env[std::ffi::OsStr::new("PATH")], "fixture");
         assert_eq!(env[std::ffi::OsStr::new("CARGO_HOME")], "fixture");
+        assert_eq!(env[std::ffi::OsStr::new("RUSTUP_TOOLCHAIN")], "fixture");
         assert_eq!(env[std::ffi::OsStr::new("HTTPS_PROXY")], "fixture");
         assert_eq!(
             env[std::ffi::OsStr::new("CARGO_NET_OFFLINE")],
@@ -228,14 +229,94 @@ fn rust_environment_preserves_network_policy_and_blocks_automatic_installation()
             }
         );
         assert_eq!(env[std::ffi::OsStr::new("RUSTUP_AUTO_INSTALL")], "0");
-        for key in [
-            "RUSTUP_TOOLCHAIN",
-            "RUSTC_WRAPPER",
-            "RUSTFLAGS",
-            "NODE_OPTIONS",
-            "PYTHONPATH",
-        ] {
+        for key in ["RUSTC_WRAPPER", "RUSTFLAGS", "NODE_OPTIONS", "PYTHONPATH"] {
             assert!(!env.contains_key(std::ffi::OsStr::new(key)));
         }
+    }
+}
+
+/// 构造器与原有项目探针读取同一环境覆盖；不存在覆盖时也不能注入 helper 构建版本。
+#[test]
+fn rust_constructor_preserves_inherited_toolchain_and_discovery_path() {
+    let fixture = Fixture::new();
+    let prepared = migrating(&fixture, NativeProfile::RustAllDependencies);
+    let analyzer =
+        NativeLanguageAnalyzer::new(prepared.command, prepared.identity, prepared.platforms);
+    for key in ["PATH", "RUSTUP_TOOLCHAIN", "CARGO_HOME", "RUSTUP_HOME"] {
+        assert_eq!(
+            analyzer
+                .command
+                .environment
+                .get(std::ffi::OsStr::new(key))
+                .cloned(),
+            std::env::var_os(key)
+        );
+    }
+    // 使用确定的输入覆盖有/无用户 override 两种情况，不修改测试进程的全局环境。
+    for project_toolchain in [None, Some("user-selected-project-toolchain")] {
+        let environment = profiles::rust_environment(NativeProfile::RustAllDependencies, |key| {
+            (key == "RUSTUP_TOOLCHAIN")
+                .then_some(project_toolchain)
+                .flatten()
+                .map(Into::into)
+        });
+        assert_eq!(
+            environment
+                .get(std::ffi::OsStr::new("RUSTUP_TOOLCHAIN"))
+                .cloned(),
+            project_toolchain.map(Into::into)
+        );
+    }
+}
+
+/// 工厂确认的项目 PATH/工具链及联网政策优先，禁止自动安装和只读约束不能被覆盖。
+#[test]
+fn rust_constructor_keeps_factory_resolution_and_forces_safety_policy() {
+    let fixture = Fixture::new();
+    for profile in [
+        NativeProfile::RustRepository,
+        NativeProfile::RustStandardLibrary,
+        NativeProfile::RustAllDependencies,
+    ] {
+        let mut prepared = migrating(&fixture, profile);
+        let resolved_path = std::env::join_paths([
+            fixture.tools.join("project-toolchain/bin"),
+            fixture.tools.join("cargo/bin"),
+        ])
+        .unwrap();
+        prepared.command.environment = BTreeMap::from([
+            ("PATH".into(), resolved_path.clone()),
+            (
+                "RUSTUP_TOOLCHAIN".into(),
+                "factory-approved-project-toolchain".into(),
+            ),
+            ("CARGO_NET_OFFLINE".into(), "false".into()),
+            ("RUSTUP_AUTO_INSTALL".into(), "1".into()),
+            ("CARGO_CACHE_RUSTC_INFO".into(), "1".into()),
+        ]);
+        let analyzer =
+            NativeLanguageAnalyzer::new(prepared.command, prepared.identity, prepared.platforms);
+        let environment = &analyzer.command.environment;
+        assert_eq!(environment[std::ffi::OsStr::new("PATH")], resolved_path);
+        assert_eq!(
+            environment[std::ffi::OsStr::new("RUSTUP_TOOLCHAIN")],
+            "factory-approved-project-toolchain"
+        );
+        assert_eq!(
+            environment[std::ffi::OsStr::new("RUSTUP_AUTO_INSTALL")],
+            "0"
+        );
+        assert_eq!(
+            environment[std::ffi::OsStr::new("CARGO_CACHE_RUSTC_INFO")],
+            "0"
+        );
+        assert_eq!(
+            environment[std::ffi::OsStr::new("CARGO_NET_OFFLINE")],
+            if profile == NativeProfile::RustAllDependencies {
+                "false"
+            } else {
+                "true"
+            }
+        );
     }
 }

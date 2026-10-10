@@ -94,14 +94,15 @@ impl NativeLanguageAnalyzer {
             | NativeProfile::RustAllDependencies),
         ) = NativeProfile::parse(&identity.profile)
         {
-            command
-                .environment
-                .extend(profiles::rust_environment(profile, |key| {
-                    std::env::var_os(key)
-                }));
-            command
-                .environment
-                .remove(std::ffi::OsStr::new("RUSTUP_TOOLCHAIN"));
+            // 工厂已解析的项目路径/覆盖优先于环境快照，安全约束仍由政策最后强制。
+            let environment = profiles::rust_environment(profile, |key| {
+                command
+                    .environment
+                    .get(std::ffi::OsStr::new(key))
+                    .cloned()
+                    .or_else(|| std::env::var_os(key))
+            });
+            command.environment.extend(environment);
         }
         Self {
             command,
