@@ -48,5 +48,11 @@ Single-context layout. See `docs/agents/domain.md`.
 6. Issue 合并且 worktree 不再使用后，清理该 worktree 的 `src-tauri/target`，避免生成物长期占用磁盘。
 7. 使用 `pnpm rust:cache:status` 查看 sccache，使用 `pnpm rust:cache:clean` 只清理 sccache；不要用清理缓存替代正常的增量构建。
 
+## 本地验证与 CI 节奏
+1. 开发期间先在本地 macOS 完成受影响的测试、静态检查和真实运行验证，优先修复本地能够发现的问题。
+2. 代码开发、代码审查及本地 macOS 验证完成后，再集中运行必要的最终 CI，包括 Windows 等本机无法验证的平台；CI 额度不足不阻塞可以在本地推进的开发。
+3. 开发期间控制推送频率，避免反复触发自动 CI；需要提前推送时使用仓库支持的跳过 CI 机制，最终验收提交恢复正常 CI。
+4. 已知 GitHub Actions 额度不足或暂停时，在准备最终 CI 的阶段主动提醒用户恢复执行额度，恢复后再运行；本地通过不能替代最终平台验收。
+
 ## 不要手动触发 quality-gate
 不要手动触发 quality-gate.
