@@ -20,6 +20,7 @@ impl PackId {
     /// 只有已接通生产工厂的语言才能进入真实 Native 支持包验收。
     pub const NATIVE_MIGRATED: &'static [Self] = &[
         Self::Rust,
+        Self::Python,
         Self::TypeScriptJavascript,
         Self::Java,
         Self::Go,
@@ -92,9 +93,13 @@ impl PackId {
                 },
             ],
             Self::Python => vec![
-                if windows { "bin/ty.exe" } else { "bin/ty" },
-                "control/ty.toml",
-                "licenses/ty-LICENSE",
+                if windows {
+                    "bin/narrant-python.exe"
+                } else {
+                    "bin/narrant-python"
+                },
+                "control/native.json",
+                "licenses/Python-dependencies.json",
                 "licenses/ruff-LICENSE",
                 "licenses/typeshed-LICENSE",
             ],

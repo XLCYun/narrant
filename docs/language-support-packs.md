@@ -6,12 +6,12 @@
 ## 版本和内容
 
 `resources/language-support-packs.json` 同时供 Rust 应用和 Node 打包脚本读取。改变任何文件内容时
-提升对应包版本并保留历史产物，不覆盖同版本。历史首版为 `1.0.0`；当前 Rust 和 TS/JS
+提升对应包版本并保留历史产物，不覆盖同版本。历史首版为 `1.0.0`；当前 Rust、TS/JS 和 Python
 使用未发布的 `1.1.0` 原生候选，最终双平台 CI 尚未执行：
 
 | 包 | 内容 | 平台 |
 | --- | --- | --- |
-| Python | ty 0.0.84 原生服务、内置固定 stdlib、空控制配置及 ty/Ruff/typeshed 许可证 | macOS arm64、Windows x64 |
+| Python | narrant-python，内嵌同源 ty 0.0.84 / Ruff、固定 typeshed、控制身份及实际目标锁定许可闭包 | macOS arm64 本地验收；Windows x64 待最终 CI |
 | Rust | narrant-rust，固定 rust-analyzer 库 revision 9074e9b；包内包含实际目标的锁定依赖许可闭包 | macOS arm64 本地验收；Windows x64 待最终 CI |
 | TypeScript / JavaScript | Node 24.18.0、TypeScript 6.0.3、TLS 6.0.0、@types/node 22.20.1、undici-types 6.21.0，随附上游许可证 | 同上 |
 
@@ -28,7 +28,7 @@ Rust 项目仍需要用户已有的 Cargo/rustc；标准库或完整依赖范围
 
 ```sh
 pnpm build:language-packs --all
-# 仅当前目标；--native 会拒绝宿主架构不匹配，执行包内工具、TS 引擎及 Python 真实 LSP 查询。
+# 仅当前目标；--native 会拒绝宿主架构不匹配，执行包内原生 helper 的真实分析与归档提取 smoke。
 pnpm build:language-packs --target aarch64-apple-darwin --native
 # 或 --target x86_64-pc-windows-msvc --native
 ```
@@ -49,7 +49,8 @@ node scripts/verify-native-analyzers.mjs .tools/language-support-pack-artifacts 
 该验收覆盖真实图/diff、三档配置、隔离安装、生产 Review DTO 及取消/错误；
 历史独立 helper 证据与本地生产退役结果见 [迁移验证](research/existing-native-helper-migration-validation.md)。
 
-Python 不需要用户 Python、venv 或 Node；Ruff parser/AST/codegen 编译进应用，ty 来自独立包。
+Python 不需要用户 Python、venv 或 Node；同源 Ruff parser/AST/codegen、ty 数据库与内嵌 typeshed
+编译进独立 `narrant-python`，应用通过公共 Native Host 构图。
 输入支持 UTF-8 `.py/.pyi`、Python 3.7–3.14，只分析本侧仓库和固定标准库。详见
 [Python 规格](specs/0023-python-language-analyzer.md)及[实现验收](research/python-implementation-validation.md)。
 
@@ -58,8 +59,10 @@ pnpm build:language-packs --id python --native --output .tools/language-support-
 node scripts/verify-python-analyzer.mjs .tools/language-support-pack-artifacts
 ```
 
-验证脚本会从本地产物提取固定 ty，通过仓库 Cargo 包装器依次运行语法/真实语义、真实安装租约、
-混合语言两侧 Review 测试；正常退出后清理临时工具目录。`--version` 不能替代这些验收。
+验证脚本委托共享原生验收入口，从正常归档提取 helper，通过仓库 Cargo 包装器依次验证
+固定历史图、各 minor 的语法/真实语义、真实安装租约、生产 Review DTO、错误与取消；
+正常退出后清理临时工具目录。Python 同样使用 1.98.0 优化构建和共享 Cargo 许可收集器。
+具体许可证据边界与本地结果见 [迁移验证](research/existing-native-helper-migration-validation.md)。
 
 PR 上 `Language support packs` workflow 在两个原生 runner 构建并启动工具，保存完整产物。
 它与应用发布、quality-gate 分开；不要手动触发 quality-gate。

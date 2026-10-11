@@ -201,9 +201,9 @@ test('migration toolchain selection is explicit and complete', async () => {
   assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
   assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm']);
   assert.equal(selectedToolchainNames().length, 9);
-  assert.deepEqual(selectedNativePacks(), ['rust', 'typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
+  assert.deepEqual(selectedNativePacks(), ['rust', 'python', 'typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
   assert.deepEqual(selectedToolchainNames('typescript-javascript'), []);
-  for (const id of ['python', 'none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
+  for (const id of ['none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
 });
 
 /** Cargo 许可步骤只保留目标生产闭包，开发依赖不能冒充实际分发依赖。 */

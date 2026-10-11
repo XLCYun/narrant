@@ -165,6 +165,14 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 .unwrap();
                 "main.ts"
             }
+            PackId::Python => {
+                fs::write(
+                    fixture.path().join("main.py"),
+                    "def value(): return len([])\n",
+                )
+                .unwrap();
+                "main.py"
+            }
             PackId::Go => {
                 fs::write(
                     fixture.path().join("go.mod"),
@@ -202,7 +210,6 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 fs::write(fixture.path().join("compile_commands.json"), serde_json::to_vec(&serde_json::json!([{"directory":fixture.path(),"file":"main.cpp","arguments":["clang++","-std=c++20","main.cpp"]}])).unwrap()).unwrap();
                 "main.cpp"
             }
-            _ => unreachable!(),
         };
         if let Some(kind) = match id {
             PackId::Go => Some("go"),

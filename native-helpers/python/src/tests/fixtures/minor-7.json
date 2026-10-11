@@ -1,0 +1,6 @@
+[
+  [
+    "async def 中文(x: str='a  b') -> str:",
+    "async def 中文(x: str = 'a  b') -> str:\r\n    \"\"\"line one\r\nline two\"\"\"\r\n    return x"
+  ]
+]

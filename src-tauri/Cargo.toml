@@ -29,13 +29,6 @@ libc = "0.2"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 octocrab = { version = "0.54.1", default-features = false, features = ["default-client", "jwt-rust-crypto", "rustls", "rustls-ring", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
-ruff_python_parser = "=0.0.15"
-ruff_python_ast = "=0.0.15"
-ruff_python_codegen = "=0.0.15"
-ruff_text_size = "=0.0.15"
-ruff_source_file = "=0.0.15"
-toml = "0.9"
-pep440_rs = "0.7"
 futures-util = "0.3"
 flate2 = "1"
 minisign-verify = "0.2"

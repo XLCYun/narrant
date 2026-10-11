@@ -1,0 +1,8 @@
+[
+  "from typing import overload, TypeAlias",
+  "class Box:\n    '''docs  with spaces\\nand newline'''\n    field: str = 'a  b'\n\n    @property\n    def value(self) -> str:\n        return self.field\n\n    @value.setter\n    def value(self, value: str):\n        self.field = value",
+  "@overload\ndef run(x: int) -> int:\n    ...",
+  "@overload\ndef run(x: str) -> str:\n    ...",
+  "def run(x):\n    return x",
+  "Alias: TypeAlias = list[int]"
+]

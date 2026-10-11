@@ -1,9 +1,7 @@
 //! Python 从真实 Git 比较到应用 DTO 的路由、合并与生命周期验收。
 
 use super::*;
-use crate::structure_review::{
-    code_graph::LanguageAnalyzer, python_analyzer::PythonLanguageAnalyzer,
-};
+use crate::structure_review::{code_graph::LanguageAnalyzer, native_languages};
 
 /// 用小型真实仓库建立新增、修改与仅删除场景，保留实际 Review 工作区管理。
 async fn fixture(files: &[(&str, &str, Option<&str>)]) -> Fixture {
@@ -63,7 +61,7 @@ async fn fixture(files: &[(&str, &str, Option<&str>)]) -> Fixture {
 
 /// 三种语言使用同一侧路径；Python 的真实调用目标和删除声明通过统一投影输出。
 #[tokio::test]
-#[ignore = "需要固定 NARRANT_TY_PATH"]
+#[ignore = "需要真实 NARRANT_PYTHON_PACK"]
 async fn native_python_mixed_review_uses_two_shared_workspaces() {
     let fixture = fixture(&[
         (
@@ -84,7 +82,10 @@ async fn native_python_mixed_review_uses_two_shared_workspaces() {
     let rust = observations.clone();
     let typescript = observations.clone();
     let python = observations.clone();
-    let analyzer = PythonLanguageAnalyzer::default();
+    let pack = std::env::var_os("NARRANT_PYTHON_PACK").expect("真实 Python 包");
+    let analyzer =
+        native_languages::from_pack(crate::language_support::PackId::Python, Path::new(&pack))
+            .unwrap();
     let application = StructureReview::new(Arc::new(move |input, _, _| {
         rust.lock()
             .unwrap()
@@ -270,11 +271,7 @@ async fn filtered_python_tests_do_not_prepare_a_support_pack() {
     let support =
         crate::language_support::LanguageSupportPacks::new(root.path().join("packs")).unwrap();
     let application = StructureReview::new(Arc::new(|_, _, _| panic!("没有 Rust 文件")))
-        .with_python(Arc::new(|input, cancelled| {
-            PythonLanguageAnalyzer::new(PathBuf::new())
-                .with_cancellation(cancelled)
-                .analyze(input)
-        }))
+        .with_python(Arc::new(|_, _| panic!("已过滤 Python 组不应分析")))
         .with_support_packs(support.clone());
     let result = application
         .analyze(
@@ -289,4 +286,135 @@ async fn filtered_python_tests_do_not_prepare_a_support_pack() {
         .unwrap();
     assert!(result.before.nodes.is_empty() && result.after.nodes.is_empty());
     support.shutdown().await;
+}
+
+/// 真实优化归档经安装工厂与固定 Git 两侧输出 DTO；语法失败和取消保留生命周期回收。
+#[tokio::test]
+#[ignore = "需要真实 NARRANT_NATIVE_PACKS Python 优化归档"]
+async fn real_python_pack_flows_through_review_lifecycle_to_dto() {
+    use httpmock::prelude::*;
+    let artifacts =
+        PathBuf::from(std::env::var_os("NARRANT_NATIVE_PACKS").expect("真实 Python 归档"));
+    let target = if cfg!(windows) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "aarch64-apple-darwin"
+    };
+    let server = MockServer::start();
+    for name in ["manifest.json", "pack.tar.gz"] {
+        let bytes = std::fs::read(artifacts.join("python/1.1.0").join(target).join(name)).unwrap();
+        server.mock(|when, then| {
+            when.path(format!("/python/1.1.0/{target}/{name}"));
+            then.body(bytes);
+        });
+    }
+    for invalid in [false, true] {
+        let fixture = fixture(&[
+            (
+                "main.py",
+                "def helper(): return 1\ndef run(): return helper()\n",
+                Some(if invalid {
+                    "def broken(\n"
+                } else {
+                    "def helper(): return 2\ndef run(): return helper() + len([])\n"
+                }),
+            ),
+            ("removed.pyi", "def removed() -> None: ...\n", None),
+        ])
+        .await;
+        let packs = crate::language_support::LanguageSupportPacks::with_test_origin(
+            fixture._data.path().join("packs"),
+            server.base_url(),
+            target.into(),
+        )
+        .unwrap();
+        let application = StructureReview::new(Arc::new(|_, _, _| panic!("没有 Rust 文件")))
+            .with_python(Arc::new(|_, _| panic!("生产工厂必须替换 Python 路由")))
+            .with_support_packs(packs.clone());
+        let result = application
+            .analyze(
+                &fixture.lifecycle,
+                &OperationContext::background(),
+                &fixture.presentation.review_id,
+                &fixture.presentation.snapshot_id,
+                AnalysisOptions::default(),
+                RustDependencyScope::default(),
+            )
+            .await;
+        if invalid {
+            let error = result.unwrap_err();
+            assert_eq!(error.code, "analysis-failed");
+            assert!(error.detail.contains("语法"), "{}", error.detail);
+        } else {
+            let result = result.unwrap();
+            let run = result
+                .after
+                .nodes
+                .iter()
+                .find(|node| node.name.as_deref() == Some("run"))
+                .unwrap();
+            let helper = result
+                .after
+                .nodes
+                .iter()
+                .find(|node| node.name.as_deref() == Some("helper"))
+                .unwrap();
+            assert!(run.references.iter().any(|reference| matches!(&reference.target, projection::Target::Node { id } if id == &helper.id)));
+            assert!(result
+                .diff
+                .nodes
+                .iter()
+                .any(|change| change.id == run.id && change.content == Some("modified")));
+            assert!(result
+                .diff
+                .nodes
+                .iter()
+                .any(|change| change.content == Some("removed")));
+            assert_eq!(
+                result
+                    .coverage
+                    .iter()
+                    .find(|file| file.path == "removed.pyi")
+                    .unwrap()
+                    .after,
+                "absent"
+            );
+            if let Some(output) = std::env::var_os("NARRANT_CODE_GRAPH_OUTPUT") {
+                std::fs::create_dir_all(&output).unwrap();
+                std::fs::write(
+                    Path::new(&output).join("python-structure-comparison.json"),
+                    serde_json::to_vec_pretty(&result).unwrap(),
+                )
+                .unwrap();
+            }
+            println!(
+                "Python Review: before={}, after={}, changes={}",
+                result.before.nodes.len(),
+                result.after.nodes.len(),
+                result.diff.nodes.len()
+            );
+        }
+        assert!(!fixture.head.parent().unwrap().join("before").exists());
+        assert!(fixture.head.exists());
+        // 同一生产安装复用后，已取消操作仍失败且不留下 before 工作区。
+        let token = CancellationToken::new();
+        token.cancel();
+        let error = application
+            .analyze(
+                &fixture.lifecycle,
+                &OperationContext::new(token),
+                &fixture.presentation.review_id,
+                &fixture.presentation.snapshot_id,
+                AnalysisOptions::default(),
+                RustDependencyScope::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "cancelled");
+        assert!(!fixture.head.parent().unwrap().join("before").exists());
+        packs
+            .remove(crate::language_support::PackId::Python, "1.1.0")
+            .unwrap();
+        packs.shutdown().await;
+    }
 }

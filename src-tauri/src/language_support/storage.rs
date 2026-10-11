@@ -277,12 +277,7 @@ pub(super) fn validate_manifest(
                 && (file.path == "runtime/jdk/bin/java"
                     || file.path == "runtime/jdk/bin/java.exe")))
             && !file.executable
-    }) || (key.id == PackId::Python
-        && manifest
-            .files
-            .iter()
-            .any(|file| file.path == "control/ty.toml" && (file.size != 0 || file.executable)))
-    {
+    }) {
         return Err("语言支持包工具权限或固定控制文件无效".into());
     }
     Ok(())

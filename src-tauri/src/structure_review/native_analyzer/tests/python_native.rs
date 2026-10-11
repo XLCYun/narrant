@@ -615,20 +615,6 @@ fn native_cross_project_configuration_conflicts_remain_unresolved() {
             assert!(matches!(named(&graph, "Payload"), CodeNode::Type(_)));
             assert!(matches!(named(&graph, "serve"), CodeNode::Callable(_)));
         }
-        let old = crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
-            std::env::var_os("NARRANT_TY_PATH").expect("需固定旧 ty 路径"),
-        )
-        .analyze(&input)
-        .unwrap();
-        assert!(old.diff(&graph).unwrap().nodes.is_empty());
-        assert_eq!(old.root(), graph.root());
-        assert_eq!(old.external_symbols(), graph.external_symbols());
-        let mut pending = old.root().contains.clone();
-        while let Some(id) = pending.pop() {
-            let node = old.node(&id).unwrap();
-            pending.extend(node.data().contains.clone());
-            assert_eq!(node.data().source, graph.node(&id).unwrap().data().source);
-        }
     }
 }
 
@@ -746,13 +732,6 @@ fn native_cross_project_context_still_validates_own_syntax() {
             files: vec!["alpha/main.py".into()],
             options: Default::default(),
         };
-        let old = crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
-            std::env::var_os("NARRANT_TY_PATH").expect("需固定旧 ty 路径"),
-        )
-        .analyze(&input)
-        .unwrap_err();
-        eprintln!("context beta {target_minor} old：{old}");
-        assert!(old.to_string().contains(diagnostic), "{old}");
         match analyzer().analyze(&input) {
             Ok(_) => {
                 eprintln!("context beta {target_minor} native：错误地成功");

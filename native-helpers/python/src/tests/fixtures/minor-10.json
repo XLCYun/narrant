@@ -1,0 +1,6 @@
+[
+  [
+    "match subject:\n    case {'name': name}:\n        print(name)",
+    "match subject:\n    case {'name': name}: print(name)"
+  ]
+]

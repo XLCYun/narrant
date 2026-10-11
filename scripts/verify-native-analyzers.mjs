@@ -30,7 +30,7 @@ export function validateNativeConfiguration(config, platform = process.platform,
 /** 明确列出串行验收命令；所有 Cargo 入口统一经过仓库锁。 */
 export function verificationCommands(environment, platform = process.platform, language = 'all') {
   const ids = selectedNativePacks(language);
-  const required = { rust: [], 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
+  const required = { python: [], rust: [], 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
   const suffix = platform === 'win32' ? '.exe' : '';
   const python = environment.NARRANT_PYTHON ?? (platform === 'win32' ? 'python' : 'python3');
   for (const name of ids.flatMap(id => required[id].map(name => `NARRANT_${name}`))) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
@@ -53,6 +53,13 @@ export function verificationCommands(environment, platform = process.platform, l
       { executable: 'bash', args: [...cargo, '--lib', 'native_languages::rust::tests::', '--', '--ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'real_installed_rust_pack_analyzes_with_existing_toolchain', '--', '--ignored'] },
       { executable: 'bash', args: [...cargo, '--lib', 'real_rust_pack_flows_through_review_lifecycle_to_dto', '--', '--ignored'] },
+    ] : []),
+    ...(ids.includes('python') ? [
+      { executable: 'bash', args: ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/python/Cargo.toml', '--locked', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::python_graph::', '--', '--ignored', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::python_native::', '--', '--ignored', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'language_support::python_tests::', '--', '--include-ignored', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'application::tests::python::', '--', '--include-ignored', '--test-threads=1'] },
     ] : []),
     // 所有平台复用同一进程所有者矩阵；Windows 同组还包含准确句柄与 Job 回归。
     { executable: 'bash', args: [...cargo, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'] },
@@ -98,6 +105,12 @@ export async function verifyNativeAnalyzers(artifacts, build = false, language =
   if (!target) throw new Error('Native validation requires macOS ARM64 or Windows x64');
   artifacts = path.resolve(artifacts);
   const environment = { ...process.env, NARRANT_TEST_NODE: process.execPath, NARRANT_NATIVE_LANGUAGE: language, NARRANT_NATIVE_PACKS: artifacts, NARRANT_NATIVE_HELPERS_CONFIG: path.join(artifacts, 'native-helpers-config.json'), ...(process.platform === 'win32' ? { NARRANT_WINDOWS_TEST_MANIFEST: '1' } : {}) };
+  if (ids.includes('python')) {
+    const catalog = JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'), 'utf8'));
+    environment.NARRANT_PYTHON_PACK = path.join(artifacts, 'smoke-installed/python', catalog.packs.python.version, target);
+    environment.NARRANT_PYTHON_HELPER = path.join(environment.NARRANT_PYTHON_PACK, `bin/narrant-python${process.platform === 'win32' ? '.exe' : ''}`);
+    environment.NARRANT_LANGUAGE_PACK_FIXTURE = artifacts;
+  }
   if (ids.includes('rust')) {
     const catalog = JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'), 'utf8'));
     environment.NARRANT_RUST_PACK = path.join(artifacts, 'smoke-installed/rust', catalog.packs.rust.version, target);

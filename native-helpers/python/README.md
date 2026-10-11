@@ -1,8 +1,8 @@
-# Python native helper（独立阶段）
+# Python native helper
 
 独立 Rust 库固定 ty `0.0.84` 对应的 Ruff revision
 `11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`。生产依赖的数据库、AST 和 codegen
-全部同源；registry Ruff `0.0.15` 只作为旧行为的测试对照。
+全部同源；退役前 registry Ruff `0.0.15` 的实测投影保留为固定业务快照，不再引入旧 parser。
 
 `PythonProject::load(ProjectInput)` 接收单个已归一化项目：`repository` 是磁盘仓库根，
 `project_root` 和有序 `source_roots` 是干净的仓库相对目录（空路径表示仓库根），
@@ -36,8 +36,15 @@ metadata 仅含上述固定 `source_revision`；平台 root 必须包含当前 e
 Rust/Python 通过 `native-helpers/common` 共用序列化 DTO 和已审查的控制/退出循环，
 进程所有权仍复用宿主 `child_process::CurrentProcessDomain`。
 
-本阶段只建立开发 executable、图投影与公共 Host 聚焦证据。生产工厂/注册、支持包、
-macOS ARM64 + Windows x64 实际安装和 Review 验收、旧链退役均仍待后续顺序门禁。
+Python `1.1.0` 原生候选已通过正常优化打包、macOS ARM64 隔离安装、生产工厂、
+Review 到 DTO、错误与取消验收；旧应用内 Python/ty LSP 链及宿主 Ruff 依赖已退役。
+Windows x64 和集中最终 CI 尚未执行，catalog 保持未发布。
+
+正常构建入口复用共享 helper 构建器及 Rust Cargo 许可闭包收集器，使用 Rust 1.98.0。
+包内 `bin/narrant-python`、`control/native.json` 和嵌入 stdlib 的身份共同校验；工厂唯一信任根
+为 `bin`，平台 root 同样为 `bin`。按实际目标收集的许可附带原始通知与固定来源；少数确切
+版本的 MIT 声明附上明确标注的标准条款。seahash 上游通知取回失败的边界见 `licenses/sources.json`，
+不能据此推断上游仓库没有通知。发布仍须最终验收。
 
 在仓库根执行（所有 Cargo 命令经全局锁与 sccache wrapper）：
 

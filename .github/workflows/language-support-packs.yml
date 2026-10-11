@@ -24,7 +24,6 @@ on:
       - scripts/archive-validation.mjs
       - scripts/typescript-native-smoke.mjs
       - scripts/tests/archive-validation.test.mjs
-      - scripts/python-language-support-smoke.mjs
       - scripts/verify-python-analyzer.mjs
       - native-helpers/**
       - scripts/native-language-support-packs.mjs
@@ -32,7 +31,6 @@ on:
       - src-tauri/src/structure_review/code_graph/**
       - src-tauri/src/structure_review/native_analyzer/**
       - src-tauri/src/structure_review/native_languages/**
-      - src-tauri/src/structure_review/python_analyzer/**
       - src-tauri/src/structure_review/application/**
       - src-tauri/src/language_support/**
       - src-tauri/src/lsp/**
@@ -52,7 +50,7 @@ on:
       language:
         description: Completed Native helper to validate on both platforms (all keeps final gate)
         type: choice
-        options: [all, typescript-javascript, rust, java, go, csharp, c-cpp]
+        options: [all, typescript-javascript, rust, python, java, go, csharp, c-cpp]
         default: all
       publish:
         description: Publish validated packs to the immutable OSS prefix
@@ -203,7 +201,7 @@ jobs:
           key: all-native-${{ matrix.target }}
           cache-on-failure: true
       - name: Prepare pinned Rust helper build toolchain
-        if: inputs.language == 'all' || inputs.language == 'rust' || github.event_name != 'workflow_dispatch'
+        if: inputs.language == 'all' || inputs.language == 'rust' || inputs.language == 'python' || github.event_name != 'workflow_dispatch'
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
         run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"

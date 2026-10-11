@@ -3,7 +3,6 @@
 pub mod code_graph;
 pub mod native_analyzer;
 pub(crate) mod native_languages;
-pub mod python_analyzer;
 
 mod application;
 mod source_text;

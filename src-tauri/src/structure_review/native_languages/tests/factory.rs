@@ -47,11 +47,6 @@ fn existing_factories_still_require_target_declarations() {
             error.to_string().contains("target_unavailable"),
             "{id:?}: {error}"
         );
-        assert!(from_pack(PackId::Python, root)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("不是原生语言支持包"));
     }
 }
 
@@ -82,4 +77,33 @@ fn rust_repository_factory_accepts_only_verified_pack_entry() {
     )
     .unwrap();
     assert!(RustPackAnalyzer::from_pack(root.path()).is_err());
+}
+
+/// Python 内嵌标准声明只归属于固定 helper 的唯一安装根，工厂不能与开发入口产生不同根。
+#[test]
+fn python_factory_keeps_embedded_stdlib_in_helper_trusted_root() {
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["bin", "control"] {
+        fs::create_dir(root.path().join(directory)).unwrap();
+    }
+    fs::write(
+        root.path().join(if cfg!(windows) {
+            "bin/narrant-python.exe"
+        } else {
+            "bin/narrant-python"
+        }),
+        "fixture",
+    )
+    .unwrap();
+    fs::write(root.path().join("control/native.json"),r#"{"schema_version":1,"helper_version":"0.1.0","platforms":[{"id":"python-stdlib","kind":"python-embedded-stdlib","version":"0.0.84","root":"bin","metadata":{"source_revision":"11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a"}}]}"#).unwrap();
+    let analyzer = from_pack(PackId::Python, root.path()).unwrap();
+    let repository = tempfile::tempdir().unwrap();
+    fs::write(repository.path().join("main.py"), "def run(): pass\n").unwrap();
+    analyzer
+        .validate_input(&crate::structure_review::code_graph::AnalysisInput {
+            repository_root: repository.path().into(),
+            files: vec!["main.py".into()],
+            options: Default::default(),
+        })
+        .unwrap();
 }

@@ -207,11 +207,16 @@ export async function buildNativePack({ id, target, output, definition, packageD
   let executable, args = [];
   try {
     for (const part of ['bin', 'runtime', 'licenses', 'control']) await fs.mkdir(path.join(payload, part), { recursive: true });
-    if (id === 'rust') {
+    if (id === 'rust' || id === 'python') {
       const { buildMigratingNativeHelper } = await import('./build-migrating-native-helper.mjs');
       await buildMigratingNativeHelper(id, payload);
-      executable = path.join(payload, `bin/narrant-rust${suffix}`);
-      await packageCargoLicenses(path.join(repository, 'native-helpers/rust'), target, payload, 'Rust');
+      executable = path.join(payload, `bin/narrant-${id}${suffix}`);
+      await packageCargoLicenses(path.join(repository, `native-helpers/${id}`), target, payload, id === 'rust' ? 'Rust' : 'Python');
+      if (id === 'python') {
+        const source = path.join(repository, 'native-helpers/python/licenses');
+        for (const name of ['ruff-LICENSE', 'typeshed-LICENSE']) await fs.copyFile(path.join(source, name), path.join(payload, 'licenses', name));
+        platforms.push({ id: 'python-stdlib', kind: 'python-embedded-stdlib', version: definition.ty, root: 'bin', metadata: { source_revision: definition.sourceCommit } });
+      }
     } else if (id === 'go') {
       const sdk = await findDirectory([process.env.NARRANT_GO_SDK, windows ? 'C:\\Program Files\\Go' : '/usr/local/go'], `Go ${definition.go} helper build SDK`);
       if (!(await fs.readFile(path.join(sdk, 'VERSION'), 'utf8')).startsWith(`go${definition.go}\n`)) throw new Error('Go SDK version mismatch');
@@ -307,7 +312,7 @@ export async function buildNativePack({ id, target, output, definition, packageD
         sdkPlatforms.push({ id: `macos-${version}`, kind: 'clang-target', version, root: sdkRoot, metadata: { target_triple: `arm64-apple-macosx${deploymentTarget}`, system_include_directories: ['usr/include/c++/v1', 'usr/include'], resource_platform_id: 'clang-resource-21' } });
       }
     }
-    config[helper] = { executable: relocate(executable), args: args.map(relocate), environment: id === 'csharp' ? { DOTNET_ROOT: path.join(extracted, 'bin'), DOTNET_MULTILEVEL_LOOKUP: '0', DOTNET_EnableDiagnostics: '0' } : {}, trusted_roots: [extracted], platforms: sdkPlatforms };
+    config[helper] = { executable: relocate(executable), args: args.map(relocate), environment: id === 'csharp' ? { DOTNET_ROOT: path.join(extracted, 'bin'), DOTNET_MULTILEVEL_LOOKUP: '0', DOTNET_EnableDiagnostics: '0' } : {}, trusted_roots: [id === 'python' ? path.join(extracted, 'bin') : extracted], platforms: sdkPlatforms };
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     console.log(`Built and smoke-tested local ${id}@${definition.version}: ${destination}`);
     return destination;

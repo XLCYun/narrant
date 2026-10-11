@@ -509,3 +509,43 @@ CI 待全部开发、审查和本地验证完成后集中执行，未推送或�
 聚焦 helper/Host/工厂/安装/Review/脚本测试、check、严格 Clippy、fmt 与原始 ESLint 已通过；
 Host 完整套件保留至 Task7。完整命令、数量、原始失败、产物身份与许可14项逐项出处保存在
 `.superpowers/sdd/0025a-existing-native-helper-implementation-plan/task-5-local-retirement-report.md`。
+
+## Python Task 6 本地生产接入与退役（2026-10-11）
+
+Python `1.1.0` 原生候选已接入按需支持包与生产工厂，正常优化构建使用独立 Rust 1.98.0
+工具链。运行仍为固定 ty `0.0.84` 的同源 Ruff revision `11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`。
+包内 `bin/narrant-python` 和控制身份复用公共 Host；内嵌标准声明 platform root 与工厂
+唯一 trusted root 均为 `bin`。真实隔离安装首先发现两根不一致，随后修正工厂与打包配置，
+没有放宽 Host 的单一安装根校验。
+
+macOS ARM64 正常归档的原目录与提取目录 smoke 均通过；实际 HTTP 安装、重新打开安装、
+使用中租约与生产工厂分析各通过。生产 Review 在两侧工作区中完成 modified / removed `.py/.pyi`、
+标准库关系和 DTO 序列化（before 7、after 4、changes 5），语法失败与预先取消明确传播，
+结束后工作区和租约均释放。公共真实图/diff 保留 Unicode 原文、上下文外部目标、内嵌 `len` 身份；
+格式与注释变化无内容改动，字符串内部空白改变产生 Modified。
+
+退役前 22 个真实 native 业务用例、14 个图业务用例以及实际进程超时/caught-panic 退出通过。
+三组实际旧 ty 完整图逐一与原生图一致，现固定为 JSON 快照，继续比较 category/language/id/kind/name、
+signature、规范化内容、原文、contains/references、extensions 和边界分类。旧 Ruff `0.0.15`
+四个实测 AST 投影对照同样固定为快照，覆盖每个 minor 的头内容与原文范围，旧测试 parser 依赖删除。
+旧 Python 分析子树、ty 服务下载/分发/验证链、宿主 Ruff/pep440 和无消费者 toml 直接依赖已移除。
+共享 `source_text` 的零生产消费者 UTF-16 转换与 LSP cancellation 类型留给 Task 7 集中清理；
+Host strict Clippy 在这项共享清理前尚不能作为通过门禁。
+
+优化 helper 代表性 24 文件、3 项目、600 方法、696 节点分析：首轮 0.447 秒，第二轮 0.308 秒，
+`/usr/bin/time -l` 整个 helper 的 peak RSS 分别 154189824 / 154140672 bytes。每次 ready/completed
+身份一致、自然退出、源码 hash 未变；这不是旧 release 对照或跨平台性能改善结论。
+
+正常打包复用 Rust 目标过滤的 Cargo 非 dev 许可闭包收集器：226 个 locked package，其中
+224 个外部包；附带所有找到的原始通知与固定来源。collection_literals `1.0.2`、quote-use /
+quote-use-macros `0.8.4` 仅按该确切版本发布源和原始 Cargo/VCS/SPDX=MIT 声明，附上明确标为
+标准条款的官方 MIT permission/conditions/disclaimer；没有推断版权年份、权利人或把占位行作为通知。
+seahash `4.1.0` 发布 crate 没有附通知，上游 GitLab 通知取回失败；它附带原始 Cargo authors/VCS
+和同样标注的标准条款，不能据此断言上游仓库不存在通知或原始通知已完整。version-ranges `0.1.1`
+附固定上游 commit 的原始 MPL 2.0 LICENSE。证据与 SHA-256 见 `native-helpers/python/licenses/sources.json`，
+本记录不构成许可法律判断，publication 仍受最终 gate。
+
+可复用本地入口为 `node scripts/build-language-support-packs.mjs --id python --native --output <artifacts>`
+和 `node scripts/verify-native-analyzers.mjs <artifacts> --language python`；旧专用 verifier 委托该公共入口。
+本轮只执行有意义的聚焦检查；未运行 Host 全量，未 push、触发 CI/quality-gate、上传或发布。
+Windows x64 实际安装、Review 与最终集中 CI 尚待全部开发/审查/本地检查完成。

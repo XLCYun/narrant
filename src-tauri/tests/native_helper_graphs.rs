@@ -1215,3 +1215,86 @@ fn rust_real_helper_graph_and_diff() {
         find(&graphs[0], "worker", CodeCategory::Callable).0.clone()
     );
 }
+
+/// Python 优化包经公开 Host 验证跨文件调用、标准库身份、原文及语义空白 diff。
+#[test]
+#[ignore = "require-real-tools: 真实 Python 原生支持包"]
+fn python_real_helper_graph_and_diff() {
+    let configs = config();
+    let cfg = configs.get("python").expect("缺少真实 Python helper");
+    let helper = NativeLanguageAnalyzer::new(
+        HelperCommand {
+            executable: cfg.executable.clone(),
+            args: cfg.args.iter().map(OsString::from).collect(),
+            environment: cfg
+                .environment
+                .iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+            trusted_roots: cfg.trusted_roots.clone(),
+        },
+        HelperIdentity {
+            helper_id: "narrant-python".into(),
+            helper_version: "0.1.0".into(),
+            projection_revision: "python-source-v1".into(),
+            languages: vec!["python".into()],
+            profile: "python-static-v1".into(),
+        },
+        cfg.platforms
+            .iter()
+            .map(|platform| Platform {
+                id: platform.id.clone(),
+                kind: platform.kind.clone(),
+                version: platform.version.clone(),
+                root: platform.root.clone(),
+                metadata: platform.metadata.clone(),
+            })
+            .collect(),
+    );
+    let sandbox = TempDir::new().unwrap();
+    let mut graphs = Vec::new();
+    for (variant, source) in [
+        ("before", "def worker(): return 'a  b'\n"),
+        (
+            "formatting",
+            "# 😀 comment\ndef worker( ):\n    return \"a  b\"\n",
+        ),
+        ("changed", "def worker(): return 'a b'\n"),
+    ] {
+        let root = sandbox.path().join(variant);
+        fs::create_dir(&root).unwrap();
+        put(&root,"main.py","from api import worker\nfrom hidden import hidden\ndef entry(): return worker() + hidden() + str(len([]))\n");
+        put(&root, "api.py", source);
+        put(&root, "hidden.py", "def hidden(): return 1\n");
+        let graph = helper
+            .analyze(&AnalysisInput {
+                repository_root: root,
+                files: vec!["main.py".into(), "api.py".into()],
+                options: Default::default(),
+            })
+            .unwrap();
+        let (_, entry) = find(&graph, "entry", CodeCategory::Callable);
+        let (worker, node) = find(&graph, "worker", CodeCategory::Callable);
+        assert_eq!(
+            node.data().source.as_deref().unwrap().trim_end(),
+            source.trim_start_matches("# 😀 comment\n").trim_end()
+        );
+        assert!(entry
+            .data()
+            .references
+            .iter()
+            .any(|reference| reference.target == ReferenceTarget::Node(worker.clone())));
+        assert!(entry.data().references.iter().any(|reference|matches!(&reference.target,ReferenceTarget::External {symbol} if graph.external_symbols()[symbol].name=="len" && symbol.starts_with("python:stdlib:ty-0.0.84:"))));
+        assert!(entry.data().references.iter().any(|reference|matches!(&reference.target,ReferenceTarget::External {symbol} if graph.external_symbols()[symbol].name=="hidden")));
+        assert_eq!(graph.root().contains.len(), 2);
+        graphs.push(graph);
+    }
+    assert!(graphs[0].diff(&graphs[1]).unwrap().nodes.is_empty());
+    let changed = graphs[0].diff(&graphs[2]).unwrap();
+    assert_eq!(changed.nodes.len(), 1);
+    assert_eq!(changed.nodes[0].content, Some(ChangeKind::Modified));
+    assert_eq!(
+        changed.nodes[0].id,
+        find(&graphs[0], "worker", CodeCategory::Callable).0.clone()
+    );
+}

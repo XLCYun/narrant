@@ -5,7 +5,6 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { create as createTar } from 'tar';
-import { verifyPythonRuntime } from './python-language-support-smoke.mjs';
 import { validateArchive } from './archive-validation.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -83,48 +82,30 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
   try {
     await fs.mkdir(path.join(payload, 'bin'), { recursive: true });
     await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
-    if (id === 'python') {
-      const upstreamRoot = `ty-${target}`;
-      const filename = `${upstreamRoot}.${windows ? 'zip' : 'tar.gz'}`;
-      const bytes = await download(`https://github.com/astral-sh/ty/releases/download/${definition.ty}/${filename}`, `sha256-${definition.upstreamSha256[target]}`, cache);
-      const archive = path.join(temporary, filename);
+    const nodeRoot = `node-v${definition.node}-${windows ? 'win-x64' : 'darwin-arm64'}`;
+    const nodeArchive = `${nodeRoot}.${windows ? 'zip' : 'tar.gz'}`;
+    const bytes = await download(`https://nodejs.org/dist/v${definition.node}/${nodeArchive}`, `sha256-${definition.upstreamSha256[target]}`, cache);
+    const archive = path.join(temporary, nodeArchive);
+    await fs.writeFile(archive, bytes);
+    const executable = windows ? 'node.exe' : 'bin/node';
+    execFileSync('tar', ['-xf', archive, '-C', temporary, `${nodeRoot}/${executable}`, `${nodeRoot}/LICENSE`]);
+    await fs.copyFile(path.join(temporary, nodeRoot, executable), path.join(payload, 'bin', windows ? 'node.exe' : 'node'));
+    await fs.copyFile(path.join(temporary, nodeRoot, 'LICENSE'), path.join(payload, 'licenses/Node-LICENSE'));
+    for (const { name, version, integrity } of definition.packages) {
+      const basename = name.split('/').at(-1);
+      const bytes = await download(`https://registry.npmjs.org/${name}/-/${basename}-${version}.tgz`, integrity, cache);
+      const archive = path.join(temporary, `${basename}.tgz`);
       await fs.writeFile(archive, bytes);
-      const binary = `ty${windows ? '.exe' : ''}`;
-      const archiveBinary = windows ? binary : `${upstreamRoot}/${binary}`;
-      execFileSync('tar', ['-xf', archive, '-C', temporary, archiveBinary]);
-      await fs.copyFile(path.join(temporary, archiveBinary), path.join(payload, 'bin', binary));
-      await fs.mkdir(path.join(payload, 'control'));
-      await fs.writeFile(path.join(payload, 'control/ty.toml'), '');
-      // 标准库直接封装在固定 ty 二进制中；来源与许可证仍独立记录。
-      for (const license of definition.licenses) {
-        await fs.writeFile(path.join(payload, 'licenses', license.name), await download(license.url, `sha256-${license.sha256}`, cache));
-      }
-    } else {
-      const nodeRoot = `node-v${definition.node}-${windows ? 'win-x64' : 'darwin-arm64'}`;
-      const nodeArchive = `${nodeRoot}.${windows ? 'zip' : 'tar.gz'}`;
-      const bytes = await download(`https://nodejs.org/dist/v${definition.node}/${nodeArchive}`, `sha256-${definition.upstreamSha256[target]}`, cache);
-      const archive = path.join(temporary, nodeArchive);
-      await fs.writeFile(archive, bytes);
-      const executable = windows ? 'node.exe' : 'bin/node';
-      execFileSync('tar', ['-xf', archive, '-C', temporary, `${nodeRoot}/${executable}`, `${nodeRoot}/LICENSE`]);
-      await fs.copyFile(path.join(temporary, nodeRoot, executable), path.join(payload, 'bin', windows ? 'node.exe' : 'node'));
-      await fs.copyFile(path.join(temporary, nodeRoot, 'LICENSE'), path.join(payload, 'licenses/Node-LICENSE'));
-      for (const { name, version, integrity } of definition.packages) {
-        const basename = name.split('/').at(-1);
-        const bytes = await download(`https://registry.npmjs.org/${name}/-/${basename}-${version}.tgz`, integrity, cache);
-        const archive = path.join(temporary, `${basename}.tgz`);
-        await fs.writeFile(archive, bytes);
-        validateArchive(execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }), execFileSync('tar', ['-tvzf', archive], { encoding: 'utf8' }));
-        const destination = path.join(payload, 'runtime', name);
-        await fs.mkdir(destination, { recursive: true });
-        execFileSync('tar', ['-xzf', archive, '-C', destination, '--strip-components=1']);
-        const metadata = JSON.parse(await fs.readFile(path.join(destination, 'package.json'), 'utf8'));
-        if (metadata.name !== name || metadata.version !== version) throw new Error(`Package identity mismatch: ${name}`);
-        if (name === 'typescript') {
-          // 原生 API 只加载 typescript.js；退役独立服务器和自动类型安装进程的分发入口。
-          for (const entry of ['bin/tsserver', 'lib/tsserver.js', 'lib/_tsserver.js', 'lib/tsserverlibrary.js', 'lib/tsserverlibrary.d.ts', 'lib/typingsInstaller.js', 'lib/_typingsInstaller.js', 'lib/watchGuard.js', 'lib/typesMap.json']) {
-            await fs.rm(path.join(destination, entry));
-          }
+      validateArchive(execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }), execFileSync('tar', ['-tvzf', archive], { encoding: 'utf8' }));
+      const destination = path.join(payload, 'runtime', name);
+      await fs.mkdir(destination, { recursive: true });
+      execFileSync('tar', ['-xzf', archive, '-C', destination, '--strip-components=1']);
+      const metadata = JSON.parse(await fs.readFile(path.join(destination, 'package.json'), 'utf8'));
+      if (metadata.name !== name || metadata.version !== version) throw new Error(`Package identity mismatch: ${name}`);
+      if (name === 'typescript') {
+        // 原生 API 只加载 typescript.js；退役独立服务器和自动类型安装进程的分发入口。
+        for (const entry of ['bin/tsserver', 'lib/tsserver.js', 'lib/_tsserver.js', 'lib/tsserverlibrary.js', 'lib/tsserverlibrary.d.ts', 'lib/typingsInstaller.js', 'lib/_typingsInstaller.js', 'lib/watchGuard.js', 'lib/typesMap.json']) {
+          await fs.rm(path.join(destination, entry));
         }
       }
     }
@@ -139,14 +120,10 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
     const destination = await packageDirectory(identity, payload, output);
     // 在目标宿主上执行实际工具入口；跨平台产物必须由对应 CI runner 再验证。
     if ((windows && process.platform === 'win32' && process.arch === 'x64') || (!windows && process.platform === 'darwin' && process.arch === 'arm64')) {
-      const executable = path.join(payload, 'bin', `${({ python: 'ty', 'typescript-javascript': 'node' })[id]}${windows ? '.exe' : ''}`);
+      const executable = path.join(payload, 'bin', `node${windows ? '.exe' : ''}`);
       const runOptions = { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' } };
       const version = execFileSync(executable, ['--version'], runOptions).trim();
       console.log(version);
-      if (id === 'python') {
-        if (!version.startsWith(`ty ${definition.ty} `) && version !== `ty ${definition.ty}`) throw new Error('Python pack ty version mismatch');
-        await verifyPythonRuntime(executable, path.join(payload, 'control/ty.toml'));
-      }
       if (id === 'typescript-javascript') {
         const { smokeTypeScript, typescriptConfiguration } = await import('./typescript-native-smoke.mjs');
         await smokeTypeScript(payload);

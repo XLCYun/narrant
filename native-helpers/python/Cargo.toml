@@ -29,11 +29,6 @@ toml = "1.0"
 [dev-dependencies]
 libc = "0.2"
 tempfile = "3.27"
-old_ast = { package = "ruff_python_ast", version = "=0.0.15" }
-old_parser = { package = "ruff_python_parser", version = "=0.0.15" }
-old_codegen = { package = "ruff_python_codegen", version = "=0.0.15" }
-old_text = { package = "ruff_text_size", version = "=0.0.15" }
-old_source = { package = "ruff_source_file", version = "=0.0.15" }
 
 [workspace]
 

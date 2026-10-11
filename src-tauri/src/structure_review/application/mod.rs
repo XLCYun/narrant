@@ -91,6 +91,7 @@ impl StructureReview {
     }
 
     /// 装配 Python 分析入口；测试过滤在适配器内保持一致。
+    #[cfg(test)]
     pub fn with_python(mut self, analyze_python: Arc<AnalyzePython>) -> Self {
         self.analyzers.python = analyze_python;
         self
@@ -172,7 +173,10 @@ impl StructureReview {
                             ids.insert(PackId::TypeScriptJavascript);
                         }
                         Some(LanguageGroup::Python)
-                            if super::python_analyzer::needs_tools(path, options) =>
+                            if super::native_languages::python_needs_tools(
+                                std::path::Path::new(path),
+                                options,
+                            ) =>
                         {
                             ids.insert(PackId::Python);
                         }
@@ -219,21 +223,18 @@ impl StructureReview {
                 });
             }
             if let Some(root) = lease.path(PackId::Python) {
-                let analyzer = super::python_analyzer::PythonLanguageAnalyzer::new(root.join(
-                    if cfg!(windows) {
-                        "bin/ty.exe"
-                    } else {
-                        "bin/ty"
-                    },
-                ));
+                let analyzer = super::native_languages::from_pack(PackId::Python, root)
+                    .map_err(analysis_error)?;
                 analyzers.python = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
-            for &id in PackId::NATIVE_MIGRATED
-                .iter()
-                .filter(|id| !matches!(id, PackId::TypeScriptJavascript | PackId::Rust))
-            {
+            for &id in PackId::NATIVE_MIGRATED.iter().filter(|id| {
+                !matches!(
+                    id,
+                    PackId::TypeScriptJavascript | PackId::Rust | PackId::Python
+                )
+            }) {
                 if let Some(root) = lease.path(id) {
                     let analyzer =
                         super::native_languages::from_pack(id, root).map_err(analysis_error)?;
@@ -444,11 +445,15 @@ fn analyze_side(
             files: files.typescript,
             options,
         });
-    let python_input = (!files.python.is_empty()).then(|| AnalysisInput {
-        repository_root: repository.to_owned(),
-        files: files.python,
-        options,
-    });
+    let python_input = files
+        .python
+        .iter()
+        .any(|path| super::native_languages::python_needs_tools(path, options))
+        .then(|| AnalysisInput {
+            repository_root: repository.to_owned(),
+            files: files.python,
+            options,
+        });
     let errors = Mutex::new(WorkerErrors::default());
     let (rust, typescript, python, native) = std::thread::scope(|threads| {
         let native = files

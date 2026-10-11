@@ -364,10 +364,10 @@ fn first_valid_utf8_cookie_controls_source_decoding() {
         .contains("中文"));
 }
 
-/// 对同一真实侧比较旧完整图和新公共 Host 图；导航候选或节点数量不能替代关系/内容 parity。
+/// 退役前旧完整图快照继续校验原生图的每个身份、分类、内容、原文、关系与外部边界。
 #[test]
-#[ignore = "需要固定旧 ty 0.0.84 与已构建 Python helper"]
-fn python_helper_matches_representative_legacy_graphs() {
+#[ignore = "需要已构建 Python helper"]
+fn python_helper_preserves_historical_complete_graphs() {
     /// 一份完整图对照包含场景名、真实仓库源码和明确选集。
     type GraphFixture<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
     let fixtures: &[GraphFixture<'_>] = &[
@@ -401,39 +401,14 @@ fn python_helper_matches_representative_legacy_graphs() {
             options: AnalysisOptions::default(),
         };
         let native = analyzer().analyze(&input).unwrap();
-        let old = crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
-            std::env::var_os("NARRANT_TY_PATH").expect("需固定旧 ty 路径"),
-        )
-        .analyze(&input)
-        .unwrap();
-        if let Some(directory) = std::env::var_os("NARRANT_CODE_GRAPH_OUTPUT") {
-            let directory = PathBuf::from(directory);
-            fs::create_dir_all(&directory).unwrap();
-            fs::write(
-                directory.join(format!("python-{name}-old.txt")),
-                format!("{old:#?}"),
-            )
-            .unwrap();
-            fs::write(
-                directory.join(format!("python-{name}-new.txt")),
-                format!("{native:#?}"),
-            )
-            .unwrap();
-        }
-        let diff = old.diff(&native).unwrap();
-        assert!(diff.nodes.is_empty(), "{name}: {diff:#?}");
-        assert_eq!(old.root(), native.root(), "{name}");
-        assert_eq!(old.external_symbols(), native.external_symbols(), "{name}");
-        let mut pending = old.root().contains.clone();
-        while let Some(id) = pending.pop() {
-            let node = old.node(&id).unwrap();
-            pending.extend(node.data().contains.clone());
-            assert_eq!(
-                node.data().source,
-                native.node(&id).unwrap().data().source,
-                "{name}: {id:?}"
-            );
-        }
+        let historical = match *name {
+            "relationships" => include_str!("fixtures/python-historical/relationships.json"),
+            "bindings" => include_str!("fixtures/python-historical/bindings.json"),
+            "projects" => include_str!("fixtures/python-historical/projects.json"),
+            _ => unreachable!(),
+        };
+        let historical: serde_json::Value = serde_json::from_str(historical).unwrap();
+        assert_eq!(graph_contract(&native), historical, "{name}");
     }
 }
 
@@ -501,4 +476,29 @@ fn python_helper_timeout_and_caller_panic_reap_actual_process() {
             "返回后真实 helper {pid} 未退出"
         );
     }
+}
+
+/// 历史完整业务快照按集合排序关系和成员，保持身份、分类、内容、原文及外部范围断言。
+fn graph_contract(graph: &CodeGraph) -> serde_json::Value {
+    let mut pending = graph.root().contains.clone();
+    let mut nodes = BTreeMap::new();
+    while let Some(id) = pending.pop() {
+        let node = graph.node(&id).unwrap();
+        let data = node.data();
+        pending.extend(data.contains.clone());
+        let mut contains = data
+            .contains
+            .iter()
+            .map(|id| id.0.clone())
+            .collect::<Vec<_>>();
+        contains.sort();
+        let mut references = data
+            .references
+            .iter()
+            .map(|reference| format!("{reference:?}"))
+            .collect::<Vec<_>>();
+        references.sort();
+        nodes.insert(id.0.clone(),serde_json::json!({"category":format!("{:?}",node.category()),"language":data.language.0,"kind":data.native_kind,"name":data.name,"signature":data.signature,"code":data.code,"source":data.source,"contains":contains,"references":references,"extensions":data.extensions}));
+    }
+    serde_json::json!({"root":format!("{:?}",graph.root()),"nodes":nodes,"externals":format!("{:?}",graph.external_symbols())})
 }

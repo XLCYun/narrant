@@ -55,6 +55,12 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
     }
     let (helper, projection, languages, profile) = match id {
         PackId::Rust => ("rust", "rust-source-v1", vec!["rust"], "rust-repository-v1"),
+        PackId::Python => (
+            "python",
+            "python-source-v1",
+            vec!["python"],
+            "python-static-v1",
+        ),
         PackId::TypeScriptJavascript => (
             "typescript",
             "typescript-source-v1",
@@ -75,7 +81,6 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             vec!["c", "cpp"],
             "clang-static-v1",
         ),
-        _ => return Err(failure("不是原生语言支持包")),
     };
     let executable = if id == PackId::Java {
         inside(
@@ -137,6 +142,7 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
     let mut platforms = Vec::new();
     for platform in control.platforms {
         let allowed = match id {
+            PackId::Python => platform.kind == "python-embedded-stdlib",
             PackId::TypeScriptJavascript => platform.kind == "typescript-declarations",
             PackId::Java => platform.kind == "java-jdk",
             PackId::Go => platform.kind == "go-sdk",
@@ -194,7 +200,11 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             executable,
             args,
             environment,
-            trusted_roots: vec![root],
+            trusted_roots: vec![if id == PackId::Python {
+                inside(&root, "bin")?
+            } else {
+                root
+            }],
         },
         HelperIdentity {
             helper_id: format!("narrant-{helper}"),
@@ -252,4 +262,16 @@ pub(crate) fn typescript_needs_tools(
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .is_some_and(|stem| stem.ends_with(".test") || stem.ends_with(".spec")))
+}
+
+/// Python 文件级测试过滤与 helper 一致，全被排除的语言组不准备或启动支持包。
+pub(crate) fn python_needs_tools(path: &Path, options: super::code_graph::AnalysisOptions) -> bool {
+    options.include_tests
+        || !(path.components().any(|part| part.as_os_str() == "tests")
+            || path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| {
+                    stem.starts_with("test_") || stem.ends_with("_test") || stem == "conftest"
+                }))
 }
