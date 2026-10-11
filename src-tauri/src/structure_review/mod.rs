@@ -10,3 +10,8 @@ pub mod typescript_analyzer;
 mod application;
 mod source_text;
 pub(crate) use application::{StructureComparison, StructureReview, StructureReviewError};
+
+// 旧语言服务与原生公共图共用同一个配置目录测试夹具。
+#[cfg(test)]
+#[path = "tests/config_dir_fixture.rs"]
+mod config_dir_fixture;

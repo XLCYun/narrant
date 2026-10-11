@@ -1021,7 +1021,7 @@ fn graph_repository_relative_test_classification_ignores_checkout_ancestors() {
 #[ignore = "需要固定 TypeScript 工具"]
 fn graph_config_dir_templates_retain_local_call() {
     for inherited in [false, true] {
-        let fixture = config_dir_fixture::fixture(inherited);
+        let fixture = crate::structure_review::config_dir_fixture::fixture(inherited);
         let graph = analyze(
             fixture.path(),
             &["app/src/main.ts", "app/src/dep.ts", "config/src/dep.ts"],
@@ -1048,8 +1048,6 @@ fn analyzer() -> NativeLanguageAnalyzer {
         std::env::var_os("NARRANT_TYPESCRIPT_PACK").expect("NARRANT_TYPESCRIPT_PACK required");
     from_pack(PackId::TypeScriptJavascript, Path::new(&root)).unwrap()
 }
-#[path = "../../typescript_analyzer/tests/config_dir_fixture.rs"]
-mod config_dir_fixture;
 
 /// 真实 TypeScript CPU 分析期间取消，复用公共 ProcessTree 退出屏障，不能返回成功空图。
 #[test]

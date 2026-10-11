@@ -160,7 +160,3 @@ pub(crate) type Result<T> = std::result::Result<T, AnalysisError>;
 pub(crate) fn failure(message: impl std::fmt::Display) -> AnalysisError {
     AnalysisError::new(message.to_string())
 }
-
-#[cfg(test)]
-#[path = "tests/config_dir_fixture.rs"]
-mod config_dir_fixture;

@@ -964,8 +964,7 @@ fn fixed_service_inherited_paths_reject_effective_escape() {
 #[ignore = "需要固定工具"]
 fn fixed_service_config_dir_templates_resolve_consumer_declaration() {
     for inherited in [false, true] {
-        let fixture =
-            crate::structure_review::typescript_analyzer::config_dir_fixture::fixture(inherited);
+        let fixture = crate::structure_review::config_dir_fixture::fixture(inherited);
         let root = fixture.path().canonicalize().unwrap();
         let mut session = start(&root, &["app/src/main.ts", "app/src/dep.ts"]);
         let name = session.project.workspace_root.join("app/tsconfig.json");

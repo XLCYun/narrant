@@ -98,10 +98,6 @@ if (mode === 'startup_stderr_first') {
         // Windows 先让测试固定进程 HANDLE，再允许父进程退出，排除 PID 重用。
         if (process.platform === 'win32' && !fs.existsSync(path.join(control, 'observed'))) return;
         clearInterval(ready);
-        if (mode === 'cancel_exit') process.exit(9);
-        if (mode === 'cancel_exit_zero') process.exit(0);
-        if (mode === 'cancel_invalid') { fs.writeSync(1, 'invalid-json\n'); process.exit(9); }
-        if (mode === 'cancel_failure') { output('result'); process.exit(9); }
         complete();
       }, 10);
       return;

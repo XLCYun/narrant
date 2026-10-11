@@ -1020,7 +1020,7 @@ fn graph_repository_relative_test_classification_ignores_checkout_ancestors() {
 #[ignore = "需要固定 TypeScript 工具"]
 fn graph_config_dir_templates_retain_local_call() {
     for inherited in [false, true] {
-        let fixture = super::super::config_dir_fixture::fixture(inherited);
+        let fixture = crate::structure_review::config_dir_fixture::fixture(inherited);
         let graph = analyze(
             fixture.path(),
             &["app/src/main.ts", "app/src/dep.ts", "config/src/dep.ts"],

@@ -326,12 +326,11 @@ fn validate_metadata(platform: &Platform, kinds: &BTreeMap<&str, &str>) -> Resul
     {
         return Err(failure("goamd64 只允许 amd64 的 v1–v4"));
     }
-    if platform.kind == "clang-target" {
-        if kinds.get(object["resource_platform_id"].as_str().unwrap_or_default())
+    if platform.kind == "clang-target"
+        && kinds.get(object["resource_platform_id"].as_str().unwrap_or_default())
             != Some(&"clang-resource")
-        {
-            return Err(failure("Clang 平台缺少已批准的 resource 平台"));
-        }
+    {
+        return Err(failure("Clang 平台缺少已批准的 resource 平台"));
     }
     Ok(())
 }
@@ -381,16 +380,15 @@ fn validate_profile(analyzer: &NativeLanguageAnalyzer, platforms: &[Platform]) -
             return Err(failure("TypeScript profile 必须提供三套固定标准声明"));
         }
     }
-    if profile == NativeProfile::Python {
-        if platforms.len() != 1
+    if profile == NativeProfile::Python
+        && (platforms.len() != 1
             || !analyzer
                 .command
                 .trusted_roots
                 .iter()
-                .any(|root| root.canonicalize().ok().as_ref() == Some(&platforms[0].root))
-        {
-            return Err(failure("Python 内嵌标准声明必须关联唯一 helper 安装根"));
-        }
+                .any(|root| root.canonicalize().ok().as_ref() == Some(&platforms[0].root)))
+    {
+        return Err(failure("Python 内嵌标准声明必须关联唯一 helper 安装根"));
     }
     Ok(())
 }
