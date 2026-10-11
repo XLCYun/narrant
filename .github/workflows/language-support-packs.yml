@@ -33,7 +33,6 @@ on:
       - src-tauri/src/structure_review/native_languages/**
       - src-tauri/src/structure_review/application/**
       - src-tauri/src/language_support/**
-      - src-tauri/src/lsp/**
       - src-tauri/src/child_process.rs
       - src-tauri/src/child_process/**
       - src-tauri/Cargo.toml

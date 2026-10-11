@@ -54,10 +54,15 @@ Q2 的取舍记入 [ADR-0033](../adr/0033-bound-python-analysis-to-repository-an
 
 ## 技术决定
 
-采用本地 Ruff AST 提取对象和内容，固定 ty 服务提供源声明导航证据，复用现有 LanguageAnalyzer、
-Code Graph、差异计算及支持包生命周期。无需用户 Python/Node 环境。ty 仍在快速演进，
-其旧版标准库声明存在缺口，因此精确锁定工具版本，并以真实服务反例和兼容测试作为交付门槛。
-Pyright 保留为经过同样验收后才能替换的备选，不在分析失败时自动切换或混用语义。
+2026-10-11 按 [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md) 与
+[0025](0025-migrate-existing-analyzers-to-native-helpers.md) 使用 `native-helpers/python`。
+固定 ty 0.0.84 对应 Ruff revision `11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`；
+同一数据库提供 AST、原文与全部导航候选，helper 负责既有投影并经公共 Native Host 构图。
+旧 Host Ruff parser、ty 服务器、LSP/setup/smoke 路由已经退役。无需用户 Python/Node 环境，
+不自动切换其他引擎。1.1.0 未发布候选完成本地 macOS ARM64 实际安装/Review 验收；
+最终 Windows x64 与集中双平台 CI 待完成。边界、历史断言和许可证来源限制见
+[helper 说明](../../native-helpers/python/README.md) 与
+[迁移证据](../research/existing-native-helper-migration-validation.md)。
 
 当前没有未决产品问题。实现验证若推翻已确认范围或工具选择，应记录证据并重新打开对应决定，
 不得用未验证的兼容性或默默放宽分析边界满足验收。
@@ -156,7 +161,11 @@ definition 是源声明导航证据，不是所有可能运行时实现的枚举
 普通生产文件中仅有 test 命名函数或 pytest 调用不整文件排除。未知和共享代码保留；
 不运行 pytest/unittest 做发现，也不读取测试框架安装环境。
 
-## 工具、版本与项目配置
+## 历史工具与现行项目配置
+
+下面的两层编译/LSP 描述记录迁移前版本背景；现行 helper 的 Ruff/ty 依赖固定在同一
+revision，构建工具链为 Rust 1.98.0，AST/导航共用不可变快照。输入版本、编码、
+项目归属、PEP 723 和测试开关规则仍保持；历史服务验收不是本轮平台验收。
 
 - 语法层固定 Ruff `0.16.9` 对应的 parser/AST/codegen `0.0.15` 同批兼容依赖，由应用编译。
   不把 Ruff CLI 当语义工具，不依赖内部 crates 的跨版本稳定性。该批 MSRV 为 Rust 1.96；
@@ -201,7 +210,11 @@ Ruff 固定版本最低支持 3.7，最新稳定目标 3.14，3.15 为 preview�
 
 ## 仓库与标准库边界
 
-生产启动器需落实以下规则；工具的 `untrustedWorkspace` 不是读取隔离：
+现行 `PythonProject` 将已校验仓库源码、目录及固定内嵌 typeshed 冻结到内存 System，
+该 System 没有写入、环境发现、命令执行、配置目录或缓存能力。project/版本/源码根
+显式传入，空 Python prefix 和 `UseUv::Off` 阻止解释器/uv 自动发现；可达 symlink/junction
+仍校验真实来源。加载后 AST、source 与导航读同一快照，不把缺依赖变成伪绑定。
+下列原服务启动政策保留作历史边界说明；不再通过服务器控制文件实施：
 
 1. 工具包自带固定空控制配置，通过 `configurationFile` 指定；仓库配置只在内存读取、
    归一化并生成允许的 inline configuration，不复制清洗后的项目配置树。
@@ -248,7 +261,7 @@ Ruff 固定版本最低支持 3.7，最新稳定目标 3.14，3.15 为 preview�
 只对支持的版本、编码与对象范围内的合法输入承诺完整提取；语法/配置/协议的硬失败必须可解释，缺第三方依赖
 不被升级为整个图失败。避免对语义查询失败、超时或坐标错误一律返回 Unresolved。
 
-## 接入与交付顺序
+## 历史接入与交付顺序（迁移前）
 
 1. **语法与内容闭环：** 新建 `structure_review/python_analyzer`，实现现有 LanguageAnalyzer；
    固定 Ruff 依赖，先验证版本、字节范围、对象身份、内容投影与公共 Code Graph 校验。

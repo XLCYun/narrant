@@ -157,7 +157,7 @@ NARRANT_TYPESCRIPT_PACK=/absolute/extracted/pack node native-helpers/typescript/
 - TS 物理别名准入变更后的公共 Host：24 passed，0 failed。
 - 应用单测：28 passed，4 显式真实工具测试 ignored；支持包服务：9 passed，2 显式真实安装测试 ignored。
 - 真实安装旧测试改接新包：1/1；真实 TS/JS Review DTO：1/1；生产工厂安装：1/1；公开 Host TS/JS graph/diff：1/1。
-- 其余聚焦 runner：公共 ProcessTree 3 passed（1 Windows-only ignored），原生应用回调5/5、工厂/平台11/11。
+- 其余聚焦 runner：公共 ProcessTree 3 passed（1 通用内部进程夹具 ignored），原生应用回调5/5、工厂/平台11/11。
 - 构建/归档前后真实图 smoke、`check --lib`、Cargo fmt、作用域 ESLint、`git diff --check` 通过；脚本测试36/36。
 
 安装/Review/公共进程整组在别名和全测试短路收尾前已通过；最后改动后只重跑直接受影响的 Node、TS 图和公共 Host。
@@ -222,7 +222,8 @@ name、source、contains 与总节点数。`code.calls` 的 external/symbol 修�
 删除的是旧 transport/私有 Oxc 数据结构和旧服务器协调测试，不删除这些业务覆盖。
 生产 TS/JS 工厂与 Review 使用公共 Native Host，Rust/Python 生产路由保持原状。
 
-双平台 workflow 保留现有验收矩阵与 Windows ProcessTree/LSP 定义，仅更新归档测试路径和执行列表。
+Task 4 时双平台 workflow 保留现有验收矩阵与 Windows ProcessTree/LSP 定义，仅更新归档测试路径和执行列表；
+Task 7 在三种语言退役后删除零消费者 LSP 定义，继续运行唯一生产 ProcessTree 与公共 Native Host。
 TS 聚焦 guard 同时校验 26 个真实图测试、模块注册及安装/Review/公开 graph 测试入口，
 避免退役后留下零测试筛选器。当前包必需文件、版本、control、Node 启动参数已是原生配置，
 本轮无须重复改动这些已审查契约。

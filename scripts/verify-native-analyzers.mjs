@@ -63,8 +63,6 @@ export function verificationCommands(environment, platform = process.platform, l
     ] : []),
     // 所有平台复用同一进程所有者矩阵；Windows 同组还包含准确句柄与 Job 回归。
     { executable: 'bash', args: [...cargo, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'] },
-    // 完整协议链验证正常退出、取消、超时与短命后代，任一失败仍保留红灯。
-    ...(platform === 'win32' && language === 'all' ? [{ executable: 'bash', args: [...cargo, '--lib', 'lsp::tests::windows_session::', '--', '--nocapture', '--test-threads=1'] }] : []),
     { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::', '--', '--test-threads=4'] },
     { executable: 'bash', args: [...cargo, '--lib', 'structure_review::application::tests::native::', '--', '--test-threads=4'] },
     { executable: 'bash', args: [...cargo, '--lib', 'native_languages::', '--', '--test-threads=4'] },
@@ -98,7 +96,7 @@ export async function runVerificationCommands(commands, environment, run = execu
   if (failures.length) throw new AggregateError(failures, `${failures.length} native validation group(s) failed`);
 }
 
-/** 先构建固定本地支持包，再以真实 helper 和公共 Rust 入口完成五种语言模式验收。 */
+/** 先构建固定本地支持包，再以真实 helper 和公共 Rust 入口完成七套语言 helper 验收。 */
 export async function verifyNativeAnalyzers(artifacts, build = false, language = 'all') {
   const ids = selectedNativePacks(language);
   const target = nativeTargets[`${process.platform}-${process.arch}`];

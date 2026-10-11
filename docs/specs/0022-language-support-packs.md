@@ -3,6 +3,22 @@
 Status: Accepted — the user confirmed the consolidated design and requested
 implementation on the isolated worktree, followed by a Pull Request targeting main.
 
+## 现行打包实现（2026-10-11）
+
+按 [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md) 与
+[0025](0025-migrate-existing-analyzers-to-native-helpers.md)，七套支持包均经公共 Native Host。
+Rust/Python/TS-JS 的 1.1.0 候选分别包含 `narrant-rust`、内嵌 typeshed 的 `narrant-python`、
+私有 Node 24.18.0 和直接 TypeScript 6.0.3 API helper；不包含旧 rust-analyzer/ty/TLS 服务入口。
+TS 分发删除 tsserver/typingsInstaller/watchGuard，保留固定标准声明闭包及 Node/依赖许可。
+Rust/Python 的独立锁文件固定同批原生库，正常构建收集实际目标 Cargo 许可闭包。
+Python 少数确切版本的 MIT 声明附上标明来源的标准条款；seahash 上游通知未取回的
+边界见 [来源记录](../../native-helpers/python/licenses/sources.json)，不能声称通知完整。
+Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实际消费者的共享依赖保留。
+
+三种迁移语言本地 macOS 验收通过，最终 Windows x64 和七套双平台 CI 尚待完成；catalog
+保持 `published:false` / `verifiedTargets:[]`。以下首版决策与依赖调查保留时间背景，
+服务器/内嵌 bridge 字样不代表现行生产 fallback。包租约、下载和项目工具链边界保持不变。
+
 ## 已明确的需求
 
 - 在新的 worktree 分支设计和实现，基于上一轮已经完成的 Review 修复与结构图改动。

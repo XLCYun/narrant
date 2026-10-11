@@ -115,7 +115,7 @@ test('all enabled helpers and narrow absolute platform roots are mandatory', () 
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
   const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
-  assert.equal(commands.length, 26);
+  assert.equal(commands.length, 25);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
   assert.match(commands[0].executable, /go\.exe$/);
   assert.deepEqual(commands.slice(1, 4).map(command => command.args[4]), ['native-helpers/java/tests', 'native-helpers/csharp/tests', 'native-helpers/clang/tests']);
@@ -129,11 +129,10 @@ test('verification uses every helper suite and serialized Cargo host and real gr
   assert.throws(() => verificationCommands({}), /Missing fixed toolchain/);
 });
 
-// 公共进程场景在两个平台运行；Windows 再验证完整 LSP 协议调用链。
-test('shared process acceptance runs on both platforms with Windows LSP integration', () => {
+// 公共进程所有者和原生协议在两个平台使用相同的实际验收入口。
+test('shared process and native acceptance use the same live groups on both platforms', () => {
   const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const ownerFilter = 'child_process::';
-  const sessionFilter = 'lsp::tests::windows_session::';
   const windows = verificationCommands(environment, 'win32');
   const macOS = verificationCommands(environment, 'darwin');
   assert.equal(macOS.length, 25);
@@ -142,9 +141,8 @@ test('shared process acceptance runs on both platforms with Windows LSP integrat
     assert.equal(owners.length, 1);
     assert.deepEqual(owners[0].args, ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', ownerFilter, '--', '--nocapture', '--test-threads=1']);
   }
-  assert.equal(windows.filter(command => command.args.includes(sessionFilter)).length, 1);
-  assert.ok(macOS.every(command => !command.args.includes(sessionFilter)));
-  assert.deepEqual(windows.slice(4).filter(command => !command.args.includes(sessionFilter)), macOS.slice(4));
+  for (const commands of [windows, macOS]) assert.doesNotMatch(JSON.stringify(commands), /lsp::/);
+  assert.deepEqual(windows.slice(4), macOS.slice(4));
 });
 
 // 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。
@@ -255,8 +253,8 @@ test('focused acceptance requires only the selected tools and keeps shared integ
   assert.throws(() => validateNativeConfiguration({}, 'darwin', 'go'), /go/);
 });
 
-// 工作流层必须跳过整个旧服务器构建矩阵，不只是过滤测试名称。
-test('focused workflow skips legacy builds and unrelated declaration provisioning', () => {
+// 聚焦验收必须跳过其他语言构建及无关声明工具准备。
+test('focused workflow skips unrelated builds and declaration provisioning', () => {
   assert.match(workflowSource, /options: \[all, typescript-javascript, rust, python, java, go, csharp, c-cpp\]/);
   const build = workflowSource.split('\n  build:')[1].split('\n  native-analyzers:')[0];
   assert.match(build, /inputs\.language == 'all'/);

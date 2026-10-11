@@ -5,7 +5,6 @@ pub mod native_analyzer;
 pub(crate) mod native_languages;
 
 mod application;
-mod source_text;
 pub(crate) use application::{StructureComparison, StructureReview, StructureReviewError};
 
 // 原生 TS 图复用历史配置目录场景，夹具独立于语言实现。

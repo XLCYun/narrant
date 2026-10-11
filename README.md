@@ -30,6 +30,14 @@ Rust 使用包含 `narrant-rust` 的 1.1.0 原生支持包候选，通过同一�
 仅仓库及标准库范围始终离线。分析不安装工具链、不运行项目构建脚本或过程宏。
 加载、解析或必需工具失败都会使整次结构比较失败。此候选未发布，最终双平台验收待集中执行。
 
+Python 使用 1.1.0 的 `narrant-python` 原生候选和内嵌固定 typeshed，AST、原文和导航
+来自同一不可变数据库，保持 Python 3.7–3.14 与仓库加标准库范围。
+Rust、TS/JS、Python、Java、Go、C#、C/C++ 七套 helper 均经过同一 Native Host 与
+`child_process::ProcessTree`；旧 LSP、独立 parser/server 协调和开发 setup 已退役。
+正常构建按实际依赖收集许可，Python seahash 上游通知的未取回限制见
+[来源记录](native-helpers/python/licenses/sources.json)。三个迁移语言本地 macOS 验收已通过，
+最终七套 Windows/macOS CI、整分支审查和发布仍待完成。
+
 结构视图共同分析 `.ts`、`.tsx`、`.js`、`.jsx`、`.mts`、`.cts`、`.mjs`、
 `.cjs` 及 `.d.ts`、`.d.mts`、`.d.cts` 声明文件。固定 TypeScript 原生 AST 提取语法结构和对象自身
 内容，Language Service 提供定义导航与语义证据。原生 JSDoc 推断会保留，

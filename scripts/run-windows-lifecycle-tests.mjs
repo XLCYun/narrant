@@ -10,9 +10,8 @@ export async function runWindowsLifecycleTests({ cwd = repository, platform = pr
   const manifest = ['--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked'];
   const commands = [
     { executable: 'bash', args: ['scripts/cargo-agent.sh', 'test', ...manifest, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'], cwd },
-    { executable: 'bash', args: ['scripts/cargo-agent.sh', 'test', ...manifest, '--lib', 'lsp::', '--', '--nocapture', '--test-threads=1'], cwd },
   ];
-  // 共享所有者与协议两组串行执行，首组失败仍收集会话结果，最终汇总仍然失败。
+  // 直接运行仍在生产使用的共享所有者；真实 helper 协议由完整原生验收覆盖。
   await runVerificationCommands(commands, { ...process.env, NARRANT_TEST_NODE: process.execPath });
 }
 

@@ -3,11 +3,10 @@
 mod projection;
 mod workspace;
 
-use super::code_graph::RustDependencyScope;
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
+use super::{code_graph::RustDependencyScope, native_analyzer::CancellationCheck};
 use crate::{
     language_support::{PackId, PackLease},
-    lsp::CancellationCheck,
     operation::OperationContext,
     review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
 };
