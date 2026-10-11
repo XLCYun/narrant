@@ -230,7 +230,7 @@ TS 聚焦 guard 同时校验 26 个真实图测试、模块注册及安装/Revie
 
 最终裁剪包和退役后 Host 的聚焦 runner 结果：helper 87/87、TS 图 26/26、
 独立安装 1/1、Review DTO 1/1、生产工厂安装 1/1、公开 graph/diff 1/1；
-公共 ProcessTree 3 passed（1 Windows-only ignored）、公共 Host 26 passed、
+公共 ProcessTree 3 passed（1 通用内部进程夹具 ignored）、公共 Host 26 passed、
 原生应用回调 5 passed、工厂/平台 11 passed。所有组实际执行且失败为零；
 另门语言真实工具测试维持 ignored，未运行 Rust/Python 语言套件。
 脚本组 50 passed、0 failed、2 Windows-only skipped；修正通用 guard 的陈旧 core 前提后，
