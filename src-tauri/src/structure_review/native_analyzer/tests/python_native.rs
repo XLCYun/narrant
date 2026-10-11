@@ -576,8 +576,102 @@ fn native_cancellation_finishes_promptly() {
 #[test]
 #[ignore = "需要已构建 Python helper，单独串行运行"]
 fn native_cross_project_configuration_conflicts_remain_unresolved() {
-    let graph = analyze_native(
-        &[
+    let root = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        (
+            "alpha/ty.toml",
+            "[environment]\npython-version='3.8'\nextra-paths=['../beta/src']\n",
+        ),
+        (
+            "alpha/main.py",
+            "from api import serve\ndef run(): return serve()\n",
+        ),
+        (
+            "beta/ty.toml",
+            "[environment]\npython-version='3.14'\nroot=['src']\n",
+        ),
+        (
+            "beta/src/api.py",
+            "type Payload = int\ndef serve(): return 1\n",
+        ),
+    ] {
+        let path = root.path().join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, source).unwrap();
+    }
+    // 上下文与选中两种情况都不按 alpha 版本解析 beta；选中时 beta 仍在自身组中校验。
+    for selected in [
+        vec!["alpha/main.py"],
+        vec!["alpha/main.py", "beta/src/api.py"],
+    ] {
+        let input = AnalysisInput {
+            repository_root: root.path().into(),
+            files: selected.iter().map(PathBuf::from).collect(),
+            options: Default::default(),
+        };
+        let graph = analyzer().analyze(&input).unwrap();
+        assert!(named(&graph, "run").data().references.iter().any(|reference| matches!(&reference.target, ReferenceTarget::Unresolved { name } if name == "serve")));
+        if selected.len() == 2 {
+            assert!(matches!(named(&graph, "Payload"), CodeNode::Type(_)));
+            assert!(matches!(named(&graph, "serve"), CodeNode::Callable(_)));
+        }
+        let old = crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
+            std::env::var_os("NARRANT_TY_PATH").expect("需固定旧 ty 路径"),
+        )
+        .analyze(&input)
+        .unwrap();
+        assert!(old.diff(&graph).unwrap().nodes.is_empty());
+        assert_eq!(old.root(), graph.root());
+        assert_eq!(old.external_symbols(), graph.external_symbols());
+        let mut pending = old.root().contains.clone();
+        while let Some(id) = pending.pop() {
+            let node = old.node(&id).unwrap();
+            pending.extend(node.data().contains.clone());
+            assert_eq!(node.data().source, graph.node(&id).unwrap().data().source);
+        }
+    }
+}
+
+/// 装饰器与继承候选同样先应用项目冲突，未知基类不能确认实例字段。
+#[test]
+#[ignore = "需要已构建 Python helper，单独串行运行"]
+fn native_cross_project_modern_decorator_and_base_remain_unproven() {
+    let graph = analyze_native(&[
+        ("alpha/ty.toml", "[environment]\npython-version='3.8'\nextra-paths=['../beta/src']\n"),
+        ("alpha/main.py", "from api import Base, decorate\n@decorate\ndef wrapped(): return 1\nclass Child(Base):\n    def run(self): self.possible_field = 1\n"),
+        ("beta/ty.toml", "[environment]\npython-version='3.14'\nroot=['src']\n"),
+        ("beta/src/api.py", "type Payload = int\nclass Base: pass\ndef decorate(value): return value\n"),
+    ], &["alpha/main.py", "beta/src/api.py"]);
+    assert!(matches!(named(&graph, "wrapped"), CodeNode::Callable(_)));
+    let child = named(&graph, "Child");
+    assert!(child.data().references.iter().any(|reference| reference.semantic == "code.extends" && matches!(&reference.target, ReferenceTarget::Unresolved { name } if name == "Base")));
+    assert!(child
+        .data()
+        .contains
+        .iter()
+        .all(|id| !matches!(graph.node(id).unwrap(), CodeNode::Value(_))));
+    assert!(matches!(named(&graph, "Payload"), CodeNode::Type(_)));
+}
+
+/// 跳过冲突上下文的 AST 不可跳过选集校验：beta 的版本限制和普通语法错误仍失败。
+#[test]
+#[ignore = "需要已构建 Python helper，单独串行运行"]
+fn native_cross_project_selected_target_still_validates_own_syntax() {
+    for (minor, target, diagnostic) in [
+        (
+            "3.8",
+            "type Payload = int\ndef serve(): return 1\n",
+            "目标版本不支持语法",
+        ),
+        (
+            "3.14",
+            "type Payload =\ndef serve(): return 1\n",
+            "Python 语法错误",
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let config = format!("[environment]\npython-version='{minor}'\nroot=['src']\n");
+        for (name, source) in [
             (
                 "alpha/ty.toml",
                 "[environment]\npython-version='3.8'\nextra-paths=['../beta/src']\n",
@@ -586,15 +680,27 @@ fn native_cross_project_configuration_conflicts_remain_unresolved() {
                 "alpha/main.py",
                 "from api import serve\ndef run(): return serve()\n",
             ),
-            (
-                "beta/ty.toml",
-                "[environment]\npython-version='3.14'\nroot=['src']\n",
-            ),
-            ("beta/src/api.py", "def serve(): return 1\n"),
-        ],
-        &["alpha/main.py", "beta/src/api.py"],
-    );
-    assert!(named(&graph, "run").data().references.iter().any(|reference| matches!(&reference.target, ReferenceTarget::Unresolved { name } if name == "serve")));
+            ("beta/ty.toml", config.as_str()),
+            ("beta/src/api.py", target),
+        ] {
+            let path = root.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+        let error = analyzer()
+            .analyze(&AnalysisInput {
+                repository_root: root.path().into(),
+                files: vec!["alpha/main.py".into(), "beta/src/api.py".into()],
+                options: Default::default(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains(diagnostic), "{minor}: {error}");
+        assert!(
+            error.to_string().contains("beta/src/api.py"),
+            "{minor}: {error}"
+        );
+        eprintln!("beta {minor} 选集校验：{error}");
+    }
 }
 
 /// 重复分析记录新会话冷启动和系统缓存后的耗时；查询统计来自实际适配器。

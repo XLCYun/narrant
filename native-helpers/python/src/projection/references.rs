@@ -268,6 +268,11 @@ impl Resolver<'_> {
                     conflict = true;
                     continue;
                 };
+                // 冲突项目没有调用方版本下的文档，装饰器证明必须先拒绝该候选。
+                if self.conflicting_projects.contains(&target.path) {
+                    conflict = true;
+                    continue;
+                }
                 let document = &self.documents[&target.path];
                 if target.scope != SymbolScope::Dependency {
                     // import 自身锚点不代表目标，也不能覆盖其它合格定义。
@@ -506,11 +511,15 @@ impl Resolver<'_> {
                     self.conflicting_projects.insert(actual.clone());
                 }
             }
-            let body = self.native.candidate_ast(location)?.syntax().body.clone();
-            self.documents.insert(
-                actual.clone(),
-                Document::from_ast(&relative, &location.source, body)?,
-            );
+            // 已知跨项目冲突先交关系/装饰器/继承裁决，不按调用方 minor 解析目标。
+            // 若目标也在选集中，其 AST 仍由投影入口在目标自身的数据库组中严格校验。
+            if !self.conflicting_projects.contains(&actual) {
+                let body = self.native.candidate_ast(location)?.syntax().body.clone();
+                self.documents.insert(
+                    actual.clone(),
+                    Document::from_ast(&relative, &location.source, body)?,
+                );
+            }
         }
         let offset = location.focus.start().to_usize();
         anyhow::ensure!(
