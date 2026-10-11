@@ -2,7 +2,7 @@ import path from 'node:path';
 
 /** 在整体 JSON.parse 之前逐层检查键；转义拼写不同的同名键也不能被覆盖。 */
 function rejectDuplicateKeys(text) {
-  const token = /\s*("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\],:])/y;
+  const token = /\s*("(?:[^"\\]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\],:])/y;
   let offset = 0;
   /** 读取一个严格 JSON 词法单元，拒绝未识别内容。 */
   function next() {
