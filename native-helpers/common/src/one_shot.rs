@@ -16,17 +16,27 @@ pub fn run<R: DeserializeOwned>(
     analyze: impl Fn(&R) -> Result<Value>,
 ) -> Result<()> {
     let domain = Arc::new(child_process::CurrentProcessDomain::establish()?);
-    send(&ready)?;
-    let mut line = String::new();
-    if std::io::stdin().lock().read_line(&mut line)? == 0 {
-        domain.completed()?;
-        return Ok(());
-    }
-    // 未收到合法 analyze 时不伪造请求身份或错误终结，直接失败退出。
-    let request = serde_json::from_str::<R>(&line)?;
-    let id = request_id(&request)?;
+    let initial = (|| -> Result<Option<(R, String)>> {
+        send(&ready)?;
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line)? == 0 {
+            return Ok(None);
+        }
+        // 未收到合法 analyze 时不伪造请求身份或错误终结，直接失败退出。
+        let request = serde_json::from_str::<R>(&line)?;
+        let id = request_id(&request)?.to_owned();
+        Ok(Some((request, id)))
+    })();
+    let (request, id) = match initial {
+        Ok(Some(request)) => request,
+        ended => {
+            // 此时还没有原生工作；先解除自身 Job 的关闭即终止，保留初始错误退出码。
+            domain.completed()?;
+            return ended.map(|_| ());
+        }
+    };
     let terminal = Arc::new(Mutex::new(false));
-    control(id.to_owned(), domain.clone(), terminal.clone())?;
+    control(id.clone(), domain.clone(), terminal.clone())?;
     let result = analyze(&request);
     let completed = match result {
         Ok(mut result) => {
@@ -38,14 +48,14 @@ pub fn run<R: DeserializeOwned>(
                 ("outcome".into(), json!("ok")),
             ]);
             if serde_json::to_vec(&result)?.len() > result_limit(&request) {
-                failed(id, "分析结果超过协议限额")
+                failed(&id, "分析结果超过协议限额")
             } else {
                 result
             }
         }
         Err(error) => {
             eprintln!("{error:#}");
-            failed(id, &format!("{error:#}"))
+            failed(&id, &format!("{error:#}"))
         }
     };
     // 终结提交与控制输入互斥；控制线程等锁有界，flush 完成之后不再接受取消/EOF。
