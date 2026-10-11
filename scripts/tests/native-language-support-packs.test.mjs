@@ -96,6 +96,24 @@ test('smoke waits for killed child close before rejecting and removing cwd', asy
   await assert.rejects(fs.stat(await fs.readFile(marker, 'utf8')), { code: 'ENOENT' });
 });
 
+/** 清理失败不能遮盖原始 ready 故障；无主故障时保留准确清理错误。 */
+test('smoke preserves primary failure and reports cleanup-only failure', async t => {
+  const cleanupError = new Error('fixture cleanup failure');
+  const remove = fs.rm;
+  t.mock.method(fs, 'rm', async (root, options) => {
+    // 先真正清理本夹具，再模拟清理故障，测试本身不遗留目录。
+    await remove(root, options);
+    throw cleanupError;
+  });
+  const identity = { id: 'narrant-go', projection: 'go-source-v1', languages: ['go'], profile: 'go-static-v1' };
+  await assert.rejects(smokeNativeHelper({ ...identity, executable: process.execPath,
+    args: ['-e', `console.log(JSON.stringify({protocol:'narrant.native-analyzer/1',type:'ready',helper_id:'other'})); process.stdin.resume()`] }),
+  error => /identity mismatch; scratch cleanup failed: fixture cleanup failure/.test(error.message) && error !== cleanupError);
+  await assert.rejects(smokeNativeHelper({ ...identity, executable: process.execPath,
+    args: ['-e', `console.log(JSON.stringify({protocol:'narrant.native-analyzer/1',type:'ready',helper_id:'narrant-go',helper_version:'0.1.0',projection_revision:'go-source-v1',languages:['go'],profiles:['go-static-v1']})); process.stdin.resume()`] }),
+  error => error === cleanupError);
+});
+
 /** 本地开发产物没有通过真实双平台验收前不会被发布脚本纳入。 */
 test('native catalog remains explicitly unpublished', async () => {
   const catalog = JSON.parse(await fs.readFile(new URL('../../resources/language-support-packs.json', import.meta.url)));
@@ -183,7 +201,30 @@ test('migration toolchain selection is explicit and complete', async () => {
   assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
   assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm']);
   assert.equal(selectedToolchainNames().length, 9);
-  assert.deepEqual(selectedNativePacks(), ['typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
+  assert.deepEqual(selectedNativePacks(), ['rust', 'typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
   assert.deepEqual(selectedToolchainNames('typescript-javascript'), []);
-  for (const id of ['rust', 'python', 'none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
+  for (const id of ['python', 'none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
+});
+
+/** Cargo 许可步骤只保留目标生产闭包，开发依赖不能冒充实际分发依赖。 */
+test('Cargo license packaging excludes unreachable development dependencies and binds real license bytes', async () => {
+  const { packageCargoLicenses } = await import('../native-language-support-packs.mjs');
+  const repository = fileURLToPath(new URL('../../', import.meta.url));
+  const root = await fs.mkdtemp(path.join(repository, '.license-test-'));
+  try {
+    for (const name of ['source', 'development']) {
+      await fs.mkdir(path.join(root, name));
+      await fs.writeFile(path.join(root, name, 'lib.rs'), '');
+      await fs.writeFile(path.join(root, name, 'Cargo.toml'), `[package]\nname="license_${name}"\nversion="0.1.0"\nedition="2021"\nlicense="MIT"\n[lib]\npath="lib.rs"\n${name === 'source' ? '[dev-dependencies]\nlicense_development={path="../development"}\n' : ''}`);
+      await fs.writeFile(path.join(root, name, 'LICENSE'), `actual ${name} license bytes`);
+    }
+    await fs.writeFile(path.join(root, 'source/Cargo.lock'), 'version = 4\n[[package]]\nname = "license_source"\nversion = "0.1.0"\ndependencies = ["license_development"]\n[[package]]\nname = "license_development"\nversion = "0.1.0"\n');
+    const payload = path.join(root, 'payload');
+    await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
+    await packageCargoLicenses(path.join(root, 'source'), process.platform === 'win32' ? 'x86_64-pc-windows-msvc' : 'aarch64-apple-darwin', payload, 'Fixture');
+    const notices = JSON.parse(await fs.readFile(path.join(payload, 'licenses/Fixture-dependencies.json')));
+    assert.deepEqual(notices.map(item => item.name), ['license_source']);
+    assert.equal(await fs.readFile(path.join(payload, 'licenses/license_source-0.1.0/LICENSE'), 'utf8'), 'actual source license bytes');
+    await assert.rejects(fs.stat(path.join(payload, 'licenses/license_development-0.1.0')), { code: 'ENOENT' });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

@@ -1,7 +1,7 @@
 use super::super::{model::AnalysisOptions, syntax::Document};
 
 /// 真实加载临时 Cargo 源码，以同源 AST 复用旧实现的测试属性断言。
-fn document(source: &str, include_tests: bool) -> Document {
+pub(in crate::projection) fn document(source: &str, include_tests: bool) -> Document {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("Cargo.toml"), "[package]\nname=\"test_scope\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n").unwrap();
     std::fs::write(root.path().join("lib.rs"), source).unwrap();

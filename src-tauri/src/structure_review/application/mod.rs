@@ -3,8 +3,8 @@
 mod projection;
 mod workspace;
 
+use super::code_graph::RustDependencyScope;
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
-use super::rust_analyzer::RustDependencyScope;
 use crate::{
     language_support::{PackId, PackLease},
     lsp::CancellationCheck,
@@ -204,18 +204,10 @@ impl StructureReview {
                     failure
                 })?;
             if let Some(root) = lease.path(PackId::Rust) {
-                let analyzer =
-                    super::rust_analyzer::RustLanguageAnalyzer::new(root.join(if cfg!(windows) {
-                        "bin/rust-analyzer.exe"
-                    } else {
-                        "bin/rust-analyzer"
-                    }));
+                let analyzer = super::native_languages::RustPackAnalyzer::from_pack(root)
+                    .map_err(analysis_error)?;
                 analyzers.rust = Arc::new(move |input, cancelled, scope| {
-                    analyzer
-                        .clone()
-                        .with_cancellation(cancelled)
-                        .with_dependency_scope(scope)
-                        .analyze(input)
+                    analyzer.analyze(input, cancelled, scope)
                 });
             }
             if let Some(root) = lease.path(PackId::TypeScriptJavascript) {
@@ -240,7 +232,7 @@ impl StructureReview {
             }
             for &id in PackId::NATIVE_MIGRATED
                 .iter()
-                .filter(|id| **id != PackId::TypeScriptJavascript)
+                .filter(|id| !matches!(id, PackId::TypeScriptJavascript | PackId::Rust))
             {
                 if let Some(root) = lease.path(id) {
                     let analyzer =

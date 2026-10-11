@@ -19,6 +19,7 @@ pub(crate) enum PackId {
 impl PackId {
     /// 只有已接通生产工厂的语言才能进入真实 Native 支持包验收。
     pub const NATIVE_MIGRATED: &'static [Self] = &[
+        Self::Rust,
         Self::TypeScriptJavascript,
         Self::Java,
         Self::Go,
@@ -43,11 +44,15 @@ impl PackId {
     pub fn required(self, target: &str) -> Vec<&'static str> {
         let windows = target == "x86_64-pc-windows-msvc";
         match self {
-            Self::Rust => vec![if windows {
-                "bin/rust-analyzer.exe"
-            } else {
-                "bin/rust-analyzer"
-            }],
+            Self::Rust => vec![
+                "control/native.json",
+                "licenses/Rust-dependencies.json",
+                if windows {
+                    "bin/narrant-rust.exe"
+                } else {
+                    "bin/narrant-rust"
+                },
+            ],
             Self::Java => vec![
                 "control/native.json",
                 if windows {

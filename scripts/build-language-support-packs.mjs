@@ -4,7 +4,6 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync } from 'node:zlib';
 import { create as createTar } from 'tar';
 import { verifyPythonRuntime } from './python-language-support-smoke.mjs';
 import { validateArchive } from './archive-validation.mjs';
@@ -84,20 +83,7 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
   try {
     await fs.mkdir(path.join(payload, 'bin'), { recursive: true });
     await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
-    if (id === 'rust') {
-      const filename = `rust-analyzer-${target}.${windows ? 'zip' : 'gz'}`;
-      const bytes = await download(`https://github.com/rust-lang/rust-analyzer/releases/download/${definition.rustAnalyzer}/${filename}`, `sha256-${definition.upstreamSha256[target]}`, cache);
-      if (windows) {
-        const archive = path.join(temporary, filename);
-        await fs.writeFile(archive, bytes);
-        execFileSync('tar', ['-xf', archive, '-C', path.join(payload, 'bin'), 'rust-analyzer.exe']);
-      } else await fs.writeFile(path.join(payload, 'bin/rust-analyzer'), gunzipSync(bytes));
-      for (const name of ['LICENSE-MIT', 'LICENSE-APACHE']) {
-        const response = await fetch(`https://raw.githubusercontent.com/rust-lang/rust-analyzer/${definition.sourceCommit}/${name}`, { signal: AbortSignal.timeout(30_000) });
-        if (!response.ok) throw new Error(`Unable to fetch pinned rust-analyzer ${name}`);
-        await fs.writeFile(path.join(payload, 'licenses', name), Buffer.from(await response.arrayBuffer()));
-      }
-    } else if (id === 'python') {
+    if (id === 'python') {
       const upstreamRoot = `ty-${target}`;
       const filename = `${upstreamRoot}.${windows ? 'zip' : 'tar.gz'}`;
       const bytes = await download(`https://github.com/astral-sh/ty/releases/download/${definition.ty}/${filename}`, `sha256-${definition.upstreamSha256[target]}`, cache);
@@ -153,7 +139,7 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
     const destination = await packageDirectory(identity, payload, output);
     // 在目标宿主上执行实际工具入口；跨平台产物必须由对应 CI runner 再验证。
     if ((windows && process.platform === 'win32' && process.arch === 'x64') || (!windows && process.platform === 'darwin' && process.arch === 'arm64')) {
-      const executable = path.join(payload, 'bin', `${({ rust: 'rust-analyzer', python: 'ty', 'typescript-javascript': 'node' })[id]}${windows ? '.exe' : ''}`);
+      const executable = path.join(payload, 'bin', `${({ python: 'ty', 'typescript-javascript': 'node' })[id]}${windows ? '.exe' : ''}`);
       const runOptions = { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' } };
       const version = execFileSync(executable, ['--version'], runOptions).trim();
       console.log(version);

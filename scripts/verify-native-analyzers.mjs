@@ -13,7 +13,7 @@ export function validateNativeConfiguration(config, platform = process.platform,
   const paths = platform === 'win32' ? path.win32 : path.posix;
   for (const id of ids.map(id => migratedNativePacks[id].helper)) {
     const item = config[id];
-    if (!item || !paths.isAbsolute(item.executable ?? '') || !Array.isArray(item.args) || !item.args.every(arg => typeof arg === 'string') || !Array.isArray(item.trusted_roots) || !item.trusted_roots.length || !item.trusted_roots.every(root => paths.isAbsolute(root)) || !Array.isArray(item.platforms) || !item.platforms.length) throw new Error(`Missing or incomplete native helper configuration: ${id}`);
+    if (!item || !paths.isAbsolute(item.executable ?? '') || !Array.isArray(item.args) || !item.args.every(arg => typeof arg === 'string') || !Array.isArray(item.trusted_roots) || !item.trusted_roots.length || !item.trusted_roots.every(root => paths.isAbsolute(root)) || !Array.isArray(item.platforms) || (id !== 'rust' && !item.platforms.length)) throw new Error(`Missing or incomplete native helper configuration: ${id}`);
     for (const sdk of item.platforms) if (!paths.isAbsolute(sdk.root ?? '') || !sdk.id || !sdk.kind || !sdk.version) throw new Error(`Incomplete platform catalog: ${id}`);
   }
   // 完整验收使用三个明确样本验证目标隔离和动态发现，不构成产品支持列表。
@@ -30,7 +30,7 @@ export function validateNativeConfiguration(config, platform = process.platform,
 /** 明确列出串行验收命令；所有 Cargo 入口统一经过仓库锁。 */
 export function verificationCommands(environment, platform = process.platform, language = 'all') {
   const ids = selectedNativePacks(language);
-  const required = { 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
+  const required = { rust: [], 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
   const suffix = platform === 'win32' ? '.exe' : '';
   const python = environment.NARRANT_PYTHON ?? (platform === 'win32' ? 'python' : 'python3');
   for (const name of ids.flatMap(id => required[id].map(name => `NARRANT_${name}`))) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
@@ -45,6 +45,14 @@ export function verificationCommands(environment, platform = process.platform, l
       { executable: 'bash', args: [...cargo, '--lib', 'native_languages::typescript_graph::', '--', '--ignored', '--test-threads=4'] },
       { executable: 'bash', args: [...cargo, '--lib', 'real_installed_typescript_pack_analyzes_without_development_tools', '--', '--ignored'] },
       { executable: 'bash', args: [...cargo, '--lib', 'real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto', '--', '--ignored'] },
+    ] : []),
+    ...(ids.includes('rust') ? [
+      { executable: 'bash', args: ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--lib', 'protocol::tests::', '--', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::rust_graph::', '--', '--ignored', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::rust_syntax::', '--', '--ignored', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'native_languages::rust::tests::', '--', '--ignored', '--test-threads=1'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'real_installed_rust_pack_analyzes_with_existing_toolchain', '--', '--ignored'] },
+      { executable: 'bash', args: [...cargo, '--lib', 'real_rust_pack_flows_through_review_lifecycle_to_dto', '--', '--ignored'] },
     ] : []),
     // 所有平台复用同一进程所有者矩阵；Windows 同组还包含准确句柄与 Job 回归。
     { executable: 'bash', args: [...cargo, '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'] },
@@ -90,6 +98,12 @@ export async function verifyNativeAnalyzers(artifacts, build = false, language =
   if (!target) throw new Error('Native validation requires macOS ARM64 or Windows x64');
   artifacts = path.resolve(artifacts);
   const environment = { ...process.env, NARRANT_TEST_NODE: process.execPath, NARRANT_NATIVE_LANGUAGE: language, NARRANT_NATIVE_PACKS: artifacts, NARRANT_NATIVE_HELPERS_CONFIG: path.join(artifacts, 'native-helpers-config.json'), ...(process.platform === 'win32' ? { NARRANT_WINDOWS_TEST_MANIFEST: '1' } : {}) };
+  if (ids.includes('rust')) {
+    const catalog = JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'), 'utf8'));
+    environment.NARRANT_RUST_PACK = path.join(artifacts, 'smoke-installed/rust', catalog.packs.rust.version, target);
+    environment.NARRANT_RUST_HELPER = path.join(environment.NARRANT_RUST_PACK, `bin/narrant-rust${process.platform === 'win32' ? '.exe' : ''}`);
+    environment.NARRANT_LANGUAGE_PACK_FIXTURE = artifacts;
+  }
   if (ids.includes('typescript-javascript')) {
     const catalog = JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'), 'utf8'));
     environment.NARRANT_TYPESCRIPT_PACK = path.join(artifacts, 'smoke-installed/typescript-javascript', catalog.packs['typescript-javascript'].version, target);

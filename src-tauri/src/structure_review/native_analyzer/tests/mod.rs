@@ -707,6 +707,8 @@ mod migration;
 mod python_graph;
 mod python_native;
 mod rust_graph;
+#[path = "rust_syntax.rs"]
+mod rust_syntax;
 
 /// 即使已发送 cancel，实际后端错误或无效协议也不能改称取消成功。
 #[test]

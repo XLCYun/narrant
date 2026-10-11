@@ -25,6 +25,7 @@ fn missing_sources_fail_without_installing_and_repository_scope_needs_no_sources
         RustDependencyScope::StandardLibrary,
         &cancelled,
         path.clone(),
+        &BTreeMap::new(),
     )
     .err()
     .unwrap();
@@ -34,6 +35,7 @@ fn missing_sources_fail_without_installing_and_repository_scope_needs_no_sources
         RustDependencyScope::RepositoryOnly,
         &cancelled,
         path.clone(),
+        &BTreeMap::new(),
     )
     .unwrap();
     assert!(limited.sysroot.is_none());
@@ -50,6 +52,7 @@ fn missing_sources_fail_without_installing_and_repository_scope_needs_no_sources
         RustDependencyScope::StandardLibrary,
         &cancelled,
         path,
+        &BTreeMap::new(),
     )
     .unwrap();
     assert_eq!(
@@ -83,6 +86,7 @@ fn child_projects_are_checked_individually_and_mixed_sysroots_are_explicit() {
         RustDependencyScope::StandardLibrary,
         &cancelled,
         path.clone(),
+        &BTreeMap::new(),
     )
     .unwrap();
     assert_eq!(
@@ -104,6 +108,7 @@ fn child_projects_are_checked_individually_and_mixed_sysroots_are_explicit() {
         RustDependencyScope::StandardLibrary,
         &cancelled,
         path.clone(),
+        &BTreeMap::new(),
     )
     .err()
     .unwrap();
@@ -113,6 +118,7 @@ fn child_projects_are_checked_individually_and_mixed_sysroots_are_explicit() {
         RustDependencyScope::RepositoryOnly,
         &cancelled,
         path,
+        &BTreeMap::new(),
     )
     .unwrap();
     assert_eq!(limited.manifests.len(), 2);

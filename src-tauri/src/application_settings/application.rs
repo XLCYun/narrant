@@ -212,7 +212,7 @@ impl ApplicationSettingsApplication {
     /// 原子保存 Rust 结构分析的依赖范围，保留其它语言和应用偏好。
     pub(crate) fn update_rust_dependency_scope(
         &self,
-        scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+        scope: crate::structure_review::code_graph::RustDependencyScope,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
         self.update(|settings| settings.structure_review.rust.dependency_scope = scope)
     }

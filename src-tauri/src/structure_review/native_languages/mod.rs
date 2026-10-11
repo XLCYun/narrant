@@ -1,6 +1,8 @@
 //! 固定 helper 与本机目标声明的装配；不解释项目语法或执行项目构建。
 
 mod platforms;
+mod rust;
+pub(crate) use rust::RustPackAnalyzer;
 
 use super::{
     code_graph::AnalysisError,
@@ -52,6 +54,7 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
         return Err(failure("原生支持包控制文件版本不匹配"));
     }
     let (helper, projection, languages, profile) = match id {
+        PackId::Rust => ("rust", "rust-source-v1", vec!["rust"], "rust-repository-v1"),
         PackId::TypeScriptJavascript => (
             "typescript",
             "typescript-source-v1",
@@ -170,7 +173,7 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             _ => return Err(failure("支持包声明的本机目标环境与语言或宿主不匹配")),
         });
     }
-    if platforms.is_empty() {
+    if platforms.is_empty() && id != PackId::Rust {
         return Err(failure(
             "target_unavailable: 支持包未提供经过验证的目标标准库",
         ));

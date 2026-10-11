@@ -3,7 +3,8 @@
 此独立 crate 将 rust-analyzer `9074e9b4c6bc31d7986ccf4e22d18af70e5508da`
 的 `project-model`、`load-cargo`、`ide`、`syntax`、`vfs`、`base-db` 和 `hir-def` 直接链接到同一个程序。
 提供只读项目核心、完整 Rust 图投影和 `narrant-rust` 单请求 NDJSON 可执行程序。
-本阶段通过公共 Native Host 聚焦测试直接调用；应用工厂注册、支持包和旧链路删除尚未接入。
+应用工厂从 1.1.0 未发布候选加载该程序，经公共 Native Host 构图；旧 Rust LSP 与服务器分发已退役。
+本地 macOS ARM64 完成实际支持包安装及 Review 验收，最终双平台 CI 待全部开发与审查完成后执行。
 
 ## 构建与验证
 
@@ -23,6 +24,9 @@ scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/rust/Cargo.to
 构建时注入的 `RUSTUP_TOOLCHAIN`，或显式设为测试项目工具链；生产 helper 保留 Host
 提供的运行时覆盖。公共 Host 图测试位于 `native_analyzer/tests/rust_graph.rs`，设置
 `NARRANT_RUST_HELPER` 为本地二进制的绝对路径，再筛选并运行这些 ignored 集成测试。
+正常支持包入口为 `node scripts/build-language-support-packs.mjs --id rust --native`；
+`node scripts/verify-native-analyzers.mjs <产物目录> --language rust` 包含真实工厂、安装和 Review。
+工厂测试的 `NARRANT_RUST_PACK` 指向完整安装目录，不能仅复制可执行文件。
 测试中的标准库/全部依赖案例需要本机项目
 默认工具链已有 rust-src 以及标准库 metadata 所需的依赖缓存；测试不自动准备这些组件。
 `Cargo.lock` 以固定 revision 的上游锁文件为基线，不要删锁后选择最新传递依赖：

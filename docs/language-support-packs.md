@@ -6,19 +6,20 @@
 ## 版本和内容
 
 `resources/language-support-packs.json` 同时供 Rust 应用和 Node 打包脚本读取。改变任何文件内容时
-提升对应包版本并保留历史产物，不覆盖同版本。首版三个包均为 `1.0.0`：
+提升对应包版本并保留历史产物，不覆盖同版本。历史首版为 `1.0.0`；当前 Rust 和 TS/JS
+使用未发布的 `1.1.0` 原生候选，最终双平台 CI 尚未执行：
 
 | 包 | 内容 | 平台 |
 | --- | --- | --- |
 | Python | ty 0.0.84 原生服务、内置固定 stdlib、空控制配置及 ty/Ruff/typeshed 许可证 | macOS arm64、Windows x64 |
-| Rust | rust-analyzer 2026-09-07，MIT/Apache 许可证 | macOS arm64、Windows x64 |
+| Rust | narrant-rust，固定 rust-analyzer 库 revision 9074e9b；包内包含实际目标的锁定依赖许可闭包 | macOS arm64 本地验收；Windows x64 待最终 CI |
 | TypeScript / JavaScript | Node 24.18.0、TypeScript 6.0.3、TLS 6.0.0、@types/node 22.20.1、undici-types 6.21.0，随附上游许可证 | 同上 |
 
 Rust 项目仍需要用户已有的 Cargo/rustc；标准库或完整依赖范围还需要对应工具链的 rust-src。
 应用不运行 rustup 安装命令。纯仓库范围不加载标准库。支持包不包含 npm/pnpm，TS/JS 不会安装被审查项目的依赖；Rust 的“所有依赖”范围保留原有 Cargo 策略。
 
 工具链检查在实际发现的 Rust 项目目录执行，包含 `src-tauri/` 这类直接子项目。
-首版一个分析会话只配置一套标准库；同一仓库内多个独立项目若使用不同 sysroot，
+一个分析会话只配置一套标准库；同一仓库内多个独立项目若使用不同 sysroot，
 标准库/所有依赖范围明确报错并提示切换为“仅仓库”，不把仓库根目录的默认工具链套给所有项目。
 
 ## 本地构建与验收
@@ -37,13 +38,16 @@ pnpm build:language-packs --target aarch64-apple-darwin --native
 上游下载每次校验固定摘要，缓存位于 `.tools/language-pack-downloads`；不执行 npm 安装脚本。
 归档按稳定文件顺序、固定时间及权限创建，不包含系统扩展属性。清单包含归档及每个文件的 SHA-256。
 
-真实安装和 Rust、TS/JS 分析验证（先构建当前平台产物；Rust 使用已有 Cargo/rustc）：
+Rust 候选通过正常入口构建优化 helper，构建工具链固定 1.98.0；运行时保留项目已有 Cargo/rustc。
+支持包包含控制身份、可执行入口、实际目标依赖许可和原始许可出处，不携带项目工具链。
 
 ```sh
-NARRANT_LANGUAGE_PACK_FIXTURE="$PWD/.tools/language-support-pack-artifacts" \
-  scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --lib \
-  real_installed_ -- --ignored
+pnpm build:language-packs --id rust --native --output .tools/language-support-pack-artifacts
+node scripts/verify-native-analyzers.mjs .tools/language-support-pack-artifacts --language rust
 ```
+
+该验收覆盖真实图/diff、三档配置、隔离安装、生产 Review DTO 及取消/错误；
+历史独立 helper 证据与本地生产退役结果见 [迁移验证](research/existing-native-helper-migration-validation.md)。
 
 Python 不需要用户 Python、venv 或 Node；Ruff parser/AST/codegen 编译进应用，ty 来自独立包。
 输入支持 UTF-8 `.py/.pyi`、Python 3.7–3.14，只分析本侧仓库和固定标准库。详见

@@ -126,14 +126,69 @@ export async function smokeNativeHelper({ executable, args = [], id, projection,
         else resolve();
       });
     });
-  } catch (error) { primaryError = error; throw error; }
-  finally {
-    try { await fs.rm(root, { recursive: true, force: true }); }
-    catch (error) {
-      if (!primaryError) throw error;
-      primaryError.message += `; scratch cleanup failed: ${error.message}`;
+  } catch (error) { primaryError = error; }
+  try { await fs.rm(root, { recursive: true, force: true }); }
+  catch (error) {
+    if (primaryError) primaryError.message += `; scratch cleanup failed: ${error.message}`;
+    else primaryError = error;
+  }
+  if (primaryError) throw primaryError;
+}
+
+/** 从实际目标的锁定依赖闭包收集许可；Rust 正常构建入口使用，后续 Python 可复用此归档步骤。 */
+export async function packageCargoLicenses(source, target, payload, label) {
+  // 锁定依赖的实际元数据和许可证随二进制分发，不复制源码或目标工具链。
+  const metadata = JSON.parse(execFileSync('bash', [path.join(repository, 'scripts/cargo-agent.sh'), 'metadata', '--locked', '--offline', '--filter-platform', target, '--format-version', '1'], { cwd: source, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
+  const included = new Set();
+  const pending = [metadata.resolve.root];
+  while (pending.length) {
+    const id = pending.pop();
+    if (included.has(id)) continue;
+    included.add(id);
+    for (const dependency of nodes.get(id).deps) {
+      if (dependency.dep_kinds.some(kind => kind.kind !== 'dev')) pending.push(dependency.pkg);
     }
   }
+  const fallbackRoot = path.join(source, 'licenses');
+  let fallbacks = {};
+  try { fallbacks = JSON.parse(await fs.readFile(path.join(fallbackRoot, 'fallbacks.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const notices = [];
+  for (const pkg of metadata.packages.filter(pkg => included.has(pkg.id))) {
+    const destination = path.join(payload, 'licenses', `${pkg.name}-${pkg.version}`);
+    await fs.mkdir(destination, { recursive: true });
+    const files = new Set();
+    let directory = path.dirname(pkg.manifest_path);
+    for (let level = 0; level < 5; level++) {
+      const names = await fs.readdir(directory);
+      for (const name of names.filter(name => /^(LICENSE|COPYING|NOTICE)([.-]|$)/i.test(name))) {
+        if ((await fs.stat(path.join(directory, name))).isFile()) {
+          await fs.copyFile(path.join(directory, name), path.join(destination, name));
+          files.add(name);
+        }
+      }
+      if (files.size || path.dirname(directory) === directory) break;
+      directory = path.dirname(directory);
+    }
+    if (pkg.license_file) {
+      const name = path.basename(pkg.license_file);
+      await fs.copyFile(path.resolve(path.dirname(pkg.manifest_path), pkg.license_file), path.join(destination, name));
+      files.add(name);
+    }
+    if (!files.size && pkg.license) {
+      // 缺文本的精确锁定版本只能使用已保存一手出处的原许可，不猜测作者或许可模板。
+      const names = fallbacks[`${pkg.name}@${pkg.version}`];
+      if (!Array.isArray(names) || !names.length) throw new Error(`Locked crate has no distributable license text: ${pkg.name}`);
+      for (const name of names) {
+        await fs.copyFile(path.join(fallbackRoot, name), path.join(destination, name));
+        files.add(name);
+      }
+    }
+    notices.push({ name: pkg.name, version: pkg.version, license: pkg.license, source: pkg.source, repository: pkg.repository, authors: pkg.authors, files: [...files].sort() });
+  }
+  if (Object.keys(fallbacks).length) await fs.copyFile(path.join(fallbackRoot, 'sources.json'), path.join(payload, `licenses/${label}-license-sources.json`));
+  await fs.writeFile(path.join(payload, `licenses/${label}-dependencies.json`), JSON.stringify(notices, null, 2));
 }
 
 /** 从固定语言源码和私有 SDK 组装本机开发包；不下载项目依赖、不调用项目构建。 */
@@ -152,7 +207,12 @@ export async function buildNativePack({ id, target, output, definition, packageD
   let executable, args = [];
   try {
     for (const part of ['bin', 'runtime', 'licenses', 'control']) await fs.mkdir(path.join(payload, part), { recursive: true });
-    if (id === 'go') {
+    if (id === 'rust') {
+      const { buildMigratingNativeHelper } = await import('./build-migrating-native-helper.mjs');
+      await buildMigratingNativeHelper(id, payload);
+      executable = path.join(payload, `bin/narrant-rust${suffix}`);
+      await packageCargoLicenses(path.join(repository, 'native-helpers/rust'), target, payload, 'Rust');
+    } else if (id === 'go') {
       const sdk = await findDirectory([process.env.NARRANT_GO_SDK, windows ? 'C:\\Program Files\\Go' : '/usr/local/go'], `Go ${definition.go} helper build SDK`);
       if (!(await fs.readFile(path.join(sdk, 'VERSION'), 'utf8')).startsWith(`go${definition.go}\n`)) throw new Error('Go SDK version mismatch');
       executable = path.join(payload, `bin/narrant-go${suffix}`);

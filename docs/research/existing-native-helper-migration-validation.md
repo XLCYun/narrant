@@ -476,3 +476,36 @@ Rust 格式、指定 JS 文件 lint 与差异检查也通过；这批改动已�
 这只是验收前整理。整项迁移仍需依次完成三门语言的生产接入、双平台安装与 Review、
 旧链路删除、宿主全量测试及整分支审查。[草稿 PR #201](https://github.com/XLCYun/narrant/pull/201)
 保留这些未完成项；GitHub Actions 的预算拒绝不算执行结果或平台验收证据。
+
+## Rust Task 5 本地生产接入与退役（2026-10-11）
+
+本节补充上面的独立 helper 阶段，按最新0025/0025a政策先完成 macOS ARM64 本地生产验收。
+Rust 1.1.0 原生候选已经接入支持包安装与应用工厂；旧 Rust LSP 分析器、服务器分发及
+Host `ra_ap_syntax` 依赖已删除。三档设置类型、共享图与进程消费者保留，Python 生产链未切换。
+此结果不表示发布就绪：候选仍 `published=false`、`verifiedTargets=[]`，最终 Windows/macOS
+CI 待全部开发、审查和本地验证完成后集中执行，未推送或触发 Actions/quality-gate。
+
+- 退役前实际旧安装与新 helper 在多独立 Cargo、JSON、自定义根 × 三档范围 × 测试开关的
+  18 组完整图、root、外部符号、原文与 diff 逐项一致；退役后保留同矩阵的业务断言。
+  已验证的 Cargo 1.81/1.94/1.96 只读18组及共享生命周期实现未改动，沿用历史证据。
+- 正常入口构建优化包、暂存与解压 smoke 后，通过实际归档隔离安装、生产工厂与 Review→DTO。
+  Review 两侧各4节点、差异6项；公开 API 真实 graph/diff、三档只读、解析错误与活动探测取消通过。
+  工厂冻结用户运行环境，按每侧真实项目目录检查工具链；不注入 helper 构建版本，不安装组件或运行构建脚本。
+- 旧 syntax16项业务去向为15项实际 Host 图测试（UTF-16传输断言改为Unicode/CRLF原文及稳定身份）
+  和1项 helper 同源 AST 字段类型测试。其他 test_code、引用、外部声明、crate根、选集范围断言保留于原生测试。
+  新版 RA 文档注释不再属于 trivia，迁移断言发现了注释变化错误参与 diff；修复使用真实 Comment/DOC_COMMENT
+  分类，保留原文，并确认字面量、宏标点和真正属性变化仍参与比较。保留了修复前失败日志。
+- 最终归档7,280,548 bytes，SHA-256 `fadcbdd482607428718bb1088389eef1e2476feac2cc9d1c0fbf056956ee7522`；
+  helper22,954,944 bytes，SHA-256 `cc42912f8e2bb11904841b35b41902ba25e8f6209f2494318063e16f07a51abb`。
+  实际目标许可闭包206项（204外部crate与2本项目crate）；204外部项均附许可文本。
+  缺原文件的14个精确锁定crate使用固定上游原许可，清单/出处/hash在 `native-helpers/rust/licenses/`
+  及归档 `Rust-license-sources.json`，未猜测作者或版权。
+- 代表性 release 单样本的20节点项目：仅仓库0.508s/峰值38,649,856 bytes，标准库5.032s/711,852,032 bytes，
+  全部依赖5.275s/667,484,160 bytes。该计量来自文档注释修复前优化包；注释修复后、最终import格式化前的优化包同样20节点，额外复测遇到
+  同时 Host 编译，时间/峰值分别2.829s/38,518,784、22.687s/530,808,832、11.734s/655,654,912 bytes。
+  两次均以 `/usr/bin/time -l` 记录进程最大RSS，三档输入快照不变；无旧实现同口径对照，不宣称性能提升。
+  标准库/全部依赖峰值仍是明确局限，本轮没有新增缓存或优化框架。
+
+聚焦 helper/Host/工厂/安装/Review/脚本测试、check、严格 Clippy、fmt 与原始 ESLint 已通过；
+Host 完整套件保留至 Task7。完整命令、数量、原始失败、产物身份与许可14项逐项出处保存在
+`.superpowers/sdd/0025a-existing-native-helper-implementation-plan/task-5-local-retirement-report.md`。

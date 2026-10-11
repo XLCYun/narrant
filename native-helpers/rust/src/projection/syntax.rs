@@ -5,7 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ::syntax::{AstNode, NodeOrToken, SyntaxKind, SyntaxNode, TextRange, TextSize, WalkEvent, ast};
+use ::syntax::{
+    AstNode, AstToken, NodeOrToken, SyntaxKind, SyntaxNode, TextRange, TextSize, WalkEvent, ast,
+};
 
 use super::{Result, failure};
 use crate::RustProject;
@@ -321,7 +323,8 @@ fn signature(syntax: &SyntaxNode, children: &[TextRange]) -> String {
     let mut tokens = Vec::new();
     for element in syntax.children_with_tokens() {
         match element {
-            NodeOrToken::Node(node) if body.as_ref() == Some(&node) => {}
+            NodeOrToken::Node(node)
+                if body.as_ref() == Some(&node) || node.kind() == SyntaxKind::DOC_COMMENT => {}
             NodeOrToken::Node(node)
                 if matches!(
                     node.kind(),
@@ -349,7 +352,9 @@ fn signature(syntax: &SyntaxNode, children: &[TextRange]) -> String {
                 }
             }
             NodeOrToken::Node(node) => tokens.push(normalize(&node, children)),
-            NodeOrToken::Token(token) if !token.kind().is_trivia() => {
+            NodeOrToken::Token(token)
+                if !token.kind().is_trivia() && ast::Comment::cast(token.clone()).is_none() =>
+            {
                 if body.is_some() && token.kind() == SyntaxKind::EQ {
                     continue;
                 }
@@ -398,8 +403,11 @@ fn normalized_tokens(
     }
     for element in syntax.children_with_tokens() {
         match element {
+            NodeOrToken::Node(node) if node.kind() == SyntaxKind::DOC_COMMENT => {}
             NodeOrToken::Node(node) => normalized_tokens(&node, children, output),
-            NodeOrToken::Token(token) if !token.kind().is_trivia() => {
+            NodeOrToken::Token(token)
+                if !token.kind().is_trivia() && ast::Comment::cast(token.clone()).is_none() =>
+            {
                 let in_macro = token
                     .parent_ancestors()
                     .any(|parent| parent.kind() == SyntaxKind::TOKEN_TREE);

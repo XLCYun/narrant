@@ -9,7 +9,7 @@ use tauri::State;
 #[tauri::command]
 pub(crate) fn update_application_rust_dependency_scope(
     application: State<'_, ApplicationSettingsApplication>,
-    scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+    scope: crate::structure_review::code_graph::RustDependencyScope,
 ) -> Result<ApplicationSettings, String> {
     application
         .update_rust_dependency_scope(scope)

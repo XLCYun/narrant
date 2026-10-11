@@ -7,16 +7,30 @@ use httpmock::prelude::*;
 
 /// 每个目标都经过安装工厂和真实 helper，确保本机发现与打包入口共同生效。
 async fn assert_installed_target(id: PackId, installed: &Path, repository: &Path, file: &str) {
-    let analyzer = native_languages::from_pack(id, installed).unwrap();
+    let installed = installed.to_owned();
     let input = AnalysisInput {
         repository_root: repository.into(),
         files: vec![file.into()],
         options: AnalysisOptions::default(),
     };
-    let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
-        .await
-        .unwrap()
-        .unwrap();
+    let graph = tokio::task::spawn_blocking(move || {
+        if id == PackId::Rust {
+            native_languages::RustPackAnalyzer::from_pack(&installed)
+                .unwrap()
+                .analyze(
+                    &input,
+                    std::sync::Arc::new(|| false),
+                    crate::structure_review::code_graph::RustDependencyScope::RepositoryOnly,
+                )
+        } else {
+            native_languages::from_pack(id, &installed)
+                .unwrap()
+                .analyze(&input)
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert!(
         !graph.root().contains.is_empty(),
         "{} 返回了空图",
@@ -138,6 +152,11 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             .unwrap();
         let fixture = tempfile::tempdir().unwrap();
         let file = match id {
+            PackId::Rust => {
+                fs::write(fixture.path().join("Cargo.toml"), "[package]\nname=\"native_fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n").unwrap();
+                fs::write(fixture.path().join("lib.rs"), "pub fn value() -> u32 { 1 }").unwrap();
+                "lib.rs"
+            }
             PackId::TypeScriptJavascript => {
                 fs::write(
                     fixture.path().join("main.ts"),

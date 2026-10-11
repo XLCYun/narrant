@@ -1,5 +1,6 @@
 /** 已接通生产工厂且具备真实验收的集合；核心探针不能进入这个表。 */
 export const migratedNativePacks = Object.freeze({
+  rust: { helper: 'rust', toolchains: [] },
   'typescript-javascript': { helper: 'typescript', toolchains: [] },
   java: { helper: 'java', toolchains: ['jdk25', 'jdk17', 'jdk8'] },
   go: { helper: 'go', toolchains: ['go', 'go-target'] },

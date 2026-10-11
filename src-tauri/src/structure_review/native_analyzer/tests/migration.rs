@@ -373,3 +373,62 @@ fn rust_profiles_admit_physical_aliases_without_loosening_other_languages() {
     }
     assert!(input::validate(&fixture.analyzer(), &input).is_err());
 }
+
+/// 工厂按三档重新配置时只使用被冻结的环境，系统加载变量与联网政策不丢失。
+#[test]
+fn rust_project_configuration_keeps_frozen_runtime_environment() {
+    use crate::structure_review::code_graph::RustDependencyScope;
+    let fixture = Fixture::new();
+    for (scope, profile) in [
+        (
+            RustDependencyScope::RepositoryOnly,
+            NativeProfile::RustRepository,
+        ),
+        (
+            RustDependencyScope::StandardLibrary,
+            NativeProfile::RustStandardLibrary,
+        ),
+        (
+            RustDependencyScope::AllDependencies,
+            NativeProfile::RustAllDependencies,
+        ),
+    ] {
+        let snapshot = BTreeMap::from([
+            ("PATH".into(), "project-tools".into()),
+            ("RUSTUP_TOOLCHAIN".into(), "project-version".into()),
+            ("CARGO_NET_OFFLINE".into(), "false".into()),
+            ("RUSTC_WRAPPER".into(), "rejected-wrapper".into()),
+            ("SystemRoot".into(), "frozen-system-root".into()),
+        ]);
+        let analyzer = migrating(&fixture, NativeProfile::RustRepository).with_rust_project(
+            scope,
+            snapshot,
+            vec![],
+        );
+        let env = &analyzer.command.environment;
+        assert_eq!(analyzer.identity.profile, profile.as_str());
+        assert_eq!(env[std::ffi::OsStr::new("PATH")], "project-tools");
+        assert_eq!(
+            env[std::ffi::OsStr::new("RUSTUP_TOOLCHAIN")],
+            "project-version"
+        );
+        assert_eq!(
+            env[std::ffi::OsStr::new("CARGO_NET_OFFLINE")],
+            if scope == RustDependencyScope::AllDependencies {
+                "false"
+            } else {
+                "true"
+            }
+        );
+        assert!(!env.contains_key(std::ffi::OsStr::new("RUSTC_WRAPPER")));
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("SystemRoot"))
+                .map(|value| value.to_str().unwrap()),
+            if cfg!(windows) {
+                Some("frozen-system-root")
+            } else {
+                None
+            }
+        );
+    }
+}

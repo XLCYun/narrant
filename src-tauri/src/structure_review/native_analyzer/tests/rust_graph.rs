@@ -13,7 +13,7 @@ use crate::structure_review::{
 };
 
 /// 直接调用公共 Host 与已构建 helper；工具链在测试边界隔离，不注册生产工厂。
-fn analyzer() -> NativeLanguageAnalyzer {
+pub(super) fn analyzer() -> NativeLanguageAnalyzer {
     let executable =
         PathBuf::from(std::env::var_os("NARRANT_RUST_HELPER").expect("需指定实际 Rust helper"));
     let mut environment = BTreeMap::new();
@@ -58,7 +58,7 @@ fn rust_helper_excludes_test_attributes_with_glob_imports() {
     fs::create_dir(directory.path().join("tests")).unwrap();
     fs::write(
         directory.path().join("tests/github_discovery.rs"),
-        include_str!("../../rust_analyzer/tests/fixtures/pr31_github_discovery.rs"),
+        include_str!("fixtures/pr31_github_discovery.rs"),
     )
     .unwrap();
     let analyze = |include_tests| {
@@ -109,7 +109,7 @@ fn rust_helper_excludes_test_attributes_with_glob_imports() {
 }
 
 /// 通过公共根和节点查询遍历结果，验收不依赖图内部存储。
-fn nodes(graph: &CodeGraph) -> BTreeMap<NodeId, &CodeNode> {
+pub(super) fn nodes(graph: &CodeGraph) -> BTreeMap<NodeId, &CodeNode> {
     let mut result = BTreeMap::new();
     let mut pending = graph.root().contains.clone();
     while let Some(id) = pending.pop() {
@@ -617,8 +617,10 @@ fn closure(state: &State) -> u32 { let f = || store::helper() + state.value + LO
 #[ignore = "需要已构建 Rust helper 和项目工具链，单独串行运行"]
 fn rust_helper_describes_external_symbols() {
     let repository = repository(
-        "mod store; use std::sync::Arc; pub fn run() -> Arc<u32> { Arc::new(store::helper()) }",
+        "mod store; use std::sync::Arc; pub fn run() -> Arc<u32> { { store::helpers::Cache::读取(); Arc::new(store::helper()) } }",
     );
+    fs::write(repository.path().join("src/store.rs"),
+        "pub fn helper() -> u32 { 1 } pub mod helpers { pub struct Cache; impl Cache { pub fn 读取() {} } }").unwrap();
     let graph = analyzer()
         .analyze(&AnalysisInput {
             options: crate::structure_review::code_graph::AnalysisOptions {
@@ -651,6 +653,13 @@ fn rust_helper_describes_external_symbols() {
         "{:#?}",
         graph.external_symbols()
     );
+    let (symbol, description) = graph
+        .external_symbols()
+        .iter()
+        .find(|(_, description)| description.name == "helpers::Cache::读取")
+        .expect("图外名称保留语法层级及 Unicode");
+    assert!(symbol.contains("%2F"), "文件 ID 编码保持稳定: {symbol}");
+    assert_eq!(description.scope, SymbolScope::Repository);
     assert!(all.values().flat_map(|node| &node.data().references).any(|reference| {
         reference.semantic == "code.calls"
             && matches!(&reference.target, ReferenceTarget::Unresolved { name } if name == "new")
@@ -880,10 +889,10 @@ fn save(name: &str, graph: &CodeGraph) {
     }
 }
 
-/// 物理目录别名在旧完整图和公共 Host 新完整图中都只产生一组稳定节点。
+/// 物理目录别名经公共 Host 只产生一组稳定节点、原文与内部调用。
 #[test]
-#[ignore = "需要固定旧 Rust 支持包与真实 helper"]
-fn rust_helper_matches_legacy_graph_with_aliases() {
+#[ignore = "需要真实 Rust helper"]
+fn rust_helper_deduplicates_aliases_with_stable_graph_content() {
     let root = repository("mod store; pub fn run() -> u32 { store::helper() }");
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.path().join("src"), root.path().join("alias")).unwrap();
@@ -906,20 +915,19 @@ fn rust_helper_matches_legacy_graph_with_aliases() {
         options: Default::default(),
     };
     let native = analyzer().analyze(&input).unwrap();
-    let old = crate::structure_review::rust_analyzer::RustLanguageAnalyzer::new(
-        std::env::var_os("NARRANT_RUST_ANALYZER").expect("固定旧包路径"),
-    )
-    .with_dependency_scope(
-        crate::structure_review::rust_analyzer::RustDependencyScope::RepositoryOnly,
-    )
-    .analyze(&input)
-    .unwrap();
-    assert!(old.diff(&native).unwrap().nodes.is_empty());
-    assert_eq!(old.root(), native.root());
-    assert_eq!(old.external_symbols(), native.external_symbols());
-    for (id, node) in nodes(&old) {
-        assert_eq!(node.data().source, native.node(&id).unwrap().data().source);
+    assert_eq!(native.root().contains.len(), 1);
+    assert!(native.external_symbols().is_empty());
+    for node in nodes(&native).values() {
+        assert!(node
+            .data()
+            .source
+            .as_ref()
+            .is_some_and(|source| !source.is_empty()));
+        assert!(!node.data().id.0.contains("alias/"));
     }
+    assert!(nodes(&native).values().any(|node| node.data().name.as_deref() == Some("run")
+        && node.data().references.iter().any(|reference| matches!(&reference.target,
+            ReferenceTarget::Node(node_id) if native.node(node_id).unwrap().data().name.as_deref() == Some("helper")))));
     assert_eq!(nodes(&native).len(), 4);
 }
 
@@ -1488,4 +1496,135 @@ fn rust_helper_lifecycle_native_failure_remains_error() {
         .unwrap_err();
     assert!(!error.is_cancelled(), "{error}");
     assert!(error.message.contains("无法解析"), "{error}");
+}
+
+/// 保留退役前完整图矩阵的业务范围；多 Cargo、JSON、自定义根均覆盖三档和测试开关。
+#[test]
+#[ignore = "需要真实 helper 与 rust-src"]
+fn rust_helper_whole_graph_project_form_matrix() {
+    use crate::structure_review::code_graph::RustDependencyScope;
+    let sysroot = std::process::Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .env("RUSTUP_TOOLCHAIN", "stable")
+        .output()
+        .unwrap();
+    assert!(sysroot.status.success());
+    let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout).unwrap().trim());
+    for shape in ["multiple", "json", "custom"] {
+        let root = tempfile::tempdir().unwrap();
+        let source = "pub struct Value; fn target() {} pub fn run() { target(); } #[cfg(any())] fn inactive() {} #[cfg(test)] mod tests { #[test] fn check() { super::target(); } }";
+        let files = match shape {
+            "multiple" => {
+                for name in ["a", "b"] {
+                    fs::create_dir(root.path().join(name)).unwrap();
+                    fs::write(root.path().join(name).join("Cargo.toml"), format!("[package]\nname=\"{name}\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"entry.rs\"\n")).unwrap();
+                    fs::write(root.path().join(name).join("entry.rs"), source).unwrap();
+                }
+                vec!["a/entry.rs".into(), "b/entry.rs".into()]
+            }
+            "json" => {
+                fs::write(root.path().join("entry.rs"), source).unwrap();
+                fs::write(root.path().join("rust-project.json"), r#"{"crates":[{"root_module":"entry.rs","edition":"2021","deps":[],"cfg":[]}]}"#).unwrap();
+                vec!["entry.rs".into()]
+            }
+            _ => {
+                fs::write(root.path().join("entry.rs"), source).unwrap();
+                fs::write(root.path().join("Cargo.toml"), "[package]\nname=\"custom\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\nname=\"custom_library\"\npath=\"entry.rs\"\n").unwrap();
+                vec!["entry.rs".into()]
+            }
+        };
+        let mut baseline = std::collections::BTreeMap::<bool, CodeGraph>::new();
+        for (scope, profile) in [
+            (RustDependencyScope::RepositoryOnly, "rust-repository-v1"),
+            (
+                RustDependencyScope::StandardLibrary,
+                "rust-standard-library-v1",
+            ),
+            (
+                RustDependencyScope::AllDependencies,
+                "rust-all-dependencies-v1",
+            ),
+        ] {
+            for include_tests in [false, true] {
+                let input = AnalysisInput {
+                    repository_root: root.path().into(),
+                    files: files.clone(),
+                    options: crate::structure_review::code_graph::AnalysisOptions { include_tests },
+                };
+                let mut native = analyzer();
+                native.identity.profile = profile.into();
+                if scope != RustDependencyScope::RepositoryOnly {
+                    native.platforms = vec![super::Platform {
+                        id: "project-rust".into(),
+                        kind: "rust-standard-library".into(),
+                        version: "stable".into(),
+                        root: sysroot.clone(),
+                        metadata: serde_json::json!({"rust_src":"lib/rustlib/src/rust/library"}),
+                    }];
+                }
+                native
+                    .command
+                    .environment
+                    .insert("CARGO_NET_OFFLINE".into(), "true".into());
+                let graph = native.analyze(&input).unwrap();
+                let expected_count = match (shape, include_tests) {
+                    ("multiple", false) => 10,
+                    ("multiple", true) => 14,
+                    ("json", false) => 4,
+                    ("json", true) => 6,
+                    (_, false) => 5,
+                    (_, true) => 7,
+                };
+                assert_eq!(nodes(&graph).len(), expected_count);
+                assert_eq!(
+                    graph.root().contains.len(),
+                    if shape == "multiple" {
+                        2
+                    } else if shape == "json" {
+                        if include_tests {
+                            5
+                        } else {
+                            4
+                        }
+                    } else {
+                        1
+                    }
+                );
+                assert!(graph.external_symbols().is_empty());
+                assert!(nodes(&graph)
+                    .values()
+                    .all(|node| node.data().source.is_some()));
+                assert!(nodes(&graph).values().any(|node| node.data().name.as_deref() == Some("run")
+                    && node.data().references.iter().any(|reference| matches!(&reference.target,
+                        ReferenceTarget::Node(node_id) if graph.node(node_id).unwrap().data().name.as_deref() == Some("target")))));
+                if let Some(expected) = baseline.get(&include_tests) {
+                    assert_eq!(
+                        format!("{expected:#?}"),
+                        format!("{graph:#?}"),
+                        "{shape}/{profile}/{include_tests}"
+                    );
+                    assert!(expected.diff(&graph).unwrap().nodes.is_empty());
+                } else {
+                    baseline.insert(include_tests, graph.clone());
+                }
+                assert!(nodes(&graph)
+                    .values()
+                    .any(|node| node.data().name.as_deref() == Some("inactive")));
+                assert_eq!(
+                    nodes(&graph)
+                        .values()
+                        .any(|node| node.data().name.as_deref() == Some("check")),
+                    include_tests
+                );
+                eprintln!(
+                    "project-form business matrix {shape}/{profile}/tests={include_tests}: {} nodes",
+                    nodes(&graph).len()
+                );
+                save(
+                    &format!("project-form-{shape}-{profile}-{include_tests}"),
+                    &graph,
+                );
+            }
+        }
+    }
 }

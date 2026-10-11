@@ -37,7 +37,7 @@ impl NativeProfile {
 }
 
 /// 工具链与网络变量按固定白名单快照；禁止继承编译器包装器、构建参数或进程注入。
-pub(super) fn rust_environment(
+pub(crate) fn rust_environment(
     profile: NativeProfile,
     lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
 ) -> std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> {

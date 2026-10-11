@@ -2,13 +2,16 @@
   "schemaVersion": 1,
   "packs": {
     "rust": {
-      "version": "1.0.0",
-      "rustAnalyzer": "2026-09-07",
+      "version": "1.1.0",
+      "published": false,
       "sourceCommit": "9074e9b4c6bc31d7986ccf4e22d18af70e5508da",
-      "upstreamSha256": {
-        "aarch64-apple-darwin": "16e9b2af9db7c0ce015ffe88f85db27669b05c84887a59c737d697d2c5f8d349",
-        "x86_64-pc-windows-msvc": "cd3dddd580edac199c5e84c6cceb3addea32769c25cb6b597024a200b3359b05"
-      }
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-rust",
+      "projectionRevision": "rust-source-v1",
+      "profile": "rust-repository-v1",
+      "buildToolchain": "1.98.0",
+      "targetStandardLibrary": "local-project-rust-sysroot",
+      "verifiedTargets": []
     },
     "typescript-javascript": {
       "version": "1.1.0",

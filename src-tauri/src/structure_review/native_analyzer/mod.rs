@@ -6,6 +6,7 @@ mod process;
 mod profiles;
 mod protocol;
 
+pub(crate) use profiles::rust_environment;
 pub use profiles::NativeProfile;
 
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
@@ -111,6 +112,39 @@ impl NativeLanguageAnalyzer {
             limits: AnalysisLimits::default(),
             cancelled: Arc::new(|| false),
         }
+    }
+
+    /// 项目平台探测前复用完整选集和支持包边界校验，不启动 helper。
+    pub(crate) fn validate_input(&self, input: &AnalysisInput) -> Result<()> {
+        input::validate(self, input).map(|_| ())
+    }
+
+    /// 工厂按类型化 Rust 范围固定已探测的项目平台，仍强制共用环境白名单。
+    pub(crate) fn with_rust_project(
+        mut self,
+        scope: super::code_graph::RustDependencyScope,
+        environment: BTreeMap<OsString, OsString>,
+        platforms: Vec<Platform>,
+    ) -> Self {
+        use super::code_graph::RustDependencyScope;
+        let profile = match scope {
+            RustDependencyScope::RepositoryOnly => NativeProfile::RustRepository,
+            RustDependencyScope::StandardLibrary => NativeProfile::RustStandardLibrary,
+            RustDependencyScope::AllDependencies => NativeProfile::RustAllDependencies,
+        };
+        self.identity.profile = profile.as_str().into();
+        self.command.environment = rust_environment(profile, |key| {
+            environment.get(std::ffi::OsStr::new(key)).cloned()
+        });
+        #[cfg(windows)]
+        if let Some(system_root) = environment.get(std::ffi::OsStr::new("SystemRoot")) {
+            // Windows 系统加载环境同样来自工厂快照，不重新读取全局环境。
+            self.command
+                .environment
+                .insert("SystemRoot".into(), system_root.clone());
+        }
+        self.platforms = platforms;
+        self
     }
 
     /// 设置本次分析的有界资源政策，前后侧应使用同一组参数。

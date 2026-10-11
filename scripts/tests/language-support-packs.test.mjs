@@ -14,16 +14,16 @@ test('pack artifact binds identity, bytes and executable metadata to the complet
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-pack-test-'));
   try {
     await fs.mkdir(path.join(root, 'input/bin'), { recursive: true });
-    await fs.writeFile(path.join(root, 'input/bin/rust-analyzer'), 'analyzer fixture');
+    await fs.writeFile(path.join(root, 'input/bin/narrant-rust'), 'analyzer fixture');
     const result = await packageDirectory({ id: 'rust', version: '1.0.0', target: 'aarch64-apple-darwin' }, path.join(root, 'input'), path.join(root, 'output'));
     const manifest = JSON.parse(await fs.readFile(path.join(result, 'manifest.json')));
     assert.equal(manifest.id, 'rust');
     assert.equal(manifest.version, '1.0.0');
-    assert.deepEqual(manifest.files.map(file => [file.path, file.executable]), [['bin/rust-analyzer', true]]);
+    assert.deepEqual(manifest.files.map(file => [file.path, file.executable]), [['bin/narrant-rust', true]]);
     const bytes = await fs.readFile(path.join(result, 'pack.tar.gz'));
     assert.equal(manifest.archiveSize, bytes.length);
     assert.equal(manifest.archiveSha256, createHash('sha256').update(bytes).digest('hex'));
-    await fs.utimes(path.join(root, 'input/bin/rust-analyzer'), new Date(), new Date());
+    await fs.utimes(path.join(root, 'input/bin/narrant-rust'), new Date(), new Date());
     const second = await packageDirectory({ id: 'rust', version: '1.0.0', target: 'aarch64-apple-darwin' }, path.join(root, 'input'), path.join(root, 'repeat'));
     assert.deepEqual(await fs.readFile(path.join(second, 'pack.tar.gz')), bytes);
   } finally { await fs.rm(root, { recursive: true, force: true }); }

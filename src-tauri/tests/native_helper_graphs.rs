@@ -1146,3 +1146,72 @@ fn typescript_real_helper_graph_and_diff() {
     assert_eq!(diff.nodes.len(), 1);
     assert_eq!(diff.nodes[0].content, Some(ChangeKind::Modified));
 }
+
+/// Rust 优化包通过公开 Host 验证多文件引用、选集、原文与规范化 diff。
+#[test]
+#[ignore = "require-real-tools: 真实 Rust 原生支持包"]
+fn rust_real_helper_graph_and_diff() {
+    let configs = config();
+    let cfg = configs.get("rust").expect("缺少真实 Rust helper");
+    let analyzer = NativeLanguageAnalyzer::new(
+        HelperCommand {
+            executable: cfg.executable.clone(),
+            args: cfg.args.iter().map(OsString::from).collect(),
+            environment: cfg
+                .environment
+                .iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+            trusted_roots: cfg.trusted_roots.clone(),
+        },
+        HelperIdentity {
+            helper_id: "narrant-rust".into(),
+            helper_version: "0.1.0".into(),
+            projection_revision: "rust-source-v1".into(),
+            languages: vec!["rust".into()],
+            profile: "rust-repository-v1".into(),
+        },
+        vec![],
+    );
+    let sandbox = TempDir::new().unwrap();
+    let mut graphs = Vec::new();
+    for (variant, source) in [
+        ("before", "pub fn worker() -> u32 { 1 }"),
+        ("formatted", "// 😀 注释\npub fn worker( ) -> u32 {\n 1\n}"),
+        ("changed", "pub fn worker() -> u32 { 2 }"),
+    ] {
+        let root = sandbox.path().join(variant);
+        fs::create_dir(&root).unwrap();
+        put(&root, "Cargo.toml", "[package]\nname=\"native_fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n");
+        put(&root, "lib.rs", "mod worker; mod hidden; pub fn entry() -> u32 { worker::worker() + hidden::hidden() } #[test] fn check() {} #[cfg(any())] fn inactive() {}");
+        put(&root, "worker.rs", source);
+        put(&root, "hidden.rs", "pub fn hidden() -> u32 { 3 }");
+        let graph = analyzer
+            .analyze(&AnalysisInput {
+                repository_root: root.clone(),
+                files: vec!["lib.rs".into(), "worker.rs".into()],
+                options: Default::default(),
+            })
+            .unwrap();
+        let (_, entry) = find(&graph, "entry", CodeCategory::Callable);
+        let (worker, _) = find(&graph, "worker", CodeCategory::Callable);
+        assert!(entry
+            .data()
+            .references
+            .iter()
+            .any(|reference| reference.semantic == "code.calls"
+                && reference.target == ReferenceTarget::Node(worker.clone())));
+        assert!(entry.data().references.iter().any(|reference| matches!(&reference.target, ReferenceTarget::External { symbol } if graph.external_symbols()[symbol].name=="hidden")));
+        assert!(graph.root().contains.len() == 1);
+        assert!(!root.join("Cargo.lock").exists() && !root.join("target").exists());
+        graphs.push(graph);
+    }
+    assert!(graphs[0].diff(&graphs[1]).unwrap().nodes.is_empty());
+    let changed = graphs[0].diff(&graphs[2]).unwrap();
+    assert_eq!(changed.nodes.len(), 1);
+    assert_eq!(changed.nodes[0].content, Some(ChangeKind::Modified));
+    assert_eq!(
+        changed.nodes[0].id,
+        find(&graphs[0], "worker", CodeCategory::Callable).0.clone()
+    );
+}

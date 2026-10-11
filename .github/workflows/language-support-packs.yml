@@ -52,7 +52,7 @@ on:
       language:
         description: Completed Native helper to validate on both platforms (all keeps final gate)
         type: choice
-        options: [all, typescript-javascript, java, go, csharp, c-cpp]
+        options: [all, typescript-javascript, rust, java, go, csharp, c-cpp]
         default: all
       publish:
         description: Publish validated packs to the immutable OSS prefix
@@ -111,6 +111,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
+      - name: Prepare pinned Rust helper build toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build and execute native tools
         run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
       - uses: dtolnay/rust-toolchain@stable
@@ -200,6 +202,9 @@ jobs:
           workspaces: src-tauri
           key: all-native-${{ matrix.target }}
           cache-on-failure: true
+      - name: Prepare pinned Rust helper build toolchain
+        if: inputs.language == 'all' || inputs.language == 'rust' || github.event_name != 'workflow_dispatch'
+        run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
         run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

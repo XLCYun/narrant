@@ -115,3 +115,7 @@ pub fn analyze(request: &Request) -> Result<Value> {
         json!({"graph":graph,"evidence":{"configurations":[{"id":"rust-projects","source_paths":source_paths,"platform_ids":platform_ids}],"files":files,"origins":origins}}),
     )
 }
+
+#[cfg(test)]
+#[path = "tests/syntax.rs"]
+mod syntax_tests;

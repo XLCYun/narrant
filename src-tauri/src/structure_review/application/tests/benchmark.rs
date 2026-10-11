@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::structure_review::{
-    code_graph::LanguageAnalyzer, native_languages, rust_analyzer::RustLanguageAnalyzer,
+    code_graph::LanguageAnalyzer, native_languages, native_languages::RustPackAnalyzer,
 };
 use serde_json::{json, Value};
 use std::time::Instant;
@@ -127,11 +127,11 @@ async fn sequential(
 
 /// 在同一 head 上交替执行串行和并行，并逐字段确认结果相同。
 #[tokio::test]
-#[ignore = "真实性能基准：设置 NARRANT_STRUCTURE_BENCHMARK_* 与 NARRANT_RUST_ANALYZER，直接运行测试二进制"]
+#[ignore = "真实性能基准：设置 NARRANT_STRUCTURE_BENCHMARK_* 与 NARRANT_RUST_PACK，直接运行测试二进制"]
 async fn compares_sequential_and_parallel_repository_analysis() {
     let fixture = fixture().await;
-    let executable = std::env::var_os("NARRANT_RUST_ANALYZER").unwrap();
-    let analyzer = RustLanguageAnalyzer::new(executable);
+    let pack = std::env::var_os("NARRANT_RUST_PACK").unwrap();
+    let analyzer = RustPackAnalyzer::from_pack(std::path::Path::new(&pack)).unwrap();
     let pack = std::env::var_os("NARRANT_TYPESCRIPT_PACK").expect("真实 TS 原生支持包");
     let typescript_analyzer = native_languages::from_pack(
         crate::language_support::PackId::TypeScriptJavascript,
@@ -152,11 +152,7 @@ async fn compares_sequential_and_parallel_repository_analysis() {
             let analyzer = analyzer.clone();
             let analyze: Arc<AnalyzeGraph> = Arc::new(move |input, cancelled, scope| {
                 let side_start = Instant::now();
-                let graph = analyzer
-                    .clone()
-                    .with_cancellation(cancelled)
-                    .with_dependency_scope(scope)
-                    .analyze(input)?;
+                let graph = analyzer.analyze(input, cancelled, scope)?;
                 captured.lock().unwrap().push(json!({
                     "side": if input.repository_root.ends_with("before") { "before" } else { "after" },
                     "started_ms": side_start.duration_since(start).as_secs_f64() * 1000.0,

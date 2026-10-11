@@ -108,6 +108,16 @@ impl LanguageSupportPacks {
         Self::with_origin(root, ORIGIN.to_owned(), target.to_owned())
     }
 
+    /// 应用集成测试复用真实下载和安装流程，生产调用方仍不能指定分发源。
+    #[cfg(test)]
+    pub(crate) fn with_test_origin(
+        root: PathBuf,
+        origin: String,
+        target: String,
+    ) -> Result<Self, String> {
+        Self::with_origin(root, origin, target)
+    }
+
     /// 装配存储与已验证版本，测试可用本地 HTTP 服务器经过同一下载路径。
     fn with_origin(root: PathBuf, origin: String, target: String) -> Result<Self, String> {
         // 可选能力的目录故障不能阻止 File Changes 和整个应用启动。

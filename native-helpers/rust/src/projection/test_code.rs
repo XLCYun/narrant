@@ -107,4 +107,4 @@ fn any(values: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
 
 #[cfg(test)]
 #[path = "tests/test_code.rs"]
-mod tests;
+pub(super) mod tests;

@@ -561,7 +561,7 @@ function ReviewReaderPreview({
   };
   const [structureState, setStructureState] = useState<StructureState>(() => {
     if (structureKind === "loading") return { kind: "loading" };
-    if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
+    if (structureKind === "failed") return { kind: "failed", detail: "无法启动 Rust 原生分析器：分析程序不存在。" };
     return structureReadyState(false);
   });
   const review: ReviewReaderBinding = {

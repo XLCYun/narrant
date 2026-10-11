@@ -1,12 +1,13 @@
-//! 只检查用户已有的项目工具链；显式源码路径阻止 rust-analyzer 自动安装 rust-src。
+//! 只检查用户已有的项目工具链；绝不安装组件或使用 helper 的构建工具链。
 use super::{failure, Result, RustDependencyScope};
-use crate::lsp::CancellationCheck;
+use crate::structure_review::native_analyzer::CancellationCheck;
 use std::{
+    collections::BTreeMap,
     ffi::OsString,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -15,6 +16,7 @@ pub(super) struct RustToolchain {
     pub sysroot: Option<PathBuf>,
     pub sources: Option<PathBuf>,
     pub path: OsString,
+    #[cfg(test)]
     pub manifests: Vec<PathBuf>,
 }
 
@@ -24,13 +26,27 @@ impl RustToolchain {
         repository: &Path,
         scope: RustDependencyScope,
         cancelled: &CancellationCheck,
+        environment: &BTreeMap<OsString, OsString>,
     ) -> Result<Self> {
-        let mut paths: Vec<_> =
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
-        if let Some(cargo_home) = std::env::var_os("CARGO_HOME")
+        let mut paths: Vec<_> = std::env::split_paths(
+            &environment
+                .get(std::ffi::OsStr::new("PATH"))
+                .cloned()
+                .unwrap_or_default(),
+        )
+        .collect();
+        if let Some(cargo_home) = environment
+            .get(std::ffi::OsStr::new("CARGO_HOME"))
+            .cloned()
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                environment
+                    .get(std::ffi::OsStr::new(if cfg!(windows) {
+                        "USERPROFILE"
+                    } else {
+                        "HOME"
+                    }))
+                    .cloned()
                     .map(|home| PathBuf::from(home).join(".cargo"))
             })
         {
@@ -40,7 +56,7 @@ impl RustToolchain {
             }
         }
         let path = std::env::join_paths(paths).map_err(failure)?;
-        Self::resolve_projects(repository, scope, cancelled, path)
+        Self::resolve_projects(repository, scope, cancelled, path, environment)
     }
 
     /// 固定发现的项目集合，逐个使用 manifest 目录解析 rustup 的项目覆盖。
@@ -49,6 +65,7 @@ impl RustToolchain {
         scope: RustDependencyScope,
         cancelled: &CancellationCheck,
         path: OsString,
+        environment: &BTreeMap<OsString, OsString>,
     ) -> Result<Self> {
         let manifests = discover_manifests(repository)?;
         let directories = if manifests.is_empty() {
@@ -61,7 +78,8 @@ impl RustToolchain {
         };
         let mut resolved: Option<Self> = None;
         for directory in directories {
-            let candidate = Self::resolve_with_path(&directory, scope, cancelled, path.clone())?;
+            let candidate =
+                Self::resolve_with_path(&directory, scope, cancelled, path.clone(), environment)?;
             if let Some(previous) = &resolved {
                 if previous.sysroot != candidate.sysroot {
                     return Err(failure("此仓库的多个 Rust 项目使用不同工具链；当前标准库分析尚不支持这种组合。请切换为仅仓库范围，Narrant 不会自动安装组件或替换项目工具链。"));
@@ -70,8 +88,12 @@ impl RustToolchain {
                 resolved = Some(candidate);
             }
         }
-        let mut resolved = resolved.ok_or_else(|| failure("没有可检查的 Rust 项目"))?;
-        resolved.manifests = manifests;
+        let resolved = resolved.ok_or_else(|| failure("没有可检查的 Rust 项目"))?;
+        #[cfg(test)]
+        let resolved = Self {
+            manifests,
+            ..resolved
+        };
         Ok(resolved)
     }
 
@@ -81,8 +103,16 @@ impl RustToolchain {
         scope: RustDependencyScope,
         cancelled: &CancellationCheck,
         path: OsString,
+        environment: &BTreeMap<OsString, OsString>,
     ) -> Result<Self> {
-        probe("cargo", &["--version"], repository, &path, cancelled)?;
+        probe(
+            "cargo",
+            &["--version"],
+            repository,
+            &path,
+            cancelled,
+            environment,
+        )?;
         let root = PathBuf::from(
             probe(
                 "rustc",
@@ -90,6 +120,7 @@ impl RustToolchain {
                 repository,
                 &path,
                 cancelled,
+                environment,
             )?
             .trim(),
         );
@@ -103,6 +134,7 @@ impl RustToolchain {
                 sysroot: None,
                 sources: None,
                 path,
+                #[cfg(test)]
                 manifests: vec![],
             });
         }
@@ -114,6 +146,7 @@ impl RustToolchain {
             sysroot: Some(root),
             sources: Some(sources),
             path,
+            #[cfg(test)]
             manifests: vec![],
         })
     }
@@ -141,23 +174,6 @@ fn discover_manifests(repository: &Path) -> Result<Vec<PathBuf>> {
     Ok(manifests)
 }
 
-/// 短探测进程在超时、取消和提前返回时均被回收。
-struct ProbeProcess(Child);
-impl Drop for ProbeProcess {
-    /// 正常完成后的 kill 无影响，异常时保证 rustup 代理不会继续运行。
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            // SAFETY: 此探测使用独立进程组；负 PID 只回收自己创建的组。
-            unsafe {
-                libc::kill(-(self.0.id() as i32), libc::SIGKILL);
-            }
-        }
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 /// 在项目目录执行有界只读探测，禁止 rustup 自动获取缺失工具链。
 fn probe(
     tool: &str,
@@ -165,12 +181,15 @@ fn probe(
     repository: &Path,
     path: &OsString,
     cancelled: &CancellationCheck,
+    environment: &BTreeMap<OsString, OsString>,
 ) -> Result<String> {
     let temporary = tempfile::tempdir().map_err(failure)?;
     let stdout = temporary.path().join("stdout");
     let stderr = temporary.path().join("stderr");
     let mut command = Command::new(tool);
     command
+        .env_clear()
+        .envs(environment)
         .args(args)
         .current_dir(repository)
         .env("PATH", path)
@@ -178,25 +197,21 @@ fn probe(
         .stdin(Stdio::null())
         .stdout(File::create(&stdout).map_err(failure)?)
         .stderr(File::create(&stderr).map_err(failure)?);
-    crate::child_process::configure_std_command(&mut command);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut process = ProbeProcess(command.spawn().map_err(|error| {
+    let mut process = crate::child_process::ProcessTree::spawn(&mut command).map_err(|error| {
         failure(format!(
             "无法使用项目的 {tool}：{error}。请先安装项目对应的 Rust 工具链。"
         ))
-    })?);
+    })?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if cancelled() {
-            return Err(super::super::code_graph::AnalysisError::cancelled(
-                "Rust 工具链检查已取消",
-            ));
+            return Err(
+                crate::structure_review::code_graph::AnalysisError::cancelled(
+                    "Rust 工具链检查已取消",
+                ),
+            );
         }
-        if let Some(status) = process.0.try_wait().map_err(failure)? {
+        if let Some(status) = process.status().map_err(failure)? {
             let mut output = String::new();
             File::open(if status.success() { stdout } else { stderr })
                 .map_err(failure)?
@@ -208,6 +223,7 @@ fn probe(
                     "项目的 {tool} 不可用：{output}。请自行准备项目对应的 Rust 工具链。"
                 )));
             }
+            process.finish(Duration::from_secs(1)).map_err(failure)?;
             return Ok(output);
         }
         if Instant::now() >= deadline {
