@@ -17,6 +17,11 @@
 - 原生分析运行于当前 helper 进程内的单次 worker thread；主线程处理 cancel 和
   提前 stdin EOF，等待线程回收后 flush 唯一终结并退出。公共 Host 的 ProcessTree
   继续拥有整个进程树与超时清理；取消不能变成成功空图。
+- Windows 的 stdout/stderr 使用公开回调式 `fs.write`，按字节补齐短写，避免标准
+  stream 的同步管道写入阻塞控制。POSIX 保留 stream 背压处理。正常结果、错误与取消
+  均等完整输出后 exit 0；提前 EOF 才允许丢弃余量。Windows 给已完成写入的回调
+  100ms 收尾窗口，仍未 flush 才在分析线程回收后仅终止当前进程（exit 1），避免
+  `process.exit()` 等待阻塞中的 libuv 写线程。诊断先于终结，正常 Host 可随终结关闭 stdin。
 
 支持包构建与真实图 smoke：
 

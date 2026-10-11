@@ -270,6 +270,6 @@ test('focused workflow skips legacy builds and unrelated declaration provisionin
 test('TypeScript focused acceptance includes native projection, complete old graph assertions and Review', () => {
   const commands = verificationCommands({}, 'darwin', 'typescript-javascript');
   const serialized = JSON.stringify(commands);
-  for (const required of ['projection.test.mjs','config.test.mjs','workspace.test.mjs','helper.test.mjs','syntax.test.mjs','lifecycle.test.mjs','native_languages::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto','typescript_']) assert.ok(serialized.includes(required), required);
+  for (const required of ['projection.test.mjs','config.test.mjs','workspace.test.mjs','helper.test.mjs','syntax.test.mjs','lifecycle.test.mjs','output.test.mjs','native_languages::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto','typescript_']) assert.ok(serialized.includes(required), required);
   assert.ok(!serialized.includes('lsp::tests::'));
 });

@@ -79,7 +79,10 @@ async function running(t) {
 
 for (const control of ['cancel', 'EOF']) test(`actual executable stops running analysis on ${control}`, { timeout: 25000 }, async t => {
   const state = await running(t);
-  if (control === 'cancel') state.child.stdin.write(`${JSON.stringify({ protocol, type: 'cancel', id: 'analysis-1' })}\n`);
+  if (control === 'cancel') {
+    closeOnCompleted(state);
+    state.child.stdin.write(`${JSON.stringify({ protocol, type: 'cancel', id: 'analysis-1' })}\n`);
+  }
   else state.child.stdin.end();
   await exited(state);
   if (control === 'cancel') {
@@ -98,6 +101,24 @@ async function exited(state, code = 0) {
   assert.ok(state.messages.filter(message => message.type === 'completed').length <= 1);
   for (const message of state.messages) assert.equal(message.protocol, protocol);
 }
+
+/** 与真实 Host 一样在读到完整终结的同一轮关闭 stdin，不等 helper 的写回调或轮询间隔。 */
+function closeOnCompleted(state) {
+  state.child.stdout.on('data', () => {
+    if (state.messages.some(message => message.type === 'completed')) state.child.stdin.end();
+  });
+}
+
+for (const outcome of ['ok', 'error']) test(`immediate Host EOF after completed(${outcome}) retains full flush and exit zero`, { timeout: 15000 }, async t => {
+  const input = await request(t, outcome === 'ok' ? 'export const value = 1;' : 'return;');
+  const state = await launch(t);
+  closeOnCompleted(state);
+  state.child.stdin.write(`${JSON.stringify(input)}\n`);
+  await exited(state);
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[1].outcome, outcome);
+  if (outcome === 'error') assert.ok(state.stderr.endsWith('\n'));
+});
 
 test('actual executable flushes one nonempty terminal and exits with stdin still open', { timeout: 15000 }, async t => {
   const input = await request(t, 'export function caller(){return target()} export function target(){return 1}');
@@ -163,6 +184,18 @@ test('invalid initial request exits without fabricating a terminal ID', { timeou
   assert.equal(state.messages.length, 1);
 });
 
+/** EOF 丢弃分支必须在恢复消费前退出；Windows 自终止报告原生退出码 1，普通终结仍要求 0。 */
+async function abandonedExit(state, stream) {
+  const exit = new Promise(resolve => state.child.once('exit', (code, signal) => resolve({ code, signal })));
+  state.child.stdin.end();
+  let stopped = false;
+  void exit.then(() => { stopped = true; });
+  await until(() => stopped, 5000);
+  assert.deepEqual(await exit, { code: process.platform === 'win32' ? 1 : 0, signal: null }, state.stderr);
+  stream.resume();
+  await until(() => state.exited, 5000);
+}
+
 test('premature EOF also stops a completed graph blocked on stdout backpressure', { timeout: 25000 }, async t => {
   const state = await running(t);
   state.child.stdout.pause();
@@ -171,15 +204,60 @@ test('premature EOF also stops a completed graph blocked on stdout backpressure'
   assert.equal(state.exited, false, 'fixture must reach actual stdout backpressure before EOF');
   await delay(100);
   assert.equal(state.exited, false, 'helper must still be blocked on output before EOF');
-  state.child.stdin.end();
   // close 事件须等读取结束；先观察 exit，确认解除背压并非 resume 所致。
-  const exit = new Promise(resolve => state.child.once('exit', (code, signal) => resolve({ code, signal })));
-  let stopped = false;
-  void exit.then(() => { stopped = true; });
-  await until(() => stopped, 5000);
-  assert.deepEqual(await exit, { code: 0, signal: null }, state.stderr);
-  state.child.stdout.resume();
-  await until(() => state.exited, 5000);
+  await abandonedExit(state, state.child.stdout);
   assert.equal(state.parseError, null);
   assert.equal(state.messages.length, 1, 'abandoned partial output must not become a successful terminal');
+});
+
+for (const control of ['drain', 'EOF']) test(`native error with stderr backpressure preserves failure on ${control}`, { timeout: 20000 }, async t => {
+  const input = await request(t, 'export const value = 1;');
+  // 真实文件系统拒绝过长路径；原生错误和堆栈都足够填满管道，不替换分析器。
+  input.input.files = [`${'x'.repeat(512 * 1024)}.ts`];
+  const state = await launch(t);
+  state.child.stderr.pause();
+  state.child.stdin.write(`${JSON.stringify(input)}\n`);
+  await until(() => state.child.stderr.readableLength > 0 || state.exited, 10000);
+  assert.equal(state.exited, false);
+  await delay(100);
+  assert.equal(state.exited, false, 'normal error must wait for diagnostic flush');
+  assert.equal(state.messages.length, 1, 'diagnostics must flush before the Host can receive completed and close stdin');
+  if (control === 'EOF') {
+    await abandonedExit(state, state.child.stderr);
+    assert.equal(state.messages.length, 1, 'preterminal EOF must abandon the pending terminal');
+  }
+  else {
+    state.child.stdin.write(`${JSON.stringify({ protocol, type: 'cancel', id: input.id })}\n`);
+    state.child.stderr.resume();
+    await exited(state);
+    assert.equal(state.messages.length, 2);
+    assert.equal(state.messages[1]?.outcome, 'error', 'observed native failure must survive cancel during diagnostic flush');
+    assert.equal(state.messages[1]?.error.code, 'object_extraction_failed');
+    assert.equal(Object.hasOwn(state.messages[1], 'diagnostic'), false, 'worker diagnostic must not enter the protocol');
+    assert.ok(Buffer.byteLength(state.stderr) > 512 * 1024);
+    assert.ok(state.stderr.endsWith('\n'), 'diagnostic must flush completely');
+  }
+  assert.equal(state.parseError, null);
+  assert.equal(state.pending, '');
+});
+
+test('stdout write failure exits nonzero after flushing its diagnostic', { timeout: 15000 }, async t => {
+  const input = await request(t, 'export const value = 1;');
+  const state = await launch(t);
+  state.child.stdout.destroy();
+  state.child.stdin.write(`${JSON.stringify(input)}\n`);
+  await exited(state, 1);
+  assert.equal(state.messages.length, 1);
+  assert.match(state.stderr, /EPIPE|EIO|EBADF/);
+});
+
+test('stderr write failure retains the native error terminal and nonzero exit', { timeout: 15000 }, async t => {
+  const input = await request(t, 'return;');
+  const state = await launch(t);
+  state.child.stderr.destroy();
+  state.child.stdin.write(`${JSON.stringify(input)}\n`);
+  await exited(state, 1);
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[1].outcome, 'error');
+  assert.equal(state.messages[1].error.code, 'object_extraction_failed');
 });
