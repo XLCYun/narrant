@@ -704,6 +704,8 @@ fn subprocess_bounds_blocked_stdin_writer() {
 #[path = "migration.rs"]
 mod migration;
 
+mod python_graph;
+mod python_native;
 mod rust_graph;
 
 /// 即使已发送 cancel，实际后端错误或无效协议也不能改称取消成功。

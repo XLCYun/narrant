@@ -6,7 +6,12 @@ rust-version = "1.98"
 publish = false
 
 [dependencies]
+narrant-native-common = { path = "../common" }
 anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+pep440_rs = "0.7"
+url = "2.5"
 walkdir = "2.5"
 ruff_notebook = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
 ty_project = { git = "https://github.com/astral-sh/ruff.git", rev = "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a" }
@@ -22,6 +27,7 @@ ruff_ranged_value = { git = "https://github.com/astral-sh/ruff.git", rev = "11aa
 toml = "1.0"
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3.27"
 old_ast = { package = "ruff_python_ast", version = "=0.0.15" }
 old_parser = { package = "ruff_python_parser", version = "=0.0.15" }
@@ -30,3 +36,15 @@ old_text = { package = "ruff_text_size", version = "=0.0.15" }
 old_source = { package = "ruff_source_file", version = "=0.0.15" }
 
 [workspace]
+
+[[bin]]
+name = "narrant-python"
+path = "src/main.rs"
+
+[[test]]
+name = "initial_protocol"
+path = "../common/src/tests/initial.rs"
+
+[[test]]
+name = "lifecycle"
+path = "src/tests/lifecycle.rs"

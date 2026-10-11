@@ -1,5 +1,6 @@
 //! 聚焦原生数据库、只读边界与导航候选；完整图与绑定校验另行验收。
 use super::*;
+use std::collections::BTreeSet;
 use std::fs;
 
 /// 在临时磁盘目录写入 fixture，再以明确项目环境加载。
@@ -59,7 +60,21 @@ fn all_supported_minors_resolve_local_and_standard_definitions() {
         );
         for token in ["len", "upper"] {
             let standard = query(&project, "main.py", token);
-            assert!(!standard.candidates.is_empty(), "3.{minor} {token}");
+            assert_eq!(
+                standard.candidates.len(),
+                if token == "upper" { 2 } else { 1 },
+                "3.{minor} {token}: {standard:?}"
+            );
+            let focuses: BTreeSet<_> = standard
+                .candidates
+                .iter()
+                .map(|candidate| (candidate.focus.start(), candidate.focus.end()))
+                .collect();
+            assert_eq!(
+                focuses.len(),
+                standard.candidates.len(),
+                "overload 焦点必须不同"
+            );
             println!(
                 "Python 3.{minor} {token}: {:?}",
                 standard
@@ -152,7 +167,14 @@ fn aliases_rebindings_stubs_property_and_overload_remain_candidates() {
         );
     }
     let overload = query(&project, "main.py", "typed");
-    assert!(!overload.candidates.is_empty());
+    assert_eq!(overload.candidates.len(), 2, "{overload:?}");
+    assert_ne!(overload.candidates[0].focus, overload.candidates[1].focus);
+    assert!(
+        overload
+            .candidates
+            .iter()
+            .all(|candidate| &candidate.source[candidate.focus] == "typed")
+    );
     println!(
         "stub overload: {:?}",
         overload

@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use serde::Deserialize;
 use std::{collections::BTreeSet, path::PathBuf};
 
-pub const PROTOCOL: &str = "narrant.native-analyzer/1";
+pub use narrant_native_common::PROTOCOL;
 /// Host 发来的唯一分析请求，不接受命令或任意环境对象。
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,25 +117,7 @@ impl Request {
     }
 }
 
-/// 运行中仅接受严格的同请求 cancel；未知字段、重复字段和错误 ID 均为协议错误。
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Cancel {
-    protocol: String,
-    #[serde(rename = "type")]
-    message_type: String,
-    id: String,
-}
-
-/// 控制读取独立于原生加载，不把错误 ID 或任意 JSON 当成有效取消。
-pub fn validate_cancel(line: &str, id: &str) -> Result<()> {
-    let cancel: Cancel = serde_json::from_str(line)?;
-    ensure!(
-        cancel.protocol == PROTOCOL && cancel.message_type == "cancel" && cancel.id == id,
-        "无效取消请求"
-    );
-    Ok(())
-}
+pub use narrant_native_common::one_shot::validate_cancel;
 
 #[cfg(test)]
 #[path = "tests/protocol.rs"]

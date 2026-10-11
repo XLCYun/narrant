@@ -1,12 +1,14 @@
 //! 同源 Ruff / ty 的只读 Python 分析核心；导航仅提供候选，关系裁决由调用方完成。
 mod loading;
+pub mod projection;
+pub mod protocol;
 mod symbols;
 mod system;
 pub use symbols::StandardSymbolIdentity;
 
 use anyhow::{Result, bail, ensure};
 use ruff_db::{
-    files::{File, system_path_to_file},
+    files::{File, system_path_to_file, vendored_path_to_file},
     parsed::{ParsedModuleRef, parsed_module},
     source::source_text,
 };
@@ -102,6 +104,52 @@ impl PythonProject {
             "Python 查询位置越界或不是 UTF-8 边界"
         );
         self.parse(path)?;
+        self.query_file(file, offset, source)
+    }
+
+    /// 标准声明查询仍使用当前项目数据库；路径只允许固定内嵌声明来源。
+    pub(crate) fn standard_definitions(
+        &self,
+        path: &str,
+        offset: usize,
+    ) -> Result<DefinitionQuery> {
+        let file = vendored_path_to_file(&self.db, path)?;
+        let source = self.checked_source(file)?;
+        ensure!(
+            offset < source.len() && source.is_char_boundary(offset),
+            "标准声明查询位置越界"
+        );
+        self.query_file(file, offset, source)
+    }
+
+    /// 投影读取同一数据库已解析的候选 AST，不从候选原文启动第二套 parser。
+    pub(crate) fn candidate_ast(&self, candidate: &DefinitionCandidate) -> Result<ParsedModuleRef> {
+        let file = match &candidate.origin {
+            SourceOrigin::Repository(path) => return self.parse(path),
+            SourceOrigin::StandardDeclaration(path) => {
+                vendored_path_to_file(&self.db, path.as_str())?
+            }
+        };
+        let program = self
+            .db
+            .project()
+            .program(&self.db)
+            .program_file(&self.db, file);
+        let parsed = parsed_module(&self.db, program.python_file(&self.db)).load(&self.db);
+        ensure!(
+            parsed.errors().is_empty(),
+            "内嵌标准声明解析失败：{:?}",
+            parsed.errors()
+        );
+        Ok(parsed)
+    }
+
+    /// 将原生查询来源统一投影为固定侧仓库路径或内嵌标准库路径。
+    fn query_file(&self, file: File, offset: usize, source: String) -> Result<DefinitionQuery> {
+        ensure!(
+            offset < source.len() && source.is_char_boundary(offset),
+            "Python 查询位置越界"
+        );
         let program = self
             .db
             .project()

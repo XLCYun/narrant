@@ -392,3 +392,56 @@ I2 将旧语法/测试过滤的七项缺失断言接到真实 helper + 公共 Co
 有意义空白、宏标点粘连、顶层宏实参、类型表达式中的独立嵌套声明、成员重排与闭包
 使用顺序、通配导入下新增嵌套测试、嵌套测试增改后的父内容/包含关系。七项全部通过，
 没有恢复旧 LSP 传输夹具。本轮未重跑无关的 18 个旧 Cargo 场景或 Host 全量。
+
+## Python Task 6 独立 helper 阶段（未生产切换）
+
+基线 `5cb3461` 后新增 `narrant-python` 单次原生 executable、严格 typed request 与完整
+Python 图投影。Ruff/ty 仍固定 revision `11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`；
+旧 syntax/bindings/fields/known/project/reference 业务政策直接迁入 helper，Document 的 AST
+与原文取自同一数据库，定义位置改为原生字节焦点。内嵌标准声明也由该数据库取得 AST，
+不恢复 LSP、不加入第二个生产 parser，不读取磁盘解释器/stdlib、用户环境或执行项目。
+选集与上下文分离；测试覆盖、配置来源和节点 origin 交公共 Host 做唯一最终图校验。
+
+`python-static-v1` 只接受一个 `python-embedded-stdlib` 平台，version 为 `0.0.84`，
+metadata 严格只含上述同源 `source_revision`，root 须包含当前 executable。
+配置/PEP723/目标 3.7–3.14、有序源码根、多项目冲突政策沿用旧实现；加载前物理边界
+和安装环境拒绝、加载后词法 alias 身份继续由 Task 2 核心保证。标准外部身份沿用
+`python:stdlib:ty-0.0.84:`，导航的多个 overload 和重绑定反证仍须旧绑定/声明证明裁决。
+Task 2 延后的断言现要求 `str.upper` 恰有两个不同焦点候选、`len` 一个，stub overload
+恰有两个 `typed` 焦点；3.7–3.14 和绑定反例的聚焦测试通过，未删除原生候选。
+
+经控制者确认，`native-helpers/common` 仅承载序列化 DTO、严格 cancel/PROTOCOL 与两门
+helper 实际使用的单次控制循环。继续复用 `CurrentProcessDomain` 和现有 Unix/Windows
+进程原语；没有分析引擎/Tauri 依赖、Host 图验证器、另一个进程管理器或通用插件框架。
+Rust/Python 保留各自 typed request 与平台政策。抽取中修正旧 Rust 的初始解码失败会
+伪造 `analysis-1` completed(error) 行为：非法 JSON/schema/envelope 现在不产生终结消息，
+有效 analyze 的实际分析错误仍按原请求 ID 返回。两门真实入口均有此回归。
+
+公共 Host 的 34 个 Python 聚焦测试全部通过（31.28s），迁移旧 graph/native 的业务
+断言，覆盖自身内容/diff、执行顺序、接收者和表达式作用域、共享初始化、字段顺序、
+版本/编码/Unicode、装饰器/property/overload、别名/内部链接、每个 minor 的标准关系、
+多项目、污染环境、缺依赖与测试过滤。三个代表场景逐一比较真实旧 ty 完整图和新 Host
+完整图：关系/装饰器/overload、绑定反证、独立项目搜索；比较 diff、根、External 描述及
+每个对象的原文。旧 ty 为用户已有固定安装 `0.0.84`，仅只读调用，没有改动安装内容。
+精确版本选择的旧初始化断言另改为实际数据库 AST target 与配置/PEP723 选择相等。
+新增真实 Host 超时/捕获调用方 panic 也确认返回前 PID 已消失（1 test，两个场景，0.79s）。
+
+Python 真实 executable 的活动分析 cancel、提前 stdin EOF、错误控制 ID、正常终结不等
+EOF 和 stdout 背压 EOF 均通过；Rust 抽取后的严格 cancel、非法初始入口和四项实际生命周期
+回归通过，后者含活动 Cargo 探针后代。新 Rust executable 经公共 Host 的代表性完整图
+比较也通过（1 test，1.86s）。没有重跑无关的核心研究、完整 Host 或完整 Rust 语义套件。
+
+本机 macOS ARM64 debug executable 的 3 项目、24 文件、600 方法单样本为 3.22s real，
+最大 RSS 174800896 bytes（约 166.7 MiB），峰值 memory footprint 134316680 bytes；
+图为 696 节点、24 根，exit 0。公共 Host 两次同规模 debug 样本约 3.219s / 3.209s。
+这些不是优化支持包结果或旧 release 性能排名。详细命令、原始输出及中间失败保留在
+ignored Task 6 report/scratch。
+
+两门 helper 的 all-target Clippy `-D warnings` 通过。宿主 lib/tests 原始严格 Clippy
+显示 Task 6 BASE 已有的重复 TS fixture 模块和 input.rs 两处 collapsible-if；本轮新增
+fixture type-complexity 已用具名类型修正。仅在验证命令允许这两个基线 lint 类后通过；
+未加入源码 suppress，也未修改无关宿主代码。基线告警仍是整分支清理与最终检查义务。
+
+本记录仅代表独立阶段。生产 Python 工厂/注册、catalog、支持包发布、两平台实际安装与
+Review、DTO/取消验收及旧 Python/ty/宿主 Ruff 退役仍按 TS/JS → Rust → Python 顺序完成；
+本轮均未执行，完整 Task 6 与整项迁移尚未完成。

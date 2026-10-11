@@ -1034,6 +1034,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "narrant-native-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "narrant-rust-core"
 version = "0.1.0"
 dependencies = [
@@ -1046,18 +1058,17 @@ dependencies = [
  "ide-db",
  "libc",
  "load-cargo",
+ "narrant-native-common",
  "project-model",
  "serde",
  "serde_json",
  "syntax",
  "tempfile",
- "tokio",
  "toml",
  "toolchain",
  "url",
  "vfs",
  "vfs-notify",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-# Python native analysis core
+# Python native helper（独立阶段）
 
 独立 Rust 库固定 ty `0.0.84` 对应的 Ruff revision
 `11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`。生产依赖的数据库、AST 和 codegen
@@ -7,7 +7,7 @@
 `PythonProject::load(ProjectInput)` 接收单个已归一化项目：`repository` 是磁盘仓库根，
 `project_root` 和有序 `source_roots` 是干净的仓库相对目录（空路径表示仓库根），
 `python_minor` 显式为 7–14。配置解析、PEP 723 版本冲突、跨项目冲突、选集和测试过滤
-由后续应用适配器复用既有规则，本核心不会发现配置或解释器。
+由 helper 的 projection 层迁移既有规则；核心本身不发现配置或解释器。
 
 加载只读遍历项目根及显式源码根，校验每个可达路径的真实仓库边界；`.git`、`.venv`
 被排除，可达安装环境、逃逸/损坏链接、读取与 UTF-8/编码声明错误明确失败。
@@ -26,14 +26,25 @@
 `builtins` / `str.upper`，其他声明保留原始来源与范围供后续适配。
 
 导航可能同时包含已知目标和缺依赖重绑定，多个 overload 可以映射到相同的标准符号。
-这些候选不删除、不合并，也不表示确定的运行时目标。完整绑定、关系、外部身份和图投影
-仍须后续 Task 6 验收。此库尚未接公共 Host、协议、ProcessTree、Review 或支持包。
+这些候选不删除、不合并，也不表示确定的运行时目标。projection 沿用既有绑定反证、
+装饰器证明、字段归属和外部身份规则，再交公共 Host 构建/校验最终 CodeGraph。
+
+`narrant-python` 仅接受 `narrant.native-analyzer/1` 的单次严格请求与运行中同请求 cancel。
+`python-static-v1` 要求一个 `python-embedded-stdlib` 平台，version 为 `0.0.84`，
+metadata 仅含上述固定 `source_revision`；平台 root 必须包含当前 executable。
+标准 AST 来自同一数据库的 vendored 文件，不启动额外 parser，不读取磁盘 stdlib。
+Rust/Python 通过 `native-helpers/common` 共用序列化 DTO 和已审查的控制/退出循环，
+进程所有权仍复用宿主 `child_process::CurrentProcessDomain`。
+
+本阶段只建立开发 executable、图投影与公共 Host 聚焦证据。生产工厂/注册、支持包、
+macOS ARM64 + Windows x64 实际安装和 Review 验收、旧链退役均仍待后续顺序门禁。
 
 在仓库根执行（所有 Cargo 命令经全局锁与 sccache wrapper）：
 
 ```sh
 scripts/cargo-agent.sh +1.98.0 check --manifest-path native-helpers/python/Cargo.toml --lib --locked
-scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/python/Cargo.toml --lib --locked -- --nocapture
+scripts/cargo-agent.sh +1.98.0 build --manifest-path native-helpers/python/Cargo.toml --bin narrant-python --locked
+scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/python/Cargo.toml --locked --test initial_protocol --test lifecycle -- --test-threads=1
 scripts/cargo-agent.sh +1.98.0 clippy --manifest-path native-helpers/python/Cargo.toml --all-targets --locked -- -D warnings
 scripts/cargo-agent.sh +1.98.0 fmt --manifest-path native-helpers/python/Cargo.toml -- --check
 ```

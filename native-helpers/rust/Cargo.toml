@@ -6,8 +6,7 @@ rust-version = "1.98"
 publish = false
 
 [dependencies]
-libc = "0.2"
-tokio = { version = "1.53.1", features = ["process"] }
+narrant-native-common = { path = "../common" }
 anyhow = "1.0"
 tempfile = "3.27"
 serde = { version = "1.0", features = ["derive"] }
@@ -27,6 +26,9 @@ ide-db = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9
 toolchain = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }
 vfs-notify = { git = "https://github.com/rust-lang/rust-analyzer.git", rev = "9074e9b4c6bc31d7986ccf4e22d18af70e5508da" }
 
+[dev-dependencies]
+libc = "0.2"
+
 [workspace]
 
 [[bin]]
@@ -37,5 +39,6 @@ path = "src/main.rs"
 name = "lifecycle"
 path = "src/tests/lifecycle.rs"
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_SystemServices"] }
+[[test]]
+name = "initial_protocol"
+path = "../common/src/tests/initial.rs"
