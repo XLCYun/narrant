@@ -137,8 +137,9 @@ export async function smokeNativeHelper({ executable, args = [], id, projection,
 
 /** 从实际目标的锁定依赖闭包收集许可；Rust 正常构建入口使用，后续 Python 可复用此归档步骤。 */
 export async function packageCargoLicenses(source, target, payload, label) {
-  // 锁定依赖的实际元数据和许可证随二进制分发，不复制源码或目标工具链。
-  const metadata = JSON.parse(execFileSync('bash', [path.join(repository, 'scripts/cargo-agent.sh'), 'metadata', '--locked', '--offline', '--filter-platform', target, '--format-version', '1'], { cwd: source, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  // 构建自己的工具时允许获取锁定 metadata 所需的开发 crate；release 缓存不保证含它们。
+  // 分发仍只收集下面的目标生产闭包，此步骤不参与用户项目的离线分析。
+  const metadata = JSON.parse(execFileSync('bash', [path.join(repository, 'scripts/cargo-agent.sh'), 'metadata', '--locked', '--filter-platform', target, '--format-version', '1'], { cwd: source, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
   const included = new Set();
   const pending = [metadata.resolve.root];

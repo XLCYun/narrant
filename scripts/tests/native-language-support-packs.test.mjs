@@ -4,7 +4,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, ChildProcess } from 'node:child_process';
+import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { promisify } from 'node:util';
 import { packageDirectory } from '../build-language-support-packs.mjs';
 import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms, javaFixturePlatforms, goFixturePlatforms } from '../native-language-support-packs.mjs';
 import { prepareDotnetFixtureReferences } from '../provision-native-toolchains.mjs';
@@ -227,4 +230,63 @@ test('Cargo license packaging excludes unreachable development dependencies and 
     assert.equal(await fs.readFile(path.join(payload, 'licenses/license_source-0.1.0/LICENSE'), 'utf8'), 'actual source license bytes');
     await assert.rejects(fs.stat(path.join(payload, 'licenses/license_development-0.1.0')), { code: 'ENOENT' });
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** 用本机 registry 重现 release 缓存没有开发 crate 的情况，收集仍需完整 metadata。 */
+test('Cargo license packaging fetches uncached locked metadata without distributing dev licenses', async () => {
+  const repository = fileURLToPath(new URL('../../', import.meta.url));
+  const root = await fs.mkdtemp(path.join(repository, '.license-cache-test-'));
+  const run = promisify(execFile);
+  let server;
+  try {
+    const source = path.join(root, 'source'), cargoHome = path.join(root, 'cargo-home');
+    const crate = path.join(root, 'license_development-0.1.0');
+    for (const directory of [source, cargoHome, crate]) await fs.mkdir(directory);
+    await fs.writeFile(path.join(source, 'lib.rs'), '');
+    await fs.writeFile(path.join(source, 'LICENSE'), 'actual distributed source license');
+    await fs.writeFile(path.join(source, 'Cargo.toml'), '[package]\nname="license_source"\nversion="0.1.0"\nedition="2021"\nlicense="MIT"\n[lib]\npath="lib.rs"\n[dev-dependencies]\nlicense_development="=0.1.0"\n');
+    await fs.writeFile(path.join(crate, 'lib.rs'), '');
+    await fs.writeFile(path.join(crate, 'LICENSE'), 'development license must not be distributed');
+    await fs.writeFile(path.join(crate, 'Cargo.toml'), '[package]\nname="license_development"\nversion="0.1.0"\nedition="2021"\nlicense="MIT"\n[lib]\npath="lib.rs"\n');
+    const archive = path.join(root, 'development.crate');
+    execFileSync('tar', ['-czf', archive, '-C', root, 'license_development-0.1.0'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+    const bytes = await fs.readFile(archive), checksum = createHash('sha256').update(bytes).digest('hex');
+    const lock = `version = 4\n[[package]]\nname = "license_source"\nversion = "0.1.0"\ndependencies = ["license_development"]\n[[package]]\nname = "license_development"\nversion = "0.1.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "${checksum}"\n`;
+    await fs.writeFile(path.join(source, 'Cargo.lock'), lock);
+    let downloads = 0, address;
+    // 本机稀疏索引和真实 crate 归档让测试不依赖公网或预热的用户缓存。
+    server = createServer((request, response) => {
+      if (request.url === '/index/config.json') response.end(JSON.stringify({ dl: `${address}/api/v1/crates`, api: address }));
+      else if (request.url === '/index/li/ce/license_development') response.end(`${JSON.stringify({ name: 'license_development', vers: '0.1.0', deps: [], cksum: checksum, features: {}, yanked: false })}\n`);
+      else if (request.url === '/api/v1/crates/license_development/0.1.0/download') { downloads++; response.end(bytes); }
+      else { response.statusCode = 404; response.end(); }
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    address = `http://127.0.0.1:${server.address().port}`;
+    await fs.writeFile(path.join(cargoHome, 'config.toml'), `[source.crates-io]\nreplace-with="fixture"\n[source.fixture]\nregistry="sparse+${address}/index/"\n`);
+    const target = process.platform === 'win32' ? 'x86_64-pc-windows-msvc' : 'aarch64-apple-darwin';
+    const environment = { ...process.env, CARGO_HOME: cargoHome };
+    // 只预热 registry metadata；然后仅移除本夹具的 dev crate，保留索引与锁。
+    await run('bash', [path.join(repository, 'scripts/cargo-agent.sh'), 'metadata', '--locked', '--filter-platform', target, '--format-version', '1'], { cwd: source, env: environment });
+    assert.equal(downloads, 1);
+    for (const directory of ['cache', 'src']) {
+      for (const registry of await fs.readdir(path.join(cargoHome, 'registry', directory))) {
+        await fs.rm(path.join(cargoHome, 'registry', directory, registry, `license_development-0.1.0${directory === 'cache' ? '.crate' : ''}`), { recursive: true });
+      }
+    }
+    const payload = path.join(root, 'payload');
+    await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
+    const module = new URL('../native-language-support-packs.mjs', import.meta.url).href;
+    // 独立子进程传环境，避免并发测试改写全局 CARGO_HOME；异步调用允许 registry 响应。
+    await run(process.execPath, ['--input-type=module', '-e', `import { packageCargoLicenses } from ${JSON.stringify(module)}; await packageCargoLicenses(...JSON.parse(process.argv[1]));`, JSON.stringify([source, target, payload, 'Fixture'])], { cwd: repository, env: environment });
+    assert.equal(downloads, 2, 'collector must fetch the uncached locked development crate');
+    assert.equal(await fs.readFile(path.join(source, 'Cargo.lock'), 'utf8'), lock);
+    const notices = JSON.parse(await fs.readFile(path.join(payload, 'licenses/Fixture-dependencies.json')));
+    assert.deepEqual(notices.map(item => item.name), ['license_source']);
+    assert.equal(await fs.readFile(path.join(payload, 'licenses/license_source-0.1.0/LICENSE'), 'utf8'), 'actual distributed source license');
+    await assert.rejects(fs.stat(path.join(payload, 'licenses/license_development-0.1.0')), { code: 'ENOENT' });
+  } finally {
+    if (server) await new Promise(resolve => server.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
