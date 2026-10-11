@@ -681,8 +681,12 @@ fn native_cross_project_selected_target_still_validates_own_syntax() {
             })
             .unwrap_err();
         assert!(error.to_string().contains(diagnostic), "{minor}: {error}");
+        // 诊断保留平台原生分隔符；测试只归一化比较，仍核对完整目标相对路径。
         assert!(
-            error.to_string().contains("beta/src/api.py"),
+            error
+                .to_string()
+                .replace('\\', "/")
+                .contains("beta/src/api.py"),
             "{minor}: {error}"
         );
         eprintln!("beta {minor} 选集校验：{error}");
