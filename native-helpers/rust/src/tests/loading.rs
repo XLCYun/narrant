@@ -461,6 +461,8 @@ fn lockfile_redirection_copies_real_workspace_constraints() {
 fn real_old_cargo_versions_preserve_valid_locks_and_reject_only_required_writes() {
     let toolchains = std::env::var_os("NARRANT_TEST_CARGO_TOOLCHAINS").expect("实际旧工具链路径");
     for toolchain in std::env::split_paths(&toolchains) {
+        let expected_version = actual_toolchain_version(&toolchain);
+        assert!(["1.81.0", "1.94.0", "1.96.0"].contains(&expected_version.as_str()));
         for (mode, member) in [
             ("valid", false),
             ("missing", false),
@@ -500,6 +502,11 @@ fn real_old_cargo_versions_preserve_valid_locks_and_reject_only_required_writes(
             .unwrap();
             let discovery = super::load_complete(manifest.clone(), &config, &policy).unwrap();
             let version = discovery.toolchain.as_ref().unwrap().clone();
+            assert_eq!(
+                version.to_string(),
+                expected_version,
+                "加载必须使用实际指定的旧工具链"
+            );
             let locks = tempfile::tempdir().unwrap();
             super::redirect_project_lockfile(&mut config, &discovery, locks.path()).unwrap();
             config.no_deps = false;
@@ -530,7 +537,7 @@ fn real_old_cargo_versions_preserve_valid_locks_and_reject_only_required_writes(
                 );
                 assert_eq!(
                     cargo.workspace_root().as_str(),
-                    root.path().canonicalize().unwrap().to_str().unwrap()
+                    dunce::canonicalize(root.path()).unwrap().to_str().unwrap()
                 );
             }
             support::assert_unchanged(root.path(), &before);
@@ -543,6 +550,8 @@ fn real_old_cargo_versions_preserve_valid_locks_and_reject_only_required_writes(
 #[ignore = "需要 NARRANT_TEST_CARGO_194 指定实际 1.94.0 工具链目录"]
 fn old_cargo_metadata_preserves_features_and_effective_targets() {
     let toolchain = std::env::var("NARRANT_TEST_CARGO_194").expect("实际1.94工具链");
+    let expected_version = actual_toolchain_version(Path::new(&toolchain));
+    assert_eq!(expected_version, "1.94.0");
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join(".cargo")).unwrap();
     std::fs::write(
@@ -577,6 +586,11 @@ fn old_cargo_metadata_preserves_features_and_effective_targets() {
         )
         .unwrap();
         let workspace = load_complete(manifest, &config, &policy).unwrap();
+        assert_eq!(
+            workspace.toolchain.as_ref().unwrap().to_string(),
+            expected_version,
+            "metadata 必须使用指定的 1.94 工具链"
+        );
         let locks = tempfile::tempdir().unwrap();
         redirect_project_lockfile(&mut config, &workspace, locks.path()).unwrap();
         config.no_deps = false;
@@ -599,4 +613,59 @@ fn old_cargo_metadata_preserves_features_and_effective_targets() {
         }
         support::assert_unchanged(root.path(), &before);
     }
+}
+
+/// 同一真实文件的常规与 verbatim 拼写必须在 Cargo、选集和 VFS 查询中得到相同身份。
+#[cfg(windows)]
+#[test]
+fn windows_disk_aliases_use_one_vfs_identity() {
+    let root = support::fixture();
+    let file = root.path().join("src/lib.rs");
+    let verbatim = std::fs::canonicalize(&file).unwrap();
+    let compatible = dunce::canonicalize(&file).unwrap();
+    assert_ne!(verbatim, compatible, "短测试路径应能安全简化");
+    assert_eq!(
+        absolute_utf8(&verbatim).unwrap(),
+        absolute_utf8(&compatible).unwrap()
+    );
+    let before = support::snapshot(root.path());
+    let project = RustProject::load(
+        &root.path().join("Cargo.toml"),
+        &LoadPolicy::repository_only(),
+    )
+    .unwrap();
+    assert_eq!(
+        project.file_id(&verbatim).unwrap(),
+        project.file_id(&compatible).unwrap()
+    );
+    support::assert_unchanged(root.path(), &before);
+}
+
+/// 从指定目录真实执行 Cargo 与 rustc，避免工具链环境被构建版本覆盖后仍误报旧版本通过。
+fn actual_toolchain_version(toolchain: &Path) -> String {
+    let mut versions = Vec::new();
+    for tool in ["cargo", "rustc"] {
+        let executable = toolchain.join("bin").join(if cfg!(windows) {
+            format!("{tool}.exe")
+        } else {
+            tool.into()
+        });
+        let output = std::process::Command::new(executable)
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{tool}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let version = String::from_utf8(output.stdout).unwrap();
+        eprintln!("真实指定工具：{}", version.trim());
+        versions.push(version.split_whitespace().nth(1).unwrap().to_owned());
+    }
+    assert_eq!(
+        versions[0], versions[1],
+        "Cargo 与 rustc 必须来自同一真实工具链"
+    );
+    versions.remove(0)
 }

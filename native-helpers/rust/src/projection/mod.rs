@@ -26,12 +26,10 @@ fn failure(message: impl std::fmt::Display) -> anyhow::Error {
 /// 每个请求独立加载并输出全图，任何查询错误立即丢弃项目和全部候选数据。
 pub fn analyze(request: &Request) -> Result<Value> {
     request.validate()?;
-    let repository = request.input.repository_root.canonicalize()?;
+    let repository = dunce::canonicalize(&request.input.repository_root)?;
     let mut selected: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for relative in &request.input.files {
-        let path = repository
-            .join(relative)
-            .canonicalize()
+        let path = dunce::canonicalize(repository.join(relative))
             .with_context(|| format!("无法读取 {relative}"))?;
         ensure!(
             path.starts_with(&repository)

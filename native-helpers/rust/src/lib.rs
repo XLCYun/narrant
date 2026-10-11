@@ -73,8 +73,7 @@ impl RustProject {
 
     /// 将已加载文件映射为数据库身份；不存在或被排除的文件必须报告错误。
     pub fn file_id(&self, path: &Path) -> Result<FileId> {
-        let path = path
-            .canonicalize()
+        let path = dunce::canonicalize(path)
             .with_context(|| format!("无法定位源码 {}", path.display()))?;
         ensure!(path.to_str().is_some(), "源码路径必须为 UTF-8 路径");
         let path = AbsPathBuf::assert_utf8(path);

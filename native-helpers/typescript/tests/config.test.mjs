@@ -12,7 +12,7 @@ assert.equal(ts.version, '6.0.3');
 
 /** 真实文件系统同时提供源码、竞争目标和被排除成员，不伪造 readDirectory。 */
 function fixture(t, inherited, extra = {}) {
-  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'narrant-config-')));
+  const temporary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'narrant-config-')));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const root = path.join(temporary, 'repo');
   const config = {
@@ -53,7 +53,7 @@ function snapshot(root, host = ts.sys) {
     .map(key => [key, parsed.options[key]]));
   const targets = ['@app/dep', '@explicit/dep'].map(name => ts.resolveModuleName(name,
     path.join(root, 'app/src/main.ts'), parsed.options, host).resolvedModule?.resolvedFileName);
-  return JSON.parse(JSON.stringify({ options, files: parsed.fileNames.sort(), targets }).replaceAll(root, '<root>'));
+  return JSON.parse(JSON.stringify({ options, files: parsed.fileNames.sort(), targets }).replaceAll(root.replaceAll('\\', '/'), '<root>'));
 }
 
 for (const inherited of [false, true]) {

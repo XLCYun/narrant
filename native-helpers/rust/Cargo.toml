@@ -6,6 +6,7 @@ rust-version = "1.98"
 publish = false
 
 [dependencies]
+dunce = "=1.0.5"
 narrant-native-common = { path = "../common" }
 anyhow = "1.0"
 tempfile = "3.27"

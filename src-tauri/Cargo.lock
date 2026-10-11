@@ -5959,6 +5959,7 @@ dependencies = [
 name = "narrant"
 version = "1.2.14"
 dependencies = [
+ "dunce",
  "async-trait",
  "base64 0.22.1",
  "bytes",

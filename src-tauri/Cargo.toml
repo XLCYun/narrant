@@ -18,6 +18,7 @@ dotenvy = "0.15"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+dunce = "=1.0.5"
 base64 = "0.22"
 bytes = "1"
 async-trait = "0.1"

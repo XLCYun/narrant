@@ -563,11 +563,10 @@ fn ensure_complete(
     Ok(())
 }
 
-/// 将存在的路径规范化为上游所需的 UTF-8 绝对路径，避免上游 assert 引发 panic。
+/// 将真实路径转换为上游统一磁盘身份；安全简化 Windows 前缀，保留长路径与特殊名称。
 fn absolute_utf8(path: &Path) -> Result<AbsPathBuf> {
-    let absolute = path
-        .canonicalize()
-        .with_context(|| format!("路径不可用：{}", path.display()))?;
+    let absolute =
+        dunce::canonicalize(path).with_context(|| format!("路径不可用：{}", path.display()))?;
     ensure!(
         absolute.to_str().is_some(),
         "路径必须为 UTF-8 绝对路径：{}",

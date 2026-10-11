@@ -7,7 +7,7 @@ import { prepare, runtime, ts } from './support.mjs';
 
 /** 只在测试夹具创建文件；被测准备流程必须原位读取，不能增加或改写文件。 */
 function fixture(t, files) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'narrant-workspace-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'narrant-workspace-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const [name, source] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
@@ -27,10 +27,10 @@ test('configuration overlays and fixed libraries use the unchanged workspace', t
   assert.equal(host.readFile(path.join(root, 'main.ts')), source);
   assert.equal(JSON.parse(host.readFile(path.join(root, 'tsconfig.json'))).compilerOptions.plugins, undefined);
   const node = ts.resolveTypeReferenceDirective('node', path.join(root, 'main.ts'), {}, host).resolvedTypeReferenceDirective;
-  assert.equal(node.resolvedFileName, path.join(runtime, '@types/node/index.d.ts'));
+  assert.equal(node.resolvedFileName, ts.normalizePath(path.join(runtime, '@types/node/index.d.ts')));
   const undici = ts.resolveModuleName('undici-types', path.join(runtime, '@types/node/web-globals/fetch.d.ts'),
     { moduleResolution: ts.ModuleResolutionKind.NodeNext }, host).resolvedModule;
-  assert.equal(undici.resolvedFileName, path.join(runtime, 'undici-types/index.d.ts'));
+  assert.equal(undici.resolvedFileName, ts.normalizePath(path.join(runtime, 'undici-types/index.d.ts')));
   assert.throws(() => host.writeFile(path.join(root, 'main.ts'), 'changed'), /不能写入/);
   assert.throws(() => host.createDirectory(path.join(root, 'generated')), /不能创建/);
   assert.deepEqual(fs.readdirSync(root).sort(), ['main.ts', 'tsconfig.json']);
@@ -53,7 +53,7 @@ test('glob traversal skips Cargo output and business dependencies, preserving or
   assert.equal(host.readFile(path.join(root, 'node_modules/business/index.d.ts')), undefined);
   assert.equal(host.fileExists(path.join(root, 'node_modules/business/package.json')), false);
   const parsed = ts.getParsedCommandLineOfConfigFile(path.join(root, 'tsconfig.json'), {}, host);
-  assert.deepEqual(parsed.fileNames, output.sources);
+  assert.deepEqual(parsed.fileNames, output.sources.map(ts.normalizePath));
 });
 
 test('workspace package resolution uses original source without creating node_modules links', t => {
@@ -66,7 +66,25 @@ test('workspace package resolution uses original source without creating node_mo
   const { host } = prepare({ root, runtime, selected: [path.join(root, 'main.ts')] }, ts);
   const target = ts.resolveModuleName('@sample/lib', path.join(root, 'main.ts'),
     { moduleResolution: ts.ModuleResolutionKind.Bundler }, host).resolvedModule;
-  assert.equal(target.resolvedFileName, path.join(root, 'packages/lib/src/index.ts'));
+  assert.equal(target.resolvedFileName, ts.normalizePath(path.join(root, 'packages/lib/src/index.ts')));
+  assert.equal(fs.existsSync(path.join(root, 'node_modules')), false);
+});
+
+/** 原生短路径或目录别名仍通过同一真实根解析虚拟 workspace 包，不增加授权文件。 */
+test('workspace package resolution preserves an existing root alias', t => {
+  const root = fixture(t, {
+    'package.json': '{"workspaces":["packages/*"]}',
+    'main.ts': "import {run} from '@sample/lib'; run();",
+    'packages/lib/package.json': '{"name":"@sample/lib","exports":{".":"./src/index.ts"}}',
+    'packages/lib/src/index.ts': 'export function run() {}',
+  });
+  const alias = `${root}-alias`;
+  fs.symlinkSync(root, alias, 'junction');
+  t.after(() => fs.rmSync(alias, { recursive: true, force: true }));
+  const { host } = prepare({ root: alias, runtime, selected: [path.join(alias, 'main.ts')] }, ts);
+  const target = ts.resolveModuleName('@sample/lib', path.join(alias, 'main.ts'),
+    { moduleResolution: ts.ModuleResolutionKind.Bundler }, host).resolvedModule;
+  assert.equal(target?.resolvedFileName?.replaceAll('\\', '/'), path.join(fs.realpathSync.native(root), 'packages/lib/src/index.ts').replaceAll('\\', '/'));
   assert.equal(fs.existsSync(path.join(root, 'node_modules')), false);
 });
 

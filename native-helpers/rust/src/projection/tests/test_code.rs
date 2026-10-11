@@ -5,7 +5,7 @@ pub(in crate::projection) fn document(source: &str, include_tests: bool) -> Docu
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("Cargo.toml"), "[package]\nname=\"test_scope\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n").unwrap();
     std::fs::write(root.path().join("lib.rs"), source).unwrap();
-    let repository = root.path().canonicalize().unwrap();
+    let repository = dunce::canonicalize(root.path()).unwrap();
     let project = crate::RustProject::load(
         &repository.join("Cargo.toml"),
         &crate::LoadPolicy::repository_only(),

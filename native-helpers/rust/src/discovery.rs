@@ -15,14 +15,14 @@ pub(crate) fn manifests(repository: &Path) -> Result<Vec<PathBuf>> {
             .map(|root| root.join(name))
             .find(|path| path.is_file())
         {
-            return Ok(vec![path.canonicalize()?]);
+            return Ok(vec![dunce::canonicalize(&path)?]);
         }
     }
     let mut manifests = Vec::new();
     for entry in std::fs::read_dir(repository)? {
         let path = entry?.path().join("Cargo.toml");
         if path.is_file() {
-            manifests.push(path.canonicalize()?);
+            manifests.push(dunce::canonicalize(&path)?);
         }
     }
     manifests.sort();
@@ -41,8 +41,9 @@ pub(crate) fn policies(
     for manifest in manifests {
         let directory = manifest.parent().context("清单没有父目录")?;
         probe("cargo", &["--version"], directory)?;
-        let sysroot = PathBuf::from(probe("rustc", &["--print", "sysroot"], directory)?.trim())
-            .canonicalize()?;
+        let sysroot = dunce::canonicalize(PathBuf::from(
+            probe("rustc", &["--print", "sysroot"], directory)?.trim(),
+        ))?;
         ensure!(
             sysroot.is_absolute() && sysroot.is_dir(),
             "项目工具链返回无效 sysroot"
@@ -58,15 +59,13 @@ pub(crate) fn policies(
             let platform = platform.context("标准库分析缺少批准的项目工具链平台")?;
             ensure!(
                 platform.kind == "rust-standard-library"
-                    && platform.root.canonicalize()? == sysroot,
+                    && dunce::canonicalize(&platform.root)? == sysroot,
                 "批准的平台与实际项目 sysroot 不一致"
             );
             let rust_src = platform.root.join(&platform.metadata.rust_src);
             ensure!(
-                rust_src.canonicalize()?
-                    == sysroot
-                        .join("lib/rustlib/src/rust/library")
-                        .canonicalize()?,
+                dunce::canonicalize(&rust_src)?
+                    == dunce::canonicalize(sysroot.join("lib/rustlib/src/rust/library"))?,
                 "平台 rust_src 与实际项目工具链不一致"
             );
             Some(ProjectToolchain { sysroot, rust_src })

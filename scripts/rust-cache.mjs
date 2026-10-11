@@ -115,7 +115,8 @@ function runCommand(command, args) {
 
   const child = spawn(command, args, {
     env,
-    shell: process.platform === "win32",
+    // 原生 Cargo/Node 可直接执行；cmd.exe 会吃掉 --config TOML 中的引号。
+    shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command),
     stdio: "inherit",
   });
 

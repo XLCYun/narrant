@@ -264,6 +264,12 @@ version = "0.0.0"
 source = "git+https://github.com/rust-lang/rust-analyzer.git?rev=9074e9b4c6bc31d7986ccf4e22d18af70e5508da#9074e9b4c6bc31d7986ccf4e22d18af70e5508da"
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1049,6 +1055,7 @@ dependencies = [
 name = "narrant-rust-core"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "anyhow",
  "base-db",
  "cargo_metadata",

@@ -132,7 +132,10 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
     } else if id == PackId::TypeScriptJavascript {
         vec![
             "--disable-proto=throw".into(),
-            inside(&root, "runtime/helper/main.mjs")?.into_os_string(),
+            // 授权仍由 inside 检查；只在 Node 入口边界安全简化 Windows 规范路径。
+            dunce::simplified(&inside(&root, "runtime/helper/main.mjs")?)
+                .as_os_str()
+                .to_owned(),
         ]
     } else if id == PackId::Csharp {
         vec![inside(&root, "runtime/helper/Narrant.CSharp.Helper.dll")?.into_os_string()]

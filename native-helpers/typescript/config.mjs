@@ -53,7 +53,8 @@ export function prepareConfigurations(context, ts, sources) {
     original = canonicalPath(checkedWorkspacePath(context.root, original));
     if (done.has(original)) return original;
     done.add(original);
-    const parsed = ts.parseConfigFileTextToJson(original, fs.readFileSync(original, 'utf8'));
+    // Compiler API 的诊断文件身份要求正斜杠；磁盘读取与授权仍使用原生真实路径。
+    const parsed = ts.parseConfigFileTextToJson(ts.normalizePath(original), fs.readFileSync(original, 'utf8'));
     if (parsed.error || !parsed.config || typeof parsed.config !== 'object' || Array.isArray(parsed.config)) {
       throw new Error(`无效配置 JSONC：${original}`);
     }

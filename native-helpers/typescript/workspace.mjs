@@ -132,9 +132,17 @@ export function workspaceSystem(context, ts) {
   const native = { ...ts.sys };
   const libraries = ['typescript/lib', '@types/node', 'undici-types'].map(name => path.join(context.runtime, name));
   const links = [...context.links].sort((a, b) => b[0].length - a[0].length);
+  /** 虚拟路径从现存祖先恢复真实拼写，保留尚不存在的相对后缀。 */
+  function physicalPath(file) {
+    file = path.resolve(file);
+    // 虚拟 node_modules 尚不存在；先用现存祖先恢复真实根身份，再匹配内存别名。
+    let ancestor = file;
+    while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+    return path.join(canonicalPath(ancestor), path.relative(ancestor, file));
+  }
   /** 模块别名只转换读取位置，不创建文件或符号链接。 */
   function resolve(file) {
-    file = path.resolve(file);
+    file = physicalPath(file);
     for (const [alias, target] of links) {
       if (within(alias, file)) { file = path.join(target, path.relative(alias, file)); break; }
     }
@@ -159,7 +167,7 @@ export function workspaceSystem(context, ts) {
   }
   /** 合成的包路径仅存在于读取接口；目录本身不会落盘。 */
   function directoryExists(directory) {
-    directory = path.resolve(directory);
+    directory = physicalPath(directory);
     const canonical = resolve(directory);
     if (libraries.some(root => within(root, canonical) || within(canonical, root))) return native.directoryExists(canonical);
     if ([...context.links.keys()].some(alias => within(directory, alias))) return true;
@@ -167,6 +175,7 @@ export function workspaceSystem(context, ts) {
   }
   /** 为 TypeScript 原生 glob 算法提供经过范围筛选的目录条目。 */
   function entries(directory) {
+    directory = physicalPath(directory);
     const canonical = resolve(directory);
     const files = new Set();
     const directories = new Set();

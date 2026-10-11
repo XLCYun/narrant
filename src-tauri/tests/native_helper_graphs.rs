@@ -1065,15 +1065,30 @@ fn clang_cpp_real_helper_graph_and_diff() {
 fn typescript_real_helper_graph_and_diff() {
     let configs = config();
     let configured = configs.get("typescript").expect("缺少 TypeScript helper");
+    let environment = configured
+        .environment
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect();
+    #[cfg(windows)]
+    let mut environment: BTreeMap<OsString, OsString> = environment;
+    #[cfg(windows)]
+    if !configured
+        .environment
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("SystemRoot"))
+    {
+        // 真实 Node 测试与生产入口一样保留系统根，不恢复父进程的其他环境。
+        let system_root = std::env::var_os("SystemRoot")
+            .filter(|value| !value.is_empty())
+            .expect("Windows 真实 TypeScript helper 验收需要非空 SystemRoot");
+        environment.insert("SystemRoot".into(), system_root);
+    }
     let helper = NativeLanguageAnalyzer::new(
         HelperCommand {
             executable: configured.executable.clone(),
             args: configured.args.iter().map(OsString::from).collect(),
-            environment: configured
-                .environment
-                .iter()
-                .map(|(k, v)| (OsString::from(k), OsString::from(v)))
-                .collect(),
+            environment,
             trusted_roots: configured.trusted_roots.clone(),
         },
         HelperIdentity {

@@ -383,7 +383,7 @@ impl Resolver<'_> {
         {
             return Ok(false);
         }
-        let path = path.canonicalize()?;
+        let path = dunce::canonicalize(path)?;
         if !path.starts_with(self.repository) {
             return Ok(false);
         }
@@ -586,8 +586,7 @@ impl Resolver<'_> {
         observed: &str,
         semantic: &str,
     ) -> Result<Vec<ReferenceTarget>> {
-        let key = Path::new(key)
-            .canonicalize()
+        let key = dunce::canonicalize(key)
             .ok()
             .and_then(|path| path.to_str().map(str::to_owned))
             .unwrap_or_else(|| key.to_owned());
