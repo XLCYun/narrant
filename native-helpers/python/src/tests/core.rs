@@ -33,6 +33,57 @@ fn query(project: &PythonProject, path: &str, token: &str) -> DefinitionQuery {
         .unwrap()
 }
 
+/// 候选在同一冻结数据库按自身版本校验，不改变调用方版本或绕过普通语法错误。
+#[test]
+fn candidate_ast_uses_target_minor_without_changing_caller_policy() {
+    for (minor, source, expected_error) in [
+        (14, "type Payload = int\ndef serve(): return 1\n", None),
+        (
+            8,
+            "type Payload = int\ndef serve(): return 1\n",
+            Some("TypeAliasStatement"),
+        ),
+        (
+            14,
+            "type Payload =\ndef serve(): return 1\n",
+            Some("ExpectedExpression"),
+        ),
+    ] {
+        let (_, project) = fixture(
+            &[
+                ("main.py", "from api import serve\nserve()\n"),
+                ("api.py", source),
+            ],
+            8,
+        );
+        let candidates = query(&project, "main.py", "serve").candidates;
+        assert_eq!(candidates.len(), 1);
+        let result = project.candidate_ast(&candidates[0], minor);
+        match expected_error {
+            Some(expected) => assert!(
+                result
+                    .err()
+                    .expect("非法候选应拒绝")
+                    .to_string()
+                    .contains(expected)
+            ),
+            None => assert_eq!(
+                result.unwrap().module().python_version(),
+                PythonVersion::PY314
+            ),
+        }
+        assert_eq!(
+            project
+                .parse(Path::new("main.py"))
+                .unwrap()
+                .module()
+                .python_version(),
+            PythonVersion::PY38
+        );
+        assert!(project.parse(Path::new("api.py")).is_err());
+    }
+}
+
 /// 逐个验证 3.7–3.14，不把旧目标提升为新版本；保留标准库全部 overload 候选。
 #[test]
 fn all_supported_minors_resolve_local_and_standard_definitions() {

@@ -6,6 +6,7 @@ use super::{
     syntax::{self, Document},
 };
 use crate::{DefinitionCandidate, PythonProject, SourceOrigin};
+use anyhow::Context;
 use narrant_native_common::model::{
     CodeCategory, CodeReference, ExternalSymbol, NodeId, ReferenceTarget, SymbolScope,
 };
@@ -268,7 +269,7 @@ impl Resolver<'_> {
                     conflict = true;
                     continue;
                 };
-                // 冲突项目没有调用方版本下的文档，装饰器证明必须先拒绝该候选。
+                // 冲突项目文档只作目标语法校验，装饰器证明必须先拒绝该候选。
                 if self.conflicting_projects.contains(&target.path) {
                     conflict = true;
                     continue;
@@ -503,23 +504,28 @@ impl Resolver<'_> {
             }
         };
         if !self.documents.contains_key(&actual) {
+            let mut target_minor = self.project.minor;
             if scope == SymbolScope::Repository {
                 let target_project = Project::for_file(self.repository, &actual, &location.source)?;
+                target_minor = target_project.minor;
                 if target_project.root != self.project.root
                     && target_project.root != self.repository
                 {
                     self.conflicting_projects.insert(actual.clone());
                 }
             }
-            // 已知跨项目冲突先交关系/装饰器/继承裁决，不按调用方 minor 解析目标。
-            // 若目标也在选集中，其 AST 仍由投影入口在目标自身的数据库组中严格校验。
-            if !self.conflicting_projects.contains(&actual) {
-                let body = self.native.candidate_ast(location)?.syntax().body.clone();
-                self.documents.insert(
-                    actual.clone(),
-                    Document::from_ast(&relative, &location.source, body)?,
-                );
-            }
+            // 未选中的上下文也按目标自身 minor 校验；跨项目文档不能提供关系证明。
+            let body = self
+                .native
+                .candidate_ast(location, target_minor)
+                .with_context(|| format!("{}：Python 目标语法提取失败", relative.display()))?
+                .syntax()
+                .body
+                .clone();
+            self.documents.insert(
+                actual.clone(),
+                Document::from_ast(&relative, &location.source, body)?,
+            );
         }
         let offset = location.focus.start().to_usize();
         anyhow::ensure!(

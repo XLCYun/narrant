@@ -8,11 +8,12 @@ pub use symbols::StandardSymbolIdentity;
 
 use anyhow::{Result, bail, ensure};
 use ruff_db::{
+    PythonFile,
     files::{File, system_path_to_file, vendored_path_to_file},
     parsed::{ParsedModuleRef, parsed_module},
     source::source_text,
 };
-use ruff_python_ast::Stmt;
+use ruff_python_ast::{PythonVersion, Stmt};
 use ruff_python_codegen::{Generator, Indentation, Mode};
 use ruff_source_file::LineEnding;
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -122,10 +123,34 @@ impl PythonProject {
         self.query_file(file, offset, source)
     }
 
-    /// 投影读取同一数据库已解析的候选 AST，不从候选原文启动第二套 parser。
-    pub(crate) fn candidate_ast(&self, candidate: &DefinitionCandidate) -> Result<ParsedModuleRef> {
+    /// 仓库候选按目标项目版本查询同一冻结 DB/File；标准声明保持原生内嵌策略。
+    pub(crate) fn candidate_ast(
+        &self,
+        candidate: &DefinitionCandidate,
+        repository_minor: u8,
+    ) -> Result<ParsedModuleRef> {
         let file = match &candidate.origin {
-            SourceOrigin::Repository(path) => return self.parse(path),
+            SourceOrigin::Repository(path) => {
+                ensure!((7..=14).contains(&repository_minor), "无效 Python 目标版本");
+                let file = self.file(path)?;
+                self.checked_source(file)?;
+                let parsed = parsed_module(
+                    &self.db,
+                    PythonFile::new(&self.db, file, PythonVersion::from((3, repository_minor))),
+                )
+                .load(&self.db);
+                ensure!(
+                    parsed.errors().is_empty(),
+                    "Python 语法错误：{:?}",
+                    parsed.errors()
+                );
+                ensure!(
+                    parsed.unsupported_syntax_errors().is_empty(),
+                    "Python 目标版本不支持语法：{:?}",
+                    parsed.unsupported_syntax_errors()
+                );
+                return Ok(parsed);
+            }
             SourceOrigin::StandardDeclaration(path) => {
                 vendored_path_to_file(&self.db, path.as_str())?
             }

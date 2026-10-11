@@ -703,6 +703,70 @@ fn native_cross_project_selected_target_still_validates_own_syntax() {
     }
 }
 
+/// 未选中的冲突上下文也须按目标自身版本拒绝普通语法错误与不支持语法。
+#[test]
+#[ignore = "需要固定旧 ty 0.0.84 与已构建 Python helper"]
+fn native_cross_project_context_still_validates_own_syntax() {
+    let mut accepted = Vec::new();
+    for (caller_minor, target_minor, target, diagnostic) in [
+        (
+            "3.8",
+            "3.14",
+            "type Payload =\ndef serve(): return 1\n",
+            "ExpectedExpression",
+        ),
+        (
+            "3.14",
+            "3.8",
+            "type Payload = int\ndef serve(): return 1\n",
+            "TypeAliasStatement",
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let caller_config = format!(
+            "[environment]\npython-version='{caller_minor}'\nextra-paths=['../beta/src']\n"
+        );
+        let target_config =
+            format!("[environment]\npython-version='{target_minor}'\nroot=['src']\n");
+        for (name, source) in [
+            ("alpha/ty.toml", caller_config.as_str()),
+            (
+                "alpha/main.py",
+                "from api import serve\ndef run(): return serve()\n",
+            ),
+            ("beta/ty.toml", target_config.as_str()),
+            ("beta/src/api.py", target),
+        ] {
+            let path = root.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+        let input = AnalysisInput {
+            repository_root: root.path().into(),
+            files: vec!["alpha/main.py".into()],
+            options: Default::default(),
+        };
+        let old = crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
+            std::env::var_os("NARRANT_TY_PATH").expect("需固定旧 ty 路径"),
+        )
+        .analyze(&input)
+        .unwrap_err();
+        eprintln!("context beta {target_minor} old：{old}");
+        assert!(old.to_string().contains(diagnostic), "{old}");
+        match analyzer().analyze(&input) {
+            Ok(_) => {
+                eprintln!("context beta {target_minor} native：错误地成功");
+                accepted.push(target_minor);
+            }
+            Err(error) => {
+                eprintln!("context beta {target_minor} native：{error}");
+                assert!(error.to_string().contains(diagnostic), "{error}");
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "非法上下文被接受：{accepted:?}");
+}
+
 /// 重复分析记录新会话冷启动和系统缓存后的耗时；查询统计来自实际适配器。
 #[test]
 #[ignore = "性能验收需要已构建 Python helper，单独串行运行"]
