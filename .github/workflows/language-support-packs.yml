@@ -11,6 +11,8 @@ on:
       - scripts/native-xz-extraction.mjs
       - scripts/tests/native-xz-extraction.test.mjs
       - scripts/verify-native-analyzers.mjs
+      - scripts/prepare-rust-native-tests.mjs
+      - scripts/run-rust-helper-test.mjs
       - scripts/native-migration.mjs
       - scripts/build-migrating-native-helper.mjs
       - scripts/tests/native-analyzer-ci.test.mjs
@@ -79,7 +81,7 @@ jobs:
           cache-on-failure: true
       - name: Validate lifecycle runner
         run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs
-      - name: Run process and LSP lifecycle checks from production sources
+      - name: Run process and Native Helper lifecycle checks from production sources
         run: node scripts/run-windows-lifecycle-tests.mjs
 
   build:
@@ -138,6 +140,9 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    env:
+      # 测试项目选择独立于 helper 的固定构建版本，缓存必须由本次 setup 显式准备。
+      NARRANT_PROJECT_RUST_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -194,6 +199,10 @@ jobs:
           "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
           "NARRANT_WINDOWS_SDK_VERSION=10.0.26100.0" >> $env:GITHUB_ENV
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
+      - name: Select isolated Rust project test Cargo home
+        env:
+          NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'CARGO_HOME=' + process.env.NARRANT_RUST_TEST_CARGO_HOME + '\n')"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -202,6 +211,12 @@ jobs:
       - name: Prepare pinned Rust helper build toolchain
         if: inputs.language == 'all' || inputs.language == 'rust' || inputs.language == 'python' || github.event_name != 'workflow_dispatch'
         run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Prepare Rust project sources and historical Cargo test inputs
+        if: inputs.language == 'all' || inputs.language == 'rust' || github.event_name != 'workflow_dispatch'
+        run: |
+          rustup component add rust-src --toolchain stable
+          rustup toolchain install 1.81.0 1.94.0 1.96.0 --profile minimal
+          node scripts/prepare-rust-native-tests.mjs --prepare
       - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
         run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

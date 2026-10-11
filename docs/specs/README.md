@@ -22,7 +22,8 @@ and compatibility validation pending).
 
 Migration of the existing Rust, TypeScript/JavaScript, and Python analyzers is specified
 in [0025 — Migrate existing analyzers to Native Helpers](0025-migrate-existing-analyzers-to-native-helpers.md)
-(accepted; implementation pending). Existing capabilities and configuration behavior remain;
+(accepted; local macOS ARM64 implementation, optimized packages, installation and Review acceptance complete;
+final combined macOS/Windows acceptance and publication pending). Existing capabilities and configuration behavior remain;
 helpers use direct native APIs without LSP and migrate one language implementation at a time.
 
 ## Conventions

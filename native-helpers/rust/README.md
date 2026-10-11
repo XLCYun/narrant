@@ -27,8 +27,12 @@ scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/rust/Cargo.to
 正常支持包入口为 `node scripts/build-language-support-packs.mjs --id rust --native`；
 `node scripts/verify-native-analyzers.mjs <产物目录> --language rust` 包含真实工厂、安装和 Review。
 工厂测试的 `NARRANT_RUST_PACK` 指向完整安装目录，不能仅复制可执行文件。
-测试中的标准库/全部依赖案例需要本机项目
-默认工具链已有 rust-src 以及标准库 metadata 所需的依赖缓存；测试不自动准备这些组件。
+完整 Rust 门禁必须显式设置 `NARRANT_PROJECT_RUST_TOOLCHAIN` 和绝对 `CARGO_HOME`，
+并已安装项目测试工具链的 rust-src。`node scripts/prepare-rust-native-tests.mjs --prepare`
+仅在测试准备阶段补齐标准库 metadata 依赖并验证离线解析；门禁本身只检查已有前提。
+旧 Cargo 兼容性样本还需已安装的 1.81.0、1.94.0 和 1.96.0；隔离目录可通过
+`NARRANT_TEST_CARGO_TOOLCHAINS` / `NARRANT_TEST_CARGO_194` 指定。它们是历史测试输入，
+不构成产品支持版本列表。CI 显式准备上述组件与缓存，产品运行时不会自动安装。
 `Cargo.lock` 以固定 revision 的上游锁文件为基线，不要删锁后选择最新传递依赖：
 首次新解析的 `unicode-ident 1.0.26` 会与固定 lexer 的 Unicode 断言不兼容。
 
@@ -96,5 +100,6 @@ cancelled 帧，公共 Host 在已记录取消且没有已观察的真实失败�
 既有整树退出屏障。正常 error/ok 仍发送唯一 completed 并 exit 0，不等待 stdin EOF。
 helper 不维持后台会话、watcher、构建脚本或宏进程。`scratch_root`
 仅为 Host 协议授权字段，临时锁使用系统 tempfile 生命周期并在正常退出时清理；强制终止
-与既有临时目录一样可能留下无项目副作用的系统临时文件。真实支持包优化构建的耗时、
-峰值内存、Windows 及安装/Review 验收仍由后续 Rust 集成阶段完成。
+与既有临时目录一样可能留下无项目副作用的系统临时文件。真实支持包优化构建、耗时和峰值内存样本、
+安装/Review 接入已完成本地 macOS ARM64 验收；最终七套 helper 的 macOS/Windows
+联合平台验收与支持包发布仍待完成，局部性能样本不代表性能提升承诺。

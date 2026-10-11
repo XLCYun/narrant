@@ -66,7 +66,11 @@ pub(crate) fn project_toolchain(root: &Path) -> crate::ProjectToolchain {
     let output = std::process::Command::new("rustc")
         .args(["--print", "sysroot"])
         .current_dir(root)
-        .env_remove("RUSTUP_TOOLCHAIN")
+        // 项目测试版本独立于 Cargo 为 helper 构建注入的 RUSTUP_TOOLCHAIN。
+        .env(
+            "RUSTUP_TOOLCHAIN",
+            std::env::var_os("NARRANT_PROJECT_RUST_TOOLCHAIN").unwrap_or_else(|| "stable".into()),
+        )
         .env("RUSTUP_AUTO_INSTALL", "0")
         .output()
         .unwrap();

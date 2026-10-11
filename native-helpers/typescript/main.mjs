@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
+import { decodeRequest } from './request.mjs';
+
 const protocol = 'narrant.native-analyzer/1';
 
 /** Windows 标准管道的 stream.write 会同步阻塞；回调式 fs.write 在 libuv 工作线程写入。 */
@@ -110,7 +112,7 @@ async function runProtocol() {
   lines.on('line', line => {
     if (writing || flushed) return;
     try {
-      const message = JSON.parse(line);
+      const message = decodeRequest(line, request?.id);
       if (message?.protocol !== protocol) throw new Error('无效分析协议');
       if (!request) {
         if (message.type !== 'analyze' || typeof message.id !== 'string' || !message.id) throw new Error('无效分析请求');

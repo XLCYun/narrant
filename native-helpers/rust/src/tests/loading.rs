@@ -323,7 +323,8 @@ fn missing_rust_src_fails_without_installing_or_modifying_workspace() {
         Ok(_) => panic!("缺少 rust-src 必须报错"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("缺少 rust-src"));
+    // 原生事务会增加上下文；保留对实际缺少源码原因的断言，检查完整错误链。
+    assert!(format!("{error:#}").contains("缺少 rust-src"), "{error:#}");
     support::assert_unchanged(root.path(), &before);
 }
 

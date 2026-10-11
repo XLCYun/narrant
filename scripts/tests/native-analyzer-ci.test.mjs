@@ -113,7 +113,7 @@ test('all enabled helpers and narrow absolute platform roots are mandatory', () 
 
 // 验收命令覆盖所有 helper，且 Cargo 统一串行经过仓库入口。
 test('verification uses every helper suite and serialized Cargo host and real graph tests', () => {
-  const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK', 'PROJECT_RUST_TOOLCHAIN', 'TEST_CARGO_TOOLCHAINS', 'TEST_CARGO_194'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const commands = verificationCommands(environment, 'win32');
   assert.equal(commands.length, 25);
   assert.equal(commands[2].environment.NARRANT_TEST_REFS8, path.join('/isolated/tools', 'ref/net8.0'));
@@ -131,7 +131,7 @@ test('verification uses every helper suite and serialized Cargo host and real gr
 
 // 公共进程所有者和原生协议在两个平台使用相同的实际验收入口。
 test('shared process and native acceptance use the same live groups on both platforms', () => {
-  const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
+  const environment = Object.fromEntries(['GO_SDK', 'GO_TARGET_SDK', 'DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT', 'JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8', 'LLVM_SDK', 'PROJECT_RUST_TOOLCHAIN', 'TEST_CARGO_TOOLCHAINS', 'TEST_CARGO_194'].map(name => [`NARRANT_${name}`, '/isolated/tools']));
   const ownerFilter = 'child_process::';
   const windows = verificationCommands(environment, 'win32');
   const macOS = verificationCommands(environment, 'darwin');
@@ -267,8 +267,9 @@ test('focused workflow skips unrelated builds and declaration provisioning', () 
 /** TS 聚焦门禁必须运行真实安装和 Review，不使用旧服务或空筛选充当验收。 */
 test('TypeScript focused acceptance includes native projection, complete old graph assertions and Review', async () => {
   const commands = verificationCommands({}, 'darwin', 'typescript-javascript');
+  assert.ok(commands[0].args.includes('--test-concurrency=1'));
   const serialized = JSON.stringify(commands);
-  for (const required of ['projection.test.mjs','config.test.mjs','workspace.test.mjs','helper.test.mjs','syntax.test.mjs','lifecycle.test.mjs','output.test.mjs','native_languages::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto','typescript_']) assert.ok(serialized.includes(required), required);
+  for (const required of ['projection.test.mjs','config.test.mjs','workspace.test.mjs','helper.test.mjs','syntax.test.mjs','lifecycle.test.mjs','output.test.mjs','protocol.test.mjs','native_languages::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto','typescript_']) assert.ok(serialized.includes(required), required);
   assert.ok(!serialized.includes('lsp::tests::'));
   // 退役后仍校验筛选器对应的真实测试入口，防止旧模块删除后零测试被记为通过。
   const source = async relative => fs.readFile(new URL(`../../${relative}`, import.meta.url), 'utf8');
@@ -287,9 +288,9 @@ test('TypeScript focused acceptance includes native projection, complete old gra
 
 /** Rust 聚焦门禁必须检查真实仍存在的入口，三档批准平台由生产工厂逐侧发现。 */
 test('Rust focused acceptance retains live graph, factory, installation and Review selectors', async () => {
-  const commands = verificationCommands({}, 'darwin', 'rust');
+  const commands = verificationCommands({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', NARRANT_TEST_CARGO_TOOLCHAINS: '/81:/94:/96', NARRANT_TEST_CARGO_194: '/94' }, 'darwin', 'rust');
   const serialized = JSON.stringify(commands);
-  for (const required of ['protocol::tests::', 'native_analyzer::tests::rust_graph::', 'native_analyzer::tests::rust_syntax::', 'native_languages::rust::tests::', 'real_installed_rust_pack_analyzes_with_existing_toolchain', 'real_rust_pack_flows_through_review_lifecycle_to_dto', 'rust_', 'native_helper_graphs']) assert.ok(serialized.includes(required), required);
+  for (const required of ['--locked', 'initial_protocol', 'lifecycle', '--include-ignored', 'native_analyzer::tests::rust_graph::', 'native_analyzer::tests::rust_syntax::', 'native_languages::rust::tests::', 'real_installed_rust_pack_analyzes_with_existing_toolchain', 'real_rust_pack_flows_through_review_lifecycle_to_dto', 'rust_', 'native_helper_graphs']) assert.ok(serialized.includes(required), required);
   assert.doesNotMatch(serialized, /lsp::|java\/tests|csharp\/tests|clang\/tests/);
   const config = { rust: { executable:'/pack/bin/narrant-rust', args:[], trusted_roots:['/pack'], platforms:[] } };
   assert.equal(validateNativeConfiguration(config, 'darwin', 'rust'), config);
@@ -318,4 +319,26 @@ test('Python focused acceptance retains version, graph, installed factory and Re
   ]) assert.ok((await read(file)).includes(`fn ${name}(`), name);
   const graph = await read('src-tauri/src/structure_review/native_analyzer/tests/python_native.rs');
   assert.ok([...graph.matchAll(/fn native_[a-z_]+\(/g)].length >= 22);
+});
+
+/** CI 必须用独立 Cargo home 准备项目 rust-src 和离线 metadata，不能依赖宿主已有组件缓存。 */
+test('Rust acceptance declares fresh project prerequisites independently from helper build toolchain', async () => {
+  const native = workflowSource.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
+  assert.match(native, /NARRANT_PROJECT_RUST_TOOLCHAIN: stable/);
+  assert.match(native, /NARRANT_RUST_TEST_CARGO_HOME: \$\{\{ runner.temp \}\}\/narrant-native-cargo/);
+  assert.match(native, /appendFileSync\(process.env.GITHUB_ENV, 'CARGO_HOME=' \+ process.env.NARRANT_RUST_TEST_CARGO_HOME/);
+  assert.ok(native.indexOf('Select isolated Rust project test Cargo home') < native.indexOf('key: all-native-'));
+  const prepare = native.split('name: Prepare Rust project sources and historical Cargo test inputs')[1].split('\n      - ')[0];
+  assert.match(prepare, /rustup component add rust-src --toolchain stable/);
+  assert.match(prepare, /rustup toolchain install 1\.81\.0 1\.94\.0 1\.96\.0 --profile minimal/);
+  assert.match(prepare, /node scripts\/prepare-rust-native-tests\.mjs --prepare/);
+  assert.ok(native.indexOf('prepare-rust-native-tests.mjs --prepare') < native.indexOf('node scripts/verify-native-analyzers.mjs'));
+  const commands = verificationCommands({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', NARRANT_TEST_CARGO_TOOLCHAINS: '/81:/94:/96', NARRANT_TEST_CARGO_194: '/94' }, 'darwin', 'rust');
+  assert.deepEqual(commands[0].args.slice(0, 6), ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--config']);
+  assert.match(commands[0].args[6], /target\.'cfg\(all\(\)\)'\.runner=.*run-rust-helper-test\.mjs/);
+  assert.deepEqual(commands[0].args.slice(7), ['--locked', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1']);
+  assert.throws(() => verificationCommands({}, 'darwin', 'rust'), /NARRANT_PROJECT_RUST_TOOLCHAIN/);
+  const { prepareRustNativeTests } = await import('../prepare-rust-native-tests.mjs');
+  await assert.rejects(prepareRustNativeTests({}), /explicit.*CARGO_HOME/);
+  await assert.rejects(prepareRustNativeTests({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', CARGO_HOME: '/cargo', NARRANT_TEST_CARGO_TOOLCHAINS: '/only-one' }), /exactly/);
 });

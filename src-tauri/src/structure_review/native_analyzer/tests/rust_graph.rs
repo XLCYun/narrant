@@ -658,7 +658,11 @@ fn rust_helper_describes_external_symbols() {
         .iter()
         .find(|(_, description)| description.name == "helpers::Cache::读取")
         .expect("图外名称保留语法层级及 Unicode");
-    assert!(symbol.contains("%2F"), "文件 ID 编码保持稳定: {symbol}");
+    let separator = if cfg!(windows) { "%5C" } else { "%2F" };
+    assert!(
+        symbol.contains(&format!("src{separator}store.rs")),
+        "原生相对文件 ID 编码保持稳定: {symbol}"
+    );
     assert_eq!(description.scope, SymbolScope::Repository);
     assert!(all.values().flat_map(|node| &node.data().references).any(|reference| {
         reference.semantic == "code.calls"

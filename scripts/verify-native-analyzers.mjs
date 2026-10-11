@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { prepareRustNativeTests } from './prepare-rust-native-tests.mjs';
 import { nativeTargets } from './provision-native-toolchains.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,24 +31,26 @@ export function validateNativeConfiguration(config, platform = process.platform,
 /** 明确列出串行验收命令；所有 Cargo 入口统一经过仓库锁。 */
 export function verificationCommands(environment, platform = process.platform, language = 'all') {
   const ids = selectedNativePacks(language);
-  const required = { python: [], rust: [], 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
+  const required = { python: [], rust: ['PROJECT_RUST_TOOLCHAIN', 'TEST_CARGO_TOOLCHAINS', 'TEST_CARGO_194'], 'typescript-javascript': [], go: ['GO_SDK', 'GO_TARGET_SDK'], java: ['JAVA_RUNTIME', 'JAVA_TARGET_JDK', 'JAVA_TARGET_8'], csharp: ['DOTNET_SDK', 'DOTNET_REF8_ROOT', 'DOTNET_REF9_ROOT'], 'c-cpp': ['LLVM_SDK'] };
   const suffix = platform === 'win32' ? '.exe' : '';
   const python = environment.NARRANT_PYTHON ?? (platform === 'win32' ? 'python' : 'python3');
   for (const name of ids.flatMap(id => required[id].map(name => `NARRANT_${name}`))) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
   const cargo = ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml'];
+  const rustTestRunner = `target.'cfg(all())'.runner=${JSON.stringify([process.execPath, path.join(repository, 'scripts/run-rust-helper-test.mjs')])}`;
   return [
     ...(ids.includes('go') ? [{ executable: path.join(environment.NARRANT_GO_SDK, `bin/go${suffix}`), args: ['test', './...'], cwd: 'native-helpers/go', environment: { GOROOT: environment.NARRANT_GO_SDK, GOTOOLCHAIN: 'local', GOWORK: 'off', GOPROXY: 'off', GOSUMDB: 'off', NARRANT_GO_TEST_SDKS: [environment.NARRANT_GO_TARGET_SDK, environment.NARRANT_GO_SDK].join(platform === 'win32' ? ';' : ':') } }] : []),
     ...(ids.includes('java') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/java/tests', '-v'], environment: { NARRANT_JAVA_TARGET: environment.NARRANT_JAVA_TARGET_JDK, NARRANT_JAVA_LIB: path.join(repository, '.tools/java-native/lib') } }] : []),
     ...(ids.includes('csharp') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/csharp/tests', '-v'], environment: { NARRANT_TEST_DOTNET: path.join(environment.NARRANT_DOTNET_SDK, `dotnet${suffix}`), NARRANT_TEST_REFS: path.join(environment.NARRANT_DOTNET_SDK, 'packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0'), NARRANT_TEST_REFS8: path.join(environment.NARRANT_DOTNET_REF8_ROOT, 'ref/net8.0'), NARRANT_TEST_REFS9: path.join(environment.NARRANT_DOTNET_REF9_ROOT, 'ref/net9.0'), NARRANT_TEST_REFS9_VERSION: '9.0.20' } }] : []),
     ...(ids.includes('c-cpp') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/clang/tests', '-v'], environment: { NARRANT_LLVM_ROOT: environment.NARRANT_LLVM_SDK, NARRANT_CLANG_HELPER: path.join(repository, `native-helpers/clang/build/narrant-clang${suffix}`) } }] : []),
+    // 真实协议子进程与 CPU 生命周期夹具按文件串行，避免准备测试本身耗尽退出观察期限。
     ...(ids.includes('typescript-javascript') ? [
-      { executable: process.execPath, args: ['--test', 'native-helpers/typescript/tests/projection.test.mjs', 'native-helpers/typescript/tests/occurrences.test.mjs', 'native-helpers/typescript/tests/config.test.mjs', 'native-helpers/typescript/tests/workspace.test.mjs', 'native-helpers/typescript/tests/helper.test.mjs', 'native-helpers/typescript/tests/syntax.test.mjs', 'native-helpers/typescript/tests/lifecycle.test.mjs', 'native-helpers/typescript/tests/output.test.mjs'] },
+      { executable: process.execPath, args: ['--test', '--test-concurrency=1', 'native-helpers/typescript/tests/projection.test.mjs', 'native-helpers/typescript/tests/occurrences.test.mjs', 'native-helpers/typescript/tests/config.test.mjs', 'native-helpers/typescript/tests/workspace.test.mjs', 'native-helpers/typescript/tests/helper.test.mjs', 'native-helpers/typescript/tests/syntax.test.mjs', 'native-helpers/typescript/tests/lifecycle.test.mjs', 'native-helpers/typescript/tests/output.test.mjs', 'native-helpers/typescript/tests/protocol.test.mjs'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_languages::typescript_graph::', '--', '--ignored', '--test-threads=4'] },
       { executable: 'bash', args: [...cargo, '--lib', 'real_installed_typescript_pack_analyzes_without_development_tools', '--', '--ignored'] },
       { executable: 'bash', args: [...cargo, '--lib', 'real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto', '--', '--ignored'] },
     ] : []),
     ...(ids.includes('rust') ? [
-      { executable: 'bash', args: ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--lib', 'protocol::tests::', '--', '--test-threads=1'] },
+      { executable: 'bash', args: ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--config', rustTestRunner, '--locked', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::rust_graph::', '--', '--ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::rust_syntax::', '--', '--ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_languages::rust::tests::', '--', '--ignored', '--test-threads=1'] },
@@ -120,6 +123,7 @@ export async function verifyNativeAnalyzers(artifacts, build = false, language =
     environment.NARRANT_TYPESCRIPT_PACK = path.join(artifacts, 'smoke-installed/typescript-javascript', catalog.packs['typescript-javascript'].version, target);
     environment.NARRANT_LANGUAGE_PACK_FIXTURE = artifacts;
   }
+  if (ids.includes('rust')) Object.assign(environment, await prepareRustNativeTests(environment));
   const commands = verificationCommands(environment, process.platform, language);
   if (build) {
     if (ids.includes('java')) await execute({ executable: environment.NARRANT_PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), args: ['native-helpers/java/tools/fetch-deps.py'] }, environment);
