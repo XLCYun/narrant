@@ -110,6 +110,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
+      # 锁定 Ruff 源码包含超过 MAX_PATH 的快照；Cargo 的 libgit2 checkout 读取此配置。
+      - name: Enable Windows Git checkout long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
       - name: Prepare pinned Rust helper build toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build and execute native tools
@@ -167,6 +171,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Test native validation and pack scripts
         run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/native-analyzer-ci.test.mjs scripts/tests/run-windows-process-probe.test.mjs scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
+      # 只准备 CI 工具源码 checkout；保持独立 Cargo home 和用户项目离线分析策略。
+      - name: Enable Windows Git checkout long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
       - name: Provision checksum-verified private developer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
       - name: Select exact macOS target declarations

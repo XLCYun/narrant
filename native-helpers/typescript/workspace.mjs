@@ -133,7 +133,12 @@ export function workspaceSystem(context, ts) {
     for (const [alias, target] of links) {
       if (within(alias, file)) { file = path.join(target, path.relative(alias, file)); break; }
     }
-    return native.realpath?.(file) ?? file;
+    // 与清单、配置和选集使用同一解析器；TS 的 native realpath 可能改变磁盘大小写拼写。
+    try { return fs.realpathSync(file); }
+    catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return file;
+      throw error;
+    }
   }
   /** 明确越界源码是分析错误，普通缺失业务依赖仍留给 TypeScript 产生诊断。 */
   function permitted(file) {

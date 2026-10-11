@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { validateToolchainManifest, verifyArchive } from '../provision-native-toolchains.mjs';
 import { runVerificationCommands, validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
 
@@ -341,4 +342,24 @@ test('Rust acceptance declares fresh project prerequisites independently from he
   const { prepareRustNativeTests } = await import('../prepare-rust-native-tests.mjs');
   await assert.rejects(prepareRustNativeTests({}), /explicit.*CARGO_HOME/);
   await assert.rejects(prepareRustNativeTests({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', CARGO_HOME: '/cargo', NARRANT_TEST_CARGO_TOOLCHAINS: '/only-one' }), /exactly/);
+});
+
+/** Cargo 的锁定 Git checkout 也读取全局配置，两个 Windows 构建入口都先启用长路径。 */
+test('Windows pack builds enable Git long paths before locked Cargo source checkout', async () => {
+  for (const job of ['build', 'native-analyzers']) {
+    const source = workflowSource.split(`\n  ${job}:`)[1].split(/\n {2}\S/)[0];
+    const setup = source.split('name: Enable Windows Git checkout long paths')[1]?.split('\n      - ')[0];
+    assert.ok(setup, `${job} must prepare long paths`);
+    assert.match(setup, /if: runner\.os == 'Windows'/);
+    assert.match(setup, /run: git config --global core\.longpaths true/);
+    assert.ok(source.indexOf('Enable Windows Git checkout long paths') < source.indexOf('Prepare pinned Rust helper build toolchain'));
+  }
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-git-longpaths-'));
+  try {
+    // 只给 Git 子进程指定私有配置文件，不修改用户 HOME、全局配置或其他测试环境。
+    const environment = { ...process.env, GIT_CONFIG_GLOBAL: path.join(root, 'global.gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
+    execFileSync('git', ['config', '--global', 'core.longpaths', 'true'], { env: environment });
+    assert.equal(execFileSync('git', ['config', '--global', '--bool', 'core.longpaths'], { encoding: 'utf8', env: environment }).trim(), 'true');
+    assert.match(execFileSync('git', ['config', '--global', '--show-origin', 'core.longpaths'], { encoding: 'utf8', env: environment }), /global\.gitconfig\s+true/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

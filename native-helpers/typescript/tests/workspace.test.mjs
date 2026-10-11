@@ -90,3 +90,16 @@ test('internal config symlinks still use sanitized in-memory configuration', t =
   assert.equal(fs.readFileSync(path.join(root, 'linked.json'), 'utf8'), config);
   assert.equal(fs.lstatSync(path.join(root, 'linked.json')).isSymbolicLink(), true);
 });
+
+/** 不同 realpath 实现返回不同大小写时，已有文件仍以工作区清单的真实路径授权。 */
+test('workspace authorization uses one realpath identity for a case alias', t => {
+  const root = fixture(t, { 'main.ts': 'export const value = 1;' });
+  const alias = path.join(path.dirname(root), path.basename(root).toUpperCase());
+  if (!fs.existsSync(alias)) return t.skip('测试文件系统区分大小写，不提供同一文件的大小写别名');
+  const file = path.join(alias, 'main.ts');
+  assert.equal(fs.statSync(file).ino, fs.statSync(path.join(root, 'main.ts')).ino);
+  const { host, context } = prepare({ root: alias, runtime, selected: [file] });
+  assert.equal(host.fileExists(file), true);
+  assert.equal(host.realpath(file), [...context.sources][0]);
+  assert.equal(host.readFile(file), 'export const value = 1;');
+});
