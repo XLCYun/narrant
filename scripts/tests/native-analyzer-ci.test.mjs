@@ -354,12 +354,14 @@ test('Windows pack builds enable Git long paths before locked Cargo source check
     assert.match(setup, /run: git config --global core\.longpaths true/);
     assert.ok(source.indexOf('Enable Windows Git checkout long paths') < source.indexOf('Prepare pinned Rust helper build toolchain'));
   }
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-git-longpaths-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant-git-longpaths-引用-'));
   try {
     // 只给 Git 子进程指定私有配置文件，不修改用户 HOME、全局配置或其他测试环境。
     const environment = { ...process.env, GIT_CONFIG_GLOBAL: path.join(root, 'global.gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
     execFileSync('git', ['config', '--global', 'core.longpaths', 'true'], { env: environment });
     assert.equal(execFileSync('git', ['config', '--global', '--bool', 'core.longpaths'], { encoding: 'utf8', env: environment }).trim(), 'true');
-    assert.match(execFileSync('git', ['config', '--global', '--show-origin', 'core.longpaths'], { encoding: 'utf8', env: environment }), /global\.gitconfig\s+true/);
+    // NUL 分隔保留真实来源路径，避免解析 Windows 反斜杠和 Unicode 的人读引号转义。
+    const origin = execFileSync('git', ['config', '--global', '--null', '--show-origin', '--bool', 'core.longpaths'], { encoding: 'utf8', env: environment });
+    assert.deepEqual(origin.split('\0'), [`file:${environment.GIT_CONFIG_GLOBAL}`, 'true', '']);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
