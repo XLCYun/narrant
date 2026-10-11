@@ -14,8 +14,9 @@
 - `projection.mjs` 从原生 AST 收集声明；规范打印只裁剪声明成员列表，保留完整
   参数、初始化器和函数体。token 来自正确语法上下文的重新解析，保留 JSX、
   模板、正则、ASI、稀疏数组；不维护 Oxc 式的第二套 AST。
-- helper 不拥有额外进程管理器。同步编译期间的取消/超时由公共 Host 的
-  ProcessTree 终止进程并等待回收；取消不能变成成功空图。
+- 原生分析运行于当前 helper 进程内的单次 worker thread；主线程处理 cancel 和
+  提前 stdin EOF，等待线程回收后 flush 唯一终结并退出。公共 Host 的 ProcessTree
+  继续拥有整个进程树与超时清理；取消不能变成成功空图。
 
 支持包构建与真实图 smoke：
 

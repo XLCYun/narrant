@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { typescriptConfiguration } from '../../../scripts/typescript-native-smoke.mjs';
+import { exchangeTypeScript, typescriptConfiguration } from '../../../scripts/typescript-native-smoke.mjs';
 
 // 可复现的一次性 helper 样本；macOS time 同时提供完整子进程的墙钟与峰值 RSS。
 if (process.platform !== 'darwin') throw new Error('此性能样本使用 macOS /usr/bin/time -l');
@@ -21,9 +20,8 @@ try {
   const request = { protocol: 'narrant.native-analyzer/1', type: 'analyze', id: 'analysis-1', input: { repository_root: root, files, include_tests: false, profile: 'typescript-static-v1' }, environment: { scratch_root: root, platforms: config.platforms }, limits: { analysis_timeout_ms: 30000, max_result_bytes: 16777216, max_diagnostic_bytes: 262144 } };
   for (let run = 1; run <= 3; run++) {
     const started = performance.now();
-    const result = spawnSync('/usr/bin/time', ['-l', config.executable, ...config.args], { input: `${JSON.stringify(request)}\n`, encoding: 'utf8', env: {}, timeout: 30000, maxBuffer: 16777216 });
-    assert.equal(result.status, 0, result.stderr);
-    const completed = JSON.parse(result.stdout.trim().split('\n')[1]);
+    const result = await exchangeTypeScript({ executable: '/usr/bin/time', args: ['-l', config.executable, ...config.args] }, request);
+    const completed = result.messages[1];
     assert.equal(completed.outcome, 'ok');
     assert.equal(completed.graph.nodes.length, 440);
     assert.equal(completed.graph.nodes.flatMap(n => n.references).filter(r => r.target.kind === 'node').length, 400);
