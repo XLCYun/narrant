@@ -103,3 +103,35 @@ test('workspace authorization uses one realpath identity for a case alias', t =>
   assert.equal(host.realpath(file), [...context.sources][0]);
   assert.equal(host.readFile(file), 'export const value = 1;');
 });
+
+for (const alias of ['MAIN.ts', 'nested/MAIN.ts', 'NESTED/main.ts', 'NESTED/MAIN.ts']) {
+  /** 文件名和子目录别名必须回到同一真实清单项，不猜测大小写或添加授权路径。 */
+  test(`workspace authorization preserves existing case alias ${alias}`, t => {
+    const root = fixture(t, { 'main.ts': 'export const value = 1;', 'nested/main.ts': 'export const nested = 2;' });
+    const file = path.join(root, alias);
+    if (!fs.existsSync(file)) return t.skip('测试文件系统不提供大小写别名');
+    const original = path.join(root, alias.startsWith('MAIN') ? 'main.ts' : 'nested/main.ts');
+    assert.equal(fs.statSync(file).ino, fs.statSync(original).ino);
+    const { host, context } = prepare({ root, runtime, selected: [original] });
+    assert.equal(host.fileExists(file), true);
+    assert.equal(host.realpath(file), host.realpath(original));
+    assert.equal(context.sources.has(host.realpath(file)), true);
+    assert.equal(host.readFile(file), fs.readFileSync(original, 'utf8'));
+  });
+}
+
+/** 配置别名只读取已经清洗的覆盖层，真实越界链接仍在原生 host 中失败。 */
+test('workspace metadata case aliases preserve overlays and external junctions remain rejected', t => {
+  const root = fixture(t, { 'main.ts': '', 'tsconfig.json': '{"compilerOptions":{"plugins":[{"name":"must-not-run"}]},"files":["main.ts"]}' });
+  const alias = path.join(root, 'TSCONFIG.json');
+  if (!fs.existsSync(alias)) return t.skip('测试文件系统不提供大小写别名');
+  const { host } = prepare({ root, runtime, selected: [path.join(root, 'main.ts')] });
+  assert.equal(host.fileExists(alias), true);
+  assert.equal(JSON.parse(host.readFile(alias)).compilerOptions.plugins, undefined);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'narrant-workspace-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(outside, 'main.ts'), 'export const escaped = true;');
+  fs.symlinkSync(outside, path.join(root, 'escape'), 'junction');
+  assert.throws(() => host.fileExists(path.join(root, 'escape/main.ts')), /服务引入未授权源码/);
+  assert.throws(() => host.readFile(path.join(root, 'escape/main.ts')), /服务引入未授权源码/);
+});

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createWorkspace, within, checkedWorkspacePath } from './workspace.mjs';
+import { createWorkspace, within, checkedWorkspacePath, canonicalPath } from './workspace.mjs';
 import { prepareConfigurations, inferredOptions } from './config.mjs';
 import { project, normalize, unwrap, isTest } from './projection.mjs';
 import { hasSyntaxErrors } from './syntax.mjs';
@@ -12,15 +12,15 @@ export function analyze(ts, request) {
   const platforms = request.environment.platforms;
   const library = platforms.find(p => p.metadata.package === 'typescript');
   if (!library || ts.version !== '6.0.3') throw new Error('需要固定 TypeScript 6.0.3 与声明平台');
-  const libraryRoot = fs.realpathSync(library.root);
+  const libraryRoot = canonicalPath(library.root);
   const runtime = path.dirname(path.dirname(libraryRoot));
   for (const name of ['typescript', '@types/node', 'undici-types']) {
     const entries = platforms.filter(p => p.kind === 'typescript-declarations' && p.metadata.package === name);
     const expected = path.join(runtime, name, name === 'typescript' ? 'lib' : '');
-    if (entries.length !== 1 || fs.realpathSync(entries[0].root) !== fs.realpathSync(expected)) throw new Error('声明 catalog 与固定运行时目录不一致');
+    if (entries.length !== 1 || canonicalPath(entries[0].root) !== canonicalPath(expected)) throw new Error('声明 catalog 与固定运行时目录不一致');
   }
-  const root = fs.realpathSync(input.repository_root);
-  const selected = input.files.map(file => fs.realpathSync(checkedWorkspacePath(root, path.join(root, file))));
+  const root = canonicalPath(input.repository_root);
+  const selected = input.files.map(file => canonicalPath(checkedWorkspacePath(root, path.join(root, file))));
   if (selected.some(file => !fs.statSync(file).isFile())) throw new Error('选集必须是普通源码文件');
   // 旧入口先校验路径，再短路空选集/全词法测试选集；不读取无关坏配置。
   if (!selected.length || !input.include_tests && input.files.every(isTest)) {
@@ -37,7 +37,7 @@ export function analyze(ts, request) {
   const context = createWorkspace({ root, runtime });
   const { host, projects, candidates, configFiles } = prepareConfigurations(context, ts, [...context.sources]);
   for (const file of selected) {
-    if (!context.sources.has(fs.realpathSync(file))) throw new Error(`选集不是受控源码：${file}`);
+    if (!context.sources.has(canonicalPath(file))) throw new Error(`选集不是受控源码：${file}`);
     if (!candidates.get(file)?.length) {
       const converted = ts.convertCompilerOptionsFromJson(inferredOptions(context, file), context.root);
       if (converted.errors.length) throw new Error("默认项目配置转换失败");

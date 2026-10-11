@@ -4,6 +4,11 @@ import path from 'node:path';
 export const sourcePattern = /\.(?:[cm]?[jt]sx?)$/i;
 const excluded = new Set(['node_modules', '.git', '.tools', '.narrant-typescript']);
 
+/** 根、清单和服务查询共用磁盘真实拼写，合法大小写别名与符号链接只保留一个身份。 */
+export function canonicalPath(file) {
+  return fs.realpathSync.native(file);
+}
+
 /** 检查路径归属，不以字符串前缀混淆相邻目录。 */
 export function within(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -16,7 +21,7 @@ export function checkedWorkspacePath(root, candidate) {
   if (!within(root, candidate)) throw new Error(`仓库外路径：${candidate}`);
   let ancestor = candidate;
   while (!fs.existsSync(ancestor) && ancestor !== root) ancestor = path.dirname(ancestor);
-  if (!within(root, fs.realpathSync(ancestor))) throw new Error(`符号链接越界：${candidate}`);
+  if (!within(root, canonicalPath(ancestor))) throw new Error(`符号链接越界：${candidate}`);
   return candidate;
 }
 
@@ -51,8 +56,8 @@ function validateManifest(root, file, manifest) {
 
 /** 第一方目录清单和模块位置只保存在内存，不复制文件、不创建链接、不写入 workspace。 */
 export function createWorkspace(input) {
-  const root = fs.realpathSync(input.root);
-  const runtime = fs.realpathSync(input.runtime);
+  const root = canonicalPath(input.root);
+  const runtime = canonicalPath(input.runtime);
   const sources = new Set();
   const metadata = new Set();
   const links = new Map();
@@ -65,7 +70,7 @@ export function createWorkspace(input) {
       const file = path.join(directory, entry.name);
       if (entry.name.startsWith('@') && entry.isDirectory()) { existingLinks(file); continue; }
       if (!entry.isSymbolicLink()) continue;
-      const target = fs.realpathSync(file);
+      const target = canonicalPath(file);
       if (firstParty(root, target)) links.set(file, target);
     }
   }
@@ -78,7 +83,7 @@ export function createWorkspace(input) {
       if (entry.isDirectory()) { visit(file); continue; }
       if (!sourcePattern.test(file) && !/\.jsonc?$/i.test(file)) continue;
       checkedWorkspacePath(root, file);
-      const canonical = fs.realpathSync(file);
+      const canonical = canonicalPath(file);
       if (!firstParty(root, canonical)) throw new Error(`不允许的依赖源码：${file}`);
       if (!fs.statSync(canonical).isFile()) throw new Error(`非普通输入文件：${file}`);
       if (sourcePattern.test(canonical)) sources.add(canonical);
@@ -133,8 +138,8 @@ export function workspaceSystem(context, ts) {
     for (const [alias, target] of links) {
       if (within(alias, file)) { file = path.join(target, path.relative(alias, file)); break; }
     }
-    // 与清单、配置和选集使用同一解析器；TS 的 native realpath 可能改变磁盘大小写拼写。
-    try { return fs.realpathSync(file); }
+    // 与根、清单、配置和选集使用同一原生解析器，不按字符串大小写猜测授权身份。
+    try { return canonicalPath(file); }
     catch (error) {
       if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return file;
       throw error;

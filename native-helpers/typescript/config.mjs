@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { within, checkedWorkspacePath, workspaceSystem } from './workspace.mjs';
+import { within, checkedWorkspacePath, workspaceSystem, canonicalPath } from './workspace.mjs';
 
 /** 使用固定 TS 解析受限 JSONC；将原生配置结果交给同进程 LanguageService。 */
 export function prepareConfigurations(context, ts, sources) {
@@ -42,7 +42,7 @@ export function prepareConfigurations(context, ts, sources) {
         if (fs.existsSync(file) && fs.statSync(file).isFile()) {
           if (!/\.jsonc?$/.test(file)) throw new Error(`不执行配置代码：${file}`);
           checkedWorkspacePath(context.root, file);
-          return fs.realpathSync(file);
+          return canonicalPath(file);
         }
       }
     }
@@ -50,7 +50,7 @@ export function prepareConfigurations(context, ts, sources) {
   }
   /** 保留每层 extends/references；只剥离插件入口和改写路径。 */
   function processConfig(original) {
-    original = fs.realpathSync(checkedWorkspacePath(context.root, original));
+    original = canonicalPath(checkedWorkspacePath(context.root, original));
     if (done.has(original)) return original;
     done.add(original);
     const parsed = ts.parseConfigFileTextToJson(original, fs.readFileSync(original, 'utf8'));
@@ -85,7 +85,7 @@ export function prepareConfigurations(context, ts, sources) {
         const file = /\.json$/.test(absolute) ? absolute : path.join(absolute, 'tsconfig.json');
         checkedWorkspacePath(context.root, file);
         if (!fs.existsSync(file)) throw new Error(`缺失引用项目配置：${file}`);
-        configs.add(fs.realpathSync(file));
+        configs.add(canonicalPath(file));
         processConfig(file);
         return { ...reference, path: checkedWorkspacePath(context.root, absolute) };
       });
