@@ -2,29 +2,27 @@
 
 ## TypeScript / JavaScript 结构分析
 
-以下命令只供 Narrant 开发环境安装应用自身依赖和准备分析工具，在 Narrant 仓库根目录执行：
+在 Narrant 仓库根目录安装应用依赖：
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm setup:typescript-analyzer
 ```
 
-应用自身支持 Node `>=22.13 <26`，语言服务最低要求 `22.22.2`，因此准备分析工具时
-应使用 `>=22.22.2 <26`。准备命令需要网络和 `tar`，会校验固定 npm 归档的
-SHA-512，不运行包安装脚本，再将当前 Node 可执行文件复制到
-`.tools/node`（Windows 为 `.tools/node.exe`）。语义分析运行时使用下列独立工具链：
+应用自身支持 Node `>=22.13 <26`，构建用 TypeScript 仍由 `package.json` 和
+`pnpm-lock.yaml` 管理。TS/JS 结构分析使用独立支持包中的固定 Node 24.18.0、
+TypeScript 6.0.3、@types/node 22.20.1 和 undici-types 6.21.0；安装与使用租约
+由公共语言支持包服务管理。生产入口通过 Native Host 直接调用 Compiler/Language Service API。
 
-| 工具或声明 | 固定版本 |
-| --- | --- |
-| typescript-language-server | 6.0.0 |
-| TypeScript / tsserver | 6.0.3 |
-| @types/node | 22.20.1 |
-| undici-types | 6.21.0 |
+开发验证在 macOS ARM64 或 Windows x64 使用对应目标构建本地候选：
 
-固定包默认位于 `.tools/typescript-analyzer/`。如需自定义位置，请在启动应用前将
-`NARRANT_TYPESCRIPT_NODE` 和 `NARRANT_TYPESCRIPT_RUNTIME` 分别设为 Node
-可执行文件和固定包目录的绝对路径。应用构建使用的 TypeScript 版本仍由
-`package.json` 和 `pnpm-lock.yaml` 管理，不会取代这套固定语义引擎。
+```sh
+node scripts/build-language-support-packs.mjs --id typescript-javascript --target aarch64-apple-darwin --output native-language-support-packs
+node scripts/verify-native-analyzers.mjs native-language-support-packs --language typescript-javascript
+```
+
+Windows 目标为 `x86_64-pc-windows-msvc`。构建验证固定上游摘要，不运行包安装脚本；
+验收包含真实图、归档安装与 Review DTO。当前 1.1.0 候选尚未发布，最终双平台
+Actions 验收留到开发、审查和本地验证完成后。
 
 Rust 分析继续使用开发仓库中的 `.tools/rust-analyzer`（Windows 为
 `.tools/rust-analyzer.exe`），也可在启动应用前用 `NARRANT_RUST_ANALYZER`
@@ -33,8 +31,8 @@ Rust 分析继续使用开发仓库中的 `.tools/rust-analyzer`（Windows 为
 伪装成成功的空结果。
 
 结构视图共同分析 `.ts`、`.tsx`、`.js`、`.jsx`、`.mts`、`.cts`、`.mjs`、
-`.cjs` 及 `.d.ts`、`.d.mts`、`.d.cts` 声明文件。Oxc 提取语法结构和对象自身
-内容，固定 TLS/tsserver 通过共享 LSP 提供语义证据。原生 JSDoc 推断会保留，
+`.cjs` 及 `.d.ts`、`.d.mts`、`.d.cts` 声明文件。固定 TypeScript 原生 AST 提取语法结构和对象自身
+内容，Language Service 提供定义导航与语义证据。原生 JSDoc 推断会保留，
 不使用另外的 JSDoc 解析器。直接绑定到 `const` 名称的箭头函数会成为 Callable；
 内联回调保留在所属对象内容中，不产生匿名回调节点。自定义 JSX 组件会产生组件引用，
 `div`、`button` 等内置标签不产生节点或组件关系；其属性中的表达式和回调仍参与
@@ -57,12 +55,10 @@ baseUrl 和 paths，在固定 TS 6 引擎下保留可靠的本地调用，将冲
 并显示原生弃用说明。这些代表性结果不表示使用项目安装的 TypeScript，也不构成对所有
 TS 5/6 配置的兼容承诺。
 
-上述工具链和真实语言服务验收在 macOS 上执行；Linux 和 Windows 尚未原生执行。
-Windows 共享 LSP 代码和测试已通过交叉类型检查。正式安装包内分发分析工具仍是后续
-工作。未配置文件的确定性默认规则及 workspace 支持边界见
-[受控项目说明](src-tauri/src/structure_review/typescript_analyzer/runtime/README.md)，
-产品范围和验收依据见
-[TypeScript / JavaScript Code Graph 规范](docs/specs/0021-typescript-language-analyzer.md)。
+原生 TS/JS 支持包、公共图与差异、隔离安装及 Review 已完成本地 macOS ARM64 验证；
+Windows 实际运行和最终双平台 Actions 仍待验收。受控配置与 workspace 支持边界见
+[原生 Helper 说明](native-helpers/typescript/README.md)，迁移断言与验证记录见
+[原生迁移证据](docs/research/0025-typescript-native-helper-migration.md)。
 
 ## 构建 Windows 安装包
 

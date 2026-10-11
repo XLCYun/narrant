@@ -134,12 +134,18 @@ export async function buildPack({ id, target, output, cache = path.join(reposito
         execFileSync('tar', ['-xzf', archive, '-C', destination, '--strip-components=1']);
         const metadata = JSON.parse(await fs.readFile(path.join(destination, 'package.json'), 'utf8'));
         if (metadata.name !== name || metadata.version !== version) throw new Error(`Package identity mismatch: ${name}`);
+        if (name === 'typescript') {
+          // 原生 API 只加载 typescript.js；退役独立服务器和自动类型安装进程的分发入口。
+          for (const entry of ['bin/tsserver', 'lib/tsserver.js', 'lib/_tsserver.js', 'lib/tsserverlibrary.js', 'lib/tsserverlibrary.d.ts', 'lib/typingsInstaller.js', 'lib/_typingsInstaller.js', 'lib/watchGuard.js', 'lib/typesMap.json']) {
+            await fs.rm(path.join(destination, entry));
+          }
+        }
       }
     }
     if (id === 'typescript-javascript') {
       const { buildMigratingNativeHelper } = await import('./build-migrating-native-helper.mjs');
       await buildMigratingNativeHelper(id, payload);
-      const platforms = definition.packages.filter(p => p.name !== 'typescript-language-server').map(({ name, version }) => ({ id: name.replaceAll('/', '-').replaceAll('@', ''), kind: 'typescript-declarations', version, root: `runtime/${name}${name === 'typescript' ? '/lib' : ''}`, metadata: { package: name } }));
+      const platforms = definition.packages.map(({ name, version }) => ({ id: name.replaceAll('/', '-').replaceAll('@', ''), kind: 'typescript-declarations', version, root: `runtime/${name}${name === 'typescript' ? '/lib' : ''}`, metadata: { package: name } }));
       await fs.mkdir(path.join(payload, 'control'));
       await fs.writeFile(path.join(payload, 'control/native.json'), JSON.stringify({ schema_version: 1, helper_version: definition.helperVersion, platforms }));
     }

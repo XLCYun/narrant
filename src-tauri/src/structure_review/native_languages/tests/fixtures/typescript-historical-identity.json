@@ -1,0 +1,214 @@
+[
+  {
+    "category": "Type",
+    "contains": [
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::constructor:constructor",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::field:field",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::field:prop",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::method:method",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::static_block:anonymous"
+    ],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model",
+    "name": "Model",
+    "native_kind": "class",
+    "source": "/** docs */\nexport class Model { field = 1; constructor(public prop: string) {} method(){} static { run(); } }"
+  },
+  {
+    "category": "Value",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::field:field",
+    "name": "field",
+    "native_kind": "field",
+    "source": "field = 1;"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::constructor:constructor",
+    "name": "constructor",
+    "native_kind": "constructor",
+    "source": "constructor(public prop: string) {}"
+  },
+  {
+    "category": "Value",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::field:prop",
+    "name": "prop",
+    "native_kind": "field",
+    "source": "public prop: string"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::method:method",
+    "name": "method",
+    "native_kind": "method",
+    "source": "method(){}"
+  },
+  {
+    "category": "ExecutionRegion",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model::static_block:anonymous",
+    "name": null,
+    "native_kind": "static_block",
+    "source": "static { run(); }"
+  },
+  {
+    "category": "Container",
+    "contains": [
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::namespace:N::arrow:arrow"
+    ],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::namespace:N",
+    "name": "N",
+    "native_kind": "namespace",
+    "source": "namespace N { export const arrow = () => 1; }"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::namespace:N::arrow:arrow",
+    "name": "arrow",
+    "native_kind": "arrow",
+    "source": "export const arrow = () => 1;"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::binding:handlers::binding:nested::object_method:save",
+    "name": "save",
+    "native_kind": "object_method",
+    "source": "save(){}"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::function:overloaded",
+    "name": "overloaded",
+    "native_kind": "function",
+    "source": "function overloaded(x:string):string;\nfunction overloaded(x:any){return x;}"
+  },
+  {
+    "category": "Type",
+    "contains": [
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I::method:method",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I::property:property"
+    ],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I",
+    "name": "I",
+    "native_kind": "interface",
+    "source": "interface I { property: string; method(): void; }"
+  },
+  {
+    "category": "Value",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I::property:property",
+    "name": "property",
+    "native_kind": "property",
+    "source": "property: string;"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I::method:method",
+    "name": "method",
+    "native_kind": "method",
+    "source": "method(): void;"
+  },
+  {
+    "category": "Type",
+    "contains": [
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I#2::property:another"
+    ],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I#2",
+    "name": "I",
+    "native_kind": "interface",
+    "source": "interface I { another: number; }"
+  },
+  {
+    "category": "Value",
+    "contains": [],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I#2::property:another",
+    "name": "another",
+    "native_kind": "property",
+    "source": "another: number;"
+  },
+  {
+    "category": "Container",
+    "contains": [
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::binding:handlers::binding:nested::object_method:save",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::class:Model",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::function:overloaded",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::interface:I#2",
+      "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts::namespace:N"
+    ],
+    "id": "typescript:repo:%E4%B8%AD%E6%96%87+path%2F%E5%A3%B0%E6%98%8E%21%7E%27%28%29.ts",
+    "name": "中文 path/声明!~'().ts",
+    "native_kind": "file",
+    "source": "/** docs */\nexport class Model { field = 1; constructor(public prop: string) {} method(){} static { run(); } } namespace N { export const arrow = () => 1; } const handlers = { nested: { save(){} } }; function overloaded(x:string):string; function overloaded(x:any){return x;} interface I { property: string; method(): void; } interface I { another: number; }"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "javascript:repo:main.js::function:caller",
+    "name": "caller",
+    "native_kind": "function",
+    "source": "export function caller() {}"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "javascript:repo:main.js::function:expression",
+    "name": "expression",
+    "native_kind": "function",
+    "source": "const expression = function hidden(){};"
+  },
+  {
+    "category": "Type",
+    "contains": [
+      "javascript:repo:main.js::class:C::field:%23field",
+      "javascript:repo:main.js::class:C::getter:value",
+      "javascript:repo:main.js::class:C::setter:value"
+    ],
+    "id": "javascript:repo:main.js::class:C",
+    "name": "C",
+    "native_kind": "class",
+    "source": "class C { #field = 1; get value(){return 1} set value(v){} }"
+  },
+  {
+    "category": "Value",
+    "contains": [],
+    "id": "javascript:repo:main.js::class:C::field:%23field",
+    "name": "#field",
+    "native_kind": "field",
+    "source": "#field = 1;"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "javascript:repo:main.js::class:C::getter:value",
+    "name": "value",
+    "native_kind": "getter",
+    "source": "get value(){return 1}"
+  },
+  {
+    "category": "Callable",
+    "contains": [],
+    "id": "javascript:repo:main.js::class:C::setter:value",
+    "name": "value",
+    "native_kind": "setter",
+    "source": "set value(v){}"
+  },
+  {
+    "category": "Container",
+    "contains": [
+      "javascript:repo:main.js::class:C",
+      "javascript:repo:main.js::function:caller",
+      "javascript:repo:main.js::function:expression"
+    ],
+    "id": "javascript:repo:main.js",
+    "name": "main.js",
+    "native_kind": "file",
+    "source": "export function caller() {} const expression = function hidden(){}; class C { #field = 1; get value(){return 1} set value(v){} };"
+  }
+]

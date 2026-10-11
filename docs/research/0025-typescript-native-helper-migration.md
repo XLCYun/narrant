@@ -1,8 +1,10 @@
 # TypeScript / JavaScript 原生 Helper 迁移证据
 
-本记录对应规格 0025 的 Task 4 集成候选，基线 `1fd3fa0`。本机 macOS ARM64 验证不能替代
-macOS ARM64 + Windows x64 Actions。候选支持包 `1.1.0` 保持 `published=false`、
-`verifiedTargets=[]`；旧 TS 子树和 Oxc 依赖暂留到双平台验收完成，生产入口已切换公共 Native Host。
+本记录对应规格 0025 的 Task 4；集成基线 `1fd3fa0`，本地退役基线 `75c47ca`。
+依照更新后的 0025/0025a 与 AGENTS.md，完成本地 macOS ARM64 的真实包、公共图/diff、
+隔离安装及 Review 验收后，旧 TS 链在开发分支退役。候选支持包 `1.1.0` 仍保持
+`published=false`、`verifiedTargets=[]`；全部开发、审查和本地验证结束后再集中完成
+macOS ARM64 + Windows x64 Actions，本地结果不能替代最终平台验收。
 
 ## 固定工具和边界
 
@@ -12,7 +14,8 @@ macOS ARM64 + Windows x64 Actions。候选支持包 `1.1.0` 保持 `published=fa
   不启动 TLS/tsserver/LSP，不加载业务插件、不写项目、不运行用户代码、不下载项目依赖。
 - 复用旧受限 workspace/config 文件系统的政策：第一方源码、必要 JSON 元数据、固定声明闭包。
   business node_modules 中的源码/声明不可读；包配置 JSON 可按既有政策提供 extends 元数据。
-- 同步 Compiler API 执行期间由公共 Host/ProcessTree 执行强制取消、等待回收；没有额外进程框架。
+- 同步 Compiler API 在当前 helper 的单次 Worker 中运行；主线程处理 control/EOF，等待 Worker 回收。
+  公共 Host/ProcessTree 保持唯一进程树所有权、超时和强制取消屏障；没有额外进程框架。
 - 生产支持包工厂与 Review 入口已接通；测试可注入闭包，生产不再装配旧 TS fallback。
 
 ## 兼容性判断
@@ -20,7 +23,10 @@ macOS ARM64 + Windows x64 Actions。候选支持包 `1.1.0` 保持 `published=fa
 身份编码按 Rust `form_urlencoded::byte_serialize`，空格是 `+`，中文是 UTF-8 百分号编码，
 标点逐字节编码；没有直接使用 `encodeURIComponent`。身份中的仓库相对路径保留平台原生分隔符，
 协议 evidence 路径保持 `/`。真实旧 Oxc 声明与新 helper 对比了类别、native_kind、名字、ID、source、contains；
-夹具含 Unicode、空格、标点、TS/JS、重载、参数属性和嵌套声明。Windows 由同一对比测试实际验证。
+夹具含 Unicode、空格、标点、TS/JS、重载、参数属性和嵌套声明。退役前逐项对照通过后，
+23 个历史节点冻结于 `native_languages/tests/fixtures/typescript-historical-identity.json`；
+`typescript_historical_identity_and_source_contract` 继续验证全部字段与节点数量，
+Windows 只将身份路径的 `%2F` 换为 `%5C`，实际运行留待最终平台验收。
 
 比较内容允许原生打印差别；字符串引号和可选尾逗号可归一化。比较仍保留完整参数、初始化器和函数体，
 只有具名声明主体的独立成员被裁剪。稀疏数组空位、顺序、JSX 文本、模板 raw 文本、正则、ASI 与
@@ -158,15 +164,15 @@ NARRANT_TYPESCRIPT_PACK=/absolute/extracted/pack node native-helpers/typescript/
 最终候选包已重建。坏 tsconfig 不阻止空选集或全部词法测试排除；混合选集仍正常验证配置，越界始终先失败。
 完整日志和精确本机命令在 ignored Task 4 report；没有运行宿主全量测试，没有推送、发布或触发 workflow。
 
-剩余验收：控制者以集成 commit 运行双平台 Actions，记录 URL/SHA；两平台均通过后再删除旧 TS 链与七个 Oxc 依赖，
-并迁走暂时复用的 configDir fixture、固定身份对照。此记录不代表 Task 4 已完成最终验收。
+上述为集成阶段历史结果；其旧链退役等待条件已被更新的 0025/0025a 取代。
+本地退役后的最终包与当前 Host 验收见下节，双平台 Actions 仍是最终交付义务。
 
 
 首轮 Actions [38084193094](https://github.com/XLCYun/narrant/actions/runs/38084193094/job/114307126707)
 在 macOS 脚本测试阶段发现过时的 workflow guard 断言，尚未完成语言验收。修正测试以实际条件分别验证
 lifecycle 独占、聚焦语言跳过旧 build、完整发布依赖/显式开关/main 分支；生产 workflow 不变。
 同一六文件 Node 测试组本机 44 passed、0 failed、2 Windows-only skipped；预期负例日志改为捕获并验证。
-该修复不代替双平台重跑，旧链继续保留。
+该修复不代替双平台重跑；当时仍保留旧链，现已依照本地验收政策退役。
 
 ## 审查修复：JSX 语义空白（T4-I1）
 
@@ -189,4 +195,47 @@ TS 6.0.3 的 `getSyntacticDiagnostics` 对 TS 文件只返回 parse diagnostics�
 
 验证包括原审查的三个反例；各早期错误家族与普通类型/目标错误的拒绝/允许对照；noCheck、checkJs、nocheck/ignore/expect-error 指令的冷/暖缓存；异常时的属性恢复；无 dist 项目引用。代表性测试还与保留的旧 Document::parse 对照，明确发现并保留上述重复导出的宽松政策。既有真实图组继续覆盖 union、JSDoc、跨配置、无 dist 引用和回调导航。
 
-维护成本限定在固定 TS 引擎升级：重新核对这份命名分类、plainJSErrors 与 checker 发出位置，以及 `checker.getDiagnostics`、SourceFile.checkJsDirective、Program.isSourceOfProjectReferenceRedirect、原生私有符号查询这些内部 API；重跑已保留的拒绝/允许、事务和真实图组。它们不是跨版本稳定 API，升级不可只修改版本号或动态猜测能力。当前继续固定 TS 6.0.3，双平台验收和旧链删除仍待完成。
+维护成本限定在固定 TS 引擎升级：重新核对这份命名分类、plainJSErrors 与 checker 发出位置，以及 `checker.getDiagnostics`、SourceFile.checkJsDirective、Program.isSourceOfProjectReferenceRedirect、原生私有符号查询这些内部 API；重跑已保留的拒绝/允许、事务和真实图组。它们不是跨版本稳定 API，升级不可只修改版本号或动态猜测能力。当前继续固定 TS 6.0.3；旧链现已在本地验收后退役，双平台最终验收仍待完成。
+
+
+## 本地 macOS 验收与旧链退役（2026-10-11）
+
+本轮使用 Node 24.18.0 和正常构建入口，不修改用户已安装的包。最终产物为
+`typescript-javascript@1.1.0 / aarch64-apple-darwin`，归档大小 45093622 bytes，
+SHA-256 `f05c4e02d052d4c3116b84f97604f32c52fc825f262f8fdade14dd1dcc924157`。
+255 个清单文件中不存在 TLS、tsserver、typingsInstaller 或 watchGuard 入口；
+全部六个 helper 模块与已审查源码逐字节相同。构建时先验固定 npm SHA-512，
+再移除独立服务器文件；Compiler/LanguageService 的 `typescript.js`、标准声明、
+包元数据与许可证保留。库内原生 server 命名空间属于上游 API，没有修改上游引擎。
+
+退役的目录是 `src-tauri/src/structure_review/typescript_analyzer/`（旧 AST、投影、
+项目准备、TLS/LSP 传输与测试协调），以及 `scripts/setup-typescript-analyzer.mjs`
+和 `setup:typescript-analyzer`。七个 Oxc 直接依赖全部删除：allocator、ast、ast_visit、
+parser、span、codegen、semantic；Cargo 锁文件只删去 39 个不再消费的包，没有新增或升级包。
+归档断言移入 `scripts/tests/archive-validation.test.mjs`，共享 validator 继续供包构建使用；
+configDir 夹具保留在 `structure_review/tests/config_dir_fixture.rs`。
+
+旧 22 项 graph_service 业务断言完整保留在 `native_languages/tests/typescript_graph.rs`；
+旧内容、参数属性、workspace/config 和早期语法断言保留在本记录前面的迁移表对应测试中。
+旧 identity/source 直接比较冻结为 23 节点历史契约，仍比较 ID、类别、native_kind、
+name、source、contains 与总节点数。`code.calls` 的 external/symbol 修复断言保持原样。
+删除的是旧 transport/私有 Oxc 数据结构和旧服务器协调测试，不删除这些业务覆盖。
+生产 TS/JS 工厂与 Review 使用公共 Native Host，Rust/Python 生产路由保持原状。
+
+双平台 workflow 保留现有验收矩阵与 Windows ProcessTree/LSP 定义，仅更新归档测试路径和执行列表。
+TS 聚焦 guard 同时校验 26 个真实图测试、模块注册及安装/Review/公开 graph 测试入口，
+避免退役后留下零测试筛选器。当前包必需文件、版本、control、Node 启动参数已是原生配置，
+本轮无须重复改动这些已审查契约。
+
+最终裁剪包和退役后 Host 的聚焦 runner 结果：helper 87/87、TS 图 26/26、
+独立安装 1/1、Review DTO 1/1、生产工厂安装 1/1、公开 graph/diff 1/1；
+公共 ProcessTree 3 passed（1 Windows-only ignored）、公共 Host 26 passed、
+原生应用回调 5 passed、工厂/平台 11 passed。所有组实际执行且失败为零；
+另门语言真实工具测试维持 ignored，未运行 Rust/Python 语言套件。
+脚本组 50 passed、0 failed、2 Windows-only skipped；修正通用 guard 的陈旧 core 前提后，
+保留临时缺 binary 清单的编译前拒绝断言，最终相关文件 10/10 通过。
+`check --lib`、`clippy --lib --tests -- -D warnings`、fmt check、作用域 ESLint 与 diff check 通过。
+精确命令、完整结果、包身份和保留/删除边界记录在本地 Task 4 retirement report。
+未运行宿主全量测试（留待 Task 7），未推送、触发 Actions/quality-gate、发布或合并。
+本地完成后继续 Rust 迁移；最终集中运行 macOS/Windows Actions 时由控制者提醒恢复额度，
+记录执行 URL 与 commit，处理真实平台失败。该记录不声明 Windows 或整个迁移已验收完成。

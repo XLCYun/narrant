@@ -1077,14 +1077,20 @@ fn typescript_real_helper_cancellation_reaps_before_return() {
     directory.close().unwrap();
 }
 
-/// 验收期直接比较旧 AST 身份与原文，特别覆盖 Windows 分隔符和 URL 字节转义；旧链移除时迁为固定断言。
+/// 固定退役前已验证的身份、类别、原文和包含树，覆盖 Unicode、标点与两平台路径分隔符。
 #[test]
 #[ignore = "需要真实 TypeScript 原生支持包"]
-fn typescript_legacy_identity_and_source_comparison() {
-    use crate::structure_review::{
-        source_text::{LineBreakRules, SourceText},
-        typescript_analyzer::syntax::Document,
-    };
+fn typescript_historical_identity_and_source_contract() {
+    /// 历史夹具只保存公共语言契约，不依赖退役后的 AST 或传输实现。
+    #[derive(serde::Deserialize)]
+    struct HistoricalNode {
+        id: String,
+        category: String,
+        native_kind: String,
+        name: Option<String>,
+        source: Option<String>,
+        contains: Vec<String>,
+    }
     let sources = [
         ("中文 path/声明!~'().ts", "/** docs */\nexport class Model { field = 1; constructor(public prop: string) {} method(){} static { run(); } } namespace N { export const arrow = () => 1; } const handlers = { nested: { save(){} } }; function overloaded(x:string):string; function overloaded(x:any){return x;} interface I { property: string; method(): void; } interface I { another: number; }"),
         ("main.js", "export function caller() {} const expression = function hidden(){}; class C { #field = 1; get value(){return 1} set value(v){} };"),
@@ -1095,47 +1101,37 @@ fn typescript_legacy_identity_and_source_comparison() {
         directory.path(),
         &sources.iter().map(|(file, _)| *file).collect::<Vec<_>>(),
     );
-    let root = directory.path().canonicalize().unwrap();
-    let mut count = 0;
-    for (file, source) in sources {
-        let old = Document::parse(
-            &root,
-            root.join(file),
-            SourceText::new(
-                source,
-                LineBreakRules {
-                    lone_cr: true,
-                    unicode_separators: true,
-                },
-            ),
-            Default::default(),
-        )
-        .unwrap();
-        count += old.declarations.len();
-        for d in old.declarations {
-            let expected = d.node;
-            let actual = graph.node(&expected.data().id).unwrap_or_else(|| {
-                panic!(
-                    "原生身份缺少 {:?}; actual={:?}",
-                    expected.data().id,
-                    nodes(&graph)
-                        .iter()
-                        .map(|n| &n.data().id)
-                        .collect::<Vec<_>>()
-                )
-            });
-            assert_eq!(actual.category(), expected.category());
-            assert_eq!(actual.data().native_kind, expected.data().native_kind);
-            assert_eq!(actual.data().name, expected.data().name);
-            assert_eq!(actual.data().source, expected.data().source);
-            let mut actual_children = actual.data().contains.clone();
-            actual_children.sort();
-            let mut expected_children = expected.data().contains.clone();
-            expected_children.sort();
-            assert_eq!(actual_children, expected_children);
-        }
+    let expected: Vec<HistoricalNode> =
+        serde_json::from_str(include_str!("fixtures/typescript-historical-identity.json")).unwrap();
+    assert_eq!(nodes(&graph).len(), expected.len());
+    for node in expected {
+        // 历史基线冻结为 POSIX；Windows 仅改变身份路径内的目录分隔符编码。
+        let platform_id = |id: String| {
+            if cfg!(windows) {
+                id.replace("%2F", "%5C")
+            } else {
+                id
+            }
+        };
+        let id = crate::structure_review::code_graph::NodeId(platform_id(node.id));
+        let actual = graph
+            .node(&id)
+            .unwrap_or_else(|| panic!("原生身份缺少 {id:?}"));
+        assert_eq!(format!("{:?}", actual.category()), node.category);
+        assert_eq!(actual.data().native_kind, node.native_kind);
+        assert_eq!(actual.data().name, node.name);
+        assert_eq!(actual.data().source, node.source);
+        let mut actual_children: Vec<_> = actual
+            .data()
+            .contains
+            .iter()
+            .map(|id| id.0.clone())
+            .collect();
+        actual_children.sort();
+        let mut expected_children: Vec<_> = node.contains.into_iter().map(platform_id).collect();
+        expected_children.sort();
+        assert_eq!(actual_children, expected_children);
     }
-    assert_eq!(nodes(&graph).len(), count);
 }
 
 /// 目录链接在 Unix/Windows 均可验证；TS 合并物理文件，测试选项和越界检查不能被别名绕过。

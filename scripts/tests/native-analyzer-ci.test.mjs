@@ -267,9 +267,22 @@ test('focused workflow skips legacy builds and unrelated declaration provisionin
 });
 
 /** TS 聚焦门禁必须运行真实安装和 Review，不使用旧服务或空筛选充当验收。 */
-test('TypeScript focused acceptance includes native projection, complete old graph assertions and Review', () => {
+test('TypeScript focused acceptance includes native projection, complete old graph assertions and Review', async () => {
   const commands = verificationCommands({}, 'darwin', 'typescript-javascript');
   const serialized = JSON.stringify(commands);
   for (const required of ['projection.test.mjs','config.test.mjs','workspace.test.mjs','helper.test.mjs','syntax.test.mjs','lifecycle.test.mjs','output.test.mjs','native_languages::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto','typescript_']) assert.ok(serialized.includes(required), required);
   assert.ok(!serialized.includes('lsp::tests::'));
+  // 退役后仍校验筛选器对应的真实测试入口，防止旧模块删除后零测试被记为通过。
+  const source = async relative => fs.readFile(new URL(`../../${relative}`, import.meta.url), 'utf8');
+  const graph = await source('src-tauri/src/structure_review/native_languages/tests/typescript_graph.rs');
+  assert.ok([...graph.matchAll(/fn (?:graph_|typescript_)[a-z_]+\(/g)].length >= 26);
+  assert.match(graph, /fn typescript_historical_identity_and_source_contract\(/);
+  assert.match(await source('src-tauri/src/structure_review/native_languages/mod.rs'), /#\[path = "tests\/typescript_graph\.rs"\]\s*mod typescript_graph;/);
+  for (const [file, name] of [
+    ['src-tauri/src/language_support/tests/service.rs', 'real_installed_typescript_pack_analyzes_without_development_tools'],
+    ['src-tauri/src/structure_review/application/tests/mod.rs', 'real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto'],
+    ['src-tauri/tests/native_helper_graphs.rs', 'typescript_real_helper_graph_and_diff'],
+  ]) assert.ok((await source(file)).includes(`fn ${name}(`), name);
+  assert.match(workflowSource, /scripts\/tests\/archive-validation\.test\.mjs/);
+  assert.doesNotMatch(workflowSource, /setup-typescript-analyzer/);
 });

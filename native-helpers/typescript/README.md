@@ -36,7 +36,8 @@ Windows 使用 `x86_64-pc-windows-msvc`，在对应平台本机构建和验证�
 单独运行 Node 测试需设置 `NARRANT_TYPESCRIPT_PACK` 为真实已解压包目录。
 
 1.1.0 为迁移候选包，`published=false`；macOS/Windows Actions 通过前不发布。
-旧 TypeScript 子树暂留用于身份/原文对照，生产入口只走 Native Host。
+旧 TypeScript 子树、TLS 开发安装链和 Oxc 宿主依赖已在本地 macOS 验收后退役；
+身份、原文和包含树由固定历史断言继续验证，生产入口使用 Native Host。
 
 别名选择沿用旧 TS 行为：按真实文件路径合并图节点，coverage 保留每个词法选集路径，
 origins 聚合未被测试规则排除的来源。测试规则同时检查选中路径和真实仓库相对路径。

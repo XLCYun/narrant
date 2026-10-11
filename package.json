@@ -10,7 +10,6 @@
   "scripts": {
     "build:language-packs": "node scripts/build-language-support-packs.mjs",
     "publish:language-packs": "node scripts/publish-language-support-packs.mjs",
-    "setup:typescript-analyzer": "node scripts/setup-typescript-analyzer.mjs",
     "generate:file-icons": "node scripts/generate-file-type-icons.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
     "predev": "pnpm generate:file-icons",

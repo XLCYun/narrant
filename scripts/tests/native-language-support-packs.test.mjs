@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync, ChildProcess } from 'node:child_process';
 import { packageDirectory } from '../build-language-support-packs.mjs';
 import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms, javaFixturePlatforms, goFixturePlatforms } from '../native-language-support-packs.mjs';
@@ -143,8 +144,8 @@ test('Java and Go fixtures describe actual SDKs without a bundled target list', 
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-/** 候选入口固定且核心探针不能被当成完成的协议可执行文件。 */
-test('migration build entry rejects unfinished cores before creating an artifact', async () => {
+/** 已完成 helper 的入口身份固定；TS 暂存与未知身份拒绝不触发无关语言编译。 */
+test('migration build entry preserves completed helpers, rejects missing binaries and stages TypeScript', async t => {
   const { migratingHelperEntry, buildMigratingNativeHelper } = await import('../build-migrating-native-helper.mjs');
   assert.equal(migratingHelperEntry('rust', true).entry, 'bin/narrant-rust.exe');
   assert.equal(migratingHelperEntry('python', false).binary, 'narrant-python');
@@ -152,8 +153,25 @@ test('migration build entry rejects unfinished cores before creating an artifact
   assert.throws(() => migratingHelperEntry('../project'), /Unknown/);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-migration-build-'));
   try {
-    for (const id of ['rust', 'python']) await assert.rejects(buildMigratingNativeHelper(id, path.join(root, id)), /only a core proof/);
+    for (const id of ['rust', 'python']) {
+      const manifest = await fs.readFile(new URL(`../../native-helpers/${id}/Cargo.toml`, import.meta.url), 'utf8');
+      assert.ok(manifest.includes(`name = "narrant-${id}"`), `${id} protocol binary`);
+    }
+    // 仅替换读取到的临时清单内容，保留“缺协议 binary 在编译/产物创建前失败”的真实入口契约。
+    const readFile = fs.readFile;
+    const manifests = ['rust', 'python'].map(id => fileURLToPath(new URL(`../../native-helpers/${id}/Cargo.toml`, import.meta.url)));
+    const incomplete = t.mock.method(fs, 'readFile', async (file, ...args) => manifests.includes(file)
+      ? '[package]\nname = "core-only"\n'
+      : readFile(file, ...args));
+    try {
+      for (const id of ['rust', 'python']) await assert.rejects(buildMigratingNativeHelper(id, path.join(root, id)), /only a core proof/);
+    } finally { incomplete.mock.restore(); }
+    await assert.rejects(buildMigratingNativeHelper('../project', root), /Unknown/);
     assert.deepEqual(await fs.readdir(root), []);
+    await buildMigratingNativeHelper('typescript-javascript', root);
+    for (const name of ['main.mjs', 'analyze.mjs', 'projection.mjs', 'workspace.mjs', 'config.mjs', 'syntax.mjs']) {
+      assert.deepEqual(await fs.readFile(path.join(root, 'runtime/helper', name)), await fs.readFile(new URL(`../../native-helpers/typescript/${name}`, import.meta.url)));
+    }
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
