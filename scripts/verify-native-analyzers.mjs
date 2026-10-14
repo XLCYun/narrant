@@ -51,7 +51,7 @@ export function verificationCommands(environment, platform = process.platform, l
       { executable: 'bash', args: [...cargo, '--lib', 'real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto', '--', '--ignored'] },
     ] : []),
     ...(ids.includes('rust') ? [
-      { executable: 'bash', args: ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--config', rustTestRunner, '--locked', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1'] },
+      { executable: 'bash', args: ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--config', rustTestRunner, '--locked', '--no-fail-fast', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::rust_graph::', '--', '--ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_analyzer::tests::rust_syntax::', '--', '--ignored', '--test-threads=1'] },
       { executable: 'bash', args: [...cargo, '--lib', 'native_languages::rust::tests::', '--', '--ignored', '--test-threads=1'] },

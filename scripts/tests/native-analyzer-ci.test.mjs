@@ -366,7 +366,7 @@ test('Rust acceptance declares fresh project prerequisites independently from he
   const commands = verificationCommands({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', NARRANT_TEST_CARGO_TOOLCHAINS: '/81:/94:/96', NARRANT_TEST_CARGO_194: '/94' }, 'darwin', 'rust');
   assert.deepEqual(commands[0].args.slice(0, 6), ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--config']);
   assert.match(commands[0].args[6], /target\.'cfg\(all\(\)\)'\.runner=.*run-rust-helper-test\.mjs/);
-  assert.deepEqual(commands[0].args.slice(7), ['--locked', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1']);
+  assert.deepEqual(commands[0].args.slice(7), ['--locked', '--no-fail-fast', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1']);
   assert.throws(() => verificationCommands({}, 'darwin', 'rust'), /NARRANT_PROJECT_RUST_TOOLCHAIN/);
   const { prepareRustNativeTests } = await import('../prepare-rust-native-tests.mjs');
   await assert.rejects(prepareRustNativeTests({}), /explicit.*CARGO_HOME/);

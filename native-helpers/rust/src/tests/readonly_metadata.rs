@@ -24,6 +24,10 @@ fn json_target_paths_use_real_cargo_origins() {
     )
     .unwrap();
     let workspace = ProjectWorkspace::load(manifest, &config, &|_| ()).unwrap();
+    // 建立真实 target 文件，既容纳平台路径写法，也能识别错误的配置来源目录。
+    let target_path = root.path().join("targets/custom.json");
+    std::fs::create_dir(target_path.parent().unwrap()).unwrap();
+    std::fs::write(&target_path, "{}").unwrap();
     std::fs::create_dir(root.path().join(".cargo")).unwrap();
     std::fs::write(
         root.path().join(".cargo/config.toml"),
@@ -31,17 +35,12 @@ fn json_target_paths_use_real_cargo_origins() {
     )
     .unwrap();
     let targets = effective_targets(&workspace, &config).unwrap();
+    assert_eq!(targets.len(), 2);
+    let actual = std::path::Path::new(&targets[0]);
+    assert!(actual.is_absolute());
     assert_eq!(
-        targets,
-        vec![
-            root.path()
-                .canonicalize()
-                .unwrap()
-                .join("targets/custom.json")
-                .to_str()
-                .unwrap()
-                .to_owned(),
-            "x86_64-unknown-linux-gnu".into()
-        ]
+        actual.canonicalize().unwrap(),
+        target_path.canonicalize().unwrap()
     );
+    assert_eq!(targets[1], "x86_64-unknown-linux-gnu");
 }

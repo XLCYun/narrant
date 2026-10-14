@@ -19,8 +19,11 @@ fn binary_resource_queries_return_errors_from_the_same_snapshot() {
     )
     .unwrap();
     let resource = project.file_id(&resource_path).unwrap();
+    // 核对真实文件身份，Windows 普通路径与扩展路径前缀不构成不同资源。
+    let actual_resource_path = project.file_path(resource).unwrap();
+    assert!(actual_resource_path.is_absolute());
     assert_eq!(
-        project.file_path(resource).unwrap(),
+        actual_resource_path.canonicalize().unwrap(),
         resource_path.canonicalize().unwrap()
     );
     support::assert_unchanged(root.path(), &before);
