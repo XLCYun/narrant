@@ -36,7 +36,8 @@ export function verificationCommands(environment, platform = process.platform, l
   const python = environment.NARRANT_PYTHON ?? (platform === 'win32' ? 'python' : 'python3');
   for (const name of ids.flatMap(id => required[id].map(name => `NARRANT_${name}`))) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
   const cargo = ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml'];
-  const rustTestRunner = `target.'cfg(all())'.runner=${JSON.stringify([process.execPath, path.join(repository, 'scripts/run-rust-helper-test.mjs')])}`;
+  // Git Bash 会丢失内联 TOML 中一层反斜杠转义；Windows 接受正斜杠路径，Unix 路径保持原样。
+  const rustTestRunner = `target.'cfg(all())'.runner=${JSON.stringify([process.execPath, path.join(repository, 'scripts/run-rust-helper-test.mjs')].map(file => platform === 'win32' ? file.replaceAll('\\', '/') : file))}`;
   return [
     ...(ids.includes('go') ? [{ executable: path.join(environment.NARRANT_GO_SDK, `bin/go${suffix}`), args: ['test', './...'], cwd: 'native-helpers/go', environment: { GOROOT: environment.NARRANT_GO_SDK, GOTOOLCHAIN: 'local', GOWORK: 'off', GOPROXY: 'off', GOSUMDB: 'off', NARRANT_GO_TEST_SDKS: [environment.NARRANT_GO_TARGET_SDK, environment.NARRANT_GO_SDK].join(platform === 'win32' ? ';' : ':') } }] : []),
     ...(ids.includes('java') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/java/tests', '-v'], environment: { NARRANT_JAVA_TARGET: environment.NARRANT_JAVA_TARGET_JDK, NARRANT_JAVA_LIB: path.join(repository, '.tools/java-native/lib') } }] : []),

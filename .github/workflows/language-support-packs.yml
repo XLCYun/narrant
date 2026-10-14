@@ -164,7 +164,8 @@ jobs:
             '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2022","target":"x86_64-pc-windows-msvc"}]'
           ) }}
     runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
-    timeout-minutes: 120
+    # 自托管 Windows 串行冷编译七套 helper 与 Host，再运行全部测试，需要超过两小时。
+    timeout-minutes: 180
     env:
       # 测试项目选择独立于 helper 的固定构建版本，缓存必须由本次 setup 显式准备。
       NARRANT_PROJECT_RUST_TOOLCHAIN: stable

@@ -4,12 +4,33 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { validateToolchainManifest, verifyArchive } from '../provision-native-toolchains.mjs';
 import { runVerificationCommands, validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
 
 const manifest = JSON.parse(await fs.readFile(new URL('../../resources/native-toolchains.json', import.meta.url), 'utf8'));
 const workflowSource = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
+
+// 用真实 Cargo 解析生产命令生成的 runner 配置，覆盖 Node → Git Bash → 缓存入口边界。
+test('Rust helper runner configuration survives the complete Cargo agent chain', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'narrant cargo config 空格-'));
+  try {
+    const manifestPath = path.join(directory, 'Cargo.toml');
+    await fs.writeFile(manifestPath, '[package]\nname = "runner_config_regression"\nversion = "0.1.0"\nedition = "2021"\n[lib]\npath = "lib.rs"\n');
+    await fs.writeFile(path.join(directory, 'lib.rs'), '');
+    const command = verificationCommands({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', NARRANT_TEST_CARGO_TOOLCHAINS: 'fixture', NARRANT_TEST_CARGO_194: 'fixture' }, process.platform, 'rust')[0];
+    const runner = command.args[command.args.indexOf('--config') + 1];
+    // metadata 不编译、不下载；沿用已安装工具链，保留导致 Windows 转义丢失的完整调用链。
+    const result = spawnSync(command.executable, [command.args[0], 'metadata', '--offline', '--no-deps', '--format-version', '1', '--manifest-path', manifestPath, '--config', runner], {
+      cwd: fileURLToPath(new URL('../../', import.meta.url)),
+      encoding: 'utf8',
+      timeout: 20_000,
+    });
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal(JSON.parse(result.stdout).packages[0].name, 'runner_config_regression');
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
 
 // 显式测试标记保留库测试 manifest，但应用目标必须复用 Tauri 的资源，避免重复资源 1。
 test('Windows native test manifest keeps Common Controls and excludes duplicate app generation', async () => {
