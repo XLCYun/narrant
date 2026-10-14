@@ -60,8 +60,8 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);
   assert.match(job('publish'), /needs: \[build, native-analyzers\]/);
   /** 这些 GitHub guards 只使用 JS 同义的布尔运算；直接验证实际条件，避免要求不同职责共享文本。 */
-  const enabled = (name, event, scope, language, publish, ref) => runInNewContext(job(name).match(/^ {4}if: (.+)$/m)[1], {
-    github: { event_name: event, ref }, inputs: { validation_scope: scope, language, publish },
+  const enabled = (name, event, scope, language, publish, ref, platform = 'all') => runInNewContext(job(name).match(/^ {4}if: (.+)$/m)[1], {
+    github: { event_name: event, ref }, inputs: { validation_scope: scope, language, publish, platform },
   });
   for (const scope of ['full', 'windows-lifecycle']) {
     for (const language of ['all', 'typescript-javascript', 'java']) {
@@ -75,6 +75,25 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   for (const [event, publish, ref] of [['pull_request', true, 'refs/heads/main'], ['workflow_dispatch', false, 'refs/heads/main'], ['workflow_dispatch', true, 'refs/heads/codex/migration']]) {
     assert.equal(enabled('publish', event, 'full', 'all', publish, ref), false);
   }
+  for (const platform of ['macos', 'windows']) {
+    assert.equal(enabled('publish', 'workflow_dispatch', 'full', 'all', true, 'refs/heads/main', platform), false);
+  }
   for (const name of ['build', 'native-analyzers']) assert.equal(enabled(name, 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), true);
   assert.equal(enabled('windows-lifecycle', 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), false);
+});
+
+// 执行工作流实际矩阵表达式，确认单平台验收不会调度另一平台，默认仍覆盖两个目标。
+test('manual platform selection schedules only the requested native targets', async () => {
+  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  for (const name of ['build', 'native-analyzers']) {
+    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
+    const expression = job.match(/include: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1].trim();
+    assert.ok(expression?.startsWith('${{') && expression.endsWith('}}'));
+    for (const platform of [undefined, 'all', 'macos', 'windows']) {
+      const selected = runInNewContext(expression.slice(3, -2), { inputs: { platform }, fromJSON: JSON.parse });
+      const targets = selected.map(item => item.target);
+      assert.deepEqual(targets, platform === 'windows' ? ['x86_64-pc-windows-msvc'] : platform === 'macos' ? ['aarch64-apple-darwin'] : ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc']);
+      assert.ok(selected.every(item => item.runner === (item.target === 'aarch64-apple-darwin' ? 'macos-15' : name === 'build' ? 'windows-latest' : 'windows-2022')));
+    }
+  }
 });

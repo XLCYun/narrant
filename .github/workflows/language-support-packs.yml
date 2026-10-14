@@ -49,9 +49,14 @@ on:
         options: [full, windows-lifecycle]
         default: full
       language:
-        description: Completed Native helper to validate on both platforms (all keeps final gate)
+        description: Completed Native helper to validate (all keeps the full language gate)
         type: choice
         options: [all, typescript-javascript, rust, python, java, go, csharp, c-cpp]
+        default: all
+      platform:
+        description: Platforms to validate (publishing requires all)
+        type: choice
+        options: [all, macos, windows]
         default: all
       publish:
         description: Publish validated packs to the immutable OSS prefix
@@ -90,11 +95,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
+        include: >-
+          ${{ fromJSON(
+            inputs.platform == 'windows' && '[{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]' ||
+            inputs.platform == 'macos' && '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]' ||
+            '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]'
+          ) }}
     runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
     # Windows 冷构建包含 release 打包、helper 测试与 Host 编译，使用完整验收的总预算。
     timeout-minutes: 120
@@ -139,11 +145,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
+        include: >-
+          ${{ fromJSON(
+            inputs.platform == 'windows' && '[{"runner":"windows-2022","target":"x86_64-pc-windows-msvc"}]' ||
+            inputs.platform == 'macos' && '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]' ||
+            '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2022","target":"x86_64-pc-windows-msvc"}]'
+          ) }}
     runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
     timeout-minutes: 120
     env:
@@ -177,18 +184,6 @@ jobs:
       - name: Enable Windows Git checkout long paths
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
-      - name: Provision checksum-verified private developer toolchains
-        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
-      - name: Select exact macOS target declarations
-        if: runner.os == 'macOS' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdk=/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
-          test -d "$sdk"
-          echo "NARRANT_MACOS_SDK=$sdk" >> "$GITHUB_ENV"
-          echo 'NARRANT_MACOS_SDK_VERSION=15.5' >> "$GITHUB_ENV"
-          echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
       - name: Select isolated Windows SDK and MSVC declaration roots
         if: runner.os == 'Windows' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
         shell: pwsh
@@ -199,10 +194,13 @@ jobs:
           # 发现含固定工具集的 VS 2022 实例，同时支持托管镜像和自托管 Build Tools。
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           if (!(Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'Visual Studio Installer vswhere.exe is missing' }
-          $vs = & $vswhere -products '*' -version '[17.0,18.0)' -property installationPath |
+          # 先等待原生命令完整退出，避免 First 提前终止管道而留下空退出码。
+          $installations = @(& $vswhere -products '*' -version '[17.0,18.0)' -property installationPath)
+          if ($LASTEXITCODE -ne 0) { throw "VS 2022 discovery failed with exit code $LASTEXITCODE" }
+          $vs = $installations |
             Where-Object { Test-Path -LiteralPath (Join-Path $_ "VC\Tools\MSVC\$version\include") -PathType Container } |
             Select-Object -First 1
-          if ($LASTEXITCODE -ne 0 -or !$vs) { throw "No VS 2022 instance contains MSVC $version" }
+          if (!$vs) { throw "No VS 2022 instance contains MSVC $version" }
           $msvc = "$vs\VC\Tools\MSVC\$version"
           $sdk = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Include\$($fixed.windows_sdk)"
           foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared")) {
@@ -215,6 +213,18 @@ jobs:
           "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
           "NARRANT_WINDOWS_SDK_VERSION=$($fixed.windows_sdk)" >> $env:GITHUB_ENV
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
+      - name: Provision checksum-verified private developer toolchains
+        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
+      - name: Select exact macOS target declarations
+        if: runner.os == 'macOS' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk=/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
+          test -d "$sdk"
+          echo "NARRANT_MACOS_SDK=$sdk" >> "$GITHUB_ENV"
+          echo 'NARRANT_MACOS_SDK_VERSION=15.5' >> "$GITHUB_ENV"
+          echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
       - name: Select isolated Rust project test Cargo home
         env:
           NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
@@ -246,7 +256,7 @@ jobs:
           if-no-files-found: warn
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.language == 'all' && inputs.publish && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.language == 'all' && inputs.platform == 'all' && inputs.publish && github.ref == 'refs/heads/main'
     needs: [build, native-analyzers]
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -53,6 +53,10 @@ VS 2022 实例，支持 Enterprise 和 Build Tools。系统已安装的 VC runti
 
 先手动运行 Language support packs 的 `validation_scope=windows-lifecycle`，
 确认 checkout、工具链、后台进程及退出清理可用，再运行完整语言验收。
+手动完整验收可用 `platform=windows` 或 `platform=macos` 只调度指定平台；
+默认 `platform=all` 和自动 PR 验收仍覆盖两平台。发布必须选择 `platform=all`，
+单平台结果不能代替最终双平台验收。Windows 的 VS/SDK/CRT 检查先于大型工具链
+下载执行；查询 `vswhere` 时先完整读取输出和退出码，再筛选所需实例。
 不得手动触发 `quality-gate`。需要交互桌面的 UI 测试另行验证，不以服务模式下
 的后台测试代替。记录实际 Windows 版本和提交 SHA，自托管 Windows 10 的结果
 不能标记为 Windows Server 托管镜像的结果。
