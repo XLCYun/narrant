@@ -54,7 +54,7 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   assert.match(workflow, /validation_scope:\n[\s\S]*default: full/);
   const lifecycle = job('windows-lifecycle');
   assert.match(lifecycle, /if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'/);
-  assert.match(lifecycle, /runs-on: windows-2022/);
+  assert.match(lifecycle, /runs-on:.*fromJSON\(vars\.NARRANT_WINDOWS_RUNNER_LABELS\).*\|\| 'windows-2022'/);
   assert.match(lifecycle, /run: node scripts\/run-windows-lifecycle-tests.mjs/);
   assert.match(lifecycle, /workspaces: native-helpers\/windows-process-probe/);
   assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);

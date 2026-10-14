@@ -64,7 +64,8 @@ permissions:
 jobs:
   windows-lifecycle:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'
-    runs-on: windows-2022
+    # 仓库变量可指定自托管标签；未配置时继续使用原来的 GitHub 托管镜像。
+    runs-on: ${{ vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || 'windows-2022' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,7 +95,7 @@ jobs:
             target: aarch64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
     # Windows 冷构建包含 release 打包、helper 测试与 Host 编译，使用完整验收的总预算。
     timeout-minutes: 120
     steps:
@@ -143,7 +144,7 @@ jobs:
             target: aarch64-apple-darwin
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
     timeout-minutes: 120
     env:
       # 测试项目选择独立于 helper 的固定构建版本，缓存必须由本次 setup 显式准备。
@@ -193,11 +194,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
           $fixed = (Get-Content resources/native-toolchains.json -Raw | ConvertFrom-Json).runner_prerequisites.'x86_64-pc-windows-msvc'
           $version = $fixed.msvc_tools
+          # 发现含固定工具集的 VS 2022 实例，同时支持托管镜像和自托管 Build Tools。
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'Visual Studio Installer vswhere.exe is missing' }
+          $vs = & $vswhere -products '*' -version '[17.0,18.0)' -property installationPath |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ "VC\Tools\MSVC\$version\include") -PathType Container } |
+            Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -or !$vs) { throw "No VS 2022 instance contains MSVC $version" }
           $msvc = "$vs\VC\Tools\MSVC\$version"
-          $sdk = 'C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0'
+          $sdk = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Include\$($fixed.windows_sdk)"
           foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared")) {
             if (!(Test-Path $directory -PathType Container)) { throw "Missing exact SDK directory: $directory" }
           }
@@ -206,7 +213,7 @@ jobs:
           "NARRANT_MSVC_ROOT=$msvc" >> $env:GITHUB_ENV
           "NARRANT_MSVC_VERSION=$version" >> $env:GITHUB_ENV
           "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
-          "NARRANT_WINDOWS_SDK_VERSION=10.0.26100.0" >> $env:GITHUB_ENV
+          "NARRANT_WINDOWS_SDK_VERSION=$($fixed.windows_sdk)" >> $env:GITHUB_ENV
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
       - name: Select isolated Rust project test Cargo home
         env:

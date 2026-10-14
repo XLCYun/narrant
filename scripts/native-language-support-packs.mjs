@@ -262,7 +262,8 @@ export async function buildNativePack({ id, target, output, definition, packageD
         const source = path.join(repository, 'native-helpers/clang');
         const build = path.join(source, 'build');
         execFileSync('cmake', ['-S', source, '-B', build, '-G', 'Visual Studio 17 2022', '-A', 'x64', '-T', `v143,version=${process.env.NARRANT_MSVC_VERSION}`, '-DCMAKE_SYSTEM_VERSION=10.0.26100.0', `-DCMAKE_GENERATOR_INSTANCE=${process.env.NARRANT_VISUAL_STUDIO}`, `-DLLVM_DIR=${path.join(sdk, 'lib/cmake/llvm')}`, `-DClang_DIR=${path.join(sdk, 'lib/cmake/clang')}`], { stdio: 'inherit' });
-        execFileSync('cmake', ['--build', build, '--config', 'Release', '--parallel', '2'], { stdio: 'inherit' });
+        // 自托管机器可按可用内存设置 CMake 并行度，默认仍为两个编译任务。
+        execFileSync('cmake', ['--build', build, '--config', 'Release', '--parallel', process.env.CMAKE_BUILD_PARALLEL_LEVEL || '2'], { stdio: 'inherit' });
         // 运行时只从私有 bin 加载官方 LLVM DLL 与已批准的 VC143 CRT。
         for (const directory of [path.join(sdk, 'bin'), process.env.NARRANT_MSVC_REDIST]) {
           for (const name of await fs.readdir(directory)) if (name.toLowerCase().endsWith('.dll')) await copyToolTree(path.join(directory, name), path.join(payload, 'bin', name));
