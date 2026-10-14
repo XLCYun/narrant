@@ -66,6 +66,9 @@ VS 2022 实例，支持 Enterprise 和 Build Tools。系统已安装的 VC runti
 
 先手动运行 Language support packs 的 `validation_scope=windows-lifecycle`，
 确认 checkout、工具链、后台进程及退出清理可用，再运行完整语言验收。
+已通过打包、仅需补跑原生验收时，可使用 `validation_scope=native-analyzers`；
+该选项保留所选语言的全部 helper、Host、安装和 Review 检查，并跳过独立打包任务。
+汇总结果时记录两次运行及各自提交，确认已通过的打包代码未变；默认完整验收和发布仍要求两项任务。
 手动完整验收可用 `platform=windows` 或 `platform=macos` 只调度指定平台；
 默认 `platform=all` 和自动 PR 验收仍覆盖两平台。发布必须选择 `platform=all`，
 单平台结果不能代替最终双平台验收。Windows 的 VS/SDK/CRT 检查先于大型工具链

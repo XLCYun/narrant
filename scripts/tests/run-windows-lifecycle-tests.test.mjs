@@ -63,12 +63,12 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   const enabled = (name, event, scope, language, publish, ref, platform = 'all') => runInNewContext(job(name).match(/^ {4}if: (.+)$/m)[1], {
     github: { event_name: event, ref }, inputs: { validation_scope: scope, language, publish, platform },
   });
-  for (const scope of ['full', 'windows-lifecycle']) {
+  for (const scope of ['full', 'native-analyzers', 'windows-lifecycle']) {
     for (const language of ['all', 'typescript-javascript', 'java']) {
       const context = ['workflow_dispatch', scope, language, true, 'refs/heads/main'];
       assert.equal(enabled('windows-lifecycle', ...context), scope === 'windows-lifecycle');
       assert.equal(enabled('build', ...context), scope === 'full' && language === 'all');
-      assert.equal(enabled('native-analyzers', ...context), scope === 'full');
+      assert.equal(enabled('native-analyzers', ...context), scope !== 'windows-lifecycle');
       assert.equal(enabled('publish', ...context), scope === 'full' && language === 'all');
     }
   }

@@ -164,7 +164,15 @@ test('shared process and native acceptance use the same live groups on both plat
     assert.deepEqual(owners[0].args, ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', ownerFilter, '--', '--nocapture', '--test-threads=1']);
   }
   for (const commands of [windows, macOS]) assert.doesNotMatch(JSON.stringify(commands), /lsp::/);
-  assert.deepEqual(windows.slice(4), macOS.slice(4));
+  // 两个平台的 runner 可使用不同分隔符；只规范这些路径，其他命令与参数仍严格对照。
+  const runnerPrefix = "target.'cfg(all())'.runner=";
+  const normalizeRunnerPaths = commands => commands.map(command => ({
+    ...command,
+    args: command.args.map(arg => arg.startsWith(runnerPrefix)
+      ? [runnerPrefix, ...JSON.parse(arg.slice(runnerPrefix.length)).map(file => path.normalize(file))]
+      : arg),
+  }));
+  assert.deepEqual(normalizeRunnerPaths(windows.slice(4)), normalizeRunnerPaths(macOS.slice(4)));
 });
 
 // 前组真实子进程失败后仍必须执行后组，同时整体保持失败，不能只收集成功日志。

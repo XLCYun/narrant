@@ -45,9 +45,9 @@ on:
   workflow_dispatch:
     inputs:
       validation_scope:
-        description: Full acceptance or focused Windows lifecycle diagnostics
+        description: Full acceptance, native analyzers only, or Windows lifecycle diagnostics
         type: choice
-        options: [full, windows-lifecycle]
+        options: [full, native-analyzers, windows-lifecycle]
         default: full
       language:
         description: Completed Native helper to validate (all keeps the full language gate)
@@ -98,7 +98,7 @@ jobs:
         run: node scripts/run-windows-lifecycle-tests.mjs
 
   build:
-    if: github.event_name != 'workflow_dispatch' || (inputs.validation_scope != 'windows-lifecycle' && inputs.language == 'all')
+    if: github.event_name != 'workflow_dispatch' || (inputs.validation_scope == 'full' && inputs.language == 'all')
     strategy:
       fail-fast: false
       matrix:
