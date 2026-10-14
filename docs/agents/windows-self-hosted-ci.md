@@ -25,6 +25,14 @@ gh variable set NARRANT_WINDOWS_RUNNER_LABELS \
 
 Runner 服务采用独立于交互开发账户的运行身份。服务身份必须能读取工具、写入
 自己的 runner/工作目录及工具缓存；不要依赖 Codex 用户缓存里的可执行文件。
+当前实例使用专用虚拟账户
+`NT SERVICE\actions.runner.XLCYun-narrant.desktop-9roujqj-narrant`，由 Windows
+管理账户密码。它与 GitHub 的仓库注册范围分别管理；给此账户授权不会同时给使用
+共享 `NETWORK SERVICE` 的其他服务授权。工具目录只需读取/执行权限，runner、
+Cargo 和 Rustup 目录需要修改权限。切换服务身份前保存原配置、账户权限和目录
+ACL，确认 runner 空闲；切换后验证原注册重新上线，并在 CI 中验证实际能力。
+旧身份创建的 CI checkout 可能触发 Git 所有权检查；确认无未提交改动后，将其
+移至同级备份，让下一次 checkout 由新身份创建，保留工具缓存和 runner 注册。
 使用短工作路径，启用 Windows 长路径支持，并保证接电时不会自动睡眠。
 服务身份还必须能创建文件和目录符号链接，语言边界测试会实际创建这些链接。
 通过本地安全策略为该账户授予 `Create symbolic links` 后，重启 runner 服务
