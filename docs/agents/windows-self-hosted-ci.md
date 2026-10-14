@@ -57,6 +57,10 @@ VS 2022 实例，支持 Enterprise 和 Build Tools。系统已安装的 VC runti
 默认 `platform=all` 和自动 PR 验收仍覆盖两平台。发布必须选择 `platform=all`，
 单平台结果不能代替最终双平台验收。Windows 的 VS/SDK/CRT 检查先于大型工具链
 下载执行；查询 `vswhere` 时先完整读取输出和退出码，再筛选所需实例。
+仅做手动验收、不需要下载产物时，可指定 `upload_artifacts=false`，保留全部
+构建和测试，只省去 GitHub 产物存储。默认和自动 PR 验收仍上传；`publish=true`
+会强制上传，不能通过此选项跳过发布所需产物。Actions 执行预算与产物存储额度
+分别管理，自托管 runner 也可能因存储额度不足而上传失败。
 不得手动触发 `quality-gate`。需要交互桌面的 UI 测试另行验证，不以服务模式下
 的后台测试代替。记录实际 Windows 版本和提交 SHA，自托管 Windows 10 的结果
 不能标记为 Windows Server 托管镜像的结果。

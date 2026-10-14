@@ -97,3 +97,27 @@ test('manual platform selection schedules only the requested native targets', as
     }
   }
 });
+
+// 仅验收时可省去产物存储；自动 PR 与正式发布仍必须上传，不能用此开关绕过发布输入。
+test('manual validation can omit artifacts while pull requests and publishing retain uploads', async () => {
+  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  for (const name of ['build', 'native-analyzers']) {
+    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
+    const upload = job.split('      - uses: actions/upload-artifact@')[1].split('\n      - ')[0];
+    const condition = upload.match(/^ {8}if: (.+)$/m)?.[1] ?? 'success()';
+    for (const [event, uploadArtifacts, publish, expected] of [
+      ['workflow_dispatch', false, false, false],
+      ['workflow_dispatch', true, false, true],
+      ['workflow_dispatch', false, true, true],
+      ['workflow_dispatch', true, true, true],
+      ['pull_request', undefined, undefined, true],
+    ]) {
+      const selected = runInNewContext(condition, {
+        github: { event_name: event }, inputs: { upload_artifacts: uploadArtifacts, publish },
+        always: () => true, success: () => true,
+      });
+      assert.equal(Boolean(selected), expected, `${name}: ${event}, upload=${uploadArtifacts}, publish=${publish}`);
+    }
+  }
+  assert.match(workflow, /upload_artifacts:\n[\s\S]*?type: boolean\n\s+default: true/);
+});

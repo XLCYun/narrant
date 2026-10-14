@@ -58,6 +58,10 @@ on:
         type: choice
         options: [all, macos, windows]
         default: all
+      upload_artifacts:
+        description: Upload build artifacts (always enabled when publishing)
+        type: boolean
+        default: true
       publish:
         description: Publish validated packs to the immutable OSS prefix
         type: boolean
@@ -135,6 +139,8 @@ jobs:
       - name: Verify native Python graphs, installation, and Review lifecycle
         run: node scripts/verify-python-analyzer.mjs language-support-packs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # 仅手动验收可不占用产物存储，正式发布仍依赖上传成功。
+        if: github.event_name != 'workflow_dispatch' || inputs.upload_artifacts || inputs.publish
         with:
           name: language-support-packs-${{ matrix.target }}
           path: language-support-packs/
@@ -246,7 +252,7 @@ jobs:
       - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
         run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.upload_artifacts || inputs.publish)
         with:
           name: native-analyzers-${{ matrix.target }}
           path: |
