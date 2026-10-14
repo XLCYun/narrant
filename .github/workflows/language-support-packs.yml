@@ -19,6 +19,7 @@ on:
       - scripts/run-windows-process-probe.mjs
       - scripts/tests/run-windows-process-probe.test.mjs
       - scripts/run-windows-lifecycle-tests.mjs
+      - scripts/verify-windows-runner.mjs
       - scripts/tests/run-windows-lifecycle-tests.test.mjs
       - src-tauri/tests/native_helper_graphs.rs
       - scripts/*language-support-packs.mjs
@@ -83,6 +84,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
+      - name: Verify Windows runner filesystem prerequisites
+        run: node scripts/verify-windows-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -120,6 +123,9 @@ jobs:
         with:
           node-version: 24.18.0
           cache: pnpm
+      - name: Verify Windows runner filesystem prerequisites
+        if: runner.os == 'Windows'
+        run: node scripts/verify-windows-runner.mjs
       - run: pnpm install --frozen-lockfile
       - run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
       # 锁定 Ruff 源码包含超过 MAX_PATH 的快照；Cargo 的 libgit2 checkout 读取此配置。
@@ -174,6 +180,9 @@ jobs:
         with:
           node-version: 24.18.0
           cache: pnpm
+      - name: Verify Windows runner filesystem prerequisites
+        if: runner.os == 'Windows'
+        run: node scripts/verify-windows-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
       - name: Probe Windows process cleanup before toolchain provisioning
         if: runner.os == 'Windows'

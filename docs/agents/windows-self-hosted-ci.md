@@ -26,6 +26,11 @@ gh variable set NARRANT_WINDOWS_RUNNER_LABELS \
 Runner 服务采用独立于交互开发账户的运行身份。服务身份必须能读取工具、写入
 自己的 runner/工作目录及工具缓存；不要依赖 Codex 用户缓存里的可执行文件。
 使用短工作路径，启用 Windows 长路径支持，并保证接电时不会自动睡眠。
+服务身份还必须能创建文件和目录符号链接，语言边界测试会实际创建这些链接。
+通过本地安全策略为该账户授予 `Create symbolic links` 后，重启 runner 服务
+使新登录令牌生效；不需要重启 Windows。配置时保留已有账户的权限。
+工作流在大型下载/编译前运行 `scripts/verify-windows-runner.mjs`，以实际服务身份
+验证能力；交互账户下成功不能替代此检查。参见 [Microsoft 权限说明](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/create-symbolic-links)。
 
 需要由 runner 服务环境提供：
 

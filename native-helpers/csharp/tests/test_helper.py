@@ -504,10 +504,11 @@ public sealed class SentinelAnalyzer : DiagnosticAnalyzer {
 }''', encoding="utf-8")
         references = [f"/reference:{path}" for path in sorted(Path(REFS).glob("*.dll"))]
         env = {**os.environ, "DOTNET_ROOT": str(Path(DOTNET).parent), "DOTNET_MULTILEVEL_LOOKUP": "0"}
+        # 编译器诊断统一为 UTF-8，避免 Windows 系统代码页使捕获线程解码失败。
         compile_generator = subprocess.run(
-            [DOTNET, str(compiler), "/nologo", "/target:library", f"/out:{sentinel}",
+            [DOTNET, str(compiler), "/nologo", "/utf8output", "/target:library", f"/out:{sentinel}",
              f"/reference:{sdk_roslyn / 'Microsoft.CodeAnalysis.dll'}", *references, str(generator_source)],
-            capture_output=True, text=True, env=env, check=False, timeout=30)
+            capture_output=True, encoding="utf-8", env=env, check=False, timeout=30)
         self.assertEqual(compile_generator.returncode, 0, compile_generator.stdout + compile_generator.stderr)
         self.assertTrue(sentinel.is_file())
 
@@ -515,10 +516,10 @@ public sealed class SentinelAnalyzer : DiagnosticAnalyzer {
         validation_source = Path(self.temp.name) / "Validation.cs"
         validation_source.write_text("class Validation {}", encoding="utf-8")
         validate_generator = subprocess.run(
-            [DOTNET, str(compiler), "/nologo", "/target:library",
+            [DOTNET, str(compiler), "/nologo", "/utf8output", "/target:library",
              f"/out:{Path(self.temp.name) / 'Validation.dll'}", f"/analyzer:{sentinel}",
              *references, str(validation_source)],
-            capture_output=True, text=True, env=env, check=False, timeout=30)
+            capture_output=True, encoding="utf-8", env=env, check=False, timeout=30)
         self.assertEqual(validate_generator.returncode, 0, validate_generator.stdout + validate_generator.stderr)
         self.assertTrue(marker.is_file(), "the real generator must have executed during control compilation")
         self.assertEqual(marker.read_text(encoding="utf-8"), "executed")
