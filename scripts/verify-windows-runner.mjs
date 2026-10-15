@@ -4,8 +4,23 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-// 在下载和编译前验证服务身份能创建真实文件、目录符号链接，不能用 junction 代替。
+// 在下载和编译前验证实际 runner 身份能创建真实文件、目录符号链接，不能用 junction 代替。
 if (process.platform !== 'win32') throw new Error('Windows runner verification requires Windows');
+
+// 同一桌面账户的 CI 工具配置必须落在独立 HOME，避免 --global 写入日常 Git/npm 配置。
+if (process.env.NARRANT_CI_SHARED_DESKTOP === '1') {
+  const home = process.env.HOME;
+  assert.ok(path.isAbsolute(home ?? ''), 'Shared desktop CI requires an explicit tool HOME');
+  assert.notEqual(path.resolve(home).toLowerCase(), path.resolve(process.env.USERPROFILE).toLowerCase(),
+    'CI tool HOME must differ from the real user profile');
+  for (const name of ['GIT_CONFIG_GLOBAL', 'NPM_CONFIG_USERCONFIG']) {
+    assert.ok(path.isAbsolute(process.env[name] ?? ''), `${name} must use an explicit CI path`);
+    const relative = path.relative(home, process.env[name]);
+    assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative),
+      `${name} must be inside the CI tool HOME`);
+  }
+  console.log('Shared desktop Git and npm user configuration paths are isolated.');
+}
 
 // 自托管服务须实际加载小容量缓存；只检查非敏感配置，不输出整个服务环境。
 if (process.env.RUNNER_ENVIRONMENT === 'self-hosted') {
@@ -33,7 +48,7 @@ try {
   }
   console.log('Windows runner can create and read file and directory symbolic links.');
 } catch (cause) {
-  throw new Error('Windows runner symbolic-link prerequisite failed. Check the runner service account\'s Create symbolic links right and restart the service after granting it.', { cause });
+  throw new Error('Windows runner symbolic-link prerequisite failed. Check the actual runner token\'s Create symbolic links right and restart the runner after granting it.', { cause });
 } finally {
   await fs.rm(root, { recursive: true, force: true });
 }

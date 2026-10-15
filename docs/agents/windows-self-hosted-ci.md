@@ -24,6 +24,18 @@ gh variable set NARRANT_WINDOWS_RUNNER_LABELS \
 ## 主机准备
 
 runner 使用当前已登录的 `win10` 桌面账户，独立工作目录为 `C:\ci\runners\narrant`。
+工具用户配置也必须放在 CI 专属目录；runner `.env` 设置如下，真实 `USERPROFILE` 保持不变：
+
+```text
+HOME=C:\ci\home
+GIT_CONFIG_GLOBAL=C:\ci\home\.gitconfig
+PNPM_HOME=C:\ci\home\pnpm
+NPM_CONFIG_USERCONFIG=C:\ci\home\.npmrc
+```
+
+配置文件可为空，不复制日常 Git/npm 配置或凭据。预检会确认两份用户配置位于独立 HOME，
+防止后续工作流的 `git config --global` 写入用户日常配置。`pnpm/action-setup` 会将
+`PNPM_HOME` 改为自己的专用安装目录；它不作为 Git/npm 用户配置隔离的判断依据。
 工具目录只需读取/执行权限，runner、Cargo、Rustup 和缓存目录需要修改权限；
 不要依赖 Codex 用户缓存里的可执行文件。原虚拟服务账户
 `NT SERVICE\actions.runner.XLCYun-narrant.desktop-9roujqj-narrant` 的服务配置保留用于回滚，
