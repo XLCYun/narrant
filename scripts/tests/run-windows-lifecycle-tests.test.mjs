@@ -6,6 +6,11 @@ import path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { runWindowsLifecycleTests } from '../run-windows-lifecycle-tests.mjs';
 
+/** 统一 Git checkout 的 LF/CRLF 差异，让工作流断言只验证调度行为。 */
+async function readLanguageWorkflow() {
+  return (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+}
+
 // 非 Windows 主机不能因为 cfg 排除了全部测试而得到成功结论。
 test('lifecycle validation rejects non-Windows hosts before starting Cargo', async () => {
   await assert.rejects(runWindowsLifecycleTests({ platform: 'darwin' }), /requires a Windows runner/);
@@ -49,7 +54,7 @@ process.exit(7);
 
 // 轻量诊断独占 Windows；聚焦语言只运行 native 验收，发布必须等待完整双平台且显式授权。
 test('manual lifecycle scope isolates one cheap job and cannot publish packs', async () => {
-  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const workflow = await readLanguageWorkflow();
   const job = name => workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
   assert.match(workflow, /validation_scope:\n[\s\S]*default: full/);
   const lifecycle = job('windows-lifecycle');
@@ -85,7 +90,7 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
 
 // 执行工作流实际矩阵表达式，确认单平台验收不会调度另一平台，默认仍覆盖两个目标。
 test('manual platform selection schedules only the requested native targets', async () => {
-  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const workflow = await readLanguageWorkflow();
   for (const name of ['build', 'native-analyzers']) {
     const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
     const expression = job.match(/include: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1].trim();
@@ -100,13 +105,13 @@ test('manual platform selection schedules only the requested native targets', as
 
 // 所有任务使用自托管本地缓存，避免额外上传完整 target。
 test('self-hosted runners skip remote Rust build caches', async () => {
-  const workflow = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
+  const workflow = await readLanguageWorkflow();
   assert.doesNotMatch(workflow, /Swatinem\/rust-cache|CARGO_TARGET_DIR/);
 });
 
 // 两个平台的标签分别生效；缺少配置时仍使用对应自托管标签，不能把任务发往另一平台。
 test('self-hosted runner routing remains independent for each platform', async () => {
-  const workflow = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
+  const workflow = await readLanguageWorkflow();
   for (const name of ['build', 'native-analyzers']) {
     const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
     const expression = job.match(/^ {4}runs-on: \$\{\{ (.+) \}\}$/m)[1];
@@ -128,7 +133,7 @@ test('self-hosted runner routing remains independent for each platform', async (
 
 // 仅验收时可省去产物存储；自动 PR 与正式发布仍必须上传，不能用此开关绕过发布输入。
 test('manual validation can omit artifacts while pull requests and publishing retain uploads', async () => {
-  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const workflow = await readLanguageWorkflow();
   for (const name of ['build', 'native-analyzers']) {
     const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
     const upload = job.split('      - uses: actions/upload-artifact@')[1].split('\n      - ')[0];

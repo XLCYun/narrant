@@ -35,7 +35,7 @@ runner 使用当前已登录的 `win10` 桌面账户，独立工作目录为 `C:
 runner 的实际令牌必须能创建文件和目录符号链接，语言边界测试会实际创建这些链接。
 现有普通桌面令牌缺少该权限时，可使用同一会话中的提升权限计划任务；
 不为 CI 新建登录会话、启用自动登录或全局 Developer Mode。配置时保留已有账户的权限。
-工作流在大型下载/编译前运行 `scripts/verify-windows-runner.mjs`，以实际服务身份
+工作流在大型下载/编译前运行 `scripts/verify-windows-runner.mjs`，以实际 runner 身份
 验证能力；其他终端下成功不能替代此检查。参见 [Microsoft 权限说明](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/create-symbolic-links)。
 
 需要由 runner 环境提供：
@@ -116,7 +116,17 @@ ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
 
 真实 Tauri E2E 共用 `desktop-9roujqj-narrant` 及上面的 `NARRANT_WINDOWS_RUNNER_LABELS`。
 原虚拟服务账户运行在 Session 0，不能提供桌面会话；已选择复用当前 `win10` 登录会话，
-主机迁移结果须以实际 Listener 用户、SessionId 和 CI 检查为准。
+2026-10-15 已完成原地迁移，原注册 ID 21 保留。实际 Listener 为 `win10 / Session 1`，
+原服务已停止并改为手动启动。计划任务名称为 `Narrant CI Interactive Runner`，使用
+`InteractiveToken` 和提升权限；文件、目录符号链接及 Git 所有权检查通过。
+迁移、核验和回滚记录位于 `C:\Users\win10\ci-setup\interactive-runner-migration-20261015`。
+
+手动启停前确认 runner 空闲；计划任务只会使用已经登录的 `win10` 会话：
+
+```powershell
+Start-ScheduledTask -TaskName 'Narrant CI Interactive Runner'
+Stop-ScheduledTask -TaskName 'Narrant CI Interactive Runner'
+```
 
 迁移时先确认 runner 空闲并保存服务配置与目录 ACL，停止原服务，再从已登录的用户
 桌面运行原安装目录的 `run.cmd`；计划任务使用 `InteractiveToken`，仅在该用户已登录时启动。
