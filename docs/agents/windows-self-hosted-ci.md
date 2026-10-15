@@ -1,8 +1,8 @@
 # Windows 自托管 CI
 
-语言支持包和 Windows 发布打包通过 `NARRANT_WINDOWS_RUNNER_LABELS` 选择自托管
+语言支持包、`quality-gate`、更新冒烟和 Windows 发布打包通过 `NARRANT_WINDOWS_RUNNER_LABELS` 选择自托管
 runner；未设置变量时仍使用 `self-hosted`、`Windows`、`X64`、`narrant-ci` 标签。
-`quality-gate` 的真实 E2E 和更新验收使用下文单独的桌面标签，避免发到后台服务。
+所有任务共用现有实例；桌面任务所需的登录会话配置见下文。
 
 ## 注册与调度
 
@@ -116,16 +116,22 @@ ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
 
 ## 桌面与更新验收
 
-真实 Tauri E2E 和更新冒烟使用 `NARRANT_WINDOWS_DESKTOP_RUNNER_LABELS`，默认值为
-`["self-hosted","Windows","X64","narrant-desktop-ci"]`。当前虚拟账户服务位于后台
-Session 0，不能作为桌面 runner。隔离虚拟机或专用测试系统均可，具体部署仍待确定；
-没有匹配 runner 时任务排队，发布门禁保持未通过。
+真实 Tauri E2E 和更新冒烟共用 `desktop-9roujqj-narrant` 及上面的
+`NARRANT_WINDOWS_RUNNER_LABELS`。不新增虚拟机、独立系统或另一份 runner 注册。
+当前虚拟服务账户运行在 Session 0，不能提供桌面会话；调度修改不会自动改变主机上的
+启动方式，准备完成前桌面检查会明确失败。
 
-在专用测试用户已登录的图形会话中启动桌面 runner，使用独立工作区和工具缓存。
+迁移时先确认 runner 空闲并保存服务配置与目录 ACL，停止原服务，再从已登录的用户
+桌面运行原安装目录的 `run.cmd`；可配置仅在该用户已登录时启动的计划任务。
+虚拟服务账户不能交互登录，需要选择本机登录账户并授予原工作区、工具缓存的必要权限。
+保留原注册、标签、工具配置和完成钩子，不要同时启动服务和桌面两个 Listener。
 `scripts/verify-desktop-runner.mjs` 会拒绝 Session 0，再由真实 E2E 验证应用行为。
-更新冒烟还需要写系统 hosts、安装用户证书和应用，必须在隔离测试系统中配置
-`NARRANT_UPDATE_SMOKE_ISOLATED=1` 与相应权限。普通开发账户与专用账户共享系统
-hosts，所以账户隔离不能替代系统隔离。完成环境准备后才添加桌面标签。
+
+更新冒烟还需要写系统 hosts、安装用户证书和应用的权限，不要求额外的隔离系统声明。
+保留原 hosts 备份、临时证书删除、进程退出及恢复校验；失败时保留恢复所需文件。
+每台机器只运行一个 runner，桌面任务依次执行。测试期间避免同时手动运行 Narrant；
+若所选登录账户已有 Narrant 数据，现有保护会拒绝冒烟，不得删除个人数据来让测试通过。
+先解决登录账户、测试数据目录和系统权限，再运行真实更新验收。
 
 注册 token 仅在本机注册时使用，不写入仓库、日志或会话。下载和任务联网应在
 服务身份下验证；交互用户的本地代理可用，不代表 Windows 服务也能使用它。

@@ -1,6 +1,6 @@
 # macOS 自托管 CI
 
-语言支持包、`quality-gate` 的普通检查、macOS 打包、发布和证据汇总通过
+语言支持包、`quality-gate`、更新冒烟、macOS 打包、发布和证据汇总通过
 `NARRANT_MACOS_RUNNER_LABELS` 选择 Apple Silicon runner。未设置变量时使用
 下面的自托管标签，离线时排队，不自动切换到付费托管机器。原 Ubuntu 通用任务
 改在 Mac 执行，不再产生 Linux 平台验证结果；产品目标仍为 macOS ARM64 和 Windows x64。
@@ -65,20 +65,23 @@ CI 设置 `NARRANT_CARGO_LOCK_FILE=/Users/Shared/narrant-ci/cargo.lock`。
 
 ## 桌面与发布任务
 
-真实 Tauri E2E 和更新冒烟使用 `NARRANT_MACOS_DESKTOP_RUNNER_LABELS`，默认值为
-`["self-hosted","macOS","ARM64","narrant-desktop-ci"]`。这表示具备桌面能力的另一套
-运行环境，不要求一定使用虚拟机；隔离虚拟机或专用测试系统均可。当前 `_narrantci`
-LaunchDaemon 仅供后台任务，尚未配置桌面 runner；此标签无人在线时，桌面任务排队，
-发布仍等待真实验收通过，不把它跳过或标成成功。
+真实 Tauri E2E 和更新冒烟共用 `mac-m2-narrant` 及上面的
+`NARRANT_MACOS_RUNNER_LABELS`。不新增虚拟机、独立系统或另一份 runner 注册。
+当前 `_narrantci` 是不能交互登录的服务账户，LaunchDaemon 尚不能运行桌面验收；
+调度修改不会自动改变主机上的启动方式，准备完成前桌面检查会明确失败。
 
-桌面 runner 从专用测试用户已登录的 Aqua 会话启动，使用独立 checkout 和工具目录；
-同一物理 Mac 上的 Cargo 继续共用编译锁。`scripts/verify-desktop-runner.mjs` 会在
-大型构建前检查会话，真实 E2E 仍需完整运行。
+同一 runner 的桌面启动需要一个已登录的 Aqua 用户会话。迁移时先确认 runner 空闲，
+停止旧 LaunchDaemon，再把原安装目录的官方 `runsvc.sh` 配置为该用户的 LaunchAgent；
+保留注册、标签、独立 checkout、工具缓存、完成钩子与共享 Cargo 锁。
+账户变化时先备份配置并调整相关目录权限，不能同时启动后台和桌面两个 Listener。
+`scripts/verify-desktop-runner.mjs` 会在大型构建前检查会话，真实 E2E 仍需完整运行。
 
-更新冒烟会安装应用、临时修改系统 hosts 和证书信任，并启动本地 HTTPS 服务。
-只在已确定隔离边界的测试系统设置 `NARRANT_UPDATE_SMOKE_ISOLATED=1`，并为该系统
-准备无交互 sudo。另建普通用户不能隔离 hosts 和系统证书；日常开发系统的后台
-runner 不添加这项权限。环境准备后才注册桌面标签，不能只加标签绕过配置。
+更新冒烟会安装应用、临时修改系统 hosts 和证书信任，并启动本地 HTTPS 服务，
+需要执行这些系统操作的权限。它在当前机器运行，不要求额外的隔离系统声明。
+保持已有 hosts 备份、临时证书删除、进程退出及恢复校验；失败时保留恢复所需文件。
+每台机器只运行一个 runner，桌面任务依次执行。测试期间避免同时手动运行 Narrant；
+若所选登录账户已有 Narrant 数据，现有保护会拒绝冒烟，不得删除个人数据来让测试通过。
+先解决登录账户、测试数据目录和系统权限，再运行真实更新验收。
 
 普通发布任务不需要上述系统权限。macOS 签名使用本次任务的临时钥匙串和公证密钥，
 成功或失败后都恢复原钥匙串列表并删除凭据。两条 OSS 发布流程共用

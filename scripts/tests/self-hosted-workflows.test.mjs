@@ -4,7 +4,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 
 // 执行实际调度表达式，覆盖未配置变量与两个平台，防止任务回退到付费镜像。
-test('all workflow jobs default to self-hosted runners and keep desktop jobs separate', async () => {
+test('all workflow jobs reuse the existing macOS and Windows self-hosted runners', async () => {
   for (const name of ['quality-gate', 'release', 'promote-stable', 'update-smoke', 'language-support-packs']) {
     const source = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), 'utf8');
     for (const job of source.split('\njobs:\n')[1].split(/\n(?= {2}[\w-]+:\n)/)) {
@@ -17,11 +17,11 @@ test('all workflow jobs default to self-hosted runners and keep desktop jobs sep
           matrix: { runner: platform, target: platform === 'macos' ? 'aarch64-apple-darwin' : 'x86_64-pc-windows-msvc' },
         });
         assert.ok(Array.isArray(labels) && labels.includes('self-hosted'), `${name}: ${labels}`);
-        const desktop = /^(windows-e2e|macos-e2e|native-smoke):/.test(job.trimStart());
-        assert.equal(labels.includes('narrant-desktop-ci'), desktop, name);
+        assert.ok(labels.includes('narrant-ci'), `${name}: ${labels}`);
+        assert.ok(labels.includes('macOS') || labels.includes('Windows'), `${name}: ${labels}`);
       }
     }
-    assert.doesNotMatch(source, /Swatinem\/rust-cache|cache: pnpm|sudo apt-get/);
+    assert.doesNotMatch(source, /Swatinem\/rust-cache|cache: pnpm|sudo apt-get|DESKTOP_RUNNER_LABELS|narrant-desktop-ci/);
   }
 });
 

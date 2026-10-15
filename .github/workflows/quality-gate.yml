@@ -59,7 +59,7 @@ jobs:
 
   windows-e2e:
     needs: [rust, typescript]
-    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_DESKTOP_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-desktop-ci"]') }}
+    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]') }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +78,7 @@ jobs:
 
   macos-e2e:
     needs: windows-e2e
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_DESKTOP_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-desktop-ci"]') }}
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4

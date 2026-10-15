@@ -49,6 +49,8 @@ Single-context layout. See `docs/agents/domain.md`.
 7. 使用 `pnpm rust:cache:status` 查看 sccache，使用 `pnpm rust:cache:clean` 只清理 sccache；不要用清理缓存替代正常的增量构建。
 
 ## 本地验证与 CI 节奏
+产品仅支持 Windows x64 和 macOS ARM64；通用检查也使用这两台现有自托管 runner。桌面测试与更新冒烟共用同一套 runner，不新增虚拟机、独立系统或桌面 runner 注册；按需将现有 runner 配置为登录桌面后启动，保留会话、权限及测试后恢复检查。
+
 1. 日常修改先在本地运行格式、类型检查、`check --lib` 和受影响测试；UI 改动仍按上文完成真实渲染检查。
 2. 功能基本完成后，进行实际运行验证和代码审查；涉及 Windows 路径、进程、权限或打包时，提前运行对应 Windows 专项 CI，不把平台问题全部留到最后。
 3. 准备合并时，对最终提交集中完成必要的 macOS、Windows CI。核对具体测试命令和覆盖范围；支持包构建或 runner 接入检查不能替代全仓或真实应用验收。
