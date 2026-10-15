@@ -59,10 +59,11 @@ runner 的实际令牌必须能创建文件和目录符号链接，语言边界�
 | Rustup | 安装、运行各任务指定的 Rust 工具链 |
 | Python 3 | Java 构建脚本及 Java/C#/C++ 的测试驱动 |
 | VS 2022 C++ Build Tools、Windows SDK | Rust MSVC 链接与 C/C++ helper 编译 |
-| CMake | C/C++ helper 构建 |
 | 7-Zip | 解压 LLVM，脚本使用 `%ProgramFiles%\7-Zip\7z.exe` |
 
-Node、pnpm 和语言声明工具继续由工作流准备。精确 MSVC、SDK 及打包 CRT 版本
+Node、pnpm 和语言声明工具继续由工作流准备。C/C++ 验收所需的 CMake 由
+`provision-native-toolchains.mjs` 下载、校验并解包到任务临时目录，通过 `NARRANT_CMAKE`
+传给构建与测试，不要求全局安装，也不进入用户支持包。精确 MSVC、SDK 及打包 CRT 版本
 见 `resources/native-toolchains.json`；工作流通过 `vswhere` 发现包含该工具集的
 VS 2022 实例，支持 Enterprise 和 Build Tools。系统已安装的 VC runtime 不能
 代替编译工具或打包所需的 CRT 文件。

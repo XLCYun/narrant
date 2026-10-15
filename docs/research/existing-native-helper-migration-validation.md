@@ -549,3 +549,50 @@ seahash `4.1.0` 发布 crate 没有附通知，上游 GitLab 通知取回失败�
 和 `node scripts/verify-native-analyzers.mjs <artifacts> --language python`；旧专用 verifier 委托该公共入口。
 本轮只执行有意义的聚焦检查；未运行 Host 全量，未 push、触发 CI/quality-gate、上传或发布。
 Windows x64 实际安装、Review 与最终集中 CI 尚待全部开发/审查/本地检查完成。
+
+## 最终双平台验收与自托管切换（2026-10-15）
+
+本节更新上文各开发阶段的待办状态，不把早期失败或未运行的用例改记为通过。
+三门语言的生产切换及旧链路删除已经完成；所有七套分析器共用 Native Host，
+不再保留宿主解析器、LSP 桥接或生产回退路径。开发阶段完整 Host 默认套件为
+620 通过、0 失败，128 项明确要求实际工具或平台的用例保持忽略，并由专项验收补证。
+严格 Clippy、类型检查、Lint、格式和生产构建通过；既有 Git 夹具警告及 Vite 大块提示保留。
+
+### 语言验收
+
+| 平台与范围 | 实际结果与证据 |
+| --- | --- |
+| Windows 独立打包 | [38621306352](https://github.com/XLCYun/narrant/actions/runs/38621306352/job/116049238636) 通过。 |
+| Windows 七套 helper 完整验收 | [38640186807](https://github.com/XLCYun/narrant/actions/runs/38640186807) 为 24/25 组通过，Rust 路径断言失败。修复后的 [38656526779](https://github.com/XLCYun/narrant/actions/runs/38656526779) 全部 12 组 Rust/共享验收通过，覆盖 helper、Host、安装及 Review。 |
+| macOS 七套 helper 完整验收 | `5e27cbf` 的 [38730611394](https://github.com/XLCYun/narrant/actions/runs/38730611394) 构建全部支持包，25 组中 23 组通过；C/C++ 测试缺少 CMake、Rust 测试依赖旧 HOME 路径，两组失败保留。 |
+| macOS 修复后的补验收 | `2407a2e` 的 [Rust 38748302122](https://github.com/XLCYun/narrant/actions/runs/38748302122) 全部 12 组通过；[C/C++ 38748308424](https://github.com/XLCYun/narrant/actions/runs/38748308424) 全部 7 组通过，包含原失败用例及真实安装、生产工厂、公共图与差异检查。 |
+| Windows C/C++ 构建工具补验收 | `2407a2e` 的 [38748498046](https://github.com/XLCYun/narrant/actions/runs/38748498046) 全部 7 组通过，helper 为 34 通过、1 项按平台跳过；共享进程、Host、安装工厂及公共图与差异检查通过。 |
+
+补验收期间增加任务私有 CMake，Rust 测试改从实际 PATH 查找完整 rustup 代理目录；
+语言分析核心未改动。其他语言的生产代码及验收命令未变，复用此前通过的证据。
+平台跳过项、内部子进程夹具及未选择的语言用例均不算通过。
+这里的真实平台是 Apple Silicon macOS 27 与 Windows 10 x64，不代表已实测其他系统版本。
+
+### 当前桌面账户与空间策略
+
+现有 Mac、Windows runner 已分别切换到原桌面账户，不增加系统、账户、登录会话或
+runner 注册。工作目录、工具配置与缓存独立；Windows 真实 Listener 的 Git/npm 配置位于
+CI HOME，个人 Git 文件元数据未变。Mac [38730333996](https://github.com/XLCYun/narrant/actions/runs/38730333996)
+与 Windows [38748060555](https://github.com/XLCYun/narrant/actions/runs/38748060555) 轻量检查通过。
+它们证明接入、环境及共享进程能力，不能代替语言或真实应用验收。
+
+用户要求取消 Mac 固定 30 GiB 启动门槛，开始 hook 现只记录实际剩余空间。
+经单独授权删除本任务已验收的 `src-tauri/target`，释放约 7 GiB；源码、个人应用与 CI 缓存保留。
+此前两次补验收仅因空间门槛在 checkout 前停止，未执行测试；取消门槛后上述补验收通过。
+完成 hook 仍只回收列明的 CI 生成目录并保留日志，不清理开发 worktree 或个人文件。
+
+### 真实应用与发布边界
+
+macOS 的独立身份与本地比较 E2E 实际运行 6 项、全部通过；测试前后核对的 7 个日常
+应用文件没有变化。测试应用使用 `com.cyunlab.narrant.e2e`、无痕 WebView、临时数据库和仓库、
+内存凭据，并禁用正式更新。Windows 同范围的 6 项 E2E 已在独立临时目录准备并开始构建，
+尚未取得最终结果，不算通过。
+
+正式签名包更新冒烟仍涉及共享 hosts、证书信任和正式安装记录，尚未满足日常桌面的隔离要求。
+共享桌面环境会在系统操作前拒绝该验收，发布门禁保持未通过；普通 E2E 不能替代真实升级证据。
+本轮没有手动触发 `quality-gate`、发布支持包或发布应用，PR 继续保持草稿。
