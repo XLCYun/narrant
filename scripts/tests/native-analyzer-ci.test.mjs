@@ -74,12 +74,12 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
   });
 
   // 快速诊断不替代完整验收，也不能改变主程序缓存或让探针源码漏掉 PR 触发。
-  test(`early probe retains complete native acceptance and the separate Tauri cache (${lineEnding})`, () => {
+  test(`early probe retains complete native acceptance with local caches (${lineEnding})`, () => {
     const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
     assert.match(workflow.split('\njobs:')[0], /- native-helpers\/\*\*\r?\n/);
     assert.match(workflow.split('\njobs:')[0], /- scripts\/run-windows-process-probe\.mjs\r?\n/);
     assert.match(nativeJob, /node --test [^\n]*scripts\/tests\/run-windows-process-probe\.test\.mjs/);
-    assert.match(nativeJob, /workspaces: src-tauri\r?\n\s+key: all-native-\$\{\{ matrix\.target \}\}/);
+    assert.doesNotMatch(nativeJob, /Swatinem\/rust-cache/);
     assert.doesNotMatch(nativeJob, /CARGO_TARGET_DIR/);
     const acceptance = nativeJob.split('      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance')[1].split('\n      - ')[0];
     assert.match(acceptance, /run: node scripts\/verify-native-analyzers\.mjs native-language-support-packs --build/);
@@ -290,7 +290,8 @@ test('focused workflow skips unrelated builds and declaration provisioning', () 
   assert.match(build, /inputs\.language == 'all'/);
   const native = workflowSource.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
   assert.equal((native.match(/--language "\$\{\{ inputs.language \|\| 'all' \}\}"/g) ?? []).length, 2);
-  assert.equal((native.match(/inputs\.language == 'c-cpp'/g) ?? []).length, 2);
+  assert.equal((native.match(/inputs\.language == 'c-cpp'/g) ?? []).length, 1);
+  assert.match(native, /node scripts\/verify-macos-runner\.mjs/);
   assert.match(workflowSource.split('\n  publish:')[1], /inputs\.language == 'all'/);
 });
 
@@ -357,7 +358,7 @@ test('Rust acceptance declares fresh project prerequisites independently from he
   assert.match(native, /NARRANT_PROJECT_RUST_TOOLCHAIN: stable/);
   assert.match(native, /NARRANT_RUST_TEST_CARGO_HOME: \$\{\{ runner.temp \}\}\/narrant-native-cargo/);
   assert.match(native, /appendFileSync\(process.env.GITHUB_ENV, 'CARGO_HOME=' \+ process.env.NARRANT_RUST_TEST_CARGO_HOME/);
-  assert.ok(native.indexOf('Select isolated Rust project test Cargo home') < native.indexOf('key: all-native-'));
+  assert.ok(native.indexOf('Select isolated Rust project test Cargo home') < native.indexOf('Prepare Rust project sources and historical Cargo test inputs'));
   const prepare = native.split('name: Prepare Rust project sources and historical Cargo test inputs')[1].split('\n      - ')[0];
   assert.match(prepare, /rustup component add rust-src --toolchain stable/);
   assert.match(prepare, /rustup toolchain install 1\.81\.0 1\.94\.0 1\.96\.0 --profile minimal/);

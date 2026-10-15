@@ -99,7 +99,7 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
    - 传入 source tag/full SHA、fixed public Release ID/public tag；
    - 传入 previous Stable tag 与刚记录的 manifest SHA-256。
 
-   workflow 会在 `macos-15` arm64 和 Windows x64 上重新通过 API 下载 Draft 的八个资产，校验
+   workflow 会在自托管 macOS ARM64 和 Windows x64 桌面 runner 上重新通过 API 下载 Draft 的八个资产，校验
    asset ID/size/完整 SHA-256、`SHA256SUMS`、manifest 和 minisign，再安装真实 previous Stable。
    runner 临时 CA 只信任本次 `updates.cyunlab.com` leaf，hosts 只增加 loopback mapping；gate 只服务固定
    latest 路径和当前 tag/target package。无论成功失败，hosts 按原字节恢复、DNS 刷新、helper

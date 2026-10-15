@@ -48,7 +48,7 @@ concurrency:
 jobs:
   promote:
     name: Fixed-ID Stable promotion
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 20
     environment: stable-promotion
     permissions:
@@ -68,7 +68,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
       - name: Validate trusted source and mode inputs before credentials are used
         shell: bash
         env:
@@ -139,27 +138,10 @@ jobs:
           done
           (
             cd smoke-evidence
-            sha256sum --check darwin-aarch64.json.sha256 windows-x86_64.json.sha256
+            shasum -a 256 --check darwin-aarch64.json.sha256 windows-x86_64.json.sha256
           )
-      - name: Install checksum-verified ossutil
-        shell: bash
-        run: |
-          set -euo pipefail
-          OSSUTIL_ARCHIVE="$RUNNER_TEMP/ossutil-v1.7.19-linux-amd64.zip"
-          OSSUTIL_EXTRACT_DIR="$RUNNER_TEMP/ossutil-v1.7.19"
-          OSSUTIL_BIN_DIR="$RUNNER_TEMP/bin"
-          curl --fail --location --silent --show-error \
-            --output "$OSSUTIL_ARCHIVE" \
-            https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
-          printf '%s  %s\n' \
-            dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343 \
-            "$OSSUTIL_ARCHIVE" | sha256sum --check
-          mkdir -p "$OSSUTIL_EXTRACT_DIR" "$OSSUTIL_BIN_DIR"
-          unzip -q "$OSSUTIL_ARCHIVE" -d "$OSSUTIL_EXTRACT_DIR"
-          install -m 0755 \
-            "$OSSUTIL_EXTRACT_DIR/ossutil-v1.7.19-linux-amd64/ossutil" \
-            "$OSSUTIL_BIN_DIR/ossutil"
-          echo "$OSSUTIL_BIN_DIR" >> "$GITHUB_PATH"
+      - name: Install checksum-verified ossutil 1.7.19 for Apple Silicon
+        run: bash scripts/install-ci-ossutil.sh
       - name: Exchange Narrant OSS promotion OIDC identity
         id: oss-credentials
         uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0

@@ -59,15 +59,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos
             target: darwin-aarch64
             expected_os: darwin
             expected_arch: arm64
-          - runner: windows-2025
+          - runner: windows
             target: windows-x86_64
             expected_os: win32
             expected_arch: x64
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ fromJSON(matrix.runner == 'macos' && (vars.NARRANT_MACOS_DESKTOP_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-desktop-ci"]') || (vars.NARRANT_WINDOWS_DESKTOP_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-desktop-ci"]')) }}
     timeout-minutes: 90
     permissions:
       contents: read
@@ -84,7 +84,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
       - name: Validate trusted source identity and runner target
         shell: bash
         env:
@@ -114,6 +113,8 @@ jobs:
             test -z "$PREVIOUS_TAG"
             test -z "$PREVIOUS_MANIFEST_SHA256"
           fi
+      - name: Verify isolated desktop and update-smoke permissions
+        run: node scripts/verify-desktop-runner.mjs --update-smoke
       - name: Install exact locked script dependencies
         run: pnpm install --frozen-lockfile
       - name: Download and byte-verify the fixed public Draft
@@ -194,7 +195,7 @@ jobs:
   aggregate:
     name: Verify exact two-target evidence
     needs: native-smoke
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -211,7 +212,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

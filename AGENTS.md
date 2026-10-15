@@ -42,17 +42,19 @@ Single-context layout. See `docs/agents/domain.md`.
 ## Cargo 验证节奏
 1. Agent、subagent 和 linked worktree 运行 Cargo 时，统一通过 `scripts/cargo-agent.sh` 获取仓库级全局锁并接入 sccache；不要并发启动多个冷 Rust 编译。完整说明见 `docs/agents/rust-build-cache.md`。
 2. 实现期间优先使用 `scripts/cargo-agent.sh check --lib` 和受影响模块的聚焦测试。
-3. 每个 Issue 完成前只运行一次 Rust 全量测试；审查小修只重跑受影响测试，除非修改了共享契约或测试暴露全局回归。
+3. 每个 Issue 收尾安排一次 Rust 全量测试，执行位置按下文验证节奏决定；审查小修只重跑受影响测试，除非修改了共享契约或测试暴露全局回归。
 4. main 与仍在开发的 worktree 都保留 Cargo incremental；不要设置 `CARGO_INCREMENTAL=0`，除非是 CI 或有基准支持的一次性构建。
 5. 不同分支保持各自的 `target`，不得让 divergent worktree 共享一个 `CARGO_TARGET_DIR`。
 6. Issue 合并且 worktree 不再使用后，清理该 worktree 的 `src-tauri/target`，避免生成物长期占用磁盘。
 7. 使用 `pnpm rust:cache:status` 查看 sccache，使用 `pnpm rust:cache:clean` 只清理 sccache；不要用清理缓存替代正常的增量构建。
 
 ## 本地验证与 CI 节奏
-1. 开发期间先在本地 macOS 完成受影响的测试、静态检查和真实运行验证，优先修复本地能够发现的问题。
-2. 代码开发、代码审查及本地 macOS 验证完成后，再集中运行必要的最终 CI，包括 Windows 等本机无法验证的平台；CI 额度不足不阻塞可以在本地推进的开发。
-3. 开发期间控制推送频率，避免反复触发自动 CI；需要提前推送时使用仓库支持的跳过 CI 机制，最终验收提交恢复正常 CI。
-4. 已知 GitHub Actions 额度不足或暂停时，在准备最终 CI 的阶段主动提醒用户恢复执行额度，恢复后再运行；本地通过不能替代最终平台验收。
+1. 日常修改先在本地运行格式、类型检查、`check --lib` 和受影响测试；UI 改动仍按上文完成真实渲染检查。
+2. 功能基本完成后，进行实际运行验证和代码审查；涉及 Windows 路径、进程、权限或打包时，提前运行对应 Windows 专项 CI，不把平台问题全部留到最后。
+3. 准备合并时，对最终提交集中完成必要的 macOS、Windows CI。核对具体测试命令和覆盖范围；支持包构建或 runner 接入检查不能替代全仓或真实应用验收。
+4. 同一提交的完整测试已由 CI 覆盖并通过时，本地无需重复执行；CI 未覆盖的检查仍在本地补齐。失败修复后重跑受影响范围，共享契约变化或全局回归需要扩大验证。
+5. 自托管用于节省开支，保留测试和发布校验；工作流默认使用自托管 runner，离线时排队，不自动回退到付费托管机器。开发推送按阶段集中，必要时使用仓库支持的跳过 CI 机制，最终验收恢复正常执行。
+6. 本机兼作 runner 时，开发和 CI 使用独立 checkout、target 与缓存，Cargo 仍通过 `scripts/cargo-agent.sh` 共用编译锁。调整调度、账户、桌面验收或清理时，先阅读 `docs/agents/macos-self-hosted-ci.md` 和 `docs/agents/windows-self-hosted-ci.md`。
 
 ## 不要手动触发 quality-gate
 不要手动触发 quality-gate.

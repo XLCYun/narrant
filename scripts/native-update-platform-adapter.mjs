@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, version, release } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers";
@@ -20,6 +20,23 @@ const TARGETS = Object.freeze({
 });
 const MAX_METADATA_BYTES = 64 * 1024;
 const MAX_DIAGNOSTICS_BYTES = 256 * 1024;
+
+/** 记录实际自托管主机，避免把 Windows 10/macOS 27 冒称为旧托管镜像。 */
+export function describeUpdateSmokeRunner(target, environment = process.env) {
+  const contract = TARGETS[target];
+  if (!contract || process.platform !== contract.platform || process.arch !== contract.arch) {
+    throw new Error("runner 与 native target 不匹配");
+  }
+  if (environment.RUNNER_ENVIRONMENT !== "self-hosted" || !environment.RUNNER_NAME) {
+    throw new Error("native smoke 缺少自托管 runner 身份");
+  }
+  return {
+    os: target === "darwin-aarch64" ? "macos" : "windows",
+    arch: target === "darwin-aarch64" ? "aarch64" : "x86_64",
+    image: "self-hosted", name: environment.RUNNER_NAME,
+    osVersion: version(), osRelease: release(),
+  };
+}
 
 /** 计算完整 bytes 的 lowercase SHA-256。 */
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
@@ -327,7 +344,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
 
   /** 初始化干净 runner 与 staging roots。 */
   async function initialize() {
-    if (process.platform !== contract.platform || process.arch !== contract.arch) throw new Error("hosted runner 与 native target 不匹配");
+    if (process.platform !== contract.platform || process.arch !== contract.arch) throw new Error("runner 与 native target 不匹配");
     temporary = await mkdtemp(path.join(tmpdir(), "narrant-native-update-"));
     statePaths = platformStatePaths(target, commandEnvironment);
     for (const root of [statePaths.dataRoot, statePaths.cacheRoot]) {
@@ -440,7 +457,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
 
   return Object.freeze({
     target,
-    runner: target === "darwin-aarch64" ? { os: "macos", arch: "aarch64", image: "macos-15" } : { os: "windows", arch: "x86_64", image: "windows-2025" },
+    runner: describeUpdateSmokeRunner(target, environment),
     platform: target === "darwin-aarch64"
       ? { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "verified", notarization: "verified" }
       : { packageKind: "nsis-exe", installerKind: "nsis-exe", installScope: "current-user", registryRoot: "HKCU", msiPresent: false, authenticode: "not-required" },

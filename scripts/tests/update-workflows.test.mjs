@@ -20,8 +20,8 @@ test("update-smoke 同时支持手动重试与 release 复用调用，matrix 精
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN:\n\s+required: true/);
   assert.doesNotMatch(workflow, /release:\s*\n|types:\s*\[published\]/);
   assert.equal((workflow.match(/^\s*- runner:/gm) ?? []).length, 2);
-  assert.match(workflow, /runner: macos-15\n\s+target: darwin-aarch64/);
-  assert.match(workflow, /runner: windows-2025\n\s+target: windows-x86_64/);
+  assert.match(workflow, /runner: macos\n\s+target: darwin-aarch64/);
+  assert.match(workflow, /runner: windows\n\s+target: windows-x86_64/);
   assert.doesNotMatch(workflow, /linux-|darwin-x86_64|windows-aarch64/);
   assert.match(workflow, /permissions:\n\s+contents: read/);
   assert.doesNotMatch(workflow, /id-token: write|attestations: write|attest-build-provenance/);
@@ -54,7 +54,7 @@ test("promotion 使用受保护 Environment、fixed ID 与可信 private evidenc
   assert.match(workflow, /run-id: \$\{\{ inputs\.evidence_run_id \}\}/);
   assert.match(workflow, /evidence_files=\(\n\s+smoke-evidence\/darwin-aarch64\.json\n\s+smoke-evidence\/darwin-aarch64\.json\.sha256\n\s+smoke-evidence\/windows-x86_64\.json\n\s+smoke-evidence\/windows-x86_64\.json\.sha256/);
   assert.match(workflow, /for evidence_file in "\$\{evidence_files\[@\]\}"; do/);
-  assert.match(workflow, /sha256sum --check darwin-aarch64\.json\.sha256 windows-x86_64\.json\.sha256/);
+  assert.match(workflow, /shasum -a 256 --check darwin-aarch64\.json\.sha256 windows-x86_64\.json\.sha256/);
   assert.match(workflow, /promote-stable-release\.mjs/);
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
   assert.match(workflow, /NARRANT_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
@@ -66,7 +66,7 @@ test("promotion 使用受保护 Environment、fixed ID 与可信 private evidenc
   assert.match(workflow, /OSS_BUCKET: \$\{\{ vars\.OSS_BUCKET \}\}/);
   assert.match(workflow, /OSS_REGION: \$\{\{ vars\.OSS_REGION \}\}/);
   assert.match(workflow, /configure-aliyun-credentials-action@[0-9a-f]{40}/);
-  assert.match(workflow, /ossutil-v1\.7\.19/);
+  assert.match(workflow, /bash scripts\/install-ci-ossutil\.sh/);
   assert.match(workflow, /NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: \$\{\{ vars\.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY \}\}/);
   assert.match(workflow, /cyunlab\/narrant/);
   assert.match(workflow, /XLCYun\/narrant|private source/);

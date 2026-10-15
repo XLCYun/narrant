@@ -20,6 +20,7 @@ function driverEnvironment(environment) {
     "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
     "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA",
     "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
+    "RUNNER_ENVIRONMENT", "RUNNER_NAME",
     "NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY",
     "NARRANT_RELEASE_SIGNING_PUBLIC_KEY", "NARRANT_UPDATER_PUBLIC_KEY",
   ];

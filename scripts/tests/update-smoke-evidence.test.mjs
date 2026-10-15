@@ -18,6 +18,27 @@ const now = new Date("2026-09-02T08:00:00.000Z");
 const sha = "a".repeat(64);
 const sourceSha = "b".repeat(40);
 
+test("自托管双平台证据保留真实主机信息，仍拒绝错误平台或不完整身份", () => {
+  const documents = ["darwin-aarch64", "windows-x86_64"].map(target => {
+    const document = evidence(target);
+    document.runner = { ...document.runner, image: "self-hosted", name: "isolated-ci",
+      osVersion: target === "darwin-aarch64" ? "Darwin Kernel Version 26" : "Windows 10 Pro",
+      osRelease: target === "darwin-aarch64" ? "26.0.0" : "10.0.19045" };
+    return document;
+  });
+  assert.doesNotThrow(() => verifyUpdateSmokeEvidenceSet(documents, expectations()));
+  for (const field of ["name", "osVersion", "osRelease"]) {
+    const invalid = structuredClone(documents[0]);
+    delete invalid.runner[field];
+    assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expectations()), /runner/);
+  }
+  const invalid = structuredClone(documents[0]);
+  invalid.runner.os = "windows";
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expectations()), /runner.os/);
+  invalid.runner = { os: "macos", arch: "aarch64", image: "unverified-image" };
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expectations()), /runner.image/);
+});
+
 /** 生成固定八资产 receipt。 */
 function receipt() {
   return {

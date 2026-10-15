@@ -30,13 +30,22 @@ export function normalizeUpdaterPublicKey(value) {
   return normalized;
 }
 
-/** 只在正式 build 时把编译期 updater 信任根同时交给 Tauri bundler。 */
+/** 合并 updater 信任根和自托管 Cargo 入口，并保留原始 Tauri 参数。 */
 export function buildTauriArguments(command, args, environment) {
   const cliArguments = [command];
+  const configuration = {};
   if (command === "build" && environment.NARRANT_UPDATER_PUBLIC_KEY) {
     const pubkey = normalizeUpdaterPublicKey(environment.NARRANT_UPDATER_PUBLIC_KEY);
-    cliArguments.push("--config", JSON.stringify({ plugins: { updater: { pubkey } } }));
+    configuration.plugins = { updater: { pubkey } };
   }
+  // Tauri 内部的 Cargo 也遵守自托管机器与本地开发之间的编译锁。
+  if (["build", "dev"].includes(command) && environment.RUNNER_ENVIRONMENT === "self-hosted") {
+    configuration.build = { runner: {
+      cmd: "bash",
+      args: [path.join(import.meta.dirname, "cargo-agent.sh").replaceAll("\\", "/")],
+    } };
+  }
+  if (Object.keys(configuration).length) cliArguments.push("--config", JSON.stringify(configuration));
   const normalizedArguments = args[0] === "--" ? args.slice(1) : args;
   return [...cliArguments, ...normalizedArguments];
 }

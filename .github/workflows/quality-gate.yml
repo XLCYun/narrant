@@ -13,39 +13,40 @@ concurrency:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: 安装 Tauri Linux 构建依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+      - name: 验证自托管编译环境
+        run: node scripts/verify-macos-runner.mjs
       - name: Rust 格式检查
-        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+        run: bash scripts/cargo-agent.sh fmt --all --manifest-path src-tauri/Cargo.toml -- --check
       - name: Rust 静态检查
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: bash scripts/cargo-agent.sh clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Rust 单元、集成及文档测试
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
-          cargo test --manifest-path src-tauri/Cargo.toml --doc
+          bash scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --all-targets
+          bash scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --doc
 
   typescript:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: TypeScript Lint
         run: pnpm lint
@@ -53,41 +54,43 @@ jobs:
         run: pnpm build
       - name: 前端单元及组件测试
         run: pnpm test
+      - name: 工作流与工具脚本回归
+        run: pnpm test:scripts
 
   windows-e2e:
     needs: [rust, typescript]
-    runs-on: windows-latest
-    timeout-minutes: 45
+    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_DESKTOP_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-desktop-ci"]') }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: pnpm
+      - name: 验证真实桌面会话
+        run: node scripts/verify-desktop-runner.mjs
       - run: pnpm install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
       - name: 运行全部真实 Tauri E2E
         run: pnpm test:e2e
 
   macos-e2e:
     needs: windows-e2e
-    runs-on: macos-latest
-    timeout-minutes: 45
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_DESKTOP_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-desktop-ci"]') }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: pnpm
+      - name: 验证真实桌面会话
+        run: node scripts/verify-desktop-runner.mjs
       - run: pnpm install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
       - name: 运行全部真实 Tauri E2E
         run: pnpm test:e2e

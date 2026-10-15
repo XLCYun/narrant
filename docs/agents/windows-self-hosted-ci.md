@@ -1,8 +1,8 @@
 # Windows 自托管 CI
 
-`language-support-packs.yml` 支持通过仓库变量选择 Windows runner。
-未设置变量时，继续使用各任务原有的 GitHub 托管镜像；macOS 任务不受影响。
-`quality-gate`、发布及桌面更新验收工作流分别管理，不随此变量切换。
+语言支持包和 Windows 发布打包通过 `NARRANT_WINDOWS_RUNNER_LABELS` 选择自托管
+runner；未设置变量时仍使用 `self-hosted`、`Windows`、`X64`、`narrant-ci` 标签。
+`quality-gate` 的真实 E2E 和更新验收使用下文单独的桌面标签，避免发到后台服务。
 
 ## 注册与调度
 
@@ -18,8 +18,8 @@ gh variable set NARRANT_WINDOWS_RUNNER_LABELS \
   --body '["self-hosted","windows","x64","narrant-ci"]'
 ```
 
-删除该变量即可让后续运行恢复到原有托管镜像。runner 离线时，指定自托管标签
-的任务会排队，不会自动改用托管机器。调度依据是注册范围和标签，不是触发者账号。
+删除该变量后仍使用默认自托管标签。runner 离线时任务排队，不会自动改用付费
+托管机器。调度依据是注册范围和标签，不是触发者账号。
 
 ## 主机准备
 
@@ -82,8 +82,8 @@ ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
 原 CI 缓存步骤的设置，不改变本地开发的增量编译规则；保留 CI 原有的调试信息、
 断言和优化配置。启动检查会读取实际 sccache 服务的统计，确认上限确实为 2 GiB。
 
-此工作流的自托管 Windows 任务跳过远端 Rust 缓存，避免完整 target 的压缩副本
-和上传、下载开销；GitHub 托管 Windows 与 macOS 保留原缓存方式。下载的依赖、
+自托管任务使用本地 pnpm store 和 sccache，避免完整 target 的压缩副本
+和上传、下载开销。下载的依赖、
 正在编译的 `target`、工具链和最终产物不计入 sccache 的 2 GiB 上限，磁盘仍需
 容纳一次完整构建的峰值。
 
@@ -111,9 +111,21 @@ ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
 构建和测试，只省去 GitHub 产物存储。默认和自动 PR 验收仍上传；`publish=true`
 会强制上传，不能通过此选项跳过发布所需产物。Actions 执行预算与产物存储额度
 分别管理，自托管 runner 也可能因存储额度不足而上传失败。
-不得手动触发 `quality-gate`。需要交互桌面的 UI 测试另行验证，不以服务模式下
-的后台测试代替。记录实际 Windows 版本和提交 SHA，自托管 Windows 10 的结果
+不得手动触发 `quality-gate`。记录实际 Windows 版本和提交 SHA，自托管 Windows 10 的结果
 不能标记为 Windows Server 托管镜像的结果。
+
+## 桌面与更新验收
+
+真实 Tauri E2E 和更新冒烟使用 `NARRANT_WINDOWS_DESKTOP_RUNNER_LABELS`，默认值为
+`["self-hosted","Windows","X64","narrant-desktop-ci"]`。当前虚拟账户服务位于后台
+Session 0，不能作为桌面 runner。隔离虚拟机或专用测试系统均可，具体部署仍待确定；
+没有匹配 runner 时任务排队，发布门禁保持未通过。
+
+在专用测试用户已登录的图形会话中启动桌面 runner，使用独立工作区和工具缓存。
+`scripts/verify-desktop-runner.mjs` 会拒绝 Session 0，再由真实 E2E 验证应用行为。
+更新冒烟还需要写系统 hosts、安装用户证书和应用，必须在隔离测试系统中配置
+`NARRANT_UPDATE_SMOKE_ISOLATED=1` 与相应权限。普通开发账户与专用账户共享系统
+hosts，所以账户隔离不能替代系统隔离。完成环境准备后才添加桌面标签。
 
 注册 token 仅在本机注册时使用，不写入仓库、日志或会话。下载和任务联网应在
 服务身份下验证；交互用户的本地代理可用，不代表 Windows 服务也能使用它。

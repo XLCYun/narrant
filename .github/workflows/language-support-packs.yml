@@ -76,7 +76,7 @@ permissions:
 jobs:
   macos-runner:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'macos-runner'
-    runs-on: ${{ vars.NARRANT_MACOS_RUNNER_LABELS && fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS) || 'macos-15' }}
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,8 +93,8 @@ jobs:
 
   windows-lifecycle:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'
-    # 仓库变量可指定自托管标签；未配置时继续使用原来的 GitHub 托管镜像。
-    runs-on: ${{ vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || 'windows-2022' }}
+    # 缺少仓库变量时仍使用自托管标签，避免产生托管执行费用。
+    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,13 +106,6 @@ jobs:
       - name: Verify Windows runner filesystem prerequisites
         run: node scripts/verify-windows-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        # 自托管机器使用配置好的 2 GiB 本地 sccache，避免打包整套 target 占用额外磁盘。
-        if: runner.environment != 'self-hosted'
-        with:
-          workspaces: native-helpers/windows-process-probe
-          key: windows-lifecycle
-          cache-on-failure: true
       - name: Validate lifecycle runner
         run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs
       - name: Run process and Native Helper lifecycle checks from production sources
@@ -125,11 +118,11 @@ jobs:
       matrix:
         include: >-
           ${{ fromJSON(
-            inputs.platform == 'windows' && '[{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]' ||
-            inputs.platform == 'macos' && '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]' ||
-            '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]'
+            inputs.platform == 'windows' && '[{"target":"x86_64-pc-windows-msvc"}]' ||
+            inputs.platform == 'macos' && '[{"target":"aarch64-apple-darwin"}]' ||
+            '[{"target":"aarch64-apple-darwin"},{"target":"x86_64-pc-windows-msvc"}]'
           ) }}
-    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.target == 'aarch64-apple-darwin' && vars.NARRANT_MACOS_RUNNER_LABELS && fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS) || matrix.runner }}
+    runs-on: ${{ fromJSON(matrix.target == 'aarch64-apple-darwin' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
     # Windows 冷构建包含 release 打包、helper 测试与 Host 编译，使用完整验收的总预算。
     timeout-minutes: 120
     steps:
@@ -143,7 +136,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-          cache: pnpm
       - name: Verify Windows runner filesystem prerequisites
         if: runner.os == 'Windows'
         run: node scripts/verify-windows-runner.mjs
@@ -161,12 +153,6 @@ jobs:
       - name: Build and execute native tools
         run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-        with:
-          workspaces: src-tauri
-          key: python-native-${{ matrix.target }}
-          cache-on-failure: true
       - name: Verify native Python graphs, installation, and Review lifecycle
         run: node scripts/verify-python-analyzer.mjs language-support-packs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -184,11 +170,11 @@ jobs:
       matrix:
         include: >-
           ${{ fromJSON(
-            inputs.platform == 'windows' && '[{"runner":"windows-2022","target":"x86_64-pc-windows-msvc"}]' ||
-            inputs.platform == 'macos' && '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]' ||
-            '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2022","target":"x86_64-pc-windows-msvc"}]'
+            inputs.platform == 'windows' && '[{"target":"x86_64-pc-windows-msvc"}]' ||
+            inputs.platform == 'macos' && '[{"target":"aarch64-apple-darwin"}]' ||
+            '[{"target":"aarch64-apple-darwin"},{"target":"x86_64-pc-windows-msvc"}]'
           ) }}
-    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.target == 'aarch64-apple-darwin' && vars.NARRANT_MACOS_RUNNER_LABELS && fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS) || matrix.runner }}
+    runs-on: ${{ fromJSON(matrix.target == 'aarch64-apple-darwin' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
     # 自托管 Windows 串行冷编译七套 helper 与 Host，再运行全部测试，需要超过两小时。
     timeout-minutes: 180
     env:
@@ -205,7 +191,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-          cache: pnpm
       - name: Verify Windows runner filesystem prerequisites
         if: runner.os == 'Windows'
         run: node scripts/verify-windows-runner.mjs
@@ -259,26 +244,10 @@ jobs:
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
       - name: Provision checksum-verified private developer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
-      - name: Select exact macOS target declarations
-        if: runner.os == 'macOS' && runner.environment != 'self-hosted' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdk=/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
-          test -d "$sdk"
-          echo "NARRANT_MACOS_SDK=$sdk" >> "$GITHUB_ENV"
-          echo 'NARRANT_MACOS_SDK_VERSION=15.5' >> "$GITHUB_ENV"
-          echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
       - name: Select isolated Rust project test Cargo home
         env:
           NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'CARGO_HOME=' + process.env.NARRANT_RUST_TEST_CARGO_HOME + '\n')"
-      - uses: Swatinem/rust-cache@v2
-        if: runner.environment != 'self-hosted'
-        with:
-          workspaces: src-tauri
-          key: all-native-${{ matrix.target }}
-          cache-on-failure: true
       - name: Prepare pinned Rust helper build toolchain
         if: inputs.language == 'all' || inputs.language == 'rust' || inputs.language == 'python' || github.event_name != 'workflow_dispatch'
         run: rustup toolchain install 1.98.0 --profile minimal
@@ -303,7 +272,7 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.language == 'all' && inputs.platform == 'all' && inputs.publish && github.ref == 'refs/heads/main'
     needs: [build, native-analyzers]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 20
     environment: language-support-packs
     concurrency:
@@ -323,7 +292,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -332,16 +300,8 @@ jobs:
           path: language-support-packs
       - name: Validate complete artifacts before obtaining credentials
         run: node --input-type=module -e "import { readArtifacts } from './scripts/publish-language-support-packs.mjs'; await readArtifacts('language-support-packs')"
-      - name: Install checksum-verified ossutil
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --location --silent --show-error -o "$RUNNER_TEMP/ossutil.zip" https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
-          printf '%s  %s\n' dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343 "$RUNNER_TEMP/ossutil.zip" | sha256sum --check
-          unzip -q "$RUNNER_TEMP/ossutil.zip" -d "$RUNNER_TEMP/ossutil-extracted"
-          mkdir -p "$RUNNER_TEMP/bin"
-          install -m 0755 "$RUNNER_TEMP/ossutil-extracted/ossutil-v1.7.19-linux-amd64/ossutil" "$RUNNER_TEMP/bin/ossutil"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install checksum-verified ossutil 1.7.19 for Apple Silicon
+        run: bash scripts/install-ci-ossutil.sh
       - name: Exchange isolated OSS publishing identity
         id: oss
         uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0

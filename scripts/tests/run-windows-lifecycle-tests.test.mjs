@@ -54,9 +54,8 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   assert.match(workflow, /validation_scope:\n[\s\S]*default: full/);
   const lifecycle = job('windows-lifecycle');
   assert.match(lifecycle, /if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'/);
-  assert.match(lifecycle, /runs-on:.*fromJSON\(vars\.NARRANT_WINDOWS_RUNNER_LABELS\).*\|\| 'windows-2022'/);
+  assert.match(lifecycle, /runs-on:.*fromJSON\(vars\.NARRANT_WINDOWS_RUNNER_LABELS \|\| '\["self-hosted","Windows","X64","narrant-ci"\]'/);
   assert.match(lifecycle, /run: node scripts\/run-windows-lifecycle-tests.mjs/);
-  assert.match(lifecycle, /workspaces: native-helpers\/windows-process-probe/);
   assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);
   assert.match(job('publish'), /needs: \[build, native-analyzers\]/);
   /** 这些 GitHub guards 只使用 JS 同义的布尔运算；直接验证实际条件，避免要求不同职责共享文本。 */
@@ -95,28 +94,17 @@ test('manual platform selection schedules only the requested native targets', as
       const selected = runInNewContext(expression.slice(3, -2), { inputs: { platform }, fromJSON: JSON.parse });
       const targets = selected.map(item => item.target);
       assert.deepEqual(targets, platform === 'windows' ? ['x86_64-pc-windows-msvc'] : platform === 'macos' ? ['aarch64-apple-darwin'] : ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc']);
-      assert.ok(selected.every(item => item.runner === (item.target === 'aarch64-apple-darwin' ? 'macos-15' : name === 'build' ? 'windows-latest' : 'windows-2022')));
     }
   }
 });
 
-// 自托管机器省去大型远端缓存；托管机器仍保留原缓存行为。
+// 所有任务使用自托管本地缓存，避免额外上传完整 target。
 test('self-hosted runners skip remote Rust build caches', async () => {
-  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
-  for (const name of ['windows-lifecycle', 'build', 'native-analyzers']) {
-    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
-    const cache = job.split('      - uses: Swatinem/rust-cache@v2\n')[1].split('\n      - ')[0];
-    const condition = cache.match(/^ {8}if: (.+)$/m)?.[1] ?? 'true';
-    for (const os of ['Windows', 'macOS', 'Linux']) {
-      for (const environment of ['self-hosted', 'github-hosted']) {
-        assert.equal(runInNewContext(condition, { runner: { os, environment } }),
-          environment !== 'self-hosted', `${name}: ${os}/${environment}`);
-      }
-    }
-  }
+  const workflow = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
+  assert.doesNotMatch(workflow, /Swatinem\/rust-cache|CARGO_TARGET_DIR/);
 });
 
-// 两个平台的标签分别生效；缺少标签时保留对应托管镜像，不能把任务发往另一平台。
+// 两个平台的标签分别生效；缺少配置时仍使用对应自托管标签，不能把任务发往另一平台。
 test('self-hosted runner routing remains independent for each platform', async () => {
   const workflow = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
   for (const name of ['build', 'native-analyzers']) {
@@ -130,7 +118,8 @@ test('self-hosted runner routing remains independent for each platform', async (
             vars: { NARRANT_MACOS_RUNNER_LABELS: mac, NARRANT_WINDOWS_RUNNER_LABELS: windows },
             matrix: { target, runner: 'original-hosted-runner' }, fromJSON: JSON.parse,
           });
-          assert.deepEqual(result, labels ? JSON.parse(labels) : 'original-hosted-runner');
+          const defaults = target === 'aarch64-apple-darwin' ? ['self-hosted', 'macOS', 'ARM64', 'narrant-ci'] : ['self-hosted', 'Windows', 'X64', 'narrant-ci'];
+          assert.deepEqual(result, labels ? JSON.parse(labels) : defaults);
         }
       }
     }

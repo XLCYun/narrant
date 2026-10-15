@@ -161,7 +161,17 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   const target = requireString(document.target, "target", 64);
   const contract = TARGET_CONTRACTS[target];
   if (!contract) throw new Error(`不支持的 evidence target：${target}`);
-  requireContract(document.runner, contract.runner, "runner");
+  if (document.runner?.image === "self-hosted") {
+    requireContract(document.runner, {
+      os: contract.runner.os, arch: contract.runner.arch, image: "self-hosted",
+      name: requireString(document.runner.name, "runner.name", 128),
+      osVersion: requireString(document.runner.osVersion, "runner.osVersion"),
+      osRelease: requireString(document.runner.osRelease, "runner.osRelease", 128),
+    }, "runner");
+  } else {
+    // 历史托管验收仍按原有精确镜像校验，不能把未知镜像当作已验证环境。
+    requireContract(document.runner, contract.runner, "runner");
+  }
   requireContract(document.platform, contract.platform, "platform");
 
   const source = requireObject(document.source, "source");
