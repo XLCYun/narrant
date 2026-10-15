@@ -23,24 +23,22 @@ gh variable set NARRANT_WINDOWS_RUNNER_LABELS \
 
 ## 主机准备
 
-Runner 服务采用独立于交互开发账户的运行身份。服务身份必须能读取工具、写入
-自己的 runner/工作目录及工具缓存；不要依赖 Codex 用户缓存里的可执行文件。
-当前实例使用专用虚拟账户
-`NT SERVICE\actions.runner.XLCYun-narrant.desktop-9roujqj-narrant`，由 Windows
-管理账户密码。它与 GitHub 的仓库注册范围分别管理；给此账户授权不会同时给使用
-共享 `NETWORK SERVICE` 的其他服务授权。工具目录只需读取/执行权限，runner、
-Cargo 和 Rustup 目录需要修改权限。切换服务身份前保存原配置、账户权限和目录
-ACL，确认 runner 空闲；切换后验证原注册重新上线，并在 CI 中验证实际能力。
+runner 使用当前已登录的 `win10` 桌面账户，独立工作目录为 `C:\ci\runners\narrant`。
+工具目录只需读取/执行权限，runner、Cargo、Rustup 和缓存目录需要修改权限；
+不要依赖 Codex 用户缓存里的可执行文件。原虚拟服务账户
+`NT SERVICE\actions.runner.XLCYun-narrant.desktop-9roujqj-narrant` 的服务配置保留用于回滚，
+切换前保存原启动类型、目录 ACL 和非敏感环境配置，确认 runner 空闲；
+切换后验证同一注册重新上线，并在 CI 中验证实际能力。
 旧身份创建的 CI checkout 可能触发 Git 所有权检查；确认无未提交改动后，将其
 移至同级备份，让下一次 checkout 由新身份创建，保留工具缓存和 runner 注册。
 使用短工作路径，启用 Windows 长路径支持，并保证接电时不会自动睡眠。
-服务身份还必须能创建文件和目录符号链接，语言边界测试会实际创建这些链接。
-通过本地安全策略为该账户授予 `Create symbolic links` 后，重启 runner 服务
-使新登录令牌生效；不需要重启 Windows。配置时保留已有账户的权限。
+runner 的实际令牌必须能创建文件和目录符号链接，语言边界测试会实际创建这些链接。
+现有普通桌面令牌缺少该权限时，可使用同一会话中的提升权限计划任务；
+不为 CI 新建登录会话、启用自动登录或全局 Developer Mode。配置时保留已有账户的权限。
 工作流在大型下载/编译前运行 `scripts/verify-windows-runner.mjs`，以实际服务身份
-验证能力；交互账户下成功不能替代此检查。参见 [Microsoft 权限说明](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/create-symbolic-links)。
+验证能力；其他终端下成功不能替代此检查。参见 [Microsoft 权限说明](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/create-symbolic-links)。
 
-需要由 runner 服务环境提供：
+需要由 runner 环境提供：
 
 | 工具 | 用途 |
 | --- | --- |
@@ -78,7 +76,7 @@ CARGO_INCREMENTAL=0
 ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
 ```
 
-修改 `.env` 后需在 runner 空闲时重启服务。这里的 `CARGO_INCREMENTAL=0` 延续
+修改 `.env` 后需在 runner 空闲时重启当前 Listener。这里的 `CARGO_INCREMENTAL=0` 延续
 原 CI 缓存步骤的设置，不改变本地开发的增量编译规则；保留 CI 原有的调试信息、
 断言和优化配置。启动检查会读取实际 sccache 服务的统计，确认上限确实为 2 GiB。
 
@@ -116,22 +114,24 @@ ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
 
 ## 桌面与更新验收
 
-真实 Tauri E2E 和更新冒烟共用 `desktop-9roujqj-narrant` 及上面的
-`NARRANT_WINDOWS_RUNNER_LABELS`。不新增虚拟机、独立系统或另一份 runner 注册。
-当前虚拟服务账户运行在 Session 0，不能提供桌面会话；调度修改不会自动改变主机上的
-启动方式，准备完成前桌面检查会明确失败。
+真实 Tauri E2E 共用 `desktop-9roujqj-narrant` 及上面的 `NARRANT_WINDOWS_RUNNER_LABELS`。
+原虚拟服务账户运行在 Session 0，不能提供桌面会话；已选择复用当前 `win10` 登录会话，
+主机迁移结果须以实际 Listener 用户、SessionId 和 CI 检查为准。
 
 迁移时先确认 runner 空闲并保存服务配置与目录 ACL，停止原服务，再从已登录的用户
-桌面运行原安装目录的 `run.cmd`；可配置仅在该用户已登录时启动的计划任务。
-虚拟服务账户不能交互登录，需要选择本机登录账户并授予原工作区、工具缓存的必要权限。
+桌面运行原安装目录的 `run.cmd`；计划任务使用 `InteractiveToken`，仅在该用户已登录时启动。
+不保存密码、不自动登录，不新增账户、登录会话或另一份 runner 注册。
 保留原注册、标签、工具配置和完成钩子，不要同时启动服务和桌面两个 Listener。
 `scripts/verify-desktop-runner.mjs` 会拒绝 Session 0，再由真实 E2E 验证应用行为。
 
-更新冒烟还需要写系统 hosts、安装用户证书和应用的权限，不要求额外的隔离系统声明。
-保留原 hosts 备份、临时证书删除、进程退出及恢复校验；失败时保留恢复所需文件。
-每台机器只运行一个 runner，桌面任务依次执行。测试期间避免同时手动运行 Narrant；
-若所选登录账户已有 Narrant 数据，现有保护会拒绝冒烟，不得删除个人数据来让测试通过。
-先解决登录账户、测试数据目录和系统权限，再运行真实更新验收。
+E2E 使用独立应用身份 `com.cyunlab.narrant.e2e`、无痕 WebView、临时数据库和仓库，
+凭据只保存在内存，并禁用正式应用更新。测试不运行安装程序，不修改日常应用的安装记录；
+不能关闭或清理用户正在使用的 Narrant。测试构建漏传 E2E 配置时会在初始化用户目录前停止。
+
+完整更新冒烟目前会改写系统 hosts、证书和 HKCU 的正式 Narrant 安装记录，仍未完成隔离。
+runner 设置 `NARRANT_CI_SHARED_DESKTOP=1`，checkout 外的开始 hook 拒绝 `native-smoke` job，
+预检和驱动也会在系统操作前拒绝运行。该门禁保持未通过，普通 E2E 或测试版安装包不能代替
+真实签名发布包的升级证据；完成安装、数据与网络隔离后才能恢复，不得清理个人数据来通过验收。
 
 注册 token 仅在本机注册时使用，不写入仓库、日志或会话。下载和任务联网应在
 服务身份下验证；交互用户的本地代理可用，不代表 Windows 服务也能使用它。

@@ -87,9 +87,11 @@ jobs:
           node-version: 24.18.0
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate runner routing and Cargo integration
-        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/rust-cache.test.mjs
-      - name: Verify the macOS service account, SDK and bounded cache
+        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/rust-cache.test.mjs scripts/tests/run-tauri.test.mjs
+      - name: Verify the macOS runner account, SDK and bounded cache
         run: node scripts/verify-macos-runner.mjs --smoke
+      - name: Verify the shared desktop session
+        run: node scripts/verify-desktop-runner.mjs
 
   windows-lifecycle:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'
@@ -105,9 +107,11 @@ jobs:
           node-version: 24.18.0
       - name: Verify Windows runner filesystem prerequisites
         run: node scripts/verify-windows-runner.mjs
+      - name: Verify the shared desktop session
+        run: node scripts/verify-desktop-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate lifecycle runner
-        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs
+        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/run-tauri.test.mjs
       - name: Run process and Native Helper lifecycle checks from production sources
         run: node scripts/run-windows-lifecycle-tests.mjs
 

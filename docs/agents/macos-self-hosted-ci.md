@@ -11,22 +11,29 @@ NARRANT_MACOS_RUNNER_LABELS=["self-hosted","macOS","ARM64","narrant-ci"]
 
 ## 本机部署
 
-runner 使用专用的非管理员用户 `_narrantci`，工作目录为
+runner 复用当前已登录的 `lizhanfa` 桌面账户，工作目录为
 `/Users/Shared/narrant-ci/runner/_work`，不复用日常开发 checkout。
-工具、Cargo home、Rustup home 和缓存均在 `/Users/Shared/narrant-ci` 内。
+CI 的 HOME、工具、Cargo home、Rustup home 和缓存均在 `/Users/Shared/narrant-ci` 内；
+独立 HOME 用于隔离工具配置，不代表新增系统账户或登录会话。
 Apple Command Line Tools 提供系统编译器与 SDK，无需为 runner 安装完整 Xcode。
 
-系统 launchd 服务 `com.narrant.actions-runner` 使用官方 `runsvc.sh` 入口，
-以 `_narrantci` 身份运行。配置为按需启动，不修改整机睡眠设置。
+用户 LaunchAgent `com.narrant.actions-runner` 使用官方 `runsvc.sh` 入口，
+位于 `~/Library/LaunchAgents/com.narrant.actions-runner.plist`，只在已有 Aqua 会话中运行。
+配置为按需启动，不启用自动登录，不修改整机睡眠设置。
 任务开始钩子仅在当前 Worker 存活期间阻止空闲睡眠。
-启动、停止需要管理员权限：
+在该账户已登录时启动、停止：
 
 ```bash
-sudo launchctl kickstart system/com.narrant.actions-runner
-sudo launchctl kill SIGTERM system/com.narrant.actions-runner
+launchctl kickstart gui/$(id -u)/com.narrant.actions-runner
+launchctl kill SIGTERM gui/$(id -u)/com.narrant.actions-runner
 ```
 
-runner 在线时可接收任务；退出、睡眠或断网时，指定此标签的任务会排队，
+2026-10-15 已停用旧 `_narrantci` LaunchDaemon，保留同一 runner 注册 ID 22。
+原服务配置与权限迁移记录保存在 root 专属目录
+`/Users/Shared/narrant-ci/desktop-migration-20261015`。回滚前先停止用户 Listener，
+再按备份恢复服务配置和 CI 目录权限；两个启动方式不得同时运行。
+
+runner 在线时可接收任务；账户退出登录、睡眠或断网时，指定此标签的任务会排队，
 不会自动改用托管机器。runner 自动更新由官方程序管理；其他工具按需维护。
 
 ## 资源与清理
@@ -65,23 +72,16 @@ CI 设置 `NARRANT_CARGO_LOCK_FILE=/Users/Shared/narrant-ci/cargo.lock`。
 
 ## 桌面与发布任务
 
-真实 Tauri E2E 和更新冒烟共用 `mac-m2-narrant` 及上面的
-`NARRANT_MACOS_RUNNER_LABELS`。不新增虚拟机、独立系统或另一份 runner 注册。
-当前 `_narrantci` 是不能交互登录的服务账户，LaunchDaemon 尚不能运行桌面验收；
-调度修改不会自动改变主机上的启动方式，准备完成前桌面检查会明确失败。
-
-同一 runner 的桌面启动需要一个已登录的 Aqua 用户会话。迁移时先确认 runner 空闲，
-停止旧 LaunchDaemon，再把原安装目录的官方 `runsvc.sh` 配置为该用户的 LaunchAgent；
-保留注册、标签、独立 checkout、工具缓存、完成钩子与共享 Cargo 锁。
-账户变化时先备份配置并调整相关目录权限，不能同时启动后台和桌面两个 Listener。
+真实 Tauri E2E 共用 `mac-m2-narrant` 及上面的 `NARRANT_MACOS_RUNNER_LABELS`。
+测试应用使用 `tauri.e2e.conf.json` 中的独立身份、无痕 WebView、临时数据库与仓库，
+凭据保存在内存，并禁用正式应用更新。即使漏传 E2E 配置，测试构建也会在初始化用户目录前停止。
+真实应用测试会在当前桌面打开测试窗口，不能据此关闭日常 Narrant 或删除个人数据。
 `scripts/verify-desktop-runner.mjs` 会在大型构建前检查会话，真实 E2E 仍需完整运行。
 
-更新冒烟会安装应用、临时修改系统 hosts 和证书信任，并启动本地 HTTPS 服务，
-需要执行这些系统操作的权限。它在当前机器运行，不要求额外的隔离系统声明。
-保持已有 hosts 备份、临时证书删除、进程退出及恢复校验；失败时保留恢复所需文件。
-每台机器只运行一个 runner，桌面任务依次执行。测试期间避免同时手动运行 Narrant；
-若所选登录账户已有 Narrant 数据，现有保护会拒绝冒烟，不得删除个人数据来让测试通过。
-先解决登录账户、测试数据目录和系统权限，再运行真实更新验收。
+完整更新冒烟目前仍使用正式应用身份、系统 hosts 和证书信任，不能满足同一日常账户的隔离要求。
+runner 设置 `NARRANT_CI_SHARED_DESKTOP=1`，checkout 外的开始 hook 拒绝 `native-smoke` job，
+预检和更新驱动也会在系统操作前拒绝运行。保留该门禁未通过，不以普通 E2E 或修改过的测试包
+代替真实签名发布包的升级证据。后续完成安装、数据与网络隔离后才能恢复；不得删除个人数据来通过验收。
 
 普通发布任务不需要上述系统权限。macOS 签名使用本次任务的临时钥匙串和公证密钥，
 成功或失败后都恢复原钥匙串列表并删除凭据。两条 OSS 发布流程共用

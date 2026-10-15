@@ -40,10 +40,10 @@ export function buildTauriArguments(command, args, environment) {
   }
   // Tauri 内部的 Cargo 也遵守自托管机器与本地开发之间的编译锁。
   if (["build", "dev"].includes(command) && environment.RUNNER_ENVIRONMENT === "self-hosted") {
-    configuration.build = { runner: {
-      cmd: "bash",
-      args: [path.join(import.meta.dirname, "cargo-agent.sh").replaceAll("\\", "/")],
-    } };
+    // Tauri 先追加 build/run，再追加 runner.args；因此必须直接指定可执行包装入口。
+    configuration.build = { runner: path.join(
+      import.meta.dirname, process.platform === "win32" ? "cargo-agent.cmd" : "cargo-agent.sh",
+    ) };
   }
   if (Object.keys(configuration).length) cliArguments.push("--config", JSON.stringify(configuration));
   const normalizedArguments = args[0] === "--" ? args.slice(1) : args;

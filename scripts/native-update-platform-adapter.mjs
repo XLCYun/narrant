@@ -341,14 +341,24 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   let closeHelper;
   let statePaths;
   const launches = [];
+  const ownedStateRoots = [];
 
   /** 初始化干净 runner 与 staging roots。 */
   async function initialize() {
     if (process.platform !== contract.platform || process.arch !== contract.arch) throw new Error("runner 与 native target 不匹配");
+    if (environment.NARRANT_CI_SHARED_DESKTOP === "1") {
+      throw new Error("当前更新验收仍修改共享 hosts、证书和正式安装，尚不能在日常桌面安全运行");
+    }
     temporary = await mkdtemp(path.join(tmpdir(), "narrant-native-update-"));
     statePaths = platformStatePaths(target, commandEnvironment);
     for (const root of [statePaths.dataRoot, statePaths.cacheRoot]) {
       if (await lstat(root).catch(() => null)) throw new Error("native smoke runner 含旧 Narrant state");
+    }
+    // 只有排他创建成功的目录才归本次测试所有；初始化失败不能授权清理已有用户目录。
+    for (const root of new Set([statePaths.dataRoot, statePaths.cacheRoot])) {
+      await mkdir(path.dirname(root), { recursive: true });
+      await mkdir(root);
+      ownedStateRoots.push(root);
     }
     if (target === "darwin-aarch64") closeHelper = await compileMacCloseHelper(temporary, command, commandEnvironment);
   }
@@ -450,7 +460,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     if (target === "windows-x86_64" && installation?.uninstaller && await lstat(installation.uninstaller).catch(() => null)) {
       await command(installation.uninstaller, ["/S"], { environment: commandEnvironment }).catch((error) => errors.push(error));
     }
-    for (const root of [statePaths?.dataRoot, statePaths?.cacheRoot, temporary].filter(Boolean)) await rm(root, { recursive: true, force: true }).catch((error) => errors.push(error));
+    for (const root of [...ownedStateRoots, temporary].filter(Boolean)) await rm(root, { recursive: true, force: true }).catch((error) => errors.push(error));
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "native platform cleanup 失败");
   }

@@ -18,12 +18,25 @@ use github_commands::github_api_base_url;
 
 /// 装配 Tauri state、commands 与桌面插件并运行应用。
 pub fn run() {
+    let context = tauri::generate_context!();
+    // 测试驱动只能运行独立应用身份；漏传 E2E 配置时在任何用户目录或插件初始化前停止。
+    #[cfg(feature = "wdio")]
+    assert_eq!(
+        context.config().identifier,
+        "com.cyunlab.narrant.e2e",
+        "WDIO requires the isolated tauri.e2e.conf.json application identity"
+    );
     #[cfg(feature = "wdio")]
     let oauth_base_url = std::env::var("NARRANT_GITHUB_OAUTH_URL")
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let updater_config = TrustedUpdaterConfig::from_build();
+    // 普通界面测试不接受正式更新包，真实安装升级由独立发布验收执行。
+    let updater_config = if cfg!(feature = "wdio") {
+        TrustedUpdaterConfig::parse(None, None)
+    } else {
+        TrustedUpdaterConfig::from_build()
+    };
     let updater_public_key = updater_config
         .as_ref()
         .map(|config| config.public_key().to_owned())
@@ -198,8 +211,6 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
-    let application = builder
-        .build(tauri::generate_context!())
-        .expect("build Narrant");
+    let application = builder.build(context).expect("build Narrant");
     application.run(shutdown::handle_run_event);
 }

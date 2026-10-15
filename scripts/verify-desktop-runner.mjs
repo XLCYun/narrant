@@ -18,6 +18,8 @@ if (process.platform === 'darwin') {
 }
 
 if (process.argv.includes('--update-smoke')) {
+  assert.notEqual(process.env.NARRANT_CI_SHARED_DESKTOP, '1',
+    'Release update smoke still modifies shared hosts/trust and the production installation; it cannot run on the daily-use desktop until those effects are isolated');
   if (process.platform === 'darwin') {
     execFileSync('/usr/bin/sudo', ['-n', 'true'], { stdio: 'inherit' });
   } else {

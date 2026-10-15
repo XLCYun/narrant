@@ -49,7 +49,7 @@ Single-context layout. See `docs/agents/domain.md`.
 7. 使用 `pnpm rust:cache:status` 查看 sccache，使用 `pnpm rust:cache:clean` 只清理 sccache；不要用清理缓存替代正常的增量构建。
 
 ## 本地验证与 CI 节奏
-产品仅支持 Windows x64 和 macOS ARM64；通用检查也使用这两台现有自托管 runner。桌面测试与更新冒烟共用同一套 runner，不新增虚拟机、独立系统或桌面 runner 注册；按需将现有 runner 配置为登录桌面后启动，保留会话、权限及测试后恢复检查。
+产品仅支持 Windows x64 和 macOS ARM64；通用检查与桌面测试共用现有自托管 runner 和当前已登录的桌面账户，不新增虚拟机、独立系统、账户、登录会话或 runner 注册。CI 继续使用独立工作目录与缓存；E2E 必须使用独立应用身份、测试数据和内存凭据。不得关闭、覆盖或清理日常 Narrant 的进程、安装、配置及数据。完整更新验收若仍会影响共享 hosts、证书或正式安装，必须明确阻止并保留门禁未通过，完成隔离后才能恢复。
 
 1. 日常修改先在本地运行格式、类型检查、`check --lib` 和受影响测试；UI 改动仍按上文完成真实渲染检查。
 2. 功能基本完成后，进行实际运行验证和代码审查；涉及 Windows 路径、进程、权限或打包时，提前运行对应 Windows 专项 CI，不把平台问题全部留到最后。

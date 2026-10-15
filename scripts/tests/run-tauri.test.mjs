@@ -54,8 +54,8 @@ test("自托管 Tauri 构建共用 Cargo 入口，仍保留 updater 配置与原
   assert.equal(configuration.plugins.updater.pubkey, PUBLIC_KEY);
   assert.deepEqual(args.slice(3), ["--bundles", "app"]);
   const runner = configuration.build.runner;
-  assert.equal(runner.cmd, "bash");
-  assert.match(execFileSync(runner.cmd, [...runner.args, "--version"], {
+  assert.match(runner, /cargo-agent\.(?:sh|cmd)$/);
+  assert.match(execFileSync(process.platform === "win32" ? 'cmd.exe' : runner, process.platform === "win32" ? ['/d', '/c', runner, '--version'] : ['--version'], {
     cwd: new URL("../../", import.meta.url), encoding: "utf8", timeout: 20_000,
   }), /^cargo /);
   assert.deepEqual(buildTauriArguments("signer", ["sign", "asset"], {
