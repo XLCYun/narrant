@@ -66,3 +66,20 @@ test("Rust 缓存入口保留原生命令的结构化参数", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), args);
 });
+
+// 用真实 lockf 检查另一个 checkout 已持有的锁，避免测试只断言脚本字符串。
+test("独立 CI checkout 使用显式共享 Cargo 锁", { skip: process.platform !== 'darwin' }, t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'narrant-shared-lock-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const wrapper = fileURLToPath(new URL('../cargo-agent.sh', import.meta.url));
+  const lock = path.join(directory, 'cargo.lock');
+  fs.mkdirSync(path.join(directory, 'bin'));
+  // 替代 Node 入口只探测当前锁，不启动 Cargo 编译。
+  fs.writeFileSync(path.join(directory, 'bin/node'), '#!/bin/sh\n/usr/bin/lockf -t 0 -k "$NARRANT_CARGO_LOCK_FILE" /usr/bin/true 2>/dev/null\n[ "$?" -eq 75 ]\n', { mode: 0o755 });
+  const result = spawnSync('/bin/sh', [wrapper, 'check'], {
+    encoding: 'utf8', timeout: 10_000,
+    env: { ...process.env, PATH: `${path.join(directory, 'bin')}:${process.env.PATH}`, NARRANT_CARGO_LOCK_FILE: lock },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.statSync(lock).isFile(), true);
+});

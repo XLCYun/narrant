@@ -20,6 +20,8 @@ on:
       - scripts/tests/run-windows-process-probe.test.mjs
       - scripts/run-windows-lifecycle-tests.mjs
       - scripts/verify-windows-runner.mjs
+      - scripts/verify-macos-runner.mjs
+      - scripts/cargo-agent.sh
       - scripts/tests/run-windows-lifecycle-tests.test.mjs
       - src-tauri/tests/native_helper_graphs.rs
       - scripts/*language-support-packs.mjs
@@ -45,9 +47,9 @@ on:
   workflow_dispatch:
     inputs:
       validation_scope:
-        description: Full acceptance, native analyzers only, or Windows lifecycle diagnostics
+        description: Full acceptance, native analyzers, Windows lifecycle, or macOS runner setup check
         type: choice
-        options: [full, native-analyzers, windows-lifecycle]
+        options: [full, native-analyzers, windows-lifecycle, macos-runner]
         default: full
       language:
         description: Completed Native helper to validate (all keeps the full language gate)
@@ -72,6 +74,23 @@ permissions:
   contents: read
 
 jobs:
+  macos-runner:
+    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'macos-runner'
+    runs-on: ${{ vars.NARRANT_MACOS_RUNNER_LABELS && fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS) || 'macos-15' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate runner routing and Cargo integration
+        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/rust-cache.test.mjs
+      - name: Verify the macOS service account, SDK and bounded cache
+        run: node scripts/verify-macos-runner.mjs --smoke
+
   windows-lifecycle:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'
     # 仓库变量可指定自托管标签；未配置时继续使用原来的 GitHub 托管镜像。
@@ -88,8 +107,8 @@ jobs:
         run: node scripts/verify-windows-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        # 自托管 Windows 使用服务配置的 2 GiB 本地 sccache，避免打包整套 target 占用额外磁盘。
-        if: runner.os != 'Windows' || runner.environment != 'self-hosted'
+        # 自托管机器使用配置好的 2 GiB 本地 sccache，避免打包整套 target 占用额外磁盘。
+        if: runner.environment != 'self-hosted'
         with:
           workspaces: native-helpers/windows-process-probe
           key: windows-lifecycle
@@ -110,7 +129,7 @@ jobs:
             inputs.platform == 'macos' && '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]' ||
             '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]'
           ) }}
-    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
+    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.target == 'aarch64-apple-darwin' && vars.NARRANT_MACOS_RUNNER_LABELS && fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS) || matrix.runner }}
     # Windows 冷构建包含 release 打包、helper 测试与 Host 编译，使用完整验收的总预算。
     timeout-minutes: 120
     steps:
@@ -128,6 +147,9 @@ jobs:
       - name: Verify Windows runner filesystem prerequisites
         if: runner.os == 'Windows'
         run: node scripts/verify-windows-runner.mjs
+      - name: Verify self-hosted macOS runner prerequisites
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: node scripts/verify-macos-runner.mjs
       - run: pnpm install --frozen-lockfile
       - run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
       # 锁定 Ruff 源码包含超过 MAX_PATH 的快照；Cargo 的 libgit2 checkout 读取此配置。
@@ -140,7 +162,7 @@ jobs:
         run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        if: runner.os != 'Windows' || runner.environment != 'self-hosted'
+        if: runner.environment != 'self-hosted'
         with:
           workspaces: src-tauri
           key: python-native-${{ matrix.target }}
@@ -156,7 +178,7 @@ jobs:
           if-no-files-found: error
 
   native-analyzers:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation_scope != 'windows-lifecycle'
+    if: github.event_name != 'workflow_dispatch' || (inputs.validation_scope != 'windows-lifecycle' && inputs.validation_scope != 'macos-runner')
     strategy:
       fail-fast: false
       matrix:
@@ -166,7 +188,7 @@ jobs:
             inputs.platform == 'macos' && '[{"runner":"macos-15","target":"aarch64-apple-darwin"}]' ||
             '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"windows-2022","target":"x86_64-pc-windows-msvc"}]'
           ) }}
-    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.runner }}
+    runs-on: ${{ matrix.target == 'x86_64-pc-windows-msvc' && vars.NARRANT_WINDOWS_RUNNER_LABELS && fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS) || matrix.target == 'aarch64-apple-darwin' && vars.NARRANT_MACOS_RUNNER_LABELS && fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS) || matrix.runner }}
     # 自托管 Windows 串行冷编译七套 helper 与 Host，再运行全部测试，需要超过两小时。
     timeout-minutes: 180
     env:
@@ -187,6 +209,9 @@ jobs:
       - name: Verify Windows runner filesystem prerequisites
         if: runner.os == 'Windows'
         run: node scripts/verify-windows-runner.mjs
+      - name: Verify self-hosted macOS runner prerequisites
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: node scripts/verify-macos-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
       - name: Probe Windows process cleanup before toolchain provisioning
         if: runner.os == 'Windows'
@@ -235,7 +260,7 @@ jobs:
       - name: Provision checksum-verified private developer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
       - name: Select exact macOS target declarations
-        if: runner.os == 'macOS' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
+        if: runner.os == 'macOS' && runner.environment != 'self-hosted' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
         shell: bash
         run: |
           set -euo pipefail
@@ -249,7 +274,7 @@ jobs:
           NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'CARGO_HOME=' + process.env.NARRANT_RUST_TEST_CARGO_HOME + '\n')"
       - uses: Swatinem/rust-cache@v2
-        if: runner.os != 'Windows' || runner.environment != 'self-hosted'
+        if: runner.environment != 'self-hosted'
         with:
           workspaces: src-tauri
           key: all-native-${{ matrix.target }}
