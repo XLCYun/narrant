@@ -16,6 +16,8 @@ runner 复用当前已登录的 `lizhanfa` 桌面账户，工作目录为
 CI 的 HOME、工具、Cargo home、Rustup home 和缓存均在 `/Users/Shared/narrant-ci` 内；
 独立 HOME 用于隔离工具配置，不代表新增系统账户或登录会话。
 Apple Command Line Tools 提供系统编译器与 SDK，无需为 runner 安装完整 Xcode。
+C/C++ 验收所需的 CMake 由 `provision-native-toolchains.mjs` 按清单下载、校验并解包到任务临时目录，
+通过 `NARRANT_CMAKE` 传给测试；不要求全局安装 CMake，也不将它打入用户支持包。
 
 用户 LaunchAgent `com.narrant.actions-runner` 使用官方 `runsvc.sh` 入口，
 位于 `~/Library/LaunchAgents/com.narrant.actions-runner.plist`，只在已有 Aqua 会话中运行。

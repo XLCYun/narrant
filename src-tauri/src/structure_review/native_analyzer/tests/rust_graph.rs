@@ -1076,7 +1076,14 @@ fn rust_helper_runtime_toolchain_selection_reaches_real_cargo_and_rustc() {
     let tools = tempfile::tempdir().unwrap();
     let log = tools.path().join("tools.log");
     let identities = tools.path().join("identities.log");
-    let cargo_bin = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".cargo/bin");
+    // CI 的 HOME 与 Cargo 依赖缓存独立；从 rustup 所在目录取代理，保留 +stable 与目录覆盖语义。
+    let cargo_bin = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .find(|directory| {
+            ["rustup", "cargo", "rustc"]
+                .iter()
+                .all(|tool| directory.join(tool).is_file())
+        })
+        .expect("PATH 需要包含 rustup 及其 cargo/rustc 代理目录");
     for tool in ["cargo", "rustc"] {
         let wrapper = tools.path().join(tool);
         fs::write(&wrapper,format!("#!/bin/sh\nprintf '%s %s %s\\n' '{tool}' \"$RUSTUP_TOOLCHAIN\" \"$*\" >> '{}'\nif [ '{tool}' = rustc ]; then '{}' --print sysroot >> '{}'; '{}' --version >> '{}'; fi\nexec '{}' \"$@\"\n",log.display(),cargo_bin.join("rustc").display(),identities.display(),cargo_bin.join("rustc").display(),identities.display(),cargo_bin.join(tool).display())).unwrap();

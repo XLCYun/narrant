@@ -6,7 +6,7 @@ export const migratedNativePacks = Object.freeze({
   java: { helper: 'java', toolchains: ['jdk25', 'jdk17', 'jdk8'] },
   go: { helper: 'go', toolchains: ['go', 'go-target'] },
   csharp: { helper: 'csharp', toolchains: ['dotnet', 'dotnet-ref8', 'dotnet-ref9'] },
-  'c-cpp': { helper: 'clang', toolchains: ['llvm'] },
+  'c-cpp': { helper: 'clang', toolchains: ['llvm', 'cmake'] },
 });
 
 /** 显式选择已完成语言；拼写错误和未完成迁移必须失败，不能变成空验收。 */

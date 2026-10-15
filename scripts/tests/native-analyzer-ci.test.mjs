@@ -90,7 +90,7 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
 // 两个平台必须拥有全部固定构建工具和引用夹具，清单不能遗漏语言运行时。
 test('official pinned manifest covers every required tool on both platforms', () => {
   assert.equal(validateToolchainManifest(manifest), manifest);
-  for (const entries of Object.values(manifest.targets)) assert.deepEqual(entries.map(entry => entry.name).sort(), ['dotnet', 'dotnet-ref8', 'dotnet-ref9', 'go', 'go-target', 'jdk17', 'jdk25', 'jdk8', 'llvm']);
+  for (const entries of Object.values(manifest.targets)) assert.deepEqual(entries.map(entry => entry.name).sort(), ['cmake', 'dotnet', 'dotnet-ref8', 'dotnet-ref9', 'go', 'go-target', 'jdk17', 'jdk25', 'jdk8', 'llvm']);
 });
 
 // 恶意或不完整清单必须在任何下载和解包发生前被拒绝。

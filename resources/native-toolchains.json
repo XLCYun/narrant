@@ -91,6 +91,16 @@
         "home": "LLVM-21.1.8-macOS-ARM64",
         "environment": "NARRANT_LLVM_SDK",
         "metadata_source": "https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8"
+      },
+      {
+        "name": "cmake",
+        "version": "3.31.10",
+        "url": "https://github.com/Kitware/CMake/releases/download/v3.31.10/cmake-3.31.10-macos-universal.tar.gz",
+        "algorithm": "sha256",
+        "digest": "be9f3faeeaf7921cc2d77cea711dd5e6f72c63af2810cacd9205b3ce8d1593c9",
+        "home": "cmake-3.31.10-macos-universal/CMake.app/Contents",
+        "environment": "NARRANT_CMAKE_ROOT",
+        "metadata_source": "https://github.com/Kitware/CMake/releases/download/v3.31.10/cmake-3.31.10-SHA-256.txt"
       }
     ],
     "x86_64-pc-windows-msvc": [
@@ -183,6 +193,16 @@
         "home": "clang+llvm-21.1.8-x86_64-pc-windows-msvc",
         "environment": "NARRANT_LLVM_SDK",
         "metadata_source": "https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8"
+      },
+      {
+        "name": "cmake",
+        "version": "3.31.10",
+        "url": "https://github.com/Kitware/CMake/releases/download/v3.31.10/cmake-3.31.10-windows-x86_64.zip",
+        "algorithm": "sha256",
+        "digest": "13d1a463d7130df5339baedd63d8ae990aaf385062b2f42f372796143ae94086",
+        "home": "cmake-3.31.10-windows-x86_64",
+        "environment": "NARRANT_CMAKE_ROOT",
+        "metadata_source": "https://github.com/Kitware/CMake/releases/download/v3.31.10/cmake-3.31.10-SHA-256.txt"
       }
     ]
   },

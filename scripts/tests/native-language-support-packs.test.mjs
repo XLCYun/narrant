@@ -202,8 +202,8 @@ test('migration toolchain selection is explicit and complete', async () => {
   assert.deepEqual(selectedToolchainNames('go'), ['go', 'go-target']);
   assert.deepEqual(selectedToolchainNames('java'), ['jdk25', 'jdk17', 'jdk8']);
   assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
-  assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm']);
-  assert.equal(selectedToolchainNames().length, 9);
+  assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm', 'cmake']);
+  assert.equal(selectedToolchainNames().length, 10);
   assert.deepEqual(selectedNativePacks(), ['rust', 'python', 'typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
   assert.deepEqual(selectedToolchainNames('typescript-javascript'), []);
   for (const id of ['none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);

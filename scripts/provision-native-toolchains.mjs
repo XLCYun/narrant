@@ -18,9 +18,9 @@ export function validateToolchainManifest(manifest) {
   if (manifest.schema_version !== 1) throw new Error('Unsupported native toolchain manifest');
   for (const target of Object.values(nativeTargets)) {
     const entries = manifest.targets?.[target];
-    if (!Array.isArray(entries) || entries.length !== 9 || new Set(entries.map(item => item.name)).size !== 9) throw new Error(`Incomplete toolchains: ${target}`);
+    if (!Array.isArray(entries) || entries.length !== 10 || new Set(entries.map(item => item.name)).size !== 10) throw new Error(`Incomplete toolchains: ${target}`);
     for (const item of entries) {
-      if (!['go', 'go-target', 'dotnet', 'dotnet-ref8', 'dotnet-ref9', 'jdk25', 'jdk17', 'jdk8', 'llvm'].includes(item.name) || !/^[\w.+-]+$/.test(item.version)) throw new Error('Invalid tool identity');
+      if (!['go', 'go-target', 'dotnet', 'dotnet-ref8', 'dotnet-ref9', 'jdk25', 'jdk17', 'jdk8', 'llvm', 'cmake'].includes(item.name) || !/^[\w.+-]+$/.test(item.version)) throw new Error('Invalid tool identity');
       const url = new URL(item.url);
       if (url.protocol !== 'https:' || !['go.dev', 'builds.dotnet.microsoft.com', 'github.com', 'api.nuget.org'].includes(url.hostname) || /latest/i.test(item.url)) throw new Error('Unpinned download source');
       // 这些是 CI 的标准库夹具版本，不是产品允许分析的 TFM 列表。
@@ -116,6 +116,8 @@ export async function provisionToolchains(output, target = nativeTargets[`${proc
     } finally { if (!preserveTemporary) await fs.rm(temporary, { recursive: true, force: true }); }
   }
   await prepareDotnetFixtureReferences(environment);
+  // CMake 属于构建/测试工具，不随支持包分发；两平台共用私有安装，避免依赖 runner 镜像。
+  if (environment.NARRANT_CMAKE_ROOT) environment.NARRANT_CMAKE = path.join(environment.NARRANT_CMAKE_ROOT, `bin/cmake${process.platform === 'win32' ? '.exe' : ''}`);
   // 旧 JDK 只作为声明样本；Host 的通用 JAVA_HOME 发现路径必须在真实安装中被验证。
   if (environment.NARRANT_JAVA_TARGET_8) environment.JAVA_HOME = environment.NARRANT_JAVA_TARGET_8;
   if (environment.NARRANT_DOTNET_SDK) environment.DOTNET_ROOT = environment.NARRANT_DOTNET_SDK;
