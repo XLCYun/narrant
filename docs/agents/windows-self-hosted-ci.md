@@ -64,6 +64,40 @@ VS 2022 实例，支持 Enterprise 和 Build Tools。系统已安装的 VC runti
 限制 job 内部编译器的并行度。以后增加其他仓库实例时，也需要评估实例间的资源
 竞争，不能认为多个实例仍会自动串行。
 
+### 小磁盘 runner 的缓存与清理
+
+自托管 Windows 使用一个本地 sccache，容量上限为 `2G`（2 GiB）。将官方发布的
+Windows x64 可执行文件校验后安装到服务账户可读取的工具目录，在该 runner 的
+`.env` 中设置以下变量，并把 sccache 所在目录加入该文件已有的 `PATH`：
+
+```text
+SCCACHE_CACHE_SIZE=2G
+SCCACHE_DIR=C:\ci\cache\sccache
+RUSTC_WRAPPER=sccache
+CARGO_INCREMENTAL=0
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=C:\ci\hooks\narrant-job-completed.ps1
+```
+
+修改 `.env` 后需在 runner 空闲时重启服务。这里的 `CARGO_INCREMENTAL=0` 延续
+原 CI 缓存步骤的设置，不改变本地开发的增量编译规则；保留 CI 原有的调试信息、
+断言和优化配置。启动检查会读取实际 sccache 服务的统计，确认上限确实为 2 GiB。
+
+此工作流的自托管 Windows 任务跳过远端 Rust 缓存，避免完整 target 的压缩副本
+和上传、下载开销；GitHub 托管 Windows 与 macOS 保留原缓存方式。下载的依赖、
+正在编译的 `target`、工具链和最终产物不计入 sccache 的 2 GiB 上限，磁盘仍需
+容纳一次完整构建的峰值。
+
+完成当前任务后，通过 runner 专用的 `ACTIONS_RUNNER_HOOK_JOB_COMPLETED`
+回收该 checkout 中明确列出的生成物目录。脚本放在 runner 程序目录之外，仅在
+匹配的仓库和工作目录中运行；先校验路径，不沿符号链接或 junction 删除目标。
+源码、未提交修改、验收日志、工具链和唯一的 sccache 缓存均须保留。上传与缓存
+的 post 步骤应先完成，再执行回收；异常中断后的残留由下次 checkout 或空闲维护
+处理。旧工作区备份必须先确认已不再使用，再清理其中可重建的产物。
+
+首次配置后，只运行一次 Windows lifecycle 轻量验证：检查服务身份下的缓存上限、
+实际编译与进程测试，以及完成 hook 的清理结果。保留维护前后空闲磁盘和清理清单，
+无需为了缓存配置重新运行所有语言的完整验收。
+
 先手动运行 Language support packs 的 `validation_scope=windows-lifecycle`，
 确认 checkout、工具链、后台进程及退出清理可用，再运行完整语言验收。
 已通过打包、仅需补跑原生验收时，可使用 `validation_scope=native-analyzers`；

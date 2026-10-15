@@ -88,6 +88,8 @@ jobs:
         run: node scripts/verify-windows-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        # 自托管 Windows 使用服务配置的 2 GiB 本地 sccache，避免打包整套 target 占用额外磁盘。
+        if: runner.os != 'Windows' || runner.environment != 'self-hosted'
         with:
           workspaces: native-helpers/windows-process-probe
           key: windows-lifecycle
@@ -138,6 +140,7 @@ jobs:
         run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Windows' || runner.environment != 'self-hosted'
         with:
           workspaces: src-tauri
           key: python-native-${{ matrix.target }}
@@ -246,6 +249,7 @@ jobs:
           NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'CARGO_HOME=' + process.env.NARRANT_RUST_TEST_CARGO_HOME + '\n')"
       - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Windows' || runner.environment != 'self-hosted'
         with:
           workspaces: src-tauri
           key: all-native-${{ matrix.target }}

@@ -98,6 +98,22 @@ test('manual platform selection schedules only the requested native targets', as
   }
 });
 
+// 自托管 Windows 省去大型远端缓存；其他平台与托管 Windows 仍保留原缓存行为。
+test('only self-hosted Windows skips remote Rust build caches', async () => {
+  const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  for (const name of ['windows-lifecycle', 'build', 'native-analyzers']) {
+    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
+    const cache = job.split('      - uses: Swatinem/rust-cache@v2\n')[1].split('\n      - ')[0];
+    const condition = cache.match(/^ {8}if: (.+)$/m)?.[1] ?? 'true';
+    for (const os of ['Windows', 'macOS', 'Linux']) {
+      for (const environment of ['self-hosted', 'github-hosted']) {
+        assert.equal(runInNewContext(condition, { runner: { os, environment } }),
+          os !== 'Windows' || environment !== 'self-hosted', `${name}: ${os}/${environment}`);
+      }
+    }
+  }
+});
+
 // 仅验收时可省去产物存储；自动 PR 与正式发布仍必须上传，不能用此开关绕过发布输入。
 test('manual validation can omit artifacts while pull requests and publishing retain uploads', async () => {
   const workflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
