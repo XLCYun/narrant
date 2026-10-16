@@ -28,7 +28,9 @@ Narrant 是一款让 AI 加速人类审核的桌面工具。它统一呈现本�
 
 ## ⬇️ 下载
 
-前往 [GitHub Releases](https://github.com/XLCYun/narrant/releases) 下载最新版本，并选择与你的操作系统和处理器架构相符的安装包。
+新的 GitHub Releases 下载渠道正在迁移，首个版本发布前下载列表可能为空。旧版本用户需要从本仓库手动安装一次修复版，之后使用新的更新渠道。
+
+安装包将通过 [GitHub Releases](https://github.com/XLCYun/narrant/releases) 发布；下载时请选择与你的操作系统和处理器架构相符的版本。
 
 <a id="使用说明"></a>
 
@@ -73,5 +75,3 @@ Narrant 仍在持续开发，界面、数据格式和功能行为可能在后续
 ## 开发与许可证
 
 开发说明见 [开发文档](docs/development.md)。项目采用 [Apache-2.0](LICENSE)；第三方组件与素材保留各自的许可声明。
-
-新的 GitHub Releases 下载渠道正在迁移，首个版本发布前下载列表可能为空。旧版本用户需要从本仓库手动安装一次修复版，之后使用新的更新渠道。

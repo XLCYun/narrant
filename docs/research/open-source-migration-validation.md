@@ -18,8 +18,15 @@
   三项均未发现规则命中的密钥。这是自动检测结果，不等同于对所有敏感信息的穷尽证明。
 - 本地最终验证：Rust 624 项、前端 426 项、脚本 218 项通过；脚本另有 2 项平台跳过。
   类型检查、Lint、actionlint 和 macOS 原生窗口 helper 的 Swift 编译通过。
+- GitHub 已将 `XLCYun/narrant` 设为公开，匿名 API 读取确认 `private: false`。
+- GitHub-hosted [运行 38928118116](https://github.com/XLCYun/narrant/actions/runs/38928118116)
+  验证代码提交 `296418a1ae5b47145f3a8000b9c04e4c3d547a77`；macOS ARM64 与 Windows x64
+  的支持包构建/Python 集成、完整 Native Analyzer 共四项任务全部通过，整个 run 为 success。
+  后续仅补传升级测试的 `RUNNER_TEMP` 并调整说明，相关 driver/TLS 17 项测试通过；
+  不改变该运行验收的语言实现和 CI 命令。未手动触发 quality-gate。
 - macOS runner 的 GitHub 注册、LaunchAgent、专用账户/组及 `/Users/Shared/narrant-ci`
-  已清理。Windows 退役在原主机会话继续执行；尚不能把双平台退役记为全部完成。
+  已清理。Windows 注册也已注销，GitHub runner 数量为 0；Windows 主机清理仍在原会话继续，
+  尚不能把双平台本机退役记为全部完成。
 
 ## Standards
 
@@ -40,6 +47,7 @@
   首版须走受保护 exact tag 的 bootstrap；后续正式包执行双平台真实升级。
 - 旧渠道 v1.2.14 用户需手动安装一次新渠道修复版，不能承诺旧二进制自动修复自己。
 - 此前 self-hosted 的成功记录不替代迁移后的 GitHub-hosted 验收。
+- 本次通过的是语言支持包工作流，不等同于已执行新版全仓 quality-gate 或正式包升级。
 - 语言包仍为未发布候选。Python 依赖 `seahash 4.1.0` 原始许可 notice 的来源限制仍记录在
   `native-helpers/python/licenses/sources.json`：发布 crate 声明 MIT，包内提供声明及 MIT 条款，
   精确 GitLab 原始 notice 尚未取回。不能把这项记录表述为完整法律审计。

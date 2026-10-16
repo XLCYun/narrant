@@ -1,5 +1,14 @@
 # Existing native helper migration validation
 
+## 最新托管验收（2026-10-17）
+
+代码提交 `296418a1ae5b47145f3a8000b9c04e4c3d547a77` 的
+[GitHub-hosted CI 38928118116](https://github.com/XLCYun/narrant/actions/runs/38928118116)
+全部通过：macOS ARM64、Windows x64 各完成支持包构建/Python 安装与 Review 集成、
+完整 Native Analyzer 两个任务。该结果覆盖当前七套 helper 的语言验收，不代表正式应用
+升级或新一轮全仓 quality-gate 已执行。以下保留各阶段原始范围与失败记录；开源迁移和
+当前发布边界见 [迁移验证](open-source-migration-validation.md)。
+
 ## Task 1：直接内嵌 Rust 核心（2026-10-11）
 
 本轮只建立 `native-helpers/rust/` 的独立库和聚焦证明。没有切换应用入口，没有生成

@@ -24,7 +24,9 @@ The explanations support your reading and do not approve a change or make the fi
 
 ## ⬇️ Download
 
-Visit [GitHub Releases](https://github.com/XLCYun/narrant/releases) and download the package for your operating system and processor architecture.
+The GitHub Releases channel is being migrated and may remain empty until its first release. Existing users will need to install a fixed version from this repository manually once to switch to the new update channel.
+
+Installers will be published through [GitHub Releases](https://github.com/XLCYun/narrant/releases). Choose the package for your operating system and processor architecture.
 
 ## Getting Started
 
@@ -63,5 +65,3 @@ Please use [GitHub Issues](https://github.com/XLCYun/narrant/issues) to report a
 ## Development and license
 
 See the [development guide](docs/development.md). Narrant is licensed under [Apache-2.0](LICENSE); third-party components and assets retain their own license notices.
-
-The GitHub Releases channel is being migrated and may remain empty until its first release. Existing users will need to install a fixed version from this repository manually once to switch to the new update channel.

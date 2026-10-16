@@ -20,7 +20,7 @@ export function driverEnvironment(environment) {
   return selectSystemEnvironment(environment, [
     "NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY",
     "NARRANT_RELEASE_SIGNING_PUBLIC_KEY", "NARRANT_UPDATER_PUBLIC_KEY",
-    "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT",
+    "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_TEMP",
   ]);
 }
 

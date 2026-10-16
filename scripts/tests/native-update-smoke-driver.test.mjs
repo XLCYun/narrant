@@ -18,9 +18,9 @@ import { driverEnvironment } from "../run-native-update-smoke.mjs";
 
 test("driver 保留 hosted 保护所需标记，但不继承发布凭据", () => {
   assert.deepEqual(driverEnvironment({
-    GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted",
+    GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", RUNNER_TEMP: "/runner/tmp",
     GH_TOKEN: "must-not-leak", TAURI_SIGNING_PRIVATE_KEY: "must-not-leak",
-  }), { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted" });
+  }), { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", RUNNER_TEMP: "/runner/tmp" });
 });
 
 test("发现 PID 后仍等待原生窗口就绪，启动探测失败不能通过验收", async () => {
