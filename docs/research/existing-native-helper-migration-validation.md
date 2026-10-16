@@ -633,7 +633,23 @@ macOS 第一次在编译期间因合盖睡眠断联；仅重跑该 job 后完成
 点击和选中结果断言。连续切换最小场景先失败，修复后 40 次切换通过。临时诊断已删除，
 类型检查、Lint 及 Standards/Spec 复核通过；这些改动不改变产品行为。
 修复后在继承 `NODE_USE_ENV_PROXY=1` 的本机环境中，仅由 WDIO 子命令覆盖为 0，完整
-macOS 桌面 E2E 的 6 个 spec 全部通过（46 秒）。最终提交仍需由 Actions 独立检出验收。
+macOS 桌面 E2E 的 6 个 spec 全部通过（46 秒）。
+
+最终代码提交 `d17c0a392c440cc7ceef8373bf979e9686f711b4` 的
+[quality-gate 38901436761](https://github.com/XLCYun/narrant/actions/runs/38901436761)
+由现有两个 runner 独立检出，四个 job 全部通过：
+
+| 范围 | 实际结果 |
+| --- | --- |
+| Rust | 格式、严格 Clippy 通过；623 项测试通过、0 失败、128 项按条件忽略；文档测试通过（0 个示例）。 |
+| TypeScript | Lint、类型检查、生产构建通过；426 项前端测试通过；243 项脚本测试通过、2 项跳过。 |
+| Windows 真实桌面 E2E | 6/6 spec 通过，2 分 31 秒；包含隔离、宝宝模式、GitHub PR、本地比较、仓库持久化和进程生命周期。 |
+| macOS 真实桌面 E2E | 同样 6/6 spec 通过，49 秒；原代理与分支弹层问题未再出现。 |
+
+完整日志已取回本任务的 `.tools/ci-validation/desktop-session-20261015/quality-d17c0a3-*.log`。
+上述忽略/跳过项不计为通过，语言专项仍沿用前述独立证据。此后仅补录验收文档，不改动
+已验收的生产代码、测试或工作流。GitHub 的旧 Action Node 版本提示及 embedded 驱动下的
+外部 `tauri-driver` 诊断提示保留，未为消除提示安装另一套驱动或扩大本轮升级范围。
 
 独立的 `Narrant Upgrade Test` 已替代共享 hosts、系统证书信任与正式安装操作；
 只给测试进程设置临时 TLS 和独立应用身份。macOS 的上一 Stable 升级实测发现共享
