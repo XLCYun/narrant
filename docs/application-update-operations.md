@@ -99,15 +99,16 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
    - 传入 source tag/full SHA、fixed public Release ID/public tag；
    - 传入 previous Stable tag 与刚记录的 manifest SHA-256。
 
-   workflow 会在自托管 macOS ARM64 和 Windows x64 桌面 runner 上重新通过 API 下载 Draft 的八个资产，校验
-   asset ID/size/完整 SHA-256、`SHA256SUMS`、manifest 和 minisign，再安装真实 previous Stable。
-   runner 临时 CA 只信任本次 `updates.cyunlab.com` leaf，hosts 只增加 loopback mapping；gate 只服务固定
-   latest 路径和当前 tag/target package。无论成功失败，hosts 按原字节恢复、DNS 刷新、helper
-   退出、临时 CA 删除。任何 cleanup 失败保留原 native 根因。
-5. 两个平台必须观察真实 check/download/durable staging、原生窗口正常关闭、共享 stop 完成后的
-   安装、同路径替换、无自动 relaunch，以及 harness 手工启动候选版本。aggregate job 只接受
-   exactly `darwin-aarch64` 和 `windows-x86_64` 两份 fresh `real-native` evidence；每份 JSON 都有
-   byte-exact `.sha256` companion。aggregate 上传两个 target artifact 与唯一 aggregate artifact。
+   workflow 在现有自托管 macOS ARM64 与 Windows x64 桌面 runner 上回读、核验 Draft 的八个
+   资产与上一 Stable 包，但不安装或启动正式应用。它从相应的精确源码构建独立的
+   `Narrant Upgrade Test` 旧版/候选包，使用临时 updater 密钥；macOS 测试 app 使用 ad-hoc 签名。
+   正式 app/DMG 的生产代码签名、公证及 updater 信任链单独静态验证。
+5. 两平台实际测试包必须完成检查、下载、验签、持久化暂存、正常退出后安装、同路径替换、
+   不自动重启、手动启动候选，以及模拟项目和主题/语言设置保留。TLS gate 使用测试进程独有的
+   代理和 CA 文件，不操作 hosts 或系统信任。aggregate 只接受 schema v2、恰好两个 target 的
+   `isolated-native` evidence 及逐字节 checksum；证据同时包含测试源码/叠加差异和正式资产身份。
+   这证明独立身份下的升级行为，不证明正式包本体、日常安装目录或生产签名组合下的实际升级。
+
 6. 自动路径记下成功的 **release workflow run ID**；手动重试路径才记下独立 smoke workflow run ID。
    手动运行 `Promote public Stable release`，输入完全相同的 source/public/previous identity 和对应
    evidence run ID。GitHub 计划支持 required reviewers 时等待独立
@@ -121,7 +122,19 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 8. 从一台不带 Actions 凭据的机器匿名读取 Stable endpoint，确认 version、两 target URL 和签名。
    不要在已发布 Release 上“修补”资产；任何内容变化都发布更高 SemVer。
 
-## 一次性 OSS Stable bootstrap
+## 分支试运行与历史 bootstrap
+
+开发分支可手动运行同一 workflow 的 `mode=preflight`，传入 exact `source_sha` 和
+`previous_stable_tag`。它使用当前分支源码及既有 runner，不访问生产私钥、不创建 Draft、tag 或发布。
+源码版本与上一 Stable 相同时，仅测试包的候选版本增加一个 patch；记录标记为
+`isolated-native-preflight`，正式包尚未核验，promotion 会拒绝这种结果。
+本机执行同一链路使用 `pnpm test:upgrade:build <baseline-sha> <baseline-version> <candidate-sha>
+<candidate-version> <new-output-directory>`，随后 `pnpm test:upgrade:run <test-builds.json> <new-evidence-directory>`。
+运行需要当前交互桌面；记录环境应如实填写已有 `RUNNER_NAME` 与 `RUNNER_ENVIRONMENT=self-hosted`。
+
+当前升级驱动不再执行 bootstrap。以下保留早期迁移流程作为历史记录，不是当前共享桌面可执行步骤：
+
+### 历史一次性 OSS Stable bootstrap
 
 v1.1.5 没有 updater，不能伪造 v1.1.5→候选的自动升级证据。首个 updater-capable 版本采用一次性
 bootstrap：
@@ -150,8 +163,8 @@ bootstrap：
   `release.yml` 的完整 reconciliation；脚本会拒绝任何已发布 Release。
 - 部分 Draft、重复/额外资产、asset ID/size/bytes 漂移、错误 signature/manifest/checksum 均不得人工
   绕过。重新生成完整八资产，不要只补单个文件后继续旧 smoke evidence。
-- smoke runner 失败后确认日志显示 hosts、CA 和 helper cleanup 已执行。若 cleanup 也失败，废弃该 runner；
-  不得把该次运行的 evidence 用于 promotion。
+- smoke 失败后检查测试进程、临时 CA、测试安装和数据的清理结果。若清理失败，保留日志并只修复
+  本次测试拥有的资源；不得删除日常 Narrant 数据，也不得把失败证据用于 promotion。
 - evidence 缺失、重复、超过 24 小时、checksum 变化、Actions run/artifact identity 失败或
   source/public/previous identity 不匹配时重新运行完整两平台 smoke，不能手工编辑 evidence 或
   checksum。已启用 Artifact Attestations 时，attestation 失败同样必须完整重跑。
@@ -224,7 +237,7 @@ artifact 或发布资产。
 - [ ] Windows 是 x64 current-user NSIS；首期不要求 Authenticode，但 updater minisign 必须通过。
 - [ ] normal evidence 绑定真实 previous Stable manifest 与 previous-release signing key SHA-256；bootstrap
       不携带 previous key 且只在一次性首版使用。
-- [ ] exactly 两份 fresh real-native evidence、checksums、可信 Actions run 与 exact-three artifact identity
+- [ ] exactly 两份 fresh isolated-native evidence、checksums、可信 Actions run 与 exact-three artifact identity
       均通过；启用 Artifact Attestations 时 attestation 也通过。
 - [ ] dispatch 操作者已核对全部身份；GitHub 计划支持时，`stable-promotion` required reviewer 也已独立批准。
 - [ ] promotion 二次回读 fixed Draft 后才发布；published Release 未被自动化编辑。

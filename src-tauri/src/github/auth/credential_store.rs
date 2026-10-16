@@ -1,17 +1,17 @@
-#[cfg(not(feature = "wdio"))]
+#[cfg(not(feature = "test-isolation"))]
 use keyring::Entry;
-#[cfg(feature = "wdio")]
+#[cfg(feature = "test-isolation")]
 use std::sync::Mutex;
 
 /// 平台凭据管理器中的应用命名空间；与 Tauri bundle identifier 保持一致。
-#[cfg(not(feature = "wdio"))]
+#[cfg(not(feature = "test-isolation"))]
 const CREDENTIAL_SERVICE: &str = "com.cyunlab.narrant.github-auth";
 
 /// 单账户策略下 GitHub.com 的固定凭据槽位。
 ///
 /// 系统凭据管理器本身会按操作系统用户隔离，因此这里不需要、也不应写入
 /// GitHub 登录名等用户身份信息。未来支持 GitHub Enterprise 时可改为对应 host。
-#[cfg(not(feature = "wdio"))]
+#[cfg(not(feature = "test-isolation"))]
 const CREDENTIAL_ACCOUNT: &str = "github.com";
 
 /// 为当前操作系统用户持久化加密凭据封套。
@@ -27,10 +27,10 @@ pub trait CredentialStore: Send + Sync {
 }
 
 /// 将 GitHub 凭据存储在平台凭据管理器中。
-#[cfg(not(feature = "wdio"))]
+#[cfg(not(feature = "test-isolation"))]
 pub struct SystemCredentialStore;
 
-#[cfg(not(feature = "wdio"))]
+#[cfg(not(feature = "test-isolation"))]
 impl CredentialStore for SystemCredentialStore {
     /// 从钥匙串或凭据管理器读取凭据。
     fn load(&self) -> Result<Option<String>, String> {
@@ -64,11 +64,11 @@ impl CredentialStore for SystemCredentialStore {
 }
 
 /// WDIO 进程内的隔离凭据存储，避免测试访问用户的系统钥匙串。
-#[cfg(feature = "wdio")]
+#[cfg(feature = "test-isolation")]
 #[derive(Default)]
 pub struct EphemeralCredentialStore(Mutex<Option<String>>);
 
-#[cfg(feature = "wdio")]
+#[cfg(feature = "test-isolation")]
 impl CredentialStore for EphemeralCredentialStore {
     /// 返回当前 E2E 应用进程内保存的凭据封套。
     fn load(&self) -> Result<Option<String>, String> {
@@ -96,6 +96,6 @@ fn credential_error() -> String {
     "无法访问当前系统用户的安全凭据存储。".to_owned()
 }
 
-#[cfg(all(test, feature = "wdio"))]
+#[cfg(all(test, feature = "test-isolation"))]
 #[path = "tests/credential_store.rs"]
 mod tests;

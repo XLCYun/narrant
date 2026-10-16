@@ -4,26 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       source_tag:
-        description: Private source stable tag
-        required: true
+        description: Private source stable tag (normal mode)
+        required: false
         type: string
       source_sha:
         description: Exact 40-character private source commit
         required: true
         type: string
       public_release_id:
-        description: Fixed cyunlab/narrant Draft Release database ID
-        required: true
+        description: Fixed cyunlab/narrant Draft Release database ID (normal mode)
+        required: false
         type: string
       public_tag:
-        description: Public artifact Release tag
-        required: true
+        description: Public artifact Release tag (normal mode)
+        required: false
         type: string
       mode:
-        description: One-time bootstrap or normal previous-Stable upgrade
+        description: Isolated previous-Stable upgrade with separate production artifact checks
         required: true
         type: choice
-        options: [normal, bootstrap]
+        options: [normal, preflight]
       previous_stable_tag:
         description: Required in normal mode
         required: false
@@ -49,12 +49,84 @@ permissions:
   contents: read
 
 concurrency:
-  group: narrant-update-smoke-${{ inputs.public_release_id }}
+  group: narrant-update-smoke-${{ inputs.public_release_id || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  native-smoke:
-    name: Native update smoke (${{ matrix.target }})
+  preflight:
+    if: inputs.mode == 'preflight'
+    name: Isolated branch upgrade (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos
+            target: darwin-aarch64
+          - runner: windows
+            target: windows-x86_64
+    runs-on: ${{ fromJSON(matrix.runner == 'macos' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Verify exact branch source and existing desktop
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_SHA" = "$(git rev-parse HEAD)"
+          [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git merge-base --is-ancestor "refs/tags/${PREVIOUS_TAG}^{}" "$SOURCE_SHA"
+          node scripts/verify-desktop-runner.mjs --isolated-update-test
+      - run: pnpm install --frozen-lockfile
+      - run: rustup toolchain install stable --profile minimal
+      - name: Build two isolated test packages
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: stable
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+        run: |
+          set -euo pipefail
+          candidate_version="$(node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const base = process.env.PREVIOUS_TAG.slice(1).split(".").map(Number);
+            const source = JSON.parse(readFileSync("src-tauri/tauri.conf.json")).version.split(".").map(Number);
+            const differing = source.findIndex((part, index) => part !== base[index]);
+            if (differing >= 0 && source[differing] < base[differing]) throw new Error("Candidate is older than baseline");
+            console.log(differing < 0 ? [base[0], base[1], base[2] + 1].join(".") : source.join("."));
+          ')"
+          pnpm test:upgrade:build "$(git rev-parse "refs/tags/${PREVIOUS_TAG}^{}")" "${PREVIOUS_TAG#v}" \
+            "$SOURCE_SHA" "$candidate_version" update-test-builds
+      - name: Exercise real upgrade and data preservation without production artifacts
+        run: pnpm test:upgrade:run update-test-builds/test-builds.json update-test-observation
+      - name: Preserve preflight evidence and build diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: narrant-update-preflight-${{ inputs.source_sha }}-${{ matrix.target }}
+          path: |
+            update-test-builds/test-builds.json
+            update-test-builds/*-overlay.patch
+            update-test-builds/*-build.log
+            update-test-observation/isolated-test.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  isolated-upgrade:
+    if: inputs.mode != 'preflight'
+    name: Isolated update smoke (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +140,7 @@ jobs:
             expected_os: win32
             expected_arch: x64
     runs-on: ${{ fromJSON(matrix.runner == 'macos' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
-    timeout-minutes: 90
+    timeout-minutes: 240
     permissions:
       contents: read
     steps:
@@ -105,16 +177,14 @@ jobs:
           git merge-base --is-ancestor "$SOURCE_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"
           test "$(git rev-parse "refs/tags/${SOURCE_TAG}^{}")" = "$SOURCE_SHA"
           node -e "if (process.platform !== process.env.EXPECTED_OS || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)"
-          if [[ "$MODE" == normal ]]; then
-            [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            [[ "$PREVIOUS_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          else
-            test "$MODE" = bootstrap
-            test -z "$PREVIOUS_TAG"
-            test -z "$PREVIOUS_MANIFEST_SHA256"
-          fi
-      - name: Verify desktop session and update-smoke permissions
-        run: node scripts/verify-desktop-runner.mjs --update-smoke
+          test "$MODE" = normal
+          [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$PREVIOUS_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          git merge-base --is-ancestor "refs/tags/${PREVIOUS_TAG}^{}" "$SOURCE_SHA"
+      - name: Verify existing desktop and isolated update prerequisites
+        run: node scripts/verify-desktop-runner.mjs --isolated-update-test
+      - name: Ensure stable Rust is available
+        run: rustup toolchain install stable --profile minimal
       - name: Install exact locked script dependencies
         run: pnpm install --frozen-lockfile
       - name: Download and byte-verify the fixed public Draft
@@ -146,13 +216,25 @@ jobs:
           node scripts/prepare-update-smoke-assets.mjs "$TARGET" "$PREVIOUS_TAG" previous-assets
           test "$(node -p "require('./previous-assets/previous.json').manifestSha256")" = \
             "${{ inputs.previous_stable_manifest_sha256 }}"
-      - name: Run repository-owned real native lifecycle
+      - name: Build separately identified old and candidate test packages
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: stable
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          pnpm test:upgrade:build "$(git rev-parse "refs/tags/${PREVIOUS_TAG}^{}")" "${PREVIOUS_TAG#v}" \
+            "$SOURCE_SHA" "${SOURCE_TAG#v}" update-test-builds
+      - name: Verify production artifacts and run isolated native lifecycle
         shell: bash
         env:
           NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
           NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
           NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY: ${{ inputs.mode == 'normal' && vars.NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY || '' }}
           NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
+          PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
           TARGET: ${{ matrix.target }}
           MODE: ${{ inputs.mode }}
           SOURCE_TAG: ${{ inputs.source_tag }}
@@ -178,6 +260,9 @@ jobs:
             --draft-receipt candidate-draft-receipt.json
             --candidate-directory candidate-assets
             --candidate-installer "$installer"
+            --test-build-receipt update-test-builds/test-builds.json
+            --test-output-directory update-test-observation
+            --previous-source-sha "$(git rev-parse "refs/tags/${PREVIOUS_TAG}^{}")"
             --output-directory smoke-evidence
           )
           if [[ "$MODE" == normal ]]; then
@@ -194,7 +279,7 @@ jobs:
 
   aggregate:
     name: Verify exact two-target evidence
-    needs: native-smoke
+    needs: isolated-upgrade
     runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
     timeout-minutes: 15
     permissions:

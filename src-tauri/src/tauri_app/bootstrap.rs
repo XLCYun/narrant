@@ -19,12 +19,16 @@ use github_commands::github_api_base_url;
 /// 装配 Tauri state、commands 与桌面插件并运行应用。
 pub fn run() {
     let context = tauri::generate_context!();
-    // 测试驱动只能运行独立应用身份；漏传 E2E 配置时在任何用户目录或插件初始化前停止。
-    #[cfg(feature = "wdio")]
+    // 两类桌面测试共用隔离边界，在任何用户目录或插件初始化前检查应用身份。
+    #[cfg(feature = "test-isolation")]
     assert_eq!(
         context.config().identifier,
-        "com.cyunlab.narrant.e2e",
-        "WDIO requires the isolated tauri.e2e.conf.json application identity"
+        if cfg!(feature = "upgrade-smoke") {
+            "com.cyunlab.narrant.upgrade-test"
+        } else {
+            "com.cyunlab.narrant.e2e"
+        },
+        "Desktop tests require their isolated application identity"
     );
     #[cfg(feature = "wdio")]
     let oauth_base_url = std::env::var("NARRANT_GITHUB_OAUTH_URL")
@@ -86,11 +90,11 @@ pub fn run() {
                 option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
                 oauth_client,
                 {
-                    #[cfg(feature = "wdio")]
+                    #[cfg(feature = "test-isolation")]
                     {
                         Arc::new(github::EphemeralCredentialStore::default())
                     }
-                    #[cfg(not(feature = "wdio"))]
+                    #[cfg(not(feature = "test-isolation"))]
                     {
                         Arc::new(github::SystemCredentialStore)
                     }
@@ -133,6 +137,8 @@ pub fn run() {
             app.manage(repository_application);
             app.manage(auth);
             let application_settings = ApplicationSettingsApplication::new(settings_path.clone());
+            #[cfg(feature = "upgrade-smoke")]
+            super::upgrade_smoke::prepare(app, &application_settings)?;
             app.manage(
                 babysit::BabysitApplication::with_installed_provider_registry(
                     settings_path,

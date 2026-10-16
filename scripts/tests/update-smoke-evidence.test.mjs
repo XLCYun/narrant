@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { expectedDraftAssetNames } from "../public-draft-assets.mjs";
+import { UPDATE_TEST_PROFILE } from "../update-test-profile.mjs";
 import {
   BOOTSTRAP_CHECKPOINTS,
   NORMAL_CHECKPOINTS,
@@ -93,6 +95,8 @@ function evidence(target, mode = "normal") {
 /** 返回固定 expectations。 */
 function expectations(mode = "normal") {
   return {
+    // 历史 schema 的回归只在测试中显式启用；发布 CLI 不接受这项选项。
+    allowLegacyEvidence: true,
     mode,
     sourceTag: "v2.0.0",
     sourceSha,
@@ -110,6 +114,55 @@ function expectations(mode = "normal") {
     now,
   };
 }
+
+/** 构造隔离包实际升级与正式包静态核验分别绑定的证据。 */
+function isolatedEvidence(target) {
+  const document = evidence(target);
+  document.schemaVersion = 2;
+  document.evidenceKind = "isolated-native";
+  document.previousStable.packageUrl = `https://updates.cyunlab.com/narrant/releases/1.9.0/${target}/previous-package`;
+  const mac = target === "darwin-aarch64";
+  if (mac) Object.assign(document.platform, { codeSigning: "ad-hoc-verified", notarization: "production-assets-only" });
+  document.testBuilds = {
+    schemaVersion: 1, profile: UPDATE_TEST_PROFILE, target,
+    recipeSha256: sha, updaterKeySha256: sha, manifestSha256: sha,
+    builds: Object.fromEntries(["baseline", "candidate"].map(stage => [stage, {
+      sourceSha: stage === "baseline" ? "c".repeat(40) : sourceSha,
+      version: stage === "baseline" ? "1.9.0" : "2.0.0", sourceVersion: stage === "baseline" ? "1.9.0" : "2.0.0",
+      overlay: "test overlay", overlaySha256: createHash("sha256").update("test overlay").digest("hex"), packageSha256: sha, signatureSha256: sha,
+    }])),
+  };
+  const asset = name => document.draftReceipt.assets.find(item => item.name === name).sha256;
+  const packageName = mac ? "narrant-darwin-aarch64-updater.app.tar.gz" : "narrant-windows-x86_64-updater.exe";
+  document.productionChecks = {
+    scope: "signatures-and-integrity-only", packageSha256: asset(packageName), signatureSha256: asset(`${packageName}.sig`),
+    installerSha256: asset(`Narrant_2.0.0_${mac ? "aarch64.dmg" : "x64-setup.exe"}`), manifestSha256: sha,
+    baselineTrustRoot: "verified", codeSigning: mac ? "verified" : "not-required", notarization: mac ? "verified" : "not-required", productionAppLaunched: false,
+  };
+  return document;
+}
+
+test("发布默认只接受隔离升级及正式包独立核验，预合并结果和旧证据不能冒充", () => {
+  const expected = { ...expectations(), allowLegacyEvidence: false };
+  const documents = ["darwin-aarch64", "windows-x86_64"].map(isolatedEvidence);
+  assert.equal(verifyUpdateSmokeEvidenceSet(documents, expected).evidenceKind, "isolated-native");
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(evidence("darwin-aarch64"), expected), /schema/);
+  for (const alter of [
+    value => { value.evidenceKind = "isolated-native-preflight"; },
+    value => { delete value.productionChecks; },
+    value => { value.productionChecks.packageSha256 = sha; },
+    value => { value.productionChecks.productionAppLaunched = true; },
+    value => { value.testBuilds.builds.candidate.sourceSha = "d".repeat(40); },
+    value => { value.testBuilds.builds.baseline.sourceVersion = "0.0.0"; },
+    value => { value.testBuilds.profile = { ...UPDATE_TEST_PROFILE, identifier: "com.cyunlab.narrant" }; },
+  ]) {
+    const invalid = structuredClone(documents[0]);
+    alter(invalid);
+    assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expected));
+  }
+  documents[1].testBuilds.builds.baseline.sourceSha = "f".repeat(40);
+  assert.throws(() => verifyUpdateSmokeEvidenceSet(documents, expected), /旧版源码/);
+});
 
 test("normal evidence 绑定源码、Draft 八资产、previous package/signature 与真实 checkpoints", () => {
   assert.equal(verifyUpdateSmokeEvidenceDocument(evidence("darwin-aarch64"), expectations()), "darwin-aarch64");

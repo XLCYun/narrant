@@ -1,5 +1,9 @@
 # Application Update 验收记录
 
+2026-10-16 验收范围已按用户决定调整为独立测试包实际升级与正式包静态签名/完整性核验。
+当前执行规则见 [规格](./specs/0017-application-updates.md) 和 [运维文档](./application-update-operations.md)。
+以下 2026-09 的 `real-native`、托管 runner 与 bootstrap 是历史证据，不代表当前分支已通过新验收。
+
 本记录对应 [`0017-application-updates.md`](./specs/0017-application-updates.md) 的 15 条验收标准。
 它区分可在本机确定性执行的证据、必须由应用内浏览器采集的证据，以及只能在 GitHub 托管
 runner 上产生的真实原生升级证据。除特别注明外，本机证据基线为 Task 7 的 Preview Harness

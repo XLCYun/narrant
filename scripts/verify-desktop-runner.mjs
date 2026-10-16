@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { open } from 'node:fs/promises';
-import path from 'node:path';
 
 // 共用现有 runner；在大型构建或系统变更前确认任务确实处于可用的桌面会话。
 assert.equal(process.env.RUNNER_ENVIRONMENT, 'self-hosted', 'Desktop CI requires a self-hosted runner');
@@ -18,14 +16,10 @@ if (process.platform === 'darwin') {
 }
 
 if (process.argv.includes('--update-smoke')) {
-  assert.notEqual(process.env.NARRANT_CI_SHARED_DESKTOP, '1',
-    'Release update smoke still modifies shared hosts/trust and the production installation; it cannot run on the daily-use desktop until those effects are isolated');
-  if (process.platform === 'darwin') {
-    execFileSync('/usr/bin/sudo', ['-n', 'true'], { stdio: 'inherit' });
-  } else {
-    // 只打开文件确认写权限，不改变任何 hosts 内容。
-    const hosts = await open(path.join(process.env.SystemRoot, 'System32/drivers/etc/hosts'), 'r+');
-    await hosts.close();
-  }
+  throw new Error('The legacy production-installation smoke is disabled; use --isolated-update-test');
+}
+if (process.argv.includes('--isolated-update-test')) {
+  // 新驱动只操作测试身份，TLS 使用进程环境；不需要 sudo、hosts 或系统证书权限。
+  execFileSync('openssl', ['version'], { stdio: 'inherit' });
 }
 console.log('Self-hosted desktop prerequisites passed; the actual UI/lifecycle tests still follow.');

@@ -10,9 +10,10 @@ import { setTimeout } from "node:timers";
 import { releaseAssetNames, verifyTauriUpdaterSignature } from "./release-assets.mjs";
 import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
 import { createCandidateGateRoutes, withUpdateSmokeTlsGate } from "./update-smoke-tls-gate.mjs";
-import { createUpdateSmokeTlsSystemAdapter, runBoundedCommand } from "./update-smoke-tls-system-adapter.mjs";
+import { runBoundedCommand } from "./update-smoke-tools.mjs";
+import { UPDATE_TEST_PROFILE } from "./update-test-profile.mjs";
 
-const APP_IDENTIFIER = "com.cyunlab.narrant";
+const APP_IDENTIFIER = UPDATE_TEST_PROFILE.identifier;
 const MAC_CLOSE_HELPER = path.resolve(import.meta.dirname, "macos-close-narrant-window.swift");
 const TARGETS = Object.freeze({
   "darwin-aarch64": Object.freeze({ platform: "darwin", arch: "arm64", installKind: "macos_app_archive" }),
@@ -40,6 +41,16 @@ export function describeUpdateSmokeRunner(target, environment = process.env) {
 
 /** 计算完整 bytes 的 lowercase SHA-256。 */
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
+
+/** 比较升级前后的真实应用投影；缺失或重建项目不能通过保留检查。 */
+export function verifyPreservedUpgradeData(value, baseline, repositoryPath) {
+  const repositories = value.navigation?.repositories;
+  if (value.theme !== "dark" || value.language !== "en-US" || !Array.isArray(repositories) || repositories.length !== 1 ||
+      repositories[0].canonicalPath !== repositoryPath || repositories[0].availability?.kind !== "available") {
+    throw new Error("升级后的模拟项目或设置不完整");
+  }
+  if (baseline && JSON.stringify(value.navigation) !== JSON.stringify(baseline.navigation)) throw new Error("升级后项目身份或历史发生变化");
+}
 
 /** 有界轮询共用的短暂停顿。 */
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
@@ -163,7 +174,7 @@ export async function inspectDurableStaging(stagingRoot, expected) {
   return Object.freeze({ generation, metadata, packageSha256: digest(packageBytes) });
 }
 
-/** 从 macOS app bundle 读取 exact executable/version 并验证 arm64 签名与公证。 */
+/** 从隔离 app bundle 读取精确身份、版本与 arm64 签名；正式包公证另行核验。 */
 async function inspectMacApplication(application, expectedVersion, command, environment) {
   const canonical = await realpath(application);
   const plist = path.join(canonical, "Contents", "Info.plist");
@@ -175,8 +186,7 @@ async function inspectMacApplication(application, expectedVersion, command, envi
   const architectures = await command("lipo", ["-archs", executable], { environment });
   if (architectures.trim() !== "arm64") throw new Error("macOS Narrant 必须是 thin arm64 app");
   await command("codesign", ["--verify", "--deep", "--strict", "--verbose=2", canonical], { environment });
-  await command("xcrun", ["stapler", "validate", canonical], { environment });
-  await command("spctl", ["--assess", "--type", "execute", canonical], { environment });
+  if (executableName !== UPDATE_TEST_PROFILE.binary) throw new Error("测试包可执行程序名未隔离");
   return Object.freeze({ root: canonical, application: canonical, executable, version });
 }
 
@@ -207,19 +217,21 @@ export function normalizeWindowsInstallLocation(value) {
   return normalized;
 }
 
-/** 从唯一 HKCU uninstall record 定位 current-user Narrant 安装。 */
+/** 只读取测试产品自己的卸载键，避免查询或覆盖日常产品记录。 */
 async function inspectWindowsInstallation(expectedVersion, command, environment) {
-  const script = "$ErrorActionPreference='Stop';$cu=@(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'|Where-Object {$_.DisplayName -eq 'Narrant'});$lm=@(Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue|Where-Object {$_.DisplayName -eq 'Narrant'});if($cu.Count -ne 1 -or $lm.Count -ne 0){throw 'expected one HKCU Narrant install'};[Console]::Out.Write(($cu[0]|Select-Object InstallLocation,DisplayVersion,WindowsInstaller,UninstallString|ConvertTo-Json -Compress))";
+  const script = "$ErrorActionPreference='Stop';$p=Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Narrant Upgrade Test';if($p.DisplayName -ne 'Narrant Upgrade Test'){throw 'unexpected test product'};[Console]::Out.Write(($p|Select-Object InstallLocation,DisplayVersion,WindowsInstaller,UninstallString|ConvertTo-Json -Compress))";
   const record = JSON.parse(await command("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { environment }));
   if (record.DisplayVersion !== expectedVersion || record.WindowsInstaller === 1) throw new Error("Windows Narrant version/MSI identity 无效");
   const root = await realpath(normalizeWindowsInstallLocation(record.InstallLocation));
-  if (!root.toLowerCase().startsWith((environment.LOCALAPPDATA ?? environment.USERPROFILE).toLowerCase())) {
+  const relative = path.win32.relative(environment.LOCALAPPDATA, root);
+  if (relative.startsWith("..") || path.win32.isAbsolute(relative) || path.win32.basename(root) !== UPDATE_TEST_PROFILE.name) {
     throw new Error("Windows Narrant 不是 current-user installation");
   }
   const entries = await readdir(root);
   const executables = entries.filter((name) => name.toLowerCase().endsWith(".exe") && !name.toLowerCase().includes("uninstall"));
   const uninstallers = entries.filter((name) => name.toLowerCase().endsWith(".exe") && name.toLowerCase().includes("uninstall"));
   if (executables.length !== 1 || uninstallers.length !== 1) throw new Error("Windows Narrant executable/uninstaller 不唯一");
+  if (executables[0] !== `${UPDATE_TEST_PROFILE.binary}.exe`) throw new Error("Windows 测试可执行程序名未隔离");
   return Object.freeze({ root, executable: path.win32.join(root, executables[0]), uninstaller: path.win32.join(root, uninstallers[0]), version: record.DisplayVersion });
 }
 
@@ -250,8 +262,12 @@ async function findInstalledPids(target, installation, command, environment) {
 /** 启动 exact installed app，并等待唯一 PID。 */
 async function launchInstalled(target, installation, command, environment) {
   if ((await findInstalledPids(target, installation, command, environment)).length) throw new Error("Narrant 启动前已有同安装来源进程");
-  if (target === "darwin-aarch64") await command("open", ["-n", "-a", installation.application], { environment });
-  else spawn(installation.executable, [], { env: environment, shell: false, windowsHide: false, stdio: "ignore", detached: false });
+  // 直接启动 bundle 内的程序，使代理与 CA 文件仅由这一进程继承；不修改 LaunchServices 环境。
+  await new Promise((resolve, reject) => {
+    const child = spawn(installation.executable, [], { env: environment, shell: false, windowsHide: false, stdio: "ignore", detached: false });
+    child.once("error", reject);
+    child.once("spawn", resolve);
+  });
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const pids = await findInstalledPids(target, installation, command, environment);
@@ -282,34 +298,12 @@ async function waitForNoInstalledProcess(target, installation, command, environm
   throw new Error("Narrant 未在 deadline 内退出");
 }
 
-/** 把 bootstrap candidate installer 安装到 runner。 */
-async function installBootstrapCandidate(target, installer, version, temporary, command, environment) {
-  if (target === "windows-x86_64") {
-    await command(installer, ["/S"], { environment });
-    return inspectWindowsInstallation(version, command, environment);
-  }
-  const mount = path.join(temporary, "dmg-mount");
-  const installRoot = path.join(temporary, "install");
-  await Promise.all([mkdir(mount), mkdir(installRoot)]);
-  let attached = false;
-  try {
-    await command("codesign", ["--verify", "--strict", "--verbose=2", installer], { environment });
-    await command("xcrun", ["stapler", "validate", installer], { environment });
-    await command("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", installer], { environment });
-    await command("hdiutil", ["attach", installer, "-readonly", "-nobrowse", "-mountpoint", mount], { environment });
-    attached = true;
-    const apps = (await readdir(mount)).filter((name) => name.endsWith(".app"));
-    if (apps.length !== 1 || apps[0] !== "Narrant.app") throw new Error("bootstrap DMG app layout 无效");
-    await command("ditto", [path.join(mount, apps[0]), path.join(installRoot, apps[0])], { environment });
-  } finally {
-    if (attached) await command("hdiutil", ["detach", mount], { environment }).catch(() => {});
-  }
-  return inspectMacApplication(path.join(installRoot, "Narrant.app"), version, command, environment);
-}
-
 /** 把 previous Stable updater package 安装到隔离 runner location。 */
 async function installPreviousStable(target, packagePath, version, temporary, command, environment) {
   if (target === "windows-x86_64") {
+    const escaped = packagePath.replaceAll("'", "''");
+    await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      `if ((Get-Item -LiteralPath '${escaped}').VersionInfo.ProductName -ne 'Narrant Upgrade Test') { throw 'Refusing a production or unknown installer' }`], { environment });
     await command(packagePath, ["/S"], { environment });
     return inspectWindowsInstallation(version, command, environment);
   }
@@ -335,20 +329,19 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   if (!contract) throw new Error(`不支持的 native target：${target ?? ""}`);
   const command = dependencies.runCommand ?? runBoundedCommand;
   const commandEnvironment = selectEnvironment(environment);
-  const tlsSystemAdapter = dependencies.tlsSystemAdapter ?? createUpdateSmokeTlsSystemAdapter(environment);
   let temporary;
   let installation;
   let closeHelper;
   let statePaths;
+  let baselineData;
+  let appEnvironment;
   const launches = [];
   const ownedStateRoots = [];
 
   /** 初始化干净 runner 与 staging roots。 */
   async function initialize() {
     if (process.platform !== contract.platform || process.arch !== contract.arch) throw new Error("runner 与 native target 不匹配");
-    if (environment.NARRANT_CI_SHARED_DESKTOP === "1") {
-      throw new Error("当前更新验收仍修改共享 hosts、证书和正式安装，尚不能在日常桌面安全运行");
-    }
+    if (environment.NARRANT_UPGRADE_TEST_PROFILE !== "1") throw new Error("升级验收仅允许独立测试包 profile");
     temporary = await mkdtemp(path.join(tmpdir(), "narrant-native-update-"));
     statePaths = platformStatePaths(target, commandEnvironment);
     for (const root of [statePaths.dataRoot, statePaths.cacheRoot]) {
@@ -360,6 +353,13 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
       await mkdir(root);
       ownedStateRoots.push(root);
     }
+    if (target === "windows-x86_64") {
+      await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        "if (Test-Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Narrant Upgrade Test') { throw 'Existing upgrade test installation; preserve it for inspection' }"], { environment: commandEnvironment });
+    }
+    const repository = path.join(temporary, "repository");
+    await command("git", ["init", "--quiet", "--template=", repository], { environment: commandEnvironment });
+    appEnvironment = { ...commandEnvironment, NARRANT_UPGRADE_TEST_REPOSITORY: await realpath(repository) };
     if (target === "darwin-aarch64") closeHelper = await compileMacCloseHelper(temporary, command, commandEnvironment);
   }
 
@@ -372,33 +372,21 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     return installation;
   }
 
-  /** 安装 candidate installer，供 first-updater bootstrap 使用。 */
-  async function installBootstrap(options) {
-    if (target === "windows-x86_64") {
-      const names = releaseAssetNames(options.version);
-      const updater = path.join(options.candidateDirectory, names.updater.windows);
-      const [installerBytes, updaterBytes, updaterSignature] = await Promise.all([
-        readFile(options.candidateInstaller), readFile(updater), readFile(`${updater}.sig`, "utf8"),
-      ]);
-      if (digest(installerBytes) !== digest(updaterBytes)) throw new Error("bootstrap Windows installer 与已签 updater bytes 不同");
-      verifyTauriUpdaterSignature(installerBytes, updaterSignature, options.releaseSigningPublicKey);
-    }
-    installation = await installBootstrapCandidate(target, options.candidateInstaller, options.version, temporary, command, commandEnvironment);
-    await inspectTrustedConfiguration(installation, options.candidateUpdaterPublicKey);
-    return installation;
-  }
-
   /** 在固定 Stable TLS gate 内运行旧应用真实下载生命周期。 */
   async function withCandidateGate(options, action) {
     const routes = createCandidateGateRoutes({
       target, tag: options.publicTag, version: options.version,
       directory: options.candidateDirectory, manifest: options.manifest,
     });
-    return withUpdateSmokeTlsGate({ endpoint: FIXED_STABLE_ENDPOINT, tag: options.publicTag, routes }, action, tlsSystemAdapter);
+    return withUpdateSmokeTlsGate({ endpoint: FIXED_STABLE_ENDPOINT, tag: options.publicTag, routes }, async (gate) => {
+      appEnvironment = { ...appEnvironment, ...gate.environment };
+      return action(gate);
+    }, dependencies.tlsGateDependencies);
   }
 
   /** 等待当前 candidate 进入 durable staging。 */
   async function waitForStaging(options) {
+    baselineData = await observeData("baseline", options.previous.version);
     const names = releaseAssetNames(options.version);
     const packageName = target === "darwin-aarch64" ? names.updater.darwin : names.updater.windows;
     const signature = await readFile(path.join(options.candidateDirectory, `${packageName}.sig`), "utf8");
@@ -413,6 +401,26 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
       } catch (error) { last = error; await delay(500); }
     }
     throw new Error(`candidate 未达到 durable staging：${last?.message ?? "unknown"}`);
+  }
+
+  /** 从实际应用读取已加载的数据，候选启动前不会重新写入项目或设置。 */
+  async function observeData(stage, expectedVersion) {
+    const deadline = Date.now() + 60_000;
+    const observation = path.join(statePaths.dataRoot, "upgrade-test-observation.json");
+    while (Date.now() < deadline) {
+      const bytes = await readFile(observation).catch(() => undefined);
+      if (bytes) {
+        if (bytes.length > MAX_METADATA_BYTES) throw new Error("升级数据观察结果过大");
+        const value = JSON.parse(bytes);
+        if (value.stage === stage && value.version === expectedVersion) {
+          if (value.identifier !== APP_IDENTIFIER || await realpath(value.dataRoot) !== await realpath(statePaths.dataRoot)) throw new Error("升级数据身份未隔离");
+          verifyPreservedUpgradeData(value, baselineData, appEnvironment.NARRANT_UPGRADE_TEST_REPOSITORY);
+          return value;
+        }
+      }
+      await delay(100);
+    }
+    throw new Error(`未取得 ${stage} 的真实数据快照`);
   }
 
   /** 轮询同一安装位置的 candidate version。 */
@@ -432,19 +440,6 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
       } catch (error) { last = error; await delay(1_000); }
     }
     throw new Error(`candidate installation 未就绪：${last?.message ?? "unknown"}`);
-  }
-
-  /** 注入损坏 staging，并证明 candidate 启动恢复时会清除。 */
-  async function proveBootstrapRecovery(options) {
-    const fixture = await writeBootstrapVerificationFixture(statePaths.stagingRoot, {
-      currentVersion: options.version,
-      target,
-      installKind: contract.installKind,
-    });
-    const launch = await launchInstalled(target, installation, command, commandEnvironment);
-    launches.push(launch);
-    await observeBootstrapRecovery(statePaths, fixture.generation);
-    return launch;
   }
 
   /** 失败路径终止进程，正常路径卸载/删除本次 runner state。 */
@@ -469,13 +464,18 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     target,
     runner: describeUpdateSmokeRunner(target, environment),
     platform: target === "darwin-aarch64"
-      ? { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "verified", notarization: "verified" }
+      ? { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "ad-hoc-verified", notarization: "production-assets-only" }
       : { packageKind: "nsis-exe", installerKind: "nsis-exe", installScope: "current-user", registryRoot: "HKCU", msiPresent: false, authenticode: "not-required" },
     initialize,
     installBaseline,
-    installBootstrap,
     withCandidateGate,
-    launch: async () => { const launch = await launchInstalled(target, installation, command, commandEnvironment); launches.push(launch); return launch; },
+    launch: async (stage = "baseline") => {
+      await rm(path.join(statePaths.dataRoot, "upgrade-test-observation.json"), { force: true });
+      const launch = await launchInstalled(target, installation, command, { ...appEnvironment, NARRANT_UPGRADE_TEST_STAGE: stage });
+      launches.push(launch);
+      return launch;
+    },
+    inspectPreservedData: (options) => observeData("candidate", options.version),
     waitForStaging,
     requestNormalClose: (launch) => requestNormalClose(target, launch, closeHelper, command, commandEnvironment),
     waitForExit: (launch) => waitForNoInstalledProcess(target, launch.installation, command, commandEnvironment),
@@ -488,7 +488,6 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
       }
     },
     inspectTrustedConfiguration: (publicKey) => inspectTrustedConfiguration(installation, publicKey),
-    proveBootstrapRecovery,
     cleanup,
   });
 }

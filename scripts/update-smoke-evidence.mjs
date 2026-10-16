@@ -7,17 +7,18 @@ import { pathToFileURL, URL } from "node:url";
 
 import { assertSameDraftReceipt, expectedDraftAssetNames } from "./public-draft-assets.mjs";
 import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
+import { UPDATE_TEST_PROFILE } from "./update-test-profile.mjs";
 
 export const REQUIRED_UPDATE_TARGETS = Object.freeze([
   "darwin-aarch64",
   "windows-x86_64",
 ]);
 export const NORMAL_CHECKPOINTS = Object.freeze([
-  "baseline.signed_package_installed",
+  "baseline.signed_test_package_installed",
   "baseline.exact_installed_app_launched",
   "update.fixed_endpoint_checked",
-  "update.draft_manifest_received",
-  "update.draft_package_downloaded",
+  "update.test_manifest_received",
+  "update.test_package_downloaded",
   "update.signature_verified",
   "update.durable_staging_observed",
   "shutdown.normal_close_requested",
@@ -26,6 +27,8 @@ export const NORMAL_CHECKPOINTS = Object.freeze([
   "install.no_automatic_relaunch",
   "candidate.manual_relaunch",
   "candidate.version_observed",
+  "candidate.fixture_repository_preserved",
+  "candidate.fixture_settings_preserved",
 ]);
 export const BOOTSTRAP_CHECKPOINTS = Object.freeze([
   "bootstrap.signed_installer_verified",
@@ -153,11 +156,13 @@ function verifyUpdaterTrust(trust, mode, receiptTrust) {
 /** 校验一个 target 的 evidence document。 */
 export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   requireObject(document, "evidence");
-  if (document.schemaVersion !== 1 || !["normal", "bootstrap"].includes(document.mode)) {
+  const isolated = document.schemaVersion === 2 && document.evidenceKind === "isolated-native";
+  const historical = expectations.allowLegacyEvidence === true && document.schemaVersion === 1 && document.evidenceKind === "real-native";
+  if ((!isolated && !historical) || !["normal", "bootstrap"].includes(document.mode)) {
     throw new Error("evidence schema/mode 无效");
   }
+  if (isolated && document.mode !== "normal") throw new Error("隔离升级证据必须是 normal");
   if (expectations.mode && document.mode !== expectations.mode) throw new Error("evidence mode 不匹配");
-  if (document.evidenceKind !== "real-native") throw new Error("promotion 只接受 real-native evidence");
   const target = requireString(document.target, "target", 64);
   const contract = TARGET_CONTRACTS[target];
   if (!contract) throw new Error(`不支持的 evidence target：${target}`);
@@ -172,7 +177,9 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
     // 历史托管验收仍按原有精确镜像校验，不能把未知镜像当作已验证环境。
     requireContract(document.runner, contract.runner, "runner");
   }
-  requireContract(document.platform, contract.platform, "platform");
+  requireContract(document.platform, isolated && target === "darwin-aarch64"
+    ? { ...contract.platform, codeSigning: "ad-hoc-verified", notarization: "production-assets-only" }
+    : contract.platform, "platform");
 
   const source = requireObject(document.source, "source");
   if (source.repository !== "XLCYun/narrant" || source.tag !== expectations.sourceTag || source.sha !== expectations.sourceSha) {
@@ -191,6 +198,7 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   if (!SHA256.test(candidate.manifestSha256)) throw new Error("candidate manifest SHA-256 无效");
   verifyDraftReceipt(document.draftReceipt, expectations);
   verifyUpdaterTrust(document.updaterTrust, document.mode, document.draftReceipt.updaterTrust);
+  if (isolated) verifyIsolatedPackageEvidence(document);
 
   if (document.mode === "bootstrap") {
     if (expectations.previousReleaseSigningKeySha256 !== undefined) {
@@ -215,10 +223,13 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
     }
     let previousUrl;
     try { previousUrl = new URL(previous.packageUrl); } catch { throw new Error("previous Stable package URL 无效"); }
+    const expectedHost = isolated ? "updates.cyunlab.com" : "github.com";
+    const expectedPrefix = isolated ? `/narrant/releases/${previous.version}/${target}/`
+      : `/cyunlab/narrant/releases/download/${encodeURIComponent(previous.tag)}/`;
     if (
       previousUrl.href !== previous.packageUrl || previousUrl.protocol !== "https:" ||
-      previousUrl.hostname !== "github.com" || previousUrl.username || previousUrl.password ||
-      !previousUrl.pathname.startsWith(`/cyunlab/narrant/releases/download/${encodeURIComponent(previous.tag)}/`)
+      previousUrl.hostname !== expectedHost || previousUrl.username || previousUrl.password ||
+      previousUrl.port || previousUrl.search || previousUrl.hash || !previousUrl.pathname.startsWith(expectedPrefix)
     ) {
       throw new Error("previous Stable package URL 不属于固定 public Release tag");
     }
@@ -261,6 +272,31 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   return target;
 }
 
+/** 分别绑定实际测试包和正式资产，拒绝预合并试运行冒充发布资格。 */
+function verifyIsolatedPackageEvidence(document) {
+  const tests = requireObject(document.testBuilds, "testBuilds");
+  requireContract(tests.profile, UPDATE_TEST_PROFILE, "testBuilds.profile");
+  if (tests.schemaVersion !== 1 || tests.target !== document.target ||
+      [tests.recipeSha256, tests.updaterKeySha256, tests.manifestSha256].some((value) => !SHA256.test(value))) throw new Error("测试包 recipe/key/manifest 身份无效");
+  for (const stage of ["baseline", "candidate"]) {
+    const build = requireObject(tests.builds?.[stage], `testBuilds.${stage}`);
+    if (!COMMIT.test(build.sourceSha) || [build.packageSha256, build.signatureSha256, build.overlaySha256].some((value) => !SHA256.test(value))) throw new Error("测试包源码或摘要无效");
+    if (typeof build.overlay !== "string" || createHash("sha256").update(build.overlay).digest("hex") !== build.overlaySha256) throw new Error("测试包源码叠加摘要不一致");
+    const version = stage === "baseline" ? document.previousStable?.version : document.candidate.version;
+    if (build.version !== version || build.sourceVersion !== version || (stage === "candidate" && build.sourceSha !== document.source.sha)) throw new Error("测试包与正式源码版本不一致");
+  }
+  const mac = document.target === "darwin-aarch64";
+  const packageName = mac ? "narrant-darwin-aarch64-updater.app.tar.gz" : "narrant-windows-x86_64-updater.exe";
+  const installerName = `Narrant_${document.candidate.version}_${mac ? "aarch64.dmg" : "x64-setup.exe"}`;
+  const asset = (name) => document.draftReceipt.assets.find((item) => item.name === name)?.sha256;
+  requireContract(document.productionChecks, {
+    scope: "signatures-and-integrity-only",
+    packageSha256: asset(packageName), signatureSha256: asset(`${packageName}.sig`), installerSha256: asset(installerName),
+    manifestSha256: document.candidate.manifestSha256, baselineTrustRoot: "verified",
+    codeSigning: mac ? "verified" : "not-required", notarization: mac ? "verified" : "not-required", productionAppLaunched: false,
+  }, "productionChecks");
+}
+
 /** 聚合严格两个 target，拒绝重复、缺少、额外和跨 target identity 漂移。 */
 export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
   if (!Array.isArray(documents) || !Number.isFinite(expectations?.maxAgeHours) || expectations.maxAgeHours <= 0) {
@@ -280,6 +316,7 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
     if (JSON.stringify(document.source) !== JSON.stringify(first.source) ||
         JSON.stringify(document.candidate) !== JSON.stringify(first.candidate) ||
         JSON.stringify(document.updaterTrust) !== JSON.stringify(first.updaterTrust) ||
+        document.evidenceKind !== first.evidenceKind ||
         document.mode !== first.mode) {
       throw new Error("两个 target 的候选/previous identity 不一致");
     }
@@ -290,9 +327,15 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
         }
       }
     }
+    if (first.evidenceKind === "isolated-native" &&
+        (document.testBuilds.recipeSha256 !== first.testBuilds.recipeSha256 ||
+         document.testBuilds.builds.baseline.sourceSha !== first.testBuilds.builds.baseline.sourceSha)) {
+      throw new Error("两个 target 的测试构建方案或旧版源码不一致");
+    }
   }
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: first.schemaVersion,
+    evidenceKind: first.evidenceKind,
     mode: first.mode,
     targets: REQUIRED_UPDATE_TARGETS,
     source: first.source,

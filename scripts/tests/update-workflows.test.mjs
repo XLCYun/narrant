@@ -19,7 +19,11 @@ test("update-smoke 同时支持手动重试与 release 复用调用，matrix 精
   assert.match(workflow, /workflow_call:/);
   assert.match(workflow, /CYUNLAB_RELEASE_TOKEN:\n\s+required: true/);
   assert.doesNotMatch(workflow, /release:\s*\n|types:\s*\[published\]/);
-  assert.equal((workflow.match(/^\s*- runner:/gm) ?? []).length, 2);
+  assert.equal((workflow.slice(workflow.indexOf("\n  isolated-upgrade:")).match(/^\s*- runner:/gm) ?? []).length, 2);
+  assert.match(workflow, /isolated-update-test/);
+  assert.match(workflow, /test:upgrade:build/);
+  assert.match(workflow, /--test-build-receipt/);
+  assert.doesNotMatch(workflow, /--update-smoke|sudo|hosts/);
   assert.match(workflow, /runner: macos\n\s+target: darwin-aarch64/);
   assert.match(workflow, /runner: windows\n\s+target: windows-x86_64/);
   assert.doesNotMatch(workflow, /linux-|darwin-x86_64|windows-aarch64/);

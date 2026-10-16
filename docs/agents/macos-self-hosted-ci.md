@@ -81,10 +81,16 @@ CI 设置 `NARRANT_CARGO_LOCK_FILE=/Users/Shared/narrant-ci/cargo.lock`。
 真实应用测试会在当前桌面打开测试窗口，不能据此关闭日常 Narrant 或删除个人数据。
 `scripts/verify-desktop-runner.mjs` 会在大型构建前检查会话，真实 E2E 仍需完整运行。
 
-完整更新冒烟目前仍使用正式应用身份、系统 hosts 和证书信任，不能满足同一日常账户的隔离要求。
-runner 设置 `NARRANT_CI_SHARED_DESKTOP=1`，checkout 外的开始 hook 拒绝 `native-smoke` job，
-预检和更新驱动也会在系统操作前拒绝运行。保留该门禁未通过，不以普通 E2E 或修改过的测试包
-代替真实签名发布包的升级证据。后续完成安装、数据与网络隔离后才能恢复；不得删除个人数据来通过验收。
+升级验收使用独立 `Narrant Upgrade Test`，identifier 为 `com.cyunlab.narrant.upgrade-test`，
+可执行文件名为 `narrant-upgrade-test`。旧、新测试包分别取上一 Stable 和候选源码，仅叠加隔离身份、
+内存凭据和数据观察入口。TLS 通过测试进程自己的代理与 CA 文件工作，不修改 hosts、系统信任或代理。
+正式包另做静态签名、完整性与信任根核验；测试包升级不等同于正式产品身份下实际升级。
+
+`update-smoke.yml` 的 `isolated-upgrade` 产生发布验收，`preflight` 只产生不可发布的分支验收。
+继续保留 `NARRANT_CI_SHARED_DESKTOP=1` 和 checkout 外 hook 对旧 `native-smoke` job 的阻止，
+防止重跑历史工作流误用日常安装。新入口使用 `verify-desktop-runner.mjs --isolated-update-test`，
+不要求 sudo、管理员或 hosts 写权限。缺少独立 profile 或发现旧测试安装/数据时停止，保留现场。
+失败后只清理本次拥有的测试进程、安装和数据，不能清理日常 Narrant。
 
 普通发布任务不需要上述系统权限。macOS 签名使用本次任务的临时钥匙串和公证密钥，
 成功或失败后都恢复原钥匙串列表并删除凭据。两条 OSS 发布流程共用

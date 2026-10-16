@@ -12,7 +12,7 @@ import {
   writeBootstrapVerificationFixture,
 } from "../native-update-platform-adapter.mjs";
 import { combineDriverErrors, runNativeUpdateSmokeDriver } from "../native-update-smoke-driver.mjs";
-import { BOOTSTRAP_CHECKPOINTS, NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
+import { NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
 
 /** 创建可记录方法顺序的 fake native adapter。 */
 function adapter(events, fail = {}) {
@@ -40,6 +40,7 @@ function adapter(events, fail = {}) {
     inspectUpdated: () => invoke("updated"),
     assertNotRelaunched: () => invoke("no-relaunch"),
     inspectTrustedConfiguration: () => invoke("trust"),
+    inspectPreservedData: () => invoke("preserved-data"),
     proveBootstrapRecovery: () => invoke("recovery", { pid: 8 }),
     cleanup: () => invoke("cleanup"),
   };
@@ -64,16 +65,13 @@ test("normal driver 按 gate/staging/normal-exit/no-relaunch/manual-launch 顺�
   const result = await runNativeUpdateSmokeDriver(options(), adapter(events));
   assert.deepEqual(events, [
     "initialize", "installBaseline", "gate:start", "launch", "staging", "gate:requests",
-    "close", "exit", "updated", "no-relaunch", "launch", "trust", "gate:end", "cleanup",
+    "close", "exit", "updated", "no-relaunch", "launch", "trust", "preserved-data", "close", "exit", "gate:end", "cleanup",
   ]);
   assert.deepEqual(result.checkpoints.map(({ id }) => id), [...NORMAL_CHECKPOINTS]);
 });
 
-test("bootstrap driver 不调用 baseline/gate，真实恢复后正常退出并 clean relaunch", async () => {
-  const events = [];
-  const result = await runNativeUpdateSmokeDriver(options("bootstrap"), adapter(events));
-  assert.deepEqual(events, ["initialize", "installBootstrap", "recovery", "trust", "close", "exit", "launch", "cleanup"]);
-  assert.deepEqual(result.checkpoints.map(({ id }) => id), [...BOOTSTRAP_CHECKPOINTS]);
+test("拒绝已完成使命的 bootstrap，避免误安装正式候选", async () => {
+  await assert.rejects(() => runNativeUpdateSmokeDriver(options("bootstrap"), adapter([])), /只支持 normal/);
 });
 
 test("normal 必须提供 previous release key，bootstrap 必须拒绝该 key", async () => {
@@ -82,7 +80,7 @@ test("normal 必须提供 previous release key，bootstrap 必须拒绝该 key",
   await assert.rejects(() => runNativeUpdateSmokeDriver(missing, adapter([])), /previous.*key/i);
   const bootstrap = options("bootstrap");
   bootstrap.previousReleaseSigningPublicKey = "unexpected-old-key";
-  await assert.rejects(() => runNativeUpdateSmokeDriver(bootstrap, adapter([])), /bootstrap.*previous.*key/i);
+  await assert.rejects(() => runNativeUpdateSmokeDriver(bootstrap, adapter([])), /只支持 normal/);
 });
 
 test("cleanup 错误不覆盖 native 主错误", async () => {
@@ -119,9 +117,9 @@ test("durable staging 必须匹配 pointer/metadata/package digest", async (cont
 
 test("平台 state path 固定在 Tauri identifier 的 data/cache 边界", () => {
   const mac = platformStatePaths("darwin-aarch64", { HOME: "/Users/runner" });
-  assert.equal(mac.stagingRoot, "/Users/runner/Library/Caches/com.cyunlab.narrant/application-update");
+  assert.equal(mac.stagingRoot, "/Users/runner/Library/Caches/com.cyunlab.narrant.upgrade-test/application-update");
   const windows = platformStatePaths("windows-x86_64", { APPDATA: "C:\\Users\\runner\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\runner\\AppData\\Local" });
-  assert.equal(windows.stagingRoot, "C:\\Users\\runner\\AppData\\Local\\com.cyunlab.narrant\\application-update");
+  assert.equal(windows.stagingRoot, "C:\\Users\\runner\\AppData\\Local\\com.cyunlab.narrant.upgrade-test\\application-update");
 });
 
 test("bootstrap fixture 以严格更高版本进入验签分支并观察完整 recovery cleanup/diagnostic", async (context) => {

@@ -151,10 +151,16 @@ E2E 使用独立应用身份 `com.cyunlab.narrant.e2e`、无痕 WebView、临时
 凭据只保存在内存，并禁用正式应用更新。测试不运行安装程序，不修改日常应用的安装记录；
 不能关闭或清理用户正在使用的 Narrant。测试构建漏传 E2E 配置时会在初始化用户目录前停止。
 
-完整更新冒烟目前会改写系统 hosts、证书和 HKCU 的正式 Narrant 安装记录，仍未完成隔离。
-runner 设置 `NARRANT_CI_SHARED_DESKTOP=1`，checkout 外的开始 hook 拒绝 `native-smoke` job，
-预检和驱动也会在系统操作前拒绝运行。该门禁保持未通过，普通 E2E 或测试版安装包不能代替
-真实签名发布包的升级证据；完成安装、数据与网络隔离后才能恢复，不得清理个人数据来通过验收。
+升级验收使用独立 `Narrant Upgrade Test`，identifier 为 `com.cyunlab.narrant.upgrade-test`，
+可执行文件名为 `narrant-upgrade-test`。旧、新测试包分别取上一 Stable 和候选源码，仅叠加隔离身份、
+内存凭据和数据观察入口。TLS 通过测试进程自己的代理与 CA 文件工作，不修改 hosts、系统信任或代理。
+正式包另做静态签名、完整性与信任根核验；测试包升级不等同于正式产品身份下实际升级。
+
+`update-smoke.yml` 的 `isolated-upgrade` 产生发布验收，`preflight` 只产生不可发布的分支验收。
+继续保留 `NARRANT_CI_SHARED_DESKTOP=1` 和 checkout 外 hook 对旧 `native-smoke` job 的阻止，
+防止重跑历史工作流误用日常安装。新入口使用 `verify-desktop-runner.mjs --isolated-update-test`，
+不要求 sudo、管理员或 hosts 写权限。缺少独立 profile 或发现旧测试安装/数据时停止，保留现场。
+失败后只清理本次拥有的测试进程、安装和数据，不能清理日常 Narrant。
 
 注册 token 仅在本机注册时使用，不写入仓库、日志或会话。下载和任务联网应在
 服务身份下验证；交互用户的本地代理可用，不代表 Windows 服务也能使用它。

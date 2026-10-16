@@ -4,7 +4,24 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { release, tmpdir, version } from "node:os";
 import path from "node:path";
 
-import { createNativeUpdatePlatformAdapter, describeUpdateSmokeRunner, normalizeWindowsInstallLocation, platformStatePaths } from "../native-update-platform-adapter.mjs";
+import { createNativeUpdatePlatformAdapter, describeUpdateSmokeRunner, normalizeWindowsInstallLocation, platformStatePaths, verifyPreservedUpgradeData } from "../native-update-platform-adapter.mjs";
+
+test("升级保留断言拒绝项目丢失、身份重建和设置重置", () => {
+  const baseline = { theme: "dark", language: "en-US", navigation: {
+    repositories: [{ id: 7, canonicalPath: "/fixture", availability: { kind: "available" } }], recentReviews: [],
+  } };
+  assert.doesNotThrow(() => verifyPreservedUpgradeData(structuredClone(baseline), baseline, "/fixture"));
+  for (const mutate of [
+    (value) => { value.navigation.repositories = []; },
+    (value) => { value.navigation.repositories[0].id = 8; },
+    (value) => { value.theme = "system"; },
+    (value) => { value.language = "zh-CN"; },
+  ]) {
+    const changed = structuredClone(baseline);
+    mutate(changed);
+    assert.throws(() => verifyPreservedUpgradeData(changed, baseline, "/fixture"), /升级/);
+  }
+});
 
 // 直接经过初始化失败和真实清理入口，证明已有用户数据不会被失败收尾删除。
 for (const existing of ["dataRoot", "cacheRoot"]) {
@@ -15,7 +32,7 @@ for (const existing of ["dataRoot", "cacheRoot"]) {
     const directory = await mkdtemp(path.join(tmpdir(), "narrant-cleanup-ownership-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const environment = {
-      RUNNER_ENVIRONMENT: "self-hosted", RUNNER_NAME: "fixture",
+      RUNNER_ENVIRONMENT: "self-hosted", RUNNER_NAME: "fixture", NARRANT_UPGRADE_TEST_PROFILE: "1",
       HOME: directory, APPDATA: path.join(directory, "roaming"), LOCALAPPDATA: path.join(directory, "local"),
     };
     const roots = platformStatePaths(target, environment);
@@ -44,7 +61,7 @@ test("自托管更新证据记录真实主机版本，缺少身份时不生成�
   assert.throws(() => describeUpdateSmokeRunner("unsupported", {}), /target 不匹配/);
 });
 
-test("日常桌面在任何系统操作前拒绝尚未隔离的正式更新验收", async t => {
+test("缺少隔离 profile 时在任何系统操作前拒绝更新验收", async t => {
   const target = process.platform === "darwin" && process.arch === "arm64" ? "darwin-aarch64"
     : process.platform === "win32" && process.arch === "x64" ? "windows-x86_64" : undefined;
   if (!target) return t.skip("仅产品支持的平台执行原生验收");
@@ -52,7 +69,7 @@ test("日常桌面在任何系统操作前拒绝尚未隔离的正式更新验�
   const adapter = createNativeUpdatePlatformAdapter(target, {
     RUNNER_ENVIRONMENT: "self-hosted", RUNNER_NAME: "fixture", NARRANT_CI_SHARED_DESKTOP: "1",
   }, { runCommand: async () => { commandCount++; throw new Error("不应执行系统命令"); } });
-  await assert.rejects(adapter.initialize(), /日常桌面安全运行/);
+  await assert.rejects(adapter.initialize(), /独立测试包 profile/);
   await adapter.cleanup();
   assert.equal(commandCount, 0);
 });

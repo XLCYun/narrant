@@ -150,16 +150,27 @@ updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`sign
 
 - Draft 上传完成后必须经 API 回读精确资产集、asset ID/digest/bytes，并校验版本、URL、
   manifest signature literal、SHA256SUMS 和 minisign。
-- 在 `macos-15` Apple Silicon 与 Windows x64 runner 上执行真实原生生命周期：安装上一
-  updater-capable Stable、检查候选、下载、持久化暂存、正常退出安装、原路径替换和候选启动。
-- Draft 资产不是匿名公开。smoke 使用临时 TLS gate 向真实旧应用的固定 GitHub endpoint
-  提供从 Draft API 回读的 byte-exact manifest 与包；不得降低生产 HTTPS 限制。
-- 每个平台生成 checksummed evidence，绑定 source tag/SHA、public Release ID/tag、manifest
-  SHA、上一 Stable manifest SHA、包/签名 SHA、runner OS/arch、freshness 和 real-native checkpoints。
-- 私有源码仓库中的 promotion job 使用受保护 Environment 等待人工审批。审批后再次回读
-  Draft 并复核全部 evidence，才把 Draft 设置为 published/latest。
-- 首个 updater-capable Release 没有可自动升级的上一 Stable：它执行完整安装、启动、配置、
-  签名和暂存恢复 smoke，并明确作为一次性手动 bootstrap。下一版开始强制旧版到候选升级。
+- 使用现有自托管 macOS ARM64 与 Windows x64 runner、当前桌面账户和登录会话，执行
+  独立 `Narrant Upgrade Test` 的真实安装、检查、下载、验签、持久化暂存、正常退出安装、
+  原路径替换、手动启动候选及模拟项目/主题/语言设置保留检查。
+- 旧测试包来自上一 Stable 的精确源码，新测试包来自候选精确源码。只叠加独立应用身份、
+  内存凭据和数据观察入口；使用各自版本的更新器实现。记录源码 SHA、原始版本、构建版本、
+  构建方案摘要、完整叠加差异、测试包/签名摘要及测试公钥身份。
+- 测试包使用临时 updater 密钥；macOS 测试 app 使用 ad-hoc 签名。正式 Draft 及上一 Stable
+  另行核验实际 updater 签名、摘要、内嵌信任配置；正式 macOS app/DMG 另验代码签名与公证。
+  这些静态检查不启动正式应用，也不能表述为“正式包本体完成升级”。
+- TLS gate 通过仅传给测试进程的 `HTTPS_PROXY` 与 `SSL_CERT_FILE` 服务固定
+  `https://updates.cyunlab.com/narrant/channels/stable/latest.json` 和当前候选包。
+  不修改 hosts、系统代理、证书信任、日常 Narrant 的安装、进程、凭据或数据。
+- 每个平台生成 checksummed schema v2 `isolated-native` evidence，分别绑定测试构建与正式
+  Draft 资产、source tag/SHA、public Release ID/tag、上一 Stable、runner OS/arch 和 freshness。
+  两平台必须使用相同的旧版源码和测试构建方案。
+- 无正式 Draft 的分支试运行标记为 `isolated-native-preflight`，可以用版本叠加制造升级，
+  不能用于 promotion。发布验收要求测试源码版本与正式版本一致。
+- promotion 复核可信 Actions run、完整两平台证据和 Draft 后才能继续发布。旧 schema 与
+  分支试运行不能获得发布资格。首次 updater bootstrap 的历史记录保留，当前升级入口仅运行 normal。
+- 验收覆盖范围是独立身份下的升级实现与模拟数据保留，以及正式包的静态签名/完整性。
+  正式产品身份、真实安装目录、生产签名与升级组合没有在该账户上实际执行。
 
 ## Implementation Decisions
 
@@ -190,7 +201,7 @@ updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`sign
     与应用内浏览器的截图、可访问 DOM、实际尺寸和交互检查。
 11. Draft 生成脚本对精确资产、manifest、签名、tag-specific URL 和公开/私有身份映射有测试。
 12. promotion 在缺少、过期、目标不全、来源不匹配或非 real-native evidence 时 fail closed。
-13. 首个 updater-capable Release 执行 bootstrap smoke；后续 Release 在两平台执行真实旧版到候选升级。
+13. 两平台独立测试包实际完成旧版到候选升级和模拟数据保留；报告明确区分测试包行为与正式包静态核验。
 14. 发布运维文档说明密钥备份、泄露/丢失、bridge rotation、Draft 审批、失败恢复和首版 bootstrap。
 15. 交付验证包含前端单元测试、类型检查、Lint、生产构建、`git diff --check`、聚焦 Cargo
     检查/测试，以及 Issue 完成前通过 `scripts/cargo-agent.sh` 运行一次 Rust 全量测试。
