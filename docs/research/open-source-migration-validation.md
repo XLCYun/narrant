@@ -25,8 +25,11 @@
   后续仅补传升级测试的 `RUNNER_TEMP` 并调整说明，相关 driver/TLS 17 项测试通过；
   不改变该运行验收的语言实现和 CI 命令。未手动触发 quality-gate。
 - macOS runner 的 GitHub 注册、LaunchAgent、专用账户/组及 `/Users/Shared/narrant-ci`
-  已清理。Windows 注册也已注销，GitHub runner 数量为 0；Windows 主机清理仍在原会话继续，
-  尚不能把双平台本机退役记为全部完成。
+  已清理。Windows 于 2026-10-17 重启后核验：服务、进程、计划任务、专属用户组、旧服务账户
+  配置、`C:\ci`、`ci-setup`、专属 Python 与下载缓存均已清理，并补清失效 PATH 条目和卸载日志。
+  GitHub runner 数量再次核验为 0，双平台退役已完成。个人 Narrant 与共用开发工具保留。
+- Mac 后续补清约 277 MiB 的旧 CI 调查文件、下载缓存和测试工具；开发中的 worktree
+  `target` 与共用 sccache 仍按 AGENTS.md 保留。系统管理的三个 WebKit 测试空目录无缓存数据。
 
 ## Standards
 

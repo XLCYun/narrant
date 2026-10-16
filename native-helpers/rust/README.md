@@ -4,7 +4,8 @@
 的 `project-model`、`load-cargo`、`ide`、`syntax`、`vfs`、`base-db` 和 `hir-def` 直接链接到同一个程序。
 提供只读项目核心、完整 Rust 图投影和 `narrant-rust` 单请求 NDJSON 可执行程序。
 应用工厂从 1.1.0 未发布候选加载该程序，经公共 Native Host 构图；旧 Rust LSP 与服务器分发已退役。
-本地 macOS ARM64 完成实际支持包安装及 Review 验收，最终双平台 CI 待全部开发与审查完成后执行。
+本地 macOS ARM64 与最终 GitHub-hosted macOS ARM64 / Windows x64 验收均已完成，
+包含 helper、公共图、实际安装和 Review；见[迁移证据](../../docs/research/existing-native-helper-migration-validation.md)。
 
 ## 构建与验证
 
@@ -101,5 +102,5 @@ cancelled 帧，公共 Host 在已记录取消且没有已观察的真实失败�
 helper 不维持后台会话、watcher、构建脚本或宏进程。`scratch_root`
 仅为 Host 协议授权字段，临时锁使用系统 tempfile 生命周期并在正常退出时清理；强制终止
 与既有临时目录一样可能留下无项目副作用的系统临时文件。真实支持包优化构建、耗时和峰值内存样本、
-安装/Review 接入已完成本地 macOS ARM64 验收；最终七套 helper 的 macOS/Windows
-联合平台验收与支持包发布仍待完成，局部性能样本不代表性能提升承诺。
+安装/Review 接入已完成本地 macOS ARM64 验收；七套 helper 的 macOS/Windows
+联合语言验收也已通过，支持包尚未发布。局部性能样本不代表性能提升承诺。

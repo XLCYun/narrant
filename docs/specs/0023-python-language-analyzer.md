@@ -59,8 +59,9 @@ Q2 的取舍记入 [ADR-0033](../adr/0033-bound-python-analysis-to-repository-an
 固定 ty 0.0.84 对应 Ruff revision `11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a`；
 同一数据库提供 AST、原文与全部导航候选，helper 负责既有投影并经公共 Native Host 构图。
 旧 Host Ruff parser、ty 服务器、LSP/setup/smoke 路由已经退役。无需用户 Python/Node 环境，
-不自动切换其他引擎。1.1.0 未发布候选完成本地 macOS ARM64 实际安装/Review 验收；
-最终 Windows x64 与集中双平台 CI 待完成。边界、历史断言和许可证来源限制见
+不自动切换其他引擎。1.1.0 未发布候选已完成本地 macOS ARM64 验收，以及最终
+GitHub-hosted macOS ARM64 / Windows x64 的 helper、实际安装、图与 Review 验收。
+边界、历史断言和许可证来源限制见
 [helper 说明](../../native-helpers/python/README.md) 与
 [迁移证据](../research/existing-native-helper-migration-validation.md)。
 

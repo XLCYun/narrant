@@ -2,8 +2,9 @@
 
 状态：公共 Host 已实现。以下 2026-10-03 的双平台证据仅覆盖当时新增的四套 helper。
 2026-10-11 按 [0025](0025-migrate-existing-analyzers-to-native-helpers.md) 将 Rust、TS/JS、Python
-接入同一 Host，七套生产 helper 均使用本协议，旧 LSP 已退役。本轮三个迁移语言已完成
-本地 macOS ARM64 验收；最终七套双平台 CI、整分支审查与发布仍待完成。
+接入同一 Host，七套生产 helper 均使用本协议，旧 LSP 已退役。2026-10-17 已完成
+本地 macOS ARM64 验收、整分支审查和七套 helper 的最终 GitHub-hosted 双平台语言 CI；
+证据见[迁移验证](../research/existing-native-helper-migration-validation.md)，支持包仍未发布。
 公共 Rust Host、四种 helper、应用接入、真实安装与 CodeGraph/diff 在 macOS ARM64 和 Windows x64 通过。
 共享 WindowsJob 已修复并统一接入；`83d5642` 的生产路径完整双平台矩阵四组全部通过。
 精确范围与旧缺陷见[跨平台记录](../research/native-crossplatform-validation.md)和

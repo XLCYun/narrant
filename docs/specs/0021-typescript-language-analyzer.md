@@ -19,8 +19,10 @@ uses fixed Node 24.18.0 / TypeScript 6.0.3 and the in-process Compiler/Language 
 for syntax, own-content and definition evidence. One worker handles one fixed side; the
 common Native Host owns process lifetime and graph validation. Oxc, TLS, tsserver, old
 setup scripts and the LSP transport are retired; no server fallback is retained. The
-1.1.0 candidate has passed local macOS ARM64 installation/Review/public graph checks;
-final Windows x64 and combined CI remain pending. See [migration evidence](../research/0025-typescript-native-helper-migration.md).
+unpublished 1.1.0 candidate has passed local macOS ARM64 checks and the final GitHub-hosted
+macOS ARM64 / Windows x64 helper, installation, Review and public graph gates. See
+[final migration evidence](../research/existing-native-helper-migration-validation.md) and
+[earlier TypeScript evidence](../research/0025-typescript-native-helper-migration.md).
 
 ## Language and objects
 

@@ -38,13 +38,14 @@ Rust/Python 通过 `native-helpers/common` 共用序列化 DTO 和已审查的�
 
 Python `1.1.0` 原生候选已通过正常优化打包、macOS ARM64 隔离安装、生产工厂、
 Review 到 DTO、错误与取消验收；旧应用内 Python/ty LSP 链及宿主 Ruff 依赖已退役。
-Windows x64 和集中最终 CI 尚未执行，catalog 保持未发布。
+最终 GitHub-hosted macOS ARM64 / Windows x64 语言 CI 已通过，catalog 保持未发布；
+实际命令与范围见[迁移证据](../../docs/research/existing-native-helper-migration-validation.md)。
 
 正常构建入口复用共享 helper 构建器及 Rust Cargo 许可闭包收集器，使用 Rust 1.98.0。
 包内 `bin/narrant-python`、`control/native.json` 和嵌入 stdlib 的身份共同校验；工厂唯一信任根
 为 `bin`，平台 root 同样为 `bin`。按实际目标收集的许可附带原始通知与固定来源；少数确切
 版本的 MIT 声明附上明确标注的标准条款。seahash 上游通知取回失败的边界见 `licenses/sources.json`，
-不能据此推断上游仓库没有通知。发布仍须最终验收。
+不能据此推断上游仓库没有通知。语言验收通过不消除该来源限制，发布前仍需复核许可材料。
 
 在仓库根执行（所有 Cargo 命令经全局锁与 sccache wrapper）：
 

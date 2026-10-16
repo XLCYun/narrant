@@ -24,8 +24,8 @@ three dependency scopes. Repository/standard-library modes remain offline; all-d
 mode retains the user network policy. Build scripts, proc macros and automatic toolchain
 or rust-src installation remain disabled.
 
-The 1.1.0 pack candidate has passed local macOS ARM64 helper, graph, isolated installation
-and Review checks; final Windows x64 and combined CI remain pending. See
+The unpublished 1.1.0 pack candidate has passed local macOS ARM64 checks and the final
+GitHub-hosted macOS ARM64 / Windows x64 helper, graph, installation and Review gates. See
 [implementation evidence](../research/existing-native-helper-migration-validation.md) and
 [helper boundaries](../../native-helpers/rust/README.md). The server initialization,
 readiness, UTF-16 transport and executable descriptions below preserve the dated original

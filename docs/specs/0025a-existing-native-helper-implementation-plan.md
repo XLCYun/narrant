@@ -1,6 +1,8 @@
 # 既有语言 Native Helper 迁移实施计划
 
-状态：执行中，2026-10-11。权威规格为 [0025](0025-migrate-existing-analyzers-to-native-helpers.md)，
+状态：Task 1–7 的实现、审查与双平台语言验收已完成，2026-10-17；PR #201 待合并，支持包未发布。
+完成核对与逐平台证据见[迁移验证](../research/existing-native-helper-migration-validation.md)。
+权威规格为 [0025](0025-migrate-existing-analyzers-to-native-helpers.md)，
 架构决定为 [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md)。
 基线提交：`14bb67c26ca8ad60ce36c47369047d16e34d1179`。
 

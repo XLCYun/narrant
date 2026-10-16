@@ -1,6 +1,9 @@
 # 将现有语言分析迁移到 Native Helper
 
-状态：实施中，2026-10-11。Q1–Q5 已确认；同日按用户要求调整为本地 macOS 优先、开发完成后集中 CI。本规格不代表新实现已通过验收。
+状态：实现与双平台语言验收完成，2026-10-17。Q1–Q5 的兼容基线保持不变；本地 macOS
+验证、旧链退役、整分支审查和最终 GitHub-hosted macOS ARM64 / Windows x64 语言验收均已完成。
+逐项证据见[迁移验证](../research/existing-native-helper-migration-validation.md)。PR #201 仍为草稿，
+支持包尚未发布；本状态不表示代码已合并或正式应用升级已验收。
 
 ## 目标与范围
 
@@ -50,7 +53,7 @@ Java、Go、C#、C/C++ 的既有实现继续使用该公共入口。
 
 以下保留迁移前只读核对基线。当前三套生产入口已迁到公共 Native Host；本地 macOS
 安装与 Review 证据见 [迁移验证](../research/existing-native-helper-migration-validation.md)。
-最终双平台 CI 和发布仍待集中门禁。
+最终双平台语言 CI 已通过；发布仍独立受支持包与应用发布门禁约束。
 
 | 实现 | 应用内职责 | 外部语义工具 | 迁移中的关键工作 |
 | --- | --- | --- | --- |
@@ -172,7 +175,7 @@ macOS ARM64 与 Windows x64 均须通过后才能交付。公共进程模块承�
 
 ## 公共接入契约（Task 3）
 
-本节定义迁移 helper 的接入接口，不代表 Rust、TS/JS 或 Python 已完成生产迁移。
+本节定义已接入生产工厂的迁移 helper 接口；实现与验收证据见本规格开头的迁移验证。
 继续使用 `narrant.native-analyzer/1`，消息字段、严格重复键检查和 completed DTO 不变。
 新 profile 由新 helper 在 ready 中明确宣告；旧四套 helper 的请求与图校验保持原契约。
 
@@ -218,4 +221,4 @@ TS 测试过滤同时保留输入路径和真实仓库相对路径的既有规�
 已迁移集合由 `scripts/native-migration.mjs` 和应用 `PackId::NATIVE_MIGRATED` 显式记录。
 双平台 workflow 的 language 选择仅接受该集合；聚焦运行跳过旧服务器构建矩阵和无关 SDK，
 保留所选 helper 自身、公共进程/Host、真实安装、应用接入及图/diff 验收。
-`all` 保留最终全语言门禁与 Windows 旧 LSP 生命周期边界；未完成语言不会以空跑取得绿灯。
+`all` 保留最终全语言门禁与共享进程生命周期验收；未完成语言不会以空跑取得绿灯。

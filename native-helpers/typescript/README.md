@@ -35,7 +35,9 @@ Windows 使用 `x86_64-pc-windows-msvc`，在对应平台本机构建和验证�
 真实取消与公开图/diff。所有 Cargo 命令由 `scripts/cargo-agent.sh` 串行执行。
 单独运行 Node 测试需设置 `NARRANT_TYPESCRIPT_PACK` 为真实已解压包目录。
 
-1.1.0 为迁移候选包，`published=false`；macOS/Windows Actions 通过前不发布。
+1.1.0 为迁移候选包，`published=false`；最终 GitHub-hosted macOS ARM64 / Windows x64
+语言 Actions 已通过，见[迁移证据](../../docs/research/existing-native-helper-migration-validation.md)。
+测试通过不会自动发布支持包。
 旧 TypeScript 子树、TLS 开发安装链和 Oxc 宿主依赖已在本地 macOS 验收后退役；
 身份、原文和包含树由固定历史断言继续验证，生产入口使用 Native Host。
 

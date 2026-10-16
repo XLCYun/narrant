@@ -9,6 +9,45 @@
 升级或新一轮全仓 quality-gate 已执行。以下保留各阶段原始范围与失败记录；开源迁移和
 当前发布边界见 [迁移验证](open-source-migration-validation.md)。
 
+## 完成核对（2026-10-17）
+
+按 0025 的 Q1–Q5、公共接入约束和 0025a 的 Task 1–7 核对当前生产入口、测试选择器、
+支持包清单及上述 run 的实际日志。迁移实现与双平台语言验收已完成；PR #201 仍为草稿，
+未合并、未发布应用或语言包。后续提交中的升级 smoke 临时目录传递及文档修改不改变
+该 CI 验收的 helper、Host、支持包构建器、语言测试和工作流命令。
+
+| 要求 | 当前实现与实际验收 |
+| --- | --- |
+| 同源原生 API，移除 LSP | Rust 的 `RustProject` 持有 `AnalysisHost`/VFS；TS `analyze.mjs` 创建进程内 `LanguageService`；Python 在受控 `SnapshotSystem` 上创建 `ProjectDatabase`。应用工厂七套入口均通向公共 `NativeLanguageAnalyzer`，没有服务器回退。 |
+| 保留图身份、内容和配置语义 | Rust syntax/graph、TS projection/config/workspace/Host graph、Python graph/native 业务断言都进入实际 CI；保留历史图快照、原文和图差异检查。TS 跨项目冲突仍不确定，Rust 保留当前 cfg；格式等价不掩盖有语义文本变化。 |
+| 保留依赖、目标及读取边界 | Rust helper 库测试与 Host 三档依赖测试实际执行，build scripts/过程宏/自动安装仍禁用；Python 核心和 Host 的 `7..=14` 逐 minor 测试执行，覆盖标准库、重绑定、`.py/.pyi`、污染环境和越界链接；TS 仍使用仓库与固定标准声明。 |
+| 公共协议与生命周期 | 严格协议、coverage/origins、external 描述、失败传播、EOF、取消与输出阻塞均在 helper/Host 测试中验证。共享 `child_process::ProcessTree` 平台矩阵实际执行，工作区在进程退出后释放；没有新增常驻池、跨 Review 缓存或第二套进程守卫。 |
+| 真实安装与应用调用 | 三套分别执行真实支持包安装、生产工厂与 Review-to-DTO；混合语言应用测试及公开 `native_helper_graphs` 也执行。指定真实工具的测试显式用 `--ignored` 或 `--include-ignored` 启动；普通套件中的忽略项不计为通过。 |
+| 旧链路与交付文件 | 宿主依赖清单/锁文件不再包含三套旧 parser；旧 LSP、setup 和服务器分发入口已删除。TypeScript 打包器明确删除 tsserver/typingsInstaller，通用归档校验仍保留。三套支持包为新的 1.1.0 候选，所有七包均为 `published: false`。 |
+| 审查、文档与性能 | 整分支审查的五项发现已修复并复核；后续平台修复按差异范围独立复核。0019/0021/0023、0024/0024a 和 0025/0025a 已描述当前架构，历史 ADR 保留时间背景。各语言代表性样本及 Rust 内存成本见下文，不宣称未经对照的性能提升。 |
+
+两套完整 Native Analyzer job 各串行执行 `verificationCommands(..., 'all')` 的 25 组验收，
+并实际构建全部七套支持包。以下列出迁入语言的可核对计数；它们属于不同测试组，不能与
+普通 Host 套件简单累加为去重总数。
+
+| 范围 | macOS ARM64 | Windows x64 |
+| --- | --- | --- |
+| TS/JS helper；Host 图；真实安装；Review | 173；26；1；1 通过 | 173；26；1；1 通过 |
+| Rust helper 库/初始协议/生命周期；Host 图/语法；工厂；真实安装；Review | 35/2/4；26/15；2；1；1 通过 | 36/2/2；23/15；1；1；1 通过 |
+| Python helper 库/初始协议/生命周期；Host 图/native；安装；Review | 18/2/3；16/22；3；5 通过 | 16/2/3；13/23；3；5 通过 |
+| 公共公开图与差异 | 11 通过 | 11 通过 |
+| 共享进程树 | 3 通过，1 个子进程夹具忽略 | 11 通过，1 个子进程夹具忽略 |
+
+对应原始 job 为 [macOS Native Analyzer](https://github.com/XLCYun/narrant/actions/runs/38928118116/job/117064839302)
+和 [Windows Native Analyzer](https://github.com/XLCYun/narrant/actions/runs/38928118116/job/117064839053)。
+平台条件造成的数量差异保留，未运行项不算通过；独立 build jobs 另完成支持包构建与 Python 安装/Review。
+
+此核对完成的是 Native Helper 迁移，不将语言 CI 扩大解释为新一轮全仓 quality-gate 或正式升级。
+Python `seahash 4.1.0` 原始许可 notice 的来源限制仍未消除，发布前须复核许可材料。
+按用户完整退役 runner 的要求，历史 Windows `ci-setup` 验收文件及本地 `.tools/ci-validation`
+中的自托管、桌面 CI 记录已清理；下文旧路径仅记录当时证据位置，当前可追溯证据以 GitHub run、
+提交和本页汇总为准。
+
 ## Task 1：直接内嵌 Rust 核心（2026-10-11）
 
 本轮只建立 `native-helpers/rust/` 的独立库和聚焦证明。没有切换应用入口，没有生成
