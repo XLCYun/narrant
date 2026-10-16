@@ -84,6 +84,9 @@ test("分支选择目标或同源基线不会放宽正式升级的双平台与�
   assert.match(preflight, /inputs\.preflight_target/);
   assert.match(preflight, /inputs\.preflight_baseline/);
   assert.doesNotMatch(formal, /inputs\.preflight_target|inputs\.preflight_baseline/);
+  assert.match(preflight, /narrant-update-preflight/);
+  assert.match(preflight, /update-test-observation\/failure\.json/);
+  assert.doesNotMatch(formal, /continue-on-error: true/);
   assert.match(formal, /--previous-source-sha/);
   assert.equal((formal.match(/^\s*- runner:/gm) ?? []).length, 2);
   const runner = await readFile(new URL("../../scripts/run-isolated-update-test.mjs", import.meta.url), "utf8");

@@ -67,6 +67,8 @@ export async function runNativeUpdateSmokeDriver(options, adapter) {
     });
   } catch (error) {
     primary = error;
+    try { await adapter.captureFailure(error); }
+    catch (diagnosticError) { primary = combineDriverErrors(primary, diagnosticError); }
   }
   let cleanup;
   try { await adapter.cleanup(); } catch (error) { cleanup = error; }

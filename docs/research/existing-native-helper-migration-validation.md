@@ -603,8 +603,8 @@ WDIO 日志保留 Windows 可执行位及未安装外部 `tauri-driver` 的诊�
 embedded 驱动实际完成了测试，没有为消除提示安装另一套驱动。构建保留既有未使用导入警告。
 原始日志和报告位于 Windows 的 `C:\Users\win10\ci-setup\wdio-2407a2e\logs\test.stdout.log`
 及同目录上一级的 `verification.json`。后续清理已删除约 5.38 GiB 的编译中间文件；
-剩余约 2.19 GiB 的 `target`/`dist` 清理被执行策略以 `blocked by policy` 拒绝，具体原因未返回，
-产物与已备份日志仍保留。该清理待办不改变已经完成的测试结果。
+剩余约 2.19 GiB 的 `target`/`dist` 最初被执行策略拒绝，随后已按用户授权完成清理并核对结果；
+原始日志和验证报告保留。清理不改变已经完成的测试结果。
 
 ### 后续完整检查与升级隔离（2026-10-16）
 

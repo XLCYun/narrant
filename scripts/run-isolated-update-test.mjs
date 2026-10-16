@@ -68,7 +68,7 @@ export async function runIsolatedUpdateTest(receiptPath, outputDirectory, enviro
   };
   const observation = await runNativeUpdateSmokeDriver(options, createNativeUpdatePlatformAdapter(target, {
     ...environment, NARRANT_UPGRADE_TEST_PROFILE: "1",
-  }));
+  }, { diagnosticsDirectory: output }));
   const result = {
     evidenceKind: "isolated-native-preflight",
     coverage: receipt.builds.baseline.sourceSha === receipt.builds.candidate.sourceSha

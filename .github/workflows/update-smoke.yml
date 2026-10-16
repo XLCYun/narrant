@@ -133,8 +133,28 @@ jobs:
             "$SOURCE_SHA" "$candidate_version" update-test-builds
       - name: Exercise real upgrade and data preservation without production artifacts
         run: pnpm test:upgrade:run update-test-builds/test-builds.json update-test-observation
+      - name: Preserve test packages and diagnostics on the existing runner
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFile, cp, mkdir, readdir } from 'node:fs/promises';
+          import path from 'node:path';
+          const destination = path.join(process.env.RUNNER_TOOL_CACHE, 'narrant-update-preflight', `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`);
+          await mkdir(destination, { recursive: true });
+          for (const source of ['update-test-builds', 'update-test-observation']) {
+            const entries = await readdir(source, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+            const files = entries.filter(entry => entry.isFile() && /\.(json|patch|log|exe|gz|sig)$/.test(entry.name));
+            if (!files.length) continue;
+            await mkdir(path.join(destination, source));
+            for (const file of files) await cp(path.join(source, file.name), path.join(destination, source, file.name));
+          }
+          console.log(`Runner-local test packages and diagnostics: ${destination}`);
+          await appendFile(process.env.GITHUB_STEP_SUMMARY, `Branch preflight files retained on this runner: \`${destination}\`. This is not production release evidence.\n`);
+          NODE
       - name: Preserve preflight evidence and build diagnostics
         if: always()
+        continue-on-error: true # 分支诊断已有 runner 副本；正式发布证据仍要求上传成功。
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: narrant-update-preflight-${{ inputs.source_sha }}-${{ matrix.target }}
@@ -143,6 +163,7 @@ jobs:
             update-test-builds/*-overlay.patch
             update-test-builds/*-build.log
             update-test-observation/isolated-test.json
+            update-test-observation/failure.json
           if-no-files-found: warn
           retention-days: 14
 

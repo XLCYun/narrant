@@ -30,6 +30,23 @@ Windows 使用修复后的同一源码构建两个独立测试版本，结果标
 macOS 的普通质量检查与 E2E 继续执行；正式发布的双平台升级门禁不因此豁免。
 本轮未发布正式版本或修改 Stable。
 
+### Windows 安装器格式回归
+
+Windows 同源测试的 [run 38885635994](https://github.com/XLCYun/narrant/actions/runs/38885635994)
+成功构建并签名 `1.2.14`、`1.2.15` 两份独立包，也完成真实下载和 durable staging，
+但正常退出后安装记录没有变成新版本，4 分钟轮询失败，不能计为升级通过。
+
+排查发现安装入口错误地要求 NSIS loader 自身为 AMD64。只读检查已发布的
+`Narrant_1.2.14_x64-setup.exe` 得到 PE machine `0x014c`（I386），SHA-256 为
+`36728f9201ef79151dcd9321dd00f0f7412d2487aed7488bdea3245b6954a4d4`。
+新增 handoff 回归先以“应用更新包不是 Windows x64 PE”失败；修复允许 I386/AMD64 loader，
+应用安装计划仍限定 Windows x64，并保留包签名与暂存复验。修复后更新模块 **93 项通过**，
+脚本回归 **243 项通过、2 项跳过**；真实 Windows 重跑待完成。
+
+该次 Artifact 上传还因 GitHub 存储额度已满而失败。分支试运行改为额外在现有 runner
+保存测试包与诊断，并在清理前记录测试专属日志、版本记录和进程退出状态；上传失败不能
+覆盖功能测试失败，正式发布的证据上传要求不变。
+
 ## 历史验收范围（2026-09）
 
 本记录对应 [`0017-application-updates.md`](./specs/0017-application-updates.md) 的 15 条验收标准。

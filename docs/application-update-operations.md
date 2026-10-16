@@ -130,6 +130,10 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 `isolated-native-preflight`，正式包尚未核验，promotion 会拒绝这种结果。
 `preflight_target` 可选择 Windows、macOS 或两者，当前默认 Windows。用户于 2026-10-16
 暂停 macOS 升级验收，恢复前仅选择 Windows；普通 macOS 质量检查与 E2E 不在暂停范围内。
+分支试运行将包、签名、构建记录和诊断保留到当前 runner 的
+`RUNNER_TOOL_CACHE/narrant-update-preflight/<run-id>-<attempt>`，路径写入 job summary。
+这个副本供失败复现，结束排查后可按精确目录清理；不含测试私钥，也不产生正式发布资格。
+分支 Artifact 上传失败时保留警告和本地副本；正式发布仍要求上传及双平台聚合全部成功。
 `preflight_baseline=previous-stable` 保持上一 Stable 源码；`candidate` 使用当前修复源码构建
 两个不同测试版本，并将证据标为 `same-source-version-regression`。后者用于验证修复后的升级
 链路，不能证明上一 Stable 可升级，也不能替代正式发布要求的 previous Stable 源码与双平台证据。

@@ -77,8 +77,13 @@ for (const existing of ["dataRoot", "cacheRoot"]) {
     await writeFile(sentinel, "keep my data");
     const adapter = createNativeUpdatePlatformAdapter(target, environment, {
       runCommand: async () => { throw new Error("拒绝已有数据时不得启动应用或系统命令"); },
+      diagnosticsDirectory: directory,
     });
     await assert.rejects(adapter.initialize(), /旧 Narrant state/);
+    await adapter.captureFailure(new Error("initialization refused"));
+    const report = JSON.parse(await readFile(path.join(directory, "failure.json"), "utf8"));
+    assert.equal(report.updateLog, undefined);
+    assert.equal(report.installation, undefined);
     await adapter.cleanup();
     assert.equal(await readFile(sentinel, "utf8"), "keep my data");
   });

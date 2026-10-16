@@ -363,7 +363,7 @@ impl CommandLauncher for RecordingLauncher {
     }
 }
 
-/// 写入可被最小 PE contract validator 接受的 AMD64 header。
+/// 写入与真实安装器一致的最小 PE machine header。
 fn write_pe(machine: u16) -> tempfile::NamedTempFile {
     use std::io::{Seek, SeekFrom, Write};
     let mut file = tempfile::NamedTempFile::new().expect("pe file");
@@ -380,7 +380,7 @@ fn write_pe(machine: u16) -> tempfile::NamedTempFile {
 
 #[test]
 fn windows_handoff_validates_x64_pe_copy_lifetime_argv_and_single_launch() {
-    assert!(validate_windows_pe_x64(write_pe(0x014c).path()).is_err());
+    assert!(validate_windows_nsis_pe(write_pe(0xaa64).path()).is_err());
     let package = write_pe(0x8664);
     let launcher = RecordingLauncher::default();
     let installer = prepare_and_launch_windows_nsis(package.path(), "Narrant", true, &launcher)
@@ -389,5 +389,18 @@ fn windows_handoff_validates_x64_pe_copy_lifetime_argv_and_single_launch() {
     let calls = launcher.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].1, ["/P", "/UPDATE", "/R"]);
+    std::fs::remove_dir_all(installer.parent().unwrap()).expect("cleanup kept tempdir");
+}
+
+#[test]
+fn windows_handoff_accepts_nsis_x86_bootstrapper_for_x64_application() {
+    // 已发布的 x64 NSIS 包使用 I386 loader；应用目标仍由 windows-x86_64 安装计划约束。
+    let package = write_pe(0x014c);
+    let launcher = RecordingLauncher::default();
+    let installer = prepare_and_launch_windows_nsis(package.path(), "Narrant", false, &launcher)
+        .expect("x86 NSIS bootstrapper can install the x64 application");
+    let calls = launcher.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, ["/P", "/UPDATE"]);
     std::fs::remove_dir_all(installer.parent().unwrap()).expect("cleanup kept tempdir");
 }

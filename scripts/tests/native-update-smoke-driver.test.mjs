@@ -38,6 +38,7 @@ function adapter(events, fail = {}) {
     assertNotRelaunched: () => invoke("no-relaunch"),
     inspectTrustedConfiguration: () => invoke("trust"),
     inspectPreservedData: () => invoke("preserved-data"),
+    captureFailure: () => invoke("diagnostics"),
     cleanup: () => invoke("cleanup"),
   };
 }
@@ -87,7 +88,20 @@ test("cleanup 错误不覆盖 native 主错误", async () => {
     return true;
   });
   assert.equal(events.at(-1), "cleanup");
+  assert.equal(events.at(-2), "diagnostics");
   assert.equal(combineDriverErrors(new Error("primary"), new Error("cleanup")).message, "primary");
+});
+
+test("诊断失败仍保留升级主错误并执行清理", async () => {
+  const events = [];
+  await assert.rejects(() => runNativeUpdateSmokeDriver(options(), adapter(events, {
+    updated: "candidate unchanged", diagnostics: "disk full",
+  })), error => {
+    assert.equal(error.message, "candidate unchanged");
+    assert.deepEqual(error.errors.map(value => value.message), ["candidate unchanged", "disk full"]);
+    return true;
+  });
+  assert.deepEqual(events.slice(-2), ["diagnostics", "cleanup"]);
 });
 
 test("durable staging 必须匹配 pointer/metadata/package digest", async (context) => {

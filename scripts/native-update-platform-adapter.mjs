@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir, version, release } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -153,10 +153,17 @@ export function normalizeWindowsInstallLocation(value) {
 }
 
 /** 只读取测试产品自己的卸载键，避免查询或覆盖日常产品记录。 */
-async function inspectWindowsInstallation(expectedVersion, command, environment) {
+async function readWindowsInstallationRecord(command, environment) {
   const script = "$ErrorActionPreference='Stop';$p=Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Narrant Upgrade Test';if($p.DisplayName -ne 'Narrant Upgrade Test'){throw 'unexpected test product'};[Console]::Out.Write(($p|Select-Object InstallLocation,DisplayVersion,WindowsInstaller,UninstallString|ConvertTo-Json -Compress))";
-  const record = JSON.parse(await command("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { environment }));
-  if (record.DisplayVersion !== expectedVersion || record.WindowsInstaller === 1) throw new Error("Windows Narrant version/MSI identity 无效");
+  return JSON.parse(await command("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { environment }));
+}
+
+/** 核对独立 NSIS 安装的实际版本与路径，失败时保留观察到的版本。 */
+async function inspectWindowsInstallation(expectedVersion, command, environment) {
+  const record = await readWindowsInstallationRecord(command, environment);
+  if (record.DisplayVersion !== expectedVersion || record.WindowsInstaller === 1) {
+    throw new Error(`Windows Narrant version/MSI identity 无效：expected=${expectedVersion}, actual=${record.DisplayVersion}, MSI=${record.WindowsInstaller ?? 0}`);
+  }
   const root = await realpath(normalizeWindowsInstallLocation(record.InstallLocation));
   const relative = path.win32.relative(environment.LOCALAPPDATA, root);
   if (relative.startsWith("..") || path.win32.isAbsolute(relative) || path.win32.basename(root) !== UPDATE_TEST_PROFILE.name) {
@@ -390,6 +397,30 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     throw new Error(`candidate installation 未就绪：${last?.message ?? "unknown"}`);
   }
 
+  /** 清理前保存本次测试拥有的数据与退出状态，不读取初始化拒绝的旧目录。 */
+  async function captureFailure(error) {
+    if (!dependencies.diagnosticsDirectory) return;
+    const report = {
+      target, failure: error.message, capturedAt: new Date().toISOString(),
+      processes: launches.map(({ pid, child }) => ({ pid, exitCode: child.exitCode, signalCode: child.signalCode })),
+    };
+    if (ownedStateRoots.includes(statePaths?.dataRoot)) {
+      for (const [name, file] of Object.entries({
+        updateLog: statePaths.diagnostics,
+        observation: path.join(statePaths.dataRoot, "upgrade-test-observation.json"),
+      })) {
+        const metadata = await lstat(file).catch(() => undefined);
+        if (metadata?.isFile() && metadata.size <= MAX_METADATA_BYTES) report[name] = await readFile(file, "utf8");
+      }
+      if (target === "windows-x86_64") {
+        report.installation = await readWindowsInstallationRecord(command, commandEnvironment).catch(error => ({ error: error.message }));
+      }
+    }
+    await writeFile(path.join(dependencies.diagnosticsDirectory, "failure.json"), `${JSON.stringify(report, null, 2)}\n`);
+    // Actions 日志独立于 Artifact 存储额度；仅输出测试身份的有界诊断。
+    process.stderr.write(`Upgrade test failure diagnostics: ${JSON.stringify(report)}\n`);
+  }
+
   /** 失败路径终止进程，正常路径卸载/删除本次 runner state。 */
   async function cleanup() {
     const errors = [];
@@ -439,6 +470,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
       }
     },
     inspectTrustedConfiguration: (publicKey) => inspectTrustedConfiguration(installation, publicKey),
+    captureFailure,
     cleanup,
   });
 }
