@@ -13,7 +13,7 @@ const server = createServer((request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   if (url.pathname === "/health") return json(response, { ok: true });
   if (url.pathname === "/model/status") return json(response, { active: activeModelRequests });
-  // 保持真实 HTTP 请求未完成，直到应用取消，避免首帧断言依赖外部服务速度。
+  // 保持模型响应未完成，避免首帧断言依赖外部服务速度；测试结束时统一关闭连接。
   if (url.pathname === "/model/chat/completions" && request.method === "POST") {
     activeModelRequests++;
     request.resume();

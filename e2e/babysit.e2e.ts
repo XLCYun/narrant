@@ -50,14 +50,16 @@ describe("宝宝模式", () => {
     await expect($("[data-testid='babysit-footer']")).toHaveText(expect.stringContaining("正在生成逐行解释"));
     await browser.waitUntil(async () => (await (await fetch("http://127.0.0.1:18472/model/status")).json()).active > 0,
       { timeoutMsg: "宝宝模式没有请求本地模型夹具" });
-    // provider 可能在查询与点击之间完成；在 WebView 同一任务内原子查询并只取消仍连接的按钮。
+    // 在 WebView 同一任务内查询并取消当前生成；缺少动作必须明确失败。
     await browser.execute(() => {
       const action = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
         .find((button) => button.textContent?.trim() === "取消宝宝模式");
-      action?.click();
+      if (!action) throw new Error("未找到取消宝宝模式按钮");
+      action.click();
     });
-    await browser.waitUntil(async () => (await (await fetch("http://127.0.0.1:18472/model/status")).json()).active === 0,
-      { timeoutMsg: "取消后本地模型请求仍未结束" });
+    // 断言用户可见的取消状态；HTTP 连接存活时间不能代表后端分析任务是否已经结束。
+    await expect($("[data-testid='babysit-footer']")).not.toBeDisplayed();
+    await expect(toggle).not.toHaveAttribute("aria-busy", "true");
     const reviewId = await reviewIdForSelection("refs/heads/base-ref", "refs/heads/head-ref");
     const exitReview = await $("button[aria-label='退出审核']");
     await exitReview.waitForDisplayed();
