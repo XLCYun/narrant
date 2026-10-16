@@ -37,7 +37,7 @@ fn manifest_version(target: &str, version: &str) -> String {
         "notes": "safe",
         "platforms": {
             target: {
-                "url": "https://updates.cyunlab.com/narrant/releases/2.0.0/windows-x86_64/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-narrant-windows-x86_64-updater.exe",
+                "url": "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.exe",
                 "signature": "trusted-signature"
             }
         }
@@ -135,8 +135,8 @@ async fn status_timeout_malformed_and_missing_target_are_classified_exactly() {
 
     for body in [
         "not-json".to_owned(),
-        serde_json::json!({"version": "not-semver", "url": "https://github.com/cyunlab/narrant/releases/download/v2/Narrant.exe", "signature": "sig"}).to_string(),
-        serde_json::json!({"version": "2.0.0", "url": "https://github.com/cyunlab/narrant/releases/download/v2/Narrant.exe", "signature": ""}).to_string(),
+        serde_json::json!({"version": "not-semver", "url": "https://github.com/XLCYun/narrant/releases/download/v2/Narrant.exe", "signature": "sig"}).to_string(),
+        serde_json::json!({"version": "2.0.0", "url": "https://github.com/XLCYun/narrant/releases/download/v2/Narrant.exe", "signature": ""}).to_string(),
         manifest("windows-x86_64"),
     ] {
         let endpoint = serve(vec![(Duration::ZERO, response("200 OK", &body, ""))]);

@@ -19,7 +19,6 @@ function main() {
     releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
     candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,
     bridgeTag: process.env.NARRANT_UPDATER_BRIDGE_TAG,
-    privateRepository: process.env.GITHUB_REPOSITORY,
   });
   process.stdout.write(`已验证 ${result.names.length} 个 Draft 资产。\n`);
 }

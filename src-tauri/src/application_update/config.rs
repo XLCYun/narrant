@@ -1,11 +1,14 @@
 use base64::Engine;
 use minisign_verify::PublicKey;
 use reqwest::Url;
+use semver::Version;
 
 pub(crate) const PRODUCTION_UPDATE_ENDPOINT: &str =
-    "https://updates.cyunlab.com/narrant/channels/stable/latest.json";
-const RELEASE_DOWNLOAD_PREFIX: &str = "/narrant/releases/";
-const RELEASE_MANIFEST_PATH: &str = "/narrant/channels/stable/latest.json";
+    "https://github.com/XLCYun/narrant/releases/latest/download/latest.json";
+const RELEASE_DOWNLOAD_PREFIX: &str = "/XLCYun/narrant/releases/download/";
+const RELEASE_MANIFEST_PATH: &str = "/XLCYun/narrant/releases/latest/download/latest.json";
+const TAGGED_MANIFEST_PREFIX: &str = "/XLCYun/narrant/releases/download/";
+const TAGGED_MANIFEST_SUFFIX: &str = "/latest.json";
 
 /// 更新信任配置的稳定失败分类，不包含公钥内容或环境变量值。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +85,7 @@ pub(super) fn decode_public_key(encoded: &str) -> Result<PublicKey, UpdaterConfi
 /// 验证 manifest 选出的包仍属于 Narrant tag-specific HTTPS Release 路径。
 pub(crate) fn trusted_package_url(url: &Url) -> bool {
     url.scheme() == "https"
-        && url.host_str() == Some("updates.cyunlab.com")
+        && url.host_str() == Some("github.com")
         && url.port().is_none()
         && url.username().is_empty()
         && url.password().is_none()
@@ -91,12 +94,21 @@ pub(crate) fn trusted_package_url(url: &Url) -> bool {
         && url.path().starts_with(RELEASE_DOWNLOAD_PREFIX)
 }
 
-/// OSS 更新包不得跨域重定向。
+/// 限制下载重定向只经过 GitHub 的 HTTPS Release 资产主机。
 pub(crate) fn trusted_redirect_url(url: &Url) -> bool {
-    trusted_package_url(url)
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.fragment().is_none()
+        && (trusted_package_url(url)
+            || matches!(
+                url.host_str(),
+                Some("objects.githubusercontent.com" | "release-assets.githubusercontent.com")
+            ))
 }
 
-/// 限制 manifest 请求只能落到 OSS 的固定 Stable 对象，且不接受重定向变体。
+/// 限制 manifest 初始请求与重定向只能落到 GitHub 的固定 HTTPS 发布链路。
 pub(crate) fn trusted_manifest_url(url: &Url) -> bool {
     if url.scheme() != "https"
         || !url.username().is_empty()
@@ -108,7 +120,36 @@ pub(crate) fn trusted_manifest_url(url: &Url) -> bool {
     if url.fragment().is_some() {
         return false;
     }
-    url.host_str() == Some("updates.cyunlab.com")
-        && url.path() == RELEASE_MANIFEST_PATH
-        && url.query().is_none()
+    match url.host_str() {
+        Some("github.com") => {
+            url.query().is_none()
+                && (url.path() == RELEASE_MANIFEST_PATH || trusted_tagged_manifest_path(url.path()))
+        }
+        Some("release-assets.githubusercontent.com" | "objects.githubusercontent.com") => {
+            !url.path().is_empty() && url.path() != "/"
+        }
+        _ => false,
+    }
+}
+
+/// 验证固定仓库、固定文件名且以 stable SemVer tag 标识的 GitHub 中间跳。
+fn trusted_tagged_manifest_path(path: &str) -> bool {
+    let Some(tag) = path
+        .strip_prefix(TAGGED_MANIFEST_PREFIX)
+        .and_then(|path| path.strip_suffix(TAGGED_MANIFEST_SUFFIX))
+    else {
+        return false;
+    };
+    if tag.is_empty()
+        || tag == "."
+        || tag == ".."
+        || tag.contains('/')
+        || tag.contains('%')
+        || !tag
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return false;
+    }
+    Version::parse(tag.strip_prefix('v').unwrap_or(tag)).is_ok_and(|version| version.pre.is_empty())
 }

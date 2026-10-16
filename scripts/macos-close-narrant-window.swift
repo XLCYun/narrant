@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-private let expectedBundleIdentifier = "com.cyunlab.narrant.upgrade-test"
+private let expectedBundleIdentifier = "com.cyunlab.narrant"
 
 /// 输出固定诊断并失败，避免把任何用户控制的应用信息写进 evidence log。
 private func fail(_ message: String) -> Never {

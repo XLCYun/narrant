@@ -16,7 +16,7 @@ const expected = {
   workflowSha: "b".repeat(40),
 };
 
-/** 构造可信 private workflow run。 */
+/** 构造可信 source workflow run。 */
 function runFixture() {
   return {
     id: 42,
@@ -28,8 +28,8 @@ function runFixture() {
     head_branch: "main",
     head_sha: "b".repeat(40),
     run_attempt: 1,
-    repository: { full_name: "XLCYun/narrant", private: true },
-    head_repository: { full_name: "XLCYun/narrant", private: true },
+    repository: { full_name: "XLCYun/narrant", private: false },
+    head_repository: { full_name: "XLCYun/narrant", private: false },
     pull_requests: [],
   };
 }
@@ -88,7 +88,7 @@ function automaticArtifactsFixture() {
   return payload;
 }
 
-test("evidence run 绑定 private workflow、默认分支、可信 SHA 和首次 attempt", () => {
+test("evidence run 绑定 source workflow、默认分支、可信 SHA 和首次 attempt", () => {
   assert.doesNotThrow(() => validateEvidenceWorkflowRun(runFixture(), expected));
   for (const mutate of [
     (run) => { run.path = ".github/workflows/other.yml"; },
@@ -98,7 +98,7 @@ test("evidence run 绑定 private workflow、默认分支、可信 SHA 和首次
     (run) => { run.head_sha = "c".repeat(40); },
     (run) => { run.run_attempt = 2; },
     (run) => { run.repository.full_name = "other/narrant"; },
-    (run) => { run.head_repository.private = false; },
+    (run) => { run.head_repository.full_name = "attacker/narrant"; },
     (run) => { run.pull_requests = [{}]; },
   ]) {
     const copy = globalThis.structuredClone(runFixture());

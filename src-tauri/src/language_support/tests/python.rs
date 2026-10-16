@@ -42,7 +42,7 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
     let server = MockServer::start();
     let (bytes, manifest) = fixture(false, true);
     let mut failed = server.mock(|when, then| {
-        when.path("/python/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.status(503);
     });
     let root = tempfile::tempdir().unwrap();
@@ -58,11 +58,11 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .is_err());
     failed.delete();
     let metadata = server.mock(|when, then| {
-        when.path("/python/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/python/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(bytes);
     });
     packs.retry(PackId::Python).unwrap();
@@ -128,11 +128,11 @@ async fn python_pack_rejects_incomplete_or_corrupted_payloads() {
             bytes[0] ^= 1;
         }
         server.mock(|when, then| {
-            when.path("/python/1.1.0/aarch64-apple-darwin/manifest.json");
+            when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-manifest.json");
             then.json_body(manifest);
         });
         server.mock(|when, then| {
-            when.path("/python/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+            when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
             then.body(bytes);
         });
         let root = tempfile::tempdir().unwrap();
@@ -180,7 +180,7 @@ async fn real_installed_python_pack_analyzes_without_user_python() {
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/python/1.1.0/{target}/{name}"));
+            when.path(format!("/language-pack-python-v1.1.0/{target}-{name}"));
             then.body(bytes);
         });
     }

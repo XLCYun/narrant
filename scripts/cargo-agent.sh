@@ -7,8 +7,7 @@ rust_cache_runner="$script_dir/rust-cache.mjs"
 
 # 所有 linked worktree 共享 git common dir，因此锁文件也天然跨 worktree 共享。
 common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
-# 自托管 CI 的独立 clone 可显式复用本机开发锁，避免两套 checkout 同时冷编译。
-lock_file=${NARRANT_CARGO_LOCK_FILE:-"$common_dir/narrant-cargo-agent.lock"}
+lock_file="$common_dir/narrant-cargo-agent.lock"
 
 if command -v lockf >/dev/null 2>&1; then
   exec lockf -k "$lock_file" node "$rust_cache_runner" run cargo "$@"

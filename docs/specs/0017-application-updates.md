@@ -2,10 +2,8 @@
 
 ## Problem Statement
 
-Narrant 的公开 Release 目前只提供 DMG、NSIS 安装包和校验和。已经安装的应用既不会
-发现新版本，也不能下载、暂存或安全安装新版本。发布流程虽然能从私有源码仓库向公开
-`cyunlab/narrant` 仓库写入 Draft Release，但没有 Tauri updater 制品、签名、静态
-manifest、真实原生升级验收或受保护的 Stable promotion。
+应用需要在工作不中断、签名可信、退出清理完整的前提下交付更新。源码、版本、Release、
+升级 manifest 与语言支持包统一位于 `XLCYun/narrant`，由 GitHub-hosted 临时机器构建和验收。
 
 Narrant 还同时持有 Review Workspace、Git 操作和 Babysit provider 进程。应用更新不能
 绕过既有退出清理，也不能在清理超时后冒险替换正在使用的程序文件。
@@ -20,10 +18,9 @@ manifest，启动时及每六小时检查一次，默认自动下载并把经过
 drain，再关闭 Babysit provider、Review runtime/Workspace 和 telemetry。整个停止流程共享
 十五秒 deadline；超时则保留暂存包、跳过安装并直接退出。
 
-私有源码仓库继续拥有版本、构建、签名和验证。完整 Draft Release 写入公开
-`cyunlab/narrant`；维护者审批私有仓库受保护的 promotion job 后，自动化二次复核 Draft
-身份、签名、manifest 和原生升级证据，再将其发布为 Latest。公开仓库不成为源码镜像，
-也不要求启用 GitHub immutable releases。
+同一仓库拥有版本、构建、签名和验证。完整候选先写入 Draft Release；维护者审批受保护的
+promotion job 后，自动化二次复核 Draft 身份、签名、manifest 和原生升级证据，再发布为 Latest。
+不依赖另一分发仓库或对象存储，也不要求启用 GitHub immutable releases。
 
 ## User Stories
 
@@ -35,9 +32,9 @@ drain，再关闭 Babysit provider、Review runtime/Workspace 和 telemetry。�
 6. 作为正常退出的用户，我希望已暂存更新在安全清理完成后自动安装。
 7. 作为退出清理超时的用户，我希望应用仍能退出，并在以后重试安装，而不是卡住或冒险替换文件。
 8. 作为使用辅助技术的用户，我希望更新入口、状态、进度、错误和操作具有清晰名称与焦点顺序。
-9. 作为维护者，我希望只有私有源码 tag 能请求发布，并且公开 Release 不暴露私有源码身份。
+9. 作为维护者，我希望只有本仓库已验证的 tag 能请求发布，公开 Release 可追溯到完整源码提交。
 10. 作为维护者，我希望 Draft 在发布前完成两平台签名、manifest 和真实安装/升级验证。
-11. 作为现有 v1.1.5 用户，我接受首个 updater-capable 版本需要手动安装一次；之后版本自动升级。
+11. 作为旧渠道用户，我接受手动安装一次新渠道修复版；之后通过本仓库自动升级。
 
 ## Product Behaviour
 
@@ -94,7 +91,7 @@ Application Update 对前端发布有序快照，状态至少包含：
 ### Update trust and staging
 
 - 正式 endpoint 固定为
-  `https://updates.cyunlab.com/narrant/channels/stable/latest.json`，只允许 HTTPS、固定 host 与 exact path。
+  `https://github.com/XLCYun/narrant/releases/latest/download/latest.json`，只允许该 HTTPS 入口及 GitHub 官方资产 CDN 重定向。
 - 使用 Narrant 独立的 Tauri updater minisign 密钥。公钥编译进应用；私钥、密码及离线
   备份不进入源码、公开仓库或 Release。
 - Rust 同时把 endpoint 与公钥提供给 updater plugin 和 Application Update adapter；缺失、
@@ -129,48 +126,36 @@ Application Update 对前端发布有序快照，状态至少包含：
 - `latest.json`
 - `SHA256SUMS`
 
-`latest.json` 只包含 `darwin-aarch64` 和 `windows-x86_64`。每项 `url` 是 content-addressed OSS
-updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`signature` 是对应 `.sig`。
-面向人工下载的 installer OSS 对象必须设置安全 ASCII `Content-Disposition` 文件名：
-`Narrant-<version>-macOS-arm64.dmg` 或 `Narrant-<version>-Windows-x64.exe`，避免浏览器暴露内容寻址 SHA 前缀。
-文件的字面内容。Draft 阶段
-没有最终 published time，因此 `pub_date` 可以省略；Notes 来自公开 Release body。
+`latest.json` 只包含 `darwin-aarch64` 和 `windows-x86_64`。每项 `url` 指向同仓库当前
+`vMAJOR.MINOR.PATCH` tag 的 updater asset，`signature` 是对应 `.sig` 文件的字面内容。
+Draft 尚未发布，因此 `pub_date` 可以省略；Notes 来自 Release body。
 
-### Cross-repository authority
+### Single-repository authority
 
-- 私有源码仓库的稳定 `vMAJOR.MINOR.PATCH` tag 和完整 commit 是发布请求与版本真相。
-- 公开 Release tag 只标识制品，不代表私有源码 commit；验证证据必须分别绑定 source
-  tag/SHA 与 public Release ID/tag。
-- `CYUNLAB_RELEASE_TOKEN` 继续只对 `cyunlab/narrant` 提供所需 Contents 写权限。
-- updater 私钥与密码只存在私有源码仓库受保护环境；公开仓库只获得公钥、包签名和 manifest。
-- Draft 可在失败重试中重建资产；已发布 Release 不得被自动化修改。仓库管理员仍保留
-  GitHub 原生修改能力，因为本功能不启用 immutable releases。
+- 稳定 tag 和完整 commit 是发布请求与版本真相，Release tag 必须与 source tag 相同。
+- 验证证据绑定 source tag/SHA、固定 Release database ID/tag 和资产摘要。
+- 使用本仓库 `GITHUB_TOKEN`：构建/验收只读，Draft 与受保护 promotion job 获得 Contents 写权限。
+- 私钥和密码只供签名步骤使用，不写入源码、Release、日志或证据。
+- Draft 可在失败重试中重建资产；已发布 Release 不得被自动化修改。
+- 语言支持包使用独立 `language-pack-<id>-v<version>` prerelease，永不成为应用 Latest。
 
 ### Native smoke and promotion
 
-- Draft 上传完成后必须经 API 回读精确资产集、asset ID/digest/bytes，并校验版本、URL、
+- Draft 上传后经 API 回读精确资产集、asset ID/digest/bytes，并校验版本、URL、
   manifest signature literal、SHA256SUMS 和 minisign。
-- 使用现有自托管 macOS ARM64 与 Windows x64 runner、当前桌面账户和登录会话，执行
-  独立 `Narrant Upgrade Test` 的真实安装、检查、下载、验签、持久化暂存、正常退出安装、
-  原路径替换、手动启动候选及模拟项目/主题/语言设置保留检查。
-- 旧测试包来自上一 Stable 的精确源码，新测试包来自候选精确源码。只叠加独立应用身份、
-  内存凭据和数据观察入口；使用各自版本的更新器实现。记录源码 SHA、原始版本、构建版本、
-  构建方案摘要、完整叠加差异、测试包/签名摘要及测试公钥身份。
-- 测试包使用临时 updater 密钥；macOS 测试 app 使用 ad-hoc 签名。正式 Draft 及上一 Stable
-  另行核验实际 updater 签名、摘要、内嵌信任配置；正式 macOS app/DMG 另验代码签名与公证。
-  这些静态检查不启动正式应用，也不能表述为“正式包本体完成升级”。
-- TLS gate 通过仅传给测试进程的 `HTTPS_PROXY` 与 `SSL_CERT_FILE` 服务固定
-  `https://updates.cyunlab.com/narrant/channels/stable/latest.json` 和当前候选包。
-  不修改 hosts、系统代理、证书信任、日常 Narrant 的安装、进程、凭据或数据。
-- 每个平台生成 checksummed schema v2 `isolated-native` evidence，分别绑定测试构建与正式
-  Draft 资产、source tag/SHA、public Release ID/tag、上一 Stable、runner OS/arch 和 freshness。
-  两平台必须使用相同的旧版源码和测试构建方案。
-- 无正式 Draft 的分支试运行标记为 `isolated-native-preflight`，可以用版本叠加制造升级，
-  不能用于 promotion。发布验收要求测试源码版本与正式版本一致。
-- promotion 复核可信 Actions run、完整两平台证据和 Draft 后才能继续发布。旧 schema 与
-  分支试运行不能获得发布资格。首次 updater bootstrap 的历史记录保留，当前升级入口仅运行 normal。
-- 验收覆盖范围是独立身份下的升级实现与模拟数据保留，以及正式包的静态签名/完整性。
-  正式产品身份、真实安装目录、生产签名与升级组合没有在该账户上实际执行。
+- 在 GitHub-hosted macOS ARM64 与 Windows x64 临时机器上安装上一正式版，启动正式应用，
+  完成固定入口检查、候选下载、验签、持久化暂存、正常退出安装、原路径替换和手动启动候选。
+- 设置与项目使用测试夹具，仍由正式包读取生产格式。旧版创建数据库后登记临时 Git 项目；
+  候选正常启动并退出后核对项目记录、主题及语言设置保留。这不等同于遍历所有历史用户数据迁移。
+- macOS 验证生产 Developer ID 签名、公证与 stapling；Windows 验证 current-user NSIS 与 updater 签名。
+- 临时 TLS gate 仅服务固定 GitHub manifest 和候选包。在临时 runner 上安装临时 CA、修改 hosts，
+  结束时恢复。入口拒绝本地或 self-hosted 环境；不得对日常安装运行正式包验收。
+- 每个平台产生 `real-native` evidence，绑定完整 source、Release、previous Stable、两类公钥、
+  runner OS/arch、freshness 与逐字节 checksum。promotion 核验可信 Actions run 和完整两平台证据。
+- 首个 GitHub Stable 使用受保护的 exact `NARRANT_FIRST_UPDATER_TAG`，且只能在没有任何已发布
+  updater manifest 的仓库使用一次 bootstrap。该模式验证签名安装、信任配置、损坏暂存恢复和重启，
+  **不证明旧版本升级成功**。发布后清除变量，后续只允许 normal 升级验收。
+- 旧渠道 v1.2.14 的下载任务缺陷已修复，但已安装二进制无法获得该修复或更换入口；用户需手动安装一次。
 
 ## Implementation Decisions
 
@@ -199,9 +184,9 @@ updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`sign
 9. 设置页、侧栏圆形图标和更新弹层覆盖全部可见状态、键盘操作、可访问名称与错误重试。
 10. 宽窄窗口、长短 Release Notes、确定/不确定进度、失败和 staged 弹层通过 Preview Harness
     与应用内浏览器的截图、可访问 DOM、实际尺寸和交互检查。
-11. Draft 生成脚本对精确资产、manifest、签名、tag-specific URL 和公开/私有身份映射有测试。
+11. Draft 生成脚本对精确资产、manifest、签名、tag-specific URL 和同仓库 source/Release 身份绑定有测试。
 12. promotion 在缺少、过期、目标不全、来源不匹配或非 real-native evidence 时 fail closed。
-13. 两平台独立测试包实际完成旧版到候选升级和模拟数据保留；报告明确区分测试包行为与正式包静态核验。
+13. normal 模式两平台正式包完成上一 Stable 到候选升级及模拟数据保留；bootstrap 单独报告首版安装覆盖。
 14. 发布运维文档说明密钥备份、泄露/丢失、bridge rotation、Draft 审批、失败恢复和首版 bootstrap。
 15. 交付验证包含前端单元测试、类型检查、Lint、生产构建、`git diff --check`、聚焦 Cargo
     检查/测试，以及 Issue 完成前通过 `scripts/cargo-agent.sh` 运行一次 Rust 全量测试。
@@ -218,7 +203,7 @@ updater package，`installer_url` 是同版本同 target 的 OSS DMG/EXE；`sign
 
 ## Further Notes
 
-- [ADR-0026](../adr/0026-publish-binary-releases-from-source-tags.md) 约束双仓库发布权威。
+- [ADR-0036](../adr/0036-use-one-public-github-repository-for-distribution.md) 规定统一公开仓库和托管验收。
 - [ADR-0028](../adr/0028-deliver-staged-application-updates-from-public-releases.md) 记录 Stable
   channel、完整暂存生命周期和退出边界的架构选择。
 - [Application Settings](./0014-application-settings.md) 提供设置目的地和响应式验收先例。

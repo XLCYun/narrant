@@ -1,6 +1,9 @@
 # Use OSS as the Stable Application Update authority
 
-Status: Accepted. Supersedes [ADR-0028](0028-deliver-staged-application-updates-from-public-releases.md) only where it selected GitHub Releases as the Stable channel; the staged client lifecycle and trust-root decisions remain in force.
+Status: Superseded by [ADR-0036](0036-use-one-public-github-repository-for-distribution.md) for repository and distribution authority. The following records the historical decision.
+
+
+Status: Superseded by ADR-0036. Supersedes [ADR-0028](0028-deliver-staged-application-updates-from-public-releases.md) only where it selected GitHub Releases as the Stable channel; the staged client lifecycle and trust-root decisions remain in force.
 
 Narrant clients and the CY Lab website read only
 `https://updates.cyunlab.com/narrant/channels/stable/latest.json`. Each manifest target has a content-addressed OSS updater `url` and a human-facing OSS `installer_url`. GitHub Releases continue to contain the same eight public artifacts as a release archive, but GitHub Latest is not a client or website update authority. Existing clients on the former GitHub endpoint are not bridged.

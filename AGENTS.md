@@ -49,14 +49,13 @@ Single-context layout. See `docs/agents/domain.md`.
 7. 使用 `pnpm rust:cache:status` 查看 sccache，使用 `pnpm rust:cache:clean` 只清理 sccache；不要用清理缓存替代正常的增量构建。
 
 ## 本地验证与 CI 节奏
-产品仅支持 Windows x64 和 macOS ARM64；通用检查与桌面测试共用现有自托管 runner 和当前已登录的桌面账户，不新增虚拟机、独立系统、账户、登录会话或 runner 注册。CI 继续使用独立工作目录与缓存；E2E 必须使用独立应用身份、测试数据和内存凭据。不得关闭、覆盖或清理日常 Narrant 的进程、安装、配置及数据。升级验收使用独立的 Narrant Upgrade Test 身份、内存凭据与进程级 TLS；正式包只做签名和完整性核验。不得将测试包结果描述为正式包本体升级成功。旧的系统 hosts、证书信任和正式安装测试入口继续阻止；规格与执行范围见 `docs/specs/0017-application-updates.md`。
+产品支持 Windows x64 和 macOS ARM64。CI 使用 GitHub-hosted 临时机器；正式安装与升级验收只在这些临时机器上执行。日常开发的界面测试继续使用独立应用身份、测试数据与内存凭据，保护个人 Narrant。
 
-1. 日常修改先在本地运行格式、类型检查、`check --lib` 和受影响测试；UI 改动仍按上文完成真实渲染检查。
-2. 功能基本完成后，进行实际运行验证和代码审查；涉及 Windows 路径、进程、权限或打包时，提前运行对应 Windows 专项 CI，不把平台问题全部留到最后。
-3. 准备合并时，对最终提交集中完成必要的 macOS、Windows CI。核对具体测试命令和覆盖范围；支持包构建或 runner 接入检查不能替代全仓或真实应用验收。
-4. 同一提交的完整测试已由 CI 覆盖并通过时，本地无需重复执行；CI 未覆盖的检查仍在本地补齐。失败修复后重跑受影响范围，共享契约变化或全局回归需要扩大验证。
-5. 自托管用于节省开支，保留测试和发布校验；工作流默认使用自托管 runner，离线时排队，不自动回退到付费托管机器。开发推送按阶段集中，必要时使用仓库支持的跳过 CI 机制，最终验收恢复正常执行。
-6. 本机兼作 runner 时，开发和 CI 使用独立 checkout、target 与缓存，Cargo 仍通过 `scripts/cargo-agent.sh` 共用编译锁。调整调度、账户、桌面验收或清理时，先阅读 `docs/agents/macos-self-hosted-ci.md` 和 `docs/agents/windows-self-hosted-ci.md`。
+1. 日常修改先在本地运行格式、类型检查、`check --lib` 和受影响测试；UI 改动仍完成真实渲染检查。
+2. 功能基本完成后进行实际运行验证和代码审查；涉及 Windows 路径、进程、权限或打包时，提前运行对应 Windows 专项 CI。
+3. 准备合并时，对最终提交集中完成必要的 macOS、Windows CI。按具体命令核对覆盖范围；支持包构建不能替代全仓或真实应用验收。
+4. 同一提交的完整测试已在 CI 通过时，本地无需重复执行；失败修复后重跑受影响范围，共享契约变化或全局回归扩大验证。
+5. Release、应用更新及语言支持包统一使用 `XLCYun/narrant`。发布与首版 bootstrap 按 `docs/specs/0017-application-updates.md` 和发布运维说明执行；保持既有应用身份 `com.cyunlab.narrant`。
 
 ## 不要手动触发 quality-gate
 不要手动触发 quality-gate.

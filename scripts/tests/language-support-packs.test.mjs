@@ -29,23 +29,54 @@ test('pack artifact binds identity, bytes and executable metadata to the complet
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('publisher never exposes a manifest before archive verification succeeds', async () => {
+/** 两平台最小产物和内存 GitHub，验证发布顺序与不可变性。 */
+function publicationFixture() {
+  const artifacts = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'].map(target => ({ id: 'rust', version: '1.0.0', target, body: Buffer.from('{}'), archive: Buffer.from(target) }));
+  let release;
+  const objects = new Map();
+  const events = [];
+  const github = {
+    findRelease: async () => release,
+    createRelease: async body => { events.push('create'); release = { ...body, id: 42, assets: [] }; return release; },
+    uploadAsset: async (_id, name, bytes) => { events.push('upload'); const asset = { id: objects.size + 1, name }; objects.set(name, bytes); release.assets.push(asset); return asset; },
+    readAsset: async asset => objects.get(asset.name),
+    publishRelease: async (_id, body) => { events.push('publish'); assert.equal(objects.size, 4); release = { ...release, ...body }; return release; },
+    readPublishedAsset: async (_tag, name) => objects.get(name),
+  };
+  return { artifacts, github, events, objects, release: () => release };
+}
+
+test('publisher refuses incomplete platforms before remote writes', async () => {
   const { publishArtifacts } = await import('../publish-language-support-packs.mjs');
-  const writes = [];
-  const storage = { ensureObject: async key => writes.push(key), readObject: async () => Buffer.from('corrupt') };
-  await assert.rejects(publishArtifacts([{ key: 'narrant/language-support-packs/rust/1.0.0/aarch64-apple-darwin', archive: Buffer.from('archive'), body: Buffer.from('{}') }], storage), /differs/);
-  assert.equal(writes.length, 1);
-  assert.ok(writes[0].endsWith('/pack.tar.gz'));
+  const fixture = publicationFixture();
+  await assert.rejects(publishArtifacts(fixture.artifacts.slice(0, 1), fixture.github), /both platforms/);
+  assert.deepEqual(fixture.events, []);
 });
 
-test('publisher verifies archive and manifest bytes and can safely reuse identical versions', async () => {
+test('publisher leaves a Draft if uploaded bytes differ', async () => {
   const { publishArtifacts } = await import('../publish-language-support-packs.mjs');
-  const objects = new Map();
-  const storage = { ensureObject: async (key, bytes) => { if (objects.has(key)) assert.deepEqual(objects.get(key), bytes); else objects.set(key, bytes); }, readObject: async key => objects.get(key) };
-  const artifact = { key: 'narrant/language-support-packs/rust/1.0.0/aarch64-apple-darwin', archive: Buffer.from('archive'), body: Buffer.from('{}') };
-  await publishArtifacts([artifact], storage);
-  await publishArtifacts([artifact], storage);
-  assert.equal(objects.size, 2);
+  const fixture = publicationFixture();
+  fixture.github.readAsset = async () => Buffer.from('corrupt');
+  await assert.rejects(publishArtifacts(fixture.artifacts, fixture.github), /differs/);
+  assert.deepEqual(fixture.events, ['create', 'upload']);
+  assert.equal(fixture.release().draft, true);
+});
+
+test('publisher verifies both platforms, never becomes Latest and reuses immutable versions', async () => {
+  const { publishArtifacts } = await import('../publish-language-support-packs.mjs');
+  const fixture = publicationFixture();
+  await publishArtifacts(fixture.artifacts, fixture.github);
+  assert.equal(fixture.release().draft, false);
+  assert.equal(fixture.release().prerelease, true);
+  assert.equal(fixture.release().make_latest, 'false');
+  const mutations = [...fixture.events];
+  await publishArtifacts(fixture.artifacts, fixture.github);
+  assert.deepEqual(fixture.events, mutations);
+  fixture.artifacts[0].archive = Buffer.from('changed');
+  await assert.rejects(publishArtifacts(fixture.artifacts, fixture.github), /differs/);
+  assert.deepEqual(fixture.events, mutations);
+  fixture.release().assets.pop();
+  await assert.rejects(publishArtifacts(fixture.artifacts, fixture.github), /cannot be changed|differs/);
 });
 
 test('Python pack preserves its native executable, fixed control file and standard-library license', async () => {

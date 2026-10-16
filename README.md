@@ -1,88 +1,77 @@
-# narrant
+<div align="center">
+  <img src="./assets/brand/narrant-app-icon.svg" width="160" alt="Narrant Logo">
+  <h1>纳言 Narrant</h1>
+  <p><strong>好工程，纳良言</strong></p>
+  <p>代码审核不应成为 AI 瓶颈，让 AI 加速人类审核，与 AI 协作守住最后一关。</p>
+  <p><a href="./README.en.md">English</a> · <a href="#宝宝模式">宝宝模式</a> · <a href="#下载">下载</a> · <a href="#使用说明">使用说明</a> · <a href="#主要功能">主要功能</a> · <a href="#反馈问题">反馈问题</a></p>
+</div>
 
-## TypeScript / JavaScript 结构分析
+## 项目简介
 
-在 Narrant 仓库根目录安装应用依赖：
+AI Coding 正在加快代码产出，也让待审核的改动变得更多、更频繁。对于重要的代码，人类审核仍是合入主分支前的最后一道护城河。审核者要理解改动是否符合真实需求，并为架构取舍和潜在风险做出判断。
 
-```sh
-pnpm install --frozen-lockfile
-```
+Narrant 是一款让 AI 加速人类审核的桌面工具。它统一呈现本地分支与 GitHub Pull Request，通过清晰的 Diff 和 AI 辅助解释，帮开发者更快看懂改动，同时把最终判断留给工程师。
 
-应用自身支持 Node `>=22.13 <26`，构建用 TypeScript 仍由 `package.json` 和
-`pnpm-lock.yaml` 管理。TS/JS 结构分析使用独立支持包中的固定 Node 24.18.0、
-TypeScript 6.0.3、@types/node 22.20.1 和 undici-types 6.21.0；安装与使用租约
-由公共语言支持包服务管理。生产入口通过 Native Host 直接调用 Compiler/Language Service API。
+![Narrant 审核概览](./assets/screenshots/narrant-overview.jpg)
 
-开发验证在 macOS ARM64 或 Windows x64 使用对应目标构建本地候选：
+<a id="宝宝模式"></a>
 
-```sh
-node scripts/build-language-support-packs.mjs --id typescript-javascript --target aarch64-apple-darwin --output native-language-support-packs
-node scripts/verify-native-analyzers.mjs native-language-support-packs --language typescript-javascript
-```
+## 👶 宝宝模式
 
-Windows 目标为 `x86_64-pc-windows-msvc`。构建验证固定上游摘要，不运行包安装脚本；
-验收包含真实图、归档安装与 Review DTO。当前 1.1.0 候选尚未发布，最终双平台
-Actions 验收留到开发、审查和本地验证完成后。
+宝宝模式会调用本机已登录的 Codex，为当前代码变更生成逐行解释。你可以只看发生变化的行，也可以展开全部非空行，对照变更前后的代码理解每一行在做什么。遇到陌生语言、复杂逻辑或较大的改动时，它可以先替你梳理细节，减少来回查找上下文的时间。
 
-Rust 使用包含 `narrant-rust` 的 1.1.0 原生支持包候选，通过同一数据库提取语法、语义与原文。
-构建 helper 固定 Rust 1.98.0，分析项目保留用户实际 Cargo/rustc、PATH 和 rustup 覆盖；
-标准库及所有依赖范围需要该项目工具链已有 rust-src。所有依赖范围沿用用户网络政策，
-仅仓库及标准库范围始终离线。分析不安装工具链、不运行项目构建脚本或过程宏。
-加载、解析或必需工具失败都会使整次结构比较失败。此候选未发布，最终双平台验收待集中执行。
+这些解释用于辅助阅读，不会替你批准改动或给出最终审核结论。二进制文件、依赖文件、构建产物、lock 文件和其他不适合逐行分析的内容会被跳过。使用前请安装 Codex CLI 并完成登录，开启宝宝模式后，当前文件的变更内容会交给 Codex 分析。
 
-Python 使用 1.1.0 的 `narrant-python` 原生候选和内嵌固定 typeshed，AST、原文和导航
-来自同一不可变数据库，保持 Python 3.7–3.14 与仓库加标准库范围。
-Rust、TS/JS、Python、Java、Go、C#、C/C++ 七套 helper 均经过同一 Native Host 与
-`child_process::ProcessTree`；旧 LSP、独立 parser/server 协调和开发 setup 已退役。
-正常构建按实际依赖收集许可，Python seahash 上游通知的未取回限制见
-[来源记录](native-helpers/python/licenses/sources.json)。三个迁移语言本地 macOS 验收已通过，
-最终七套 Windows/macOS CI、整分支审查和发布仍待完成。
+![Narrant 宝宝模式在单栏 Diff 中显示逐行解释](./assets/screenshots/narrant-babysit.jpg)
 
-结构视图共同分析 `.ts`、`.tsx`、`.js`、`.jsx`、`.mts`、`.cts`、`.mjs`、
-`.cjs` 及 `.d.ts`、`.d.mts`、`.d.cts` 声明文件。固定 TypeScript 原生 AST 提取语法结构和对象自身
-内容，Language Service 提供定义导航与语义证据。原生 JSDoc 推断会保留，
-不使用另外的 JSDoc 解析器。直接绑定到 `const` 名称的箭头函数会成为 Callable；
-内联回调保留在所属对象内容中，不产生匿名回调节点。自定义 JSX 组件会产生组件引用，
-`div`、`button` 等内置标签不产生节点或组件关系；其属性中的表达式和回调仍参与
-普通内容与关系分析。
+<a id="下载"></a>
 
-默认语义上下文由仓库第一方源码、项目配置启用的标准库，以及固定 Node 声明闭包
-组成，不包含业务第三方源码或类型。缺少业务依赖时，可靠关系会保留，无法确认的目标
-保持未解析，并按前后两侧分别显示上下文说明。这套代码图是保守的静态语义结果，
-不保证完整的 TypeScript 静态可靠性；输入路径检查和语言服务的文件读取控制也不构成操作系统级
-沙箱。
+## ⬇️ 下载
 
-同一比较侧的 Rust、TypeScript 和 JavaScript 共用 Review 已签出的 Git workspace。
-分析器不再复制仓库源码、配置或标准声明；配置调整与 workspace 包解析映射只存在于内存，
-标准声明从固定工具目录直接读取。临时目录仅保存 Narrant 自身的助手和控制消息，
-退出时清理这些文件及语言服务进程，Git workspace 继续由 Review 生命周期管理。
+前往 [GitHub Releases](https://github.com/XLCYun/narrant/releases) 下载最新版本，并选择与你的操作系统和处理器架构相符的安装包。
 
-生产夹具已覆盖现代 NodeNext、Bundler、JS/JSX、Promise、Node ESM/CJS 包装和
-原生 JSDoc。TS 5 风格兼容夹具使用 CommonJS、旧式 Node moduleResolution、
-baseUrl 和 paths，在固定 TS 6 引擎下保留可靠的本地调用，将冲突导入保持为未解析，
-并显示原生弃用说明。这些代表性结果不表示使用项目安装的 TypeScript，也不构成对所有
-TS 5/6 配置的兼容承诺。
+<a id="使用说明"></a>
 
-原生 TS/JS 支持包、公共图与差异、隔离安装及 Review 已完成本地 macOS ARM64 验证；
-Windows 实际运行和最终双平台 Actions 仍待验收。受控配置与 workspace 支持边界见
-[原生 Helper 说明](native-helpers/typescript/README.md)，迁移断言与验证记录见
-[原生迁移证据](docs/research/0025-typescript-native-helper-migration.md)。
+## 使用说明
 
-## 构建 Windows 安装包
+1. 打开 Narrant，选择一个本地 Git 仓库。
+2. 阅读工作区信任提示，确认后进入仓库。
+3. 在“本地分支”中选择 Head 与 Base，或从“Pull Requests”中选择要审核的 PR。
+4. 在审核概览和文件改动之间切换，逐个阅读变更。
+5. 需要辅助理解时，在支持的代码文件中开启宝宝模式。
+6. 检测到新的提交后，按需刷新审核快照。
 
-安装项目依赖后，在 Windows 系统的项目根目录运行：
+如果要查看私有 Pull Request，请先在应用中连接 GitHub，并为目标仓库授予读取权限。
 
-```powershell
-pnpm build:windows
-```
+<a id="主要功能"></a>
 
-该命令仅构建 NSIS `.exe` 安装包。构建产物位于：
+## ✨ 主要功能
 
-```text
-src-tauri\target\release\bundle\nsis\Narrant_1.0.0_x64-setup.exe
-```
+- **审核本地分支**。选择 Base 与 Head 分支，按实际合入方向查看完整变更
+- **发现 GitHub Pull Request**。从本地仓库的 GitHub remotes 发现公开 PR，连接 GitHub 后也可访问已授权的私有仓库
+- **专注阅读代码**。以文件树浏览新增、修改、删除和重命名文件，并在单栏或双栏 Diff 间切换
+- **保留审核历史**。按仓库保存 Review 与快照，分支或 PR 更新后可显式刷新并继续审核
+- **中英文界面**。根据系统语言自动选择，也可在应用内切换
+- **明暗主题**。跟随系统外观显示
 
-## 本地开发
+## 🔒 本地优先与安全边界
 
-Custom Babysit 的确定性 smoke、终端开发日志和数据保密边界见
-[开发日志](docs/agents/dev-logging.md) 与 [Babysit smoke test](docs/agents/babysit-smoke.md)。
+Narrant 直接读取你选择的本地 Git 仓库，并为审核创建由应用管理、退出时清理的临时工作区。开始使用某个仓库前，应用会要求你确认工作区信任，因为 Git hooks、filters 和 Git LFS 等仓库配置可能执行程序或读取外部内容。
+
+连接 GitHub 是可选的。公开 Pull Request 可以匿名发现；访问私有仓库时，Narrant 通过 GitHub 的设备授权流程获取你明确授予的读取权限，并把凭据存放在操作系统凭据存储中。
+
+## 当前状态
+
+Narrant 仍在持续开发，界面、数据格式和功能行为可能在后续版本中调整。发布说明会列出每个版本的重要变化和已知限制。
+
+<a id="反馈问题"></a>
+
+## 反馈问题
+
+欢迎通过 [GitHub Issues](https://github.com/XLCYun/narrant/issues) 报告问题或提出建议。提交问题时，请尽量附上操作系统、Narrant 版本、复现步骤和已经脱敏的错误信息；请勿上传访问令牌、私有代码或其他敏感数据。
+
+## 开发与许可证
+
+开发说明见 [开发文档](docs/development.md)。项目采用 [Apache-2.0](LICENSE)；第三方组件与素材保留各自的许可声明。
+
+新的 GitHub Releases 下载渠道正在迁移，首个版本发布前下载列表可能为空。旧版本用户需要从本仓库手动安装一次修复版，之后使用新的更新渠道。

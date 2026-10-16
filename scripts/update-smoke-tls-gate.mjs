@@ -1,32 +1,22 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
-import { createServer as createHttpsServer } from "node:https";
-import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { URL } from "node:url";
 
-import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
+import { FIXED_STABLE_ENDPOINT, PUBLIC_RELEASE_REPOSITORY } from "./public-draft-assets.mjs";
 import { releaseAssetNames } from "./release-assets.mjs";
-import { createTlsIdentity } from "./update-smoke-tools.mjs";
-import { setTimeout, clearTimeout } from "node:timers";
 
-const HOSTNAME = "updates.cyunlab.com";
-const LATEST_PATH = "/narrant/channels/stable/latest.json";
+const HOSTNAME = "github.com";
+const LATEST_PATH = "/XLCYun/narrant/releases/latest/download/latest.json";
 
 /** 从已验证 manifest 生成当前 target 唯一允许的 latest/tag 路由。 */
 export function createCandidateGateRoutes(options) {
-  const { target, version, directory, manifest } = options;
+  const { target, tag, version, directory, manifest } = options;
   if (!["darwin-aarch64", "windows-x86_64"].includes(target)) throw new Error("TLS gate target 无效");
   const names = releaseAssetNames(version);
   const packageName = target === "darwin-aarch64" ? names.updater.darwin : names.updater.windows;
-  const expectedUrl = manifest?.platforms?.[target]?.url;
-  const expectedPrefix = `https://${HOSTNAME}/narrant/releases/${version}/${target}/`;
-  if (typeof expectedUrl !== "string" || !expectedUrl.startsWith(expectedPrefix) || !expectedUrl.endsWith(`-${encodeURIComponent(packageName)}`)) {
-    throw new Error("TLS gate manifest package URL 不匹配");
-  }
+  const expectedUrl = `https://${HOSTNAME}/${PUBLIC_RELEASE_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(packageName)}`;
+  if (manifest?.platforms?.[target]?.url !== expectedUrl) throw new Error("TLS gate manifest package URL 不匹配");
   const packageUrl = new URL(expectedUrl);
   return Object.freeze([
     Object.freeze({ pathname: LATEST_PATH, file: join(directory, names.manifest), contentType: "application/json; charset=utf-8" }),
@@ -34,7 +24,7 @@ export function createCandidateGateRoutes(options) {
   ]);
 }
 
-/** 校验 gate 只能拦截正式 Stable endpoint 与当前 tag 包路径。 */
+/** 校验 gate 只能拦截 shipped GitHub endpoint 与当前 tag 包路径。 */
 export function validateGateConfiguration(config) {
   const endpoint = new URL(config.endpoint);
   if (endpoint.href !== FIXED_STABLE_ENDPOINT || endpoint.hostname !== HOSTNAME || endpoint.pathname !== LATEST_PATH) {
@@ -45,7 +35,7 @@ export function validateGateConfiguration(config) {
   if (new Set(paths).size !== 2 || !paths.includes(LATEST_PATH)) throw new Error("TLS gate route 集合无效");
   for (const route of config.routes) {
     const allowedPath = route.pathname === LATEST_PATH ||
-      route.pathname.startsWith(`/narrant/releases/${config.tag.replace(/^v/, "")}/`);
+      route.pathname.startsWith(`/XLCYun/narrant/releases/download/${encodeURIComponent(config.tag)}/`);
     if (
       typeof route.file !== "string" || !route.file ||
       typeof route.pathname !== "string" ||
@@ -53,7 +43,7 @@ export function validateGateConfiguration(config) {
       posix.normalize(route.pathname) !== route.pathname ||
       route.pathname.includes("\\") || route.pathname.includes("?") || route.pathname.includes("#")
     ) {
-      throw new Error("TLS gate route 不在固定 OSS Stable/release allowlist");
+      throw new Error("TLS gate route 不在固定 GitHub latest/tag allowlist");
     }
   }
   return endpoint;
@@ -67,99 +57,46 @@ export function combineGateErrors(primary, cleanupErrors) {
   return new AggregateError([primary, ...cleanupErrors].filter(Boolean), primary?.message ?? "TLS gate 清理失败");
 }
 
-/** 在随机环回端口启动服务，不占用系统端口或改变主机路由。 */
-async function listen(server) {
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-  });
-  return server.address().port;
-}
-
 /**
- * 只通过测试子进程的 HTTPS_PROXY/SSL_CERT_FILE 接入固定 HTTPS 域名。
- * CA 保持为临时文件，不改变 hosts、证书信任、系统代理或其他应用的网络。
+ * 在 runner-only 系统边界内安装临时 CA、修改 hosts 并服务两个 byte-exact 文件；
+ * 任意失败都按 hosts→server→CA→临时目录顺序恢复。
  */
-export async function withUpdateSmokeTlsGate(config, action, dependencies = {}) {
+export async function withUpdateSmokeTlsGate(config, action, systemAdapter) {
   const endpoint = validateGateConfiguration(config);
   if (typeof action !== "function") throw new Error("TLS gate action 缺失");
+  for (const method of ["createTlsIdentity", "installCertificateAuthority", "startHttpsGate", "prepareHostnameRoute", "routeHostname", "restoreHostname", "removeCertificateAuthority"]) {
+    if (typeof systemAdapter?.[method] !== "function") throw new Error(`TLS system adapter 缺少 ${method}`);
+  }
   const directory = await mkdtemp(join(tmpdir(), "narrant-update-smoke-tls-"));
-  const servers = [];
-  const sockets = new Set();
-  const served = new Set();
-  const completed = Promise.withResolvers();
-  // 请求失败可以早于等待者注册，先接住拒绝，随后由真实等待传播。
-  completed.promise.catch(() => {});
+  let identity;
+  let server;
+  let trusted = false;
+  let routed = false;
   let primary;
   let result;
-  let waitTimer;
   let finalFailure;
   try {
-    const identity = await (dependencies.createTlsIdentity ?? createTlsIdentity)({ hostname: endpoint.hostname, directory });
-    const routes = new Map(config.routes.map((route) => [route.pathname, route]));
-    const https = createHttpsServer({ cert: await readFile(identity.certificate), key: await readFile(identity.key) }, (request, response) => {
-      const route = routes.get(request.url);
-      request.resume();
-      if (request.method !== "GET" || ![endpoint.hostname, `${endpoint.hostname}:443`].includes(request.headers.host) || !route) {
-        response.writeHead(404).end();
-        return;
-      }
-      response.writeHead(200, { "content-type": route.contentType, "cache-control": "no-store", connection: "close" });
-      const input = createReadStream(route.file);
-      input.once("error", (error) => { completed.reject(error); response.destroy(error); });
-      response.once("finish", () => {
-        served.add(route.pathname);
-        if (served.size === routes.size) completed.resolve();
-      });
-      input.pipe(response);
-    });
-    servers.push(https);
-    https.on("connection", (socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
-    const tlsPort = await listen(https);
-    const proxy = createHttpServer((_request, response) => response.writeHead(403).end());
-    servers.push(proxy);
-    proxy.on("connection", (socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
-    proxy.on("connect", (request, client, head) => {
-      if (request.url !== `${endpoint.hostname}:443`) {
-        client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
-        return;
-      }
-      const upstream = connect({ host: "127.0.0.1", port: tlsPort });
-      sockets.add(upstream);
-      upstream.once("close", () => { sockets.delete(upstream); client.destroy(); });
-      client.once("close", () => upstream.destroy());
-      upstream.once("error", () => client.destroy());
-      client.once("error", () => upstream.destroy());
-      upstream.once("connect", () => {
-        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length) upstream.write(head);
-        client.pipe(upstream).pipe(client);
-      });
-    });
-    const proxyPort = await listen(proxy);
+    identity = await systemAdapter.createTlsIdentity({ hostname: endpoint.hostname, directory });
+    await systemAdapter.installCertificateAuthority(identity);
+    trusted = true;
+    server = await systemAdapter.startHttpsGate({ hostname: endpoint.hostname, routes: config.routes, identity });
+    if (typeof server?.waitForAllRequests !== "function" || typeof server?.close !== "function") {
+      throw new Error("TLS server adapter contract 无效");
+    }
+    await systemAdapter.prepareHostnameRoute(endpoint.hostname, "127.0.0.1");
+    routed = true;
+    await systemAdapter.routeHostname();
     result = await action(Object.freeze({
-      environment: Object.freeze({
-        HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-        SSL_CERT_FILE: identity.authority,
-        SSL_CERT_DIR: directory,
-        NO_PROXY: "",
-      }),
-      /** 等待真实旧应用完整读取 manifest 与该平台的候选包。 */
-      waitForAllRequests: () => {
-        waitTimer ??= setTimeout(() => completed.reject(new Error("TLS gate 等待升级请求超时")), config.timeoutMilliseconds ?? 8 * 60 * 1000);
-        return completed.promise;
-      },
+      /** 等待真实旧应用读取 exact latest.json 与当前 target package。 */
+      waitForAllRequests: () => server.waitForAllRequests(),
     }));
   } catch (error) {
     primary = error;
   } finally {
     const cleanup = [];
-    clearTimeout(waitTimer);
-    for (const socket of sockets) socket.destroy();
-    for (const server of servers.reverse()) {
-      try { await new Promise((resolve, reject) => server.close((error) => error && error.code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve())); }
-      catch (error) { cleanup.push(error); }
-    }
+    if (routed) try { await systemAdapter.restoreHostname(); } catch (error) { cleanup.push(error); }
+    if (server) try { await server.close(); } catch (error) { cleanup.push(error); }
+    if (trusted) try { await systemAdapter.removeCertificateAuthority(identity); } catch (error) { cleanup.push(error); }
     try { await rm(directory, { recursive: true, force: true }); } catch (error) { cleanup.push(error); }
     finalFailure = combineGateErrors(primary, cleanup);
   }

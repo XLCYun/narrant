@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   inspectDurableStaging,
+  observeBootstrapRecovery,
   platformStatePaths,
+  writeBootstrapVerificationFixture,
 } from "../native-update-platform-adapter.mjs";
 import { combineDriverErrors, runNativeUpdateSmokeDriver } from "../native-update-smoke-driver.mjs";
-import { NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
+import { BOOTSTRAP_CHECKPOINTS, NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
 
 /** 创建可记录方法顺序的 fake native adapter。 */
 function adapter(events, fail = {}) {
@@ -24,6 +26,10 @@ function adapter(events, fail = {}) {
     platform: { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "verified", notarization: "verified" },
     initialize: () => invoke("initialize"),
     installBaseline: () => invoke("installBaseline", { root: "/app" }),
+    installBootstrap: () => invoke("installBootstrap", { root: "/app" }),
+    prepareUserData: () => invoke("prepare-data"),
+    registerUserRepository: () => invoke("register-project"),
+    assertUserData: () => invoke("check-data"),
     withCandidateGate: async (_options, action) => {
       events.push("gate:start");
       const result = await action({ waitForAllRequests: () => invoke("gate:requests") });
@@ -37,8 +43,7 @@ function adapter(events, fail = {}) {
     inspectUpdated: () => invoke("updated"),
     assertNotRelaunched: () => invoke("no-relaunch"),
     inspectTrustedConfiguration: () => invoke("trust"),
-    inspectPreservedData: () => invoke("preserved-data"),
-    captureFailure: () => invoke("diagnostics"),
+    proveBootstrapRecovery: () => invoke("recovery", { pid: 8 }),
     cleanup: () => invoke("cleanup"),
   };
 }
@@ -61,14 +66,17 @@ test("normal driver 按 gate/staging/normal-exit/no-relaunch/manual-launch 顺�
   const events = [];
   const result = await runNativeUpdateSmokeDriver(options(), adapter(events));
   assert.deepEqual(events, [
-    "initialize", "installBaseline", "gate:start", "launch", "staging", "gate:requests",
-    "close", "exit", "updated", "no-relaunch", "launch", "trust", "preserved-data", "close", "exit", "gate:end", "cleanup",
+    "initialize", "installBaseline", "prepare-data", "gate:start", "launch", "staging", "gate:requests", "register-project", "check-data",
+    "close", "exit", "updated", "no-relaunch", "launch", "trust", "close", "exit", "check-data", "gate:end", "cleanup",
   ]);
   assert.deepEqual(result.checkpoints.map(({ id }) => id), [...NORMAL_CHECKPOINTS]);
 });
 
-test("拒绝已完成使命的 bootstrap，避免误安装正式候选", async () => {
-  await assert.rejects(() => runNativeUpdateSmokeDriver(options("bootstrap"), adapter([])), /只支持 normal/);
+test("bootstrap driver 不调用 baseline/gate，真实恢复后正常退出并 clean relaunch", async () => {
+  const events = [];
+  const result = await runNativeUpdateSmokeDriver(options("bootstrap"), adapter(events));
+  assert.deepEqual(events, ["initialize", "installBootstrap", "recovery", "trust", "close", "exit", "launch", "cleanup"]);
+  assert.deepEqual(result.checkpoints.map(({ id }) => id), [...BOOTSTRAP_CHECKPOINTS]);
 });
 
 test("normal 必须提供 previous release key，bootstrap 必须拒绝该 key", async () => {
@@ -77,7 +85,7 @@ test("normal 必须提供 previous release key，bootstrap 必须拒绝该 key",
   await assert.rejects(() => runNativeUpdateSmokeDriver(missing, adapter([])), /previous.*key/i);
   const bootstrap = options("bootstrap");
   bootstrap.previousReleaseSigningPublicKey = "unexpected-old-key";
-  await assert.rejects(() => runNativeUpdateSmokeDriver(bootstrap, adapter([])), /只支持 normal/);
+  await assert.rejects(() => runNativeUpdateSmokeDriver(bootstrap, adapter([])), /bootstrap.*previous.*key/i);
 });
 
 test("cleanup 错误不覆盖 native 主错误", async () => {
@@ -88,20 +96,7 @@ test("cleanup 错误不覆盖 native 主错误", async () => {
     return true;
   });
   assert.equal(events.at(-1), "cleanup");
-  assert.equal(events.at(-2), "diagnostics");
   assert.equal(combineDriverErrors(new Error("primary"), new Error("cleanup")).message, "primary");
-});
-
-test("诊断失败仍保留升级主错误并执行清理", async () => {
-  const events = [];
-  await assert.rejects(() => runNativeUpdateSmokeDriver(options(), adapter(events, {
-    updated: "candidate unchanged", diagnostics: "disk full",
-  })), error => {
-    assert.equal(error.message, "candidate unchanged");
-    assert.deepEqual(error.errors.map(value => value.message), ["candidate unchanged", "disk full"]);
-    return true;
-  });
-  assert.deepEqual(events.slice(-2), ["diagnostics", "cleanup"]);
 });
 
 test("durable staging 必须匹配 pointer/metadata/package digest", async (context) => {
@@ -127,7 +122,38 @@ test("durable staging 必须匹配 pointer/metadata/package digest", async (cont
 
 test("平台 state path 固定在 Tauri identifier 的 data/cache 边界", () => {
   const mac = platformStatePaths("darwin-aarch64", { HOME: "/Users/runner" });
-  assert.equal(mac.stagingRoot, "/Users/runner/Library/Caches/com.cyunlab.narrant.upgrade-test/application-update");
+  assert.equal(mac.stagingRoot, "/Users/runner/Library/Caches/com.cyunlab.narrant/application-update");
   const windows = platformStatePaths("windows-x86_64", { APPDATA: "C:\\Users\\runner\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\runner\\AppData\\Local" });
-  assert.equal(windows.stagingRoot, "C:\\Users\\runner\\AppData\\Local\\com.cyunlab.narrant.upgrade-test\\application-update");
+  assert.equal(windows.stagingRoot, "C:\\Users\\runner\\AppData\\Local\\com.cyunlab.narrant\\application-update");
+});
+
+test("bootstrap fixture 以严格更高版本进入验签分支并观察完整 recovery cleanup/diagnostic", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "narrant-bootstrap-recovery-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const state = {
+    stagingRoot: join(root, "cache", "application-update"),
+    diagnostics: join(root, "data", "logs", "application-update.jsonl"),
+  };
+  const fixture = await writeBootstrapVerificationFixture(state.stagingRoot, {
+    currentVersion: "2.0.9",
+    target: "darwin-aarch64",
+    installKind: "macos_app_archive",
+  });
+  assert.equal(fixture.version, "2.0.10");
+  const metadata = JSON.parse(await readFile(join(state.stagingRoot, fixture.generation, "metadata.json"), "utf8"));
+  assert.deepEqual(metadata, {
+    schemaVersion: 2,
+    version: "2.0.10",
+    signature: "invalid-bootstrap-verification-signature",
+    target: "darwin-aarch64",
+    installKind: "macos_app_archive",
+    releaseNotes: "bootstrap verification recovery fixture",
+  });
+
+  await rm(join(state.stagingRoot, "current"));
+  await mkdir(join(root, "data", "logs"), { recursive: true });
+  await writeFile(state.diagnostics, '{"event":"transition-warning","sequence":1,"version":null,"category":"verification","operationId":null,"httpStatus":null}\n');
+  await assert.rejects(() => observeBootstrapRecovery(state, fixture.generation, { timeoutMilliseconds: 20 }), /generation/);
+  await rm(join(state.stagingRoot, fixture.generation), { recursive: true });
+  await assert.doesNotReject(() => observeBootstrapRecovery(state, fixture.generation, { timeoutMilliseconds: 100 }));
 });

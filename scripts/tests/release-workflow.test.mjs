@@ -8,7 +8,7 @@ const reconciliation = readFileSync(
   new URL("../reconcile-draft-release.mjs", import.meta.url),
   "utf8",
 );
-const endpoint = "https://updates.cyunlab.com/narrant/channels/stable/latest.json";
+const endpoint = "https://github.com/XLCYun/narrant/releases/latest/download/latest.json";
 
 /** 统计工作流中固定文本出现次数，避免只配置了单个平台。 */
 function occurrences(text) {
@@ -77,9 +77,9 @@ test("Windows 收集 current-user NSIS updater exe 与强制签名", () => {
   assert.match(workflow, /narrant-windows-x86_64-updater\.exe\.sig/);
 });
 
-test("公开 Draft 使用跨仓库 token，且完整本地预验严格早于远端协调", () => {
-  assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
-  assert.match(workflow, /TARGET_REPOSITORY: cyunlab\/narrant/);
+test("同仓库 Draft 使用 workflow token，且完整本地预验严格早于远端协调", () => {
+  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(workflow, /TARGET_REPOSITORY: XLCYun\/narrant/);
   const draft = workflow.slice(workflow.indexOf("\n  draft-release:"));
   const install = draft.indexOf("pnpm install --frozen-lockfile --prod");
   const notes = draft.indexOf("node scripts/generate-public-release-notes.mjs");
@@ -94,7 +94,7 @@ test("公开 Draft 使用跨仓库 token，且完整本地预验严格早于远�
   assert.doesNotMatch(workflow, /environment:/);
 });
 
-test("Draft 成功后按受保护 OSS bootstrap tag 选择 smoke 模式", () => {
+test("Draft 成功后自动用固定 previous Stable 身份运行 normal update smoke", () => {
   assert.match(workflow, /outputs:\n\s+version:.*\n\s+source_sha:/);
   assert.match(workflow, /id: previous-stable[\s\S]*read-public-stable-identity\.mjs/);
   assert.match(workflow, /id: reconcile[\s\S]*reconcile-draft-release\.mjs/);
@@ -102,11 +102,10 @@ test("Draft 成功后按受保护 OSS bootstrap tag 选择 smoke 模式", () => 
   const smoke = workflow.slice(workflow.indexOf("\n  update-smoke:"));
   assert.match(smoke, /needs: \[validate, draft-release\]/);
   assert.match(smoke, /uses: \.\/\.github\/workflows\/update-smoke\.yml/);
-  assert.match(smoke, /mode: \$\{\{ github\.ref_name == vars\.NARRANT_OSS_BOOTSTRAP_TAG && 'bootstrap' \|\| 'normal' \}\}/);
-  assert.match(workflow, /id: previous-stable\n\s+if: github\.ref_name != vars\.NARRANT_OSS_BOOTSTRAP_TAG/);
+  assert.match(smoke, /mode:.*NARRANT_FIRST_UPDATER_TAG.*'bootstrap'.*'normal'/);
   assert.match(smoke, /source_sha: \$\{\{ needs\.validate\.outputs\.source_sha \}\}/);
   assert.match(smoke, /public_release_id: \$\{\{ needs\.draft-release\.outputs\.public_release_id \}\}/);
-  assert.match(smoke, /CYUNLAB_RELEASE_TOKEN: \$\{\{ secrets\.CYUNLAB_RELEASE_TOKEN \}\}/);
+  assert.doesNotMatch(smoke, /secrets:/);
 });
 
 test("Draft 二进制上传固定 uploads.github.com release-ID endpoint，不解析 tag 或 clobber", () => {

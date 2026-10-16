@@ -142,7 +142,10 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
         for name in ["manifest.json", "pack.tar.gz"] {
             let bytes = fs::read(artifact.join(name)).expect("验收必须具备所选真实支持包");
             server.mock(|when, then| {
-                when.path(format!("/{}/{version}/{target}/{name}", id.slug()));
+                when.path(format!(
+                    "/language-pack-{}-v{version}/{target}-{name}",
+                    id.slug()
+                ));
                 then.body(bytes);
             });
         }

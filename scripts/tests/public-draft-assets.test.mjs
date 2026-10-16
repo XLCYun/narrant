@@ -86,13 +86,13 @@ async function assetsFixture(context) {
   const bytes = new Map(await Promise.all(assetNames.map(async (name) => [name, await readFile(join(directory, name))])));
   const release = {
     id: 42, tag_name: "v2.0.0", draft: true, prerelease: false, body: "公开说明",
-    url: "https://api.github.com/repos/cyunlab/narrant/releases/42",
-    upload_url: "https://uploads.github.com/repos/cyunlab/narrant/releases/42/assets{?name,label}",
-    html_url: "https://github.com/cyunlab/narrant/releases/tag/untagged-testfixture",
+    url: "https://api.github.com/repos/XLCYun/narrant/releases/42",
+    upload_url: "https://uploads.github.com/repos/XLCYun/narrant/releases/42/assets{?name,label}",
+    html_url: "https://github.com/XLCYun/narrant/releases/tag/untagged-testfixture",
     assets: assetNames.map((name, index) => ({
       id: index + 100, name, state: "uploaded", size: bytes.get(name).length,
-      url: `https://api.github.com/repos/cyunlab/narrant/releases/assets/${index + 100}`,
-      browser_download_url: `https://github.com/cyunlab/narrant/releases/download/untagged-testfixture/${encodeURIComponent(name)}`,
+      url: `https://api.github.com/repos/XLCYun/narrant/releases/assets/${index + 100}`,
+      browser_download_url: `https://github.com/XLCYun/narrant/releases/download/untagged-testfixture/${encodeURIComponent(name)}`,
     })),
   };
   return { directory, output, key, bytes, release };
@@ -103,7 +103,7 @@ function fetchMock(fixture, mutate = (bytes) => bytes) {
   const calls = [];
   const implementation = async (url, options = {}) => {
     calls.push({ url: String(url), options });
-    if (String(url).endsWith("/repos/cyunlab/narrant/releases/42")) {
+    if (String(url).endsWith("/repos/XLCYun/narrant/releases/42")) {
       return new globalThis.Response(JSON.stringify(fixture.release), { status: 200, headers: { "content-type": "application/json" } });
     }
     const apiAsset = fixture.release.assets.find((asset) => asset.url === String(url));
@@ -166,27 +166,24 @@ test("public Draft receipt 绑定 old signing 与 successor key 身份，且 boo
 test("Draft identity 拒绝发布状态、tag/ID 漂移与错误仓库 API URL", () => {
   const release = {
     id: 42, tag_name: "v2.0.0", draft: true, prerelease: false, body: "notes",
-    url: "https://api.github.com/repos/cyunlab/narrant/releases/42",
-    upload_url: "https://uploads.github.com/repos/cyunlab/narrant/releases/42/assets{?name,label}",
-    html_url: "https://github.com/cyunlab/narrant/releases/tag/untagged-testfixture",
+    url: "https://api.github.com/repos/XLCYun/narrant/releases/42",
+    upload_url: "https://uploads.github.com/repos/XLCYun/narrant/releases/42/assets{?name,label}",
+    html_url: "https://github.com/XLCYun/narrant/releases/tag/untagged-testfixture",
   };
   assert.doesNotThrow(() => validateDraftReleaseIdentity(release, { releaseId: 42, tag: "v2.0.0" }));
   for (const mutate of [
     (copy) => { copy.draft = false; }, (copy) => { copy.id = 43; },
-    (copy) => { copy.tag_name = "v2.0.1"; }, (copy) => { copy.url = copy.url.replace("cyunlab", "other"); },
-    (copy) => { copy.upload_url = copy.upload_url.replace("cyunlab", "other"); },
-    (copy) => { copy.html_url = copy.html_url.replace("cyunlab", "other"); },
+    (copy) => { copy.tag_name = "v2.0.1"; }, (copy) => { copy.url = copy.url.replace("XLCYun", "other"); },
+    (copy) => { copy.upload_url = copy.upload_url.replace("XLCYun", "other"); },
+    (copy) => { copy.html_url = copy.html_url.replace("XLCYun", "other"); },
   ]) {
     const copy = { ...release }; mutate(copy);
     assert.throws(() => validateDraftReleaseIdentity(copy, { releaseId: 42, tag: "v2.0.0" }), /不匹配|已发布/);
   }
-  assert.throws(
-    () => validateDraftReleaseIdentity(
-      { ...release, html_url: "https://github.com/cyunlab/narrant/releases/tag/v2.0.0" },
-      { releaseId: 42, tag: "v2.0.0" },
-    ),
-    /untagged/,
-  );
+  assert.doesNotThrow(() => validateDraftReleaseIdentity(
+    { ...release, html_url: "https://github.com/XLCYun/narrant/releases/tag/v2.0.0" },
+    { releaseId: 42, tag: "v2.0.0" },
+  ));
 });
 
 test("Draft asset 下载身份必须绑定 Release 当前 untagged html identity", async (context) => {
@@ -238,7 +235,7 @@ test("Draft asset redirect 只接受默认 TLS 端口的 GitHub 官方资产域�
 
 test("receipt 比较绑定 asset/key ID/size/SHA，不接受同名不同 bytes", () => {
   const left = {
-    repository: "cyunlab/narrant", releaseId: 42, tag: "v2.0.0", version: "2.0.0",
+    repository: "XLCYun/narrant", releaseId: 42, tag: "v2.0.0", version: "2.0.0",
     manifestSha256: "a".repeat(64),
     updaterTrust: {
       releaseSigningKeySha256: "c".repeat(64),

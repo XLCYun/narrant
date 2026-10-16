@@ -64,7 +64,7 @@ fn downloading_runtime() -> (
         })
         .unwrap();
     let package = super::super::ReleasePackage::new(
-        "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.tar.gz",
+        "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.tar.gz",
         encode(SIGNATURE),
         super::super::platform::MACOS_TARGET,
         super::super::InstallKind::MacosAppArchive,
@@ -179,7 +179,7 @@ fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure
         })
         .unwrap();
     let package = super::super::ReleasePackage::new(
-        "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.tar.gz",
+        "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.tar.gz",
         "signature",
         super::super::platform::MACOS_TARGET,
         super::super::InstallKind::MacosAppArchive,

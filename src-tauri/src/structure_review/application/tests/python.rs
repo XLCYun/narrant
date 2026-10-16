@@ -304,7 +304,7 @@ async fn real_python_pack_flows_through_review_lifecycle_to_dto() {
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(artifacts.join("python/1.1.0").join(target).join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/python/1.1.0/{target}/{name}"));
+            when.path(format!("/language-pack-python-v1.1.0/{target}-{name}"));
             then.body(bytes);
         });
     }

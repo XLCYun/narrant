@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    runs-on: macos-15
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.value }}
@@ -48,7 +48,7 @@ jobs:
 
   macos:
     needs: [validate, quality-gate]
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    runs-on: macos-15
     timeout-minutes: 180
     env:
       NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
@@ -58,7 +58,7 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      NARRANT_UPDATER_ENDPOINT: https://updates.cyunlab.com/narrant/channels/stable/latest.json
+      NARRANT_UPDATER_ENDPOINT: https://github.com/XLCYun/narrant/releases/latest/download/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
       NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
       NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
@@ -77,7 +77,7 @@ jobs:
           if [[ "$NARRANT_RELEASE_SIGNING_PUBLIC_KEY" != "$NARRANT_UPDATER_PUBLIC_KEY" ]]; then
             test "$NARRANT_UPDATER_BRIDGE_TAG" = "$GITHUB_REF_NAME"
           fi
-          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://updates.cyunlab.com/narrant/channels/stable/latest.json" ]] || {
+          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://github.com/XLCYun/narrant/releases/latest/download/latest.json" ]] || {
             echo "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。" >&2
             exit 1
           }
@@ -85,9 +85,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - run: pnpm install --frozen-lockfile
       - name: 导入 Developer ID 证书和公证密钥
         env:
@@ -271,14 +276,14 @@ jobs:
 
   windows:
     needs: [validate, quality-gate]
-    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]') }}
+    runs-on: windows-2022
     timeout-minutes: 180
     env:
       NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
       NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      NARRANT_UPDATER_ENDPOINT: https://updates.cyunlab.com/narrant/channels/stable/latest.json
+      NARRANT_UPDATER_ENDPOINT: https://github.com/XLCYun/narrant/releases/latest/download/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
       NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
       NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
@@ -305,14 +310,19 @@ jobs:
               ($env:NARRANT_UPDATER_BRIDGE_TAG -ne $env:GITHUB_REF_NAME)) {
             throw "updater key bridge 缺少 exact tag 授权"
           }
-          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://updates.cyunlab.com/narrant/channels/stable/latest.json") {
+          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://github.com/XLCYun/narrant/releases/latest/download/latest.json") {
             throw "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。"
           }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - run: pnpm install --frozen-lockfile
       - name: 构建带 updater 签名的 current-user Windows x64 NSIS
         run: pnpm build:windows
@@ -338,16 +348,18 @@ jobs:
           if-no-files-found: error
 
   draft-release:
+    permissions:
+      contents: write
     needs: [validate, macos, windows]
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    runs-on: macos-15
     timeout-minutes: 10
     outputs:
       public_release_id: ${{ steps.reconcile.outputs.release_id }}
       previous_stable_tag: ${{ steps.previous-stable.outputs.tag }}
       previous_stable_manifest_sha256: ${{ steps.previous-stable.outputs.manifest_sha256 }}
     env:
-      GH_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
-      TARGET_REPOSITORY: cyunlab/narrant
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: XLCYun/narrant
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
@@ -362,10 +374,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: pnpm
       - run: pnpm install --frozen-lockfile --prod
       - name: 在任何远端变更前固定当前 published Stable 身份
         id: previous-stable
-        if: github.ref_name != vars.NARRANT_OSS_BOOTSTRAP_TAG
+        if: github.ref_name != vars.NARRANT_FIRST_UPDATER_TAG
         run: node scripts/read-public-stable-identity.mjs
       - uses: actions/download-artifact@v4
         with:
@@ -388,8 +401,6 @@ jobs:
       source_sha: ${{ needs.validate.outputs.source_sha }}
       public_release_id: ${{ needs.draft-release.outputs.public_release_id }}
       public_tag: ${{ github.ref_name }}
-      mode: ${{ github.ref_name == vars.NARRANT_OSS_BOOTSTRAP_TAG && 'bootstrap' || 'normal' }}
+      mode: ${{ github.ref_name == vars.NARRANT_FIRST_UPDATER_TAG && 'bootstrap' || 'normal' }}
       previous_stable_tag: ${{ needs.draft-release.outputs.previous_stable_tag }}
       previous_stable_manifest_sha256: ${{ needs.draft-release.outputs.previous_stable_manifest_sha256 }}
-    secrets:
-      CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}

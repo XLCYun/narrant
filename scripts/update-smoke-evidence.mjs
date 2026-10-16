@@ -7,18 +7,18 @@ import { pathToFileURL, URL } from "node:url";
 
 import { assertSameDraftReceipt, expectedDraftAssetNames } from "./public-draft-assets.mjs";
 import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
-import { UPDATE_TEST_PROFILE } from "./update-test-profile.mjs";
 
 export const REQUIRED_UPDATE_TARGETS = Object.freeze([
   "darwin-aarch64",
   "windows-x86_64",
 ]);
 export const NORMAL_CHECKPOINTS = Object.freeze([
-  "baseline.signed_test_package_installed",
+  "baseline.signed_package_installed",
   "baseline.exact_installed_app_launched",
+  "baseline.user_data_seeded",
   "update.fixed_endpoint_checked",
-  "update.test_manifest_received",
-  "update.test_package_downloaded",
+  "update.draft_manifest_received",
+  "update.draft_package_downloaded",
   "update.signature_verified",
   "update.durable_staging_observed",
   "shutdown.normal_close_requested",
@@ -27,8 +27,16 @@ export const NORMAL_CHECKPOINTS = Object.freeze([
   "install.no_automatic_relaunch",
   "candidate.manual_relaunch",
   "candidate.version_observed",
-  "candidate.fixture_repository_preserved",
-  "candidate.fixture_settings_preserved",
+  "candidate.user_data_preserved",
+]);
+export const BOOTSTRAP_CHECKPOINTS = Object.freeze([
+  "bootstrap.signed_installer_verified",
+  "bootstrap.candidate_installed",
+  "bootstrap.exact_installed_app_launched",
+  "bootstrap.version_observed",
+  "bootstrap.trusted_configuration_observed",
+  "bootstrap.tampered_staging_rejected",
+  "bootstrap.clean_relaunch_observed",
 ]);
 
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -39,17 +47,17 @@ const MAX_RUN_MILLISECONDS = 4 * 60 * 60 * 1000;
 const CLOCK_SKEW_MILLISECONDS = 5 * 60 * 1000;
 const TARGET_CONTRACTS = Object.freeze({
   "darwin-aarch64": Object.freeze({
-    runner: Object.freeze({ os: "macos", arch: "aarch64", image: "self-hosted" }),
+    runner: Object.freeze({ os: "macos", arch: "aarch64", image: "macos-15" }),
     platform: Object.freeze({
       packageKind: "app-tar-gz",
       installerKind: "dmg",
       installScope: "user",
-      codeSigning: "ad-hoc-verified",
-      notarization: "production-assets-only",
+      codeSigning: "verified",
+      notarization: "verified",
     }),
   }),
   "windows-x86_64": Object.freeze({
-    runner: Object.freeze({ os: "windows", arch: "x86_64", image: "self-hosted" }),
+    runner: Object.freeze({ os: "windows", arch: "x86_64", image: "windows-2022" }),
     platform: Object.freeze({
       packageKind: "nsis-exe",
       installerKind: "nsis-exe",
@@ -107,7 +115,7 @@ function isNewer(candidate, previous) {
 function verifyDraftReceipt(receipt, expectations) {
   const object = requireObject(receipt, "draftReceipt");
   if (
-    object.repository !== "cyunlab/narrant" ||
+    object.repository !== "XLCYun/narrant" ||
     object.releaseId !== expectations.publicReleaseId ||
     object.tag !== expectations.publicTag ||
     object.version !== expectations.version ||
@@ -130,8 +138,8 @@ function verifyDraftReceipt(receipt, expectations) {
   if (expectations.draftReceipt) assertSameDraftReceipt(object, expectations.draftReceipt);
 }
 
-/** 校验两把 updater 公钥的摘要身份与当前 normal bridge 语义。 */
-function verifyUpdaterTrust(trust, receiptTrust) {
+/** 校验两把 updater 公钥的摘要身份与当前 normal/bootstrap bridge 语义。 */
+function verifyUpdaterTrust(trust, mode, receiptTrust) {
   const object = requireObject(trust, "updaterTrust");
   const fields = ["releaseSigningKeySha256", "candidateUpdaterKeySha256"];
   if (Object.keys(object).sort().join(",") !== [...fields, "bridgeAuthorized"].sort().join(",") ||
@@ -140,25 +148,22 @@ function verifyUpdaterTrust(trust, receiptTrust) {
   }
   const differs = object.releaseSigningKeySha256 !== object.candidateUpdaterKeySha256;
   if (differs !== object.bridgeAuthorized) throw new Error("updater key identity/bridge 状态不一致");
+  if (mode === "bootstrap" && differs) throw new Error("bootstrap 不允许 updater key bridge");
   if (JSON.stringify(object) !== JSON.stringify(receiptTrust)) throw new Error("updater key identity 与 Draft receipt 不匹配");
 }
 
 /** 校验一个 target 的 evidence document。 */
 export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   requireObject(document, "evidence");
-  if (document.schemaVersion !== 2 || document.evidenceKind !== "isolated-native" || document.mode !== "normal") {
+  if (document.schemaVersion !== 1 || !["normal", "bootstrap"].includes(document.mode)) {
     throw new Error("evidence schema/mode 无效");
   }
   if (expectations.mode && document.mode !== expectations.mode) throw new Error("evidence mode 不匹配");
+  if (document.evidenceKind !== "real-native") throw new Error("promotion 只接受 real-native evidence");
   const target = requireString(document.target, "target", 64);
   const contract = TARGET_CONTRACTS[target];
   if (!contract) throw new Error(`不支持的 evidence target：${target}`);
-  requireContract(document.runner, {
-    ...contract.runner,
-    name: requireString(document.runner?.name, "runner.name", 128),
-    osVersion: requireString(document.runner?.osVersion, "runner.osVersion"),
-    osRelease: requireString(document.runner?.osRelease, "runner.osRelease", 128),
-  }, "runner");
+  requireContract(document.runner, contract.runner, "runner");
   requireContract(document.platform, contract.platform, "platform");
 
   const source = requireObject(document.source, "source");
@@ -177,39 +182,45 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   }
   if (!SHA256.test(candidate.manifestSha256)) throw new Error("candidate manifest SHA-256 无效");
   verifyDraftReceipt(document.draftReceipt, expectations);
-  verifyUpdaterTrust(document.updaterTrust, document.draftReceipt.updaterTrust);
-  verifyIsolatedPackageEvidence(document);
+  verifyUpdaterTrust(document.updaterTrust, document.mode, document.draftReceipt.updaterTrust);
 
-  const previous = requireObject(document.previousStable, "previousStable");
-  if (!TAG.test(previous.tag) || previous.tag.replace(/^v/, "") !== previous.version) {
-    throw new Error("previous Stable tag/version 无效");
-  }
-  if (!SHA256.test(previous.manifestSha256)) throw new Error("previous Stable manifest SHA-256 无效");
-  if (!SHA256.test(previous.packageSha256) || !SHA256.test(previous.signatureSha256)) {
-    throw new Error("previous Stable package/signature SHA-256 无效");
-  }
-  if (!SHA256.test(previous.previousReleaseSigningKeySha256) ||
-      !SHA256.test(expectations.previousReleaseSigningKeySha256) ||
-      previous.previousReleaseSigningKeySha256 !== expectations.previousReleaseSigningKeySha256) {
-    throw new Error("previous release signing key SHA-256 不匹配");
-  }
-  let previousUrl;
-  try { previousUrl = new URL(previous.packageUrl); } catch { throw new Error("previous Stable package URL 无效"); }
-  const expectedHost = "updates.cyunlab.com";
-  const expectedPrefix = `/narrant/releases/${previous.version}/${target}/`;
-  if (
-    previousUrl.href !== previous.packageUrl || previousUrl.protocol !== "https:" ||
-    previousUrl.hostname !== expectedHost || previousUrl.username || previousUrl.password ||
-    previousUrl.port || previousUrl.search || previousUrl.hash || !previousUrl.pathname.startsWith(expectedPrefix)
-  ) {
-    throw new Error("previous Stable package URL 不属于固定 public Release tag");
-  }
-  if (expectations.previousTag && previous.tag !== expectations.previousTag) throw new Error("previous Stable tag 不匹配");
-  if (expectations.previousManifestSha256 && previous.manifestSha256 !== expectations.previousManifestSha256) {
-    throw new Error("previous Stable manifest SHA-256 不匹配");
-  }
-  if (!isNewer(semver(candidate.version, "candidate version"), semver(previous.version, "previous version"))) {
-    throw new Error("candidate 必须严格高于 previous Stable");
+  if (document.mode === "bootstrap") {
+    if (expectations.previousReleaseSigningKeySha256 !== undefined) {
+      throw new Error("bootstrap 不得提供 previous release signing key identity");
+    }
+    if (expectations.allowBootstrap !== true) throw new Error("bootstrap evidence 未获一次性授权");
+    if (expectations.bootstrapTag !== source.tag) throw new Error("bootstrap tag 不匹配受保护变量");
+    if (document.previousStable !== null) throw new Error("bootstrap 不得伪造 previous Stable");
+  } else {
+    const previous = requireObject(document.previousStable, "previousStable");
+    if (!TAG.test(previous.tag) || previous.tag.replace(/^v/, "") !== previous.version) {
+      throw new Error("previous Stable tag/version 无效");
+    }
+    if (!SHA256.test(previous.manifestSha256)) throw new Error("previous Stable manifest SHA-256 无效");
+    if (!SHA256.test(previous.packageSha256) || !SHA256.test(previous.signatureSha256)) {
+      throw new Error("previous Stable package/signature SHA-256 无效");
+    }
+    if (!SHA256.test(previous.previousReleaseSigningKeySha256) ||
+        !SHA256.test(expectations.previousReleaseSigningKeySha256) ||
+        previous.previousReleaseSigningKeySha256 !== expectations.previousReleaseSigningKeySha256) {
+      throw new Error("previous release signing key SHA-256 不匹配");
+    }
+    let previousUrl;
+    try { previousUrl = new URL(previous.packageUrl); } catch { throw new Error("previous Stable package URL 无效"); }
+    if (
+      previousUrl.href !== previous.packageUrl || previousUrl.protocol !== "https:" ||
+      previousUrl.hostname !== "github.com" || previousUrl.username || previousUrl.password ||
+      !previousUrl.pathname.startsWith(`/XLCYun/narrant/releases/download/${encodeURIComponent(previous.tag)}/`)
+    ) {
+      throw new Error("previous Stable package URL 不属于固定 public Release tag");
+    }
+    if (expectations.previousTag && previous.tag !== expectations.previousTag) throw new Error("previous Stable tag 不匹配");
+    if (expectations.previousManifestSha256 && previous.manifestSha256 !== expectations.previousManifestSha256) {
+      throw new Error("previous Stable manifest SHA-256 不匹配");
+    }
+    if (!isNewer(semver(candidate.version, "candidate version"), semver(previous.version, "previous version"))) {
+      throw new Error("candidate 必须严格高于 previous Stable");
+    }
   }
 
   const started = new Date(document.startedAt);
@@ -223,7 +234,7 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
   if (now.valueOf() - completed.valueOf() > expectations.maxAgeHours * 60 * 60 * 1000) {
     throw new Error("evidence 已过期");
   }
-  const required = NORMAL_CHECKPOINTS;
+  const required = document.mode === "bootstrap" ? BOOTSTRAP_CHECKPOINTS : NORMAL_CHECKPOINTS;
   if (!Array.isArray(document.checkpoints)) throw new Error("checkpoints 必须是数组");
   const checkpointNames = document.checkpoints.map((checkpoint) =>
     requireString(requireObject(checkpoint, "checkpoint").id, "checkpoint.id", 160));
@@ -240,31 +251,6 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
     }
   }
   return target;
-}
-
-/** 分别绑定实际测试包和正式资产，拒绝预合并试运行冒充发布资格。 */
-function verifyIsolatedPackageEvidence(document) {
-  const tests = requireObject(document.testBuilds, "testBuilds");
-  requireContract(tests.profile, UPDATE_TEST_PROFILE, "testBuilds.profile");
-  if (tests.schemaVersion !== 1 || tests.target !== document.target ||
-      [tests.recipeSha256, tests.updaterKeySha256, tests.manifestSha256].some((value) => !SHA256.test(value))) throw new Error("测试包 recipe/key/manifest 身份无效");
-  for (const stage of ["baseline", "candidate"]) {
-    const build = requireObject(tests.builds?.[stage], `testBuilds.${stage}`);
-    if (!COMMIT.test(build.sourceSha) || [build.packageSha256, build.signatureSha256, build.overlaySha256].some((value) => !SHA256.test(value))) throw new Error("测试包源码或摘要无效");
-    if (typeof build.overlay !== "string" || createHash("sha256").update(build.overlay).digest("hex") !== build.overlaySha256) throw new Error("测试包源码叠加摘要不一致");
-    const version = stage === "baseline" ? document.previousStable?.version : document.candidate.version;
-    if (build.version !== version || build.sourceVersion !== version || (stage === "candidate" && build.sourceSha !== document.source.sha)) throw new Error("测试包与正式源码版本不一致");
-  }
-  const mac = document.target === "darwin-aarch64";
-  const packageName = mac ? "narrant-darwin-aarch64-updater.app.tar.gz" : "narrant-windows-x86_64-updater.exe";
-  const installerName = `Narrant_${document.candidate.version}_${mac ? "aarch64.dmg" : "x64-setup.exe"}`;
-  const asset = (name) => document.draftReceipt.assets.find((item) => item.name === name)?.sha256;
-  requireContract(document.productionChecks, {
-    scope: "signatures-and-integrity-only",
-    packageSha256: asset(packageName), signatureSha256: asset(`${packageName}.sig`), installerSha256: asset(installerName),
-    manifestSha256: document.candidate.manifestSha256, baselineTrustRoot: "verified",
-    codeSigning: mac ? "verified" : "not-required", notarization: mac ? "verified" : "not-required", productionAppLaunched: false,
-  }, "productionChecks");
 }
 
 /** 聚合严格两个 target，拒绝重复、缺少、额外和跨 target identity 漂移。 */
@@ -286,7 +272,6 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
     if (JSON.stringify(document.source) !== JSON.stringify(first.source) ||
         JSON.stringify(document.candidate) !== JSON.stringify(first.candidate) ||
         JSON.stringify(document.updaterTrust) !== JSON.stringify(first.updaterTrust) ||
-        document.evidenceKind !== first.evidenceKind ||
         document.mode !== first.mode) {
       throw new Error("两个 target 的候选/previous identity 不一致");
     }
@@ -297,15 +282,9 @@ export function verifyUpdateSmokeEvidenceSet(documents, expectations) {
         }
       }
     }
-    if (first.evidenceKind === "isolated-native" &&
-        (document.testBuilds.recipeSha256 !== first.testBuilds.recipeSha256 ||
-         document.testBuilds.builds.baseline.sourceSha !== first.testBuilds.builds.baseline.sourceSha)) {
-      throw new Error("两个 target 的测试构建方案或旧版源码不一致");
-    }
   }
   return Object.freeze({
-    schemaVersion: first.schemaVersion,
-    evidenceKind: first.evidenceKind,
+    schemaVersion: 1,
     mode: first.mode,
     targets: REQUIRED_UPDATE_TARGETS,
     source: first.source,
@@ -359,6 +338,7 @@ function parseArguments(arguments_) {
   const values = {};
   for (let index = 0; index < arguments_.length; index += 1) {
     const name = arguments_[index];
+    if (name === "--allow-bootstrap") { values.allowBootstrap = true; continue; }
     const value = arguments_[index + 1];
     if (!name?.startsWith("--") || value === undefined) throw new Error(`无效参数：${name ?? ""}`);
     values[name.slice(2)] = value;
@@ -396,6 +376,8 @@ export async function runEvidenceVerifierCli(
     previousTag: values["previous-tag"],
     previousManifestSha256: values["previous-manifest-sha256"],
     previousReleaseSigningKeySha256,
+    bootstrapTag: values["bootstrap-tag"],
+    allowBootstrap: values.allowBootstrap === true,
     maxAgeHours: Number(values["max-age-hours"]),
     now,
   });

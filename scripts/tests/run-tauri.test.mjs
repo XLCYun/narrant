@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
 
 import {
   buildTauriArguments,
@@ -44,23 +43,6 @@ test("非 build 命令和无公钥的本地 build 不注入配置", () => {
     NARRANT_UPDATER_PUBLIC_KEY: PUBLIC_KEY,
   }), ["signer", "sign", "asset"]);
   assert.deepEqual(buildTauriArguments("build", ["--", "--debug"], {}), ["build", "--debug"]);
-});
-
-test("自托管 Tauri 构建共用 Cargo 入口，仍保留 updater 配置与原始参数", () => {
-  const args = buildTauriArguments("build", ["--", "--bundles", "app"], {
-    RUNNER_ENVIRONMENT: "self-hosted", NARRANT_UPDATER_PUBLIC_KEY: PUBLIC_KEY,
-  });
-  const configuration = JSON.parse(args[2]);
-  assert.equal(configuration.plugins.updater.pubkey, PUBLIC_KEY);
-  assert.deepEqual(args.slice(3), ["--bundles", "app"]);
-  const runner = configuration.build.runner;
-  assert.match(runner, /cargo-agent\.(?:sh|cmd)$/);
-  assert.match(execFileSync(process.platform === "win32" ? 'cmd.exe' : runner, process.platform === "win32" ? ['/d', '/c', runner, '--version'] : ['--version'], {
-    cwd: new URL("../../", import.meta.url), encoding: "utf8", timeout: 20_000,
-  }), /^cargo /);
-  assert.deepEqual(buildTauriArguments("signer", ["sign", "asset"], {
-    RUNNER_ENVIRONMENT: "self-hosted",
-  }), ["signer", "sign", "asset"]);
 });
 
 test("公钥必须是 canonical base64 minisign 两行文本", () => {

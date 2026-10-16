@@ -40,7 +40,7 @@ Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实
   Narrant 不替用户自动安装或修改 Rust 项目工具链。
 - Q5：支持包独立编号，由应用声明需要的已验证版本。相同版本可跨 Review 和兼容的
   应用版本重复使用，缺少所需版本时才下载；支持包不自行追踪或升级到最新版。
-- Q6：复用现有 `updates.cyunlab.com` OSS 分发渠道，为语言支持包使用独立路径。
+- Q6（由 ADR-0036 更新）：通过 `XLCYun/narrant` 的独立语言版本 prerelease 分发，不占用应用 Latest。
   首批覆盖现有安装包平台：macOS Apple Silicon 和 Windows x64。
 - Q7：离开结构视图或切换 Review 后，已经开始的下载继续在后台运行；多个 Review
   请求同一个包的相同版本时共用一次下载。退出应用时停止未完成的下载，已经安装
@@ -70,7 +70,7 @@ Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实
   当前任一语言分析失败都会使整个结构比较失败，不能静默输出不完整的成功结果。见
   [`application/mod.rs`](../../src-tauri/src/structure_review/application/mod.rs)。
 - 当前安装包目标为 macOS Apple Silicon 和 Windows x64。应用更新使用
-  `updates.cyunlab.com` 的 OSS 通道；Q6 已确定支持包也使用该渠道的独立路径。见
+  `XLCYun/narrant` 的 GitHub Releases；支持包使用独立语言版本 prerelease。见
   [ADR-0026](../adr/0026-publish-binary-releases-from-source-tags.md) 和
   [ADR-0029](../adr/0029-use-oss-as-the-stable-application-update-authority.md)。
 - 当前 Tauri bundle 没有携带 Rust 或 TS/JS 的结构分析工具；默认路径来自编译时开发
@@ -160,7 +160,7 @@ Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实
 
 - 后端负责下载、校验、解压和安装，按包、版本和平台合并重复请求。前端离开页面
   不影响已经开始的共享任务，取消单个 Review 的分析只解除该分析的等待。
-- 快照查询只读取本地已维护的状态，不访问 OSS、不检查新版本、不触发下载，也不
+- 快照查询只读取本地已维护的状态，不访问分发服务、不检查新版本、不触发下载，也不
   在每次查询时重新遍历安装目录计算体积。
 - 前端在应用层挂载一个查询循环，结构页、全局下载提示和设置页共用它的结果。
   活动期间每约 1 秒查询一次，上一请求结束后才调度下一次，避免重叠查询。
@@ -219,7 +219,7 @@ Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实
 7. 前端验收覆盖宽窄窗口、长包名及错误内容、多个包的不同进度、后台提示、设置管理
    与重试；按仓库要求运行 Preview Harness 的真实浏览器检查及适当自动化验证。
 8. macOS Apple Silicon 和 Windows x64 均生成可验证、独立编号的支持包产物；使用
-   现有 OSS 域名的独立目录分发，应用声明的版本与实际产物一致，配套操作文档能够
+   同仓库独立语言版本 prerelease 分发，应用声明的版本与实际产物一致，配套操作文档能够
    说明如何构建和发布。生产分发可用性在实际上传并读取验证前不能宣称完成。
 
 ## 设计确认

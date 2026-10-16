@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 
 const API_ORIGIN = "https://api.github.com";
-const PRIVATE_REPOSITORY = "XLCYun/narrant";
+const SOURCE_REPOSITORY = "XLCYun/narrant";
 const WORKFLOW_NAME = "Native application update smoke evidence";
 const WORKFLOW_PATH = ".github/workflows/update-smoke.yml";
 const RELEASE_WORKFLOW_NAME = "release";
@@ -47,7 +47,7 @@ async function readBoundedJson(response, label) {
   }
 }
 
-/** 使用 header 中的 token 读取固定 private Actions API endpoint。 */
+/** 使用 header 中的 token 读取固定 Actions API endpoint。 */
 async function githubApiJson(pathname, token, fetchImpl) {
   let response;
   try {
@@ -91,10 +91,8 @@ export function validateEvidenceWorkflowRun(run, expected) {
     run.status !== "completed" ||
     run.conclusion !== "success" ||
     run.run_attempt !== 1 ||
-    run.repository?.full_name !== PRIVATE_REPOSITORY ||
-    run.repository?.private !== true ||
-    run.head_repository?.full_name !== PRIVATE_REPOSITORY ||
-    run.head_repository?.private !== true ||
+    run.repository?.full_name !== SOURCE_REPOSITORY ||
+    run.head_repository?.full_name !== SOURCE_REPOSITORY ||
     !Array.isArray(run.pull_requests) ||
     run.pull_requests.length !== 0;
   const manualValid =
@@ -130,7 +128,7 @@ export function validateEvidenceArtifacts(payload, expected, runKind = "smoke") 
   for (const artifact of payload.artifacts) {
     requireDatabaseId(artifact?.id, "evidence artifact ID");
     const expectedArchiveUrl =
-      `${API_ORIGIN}/repos/${PRIVATE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`;
+      `${API_ORIGIN}/repos/${SOURCE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`;
     if (
       !expectedNames.includes(artifact.name) ||
       seen.has(artifact.name) ||
@@ -162,13 +160,13 @@ export async function verifyEvidenceRun(options, dependencies = {}) {
   }
   const runId = requireDatabaseId(options.runId, "evidence run ID");
   const expected = { ...options, runId };
-  const run = await githubApiJson(`/repos/${PRIVATE_REPOSITORY}/actions/runs/${runId}`, options.token, fetchImpl);
+  const run = await githubApiJson(`/repos/${SOURCE_REPOSITORY}/actions/runs/${runId}`, options.token, fetchImpl);
   const runKind = validateEvidenceWorkflowRun(
     run,
     expected,
   );
   const artifacts = await githubApiJson(
-    `/repos/${PRIVATE_REPOSITORY}/actions/runs/${runId}/artifacts?per_page=100`,
+    `/repos/${SOURCE_REPOSITORY}/actions/runs/${runId}/artifacts?per_page=100`,
     options.token,
     fetchImpl,
   );

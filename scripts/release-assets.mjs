@@ -10,16 +10,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import { URL } from "node:url";
 import { TextDecoder } from "node:util";
 import { gunzipSync } from "node:zlib";
-import remarkGfm from "remark-gfm";
-import remarkParse from "remark-parse";
-import { unified } from "unified";
 
+const PUBLIC_REPOSITORY = "XLCYun/narrant";
 const STABLE_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const TARGETS = ["darwin-aarch64", "windows-x86_64"];
-const GFM_PARSER = unified().use(remarkParse).use(remarkGfm);
 
 /** 按 Unicode code point 稳定排序公开文件名，不依赖 runner locale/ICU。 */
 function comparePublicNames(left, right) {
@@ -54,10 +50,9 @@ export function releaseAssetNames(version) {
   };
 }
 
-/** 构建内容寻址的 OSS 发布 URL，不允许调用方注入 origin 或产品前缀。 */
-function ossDownloadUrl(version, target, name, sha256) {
-  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error(`无效 OSS 对象摘要：${name}`);
-  return `https://updates.cyunlab.com/narrant/releases/${version}/${target}/${sha256}-${encodeURIComponent(name)}`;
+/** 构建 tag-specific 的公开下载 URL，不允许调用方注入仓库或 endpoint。 */
+function publicDownloadUrl(tag, name) {
+  return `https://github.com/${PUBLIC_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(name)}`;
 }
 
 /** 严格解码带 padding、无空白且可逐字节 round-trip 的 standard base64。 */
@@ -148,109 +143,6 @@ export function normalizeTauriUpdaterSignature(encoded) {
   const canonical = Buffer.from(normalized, "utf8").toString("base64");
   parseUpdaterSignature(canonical);
   return canonical;
-}
-
-/**
- * 扫描每一个 http(s) scheme，并以 Markdown/自然语言标点或下一个 scheme 作为 token 终点。
- * 任何 scheme 都会产生一个独立候选，避免私有 URL 被拼进公开 URL path 后漏检。
- */
-function extractHttpUrlCandidates(text) {
-  const schemes = [...text.matchAll(/https?:\/\//gi)];
-  return schemes.map((match, index) => {
-    const start = match.index;
-    const nextScheme = schemes[index + 1]?.index ?? text.length;
-    let end = nextScheme;
-    for (let cursor = start; cursor < nextScheme; cursor += 1) {
-      if (/[\s\\<>"'`,;()[\]{}，；（）]/.test(text[cursor])) {
-        end = cursor;
-        break;
-      }
-    }
-    return text.slice(start, end).replace(/[.!。！？]+$/g, "");
-  });
-}
-
-/** 以仓库锁定的 GFM parser 枚举 link、image、definition 和 autolink destination。 */
-function extractGfmDestinations(text) {
-  const destinations = [];
-  let tree;
-  try {
-    tree = GFM_PARSER.parse(text);
-  } catch {
-    throw new Error("公开发布元数据无法按 GFM 安全解析");
-  }
-  const pending = [tree];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (["link", "image", "definition"].includes(node.type)) {
-      if (typeof node.url !== "string" || node.url.length === 0) {
-        throw new Error("公开发布元数据包含空 GFM destination");
-      }
-      destinations.push(node.url);
-    }
-    pending.push(...(node.children ?? []));
-  }
-  return destinations;
-}
-
-/** 提取 HTML 中会产生导航或资源请求的 URL attribute。 */
-function extractHtmlAttributeDestinations(text) {
-  const destinations = [];
-  const pattern = /\b(?:href|src|srcset|action|formaction|poster|cite|data|background|longdesc|manifest|usemap)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"'\\]+))/gi;
-  for (const match of text.matchAll(pattern)) {
-    destinations.push(match[1] ?? match[2] ?? match[3] ?? "");
-  }
-  return destinations;
-}
-
-/** 要求一个 link destination 解析后仍严格位于 Narrant 公开仓库 HTTPS path。 */
-function assertAllowedPublicUrl(candidate, requireLiteralCanonical = true) {
-  let url;
-  try {
-    url = new URL(candidate);
-  } catch {
-    throw new Error(`公开发布元数据包含无效 URL：${candidate}`);
-  }
-  const publicPath = (url.hostname === "github.com" && (
-    url.pathname === "/cyunlab/narrant" || url.pathname.startsWith("/cyunlab/narrant/")
-  )) || (url.hostname === "updates.cyunlab.com" && url.pathname.startsWith("/narrant/releases/"));
-  if (
-    (requireLiteralCanonical && url.href !== candidate) ||
-    url.protocol !== "https:" ||
-    !["github.com", "updates.cyunlab.com"].includes(url.hostname) ||
-    url.port ||
-    url.username ||
-    url.password ||
-    !publicPath ||
-    url.pathname.includes("/actions/")
-  ) {
-    throw new Error(`公开发布元数据包含未允许 URL：${candidate}`);
-  }
-}
-
-/** 检查 raw URL、Markdown/HTML destination、protocol-relative 和明确 URI scheme。 */
-function assertAllowedPublicLinks(text) {
-  for (const candidate of extractHttpUrlCandidates(text)) {
-    assertAllowedPublicUrl(candidate);
-  }
-  // GFM 会把紧邻的 Unicode 标点纳入 bare autolink；以解析后的 origin/path 判定真实目标。
-  for (const candidate of extractGfmDestinations(text)) {
-    assertAllowedPublicUrl(candidate, false);
-  }
-  for (const candidate of extractHtmlAttributeDestinations(text)) {
-    assertAllowedPublicUrl(candidate);
-  }
-  if (/(?:^|[^A-Za-z0-9+.-:])\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?=[:/?#]|$)/im.test(text)) {
-    throw new Error("公开发布元数据包含 protocol-relative URL");
-  }
-  if (/\b(?:mailto|data|javascript|file|ftp|ssh|git|tel|sms):[^\s<>"'`]*/i.test(text)) {
-    throw new Error("公开发布元数据包含未允许 URI scheme");
-  }
-  for (const match of text.matchAll(/\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g)) {
-    if (!/^https$/i.test(match[1])) {
-      throw new Error(`公开发布元数据包含未允许 URI scheme：${match[1]}`);
-    }
-  }
 }
 
 /** 使用 Node 内置 Ed25519 验证 Tauri updater 包与可信注释。 */
@@ -385,20 +277,19 @@ function assertNativeContainer(name, bytes) {
 }
 
 /** 校验 manifest 的版本、两目标、URL、名称与字面签名映射。 */
-function assertManifest(manifest, { version, notes, names, signatures, assetDigests }) {
+function assertManifest(manifest, { tag, version, notes, names, signatures }) {
   if (manifest.version !== version || manifest.notes !== notes || Object.hasOwn(manifest, "pub_date")) {
     throw new Error("latest.json 版本错误或 Draft 不应包含 pub_date");
   }
   assertExactNameSet(Object.keys(manifest.platforms ?? {}), TARGETS, "manifest 目标集合");
   const mappings = [
-    ["darwin-aarch64", names.updater.darwin, names.installer.darwin],
-    ["windows-x86_64", names.updater.windows, names.installer.windows],
+    ["darwin-aarch64", names.updater.darwin],
+    ["windows-x86_64", names.updater.windows],
   ];
-  for (const [target, assetName, installerName] of mappings) {
+  for (const [target, assetName] of mappings) {
     const entry = manifest.platforms[target];
     if (
-      entry.url !== ossDownloadUrl(version, target, assetName, assetDigests.get(assetName)) ||
-      entry.installer_url !== ossDownloadUrl(version, target, installerName, assetDigests.get(installerName)) ||
+      entry.url !== publicDownloadUrl(tag, assetName) ||
       entry.signature !== signatures.get(`${assetName}.sig`)
     ) {
       throw new Error(`latest.json 的 ${target} URL/名称/版本/签名映射无效`);
@@ -408,38 +299,22 @@ function assertManifest(manifest, { version, notes, names, signatures, assetDige
 
 /** 对外验证一个候选 updater manifest 的完整版本、目标和字面签名契约。 */
 export function validateUpdaterManifest(manifest, options) {
-  const { tag, version, notes, signatures, assetDigests } = options;
+  const { tag, version, notes, signatures } = options;
   parseReleaseIdentity(tag, version);
   const names = releaseAssetNames(version);
   const signatureMap = signatures instanceof Map
     ? signatures
     : new Map(Object.entries(signatures ?? {}));
-  const digestMap = assetDigests instanceof Map ? assetDigests : new Map(Object.entries(assetDigests ?? {}));
-  assertManifest(manifest, { version, notes, names, signatures: signatureMap, assetDigests: digestMap });
+  assertManifest(manifest, { tag, version, notes, names, signatures: signatureMap });
 }
 
-/** 统一拒绝把私有仓库身份、7–40 位源码 SHA 或 allowlist 外目标写入公开元数据。 */
-export function assertPublicReleaseMetadata(options) {
-  const {
-    title,
-    notes,
-    manifestText = "",
-    assetNames = [],
-    privateRepository,
-  } = options;
-  const publicText = [title, notes, manifestText, ...assetNames].join("\n");
-  const privateIdentity = String(privateRepository ?? "").trim();
-  if (!privateIdentity) {
-    throw new Error("公开发布元数据校验缺少私有仓库身份");
+/** 开源发布元数据必须有标题与说明；源码链接和提交身份可以公开。 */
+export function assertPublicReleaseMetadata({ title, notes }) {
+  if (typeof title !== "string" || !title.trim() || /[\r\n\0]/.test(title)) {
+    throw new Error("Release 标题必须是非空单行文本");
   }
-  if (publicText.toLowerCase().includes(privateIdentity.toLowerCase())) {
-    throw new Error("公开发布元数据包含私有仓库身份");
-  }
-  if (/(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])/i.test(publicText)) {
-    throw new Error("公开发布元数据包含 7–40 位 Git SHA");
-  }
-  for (const document of [title, notes, manifestText, ...assetNames]) {
-    assertAllowedPublicLinks(document);
+  if (typeof notes !== "string" || !notes.trim() || notes.includes("\0")) {
+    throw new Error("Release Notes 必须是非空文本");
   }
 }
 
@@ -475,7 +350,6 @@ export function prepareDraftAssetDirectory(options) {
     releaseSigningPublicKey,
     candidateUpdaterPublicKey,
     bridgeTag,
-    privateRepository,
   } = options;
   parseReleaseIdentity(tag, version);
   const updaterTrust = resolveUpdaterKeyPolicy({
@@ -511,10 +385,6 @@ export function prepareDraftAssetDirectory(options) {
     [`${names.updater.darwin}.sig`, normalizeTauriUpdaterSignature(byName.get(`${names.updater.darwin}.sig`).bytes.toString("utf8"))],
     [`${names.updater.windows}.sig`, normalizeTauriUpdaterSignature(byName.get(`${names.updater.windows}.sig`).bytes.toString("utf8"))],
   ]);
-  const assetDigests = new Map(existing.map(({ name, bytes }) => [
-    name,
-    createHash("sha256").update(bytes).digest("hex"),
-  ]));
   for (const [name, signature] of signatures) {
     // 公开 `.sig`、latest.json 与 SHA256SUMS 必须共享同一份 canonical bytes。
     writeFileSync(join(directory, name), signature);
@@ -536,24 +406,21 @@ export function prepareDraftAssetDirectory(options) {
     platforms: {
       "darwin-aarch64": {
         signature: signatures.get(`${names.updater.darwin}.sig`),
-        url: ossDownloadUrl(version, "darwin-aarch64", names.updater.darwin, assetDigests.get(names.updater.darwin)),
-        installer_url: ossDownloadUrl(version, "darwin-aarch64", names.installer.darwin, assetDigests.get(names.installer.darwin)),
+        url: publicDownloadUrl(tag, names.updater.darwin),
       },
       "windows-x86_64": {
         signature: signatures.get(`${names.updater.windows}.sig`),
-        url: ossDownloadUrl(version, "windows-x86_64", names.updater.windows, assetDigests.get(names.updater.windows)),
-        installer_url: ossDownloadUrl(version, "windows-x86_64", names.installer.windows, assetDigests.get(names.installer.windows)),
+        url: publicDownloadUrl(tag, names.updater.windows),
       },
     },
   };
-  assertManifest(manifest, { version, notes, names, signatures, assetDigests });
+  assertManifest(manifest, { tag, version, notes, names, signatures });
   const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
   assertPublicReleaseMetadata({
     title: `Narrant ${version}`,
     notes,
     manifestText,
     assetNames: [...nativeNames, names.manifest, names.checksums],
-    privateRepository,
   });
   writeFileSync(join(directory, names.manifest), manifestText);
 

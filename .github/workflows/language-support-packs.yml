@@ -19,8 +19,6 @@ on:
       - scripts/run-windows-process-probe.mjs
       - scripts/tests/run-windows-process-probe.test.mjs
       - scripts/run-windows-lifecycle-tests.mjs
-      - scripts/verify-windows-runner.mjs
-      - scripts/verify-macos-runner.mjs
       - scripts/cargo-agent.sh
       - scripts/tests/run-windows-lifecycle-tests.test.mjs
       - src-tauri/tests/native_helper_graphs.rs
@@ -47,9 +45,9 @@ on:
   workflow_dispatch:
     inputs:
       validation_scope:
-        description: Full acceptance, native analyzers, Windows lifecycle, or macOS runner setup check
+        description: Full acceptance, native analyzers, or Windows lifecycle
         type: choice
-        options: [full, native-analyzers, windows-lifecycle, macos-runner]
+        options: [full, native-analyzers, windows-lifecycle]
         default: full
       language:
         description: Completed Native helper to validate (all keeps the full language gate)
@@ -66,7 +64,7 @@ on:
         type: boolean
         default: true
       publish:
-        description: Publish validated packs to the immutable OSS prefix
+        description: Publish validated packs as GitHub Releases (never application Latest)
         type: boolean
         default: false
 
@@ -74,29 +72,9 @@ permissions:
   contents: read
 
 jobs:
-  macos-runner:
-    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'macos-runner'
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.18.0
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Validate runner routing and Cargo integration
-        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/rust-cache.test.mjs scripts/tests/run-tauri.test.mjs
-      - name: Verify the macOS runner account, SDK and bounded cache
-        run: node scripts/verify-macos-runner.mjs --smoke
-      - name: Verify the shared desktop session
-        run: node scripts/verify-desktop-runner.mjs
-
   windows-lifecycle:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'
-    # 缺少仓库变量时仍使用自托管标签，避免产生托管执行费用。
-    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]') }}
+    runs-on: windows-2022
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,11 +83,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-      - name: Verify Windows runner filesystem prerequisites
-        run: node scripts/verify-windows-runner.mjs
-      - name: Verify the shared desktop session
-        run: node scripts/verify-desktop-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - name: Validate lifecycle runner
         run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/run-tauri.test.mjs
       - name: Run process and Native Helper lifecycle checks from production sources
@@ -126,7 +104,7 @@ jobs:
             inputs.platform == 'macos' && '[{"target":"aarch64-apple-darwin"}]' ||
             '[{"target":"aarch64-apple-darwin"},{"target":"x86_64-pc-windows-msvc"}]'
           ) }}
-    runs-on: ${{ fromJSON(matrix.target == 'aarch64-apple-darwin' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
+    runs-on: ${{ matrix.target == 'aarch64-apple-darwin' && 'macos-15' || 'windows-2022' }}
     # Windows 冷构建包含 release 打包、helper 测试与 Host 编译，使用完整验收的总预算。
     timeout-minutes: 120
     steps:
@@ -140,12 +118,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-      - name: Verify Windows runner filesystem prerequisites
-        if: runner.os == 'Windows'
-        run: node scripts/verify-windows-runner.mjs
-      - name: Verify self-hosted macOS runner prerequisites
-        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
-        run: node scripts/verify-macos-runner.mjs
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
       # 锁定 Ruff 源码包含超过 MAX_PATH 的快照；Cargo 的 libgit2 checkout 读取此配置。
@@ -157,6 +130,10 @@ jobs:
       - name: Build and execute native tools
         run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - name: Verify native Python graphs, installation, and Review lifecycle
         run: node scripts/verify-python-analyzer.mjs language-support-packs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -168,7 +145,7 @@ jobs:
           if-no-files-found: error
 
   native-analyzers:
-    if: github.event_name != 'workflow_dispatch' || (inputs.validation_scope != 'windows-lifecycle' && inputs.validation_scope != 'macos-runner')
+    if: github.event_name != 'workflow_dispatch' || (inputs.validation_scope != 'windows-lifecycle')
     strategy:
       fail-fast: false
       matrix:
@@ -178,8 +155,8 @@ jobs:
             inputs.platform == 'macos' && '[{"target":"aarch64-apple-darwin"}]' ||
             '[{"target":"aarch64-apple-darwin"},{"target":"x86_64-pc-windows-msvc"}]'
           ) }}
-    runs-on: ${{ fromJSON(matrix.target == 'aarch64-apple-darwin' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
-    # 自托管 Windows 串行冷编译七套 helper 与 Host，再运行全部测试，需要超过两小时。
+    runs-on: ${{ matrix.target == 'aarch64-apple-darwin' && 'macos-15' || 'windows-2022' }}
+    # Windows 冷编译七套 helper 与 Host，再运行全部测试，需要超过两小时。
     timeout-minutes: 180
     env:
       # 测试项目选择独立于 helper 的固定构建版本，缓存必须由本次 setup 显式准备。
@@ -195,13 +172,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
-      - name: Verify Windows runner filesystem prerequisites
-        if: runner.os == 'Windows'
-        run: node scripts/verify-windows-runner.mjs
-      - name: Verify self-hosted macOS runner prerequisites
-        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
-        run: node scripts/verify-macos-runner.mjs
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - name: Probe Windows process cleanup before toolchain provisioning
         if: runner.os == 'Windows'
         shell: pwsh
@@ -224,7 +199,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $fixed = (Get-Content resources/native-toolchains.json -Raw | ConvertFrom-Json).runner_prerequisites.'x86_64-pc-windows-msvc'
           $version = $fixed.msvc_tools
-          # 发现含固定工具集的 VS 2022 实例，同时支持托管镜像和自托管 Build Tools。
+          # 发现含固定工具集的 VS 2022 实例，兼容已安装的 Build Tools。
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           if (!(Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'Visual Studio Installer vswhere.exe is missing' }
           # 先等待原生命令完整退出，避免 First 提前终止管道而留下空退出码。
@@ -246,7 +221,7 @@ jobs:
           "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
           "NARRANT_WINDOWS_SDK_VERSION=$($fixed.windows_sdk)" >> $env:GITHUB_ENV
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
-      - name: Provision checksum-verified private developer toolchains
+      - name: Provision checksum-verified analyzer toolchains
         run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
       - name: Select isolated Rust project test Cargo home
         env:
@@ -276,15 +251,14 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.language == 'all' && inputs.platform == 'all' && inputs.publish && github.ref == 'refs/heads/main'
     needs: [build, native-analyzers]
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    runs-on: macos-15
     timeout-minutes: 20
     environment: language-support-packs
     concurrency:
       group: language-support-packs-publish
       cancel-in-progress: false
     permissions:
-      contents: read
-      id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -296,6 +270,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.18.0
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -304,22 +279,7 @@ jobs:
           path: language-support-packs
       - name: Validate complete artifacts before obtaining credentials
         run: node --input-type=module -e "import { readArtifacts } from './scripts/publish-language-support-packs.mjs'; await readArtifacts('language-support-packs')"
-      - name: Install checksum-verified ossutil 1.7.19 for Apple Silicon
-        run: bash scripts/install-ci-ossutil.sh
-      - name: Exchange isolated OSS publishing identity
-        id: oss
-        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0
-        with:
-          oidc-provider-arn: ${{ vars.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
-          role-to-assume: ${{ vars.ALIBABA_CLOUD_ROLE_ARN }}
-          role-session-name: narrant-packs-${{ github.run_id }}
-          role-session-expiration: 1800
-          audience: sts.aliyuncs.com
       - name: Publish immutable artifacts and verify public downloads
         env:
-          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ steps.oss.outputs.aliyun-access-key-id }}
-          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ steps.oss.outputs.aliyun-access-key-secret }}
-          ALIBABA_CLOUD_SECURITY_TOKEN: ${{ steps.oss.outputs.aliyun-security-token }}
-          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
-          OSS_REGION: ${{ vars.OSS_REGION }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/publish-language-support-packs.mjs language-support-packs

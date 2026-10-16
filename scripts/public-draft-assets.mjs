@@ -18,9 +18,9 @@ import {
   verifyTauriUpdaterSignature,
 } from "./release-assets.mjs";
 
-export const PUBLIC_RELEASE_REPOSITORY = "cyunlab/narrant";
+export const PUBLIC_RELEASE_REPOSITORY = "XLCYun/narrant";
 export const FIXED_STABLE_ENDPOINT =
-  "https://updates.cyunlab.com/narrant/channels/stable/latest.json";
+  "https://github.com/XLCYun/narrant/releases/latest/download/latest.json";
 const API_ORIGIN = "https://api.github.com";
 const MAX_JSON_BYTES = 512 * 1024;
 const MAX_ASSET_BYTES = 2 * 1024 * 1024 * 1024;
@@ -131,8 +131,8 @@ export function validateDraftReleaseIdentity(release, options) {
     throw new Error("public Release ID/tag 不匹配或 Release 已发布");
   }
   const draftIdentity = release.html_url.slice(htmlPrefix.length);
-  if (!/^untagged-[A-Za-z0-9]+$/.test(draftIdentity)) {
-    throw new Error("public Draft 返回无效 untagged 身份");
+  if (draftIdentity !== release.tag_name && !/^untagged-[A-Za-z0-9]+$/.test(draftIdentity)) {
+    throw new Error("public Draft 返回无效 tag 身份");
   }
   if (typeof release.body !== "string" || !release.body.trim()) {
     throw new Error("公开 Draft Release Notes 不能为空");
@@ -208,6 +208,17 @@ async function requestAsset(asset, token, fetchImpl) {
     throw new Error(`Draft asset ${asset.name} 返回 HTTP ${response?.status ?? "unknown"}`);
   }
   return response;
+}
+
+/** 复用官方 API 资产下载边界，供语言支持包发布前逐字节回读。 */
+export async function readGitHubReleaseAsset(asset, token, fetchImpl = globalThis.fetch) {
+  if (!Number.isSafeInteger(asset?.id) || asset.id <= 0 || asset.url !== `${API_ORIGIN}/repos/${PUBLIC_RELEASE_REPOSITORY}/releases/assets/${asset.id}` ||
+      !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_ASSET_BYTES || asset.state !== "uploaded") {
+    throw new Error("GitHub asset identity 无效");
+  }
+  const bytes = await readBoundedResponse(await requestAsset(asset, token, fetchImpl), asset.size, "GitHub asset");
+  if (bytes.length !== asset.size) throw new Error("GitHub asset size 不匹配");
+  return bytes;
 }
 
 /** 流式写入一个 asset，同时校验完整字节数并计算 SHA-256。 */
@@ -286,7 +297,6 @@ async function verifyDownloadedDraft(directory, release, version, releaseSigning
     version,
     notes: release.body,
     signatures,
-    assetDigests: sums,
   });
   await Promise.all([
     verifyTauriUpdaterSignature(
@@ -322,7 +332,7 @@ export async function downloadVerifiedPublicDraft(options, dependencies = {}) {
   } = options;
   if (typeof fetchImpl !== "function") throw new Error("当前 Node 缺少 fetch");
   if (typeof token !== "string" || !token || token.trim() !== token) {
-    throw new Error("读取 public Draft 需要有效 CYUNLAB_RELEASE_TOKEN");
+    throw new Error("读取 public Draft 需要有效 GH_TOKEN");
   }
   const updaterTrust = resolveUpdaterKeyPolicy({
     tag,
@@ -393,7 +403,7 @@ async function main() {
     tag,
     version,
     outputDirectory,
-    token: process.env.CYUNLAB_RELEASE_TOKEN,
+    token: process.env.GH_TOKEN,
     mode: process.env.NARRANT_UPDATE_MODE,
     releaseSigningPublicKey: process.env.NARRANT_RELEASE_SIGNING_PUBLIC_KEY,
     candidateUpdaterPublicKey: process.env.NARRANT_UPDATER_PUBLIC_KEY,

@@ -1,3 +1,5 @@
+> 历史方案，已由 [ADR-0036](../adr/0036-use-one-public-github-repository-for-distribution.md) 替代。当前使用 GitHub-hosted 正式包验收。
+
 # 当前桌面上的隔离升级验收
 
 用户已于 2026-10-16 同意：使用独立的 Narrant Upgrade Test 验证安装与升级，正式包单独验证签名和完整性，并如实调整规格中的证据范围。继续使用现有 macOS/Windows runner、账户和登录会话，不操作日常 Narrant。

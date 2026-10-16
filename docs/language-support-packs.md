@@ -7,13 +7,13 @@
 
 `resources/language-support-packs.json` 同时供 Rust 应用和 Node 打包脚本读取。改变任何文件内容时
 提升对应包版本并保留历史产物，不覆盖同版本。历史首版为 `1.0.0`；当前 Rust、TS/JS 和 Python
-使用未发布的 `1.1.0` 原生候选，最终双平台 CI 尚未执行：
+使用未发布的 `1.1.0` 原生候选，此前双平台验收通过；迁移 GitHub-hosted 后需对最终提交重新验收：
 
 | 包 | 内容 | 平台 |
 | --- | --- | --- |
-| Python | narrant-python，内嵌同源 ty 0.0.84 / Ruff、固定 typeshed、控制身份及实际目标锁定许可闭包 | macOS arm64 本地验收；Windows x64 待最终 CI |
-| Rust | narrant-rust，固定 rust-analyzer 库 revision 9074e9b；包内包含实际目标的锁定依赖许可闭包 | macOS arm64 本地验收；Windows x64 待最终 CI |
-| TypeScript / JavaScript | Node 24.18.0、TypeScript 6.0.3、TLS 6.0.0、@types/node 22.20.1、undici-types 6.21.0，随附上游许可证 | 同上 |
+| Python | narrant-python，内嵌同源 ty 0.0.84 / Ruff、固定 typeshed、控制身份及实际目标锁定许可闭包 | macOS arm64 / Windows x64 |
+| Rust | narrant-rust，固定 rust-analyzer 库 revision 9074e9b；包内包含实际目标的锁定依赖许可闭包 | macOS arm64 / Windows x64 |
+| TypeScript / JavaScript | Node 24.18.0、TypeScript 6.0.3、@types/node 22.20.1、undici-types 6.21.0，随附上游许可证 | 同上 |
 
 Rust 项目仍需要用户已有的 Cargo/rustc；标准库或完整依赖范围还需要对应工具链的 rust-src。
 应用不运行 rustup 安装命令。纯仓库范围不加载标准库。支持包不包含 npm/pnpm，TS/JS 不会安装被审查项目的依赖；Rust 的“所有依赖”范围保留原有 Cargo 策略。
@@ -69,23 +69,23 @@ PR 上 `Language support packs` workflow 在两个原生 runner 构建并启动�
 
 ## 首次上线与后续发布
 
-生产地址固定为：
-`https://updates.cyunlab.com/narrant/language-support-packs/<id>/<version>/<target>/`。
-首次发布前由维护者配置受保护 GitHub Environment `language-support-packs`：
+每种语言、每个版本使用一个 `XLCYun/narrant` prerelease：
 
-1. 配置 `OSS_BUCKET`、`OSS_REGION`、`ALIBABA_CLOUD_OIDC_PROVIDER_ARN`、`ALIBABA_CLOUD_ROLE_ARN`。
-2. OIDC 信任限定本仓库的该 Environment 和 main 发布流程。短期角色只需要新前缀的读/写权限；
-   不要扩大现有应用 Stable promotion 角色的权限。通过 bucket/CDN 为该前缀提供公开只读 HTTPS。
-3. 合入 main 后运行 `Language support packs`，勾选 `publish`。该流程先原生构建验证，再进入
-   Environment 保护，串行发布；从其他分支触发只允许构建，发布 job 不会运行。
-4. 脚本先校验三种语言的六份本地产物，再上传归档并回读，最后上传清单并回读；已有字节完全一致则复用，
-   不同则失败。最后通过用户实际访问的 HTTPS 地址逐字节验证。此步骤成功后才能发布引用这些版本的应用。
+```text
+https://github.com/XLCYun/narrant/releases/download/language-pack-<id>-v<version>/<target>-manifest.json
+https://github.com/XLCYun/narrant/releases/download/language-pack-<id>-v<version>/<target>-pack.tar.gz
+```
 
-发布信任来自受保护的仓库版本、OIDC 权限和固定 HTTPS 来源；SHA-256 验证下载损坏及清单/归档一致性，
-不是独立的签名认证。当前没有额外的支持包签名基础设施。
+1. 配置受保护 Environment `language-support-packs`，限制 main 和维护者审批。
+2. 本地及双平台验收通过后启用目录中对应版本（`published`），合入 main；运行 `Language support packs`，
+   选择完整双平台、全部语言并勾选 `publish`。部分语言/平台验收不能发布。
+3. 脚本先核验全部本地产物，再为每个语言版本创建 Draft prerelease，上传并逐字节回读两个平台的四个资产。
+   全部成功后公开，保持 `prerelease: true`、`make_latest: false`，不会覆盖应用 Stable 的 Latest。
+4. 发布后匿名回读客户端 URL；同版本只允许复用相同字节，已发布资产不修改。公开回读成功后才发布引用它的应用。
 
-不要删除仍被已发布应用引用的包。升级失败时可回退应用，其声明的旧版本仍可复用；支持包不追踪 latest。
-本分支不会自动部署 OSS、创建云权限或发布应用；首次生产下载可用性必须以发布 job 的公开回读验证为准。
+发布使用本仓库 `GITHUB_TOKEN`，权限限定受保护发布 job 的 Contents 写入。
+下载只允许固定 GitHub 仓库与官方资产 CDN，保留清单/归档 SHA-256 校验；这不是独立的包签名认证。
+当前目录的七种包均未启用发布。不要删除仍被已发布应用引用的版本，支持包不追踪 Latest。
 
 ## 本地存储与故障恢复
 

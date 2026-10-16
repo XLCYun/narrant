@@ -59,7 +59,7 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   assert.match(workflow, /validation_scope:\n[\s\S]*default: full/);
   const lifecycle = job('windows-lifecycle');
   assert.match(lifecycle, /if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'/);
-  assert.match(lifecycle, /runs-on:.*fromJSON\(vars\.NARRANT_WINDOWS_RUNNER_LABELS \|\| '\["self-hosted","Windows","X64","narrant-ci"\]'/);
+  assert.match(lifecycle, /runs-on: windows-2022/);
   assert.match(lifecycle, /run: node scripts\/run-windows-lifecycle-tests.mjs/);
   assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);
   assert.match(job('publish'), /needs: \[build, native-analyzers\]/);
@@ -67,13 +67,12 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   const enabled = (name, event, scope, language, publish, ref, platform = 'all') => runInNewContext(job(name).match(/^ {4}if: (.+)$/m)[1], {
     github: { event_name: event, ref }, inputs: { validation_scope: scope, language, publish, platform },
   });
-  for (const scope of ['full', 'native-analyzers', 'windows-lifecycle', 'macos-runner']) {
+  for (const scope of ['full', 'native-analyzers', 'windows-lifecycle']) {
     for (const language of ['all', 'typescript-javascript', 'java']) {
       const context = ['workflow_dispatch', scope, language, true, 'refs/heads/main'];
       assert.equal(enabled('windows-lifecycle', ...context), scope === 'windows-lifecycle');
-      assert.equal(enabled('macos-runner', ...context), scope === 'macos-runner');
       assert.equal(enabled('build', ...context), scope === 'full' && language === 'all');
-      assert.equal(enabled('native-analyzers', ...context), !['windows-lifecycle', 'macos-runner'].includes(scope));
+      assert.equal(enabled('native-analyzers', ...context), scope !== 'windows-lifecycle');
       assert.equal(enabled('publish', ...context), scope === 'full' && language === 'all');
     }
   }
@@ -85,7 +84,6 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   }
   for (const name of ['build', 'native-analyzers']) assert.equal(enabled(name, 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), true);
   assert.equal(enabled('windows-lifecycle', 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), false);
-  assert.equal(enabled('macos-runner', 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), false);
 });
 
 // 执行工作流实际矩阵表达式，确认单平台验收不会调度另一平台，默认仍覆盖两个目标。
@@ -103,30 +101,15 @@ test('manual platform selection schedules only the requested native targets', as
   }
 });
 
-// 所有任务使用自托管本地缓存，避免额外上传完整 target。
-test('self-hosted runners skip remote Rust build caches', async () => {
+// 所有实际执行任务固定为 GitHub-hosted 镜像。
+test('native jobs use the hosted image matching their target', async () => {
   const workflow = await readLanguageWorkflow();
-  assert.doesNotMatch(workflow, /Swatinem\/rust-cache|CARGO_TARGET_DIR/);
-});
-
-// 两个平台的标签分别生效；缺少配置时仍使用对应自托管标签，不能把任务发往另一平台。
-test('self-hosted runner routing remains independent for each platform', async () => {
-  const workflow = await readLanguageWorkflow();
+  assert.doesNotMatch(workflow, /self-hosted|NARRANT_.*RUNNER_LABELS/);
   for (const name of ['build', 'native-analyzers']) {
     const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
     const expression = job.match(/^ {4}runs-on: \$\{\{ (.+) \}\}$/m)[1];
-    for (const target of ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc']) {
-      for (const mac of ['', '["self-hosted","macOS","ARM64","narrant-ci"]']) {
-        for (const windows of ['', '["self-hosted","Windows","X64","narrant-ci"]']) {
-          const labels = target === 'aarch64-apple-darwin' ? mac : windows;
-          const result = runInNewContext(expression, {
-            vars: { NARRANT_MACOS_RUNNER_LABELS: mac, NARRANT_WINDOWS_RUNNER_LABELS: windows },
-            matrix: { target, runner: 'original-hosted-runner' }, fromJSON: JSON.parse,
-          });
-          const defaults = target === 'aarch64-apple-darwin' ? ['self-hosted', 'macOS', 'ARM64', 'narrant-ci'] : ['self-hosted', 'Windows', 'X64', 'narrant-ci'];
-          assert.deepEqual(result, labels ? JSON.parse(labels) : defaults);
-        }
-      }
+    for (const [target, expected] of [['aarch64-apple-darwin', 'macos-15'], ['x86_64-pc-windows-msvc', 'windows-2022']]) {
+      assert.equal(runInNewContext(expression, { matrix: { target } }), expected);
     }
   }
 });

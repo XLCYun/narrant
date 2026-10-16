@@ -19,15 +19,11 @@ use github_commands::github_api_base_url;
 /// 装配 Tauri state、commands 与桌面插件并运行应用。
 pub fn run() {
     let context = tauri::generate_context!();
-    // 两类桌面测试共用隔离边界，在任何用户目录或插件初始化前检查应用身份。
+    // 界面测试在任何用户目录或插件初始化前检查独立应用身份。
     #[cfg(feature = "test-isolation")]
     assert_eq!(
         context.config().identifier,
-        if cfg!(feature = "upgrade-smoke") {
-            "com.cyunlab.narrant.upgrade-test"
-        } else {
-            "com.cyunlab.narrant.e2e"
-        },
+        "com.cyunlab.narrant.e2e",
         "Desktop tests require their isolated application identity"
     );
     #[cfg(feature = "wdio")]
@@ -137,8 +133,6 @@ pub fn run() {
             app.manage(repository_application);
             app.manage(auth);
             let application_settings = ApplicationSettingsApplication::new(settings_path.clone());
-            #[cfg(feature = "upgrade-smoke")]
-            super::upgrade_smoke::prepare(app, &application_settings)?;
             app.manage(
                 babysit::BabysitApplication::with_installed_provider_registry(
                     settings_path,

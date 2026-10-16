@@ -29,7 +29,7 @@ export async function readPublicStableIdentity(_options = {}, dependencies = {})
   if (
     !response || response.status < 200 || response.status >= 300 ||
     finalUrl.protocol !== "https:" || finalUrl.username || finalUrl.password || finalUrl.port ||
-    finalUrl.href !== FIXED_STABLE_ENDPOINT
+    !["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(finalUrl.hostname)
   ) {
     throw new Error("published Stable manifest 响应身份无效");
   }
@@ -47,21 +47,16 @@ export async function readPublicStableIdentity(_options = {}, dependencies = {})
   if (Object.keys(manifest.platforms ?? {}).sort().join(",") !== [...TARGETS].sort().join(",")) {
     throw new Error("published Stable manifest 目标集合无效");
   }
-  const prefix = `https://updates.cyunlab.com/narrant/releases/${manifest.version}/`;
+  const prefix = `https://github.com/XLCYun/narrant/releases/download/${tag}/`;
   for (const target of TARGETS) {
     const entry = manifest.platforms[target];
     let packageUrl;
     try { packageUrl = new URL(entry?.url); } catch { throw new Error("published Stable manifest package URL 无效"); }
     if (
-      !entry?.url.startsWith(`${prefix}${target}/`) || packageUrl.href !== entry.url || packageUrl.search || packageUrl.hash ||
+      !entry?.url.startsWith(prefix) || packageUrl.href !== entry.url || packageUrl.search || packageUrl.hash ||
       packageUrl.username || packageUrl.password || packageUrl.port || typeof entry.signature !== "string" || !entry.signature
     ) {
       throw new Error("published Stable manifest package identity 无效");
-    }
-    let installerUrl;
-    try { installerUrl = new URL(entry.installer_url); } catch { throw new Error("published Stable manifest installer URL 无效"); }
-    if (installerUrl.href !== entry.installer_url || !entry.installer_url.startsWith(`${prefix}${target}/`) || installerUrl.search || installerUrl.hash) {
-      throw new Error("published Stable manifest installer identity 无效");
     }
   }
   return Object.freeze({ tag, manifestSha256: createHash("sha256").update(bytes).digest("hex") });

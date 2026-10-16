@@ -24,18 +24,17 @@ function releaseNotesAdapters(subjects) {
   };
 }
 
-/** 返回固定 tag/output/private-repository 的 generator 输入。 */
+/** 返回固定 tag/output 的 generator 输入。 */
 function generatorOptions() {
   return {
     tag: "v2.0.0",
     output: "/tmp/release-notes.md",
-    privateRepository: "cyunlab/narrant-private",
   };
 }
 
 test("公开 conventional subjects 保持原顺序和既有 Notes 格式", () => {
   const subjects = [
-    "fix: 修复公开 issue https://github.com/cyunlab/narrant/issues/42",
+    "fix: 修复公开 issue https://github.com/XLCYun/narrant/issues/42",
     "feat: 增加自动更新提示",
   ].join("\n");
   const adapters = releaseNotesAdapters(subjects);
@@ -44,7 +43,7 @@ test("公开 conventional subjects 保持原顺序和既有 Notes 格式", () =>
     "## Narrant 2.0.0",
     "",
     "### 版本变动",
-    "- fix: 修复公开 issue https://github.com/cyunlab/narrant/issues/42",
+    "- fix: 修复公开 issue https://github.com/XLCYun/narrant/issues/42",
     "- feat: 增加自动更新提示",
     "",
     "> Windows x64 安装包当前未进行 Authenticode 签名。",
@@ -67,38 +66,10 @@ test("无用户可见 subject 时保留既有空变动文案", () => {
   assert.equal(adapters.writes.length, 1);
 });
 
-test("private identity、SHA、issue/PR URL 与 GFM autolink 均在写文件前 fail closed", async (context) => {
-  const fixtures = [
-    ["private repository identity", "fix: cyunlab/narrant-private", /私有仓库身份/],
-    ["private repository URL", "fix: https://github.com/cyunlab/narrant-private/issues/7", /私有仓库身份/],
-    ["private issue URL", "fix: https://github.com/other/private/issues/8", /未允许 URL/],
-    ["private PR Markdown", "fix: [内部 PR](https://github.com/other/private/pull/9)", /未允许 URL/],
-    ["abbreviated SHA", "fix: leaked commit deadbeef", /Git SHA/],
-    ["shortest abbreviated SHA", "fix: leaked commit 0a1b2c3", /Git SHA/],
-    ["full SHA", `fix: ${"a".repeat(40)}`, /Git SHA/],
-    ["GFM bare www", "fix: www.internal.example/runbook", /未允许 URL/],
-    ["GFM email autolink", "fix: private@example.com", /未允许 URL/],
-  ];
-  for (const [name, subject, pattern] of fixtures) {
-    await context.test(name, () => {
-      const adapters = releaseNotesAdapters(subject);
-      assert.throws(
-        () => generatePublicReleaseNotes(generatorOptions(), adapters.dependencies),
-        pattern,
-      );
-      assert.equal(adapters.writes.length, 0);
-    });
-  }
-});
-
-test("缺少 GITHUB_REPOSITORY 身份时不会写公开 Notes", () => {
-  const adapters = releaseNotesAdapters("fix: safe subject");
-  assert.throws(
-    () => generatePublicReleaseNotes(
-      { ...generatorOptions(), privateRepository: undefined },
-      adapters.dependencies,
-    ),
-    /缺少私有仓库身份/,
-  );
-  assert.equal(adapters.writes.length, 0);
+test("开源发布说明保留提交引用和第三方链接", () => {
+  const subject = "fix: deadbeef https://github.com/XLCYun/narrant/commit/deadbeef https://github.com/tauri-apps/tauri/issues/1";
+  const adapters = releaseNotesAdapters(subject);
+  const result = generatePublicReleaseNotes(generatorOptions(), adapters.dependencies);
+  assert.ok(result.notes.includes(subject));
+  assert.equal(adapters.writes.length, 1);
 });

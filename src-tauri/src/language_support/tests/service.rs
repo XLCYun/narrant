@@ -40,11 +40,11 @@ async fn installs_complete_pack_and_reuses_it_after_restart() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     let metadata = server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let download = server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -86,11 +86,11 @@ async fn reviews_share_download_and_cancelling_one_waiter_keeps_other_review_run
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let download = server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.delay(std::time::Duration::from_millis(150))
             .body(archive);
     });
@@ -141,11 +141,11 @@ async fn failed_checksum_is_never_installed_and_explicit_retry_starts_fresh() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let mut corrupt = server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(vec![0; archive.len()]);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -178,7 +178,7 @@ async fn failed_checksum_is_never_installed_and_explicit_retry_starts_fresh() {
     );
     corrupt.delete();
     let good = server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     packs.retry(PackId::Rust).unwrap();
@@ -237,11 +237,11 @@ async fn invalid_manifest_cannot_escape_staging_or_request_another_archive() {
         let (_, mut manifest) = fixture();
         manifest["files"][0]["path"] = serde_json::json!(invalid);
         server.mock(|when, then| {
-            when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+            when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
             then.json_body(manifest);
         });
         let archive = server.mock(|when, then| {
-            when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+            when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
             then.status(500);
         });
         let directory = tempfile::tempdir().unwrap();
@@ -283,7 +283,9 @@ async fn real_installed_typescript_pack_analyzes_without_development_tools() {
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/typescript-javascript/{version}/{target}/{name}"));
+            when.path(format!(
+                "/language-pack-typescript-javascript-v{version}/{target}-{name}"
+            ));
             then.body(bytes);
         });
     }
@@ -350,11 +352,11 @@ async fn shutdown_cleans_pending_install_and_next_start_is_not_ready() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.delay(std::time::Duration::from_secs(5)).body(archive);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -410,7 +412,7 @@ async fn real_installed_rust_pack_analyzes_with_existing_toolchain() {
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/rust/1.1.0/{target}/{name}"));
+            when.path(format!("/language-pack-rust-v1.1.0/{target}-{name}"));
             then.body(bytes);
         });
     }
@@ -470,11 +472,11 @@ async fn storage_initialization_failure_is_visible_and_retryable() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -506,11 +508,11 @@ async fn independent_instances_wait_for_the_same_installation() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let download = server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.delay(std::time::Duration::from_millis(100))
             .body(archive);
     });
@@ -550,11 +552,11 @@ async fn extraction_integrity_failure_cleans_staging() {
     let (archive, mut manifest) = fixture();
     manifest["files"][0]["sha256"] = serde_json::json!("0".repeat(64));
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/rust/1.1.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     let root = tempfile::tempdir().unwrap();
@@ -585,4 +587,26 @@ async fn extraction_integrity_failure_cleans_staging() {
             .count(),
         0
     );
+}
+/// 允许 GitHub 资产的短期签名 URL，拒绝第三方、明文及带凭据的重定向。
+#[test]
+fn language_pack_redirects_only_use_official_https_assets() {
+    for url in [
+        "https://release-assets.githubusercontent.com/github-production-release-asset/file?signature=test",
+        "https://objects.githubusercontent.com/github-production-release-asset/file",
+    ] {
+        assert!(trusted_download_redirect(&reqwest::Url::parse(url).unwrap()));
+    }
+    for url in [
+        "http://release-assets.githubusercontent.com/file",
+        "https://attacker.example/file",
+        "https://release-assets.githubusercontent.com.attacker.example/file",
+        "https://user:password@release-assets.githubusercontent.com/file",
+        "https://release-assets.githubusercontent.com:444/file",
+        "https://release-assets.githubusercontent.com/file#fragment",
+    ] {
+        assert!(!trusted_download_redirect(
+            &reqwest::Url::parse(url).unwrap()
+        ));
+    }
 }

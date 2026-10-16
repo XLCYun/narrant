@@ -134,7 +134,6 @@ function prepareFixture(fixture, overrides = {}) {
     releaseSigningPublicKey: fixture.publicKey,
     candidateUpdaterPublicKey: fixture.publicKey,
     bridgeTag: "",
-    privateRepository: "cyunlab/narrant-private",
     ...overrides,
   });
 }
@@ -148,22 +147,15 @@ test("稳定 tag/version 解析严格且可重复", () => {
   assert.throws(() => parseReleaseIdentity("v2.3.5", "2.3.4"), /不匹配/);
 });
 
-test("canonical metadata validator 拒绝独立 7–40 位 SHA 且不截取版本号或普通单词", () => {
-  const options = {
-    title: "Narrant 2.3.4",
-    notes: "fix: safe public metadata",
-    privateRepository: "cyunlab/narrant-private",
-  };
-  for (const sha of ["0a1b2c3", "deadbeef", "abcdef123456", "a".repeat(40)]) {
-    assert.throws(
-      () => assertPublicReleaseMetadata({ ...options, notes: `fix: leaked ${sha}` }),
-      /7–40 位 Git SHA/,
-    );
+test("公开元数据允许源码引用，拒绝空标题、控制字符与空说明", () => {
+  const options = { title: "Narrant 2.3.4", notes: "fix: deadbeef https://github.com/XLCYun/narrant/commit/deadbeef" };
+  assert.doesNotThrow(() => assertPublicReleaseMetadata(options));
+  for (const title of ["", "  ", "one\ntwo", "bad\0title"]) {
+    assert.throws(() => assertPublicReleaseMetadata({ ...options, title }));
   }
-  assert.doesNotThrow(() => assertPublicReleaseMetadata({
-    ...options,
-    notes: "fix: feedback 文案；版本 v1.2.3 / 2026.09.02；短 token abc123",
-  }));
+  for (const notes of ["", "  ", "bad\0notes"]) {
+    assert.throws(() => assertPublicReleaseMetadata({ ...options, notes }));
+  }
 });
 
 test("完整准备生成固定两目标 manifest 并字面保留 canonical ED 签名文件", (context) => {
@@ -185,11 +177,7 @@ test("完整准备生成固定两目标 manifest 并字面保留 canonical ED �
   assert.equal(Buffer.from(signatureFile, "base64").toString("base64"), signatureFile);
   assert.match(
     manifest.platforms["windows-x86_64"].url,
-    /^https:\/\/updates\.cyunlab\.com\/narrant\/releases\/2\.3\.4\/windows-x86_64\/[0-9a-f]{64}-narrant-windows-x86_64-updater\.exe$/,
-  );
-  assert.match(
-    manifest.platforms["darwin-aarch64"].installer_url,
-    /^https:\/\/updates\.cyunlab\.com\/narrant\/releases\/2\.3\.4\/darwin-aarch64\/[0-9a-f]{64}-Narrant_2\.3\.4_aarch64\.dmg$/,
+    /XLCYun\/narrant\/releases\/download\/v2\.3\.4\/narrant-windows-x86_64-updater\.exe$/,
   );
   assert.equal(result.names.length, 8);
   assert.equal(result.updaterTrust.bridgeAuthorized, false);
@@ -431,19 +419,11 @@ test("manifest 校验拒绝 URL、名称、版本、notes 和签名映射偏差"
     version: "2.3.4",
     notes: "发布说明\n保留换行。\n",
     signatures,
-    assetDigests: Object.fromEntries([
-      fixture.names.installer.darwin,
-      fixture.names.installer.windows,
-      fixture.names.updater.darwin,
-      fixture.names.updater.windows,
-    ].map((name) => [name, createHash("sha256").update(readFileSync(join(fixture.directory, name))).digest("hex")])),
   };
   assert.doesNotThrow(() => validateUpdaterManifest(manifest, options));
   for (const mutate of [
     (copy) => { copy.platforms["darwin-aarch64"].url = "https://example.com/wrong"; },
     (copy) => { copy.platforms["darwin-aarch64"].url = copy.platforms["darwin-aarch64"].url.replace("darwin", "macos"); },
-    (copy) => { delete copy.platforms["darwin-aarch64"].installer_url; },
-    (copy) => { copy.platforms["windows-x86_64"].installer_url = "https://example.com/setup.exe"; },
     (copy) => { copy.version = "2.3.5"; },
     (copy) => { copy.notes = "other"; },
     (copy) => { copy.platforms["windows-x86_64"].signature = "other"; },
@@ -488,83 +468,4 @@ test("SHA256SUMS 只覆盖七文件且按公开名称稳定排序", (context) =>
     "narrant-windows-x86_64-updater.exe.sig",
   ]);
   assert.equal(covered.includes("SHA256SUMS"), false);
-});
-
-test("公开元数据逐个拒绝任意 SHA 和 delimiter 拼接的 allowlist 外 URL", (context) => {
-  const fixtures = Array.from({ length: 28 }, () => createNativeAssetFixture());
-  context.after(() => fixtures.forEach((fixture) => rmSync(fixture.directory, { recursive: true, force: true })));
-  assert.throws(() => prepareFixture(fixtures[0], { notes: "cyunlab/narrant-private" }), /私有/);
-  assert.throws(() => prepareFixture(fixtures[1], { notes: "b".repeat(40) }), /Git SHA/);
-  assert.throws(
-    () => prepareFixture(fixtures[2], { notes: "https://github.com/other/private/issues/7" }),
-    /未允许 URL/,
-  );
-  assert.throws(
-    () => prepareFixture(fixtures[3], { notes: "https://git.internal.example/review/42" }),
-    /未允许 URL/,
-  );
-  assert.throws(
-    () => prepareFixture(fixtures[4], { notes: "http://github.com/cyunlab/narrant/issues/1" }),
-    /未允许 URL/,
-  );
-  assert.throws(
-    () => prepareFixture(fixtures[5], { notes: "https://github.com/cyunlab/narrant/actions/runs/123" }),
-    /未允许 URL/,
-  );
-  assert.doesNotThrow(() => prepareFixture(fixtures[6], {
-    notes: "公开说明（https://github.com/cyunlab/narrant/issues/42）。",
-  }));
-  const publicUrl = "https://github.com/cyunlab/narrant/issues/42";
-  for (const [fixture, notes] of [
-    [fixtures[7], `${publicUrl},https://internal.example/secret`],
-    [fixtures[8], `${publicUrl};https://github.com/private/repo/issues/1`],
-    [fixtures[9], `${publicUrl}https://internal.example/adjacent`],
-    [fixtures[10], `[公开](${publicUrl}) 与 [私有](https://internal.example/md)`],
-    [fixtures[11], `https://,${publicUrl}`],
-  ]) {
-    assert.throws(() => prepareFixture(fixture, { notes }), /未允许 URL|无效 URL/);
-  }
-  assert.doesNotThrow(() => prepareFixture(fixtures[12], {
-    notes: `[公开 issue](${publicUrl}), 另见 ${publicUrl};`,
-  }));
-  for (const [fixture, notes] of [
-    [fixtures[13], `<a href="https://internal.example/admin">private</a>`],
-    [fixtures[14], `<img src='//internal.example/image.png'>`],
-    [fixtures[15], `参见 //internal.example/runbook`],
-    [fixtures[16], `[联系](mailto:private@example.com)`],
-    [fixtures[17], `custom-tool://internal/secret`],
-  ]) {
-    assert.throws(
-      () => prepareFixture(fixture, { notes }),
-      /未允许 URL|无效 URL|protocol-relative|URI scheme/,
-    );
-  }
-  assert.doesNotThrow(() => prepareFixture(fixtures[18], {
-    notes: `fix: 保留 conventional subject；[公开](${publicUrl})。`,
-  }));
-  assert.throws(
-    () => prepareFixture(fixtures[19], { notes: "参见 //localhost/internal" }),
-    /protocol-relative/,
-  );
-  assert.doesNotThrow(() => prepareFixture(fixtures[20], {
-    notes: `<a href="${publicUrl}">公开 issue</a>`,
-  }));
-  for (const [fixture, notes] of [
-    [fixtures[21], "内部手册 www.internal.example/runbook"],
-    [fixtures[22], "联系 private@example.com"],
-    [fixtures[23], "[内部][ref]\n\n[ref]: /private/runbook"],
-    [fixtures[24], "![内部图][image]\n\n[image]: mailto:private@example.com"],
-    [fixtures[25], "[内部](/private/runbook)"],
-  ]) {
-    assert.throws(
-      () => prepareFixture(fixture, { notes }),
-      /未允许 URL|无效 URL/,
-    );
-  }
-  assert.doesNotThrow(() => prepareFixture(fixtures[26], {
-    notes: `公开 autolink <${publicUrl}>`,
-  }));
-  assert.doesNotThrow(() => prepareFixture(fixtures[27], {
-    notes: `[公开][issue]\n\n[issue]: ${publicUrl}`,
-  }));
 });

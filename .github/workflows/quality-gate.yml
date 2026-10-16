@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   rust:
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +25,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: 验证自托管编译环境
-        run: node scripts/verify-macos-runner.mjs
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
       - name: Rust 格式检查
         run: bash scripts/cargo-agent.sh fmt --all --manifest-path src-tauri/Cargo.toml -- --check
       - name: Rust 静态检查
@@ -37,7 +38,7 @@ jobs:
           bash scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --doc
 
   typescript:
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +48,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: TypeScript Lint
         run: pnpm lint
@@ -59,7 +61,7 @@ jobs:
 
   windows-e2e:
     needs: [rust, typescript]
-    runs-on: ${{ fromJSON(vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]') }}
+    runs-on: windows-2022
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -69,16 +71,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: 验证真实桌面会话
-        run: node scripts/verify-desktop-runner.mjs
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
       - name: 运行全部真实 Tauri E2E
         run: pnpm test:e2e
 
   macos-e2e:
-    needs: windows-e2e
-    runs-on: ${{ fromJSON(vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') }}
+    needs: [rust, typescript]
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -88,9 +92,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: 验证真实桌面会话
-        run: node scripts/verify-desktop-runner.mjs
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
       - name: 运行全部真实 Tauri E2E
         run: pnpm test:e2e

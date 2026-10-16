@@ -18,7 +18,7 @@ function git(arguments_) {
 
 /** 生成、校验并写入公开 Release Notes；测试可在 git/write seam 注入内存 adapter。 */
 export function generatePublicReleaseNotes(options, dependencies = {}) {
-  const { tag, output, privateRepository } = options;
+  const { tag, output } = options;
   const runGit = dependencies.git ?? git;
   const writeFile = dependencies.writeFile ?? writeFileSync;
   const version = tag?.startsWith("v") ? tag.slice(1) : "";
@@ -41,7 +41,7 @@ export function generatePublicReleaseNotes(options, dependencies = {}) {
     "> Windows x64 安装包当前未进行 Authenticode 签名。",
     "",
   ].join("\n");
-  assertPublicReleaseMetadata({ title, notes, privateRepository });
+  assertPublicReleaseMetadata({ title, notes });
   writeFile(output, notes);
   return { title, notes, range };
 }
@@ -52,7 +52,6 @@ function main() {
   generatePublicReleaseNotes({
     tag,
     output,
-    privateRepository: process.env.GITHUB_REPOSITORY,
   });
 }
 

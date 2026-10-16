@@ -19,7 +19,20 @@ use storage::{validate_manifest, Storage, MAX_ARCHIVE};
 use tokio::sync::watch;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-const ORIGIN: &str = "https://updates.cyunlab.com/narrant/language-support-packs";
+const ORIGIN: &str = "https://github.com/XLCYun/narrant/releases/download";
+
+/// GitHub 下载只跟随官方 HTTPS 资产域名；测试源仍可直连本地服务器。
+fn trusted_download_redirect(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.fragment().is_none()
+        && matches!(
+            url.host_str(),
+            Some("release-assets.githubusercontent.com" | "objects.githubusercontent.com")
+        )
+}
 
 /// 包准备与使用租约共享一个状态；轮询不触发任何网络或目录扫描。
 #[derive(Clone)]
@@ -181,7 +194,14 @@ impl LanguageSupportPacks {
                 storage,
                 origin,
                 client: reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
+                    .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                        if attempt.previous().len() < 5 && trusted_download_redirect(attempt.url())
+                        {
+                            attempt.follow()
+                        } else {
+                            attempt.error("语言支持包重定向离开 GitHub 资产域名")
+                        }
+                    }))
                     .connect_timeout(Duration::from_secs(15))
                     .read_timeout(Duration::from_secs(30))
                     .timeout(Duration::from_secs(600))
@@ -446,13 +466,13 @@ impl LanguageSupportPacks {
     /// 读取有界清单、流式下载并验证摘要，随后让阻塞 worker 处理解压和提交。
     async fn install_in(&self, key: &PackKey, temporary: &Path) -> Result<u64, String> {
         let base = format!(
-            "{}/{}/{}/{}",
+            "{}/language-pack-{}-v{}/{}",
             self.inner.origin,
             key.id.slug(),
             key.version,
             self.inner.storage.target
         );
-        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{base}/manifest.json")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
+        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{base}-manifest.json")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
         let mut bytes = vec![];
         while let Some(chunk) = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), chunk = response.chunk() => chunk.map_err(display)? }
         {
@@ -466,7 +486,7 @@ impl LanguageSupportPacks {
         self.update(key, |snapshot| {
             snapshot.total_bytes = Some(manifest.archive_size)
         });
-        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{base}/pack.tar.gz")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
+        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{base}-pack.tar.gz")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
         let archive = temporary.join("download.part");
         let mut output = File::create(&archive).map_err(display)?;
         let mut hash = Sha256::new();

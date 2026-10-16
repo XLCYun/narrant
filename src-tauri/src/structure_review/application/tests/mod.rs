@@ -884,7 +884,7 @@ async fn real_rust_pack_flows_through_review_lifecycle_to_dto() {
         let bytes =
             std::fs::read(artifacts.join("rust").join(version).join(target).join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/rust/{version}/{target}/{name}"));
+            when.path(format!("/language-pack-rust-v{version}/{target}-{name}"));
             then.body(bytes);
         });
     }
