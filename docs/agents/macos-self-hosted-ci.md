@@ -23,6 +23,8 @@ C/C++ 验收所需的 CMake 由 `provision-native-toolchains.mjs` 按清单下�
 位于 `~/Library/LaunchAgents/com.narrant.actions-runner.plist`，只在已有 Aqua 会话中运行。
 配置为按需启动，不启用自动登录，不修改整机睡眠设置。
 任务开始钩子仅在当前 Worker 存活期间阻止空闲睡眠。
+这不能阻止合盖或手动睡眠；运行任务时保持机器开盖、联网。若因此断联，先确认 runner
+恢复在线，再只重跑受影响的 job，不将未执行的测试记为通过。
 在该账户已登录时启动、停止：
 
 ```bash
@@ -80,6 +82,9 @@ CI 设置 `NARRANT_CARGO_LOCK_FILE=/Users/Shared/narrant-ci/cargo.lock`。
 凭据保存在内存，并禁用正式应用更新。即使漏传 E2E 配置，测试构建也会在初始化用户目录前停止。
 真实应用测试会在当前桌面打开测试窗口，不能据此关闭日常 Narrant 或删除个人数据。
 `scripts/verify-desktop-runner.mjs` 会在大型构建前检查会话，真实 E2E 仍需完整运行。
+`test:e2e` 仅为 WDIO 进程设置 `NODE_USE_ENV_PROXY=0`，避免 Node 24 的全局代理 dispatcher
+与 WDIO 自带的 Undici 混用后拒绝 `Content-Length`。下载、构建仍沿用 runner 的代理配置；
+WDIO 本身继续按 `HTTP_PROXY`/`NO_PROXY` 处理请求，本机驱动不经过代理。
 
 升级验收使用独立 `Narrant Upgrade Test`，identifier 为 `com.cyunlab.narrant.upgrade-test`，
 可执行文件名为 `narrant-upgrade-test`。旧、新测试包分别取上一 Stable 和候选源码，仅叠加隔离身份、

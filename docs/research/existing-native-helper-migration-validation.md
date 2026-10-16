@@ -620,6 +620,21 @@ embedded 驱动实际完成了测试，没有为消除提示安装另一套驱�
 改由调用方检查目标语言的实际控件，避免后台 WebView 暂停动画帧时卡住。
 临时诊断已移除，未修改宝宝模式生产行为或增加测试窗口抢焦点配置。
 
+[`e74a099` 的完整运行](https://github.com/XLCYun/narrant/actions/runs/38886815723)
+中 Rust、TypeScript 及 Windows E2E 通过：622 项 Rust、426 项前端、242 项脚本测试和
+全部 6 个 Windows spec 通过，128 项 Rust 忽略及 2 项脚本跳过不计为通过。
+macOS 第一次在编译期间因合盖睡眠断联；仅重跑该 job 后完成构建，但 WDIO 在建立会话时
+遇到 `UND_ERR_INVALID_ARG`，未执行应用断言。最小真实 WebDriver 会话复现确认 Node 24
+全局代理 dispatcher 与 WDIO 自带 Undici 混用后拒绝 `Content-Length`，仅为 WDIO 设置
+`NODE_USE_ENV_PROXY=0` 后通过；构建和下载的代理不变。
+
+本机复测另发现分支 E2E 的全页面输入框定位会与前一个关闭中的弹层竞争。测试现通过
+当前触发器的 `aria-controls` 限定搜索框与选项，选中后等待该弹层卸载；保留真实输入、
+点击和选中结果断言。连续切换最小场景先失败，修复后 40 次切换通过。临时诊断已删除，
+类型检查、Lint 及 Standards/Spec 复核通过；这些改动不改变产品行为。
+修复后在继承 `NODE_USE_ENV_PROXY=1` 的本机环境中，仅由 WDIO 子命令覆盖为 0，完整
+macOS 桌面 E2E 的 6 个 spec 全部通过（46 秒）。最终提交仍需由 Actions 独立检出验收。
+
 独立的 `Narrant Upgrade Test` 已替代共享 hosts、系统证书信任与正式安装操作；
 只给测试进程设置临时 TLS 和独立应用身份。macOS 的上一 Stable 升级实测发现共享
 更新器的下载任务编号缺陷，修复后 92 项更新模块回归通过；旧版实际失败仍保留。

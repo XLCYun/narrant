@@ -41,11 +41,18 @@ Windows 同源测试的 [run 38885635994](https://github.com/XLCYun/narrant/acti
 `36728f9201ef79151dcd9321dd00f0f7412d2487aed7488bdea3245b6954a4d4`。
 新增 handoff 回归先以“应用更新包不是 Windows x64 PE”失败；修复允许 I386/AMD64 loader，
 应用安装计划仍限定 Windows x64，并保留包签名与暂存复验。修复后更新模块 **93 项通过**，
-脚本回归 **243 项通过、2 项跳过**；真实 Windows 重跑待完成。
+脚本回归 **243 项通过、2 项跳过**。
+
+[修复重跑 38893235149](https://github.com/XLCYun/narrant/actions/runs/38893235149) 已成功：
+同一源码 `d54b43e8e8d4572103c96a4a5dc1b5a9ab741e0e` 的 `1.2.14`→`1.2.15` 独立测试包
+完成安装、下载、验签、暂存、正常退出安装、原路径替换、不自动重启、手动启动及项目/设置保留。
+全部 15 项检查点通过；运行后独立核对测试安装记录、数据、缓存和进程均已清理，原 runner 在线空闲。
+该结果仍为 `same-source-version-regression`，不改变上一 Stable 的失败结论或 macOS 升级暂停决定。
 
 该次 Artifact 上传还因 GitHub 存储额度已满而失败。分支试运行改为额外在现有 runner
 保存测试包与诊断，并在清理前记录测试专属日志、版本记录和进程退出状态；上传失败不能
-覆盖功能测试失败，正式发布的证据上传要求不变。
+覆盖功能测试失败，正式发布的证据上传要求不变。本次成功运行的上传同样因额度失败，副本位于
+Windows runner 的 `C:\ci\runners\narrant\_work\_tool\narrant-update-preflight\38893235149-1`。
 
 ## 历史验收范围（2026-09）
 

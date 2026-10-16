@@ -24,7 +24,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:components": "vitest run",
-    "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts",
+    "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && cross-env NODE_USE_ENV_PROXY=0 wdio run wdio.conf.ts",
     "test:e2e:custom-live": "node scripts/run-live-custom-provider-e2e.mjs",
     "test:upgrade:build": "node scripts/build-update-test-packages.mjs",
     "test:upgrade:run": "node scripts/run-isolated-update-test.mjs",
