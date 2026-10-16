@@ -5,6 +5,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { x as extractTar } from "tar";
 
 import { runBoundedCommand } from "./update-smoke-tools.mjs";
 import { UPDATE_TEST_PROFILE } from "./update-test-profile.mjs";
@@ -90,7 +91,8 @@ async function exportSource(sha, directory, environment) {
   await mkdir(directory);
   const archive = `${directory}.tar`;
   await runBoundedCommand("git", ["archive", "--format=tar", `--output=${archive}`, sha], { cwd: ROOT, environment });
-  await runBoundedCommand("tar", ["-xf", archive, "-C", directory], { environment });
+  // Git for Windows 的 tar 会把盘符误认成远程地址；直接使用已有的跨平台解包库。
+  await extractTar({ file: archive, cwd: directory });
   await rm(archive);
   await runBoundedCommand("git", ["init", "--quiet", "--template="], { cwd: directory, environment });
   await runBoundedCommand("git", ["add", "-A"], { cwd: directory, environment });
