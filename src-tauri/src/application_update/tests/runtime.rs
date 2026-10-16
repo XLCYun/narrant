@@ -109,6 +109,54 @@ fn updater_registry_identity_is_namespaced_and_bounded() {
     let _ = managed_operation_id("download", 42);
 }
 
+/// 真实 Ready→检查成功→自动下载链路必须为下载编号绑定候选，不能沿用检查编号。
+#[test]
+fn automatic_download_binds_the_approved_download_identity() {
+    let (_cache, _data, runtime, download_id, release) = downloading_runtime();
+    assert_eq!(download_id.value(), 2, "检查与下载必须有独立任务编号");
+    assert_eq!(
+        runtime.pending_release(download_id, &release),
+        Some(release)
+    );
+}
+
+/// 自动重试使用新下载编号，旧下载与不同候选不能借用新任务的绑定。
+#[test]
+fn download_retry_rebinds_candidate_and_rejects_previous_attempt() {
+    let (_cache, _data, runtime, previous_id, release) = downloading_runtime();
+    let failed = runtime
+        .transition(UpdateInput::DownloadFailed {
+            operation_id: previous_id,
+            failure: UpdateFailure::new(UpdateFailureCategory::Network, "fixture"),
+        })
+        .unwrap();
+    let token = failed
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::ScheduleRetry { token, .. } => Some(token),
+            _ => None,
+        })
+        .unwrap();
+    let retry = runtime.transition(UpdateInput::RetryDue { token }).unwrap();
+    let retry_id = retry
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::StartDownload { operation_id, .. } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(previous_id, retry_id);
+    assert!(runtime.pending_release(previous_id, &release).is_none());
+    assert_eq!(
+        runtime.pending_release(retry_id, &release),
+        Some(release.clone())
+    );
+    let other = StableRelease::new("3.0.0", "other", release.package().clone());
+    assert!(runtime.pending_release(retry_id, &other).is_none());
+}
+
 #[test]
 fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure() {
     let cache = tempfile::tempdir().unwrap();

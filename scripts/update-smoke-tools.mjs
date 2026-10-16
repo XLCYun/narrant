@@ -80,7 +80,7 @@ export async function resolveOpenSsl(environment = process.env) {
   } catch (error) {
     if (process.platform !== "win32" || error.code !== "ENOENT") throw error;
     const bundled = path.join(environment.ProgramFiles ?? "C:\\Program Files", "Git/usr/bin/openssl.exe");
-    if (!(await stat(bundled).catch(() => undefined))?.isFile()) throw new Error("需要 PATH 中的 OpenSSL 或现有 Git 自带的 openssl.exe");
+    if (!(await stat(bundled).catch(() => undefined))?.isFile()) throw new Error("需要 PATH 中的 OpenSSL 或现有 Git 自带的 openssl.exe", { cause: error });
     await runBoundedCommand(bundled, ["version"], { environment: commandEnvironment });
     return bundled;
   }

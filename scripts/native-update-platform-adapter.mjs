@@ -195,7 +195,7 @@ async function findInstalledPids(target, installation, command, environment) {
 }
 
 /** 启动 exact installed app，并等待唯一 PID。 */
-async function launchInstalled(target, installation, command, environment, registerLaunch) {
+export async function launchInstalled(target, installation, command, environment, registerLaunch) {
   if ((await findInstalledPids(target, installation, command, environment)).length) throw new Error("Narrant 启动前已有同安装来源进程");
   // 直接启动 bundle 内的程序，使代理与 CA 文件仅由这一进程继承；不修改 LaunchServices 环境。
   const launch = await new Promise((resolve, reject) => {

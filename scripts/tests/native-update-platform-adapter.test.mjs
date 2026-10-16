@@ -3,8 +3,29 @@ import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { release, tmpdir, version } from "node:os";
 import path from "node:path";
+import process from "node:process";
+import { once } from "node:events";
 
-import { createNativeUpdatePlatformAdapter, describeUpdateSmokeRunner, normalizeWindowsInstallLocation, platformStatePaths, verifyPreservedUpgradeData } from "../native-update-platform-adapter.mjs";
+import { createNativeUpdatePlatformAdapter, describeUpdateSmokeRunner, launchInstalled, normalizeWindowsInstallLocation, platformStatePaths, verifyPreservedUpgradeData } from "../native-update-platform-adapter.mjs";
+
+test("启动后枚举失败仍交回准确 child 所有权，收尾不依赖枚举成功", async t => {
+  let owned;
+  let enumerations = 0;
+  t.after(async () => {
+    if (owned?.child.exitCode === null && owned.child.signalCode === null) {
+      const exited = once(owned.child, "exit");
+      owned.child.kill("SIGKILL");
+      await exited;
+    }
+  });
+  await assert.rejects(() => launchInstalled(process.platform === "win32" ? "windows-x86_64" : "darwin-aarch64",
+    { executable: process.execPath }, async () => {
+      if (++enumerations === 1) return "";
+      throw new Error("enumeration failed");
+    }, process.env, launch => { owned = launch; }), /enumeration failed/);
+  assert.ok(owned?.pid > 0);
+  assert.equal(owned.pid, owned.child.pid);
+});
 
 test("升级保留断言拒绝项目丢失、身份重建和设置重置", () => {
   const baseline = { theme: "dark", language: "en-US", navigation: {

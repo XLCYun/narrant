@@ -4,6 +4,31 @@
 当前执行规则见 [规格](./specs/0017-application-updates.md) 和 [运维文档](./application-update-operations.md)。
 以下 2026-09 的 `real-native`、托管 runner 与 bootstrap 是历史证据，不代表当前分支已通过新验收。
 
+## 2026-10-16 隔离旧版升级首次实测
+
+本机 macOS ARM64 的两个真实测试包分别取自上一 Stable `v1.2.14`
+（`5f0018fe5b5a95533d4f67d6cfa261b8f8fa26cd`）与候选源码
+`69b4926957e7cdda5f692d7df748f73af3c53b7b`。候选仅将测试版本标为 `1.2.15`。
+两个包使用独立应用身份、临时 updater 密钥和 ad-hoc 代码签名；未修改旧版更新器实现。
+
+- 两份包均构建、签名并通过字节验签。旧版实际安装、启动，写入独立项目/主题/语言夹具，
+  并通过进程级 TLS 读取到 `1.2.15` manifest；未修改 hosts 或系统证书信任。
+- **升级失败，不能计为通过。** 旧版在发出包下载请求前报告 manifest 失败；驱动最终以
+  `TLS gate 等待升级请求超时` 退出。日志中的检查编号为 1、下载失败编号为 2。
+  失败后测试进程、独立数据/cache 目录及临时安装目录均已清理。
+- 原因是 `check_stable` 把检查编号保存到 `PendingUpdate`，而核心为下载另分配编号，
+  `download_pending` 因编号不同拒绝可信候选。该缺陷也存在于上一 Stable 源码。
+- 新增 `automatic_download_binds_the_approved_download_identity` 先复现 `None`，
+  修复后通过。运行时改为在转换锁内按核心批准的 `StartDownload` 绑定候选与下载编号，
+  自动重试同时重绑。更新模块聚焦回归共 **92 通过、0 失败、0 忽略**，另覆盖旧重试编号
+  和不同候选不能复用绑定；未将单元测试视为真实安装验收。
+
+新代码不能修复用户已经安装的 `v1.2.14`。当前上一 Stable→候选的发布验收仍未通过；
+修复版需要一次人工安装过渡。修复后的两个测试版本之间的真实升级及最终双平台 CI
+尚待执行，验收范围调整待用户确认。本轮未发布正式版本或修改 Stable。
+
+## 历史验收范围（2026-09）
+
 本记录对应 [`0017-application-updates.md`](./specs/0017-application-updates.md) 的 15 条验收标准。
 它区分可在本机确定性执行的证据、必须由应用内浏览器采集的证据，以及只能在 GitHub 托管
 runner 上产生的真实原生升级证据。除特别注明外，本机证据基线为 Task 7 的 Preview Harness
