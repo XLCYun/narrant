@@ -77,6 +77,20 @@ test("promotion 使用受保护 Environment、fixed ID 与可信 private evidenc
   assertPinnedActions(workflow);
 });
 
+test("分支选择目标或同源基线不会放宽正式升级的双平台与上一 Stable 约束", async () => {
+  const workflow = await readFile(smokePath, "utf8");
+  const preflight = workflow.split("\n  preflight:")[1].split("\n  isolated-upgrade:")[0];
+  const formal = workflow.split("\n  isolated-upgrade:")[1];
+  assert.match(preflight, /inputs\.preflight_target/);
+  assert.match(preflight, /inputs\.preflight_baseline/);
+  assert.doesNotMatch(formal, /inputs\.preflight_target|inputs\.preflight_baseline/);
+  assert.match(formal, /--previous-source-sha/);
+  assert.equal((formal.match(/^\s*- runner:/gm) ?? []).length, 2);
+  const runner = await readFile(new URL("../../scripts/run-isolated-update-test.mjs", import.meta.url), "utf8");
+  assert.match(runner, /same-source-version-regression/);
+  assert.match(runner, /productionArtifactsVerified: false/);
+});
+
 test("新 workflows 不授予 contents write，也不把 release token 放进命令行", async () => {
   const workflows = `${await readFile(smokePath, "utf8")}\n${await readFile(promotionPath, "utf8")}`;
   assert.doesNotMatch(workflows, /contents:\s*write/);

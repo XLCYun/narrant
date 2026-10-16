@@ -71,6 +71,8 @@ export async function runIsolatedUpdateTest(receiptPath, outputDirectory, enviro
   }));
   const result = {
     evidenceKind: "isolated-native-preflight",
+    coverage: receipt.builds.baseline.sourceSha === receipt.builds.candidate.sourceSha
+      ? "same-source-version-regression" : "distinct-source-upgrade",
     execution: environment.GITHUB_ACTIONS === "true" ? "github-actions" : "local",
     productionArtifactsVerified: false,
     ...observation,

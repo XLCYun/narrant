@@ -128,6 +128,12 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 `previous_stable_tag`。它使用当前分支源码及既有 runner，不访问生产私钥、不创建 Draft、tag 或发布。
 源码版本与上一 Stable 相同时，仅测试包的候选版本增加一个 patch；记录标记为
 `isolated-native-preflight`，正式包尚未核验，promotion 会拒绝这种结果。
+`preflight_target` 可选择 Windows、macOS 或两者，当前默认 Windows。用户于 2026-10-16
+暂停 macOS 升级验收，恢复前仅选择 Windows；普通 macOS 质量检查与 E2E 不在暂停范围内。
+`preflight_baseline=previous-stable` 保持上一 Stable 源码；`candidate` 使用当前修复源码构建
+两个不同测试版本，并将证据标为 `same-source-version-regression`。后者用于验证修复后的升级
+链路，不能证明上一 Stable 可升级，也不能替代正式发布要求的 previous Stable 源码与双平台证据。
+当前 v1.2.14 存在检查/下载任务编号错配，需要人工安装修复版过渡；原失败保留在验收记录中。
 本机执行同一链路使用 `pnpm test:upgrade:build <baseline-sha> <baseline-version> <candidate-sha>
 <candidate-version> <new-output-directory>`，随后 `pnpm test:upgrade:run <test-builds.json> <new-evidence-directory>`。
 运行需要当前交互桌面；记录环境应如实填写已有 `RUNNER_NAME` 与 `RUNNER_ENVIRONMENT=self-hosted`。

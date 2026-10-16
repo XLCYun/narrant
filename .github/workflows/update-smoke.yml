@@ -32,6 +32,18 @@ on:
         description: Required lowercase SHA-256 in normal mode
         required: false
         type: string
+      preflight_target:
+        description: Branch-only target; macOS upgrade acceptance is currently paused
+        required: true
+        default: windows
+        type: choice
+        options: [windows, macos, both]
+      preflight_baseline:
+        description: Candidate compares two test versions of fixed source, not previous Stable
+        required: true
+        default: previous-stable
+        type: choice
+        options: [previous-stable, candidate]
   workflow_call:
     inputs:
       source_tag: { required: true, type: string }
@@ -41,6 +53,8 @@ on:
       mode: { required: true, type: string }
       previous_stable_tag: { required: false, type: string }
       previous_stable_manifest_sha256: { required: false, type: string }
+      preflight_target: { required: false, type: string, default: windows }
+      preflight_baseline: { required: false, type: string, default: previous-stable }
     secrets:
       CYUNLAB_RELEASE_TOKEN:
         required: true
@@ -59,11 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos
-            target: darwin-aarch64
-          - runner: windows
-            target: windows-x86_64
+        include: ${{ fromJSON(inputs.preflight_target == 'both' && '[{"runner":"macos","target":"darwin-aarch64"},{"runner":"windows","target":"windows-x86_64"}]' || inputs.preflight_target == 'macos' && '[{"runner":"macos","target":"darwin-aarch64"}]' || '[{"runner":"windows","target":"windows-x86_64"}]') }}
     runs-on: ${{ fromJSON(matrix.runner == 'macos' && (vars.NARRANT_MACOS_RUNNER_LABELS || '["self-hosted","macOS","ARM64","narrant-ci"]') || (vars.NARRANT_WINDOWS_RUNNER_LABELS || '["self-hosted","Windows","X64","narrant-ci"]')) }}
     timeout-minutes: 240
     steps:
@@ -83,9 +93,13 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          PREFLIGHT_TARGET: ${{ inputs.preflight_target }}
+          BASELINE_SOURCE: ${{ inputs.preflight_baseline }}
         run: |
           set -euo pipefail
           test "$SOURCE_SHA" = "$(git rev-parse HEAD)"
+          [[ "$PREFLIGHT_TARGET" =~ ^(windows|macos|both)$ ]]
+          [[ "$BASELINE_SOURCE" =~ ^(previous-stable|candidate)$ ]]
           [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           git merge-base --is-ancestor "refs/tags/${PREVIOUS_TAG}^{}" "$SOURCE_SHA"
           node scripts/verify-desktop-runner.mjs --isolated-update-test
@@ -97,17 +111,25 @@ jobs:
           RUSTUP_TOOLCHAIN: stable
           SOURCE_SHA: ${{ inputs.source_sha }}
           PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
+          BASELINE_SOURCE: ${{ inputs.preflight_baseline }}
         run: |
           set -euo pipefail
+          baseline_sha="$(git rev-parse "refs/tags/${PREVIOUS_TAG}^{}")"
+          baseline_version="${PREVIOUS_TAG#v}"
+          if [ "$BASELINE_SOURCE" = candidate ]; then
+            baseline_sha="$SOURCE_SHA"
+            baseline_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          fi
+          export BASELINE_VERSION="$baseline_version"
           candidate_version="$(node --input-type=module -e '
             import { readFileSync } from "node:fs";
-            const base = process.env.PREVIOUS_TAG.slice(1).split(".").map(Number);
+            const base = process.env.BASELINE_VERSION.split(".").map(Number);
             const source = JSON.parse(readFileSync("src-tauri/tauri.conf.json")).version.split(".").map(Number);
             const differing = source.findIndex((part, index) => part !== base[index]);
             if (differing >= 0 && source[differing] < base[differing]) throw new Error("Candidate is older than baseline");
             console.log(differing < 0 ? [base[0], base[1], base[2] + 1].join(".") : source.join("."));
           ')"
-          pnpm test:upgrade:build "$(git rev-parse "refs/tags/${PREVIOUS_TAG}^{}")" "${PREVIOUS_TAG#v}" \
+          pnpm test:upgrade:build "$baseline_sha" "$baseline_version" \
             "$SOURCE_SHA" "$candidate_version" update-test-builds
       - name: Exercise real upgrade and data preservation without production artifacts
         run: pnpm test:upgrade:run update-test-builds/test-builds.json update-test-observation
