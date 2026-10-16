@@ -388,7 +388,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     return installation;
   }
 
-  /** 在固定 GitHub TLS gate 内运行旧应用真实下载生命周期。 */
+  /** 在固定 Stable TLS gate 内运行旧应用真实下载生命周期。 */
   async function withCandidateGate(options, action) {
     const routes = createCandidateGateRoutes({
       target, tag: options.publicTag, version: options.version,

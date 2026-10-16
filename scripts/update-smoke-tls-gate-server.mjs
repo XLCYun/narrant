@@ -3,6 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:https";
 import process from "node:process";
 
+import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
+
 const CONTROL_BOUND = 256 * 1024;
 
 /** 解析 helper 的固定成对参数。 */
@@ -28,7 +30,11 @@ function emit(event) {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   for (const name of ["hostname", "certificate", "key", "routes"]) if (!options[name]) throw new Error(`缺少 --${name}`);
-  if (options.hostname !== "github.com") throw new Error("TLS helper hostname 必须是 github.com");
+  const endpoint = new URL(FIXED_STABLE_ENDPOINT);
+  if (options.hostname !== endpoint.hostname) throw new Error(`TLS helper hostname 必须是 ${endpoint.hostname}`);
+  // 真实升级使用 443；随机环回端口只供直接运行服务入口的回归测试使用。
+  const port = options.port === "0" ? 0 : 443;
+  if (options.port !== undefined && options.port !== "0") throw new Error("TLS helper 仅允许默认 443 或随机端口 0");
   const [certificate, key, routeBytes] = await Promise.all([
     readFile(options.certificate), readFile(options.key), readFile(options.routes),
   ]);
@@ -37,7 +43,7 @@ async function main() {
   if (!Array.isArray(definitions) || definitions.length !== 2) throw new Error("TLS helper route config 必须精确两项");
   const routes = new Map();
   for (const definition of definitions) {
-    if (routes.has(definition.pathname) || !definition.pathname?.startsWith("/cyunlab/narrant/releases/")) {
+    if (routes.has(definition.pathname) || (definition.pathname !== endpoint.pathname && !definition.pathname?.startsWith("/narrant/releases/"))) {
       throw new Error("TLS helper route 重复或越界");
     }
     const information = await stat(definition.file);
@@ -76,9 +82,9 @@ async function main() {
   server.on("clientError", (_error, socket) => socket.destroy());
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port: 443, exclusive: true }, resolve);
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, resolve);
   });
-  emit({ event: "ready" });
+  emit({ event: "ready", port: server.address().port });
   let closing = false;
   const close = (status) => {
     if (closing) return;

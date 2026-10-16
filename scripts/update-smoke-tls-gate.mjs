@@ -27,7 +27,7 @@ export function createCandidateGateRoutes(options) {
   ]);
 }
 
-/** 校验 gate 只能拦截 shipped GitHub endpoint 与当前 tag 包路径。 */
+/** 校验 gate 只能拦截正式 Stable endpoint 与当前 tag 包路径。 */
 export function validateGateConfiguration(config) {
   const endpoint = new URL(config.endpoint);
   if (endpoint.href !== FIXED_STABLE_ENDPOINT || endpoint.hostname !== HOSTNAME || endpoint.pathname !== LATEST_PATH) {
