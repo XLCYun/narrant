@@ -1,8 +1,9 @@
 # Application Update 验收记录
 
-2026-10-16 验收范围已按用户决定调整为独立测试包实际升级与正式包静态签名/完整性核验。
+当前按 [ADR-0036](./adr/0036-use-one-public-github-repository-for-distribution.md) 恢复 GitHub-hosted
+macOS ARM64 / Windows x64 正式包验收，macOS 升级暂停已解除。
 当前执行规则见 [规格](./specs/0017-application-updates.md) 和 [运维文档](./application-update-operations.md)。
-以下 2026-09 的 `real-native`、托管 runner 与 bootstrap 是历史证据，不代表当前分支已通过新验收。
+以下保留历史失败和成功范围，不将 self-hosted 独立包结果当作当前正式包升级通过。
 
 ## 2026-10-16 隔离旧版升级首次实测
 

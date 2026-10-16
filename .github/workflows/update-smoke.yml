@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       source_tag:
-        description: Private source stable tag
+        description: Stable source tag in XLCYun/narrant
         required: true
         type: string
       source_sha:
-        description: Exact 40-character private source commit
+        description: Exact 40-character source commit
         required: true
         type: string
       public_release_id:

@@ -64,7 +64,9 @@ async function runBootstrap(options, adapter) {
   await adapter.inspectTrustedConfiguration(options.candidateUpdaterPublicKey);
   await adapter.requestNormalClose(recoveryLaunch);
   await adapter.waitForExit(recoveryLaunch);
-  await adapter.launch();
+  const cleanLaunch = await adapter.launch();
+  await adapter.requestNormalClose(cleanLaunch);
+  await adapter.waitForExit(cleanLaunch);
   return BOOTSTRAP_CHECKPOINTS;
 }
 

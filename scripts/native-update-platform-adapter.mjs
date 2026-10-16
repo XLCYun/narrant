@@ -12,6 +12,7 @@ import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
 import { createCandidateGateRoutes, withUpdateSmokeTlsGate } from "./update-smoke-tls-gate.mjs";
 import { createUpdateSmokeTlsSystemAdapter, runBoundedCommand } from "./update-smoke-tls-system-adapter.mjs";
 import { writeUpgradeUserSettings, registerUpgradeRepository, assertUpgradeUserData } from "./update-smoke-user-data.mjs";
+import { selectSystemEnvironment as selectEnvironment } from "./update-smoke-environment.mjs";
 
 const APP_IDENTIFIER = "com.cyunlab.narrant";
 const MAC_CLOSE_HELPER = path.resolve(import.meta.dirname, "macos-close-narrant-window.swift");
@@ -88,16 +89,6 @@ export async function observeBootstrapRecovery(statePaths, generation, options =
     await delay(interval);
   }
   throw new Error(`bootstrap candidate recovery 未清理或确认 ${remaining}`);
-}
-
-/** 只向原生应用和平台工具传公共系统环境。 */
-function selectEnvironment(environment) {
-  const names = [
-    "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
-    "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA",
-    "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
-  ];
-  return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
 }
 
 /** 推导 Narrant 的 Tauri app-data/cache staging 边界。 */
@@ -231,15 +222,21 @@ async function findInstalledPids(target, installation, command, environment) {
   });
 }
 
-/** 启动 exact installed app，并等待唯一 PID。 */
-async function launchInstalled(target, installation, command, environment) {
+/** 启动 exact installed app，等待唯一进程完成启动并显示原生窗口。 */
+export async function launchInstalled(target, installation, command, environment, closeHelper) {
   if ((await findInstalledPids(target, installation, command, environment)).length) throw new Error("Narrant 启动前已有同安装来源进程");
   if (target === "darwin-aarch64") await command("open", ["-n", "-a", installation.application], { environment });
   else spawn(installation.executable, [], { env: environment, shell: false, windowsHide: false, stdio: "ignore", detached: false });
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const pids = await findInstalledPids(target, installation, command, environment);
-    if (pids.length === 1) return Object.freeze({ pid: pids[0], installation });
+    if (pids.length === 1) {
+      const ready = target === "windows-x86_64"
+        ? await command("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+          `$p=Get-Process -Id ${pids[0]} -ErrorAction Stop;if($p.MainWindowHandle -ne 0 -and $p.Responding){[Console]::Out.Write('ready')}`], { environment })
+        : await command(closeHelper, [String(pids[0]), "ready"], { environment });
+      if (ready.trim() === "ready") return Object.freeze({ pid: pids[0], installation });
+    }
     if (pids.length > 1) throw new Error("exact Narrant process 不唯一");
     await delay(250);
   }
@@ -326,7 +323,6 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   let statePaths;
   let ownsState = false;
   let repositoryRoot;
-  const launches = [];
 
   /** 初始化干净 runner 与 staging roots。 */
   async function initialize() {
@@ -427,8 +423,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
       target,
       installKind: contract.installKind,
     });
-    const launch = await launchInstalled(target, installation, command, commandEnvironment);
-    launches.push(launch);
+    const launch = await launchInstalled(target, installation, command, commandEnvironment, closeHelper);
     await observeBootstrapRecovery(statePaths, fixture.generation);
     return launch;
   }
@@ -436,12 +431,14 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   /** 失败路径终止进程，正常路径卸载/删除本次 runner state。 */
   async function cleanup() {
     const errors = [];
-    for (const launch of launches.reverse()) {
-      const pids = await findInstalledPids(target, launch.installation, command, commandEnvironment).catch((error) => { errors.push(error); return []; });
+    // 启动未就绪便失败时也按安装路径回收，不能只清理成功返回的 launch。
+    if (installation) {
+      const pids = await findInstalledPids(target, installation, command, commandEnvironment).catch((error) => { errors.push(error); return []; });
       for (const pid of pids) {
         if (target === "windows-x86_64") await command("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { environment: commandEnvironment }).catch((error) => errors.push(error));
         else try { process.kill(pid, "SIGKILL"); } catch { /* 进程可能已自然退出。 */ }
       }
+      await waitForNoInstalledProcess(target, installation, command, commandEnvironment, 30_000).catch((error) => errors.push(error));
     }
     if (target === "windows-x86_64" && installation?.uninstaller && await lstat(installation.uninstaller).catch(() => null)) {
       await command(installation.uninstaller, ["/S"], { environment: commandEnvironment }).catch((error) => errors.push(error));
@@ -461,11 +458,14 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     initialize,
     installBaseline,
     prepareUserData,
+    /** 使用旧版已初始化的 schema 登记测试项目。 */
     registerUserRepository: () => registerUpgradeRepository(statePaths.dataRoot, repositoryRoot),
+    /** 候选正常退出后核对真实持久化数据。 */
     assertUserData: () => assertUpgradeUserData(statePaths.dataRoot, repositoryRoot),
     installBootstrap,
     withCandidateGate,
-    launch: async () => { const launch = await launchInstalled(target, installation, command, commandEnvironment); launches.push(launch); return launch; },
+    /** 原生窗口已就绪才报告启动成功。 */
+    launch: () => launchInstalled(target, installation, command, commandEnvironment, closeHelper),
     waitForStaging,
     requestNormalClose: (launch) => requestNormalClose(target, launch, closeHelper, command, commandEnvironment),
     waitForExit: (launch) => waitForNoInstalledProcess(target, launch.installation, command, commandEnvironment),

@@ -6,6 +6,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { verifyUpdateSmokeEvidenceDocument, writeUpdateSmokeEvidence } from "./update-smoke-evidence.mjs";
+import { selectSystemEnvironment } from "./update-smoke-environment.mjs";
 import {
   resolvePreviousReleaseSigningKeySha256,
   resolveUpdaterKeyPolicy,
@@ -15,15 +16,12 @@ const DRIVER = path.resolve(import.meta.dirname, "native-update-smoke-driver.mjs
 const OUTPUT_BOUND = 256 * 1024;
 
 /** 只向 native driver 传公共 runner 环境和 updater public key。 */
-function driverEnvironment(environment) {
-  const names = [
-    "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
-    "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA",
-    "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
+export function driverEnvironment(environment) {
+  return selectSystemEnvironment(environment, [
     "NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY",
     "NARRANT_RELEASE_SIGNING_PUBLIC_KEY", "NARRANT_UPDATER_PUBLIC_KEY",
-  ];
-  return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
+    "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT",
+  ]);
 }
 
 /** 无 shell 启动固定 repository driver，并限制输出。 */

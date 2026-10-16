@@ -26,7 +26,8 @@ CI 使用 GitHub-hosted `macos-15`（ARM64）和 `windows-2022`（x64），正�
 - `NARRANT_UPDATER_BRIDGE_TAG`：仅计划换钥时设置 exact tag，平时为空。
 - `NARRANT_GITHUB_CLIENT_ID`、`NARRANT_GITHUB_APP_SLUG`：GitHub Identity 构建配置。
 
-创建 `stable-promotion` Environment，限制默认分支，并配置 required reviewers、禁止自我审批。
+创建 `stable-promotion` Environment，限制默认分支；有独立维护者时可配置 required reviewers 并禁止自我审批。
+当前 Environment 仅配置分支保护，发布授权来自维护者手动 dispatch；尚无独立 reviewer 审批。
 将四项 updater 公钥/bridge variables 同步为 Environment 的受保护值；promotion 使用该授权二次复核。
 首次发布临时在 repository 和 Environment 配置相同的 `NARRANT_FIRST_UPDATER_TAG`，成功后删除。
 实际 reviewer 配置必须在仓库 Settings 核实，不能因 YAML 写了 Environment 就认定已有独立审批。

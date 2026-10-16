@@ -1,3 +1,4 @@
+import { selectSystemEnvironment as selectCommandEnvironment } from "./update-smoke-environment.mjs";
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -59,15 +60,6 @@ export function runBoundedCommand(executable, arguments_, options = {}) {
       else finish(undefined, output);
     });
   });
-}
-
-/** 只向系统工具传 runner 公共环境，不继承 Actions secret。 */
-function selectCommandEnvironment(environment) {
-  const names = [
-    "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
-    "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "TEMP", "TMP", "TMPDIR",
-  ];
-  return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
 }
 
 /** 在不改变原字节的前提下追加唯一 github.com loopback 映射。 */
@@ -244,7 +236,9 @@ export function createUpdateSmokeTlsSystemAdapter(environment = process.env, dep
       try { await control.waitFor("ready"); }
       catch (error) { await control.close().catch(() => {}); throw error; }
       return {
+        /** 等待两个固定路由均被实际应用请求。 */
         waitForAllRequests: () => control.waitFor("all-requested", 8 * 60 * 1000),
+        /** 停止本次 HTTPS gate 并等待子进程退出。 */
         close: () => control.close(),
       };
     },

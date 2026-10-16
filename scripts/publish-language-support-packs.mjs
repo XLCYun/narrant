@@ -107,9 +107,13 @@ export function createGitHubPublisher(token, fetchImpl = globalThis.fetch) {
       }
       throw new Error('Release list exceeds supported pagination');
     },
+    /** 在当前提交上创建不可成为 Latest 的语言包候选。 */
     createRelease: body => request(`${apiBase}/releases`, 'POST', { ...body, target_commitish: process.env.GITHUB_SHA ?? 'main' }),
+    /** 按固定 Release ID 上传一个命名资产。 */
     uploadAsset: (id, name, bytes) => request(`https://uploads.github.com/repos/${REPOSITORY}/releases/${id}/assets?name=${encodeURIComponent(name)}`, 'POST', bytes, true),
+    /** 使用官方 API 回读已上传字节。 */
     readAsset: asset => readGitHubReleaseAsset(asset, token, fetchImpl),
+    /** 公开已验证的同一个语言包 Release。 */
     publishRelease: (id, body) => request(`${apiBase}/releases/${id}`, 'PATCH', body),
     /** 发布后匿名回读，证明普通客户端无需任何仓库凭据。 */
     async readPublishedAsset(tag, name) {
